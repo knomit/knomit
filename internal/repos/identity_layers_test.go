@@ -81,7 +81,7 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 	t.Cleanup(func() { _ = svc.Close() })
 	ont, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{OntologyPath: string(ont)}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{OntologyPath: string(ont)}, "main"))
 	for i := range 3 {
 		_, err := svc.Facts().WriteFact(ctx, "main",
 			fmt.Sprintf("kb/gotchas/seed-%d.md", i), testFactBodyFor(i), "seed", "")
@@ -307,7 +307,7 @@ func TestCreate_UnrelatedRemoteIsNotRefused(t *testing.T) {
 	t.Cleanup(func() { _ = other.Close() })
 	ont, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
-	require.NoError(t, other.InitRepo(map[string]string{OntologyPath: string(ont)}, "main"))
+	require.NoError(t, other.InitRepo(context.Background(), map[string]string{OntologyPath: string(ont)}, "main"))
 	_, err = other.Facts().WriteFact(ctx, "main", "kb/gotchas/other.md", testFactBodyFor(99), "other", "")
 	require.NoError(t, err)
 	otherRoot, err := other.RootCommit(ctx, "main")
@@ -377,7 +377,7 @@ func TestProbeInitialized_UnrelatedRemoteIsNotAlreadyLocal(t *testing.T) {
 	t.Cleanup(func() { _ = other.Close() })
 	ont, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
-	require.NoError(t, other.InitRepo(map[string]string{OntologyPath: string(ont)}, "main"))
+	require.NoError(t, other.InitRepo(context.Background(), map[string]string{OntologyPath: string(ont)}, "main"))
 	srv := httptest.NewServer(other.Handler())
 	t.Cleanup(srv.Close)
 

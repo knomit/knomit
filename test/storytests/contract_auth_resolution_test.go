@@ -105,8 +105,8 @@ func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 	}
 	// The reconcile call itself must have returned the error, not swallowed it.
 	if syncErr == nil {
-		t.Fatalf("CONTRACT VIOLATION (symptom #4: silent-anonymous auth downgrade): "+
-			"ActivateSync returned nil against an unresolvable SSH credential — the auth "+
+		t.Fatalf("CONTRACT VIOLATION (symptom #4: silent-anonymous auth downgrade): " +
+			"ActivateSync returned nil against an unresolvable SSH credential — the auth " +
 			"failure was silently swallowed / downgraded to anonymous")
 	}
 	t.Logf("auth-resolution failure surfaced: last_status=%q last_error=%q activate_err=%v",

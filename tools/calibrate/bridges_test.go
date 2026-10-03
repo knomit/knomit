@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"knomit/internal/embeddings"
 	"knomit/internal/embeddings/params"
@@ -162,7 +163,7 @@ func TestBridgesBranch_DefaultsToTheIndexConsensusBranch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "k.db")
 	svc, err := store.Open(path)
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "trunk", "agent/test"))
+	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "trunk", "agent/test"))
 	require.NoError(t, svc.Close())
 
 	svc, err = store.Open(path) // as the command opens it: no OpenRepo

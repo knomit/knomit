@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,7 +63,7 @@ func failingSwapSession(t *testing.T, withOrigin bool) (*Server, *repos.RepoInst
 	if err != nil {
 		t.Fatalf("open local svc: %v", err)
 	}
-	if err := localSvc.InitRepo(map[string]string{"local.md": "local"}, "machine/test"); err != nil {
+	if err := localSvc.InitRepo(context.Background(), map[string]string{"local.md": "local"}, "machine/test"); err != nil {
 		t.Fatalf("init local git: %v", err)
 	}
 	// SwapStore closes this generation and reopens dbPath; closing it again
@@ -120,7 +121,7 @@ func failingSwapSession(t *testing.T, withOrigin bool) (*Server, *repos.RepoInst
 	if err != nil {
 		t.Fatalf("open remote svc: %v", err)
 	}
-	if err := remoteSvc.InitRepo(map[string]string{"seed.md": "seed"}, "machine/test"); err != nil {
+	if err := remoteSvc.InitRepo(context.Background(), map[string]string{"seed.md": "seed"}, "machine/test"); err != nil {
 		t.Fatalf("init remote git: %v", err)
 	}
 	if err := os.Mkdir(filepath.Join(sess.TempDir, "clone.db"), 0o755); err != nil {

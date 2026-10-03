@@ -52,7 +52,7 @@ func newDedupAttrRepo(t *testing.T) (*repos.RepoInstance, context.Context, store
 	t.Cleanup(func() { _ = svc.Close() })
 	emb := newLenEmbedder(t)
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "test",
 		UID:          nextTestRepoUID(),
@@ -270,7 +270,7 @@ func TestApplyDedupMerge_NeverMergesIntoAFlaggedCandidate(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	emb := newLenEmbedder(t)
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	ont, err := fact.ParseOntology([]byte(nestedDedupAttrOntologyYAML))
 	require.NoError(t, err)
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{

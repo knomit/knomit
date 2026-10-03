@@ -442,7 +442,7 @@ func TestReadReadme_SubscriptionReadsUpstream(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test")) // seeds README.md on main and agent
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test")) // seeds README.md on main and agent
 
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "sub", Svc: svc, Subscribed: true, ReadBranch: "main"})
 	got, err := ri.ReadReadme(context.Background())
@@ -459,7 +459,7 @@ func TestReadLicense_SubscriptionUsesTheReadBranch(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{LicensePath: "MIT-ish terms"}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{LicensePath: "MIT-ish terms"}, "agent/test"))
 
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "sub", Svc: svc, Subscribed: true, ReadBranch: "main"})
 	content, oversize, err := ri.ReadLicense(context.Background())

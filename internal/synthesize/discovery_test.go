@@ -59,7 +59,7 @@ func TestApplyDiscoveredProposals_ConfidenceGate(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	// Seed the two bridge members so refs resolve.
@@ -110,7 +110,7 @@ func TestApplyDiscoveredProposals_RefsMustCiteAtLeastTwoSeeds(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	seedSimpleFact(t, svc, branch, "kb/a.md")
@@ -140,7 +140,7 @@ func TestApplyDiscoveredProposals_OriginDiscovered(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	seedSimpleFact(t, svc, branch, "kb/a.md")
@@ -176,7 +176,7 @@ func TestApplyDiscoveredProposals_TypeMustMatchDirection(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	seedSimpleFact(t, svc, branch, "kb/a.md")
@@ -397,7 +397,7 @@ func TestApplyDiscoveredProposals_BackwardBlastGate(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 	// Seeds with no dependents → BlastRadius == 0.
 	seedSimpleFact(t, svc, branch, "kb/a.md")
@@ -439,7 +439,7 @@ func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	seedSimpleFact(t, svc, branch, "kb/a.md")
@@ -497,7 +497,7 @@ func TestApplyDiscoveredProposals_NoEmbedder_NoDedup(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 	seedSimpleFact(t, svc, branch, "kb/a.md")
 	seedSimpleFact(t, svc, branch, "kb/b.md")

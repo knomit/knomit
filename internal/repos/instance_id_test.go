@@ -56,7 +56,7 @@ func TestID_ResolvesOnReadBranchForSubscription(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	sub := NewTestInstanceWithDeps(TestInstanceConfig{Name: "sub", Svc: svc, Subscribed: true, ReadBranch: "main"})
 	full := NewTestInstanceWithDeps(TestInstanceConfig{Name: "full", Svc: svc, AgentBranch: "agent/test"})

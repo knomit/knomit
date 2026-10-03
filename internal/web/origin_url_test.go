@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -49,7 +50,7 @@ func recordingRemote(t *testing.T) (url string, paths func() []string, reset fun
 	t.Cleanup(func() { svc.Close() })
 	ont, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{repos.OntologyPath: string(ont)}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{repos.OntologyPath: string(ont)}, "main"))
 
 	var mu sync.Mutex
 	var seen []string

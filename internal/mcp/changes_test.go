@@ -63,7 +63,7 @@ func newChangesRepo(t *testing.T, consensus string) *repos.RepoInstance {
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, consensus, "agent/test"))
+	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, consensus, "agent/test"))
 	return repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "named-" + consensus, UID: nextTestRepoUID(), AgentBranch: "agent/test",
 		Svc: svc, Ontology: fact.CodeOntology(), OntologyRoot: "kb",
@@ -77,7 +77,7 @@ func newSubscribedChangesRepo(t *testing.T) *repos.RepoInstance {
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	return repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "followed", UID: nextTestRepoUID(), Subscribed: true, ReadBranch: "main",
 		Svc: svc, Ontology: fact.CodeOntology(), OntologyRoot: "kb",

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -84,7 +85,7 @@ func (o *e4Origin) cloneErr(agentBranch string, signer ssh.Signer, ownKeys []ssh
 	if len(accept) > 0 {
 		svc.SetAcceptList(fixedAccepts(accept))
 	}
-	_, _, err = svc.InitFromRemote(fileuri.New(o.bare), nil, "main", agentBranch, nil, nil)
+	_, _, err = svc.InitFromRemote(context.Background(), fileuri.New(o.bare), nil, "main", agentBranch, nil, nil)
 	return svc, err
 }
 

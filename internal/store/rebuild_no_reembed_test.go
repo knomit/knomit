@@ -24,7 +24,7 @@ func TestRebuild_PreservesRowidsAndDoesNotReEmbed(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	emb := &countingEmbedder{}
 	svc.SetEmbedder(emb)
@@ -107,7 +107,7 @@ func TestNeedsRebuild_TrueWhenVersionStale(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 	si := svc.si
 
@@ -145,7 +145,7 @@ func TestRebuild_BumpsOnlyItsOwnBranch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/x", "main"))
 
@@ -188,7 +188,7 @@ func TestRebuild_FailureClearsVersion_NotMaskedByGlobalEmbedIdentity(t *testing.
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 
 	// "phantom" is the real-world failure the builder comments describe: a stored

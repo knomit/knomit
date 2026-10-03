@@ -145,7 +145,7 @@ func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	tempDB := filepath.Join(t.TempDir(), "swap.db")
 	seed, err := store.Open(tempDB)
 	require.NoError(t, err)
-	require.NoError(t, seed.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, seed.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	seed.Close()
 
 	swapped := make(chan error, 1)

@@ -22,7 +22,7 @@ func newCommitLogService(t *testing.T) (*Service, string) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 	return svc, branch
 }
 

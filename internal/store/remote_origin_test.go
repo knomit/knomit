@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -12,7 +13,7 @@ func openOriginTestService(t *testing.T) *Service {
 	svc, err := Open(filepath.Join(t.TempDir(), "repo.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{"README.md": "x"}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{"README.md": "x"}, "agent/test"))
 	return svc
 }
 

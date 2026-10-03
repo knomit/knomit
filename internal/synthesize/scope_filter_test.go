@@ -36,7 +36,7 @@ func TestScopeFilter_FirstRun_RestrictsToDomain(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	seedFactInDomain(t, svc, branch, "a", "auth")
@@ -92,7 +92,7 @@ func TestScopeFilter_FirstRun_UnionAcrossDomainAndEntity(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	// a: matches on domain only. b: matches on entity only. c: matches neither.
@@ -131,7 +131,7 @@ func TestScopeFilter_Empty_WholeCorpus(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	seedFactInDomain(t, svc, branch, "a", "auth")
@@ -171,7 +171,7 @@ func TestScopedReview_ZeroSeeds_DoesNotAdvanceWatermark(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	// Seed facts only in "billing" domain — auth scope will find zero.
@@ -217,7 +217,7 @@ func TestScopedReview_NonEmptyWatermark_StillSeedsInScope(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	seedFactInDomain(t, svc, branch, "a", "auth")
@@ -286,7 +286,7 @@ func TestScopedReview_CompletionOnFreshReviewer_DoesNotAdvanceWatermark(t *testi
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	// Seed enough in-scope facts that StartSession builds a real (non-empty)

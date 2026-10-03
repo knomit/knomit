@@ -58,7 +58,7 @@ func newSkillRepo(t *testing.T, m *repos.Manager, name, upstream string) *repos.
 	svc, err := store.Open(filepath.Join(t.TempDir(), name+".db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, upstream, "agent/test"))
+	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, upstream, "agent/test"))
 	if upstream != "main" {
 		svc.SetOrigin(&store.Origin{URL: "https://example.invalid/" + name + ".git", Branch: upstream})
 	}

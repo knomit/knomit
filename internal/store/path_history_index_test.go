@@ -85,7 +85,7 @@ func TestPathHistory_LegacyGapDerivesFromGit(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "k.db")
 	svc, err := Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 	var commits []string
 	for i := range 5 {
@@ -115,7 +115,7 @@ func TestPathHistory_VersionBumpOverDeletedSideBranch(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "k.db")
 	svc, err := Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 	base, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("base", 0.5, nil), "base", "")
 	require.NoError(t, err)
@@ -562,7 +562,7 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 	svc, err := Open(filepath.Join(b.TempDir(), "k.db"))
 	require.NoError(b, err)
 	defer svc.Close()
-	require.NoError(b, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(b, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	content := testFactBody("target v1", 0.5, nil)

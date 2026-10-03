@@ -93,7 +93,7 @@ func minSimMounts(t *testing.T, emb cosEmbedder, n int) (run func(args map[strin
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
 		svc.SetEmbedder(emb)
-		require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+		require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 		repo := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 			Name: fmt.Sprintf("mount%d", i), UID: nextTestRepoUID(), AgentBranch: "agent/test", Svc: svc,
 			Ontology: fact.CodeOntology(), OntologyRoot: "kb", Embedder: emb,

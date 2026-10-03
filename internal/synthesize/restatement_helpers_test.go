@@ -148,7 +148,7 @@ func newRestatementEnvWith(t *testing.T, n int, emb *restatementEmbedder) *resta
 	if emb != nil {
 		svc.SetEmbedder(emb)
 	}
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	cfg := repos.TestInstanceConfig{
 		Name:         "test",

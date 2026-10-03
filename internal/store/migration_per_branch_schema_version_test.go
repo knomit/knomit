@@ -29,7 +29,7 @@ func twoBranchStore(t *testing.T) *Service {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/x", "main"))
 	return svc
 }

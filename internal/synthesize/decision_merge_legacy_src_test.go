@@ -25,7 +25,7 @@ func seedMergeMembers(t *testing.T) (*store.Service, string) {
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	members := map[string]string{
 		"kb/technology/a.md": "src://knomit/internal/a.go@ca1c272",

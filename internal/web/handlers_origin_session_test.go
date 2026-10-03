@@ -82,7 +82,7 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open remote svc: %v", err)
 	}
-	if err := remoteSvc.InitRepo(map[string]string{"seed.md": "seed"}, "machine/test"); err != nil {
+	if err := remoteSvc.InitRepo(context.Background(), map[string]string{"seed.md": "seed"}, "machine/test"); err != nil {
 		t.Fatalf("init remote git: %v", err)
 	}
 

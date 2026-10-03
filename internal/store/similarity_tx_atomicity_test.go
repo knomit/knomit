@@ -48,7 +48,7 @@ func TestGraphBuildSimilarityEdges_RewriteIsInvisibleUntilCommit(t *testing.T) {
 	svc, err := Open(dbPath)
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	// Without an embedder the similarity phase is skipped and the hook below
 	// never fires — the require.True on `fired` is what makes that loud.
 	svc.SetEmbedder(&stub768Embedder{})
@@ -106,7 +106,7 @@ func TestRebuildGraph_SimilarityPruneIsInvisibleUntilCommit(t *testing.T) {
 	svc, err := Open(dbPath)
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	svc.SetEmbedder(&stub768Embedder{})
 
 	ctx := context.Background()

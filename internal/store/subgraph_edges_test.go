@@ -49,7 +49,7 @@ func TestSubgraphEdges_ReturnsSimilarToAmongPaths(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	si := svc.si
 	ctx := context.Background()
@@ -88,7 +88,7 @@ func TestSubgraphEdges_ChunksLargePathSets(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	si := svc.si
 	ctx := context.Background()
@@ -123,7 +123,7 @@ func TestSubgraphEdges_QuoteInPathDoesNotInject(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	si := svc.si
 	ctx := context.Background()
@@ -153,7 +153,7 @@ func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	si := svc.si
 	ctx := context.Background()

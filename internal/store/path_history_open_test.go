@@ -26,7 +26,7 @@ func openPathHistoryStoreAt(t *testing.T) (*Service, string) {
 	dbPath := filepath.Join(t.TempDir(), "k.db")
 	svc, err := Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	return svc, dbPath
 }
 
@@ -211,7 +211,7 @@ func TestRefMoves_DeriveBeforeTheRef(t *testing.T) {
 			svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = svc.Close() })
-			require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+			require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 			branch, run := setup(t, svc)
 			before := mustHeadHash(t, svc, branch)
 			stop := failNewCommits(knownCommits(t, svc), injected)

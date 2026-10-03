@@ -55,7 +55,7 @@ func seedDistillCorpus(t *testing.T, perCategory int) (*Reviewer, *store.Service
 	t.Cleanup(func() { _ = svc.Close() })
 
 	branch := "agent/test"
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 	ctx := context.Background()
 
 	// path -> category, so a test can assert an item never mixes categories.

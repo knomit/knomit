@@ -87,7 +87,7 @@ func newE2ERepo(t *testing.T, m *repos.Manager, name string) *repos.RepoInstance
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	uid := "uid-" + name
 	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
 		UID: uid, Name: name, State: repos.StateActive, Profile: "code", CreatedAt: 1,

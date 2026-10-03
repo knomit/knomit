@@ -16,7 +16,7 @@ func TestConfigureRemote_WritesTwoRefspecs(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
 
@@ -42,7 +42,7 @@ func TestConfigureRemote_IsIdempotent(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
 	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
@@ -66,7 +66,7 @@ func TestReadAgentBase_MissingIsReferenceNotFound(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// InitRepo seeds the watermark; clear it to model the missing case.
 	require.NoError(t, svc.rh.gits.RemoveReference(agentBaseRefName("agent/test")))
@@ -81,7 +81,7 @@ func TestWriteAgentBase_RoundTrips(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	mainHash := mustHeadHash(t, svc, "main")
 	require.NoError(t, svc.rh.writeAgentBase("agent/test", mainHash))
@@ -96,7 +96,7 @@ func TestInitRepo_SeedsAgentWatermark(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Watermark = the initial commit (which equals local main at init time).
 	mainHash := mustHeadHash(t, svc, "main")
@@ -121,7 +121,7 @@ func TestUnpushedCommits_LocalAhead(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	c1 := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 	c2 := writeMergeFact(t, svc, "agent/test", "kb/b.md", "B", "v1")
@@ -145,7 +145,7 @@ func TestUnpushedCommits_LocalStrictlyAheadIsNoOp(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	rootHash := mustHeadHash(t, svc, "main")
 	c1 := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
@@ -163,7 +163,7 @@ func TestUnpushedCommits_AlreadyUpstreamAncestor(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Local agent === root; if we treat root as upstream, nothing unpushed.
 	rootHash := mustHeadHash(t, svc, "agent/test")
@@ -178,7 +178,7 @@ func TestUnpushedCommits_DisjointReturnsAllLocal(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	c1 := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 
 	// Create a totally unrelated root commit in the same object store.
@@ -209,7 +209,7 @@ func TestUnpushedCommits_SkipsMergeCommits(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	writeMergeFact(t, svc, "agent/test", "kb/local-1.md", "L1", "v1")
 	preMergeAgent := mustHeadHash(t, svc, "agent/test")
@@ -268,7 +268,7 @@ func TestReplayCommit_PreservesAuthorAndMessage(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	c1Hash := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 	c1, err := svc.rh.repo.CommitObject(plumbing.NewHash(c1Hash))
@@ -313,7 +313,7 @@ func TestReplayCommit_LocalWinsOnConflict(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// 1. Seed kb/shared.md on agent/test. This commit becomes c1's parent
 	//    AND will be where main starts — making it the merge base.
@@ -357,7 +357,7 @@ func TestReplayCommit_RemoteWinsOnConflict(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	baseHash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "base-version")
 	require.NoError(t, svc.rh.gits.SetReference(
@@ -386,7 +386,7 @@ func TestReplayOntoUpstream_NoUnpushedIsNoOp(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	agentHash := mustHeadHash(t, svc, "agent/test")
 	// Upstream = same hash → unpushed commits is empty → no-op.
@@ -403,7 +403,7 @@ func TestReplayOntoUpstream_FastForwardWhenLocalIsAncestor(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Upstream gets a commit; agent stays behind.
 	upstreamHash := writeMergeFact(t, svc, "main", "kb/u.md", "U", "v1")
@@ -420,7 +420,7 @@ func TestReplayOntoUpstream_ReplaysAllUnpushedCommits(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Two local commits.
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
@@ -469,7 +469,7 @@ func TestReplayOntoUpstream_HonoursContextCancellation(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Two unpushed agent commits over a one-commit upstream — enough that the
 	// loop's per-iteration ctx check is the only thing that can stop it.
@@ -500,7 +500,7 @@ func TestReplayOntoUpstream_FailureLeavesAgentRefUntouched(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 	preReplayHash := mustHeadHash(t, svc, "agent/test")
@@ -528,7 +528,7 @@ func TestReconcileMain_FastForwardsWhenOriginAhead(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// origin/main is a descendant of local main (new commit on it).
 	newMainCommit := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
@@ -554,7 +554,7 @@ func TestReconcileMain_NoOpWhenAlreadyAtOrigin(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	mainHash := mustHeadHash(t, svc, "main")
 	require.NoError(t, svc.rh.gits.SetReference(
@@ -586,7 +586,7 @@ func TestReconcileMain_HealsMissingBranchesRow(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Local main and origin/main both at the same commit (the steady-state
 	// Noop case after fetch).
@@ -622,7 +622,7 @@ func TestReconcileMain_DetectsRewind(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Local main has a commit; origin/main is a disjoint commit.
 	writeMergeFact(t, svc, "main", "kb/local.md", "L", "v1")
@@ -642,7 +642,7 @@ func TestReconcileMain_NoOriginMainIsError(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.rh.reconcileMain(context.Background(), "main")
 	require.Error(t, err)
@@ -653,7 +653,7 @@ func TestReconcileMain_CreatesLocalMainWhenMissing(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Drop local main so reconcileMain has to create it.
 	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewBranchReferenceName("main")))
@@ -680,7 +680,7 @@ func TestReconcileAgent_ReplaysLocalCommitsOntoLocalMain(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Watermark at this point is the seed (set by InitRepo). One local
 	// commit on agent; one independent commit on main. Local main advances.
@@ -720,7 +720,7 @@ func TestReconcileAgent_PicksUpMainAdvance(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Watermark = initial commit (seeded by InitRepo) = agent tip = main tip.
 	// Advance local main; agent has no local commits.
@@ -747,7 +747,7 @@ func TestReconcileAgent_ReplaysLocalCommitsOntoUpdatedMain(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Watermark = initial commit. Agent commits a local file; main advances.
 	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
@@ -785,7 +785,7 @@ func TestReconcileAgent_WatermarkPreservedAcrossTicks(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Tick 1: agent writes local-1, main advances, reconcile.
 	writeMergeFact(t, svc, "agent/test", "kb/local-1.md", "L1", "v1")
@@ -834,7 +834,7 @@ func TestReconcileAgentRebase_FallsBackToMergeBaseWhenWatermarkMissing(t *testin
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Drop the watermark to model the legacy/corruption case.
 	require.NoError(t, svc.rh.gits.RemoveReference(agentBaseRefName("agent/test")))
@@ -864,7 +864,7 @@ func TestReconcileAgent_SteadyStateUsesMerge(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Agent has a local commit; main has advanced.
 	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
@@ -900,7 +900,7 @@ func TestReconcileAgent_RewindUsesRebase(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Agent writes a local commit on top of the seed.
 	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
@@ -930,7 +930,7 @@ func TestSync_OrchestratesMainAndAgent(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Pretend a fetch happened: write origin/main ref directly.
 	originMain := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
@@ -965,7 +965,7 @@ func TestReconcileNow_UpstreamEqualsAgentIsPushOnly(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// A freshly-written fact commit on the agent branch (local ahead, unpushed).
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
@@ -1017,7 +1017,7 @@ func TestClassifyMainRewind_DistinguishesSharedAndDisjoint(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Shared history: two commits both descended from the root. MergeBase
 	// succeeds and returns the root as common ancestor.
@@ -1083,7 +1083,7 @@ func TestConfigureRemote_EmptyAgentBranchWritesOneRefspec(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", ""))
 
@@ -1107,7 +1107,7 @@ func TestReconcileNow_NoAgentBranchReconcilesMainOnly(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// origin/main is one commit ahead of local main.
 	ahead := writeMergeFact(t, svc, "main", "kb/a.md", "A", "v1")

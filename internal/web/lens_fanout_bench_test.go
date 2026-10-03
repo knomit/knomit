@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sync/atomic"
@@ -45,7 +46,7 @@ func benchTargets(b *testing.B, n int) []federate.Target {
 			b.Fatalf("open %s: %v", name, err)
 		}
 		b.Cleanup(func() { _ = svc.Close() })
-		if err := svc.InitRepo(map[string]string{}, "agent/bench"); err != nil {
+		if err := svc.InitRepo(context.Background(), map[string]string{}, "agent/bench"); err != nil {
 			b.Fatalf("init %s: %v", name, err)
 		}
 		ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{

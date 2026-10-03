@@ -35,7 +35,7 @@ func TestApplyPruneDecisions_MergeDoesNotOverwriteAnExistingFact(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	// A live fact the merge is about to be aimed at. Its body is the tell: if
 	// the merge overwrites it, this string is gone.
@@ -117,7 +117,7 @@ func TestApplyPruneDecisions_MergeStillWritesUnderANormalizedPath(t *testing.T) 
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	for _, p := range []string{"kb/technology/a.md", "kb/technology/b.md"} {
 		_, err = svc.Facts().WriteFact(ctx, branch, p,
