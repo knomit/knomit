@@ -3613,7 +3613,7 @@ components:
       properties:
         content:
           type: string
-          description: Full markdown document with YAML frontmatter. An `expires:` line that is not an RFC 3339 timestamp with an offset is 422. A `context:` map that is malformed (not one line, a list or object value, too long), or carries a key the ontology does not declare for the fact's topic, or a value its declaration refuses, is 422; a `time` value is stored in UTC.
+          description: Full markdown document with YAML frontmatter. An `expires:` line that is not an RFC 3339 timestamp with an offset is 422. A `context:` map that is malformed (not one line, a control or bidirectional formatting character, a list or object value, too long), or carries a key the ontology does not declare for the fact's topic, or a value its declaration refuses, is 422; a `time` value is stored in UTC.
 
     # Topics
     TopicNode:

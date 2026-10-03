@@ -23,7 +23,7 @@ import (
 //
 //  1. SHAPE, here, run by SerializeFact (the one write gate) and by ParseFact
 //     (which DROPS a malformed map into ContextWarnings rather than failing):
-//     key names, scalar values only, one line, no control characters, a hard
+//     key names, scalar values only, one line, no control or bidi characters, a hard
 //     cap of MaxContextValueBytes, at most MaxContextKeys keys.
 //  2. TYPES, against the ontology's `context:` declarations
 //     (ValidateContext, run by ValidateFact and by REST PUT): declared keys,
@@ -115,8 +115,22 @@ func contextStringShape(s string) error {
 		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
 			return fmt.Errorf("a string must be one line with no control characters (found %U)", r)
 		}
+		if isBidiFormat(r) {
+			return fmt.Errorf("a string must not contain bidirectional formatting characters (found %U)", r)
+		}
 	}
 	return nil
+}
+
+// isBidiFormat reports the Unicode bidirectional embedding, override and
+// isolate characters: U+202A\u2013U+202E (LRE, RLE, PDF, LRO, RLO) and
+// U+2066\u2013U+2069 (LRI, RLI, FSI, PDI). They are format characters (Cf), not
+// control characters, so unicode.IsControl misses them, yet they reorder how
+// the rest of a line displays \u2014 a label could read differently to a human
+// than to a filter. User ruling 2026-10-03: "yes, context should refuse
+// those characters." Keys cannot hold them: the key grammar is ASCII.
+func isBidiFormat(r rune) bool {
+	return (r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069')
 }
 
 // NormalizeContextValues returns a copy of ctx with Go integer types widened

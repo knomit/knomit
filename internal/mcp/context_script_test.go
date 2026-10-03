@@ -40,6 +40,11 @@ func TestScriptTools_ContextThroughTheSameGates(t *testing.T) {
 	require.True(t, isErr)
 	require.Contains(t, text, `key "task"`)
 
+	_, text, isErr = callScript(t, tools, ctx, "update", map[string]any{"file": file, "moment_name": "trigger:t1",
+		"updates": map[string]any{"context": map[string]any{"task": "t-17‮", "verdict": "agree"}}})
+	require.True(t, isErr)
+	require.Contains(t, text, `key "task": a string must not contain bidirectional formatting characters`)
+
 	_, text, isErr = callScript(t, tools, ctx, "learn", map[string]any{
 		"moment_name": "trigger:t1",
 		"facts": []any{map[string]any{"topic": "verdicts", "category": "t-17", "title": "Undeclared",

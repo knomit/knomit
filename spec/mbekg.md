@@ -454,7 +454,8 @@ context: {target: kb/forecast/ipo/9a1b2c3d.md, task: t-17, verdict: disagree}
 - **Shape** (enforced on every write): keys match `[a-z][a-z0-9_]*`, at most
   32 characters; at most 16 keys; values are strings, numbers or booleans —
   never lists, maps or null; a string is ONE line of valid UTF-8 with no
-  control character (and no U+2028/U+2029), at most 256 bytes.
+  control character, no U+2028/U+2029, and no bidirectional formatting
+  character (U+202A–U+202E, U+2066–U+2069), at most 256 bytes.
 - **Types** (enforced on write against the ontology, §3.2): every key must be
   declared by the `context:` block of the fact's topic or a parent topic; the
   value must satisfy its declaration; a `required` key must be present. A

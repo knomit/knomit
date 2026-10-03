@@ -162,6 +162,16 @@ func TestFactContext_MalformedMapNeverIndexed(t *testing.T) {
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 	require.Equal(t, 0, contextRowCount(t, svc), "rebuild: no row")
+
+	// A bidi override (user ruling: refused like a newline) via git: the same.
+	bidi := "---\ntype: observation\ndomain: [verdicts]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n" +
+		"context: {task: \"t-17\\u202E71-t\", verdict: agree}\n---\n# Bidi\n\nbody\n"
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/verdicts/bidi.md", bidi, "sync", "")
+	require.NoError(t, err)
+	require.Equal(t, 0, contextRowCount(t, svc), "incremental: no row for a bidi value")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
+	require.Equal(t, 0, contextRowCount(t, svc), "rebuild: no row for a bidi value")
+	require.Empty(t, searchPaths(t, svc, branch, ctxQ("kb/", "verdict", "agree")))
 }
 
 // Migration 000034's body is idempotent: a re-run over an applied body (what

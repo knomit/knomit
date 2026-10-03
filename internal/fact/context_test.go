@@ -79,6 +79,8 @@ func TestContext_MalformedMapDroppedWholeFactStillLoads(t *testing.T) {
 		"newline escape":   "context: {a: \"x\\ny\"}\n",
 		"tab escape":       "context: {a: \"x\\ty\"}\n",
 		"line separator":   "context: {a: \"x\\u2028y\"}\n",
+		"bidi override":    "context: {a: \"x\\u202Ey\"}\n",
+		"bidi isolate":     "context: {a: \"x\\u2067y\"}\n",
 		"bad key":          "context: {Task: x}\n",
 		"long key":         "context: {" + strings.Repeat("k", 33) + ": x}\n",
 		"over hard cap":    "context: {a: " + strings.Repeat("x", 257) + "}\n",
@@ -134,6 +136,10 @@ func TestContext_SerializeShapeGate(t *testing.T) {
 		{strings.Repeat("k", 32): "x"},
 		{"a": strings.Repeat("x", 256)},
 		{"a_1": "ünïcødé ok", "b": -1.5, "c": false},
+		// Just outside both bidi ranges: U+2029 is refused as a line break,
+		// so the neighbours checked are U+202F (narrow no-break space) and
+		// U+206A (deprecated, but not a bidi isolate).
+		{"a": "x y", "b": "x⁪y"},
 	}
 	for _, c := range ok {
 		_, err := SerializeFact(base(c))
@@ -153,6 +159,11 @@ func TestContext_SerializeShapeGate(t *testing.T) {
 		{map[string]any{"a": "x\ty"}, `key "a"`},
 		{map[string]any{"a": "x\u2028y"}, `key "a"`},
 		{map[string]any{"a": "x\u0085y"}, `key "a"`},
+		// Bidi format characters, each end of both ranges (user ruling).
+		{map[string]any{"a": "x‪y"}, "bidirectional"},
+		{map[string]any{"a": "x‮y"}, "bidirectional"},
+		{map[string]any{"a": "x⁦y"}, "bidirectional"},
+		{map[string]any{"a": "x⁩y"}, "bidirectional"},
 		{map[string]any{"a": "\xff"}, `key "a"`},
 		{map[string]any{"a": []any{"x"}}, `key "a"`},
 		{map[string]any{"a": map[string]any{"b": 1}}, `key "a"`},

@@ -144,6 +144,8 @@ func TestLearn_ContextShapeRefusedWholeCall(t *testing.T) {
 		{"newline", map[string]any{"note": "a\nb"}, `key "note"`},
 		{"tab", map[string]any{"note": "a\tb"}, `key "note"`},
 		{"line separator", map[string]any{"note": "a\u2028b"}, `key "note"`},
+		{"bidi override", map[string]any{"note": "a\u202eb"}, `key "note": a string must not contain bidirectional formatting characters (found U+202E)`},
+		{"bidi isolate", map[string]any{"note": "a\u2066b"}, `key "note": a string must not contain bidirectional formatting characters (found U+2066)`},
 		// Invalid UTF-8 cannot reach this handler: decodeArg's JSON round trip
 		// turns it into U+FFFD. SerializeFact's own gate refuses it
 		// (fact.TestContext_SerializeShapeGate).
@@ -332,6 +334,10 @@ func TestUpdate_ContextKeepReplaceClear(t *testing.T) {
 	r = update(map[string]any{"context": map[string]any{"note": "a\nb"}})
 	require.True(t, r.IsError)
 	require.Contains(t, resultText(t, r), `updates.context: invalid context: key "note"`)
+
+	r = update(map[string]any{"context": map[string]any{"note": "a⁧b"}})
+	require.True(t, r.IsError)
+	require.Contains(t, resultText(t, r), `updates.context: invalid context: key "note": a string must not contain bidirectional formatting characters`)
 
 	r = update(map[string]any{"context": map[string]any{"nope": "x"}})
 	require.True(t, r.IsError)

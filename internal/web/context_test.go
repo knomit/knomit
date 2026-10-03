@@ -166,6 +166,11 @@ func TestREST_PutGatesContext(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "Invalid context")
 	require.NotContains(t, stored("kb/verdicts/a1.md"), "context", "nothing written")
 
+	rec = put("kb/verdicts/a1.md", "context: {task: \"t-17\\u2066\"}\n")
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "bidirectional formatting characters")
+	require.NotContains(t, stored("kb/verdicts/a1.md"), "context", "nothing written")
+
 	rec = put("kb/verdicts/a1.md", "context: {rogue: x}\n")
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), "not declared")
