@@ -76,7 +76,7 @@ func TestSimilarityAdjacency_Integration(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	svc.SetEmbedder(&stub768Embedder{})
 	// Two facts with near-identical bodies cluster as SIMILAR_TO; a third unrelated.
 	writeSrcFact(t, svc, "main", "kb/a.md", "alpha beta gamma delta", nil, nil)
@@ -104,7 +104,7 @@ func TestSimilarityAdjacency_EmptyAndSinglePath(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	// Empty input.
 	g, err := svc.gq.SimilarityAdjacency(ctx, nil)
@@ -133,7 +133,7 @@ func TestSimilarityAdjacency_QuoteInPathDoesNotInject(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	si := svc.si
 	ctx := context.Background()

@@ -15,16 +15,16 @@ import (
 // Scenario: a repo is connected to a HEALTHY HTTP remote and settles, then the
 // origin is RE-POINTED to a SECOND remote whose info/refs advertisement hangs
 // (accepts the connection, never answers). The re-point drives the production
-// PUT /api/v1/{repo}/origin flow (Origins.Set + ActivateSync's synchronous
-// reconcile). ActivateSync fetches from the new origin; if that fetch is not
-// bounded, the re-point blocks indefinitely.
+// PUT /api/v1/{repo}/origin flow — the AttachOrigin event, whose guard probes
+// the new origin before anything changes. If that probe is not bounded, the
+// re-point blocks indefinitely.
 //
 // CONTRACT: the re-point aborts within a bounded time (well under the budget
 // below), governed by cfg.Git.NetworkTimeout (5s in the Storyboard). It need
 // not succeed — a hung remote SHOULD fail — but it must RETURN.
 //
-// Characterization: with the network-timeout fix threaded into ActivateSync's
-// reconcile (fetchOrigin honours ri.rh.netTimeout), this is expected GREEN.
+// Characterization: the guard's probe runs under cfg.Git.NetworkTimeout, so
+// this is expected GREEN.
 func TestContract_Repoint_HungRemote_AbortsWithinDeadline(t *testing.T) {
 	sb := testenv.NewStoryboard(t)
 
@@ -58,6 +58,6 @@ func TestContract_Repoint_HungRemote_AbortsWithinDeadline(t *testing.T) {
 	case <-time.After(budget):
 		t.Fatalf("CONTRACT VIOLATION (symptom #2): re-pointing origin to a hung "+
 			"remote did not abort within %s — the re-point path (Origins.Set + "+
-			"ActivateSync reconcile) has no network timeout/context deadline", budget)
+			"attach probe) has no network timeout/context deadline", budget)
 	}
 }

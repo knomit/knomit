@@ -35,16 +35,15 @@ type Deps struct {
 	// call throws "no script tools"; the dispatcher still runs scripts.
 	ScriptTools ScriptTools
 	KeyPath     string
-	// DisableBackgroundSync suppresses the background pull and push loops
-	// that would otherwise run on every managed repo. Tests use this to
-	// prevent non-deterministic sync/push behavior — the loops call
-	// doSync/doPush immediately on startup which can race with test
-	// assertions about remote state. Production leaves this unset.
-	DisableBackgroundSync bool
+	// Machine configures every repo's lifecycle machine. Production leaves it
+	// zero. Tests set Machine.Synchronous (no sync loop, no experiment sweep:
+	// one inline sync round instead) and Machine.Hook (hold a stage or the
+	// index job at a known point).
+	Machine Options
 	// CreateTimeout bounds a DETACHED create (Manager.StartCreate). Unset
-	// means DefaultCreateTimeout. Unlike DisableBackgroundSync this is not a
-	// test-only flag — it is a real operational knob that tests also set, to
-	// reach the timeout path in milliseconds rather than in half-hours.
+	// means DefaultCreateTimeout. It is a real operational knob that tests
+	// also set, to reach the timeout path in milliseconds rather than in
+	// half-hours.
 	CreateTimeout time.Duration
 }
 
@@ -58,16 +57,6 @@ type Manager struct {
 	repos map[string]*RepoInstance
 	ctx   context.Context
 	deps  Deps
-
-	// healGate holds the background index heal at a known point so a test can
-	// observe the 'indexing' state rather than race it. NIL IN PRODUCTION —
-	// only setIndexHealGate writes it, and nothing outside _test.go calls
-	// that. See index_heal_gate.go for why it exists.
-	//
-	// An atomic pointer rather than a mu-guarded field: it is read from the
-	// heal goroutine, which openOne launches while Add may still hold mu, and
-	// a lock-free load keeps that path free of any question about ordering.
-	healGate atomic.Pointer[indexHealGate]
 
 	// sessionReaperStop is set by Start when the background idle-session
 	// reaper is launched, and invoked by Close to wind it down. nil only when
@@ -207,8 +196,8 @@ func New(ctx context.Context, deps Deps) *Manager {
 		deps:            deps,
 		creating:        make(map[string]struct{}),
 		creatingOrigins: make(map[string]struct{}),
-		// Created here rather than in Start: openOne can run before Start on
-		// some paths, and a nil hub would silently drop those repos' events.
+		// Created here rather than in Start: a repo can be mounted before
+		// Start on some paths, and a nil hub would silently drop its events.
 		repoEventHub: NewRepoEventHub(goob.New(ctx)),
 	}
 }
@@ -634,11 +623,12 @@ func (m *Manager) Names() []string {
 }
 
 // Close gracefully stops all registered repositories and any background
-// goroutines Start launched (currently the cluster-cache warmer).
+// goroutines Start launched.
 //
-// Two-pass repo shutdown: cancel all sync loops first so they wind down
-// concurrently, then wait and release resources repo by repo. Returns nil
-// today; the error return matches io.Closer for forward compatibility.
+// Every machine is sent Unmount (which cancels its root context at once, so
+// all of them wind down concurrently), then each is waited for, up to the
+// unmount drain bound. Returns nil today; the error return matches io.Closer
+// for forward compatibility.
 func (m *Manager) Close() error {
 	if m.sessionReaperStop != nil {
 		m.sessionReaperStop()
@@ -646,17 +636,9 @@ func (m *Manager) Close() error {
 	}
 
 	// Drain detached creates FIRST — before the control.db handles below are
-	// nilled and closed. This is the same invariant the indexWg/syncWg waits in
-	// pass 2 enforce for the index heal and the reconcile loop (see
-	// TestManagerClose_WaitsForBackgroundIndex, PR #82 review finding #1): no
-	// in-flight background SQL may race the handle closing. A detached create
-	// (#67) is the third such worker and was not registered with the drain,
-	// which is how it kept issuing SQL on a closed control.db and writing into
-	// a directory the caller was already deleting.
-	//
-	// It runs BEFORE the handles are released rather than beside pass 2 for a
-	// second reason: a cancelled create rolls itself back, and that rollback
-	// deletes a registry row. It needs the registry still open to do it.
+	// nilled and closed: no in-flight background SQL may race the handle
+	// closing, and a cancelled create rolls itself back, which deletes a
+	// registry row and needs the registry still open to do it.
 	if !m.drainCreates() {
 		log.Error().Dur("timeout", createDrainTimeout).
 			Msg("close: in-flight repo create did not finish after cancellation; closing anyway")
@@ -685,64 +667,137 @@ func (m *Manager) Close() error {
 	}
 
 	m.mu.RLock()
-	instances := make([]*RepoInstance, 0, len(m.repos))
+	machines := make([]*Machine, 0, len(m.repos))
 	for _, ri := range m.repos {
-		instances = append(instances, ri)
+		if ri.machine != nil {
+			machines = append(machines, ri.machine)
+		}
 	}
 	m.mu.RUnlock()
 
-	// Pass 1: cancel each repo's background index heal AND sync loop so they can
-	// wind down concurrently.
-	for _, ri := range instances {
-		ri.mu.RLock()
-		cancel := ri.syncCancel
-		indexCancel := ri.indexCancel
-		ri.mu.RUnlock()
-		if indexCancel != nil {
-			indexCancel()
-		}
-		if cancel != nil {
-			cancel()
-		}
+	// Unmount cancels each machine's root context in Send, from this
+	// goroutine, before the driver drains — so every repo winds down at once.
+	var wg sync.WaitGroup
+	for _, mc := range machines {
+		wg.Add(1)
+		go func(mc *Machine) {
+			defer wg.Done()
+			bound := mc.opts.unmountDrainBound()
+			ctx, cancel := context.WithTimeout(context.Background(), bound)
+			defer cancel()
+			if _, err := mc.Send(ctx, Unmount("manager closing")); err != nil {
+				log.Error().Err(err).Str("repo", mc.r.Name()).Dur("bound", bound).
+					Msg("close: repo did not finish unmounting within the drain bound; closing anyway")
+			}
+		}(mc)
 	}
-
-	// Pass 2: wait for the heal (which may have started the loop via activate)
-	// then the loop to finish — indexWg before syncWg — then shut down each
-	// repo's resources. Both waits must precede closeFn so no in-flight index or
-	// reconcile SQL races the SQLite handle closing.
-	for _, ri := range instances {
-		if ri.indexWg != nil {
-			ri.indexWg.Wait()
-		}
-		if ri.syncWg != nil {
-			ri.syncWg.Wait()
-		}
-		// The loops with their own context (derived from the manager ctx, not
-		// syncCtx): the trigger dispatcher, the consensus merger and the
-		// experiment sweep. Each reaches the store through Acquire, so each must
-		// be stopped (cancel + wait) before closeFn — a run still holding an
-		// Acquire would stall closeFn's drain, and one starting after it would
-		// find the store closed. Stopped after indexWg.Wait, which orders their
-		// start in activate() (inside the heal goroutine) before this stop. A
-		// start from SwapStore (a swap that cancelled the heal before it
-		// activated) is not ordered by that wait; lifetimeGuard covers it —
-		// a start racing this stop either registers before the Wait or is
-		// refused.
-		if ri.triggers != nil {
-			ri.triggers.stop()
-		}
-		if ri.consensus != nil {
-			ri.consensus.stop()
-		}
-		ri.sweep.stop()
-		if ri.hub != nil {
-			ri.hub.Shutdown()
-		}
-		if ri.closeFn != nil {
-			ri.closeFn()
-		}
-	}
+	wg.Wait()
 	return nil
+}
+
+// Send delivers a lifecycle event to ri's machine and waits for its reply (see
+// Machine.Send). It is how callers outside the machine change a mounted repo;
+// nothing else starts, stops or marks anything about it. A bare test instance
+// has no machine and answers ErrNotOpen.
+func (m *Manager) Send(ctx context.Context, ri *RepoInstance, e MachineEvent) (Reply, error) {
+	if ri == nil || ri.machine == nil {
+		return Reply{}, ErrNotOpen
+	}
+	return ri.machine.Send(ctx, e)
+}
+
+// unmount closes ri's machine and waits until it is done: its stores closed,
+// its workers drained. Safe on a bare test instance.
+func unmount(ri *RepoInstance, reason string) {
+	if ri == nil || ri.machine == nil {
+		return
+	}
+	_, _ = ri.machine.Send(context.Background(), Unmount(reason))
+}
+
+// newInstance builds a repo's runtime instance and starts its lifecycle
+// machine, unmounted. Everything here is fixed for the instance's whole life:
+// the agent branch and the subscription flag move together (a subscription has
+// no agent branch, kb/invariants/repos/subscription/flag-and-branch-paired),
+// and the trigger dispatcher, consensus merger and experiment sweeper objects
+// exist from the first commit so their kick slots do too. The stages fill in
+// the rest when the machine is mounted.
+func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
+	cfg := m.deps.Cfg
+	agentBranch := m.deps.AgentBranch
+	if subscribed {
+		agentBranch = ""
+	}
+	ri := &RepoInstance{
+		uid:                           uid,
+		dbPath:                        m.RepoPath(uid),
+		agentBranch:                   agentBranch,
+		subscribed:                    subscribed,
+		embedder:                      m.deps.Embedder,
+		ontologyRoot:                  cfg.OntologyRoot,
+		methodologyMinScore:           cfg.MethodologyMinScore,
+		clusterResolution:             clusterResolutionOrDefault(cfg.ClusterCache.Resolution),
+		clusterMinCommunity:           clusterMinCommunityOrDefault(cfg.ClusterCache.MinCommunitySize),
+		clusterNeighborKinds:          clusterNeighborKindsOrDefault(cfg.ClusterCache.NeighborKinds),
+		discoveryEffortDefault:        cfg.Discovery.EffortDefault,
+		pipelineResumeWindow:          m.sessionCfg.PipelineResumeWindow,
+		discoveryConfidenceThreshold:  cfg.Discovery.ConfidenceThreshold,
+		discoveryBlastRadiusThreshold: cfg.Discovery.BlastRadiusThreshold,
+		discoveryBridge:               cfg.Discovery.Bridge,
+		discoveryCohFloor:             cfg.Discovery.CohFloor,
+		discoveryMaxMembers:           cfg.Discovery.MaxMembers,
+		discoveryQualityFloor:         cfg.Discovery.QualityFloor,
+		discoveryWCoh:                 cfg.Discovery.WCoh,
+		discoveryWGap:                 cfg.Discovery.WGap,
+		discoveryWSpec:                cfg.Discovery.WSpec,
+		hub:                           NewTaskHub(m.ctx),
+		syncWake:                      make(chan struct{}, 1),
+		breakers:                      &syncBreakers{},
+		repoEventHub:                  m.repoEventHub,
+		env: stageEnv{
+			m:        m,
+			cfg:      cfg,
+			signer:   m.deps.Signer,
+			keyPath:  m.deps.KeyPath,
+			embedder: m.deps.Embedder,
+			onPush:   m.fleetPushed,
+		},
+	}
+	ri.setName(name)
+	ri.ident.Store(&identity{ontologyErr: errNotIdentified})
+	// F07 / F08: built for a writable repo with an agent branch on a
+	// writable server; nil otherwise, and the kicks below are nil checks.
+	if agentBranch != "" && !cfg.ReadOnly {
+		ri.triggers = newTriggerDispatcher(ri, name, agentBranch, m.deps.Signer, cfg.Log.SlowTriggerMS,
+			cfg.Triggers.ScriptRatePerMinute, m.deps.ScriptTools, cfg.Home, m.ServerAddress)
+		ri.consensus = newConsensusMerger(ri, name, agentBranch)
+	}
+	// No sweeper for a subscription (no experiment can be forked from one)
+	// or when experiments.expiry_days is 0 (never expire: the loop must not
+	// run at all).
+	if !subscribed && cfg.Experiments.ExpiryDays > 0 {
+		ri.sweep = newExperimentSweeper(ri.Acquire, name, cfg.Experiments.ExpiryDays)
+	}
+	// The store's commit callback runs under the writer's branch lock, so it
+	// only schedules: the observer's debounce, and one non-blocking send on a
+	// 1-slot channel — the dispatcher's for the agent branch (plus the sync
+	// wake under `sync: {push: realtime}`), the consensus merger's for every
+	// other branch except exp/*. It never reads the store.
+	ri.onCommit = func(branch, hash string) {
+		if obs := ri.observer.Load(); obs != nil {
+			obs.Notify(hash)
+		}
+		if branch == agentBranch {
+			ri.triggerKick()
+			if ri.realtimePush.Load() {
+				ri.wakeSync()
+			}
+		} else if consensusKicks(branch, agentBranch) {
+			ri.consensusKick()
+		}
+	}
+	newMachine(m.ctx, ri, m.deps.Machine)
+	return ri
 }
 
 // Start opens what the repo registry in cfg.Home/control.db says exists —
@@ -845,11 +900,20 @@ func (m *Manager) Start() error {
 	if err != nil {
 		return fmt.Errorf("list registered repos: %w", err)
 	}
+	// Every active row is mounted concurrently: a mount replies once its walk
+	// reaches Ready, which is milliseconds — the index job runs in the
+	// background — so boot does not wait on any repo's index.
 	registered := make(map[string]struct{}, len(records))
+	var boot sync.WaitGroup
 	for _, rec := range records {
 		registered[rec.UID] = struct{}{}
-		m.openRegistered(rec)
+		boot.Add(1)
+		go func(rec RepoRecord) {
+			defer boot.Done()
+			m.openRegistered(rec)
+		}(rec)
 	}
+	boot.Wait()
 	// Archived repos are registered too — their database stays at
 	// RepoPath(uid) and Restore reopens it in place. Counting only the active
 	// ones would report every archived repo's file as an orphan, inviting an
@@ -876,33 +940,29 @@ func (m *Manager) Start() error {
 	return nil
 }
 
-// Add opens a single repository and registers it under name.
-// Each repo loads its own ontology from its git store during initialization.
+// mountExisting builds the instance for a registered repo and mounts what is
+// on disk: Populate does nothing, Open → Identify → Index → Serve → Sync. It
+// replies once the walk reaches Ready (the index job keeps running). A failed
+// mount has already unwound itself; the machine is unmounted and the error
+// (a *StageError naming the stage) returned.
 //
-// uid is its control.db identity and origin is the connection control.db holds
-// for it (nil when it has none). Add opens what the registry says exists; it
-// never writes to the registry itself.
-//
-// Add deliberately does NOT enforce ErrRepoNameConflictsLens (the reverse M-1
-// guard). Add registers repos that already exist on disk — the Start
-// discovery loop and the recovery paths inside Archive/Restore all go through
-// here — so refusing a lens-name collision would DROP a repo whose collision
-// predates this fix (or was created out-of-band), silently unregistering real
-// data. The invariant is enforced loud at the user-facing creation boundary
-// (CreatePreflight/Create/Restore) and soft at startup: an already-existing
-// collision keeps its repo, and operators resolve it by renaming the lens.
-func (m *Manager) Add(name, uid, dbPath string, origin *Origin) error {
-	ri, err := m.openOne(name, uid, dbPath, origin)
-	if err != nil {
-		return err
+// It registers nothing. It deliberately does not enforce
+// ErrRepoNameConflictsLens either: it opens repos that already exist, and
+// refusing a lens-name collision here would DROP a repo whose collision
+// predates that guard. The invariant is enforced loud at the user-facing
+// creation boundary (CreatePreflight/Create/Restore) and soft here.
+func (m *Manager) mountExisting(name, uid string, origin *Origin) (*RepoInstance, error) {
+	subscribed := origin != nil && origin.Mode == OriginModeSubscribe
+	ri := m.newInstance(name, uid, subscribed)
+	if _, err := m.Send(context.Background(), ri, Mount(MountSpec{Mode: MountExisting})); err != nil {
+		unmount(ri, "mount failed")
+		return nil, err
 	}
-	m.Set(name, ri)
-	return nil
+	return ri, nil
 }
 
 // Remove unregisters a repo from the live maps without touching the registry
-// or the filesystem. Callers own the durable state; this only detaches the
-// runtime instance.
+// or the filesystem, and unmounts it. Callers own the durable state.
 func (m *Manager) Remove(name string) {
 	m.mu.Lock()
 	ri := m.repos[name]
@@ -915,9 +975,7 @@ func (m *Manager) Remove(name string) {
 		delete(m.unavailable, ri.uid)
 	}
 	m.mu.Unlock()
-	if ri != nil {
-		ri.shutdown()
-	}
+	unmount(ri, "removed")
 }
 
 // ---------- private helpers ----------
@@ -986,16 +1044,18 @@ func (m *Manager) clearUnavailable(uid string) {
 	m.mu.Unlock()
 }
 
-// openRegistered opens one registry row, classifying every failure rather than
-// dropping the repo.
+// openRegistered mounts one registry row, classifying every failure rather
+// than dropping the repo: a missing file, a store that will not open, and a
+// knowledge base already held by another active repo (two local copies would
+// both write agent/<host> and clobber each other on push) each leave the repo
+// VISIBLE as unavailable, with the reason.
 func (m *Manager) openRegistered(rec RepoRecord) {
-	reg, origins, herr := m.controlHandles()
+	_, origins, herr := m.controlHandles()
 	if herr != nil {
 		m.markUnavailable(rec, "unopenable", herr.Error())
 		return
 	}
-	dbPath := m.RepoPath(rec.UID)
-	if _, err := os.Stat(dbPath); err != nil {
+	if _, err := os.Stat(m.RepoPath(rec.UID)); err != nil {
 		m.markUnavailable(rec, "missing", "database file not found")
 		return
 	}
@@ -1004,29 +1064,27 @@ func (m *Manager) openRegistered(rec RepoRecord) {
 		m.markUnavailable(rec, "unopenable", fmt.Sprintf("read origin: %v", err))
 		return
 	}
-	ri, err := m.openOne(rec.Name, rec.UID, dbPath, origin)
+	ri, err := m.mountExisting(rec.Name, rec.UID, origin)
 	if err != nil {
-		m.markUnavailable(rec, "unopenable", err.Error())
+		reason, detail := unavailableReason(err)
+		m.markUnavailable(rec, reason, detail)
 		return
-	}
-	// Record which knowledge base this repo holds. A conflict means another
-	// ACTIVE repo already holds it — two local copies would both write
-	// agent/<host> and clobber each other on push — so leave this one
-	// unregistered and say so, rather than silently duplicating an identity.
-	if id := ri.ID(); id != "" {
-		if err := reg.RecordRepoID(rec.UID, id); err != nil {
-			if errors.Is(err, ErrRepoAlreadyRegistered) {
-				short := ri.ShortID()
-				ri.shutdown()
-				m.markUnavailable(rec, "conflict",
-					fmt.Sprintf("knowledge base %s is already held by another active repo", short))
-				return
-			}
-			log.Warn().Err(err).Str("repo", rec.Name).Msg("recording repo identity failed")
-		}
 	}
 	m.clearUnavailable(rec.UID)
 	m.Set(rec.Name, ri)
+}
+
+// unavailableReason maps a failed mount onto the Unavailable vocabulary: an
+// identity conflict is "conflict", every other failure "unopenable".
+func unavailableReason(err error) (reason, detail string) {
+	var se *StageError
+	if errors.As(err, &se) {
+		if errors.Is(se.Err, ErrRepoAlreadyRegistered) {
+			return "conflict", se.Err.Error()
+		}
+		return "unopenable", se.Err.Error()
+	}
+	return "unopenable", err.Error()
 }
 
 // warnOrphanFiles reports .db files under reposDir with no registry row. They
@@ -1056,156 +1114,6 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 			Msg("database file is not in the registry and will be ignored")
 	}
 	return orphans
-}
-
-// openOne initialises a single repo from a SQLite database file. It only ever
-// OPENS: a database with no git data yields an error so the caller can skip it
-// gracefully, never a freshly seeded repository.
-func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstance, error) {
-	b := repoBuilder{
-		name:                  name,
-		uid:                   uid,
-		origin:                origin,
-		dbPath:                dbPath,
-		cfg:                   m.deps.Cfg,
-		signer:                m.deps.Signer,
-		acceptList:            m.acceptListFor(uid),
-		agentBranch:           m.deps.AgentBranch,
-		onPush:                m.fleetPushed,
-		embedder:              m.deps.Embedder,
-		scriptTools:           m.deps.ScriptTools,
-		serverAddr:            m.ServerAddress,
-		keyPath:               m.deps.KeyPath,
-		resumeWindow:          m.sessionCfg.PipelineResumeWindow,
-		ctx:                   m.ctx,
-		repoEventHub:          m.repoEventHub,
-		disableBackgroundSync: m.deps.DisableBackgroundSync,
-		// The ontology gate, wired in so the sync-activation path can enforce
-		// it without the builder knowing about the Manager. Every path that
-		// attaches a remote ends here; see startSync.
-		checkOriginOntology: m.CheckOriginOntology,
-	}
-
-	if origin != nil && origin.Mode == OriginModeSubscribe {
-		// A subscription has no agent branch: every reader uses readBranch()
-		// (the upstream, rehydrated from the origin row) and the store is
-		// read-only. Set here, before openStore, so the flag reaches the
-		// service and nothing below cuts a branch.
-		//
-		// Both fields move together: RepoInstance.subscribed is only ever true
-		// alongside an empty agent branch, and this is the production
-		// constructor that upholds it.
-		b.subscribed = true
-		b.agentBranch = ""
-	}
-
-	if err := b.openStore(); err != nil {
-		return nil, err
-	}
-	if err := b.openGit(); err != nil {
-		b.close()
-		return nil, err
-	}
-	// readBranch() is only valid once openGit has rehydrated upstreamMain. A
-	// subscription with no upstream would read from "" — no ontology, no
-	// identity, no index — so refuse instead of building a repo that looks
-	// open and answers nothing. Create persists the RESOLVED upstream, so this
-	// means a corrupted or hand-edited origin row.
-	if b.subscribed && b.readBranch() == "" {
-		b.close()
-		return nil, fmt.Errorf("open %q: subscription has no upstream branch recorded in its origin", name)
-	}
-	// ensureBranch must run before loadOntology: on a restored/copied home the
-	// configured agent branch is absent until ensureBranch adopts it (issue
-	// #32), and loadOntology reads (and may rewrite) the ontology file on
-	// that branch. Running loadOntology first would fall back to the default
-	// ontology and skip the preset-refresh on the first boot after a restore.
-	b.ensureBranch()
-	b.loadOntology()
-	b.setupIndex()
-	b.seedWatermarks()
-
-	ri := b.build()
-
-	// Synchronous open for test harnesses (DisableBackgroundSync): build the
-	// index and activate inline so the index is ready when openOne returns —
-	// preserving the open→index-ready contract many tests rely on.
-	if b.disableBackgroundSync {
-		ok := healIndexBranches(b.ctx, b.svc.IndexManager(), b.name, b.indexBranches, nil)
-		b.activate()
-		if ok {
-			ri.markIndexReady()
-		} else {
-			ri.markIndexFailed()
-		}
-		return ri, nil
-	}
-
-	// Production: the heavy initial index runs in the BACKGROUND. The store is
-	// already live, so the HTTP server / UI come up immediately and reads work
-	// progressively (partial until "ready"). The remote sync loops start only
-	// after indexing (b.activate). The heal itself holds lockBranch per branch
-	// (Rebuild self-locks; the incremental path uses SyncLocked), so a
-	// concurrent inline write or the live commit observer (which also uses
-	// SyncLocked) is serialized with it rather than racing the index watermark.
-	//
-	// The heal watches b.indexCtx — its OWN context, NOT syncCtx. syncCtx is
-	// cancelled by startSync (ActivateSync) to restart the reconcile loop; a
-	// runtime clone-create calls ActivateSync right after this Add, so sharing
-	// syncCtx would cancel the in-flight heal and pin the index at "indexing"
-	// forever (the very bug this split fixes). indexCtx is cancelled only by
-	// teardown (shutdown/Close via ri.indexCancel, or b.ctx) and by SwapStore,
-	// so a close or a swap mid-index aborts the heal and skips activation.
-	// SwapStore is NOT teardown — the repo stays live and observed — so it
-	// owns what that skip leaves undone: it starts the lifetime components
-	// (startLifetimeAfterSwap), and its caller marks the index state around
-	// the rebuild it runs on the new store (issue #400).
-	//
-	// The heal goroutine is registered with b.indexWg so every path that
-	// cancels it (Manager.Close, Archive→shutdown, SwapStore) — each of which does
-	// indexWg.Wait() BEFORE svc.Close() — waits for the heal to finish before
-	// the SQLite handle is closed. Without this the close would race in-flight
-	// index SQL on the same *sql.DB ("database is closed"). The Add happens
-	// here (synchronously, before openOne returns), so it is ordered before any
-	// teardown Wait; b.activate's own syncWg.Add runs while indexWg is still
-	// held, and teardown waits indexWg before syncWg, so the loop counter never
-	// transiently reads zero.
-	ri.markIndexing()
-	b.indexWg.Add(1)
-	go func() {
-		defer b.indexWg.Done()
-		// A no-op in production: healGate is nil unless a test armed it. When
-		// one has, this is the single point where the heal is holdable, which
-		// is what lets a test observe the 'indexing' state above rather than
-		// race it. It takes b.indexCtx, so a teardown that lands on a held
-		// gate still drains — see index_heal_gate.go.
-		m.healGate.Load().hold(b.indexCtx)
-		progress := func(_ string, done, total int) { ri.setIndexProgress(done, total) }
-		ok := healIndexBranches(b.indexCtx, b.svc.IndexManager(), b.name, b.indexBranches, progress)
-		if b.indexCtx.Err() != nil {
-			// Repo was closed or swapped mid-index — not a failure. Skip
-			// activation and leave the state as-is. On teardown the instance
-			// is going away and its status is no longer observed. On a
-			// SwapStore it is NOT going away, and this exit is safe only
-			// because SwapStore starts the lifetime components itself once
-			// this goroutine has exited (ri.activated is still false), and
-			// the swap's caller marks the index state around its rebuild on
-			// the new store. Do not add work here that a swap would need: the
-			// store this goroutine holds is about to be discarded.
-			return
-		}
-		// Activate the sync loops even on a failed heal so the reconcile/push
-		// loops can retry and recover; the index state still reflects that the
-		// initial heal did not fully complete.
-		b.activate()
-		if ok {
-			ri.markIndexReady()
-		} else {
-			ri.markIndexFailed()
-		}
-	}()
-
-	return ri, nil
 }
 
 // IsValidName reports whether s satisfies the repo/lens name grammar

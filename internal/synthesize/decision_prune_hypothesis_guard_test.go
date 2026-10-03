@@ -24,7 +24,7 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// A merge whose merged.type is "hypothesis" must be rejected with a
 	// warn — the merged fact is NOT written and source facts are NOT
@@ -88,7 +88,7 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	merges := []MergeEntry{
 		{

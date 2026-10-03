@@ -373,7 +373,7 @@ func TestDue_BodyEditDoesNotRefire(t *testing.T) {
 func TestDue_CrashBeforeMarkRefiresAndLogsBoth(t *testing.T) {
 	home := t.TempDir()
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
-		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true}
+		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}}
 	clock := newFakeClock()
 	dueHooks(t, clock, triggerHooks{})
 	m := New(context.Background(), deps)
@@ -417,7 +417,7 @@ func TestDue_SweepRunsOnReconcileTick(t *testing.T) {
 			Git: config.GitConfig{LocalReconcileInterval: 100 * time.Millisecond}},
 		AgentBranch: trigAgent,
 		KeyPath:     filepath.Join(home, "agent.key"),
-		// DisableBackgroundSync deliberately NOT set: the tick is the point.
+		// Machine.Synchronous deliberately NOT set: the tick is the point.
 	})
 	t.Cleanup(func() { m.Close() })
 	ri := bootRepo(t, m)
@@ -449,7 +449,7 @@ func TestDue_SweepRunsOnReconcileTick_FailedLocalTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcile(ctx, "repo", trigAgent, 20*time.Millisecond, nil,
+		runLocalReconcile(ctx, "repo", trigAgent, 20*time.Millisecond, nil, false,
 			func() (bool, error) { return false, nil },
 			func() error { advances.Add(1); return errors.New("advance fails every tick") },
 			ri.triggers.triggerKick, nil)
@@ -480,7 +480,10 @@ func TestDue_SweepRunsOnReconcileTick_FailedRemoteTick(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), trigAgent, failingAuth, "", false, nil, ri.triggers.triggerKick, nil, nil, nil)
+	go func() {
+		defer wg.Done()
+		runReconcileLoop(ctx, svc, ri.hub, ri.Name(), trigAgent, failingAuth, "", false, nil, ri.triggers.triggerKick, nil, nil, nil, false)
+	}()
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		10*time.Second, 20*time.Millisecond, "a tick that fails before Sync must still kick the sweep")
 	require.Greater(t, authCalls.Load(), int64(0), "fixture: the tick ran and failed at auth resolution")
@@ -697,10 +700,10 @@ func TestDue_NotOnReadOnlySubscribedOrExp(t *testing.T) {
 
 	home := t.TempDir()
 	ro := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
-		AgentBranch:           trigAgent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
+		AgentBranch: trigAgent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { _ = ro.Close() })
 	rri := bootRepo(t, ro)
@@ -878,7 +881,8 @@ func TestDue_SurvivesSwapStore(t *testing.T) {
 	clock.add(2 * time.Hour)
 	kickAndWait(t, ri)
 	require.Len(t, dueFiresOf(t, ri, "due"), 1)
-	require.NoError(t, m.SwapStore(ri, tmp))
+	require.NoError(t, swapStore(m, ri, tmp))
+	waitIndexSettled(t, ri) // the due sweep waits for the new store's index
 	kickAndWait(t, ri)
 	require.Len(t, dueFiresOf(t, ri, "due"), 1, "the swapped-in store holds no fire log rows of its own; the fact fires once more into it")
 	require.Len(t, dueMarks(t, ri), 1, "and is marked in the new store")

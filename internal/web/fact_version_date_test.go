@@ -18,7 +18,7 @@ func openTestStore(t *testing.T) (*store.Service, string) {
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	res, err := svc.Facts().WriteFact(context.Background(), "main", "kb/t.md",
 		"---\ntype: observation\nconfidence: 0.9\n---\n# t\n\nbody\n", "create t", "")
 	require.NoError(t, err)

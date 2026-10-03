@@ -77,7 +77,7 @@ func seedHighlightFixture(t *testing.T, branch string) *Service {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	ctx := context.Background()
 	for _, p := range []string{"kb/o/a.md", "kb/o/b.md", "kb/o/c.md"} {
@@ -193,7 +193,7 @@ func TestHighlights_OnlyTheRequestedBranch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	// Shared substrate on main.
@@ -281,7 +281,7 @@ func TestHighlights_ImpactCountsDistinctTargetsNotEdgeRows(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	ctx := context.Background()
 	refPaths := []string{"kb/o/a.md", "kb/o/b.md", "kb/o/c.md"}
@@ -337,7 +337,7 @@ func TestHighlights_EmptyIsSliceNotNil(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	res, err := svc.FactQuery().Stats(context.Background(), branch, "", "")
 	require.NoError(t, err)

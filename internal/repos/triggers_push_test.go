@@ -177,7 +177,10 @@ func startCountingLoop(t *testing.T, ri *RepoInstance, pre func(*countingLoop)) 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, l.mode)
+	go func() {
+		defer wg.Done()
+		runReconcileLoop(ctx, svc, ri.hub, ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, l.mode, false)
+	}()
 	t.Cleanup(func() {
 		cancel()
 		l.gates.Range(func(_, g any) bool {
@@ -330,10 +333,11 @@ func TestPush_LoopStartDrain(t *testing.T) {
 
 // NoOriginWakesLocalLoop (T3): with no origin a push fire wakes the local
 // loop; after the countdown it runs the ticker's body — kickTriggers (counted),
-// then advance. An origin that appears answers the wake with an exit, not an
-// advance (the two loops stay mutually exclusive). Sabotage: no wake arm in
-// the local loop → no advance; skip kickTriggers in the wake arm → the kick
-// count stays; drop the exit-when-origin branch → the loop keeps running.
+// then advance. An origin that appears answers the wake with a skipped
+// advance, never an advance (the two loops stay mutually exclusive) and never
+// an exit (the loop ends only on its ctx). Sabotage: no wake arm in the local
+// loop → no advance; skip kickTriggers in the wake arm → the kick count stays;
+// drop the origin check → the wake advances main behind reconcileMain.
 func TestPush_NoOriginWakesLocalLoop(t *testing.T) {
 	_, ri := newTriggerRepo(t, pushTrig("fast", "learn", "", ""))
 	w := holdWindows(t, false, nil)
@@ -344,7 +348,7 @@ func TestPush_NoOriginWakesLocalLoop(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcile(ctx, "repo", trigAgent, time.Hour, nil,
+		runLocalReconcile(ctx, "repo", trigAgent, time.Hour, nil, false,
 			func() (bool, error) { return origin.Load(), nil },
 			func() error { advances.Add(1); return nil },
 			func() { kicks.Add(1) },
@@ -370,13 +374,17 @@ func TestPush_NoOriginWakesLocalLoop(t *testing.T) {
 	write(t, ri, "kb/tasks/b.md")
 	waitOpens(t, w, 2)
 	w.releaseAll()
+	require.Eventually(t, func() bool { return kicks.Load() == 3 }, 10*time.Second, 5*time.Millisecond,
+		"the wake round ran (it kicks the dispatcher first)")
+	time.Sleep(pushQuiet)
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("a wake on a repo that gained an origin must stop the local loop")
+		t.Fatal("a wake on a repo that gained an origin must skip, not stop the local loop")
+	default:
 	}
 	require.Equal(t, int64(2), advances.Load(), "an origin-backed repo's main is reconcileMain's, never advanced here")
-	require.Equal(t, int64(3), kicks.Load())
+	cancel()
+	<-done
 }
 
 // ---- The push action itself.
@@ -497,10 +505,10 @@ func newOriginTriggerRepo(t *testing.T, entries ...string) (ri *RepoInstance, ba
 	home := filepath.Join(dir, "home")
 	require.NoError(t, os.MkdirAll(home, 0o755))
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch:           trigAgent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentBranch: trigAgent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -520,7 +528,10 @@ func startOriginLoop(t *testing.T, ri *RepoInstance, originRoot string) *atomic.
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, nil)
+	go func() {
+		defer wg.Done()
+		runReconcileLoop(ctx, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, nil, false)
+	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks
 }
@@ -619,7 +630,7 @@ func TestPush_TickDispatcherCycleSettles(t *testing.T) {
 	}
 	require.Equal(t, head(t, ri), bareRef(t, bare, "refs/heads/"+trigAgent))
 
-	ri.triggers.stop() // flushOnStop writes the held buffer
+	restartServe(t, ri) // the Serve exit runs flushOnStop, which writes the held buffer
 	seen := map[string]bool{}
 	rows := firesOf(t, ri, "fast")
 	for _, r := range rows {
@@ -635,13 +646,13 @@ func TestPush_TickDispatcherCycleSettles(t *testing.T) {
 	require.Equal(t, map[string]string{"kb/tasks/local.md": "local", "kb/tasks/peer.md": "merged"}, sources)
 }
 
-// ---- The builder wires the SAME slot into the loops it starts.
+// ---- The Sync stage wires the SAME slot into the loop it starts.
 
-// BuilderWiresLocalLoop (T13): background sync on, no origin, a 1 h local
+// SyncStageWiresLocalLoop (T13): background sync on, no origin, a 1 h local
 // interval. A push fire moves main to the agent head through the loop that
-// startSyncLoops started — the only test through that call site. Sabotage:
-// pass a nil wake there → main stays behind for the hour.
-func TestPush_BuilderWiresLocalLoop(t *testing.T) {
+// Sync.Enter started — the only test through that call site. Sabotage: pass a
+// nil wake there → main stays behind for the hour.
+func TestPush_SyncStageWiresLocalLoop(t *testing.T) {
 	var localTicks atomic.Int64
 	holdWindows(t, true, func(_ context.Context, repo string) {
 		if repo == testRepoName {
@@ -654,13 +665,13 @@ func TestPush_BuilderWiresLocalLoop(t *testing.T) {
 			Git: config.GitConfig{LocalReconcileInterval: time.Hour}},
 		AgentBranch: trigAgent,
 		KeyPath:     filepath.Join(home, "agent.key"),
-		// DisableBackgroundSync deliberately NOT set: the builder's loop is the point.
+		// Machine.Synchronous deliberately NOT set: the stage's loop is the point.
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)
 	setOntology(t, ri, triggerOntology("", pushTrig("fast", "learn", "", "")))
 	require.Eventually(t, func() bool { return localTicks.Load() >= 1 }, 20*time.Second, 10*time.Millisecond,
-		"the builder's local loop ran its start tick")
+		"the Sync stage's local loop ran its start tick")
 	require.Equal(t, int64(1), localTicks.Load())
 
 	h := write(t, ri, "kb/tasks/a.md")
@@ -672,17 +683,17 @@ func TestPush_BuilderWiresLocalLoop(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond, "a push fire must move main to the agent head within the countdown, not the hour")
 }
 
-// ---- The slot survives an ActivateSync restart.
+// ---- The slot survives a Sync stage restart.
 
-// KickAcrossActivateSync (coordinator R1): the running loop's round is parked;
-// a push fire fills the slot; ActivateSync cancels that loop and starts a new
-// one. The dying loop does not consume the wake (ctx check at the loop top),
-// the new loop's first tick drains it and covers the commit — EXACTLY one
-// tick, no countdown — and the origin has it. A fire after the restart still
-// reaches the new loop: one countdown, one tick. Sabotage: ActivateSync
-// passes nil (or a fresh channel) → the post-restart fire never opens a
-// countdown; drop the loop-start drain → a second tick follows the first.
-func TestPush_KickAcrossActivateSync(t *testing.T) {
+// KickAcrossSyncRestart (coordinator R1): the running loop's round is parked;
+// a push fire fills the slot; an AttachOrigin restarts Sync, cancelling that
+// loop and starting a new one. The dying loop does not consume the wake (ctx
+// check at the loop top), the new loop's first tick drains it and covers the
+// commit — EXACTLY one tick, no countdown — and the origin has it. A fire
+// after the restart still reaches the new loop: one countdown, one tick.
+// Sabotage: Sync.Enter passes nil (or a fresh channel) → the post-restart fire
+// never opens a countdown; drop the loop-start drain → a second tick follows.
+func TestPush_KickAcrossSyncRestart(t *testing.T) {
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
 	bare := bareOf(url)
@@ -695,21 +706,21 @@ func TestPush_KickAcrossActivateSync(t *testing.T) {
 			return
 		}
 		if n := ticks.Add(1); n == parkAt.Load() {
-			<-ctx.Done() // parked until ActivateSync cancels this loop
+			<-ctx.Done() // parked until the Sync restart cancels this loop
 		}
 	})
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
 		AgentBranch: trigAgent,
 		KeyPath:     filepath.Join(home, "agent.key"),
-		// DisableBackgroundSync deliberately NOT set: ActivateSync's loop is the point.
+		// Machine.Synchronous deliberately NOT set: the restarted loop is the point.
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 	ri, err := m.Create(context.Background(), CreateSpec{Name: testRepoName, Mode: "clone",
 		Origin: &OriginSpec{URL: url, Branch: "main"}}, nil)
 	require.NoError(t, err)
-	// Keep the repo's own ontology id: ActivateSync refuses an origin whose
+	// Keep the repo's own ontology id: the attach guard refuses an origin whose
 	// agent branch is governed by a different knowledge base.
 	require.NotNil(t, ri.Ontology())
 	setOntology(t, ri, strings.Replace(triggerOntology("", pushTrig("fast", "learn", "", "")),
@@ -734,7 +745,8 @@ func TestPush_KickAcrossActivateSync(t *testing.T) {
 
 	hb := write(t, ri, "kb/tasks/b.md") // lands while the round is parked: the slot fills
 	require.Len(t, ri.syncWake, 1, "fixture: the wake waits in the slot")
-	require.NoError(t, ri.ActivateSync(url))
+	_, err = m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))
+	require.NoError(t, err)
 
 	require.Eventually(t, func() bool { return bareRef(t, bare, "refs/heads/"+trigAgent) == hb },
 		20*time.Second, 10*time.Millisecond, "the new loop's first tick carries the commit the wake was for")

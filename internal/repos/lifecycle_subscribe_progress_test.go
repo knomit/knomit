@@ -9,7 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -33,7 +32,7 @@ func servedKnomitOrigin(t *testing.T, n int) string {
 
 	ont, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{OntologyPath: string(ont)}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{OntologyPath: string(ont)}, "main"))
 
 	ctx := context.Background()
 	for i := range n {
@@ -60,65 +59,38 @@ Body for fact %d, long enough to be worth indexing.
 }
 
 // A subscribe create NARRATES itself end to end: the remote's own sideband
-// lines during transfer, the heal's own counts during indexing, and a "done"
-// that means INDEXED rather than merely registered.
+// lines during transfer, the index job's own counts during indexing, and a
+// "done" that means INDEXED rather than merely registered.
 //
-// Run against a manager with background sync ENABLED on purpose.
-// DisableBackgroundSync — which most tests in this package set — takes an open
-// path that heals SYNCHRONOUSLY and marks the index ready before m.Add
-// returns, so every assertion about the index phase would pass vacuously with
-// no mirror in the code at all.
+// Run against a manager with background sync ENABLED on purpose: the sync loop
+// starts during the mount walk, BEFORE the index has finished, and the create
+// still reports done only once the index has.
 func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	url := servedKnomitOrigin(t, 40)
 
+	// The index job is held at its hook until the create has narrated an index
+	// event, so "the job is in flight when the create looks" is TRUE BY
+	// CONSTRUCTION rather than usually — with a 40-fact fixture the job could
+	// otherwise finish before the create's first look and emit nothing.
+	g := newGate(StageIndex, "index-job")
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
 		AgentBranch: "agent/test",
 		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     Options{Hook: g.hook},
 	})
 	require.NoError(t, m.Start())
 	// Registered AFTER the server's own cleanup so it runs BEFORE it (LIFO):
-	// the manager's sync loops must stop talking to the origin before the
+	// the manager's sync loop must stop talking to the origin before the
 	// origin goes away.
 	t.Cleanup(func() { _ = m.Close() })
 
-	// TWO SEPARATE WINDOWS WERE CLOSED HERE, and conflating them is what left
-	// this test flaky after the first fix.
-	//
-	// (1) THE OBSERVER. This used to poll job.Status() every 25 ms. That reads
-	// a LATEST-VALUE snapshot, so an index phase shorter than one poll interval
-	// is invisible and `require.NotNil(t, index, …)` fails — the reviewer's
-	// diagnosis of a single unreproducible failure (F4). Collecting from the
-	// emit callback removes that window by construction: every event is seen.
-	//
-	// (2) THE EMIT ITSELF, which the fix for (1) did not touch and the comment
-	// here used to get wrong. It claimed "mirrorIndexing emits once immediately
-	// and then sleeps 250 ms". The sleep is real; the "emits once immediately"
-	// is not. mirrorIndexing reads IndexStatus ONCE and returns WITHOUT
-	// EMITTING ANYTHING if the heal has already left the 'indexing' state
-	// (lifecycle.go). openOne marks indexing and starts the heal, and Create
-	// does RecordRepoID and ActivateSync before it ever calls the mirror — so
-	// with a 40-fact fixture the heal can finish in that gap and no index event
-	// is produced at all. Seeing every event does not help when zero are
-	// emitted. That is CI job 105665517180.
-	//
-	// indexHealGate closes (2) the same way the callback closed (1): by
-	// construction rather than by probability. The heal blocks between
-	// markIndexing() and healIndexBranches until this test opens the gate, so
-	// the heal is still 'indexing' when the mirror looks. The fixture stays at
-	// 40 facts on purpose — enlarging it would only move the race, which is a
-	// measured environment and not a property. See index_heal_gate.go.
-	//
-	// Create is called directly for reason (1); StartCreate's own job/poll path
-	// is covered by TestStartCreate_* in create_job_test.go and by the web list
-	// tests.
-	gate := newIndexHealGate()
-	m.setIndexHealGate(gate)
-
+	// Collected from the emit callback, so every event is seen (a latest-value
+	// poll could miss a short phase).
 	var mu sync.Mutex
 	var seen []Event
-	var sawIndex, healAlreadyPastGate atomic.Bool
+	var sawIndex, syncRanDuringIndex atomic.Bool
 	var indexAtDone string
 	ri, err := m.Create(context.Background(),
 		CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}},
@@ -128,29 +100,21 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 			mu.Unlock()
 			if e.Phase == PhaseIndex {
 				if !sawIndex.Swap(true) {
-					// Arrival first — see the same block in create_job_test.go
-					// for why passedThrough() alone is ambiguous. This test
-					// catches the non-blocking-hold mutation either way,
-					// because its create does transfer and ActivateSync work
-					// before the mirror looks, so the heal goroutine has
-					// always been scheduled by now. That is an incidental
-					// property of this fixture, though, not a guarantee — so
-					// the wait is here too rather than relying on it.
-					require.True(t, gate.waitArrived(10*time.Second),
-						"the heal never reached the gate, so the index event "+
-							"cannot have come from the gate holding it")
-					healAlreadyPastGate.Store(gate.passedThrough())
+					g.waitArrived(t)
+					// The walk is past Sync while the index is still held:
+					// sync, triggers and requests run during indexing.
+					if inst := m.Get("sub"); inst != nil {
+						syncRanDuringIndex.Store(inst.Status().gens[StageSync] != 0)
+					}
 				}
-				// Let the heal finish so the create can reach "done".
-				gate.open()
+				// Let the job finish so the create can reach "done".
+				g.open()
 			}
 			if e.Step == "done" {
 				// The repo's ACTUAL index state at the moment the create says
-				// done — read from the manager, not from the event. The job's
-				// own IndexState cannot be the evidence for "done means
-				// indexed", because the mirror writes both.
+				// done — read from the machine, not from the event.
 				if inst := m.Get("sub"); inst != nil {
-					indexAtDone, _, _ = inst.IndexStatus()
+					indexAtDone = inst.Status().Index.State
 				}
 			}
 		})
@@ -181,7 +145,7 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	require.NotNil(t, transfer, "no transfer event carried a sideband line; saw %s", summarize(seen))
 	require.True(t, transfer.Indeterminate, "a transfer event must not claim a percent")
 
-	// INDEX: at least one event from the mirror, carrying the heal's counts.
+	// INDEX: at least one event, carrying the job's counts.
 	var index *Event
 	for i, e := range seen {
 		if e.Phase == PhaseIndex {
@@ -190,49 +154,18 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 		}
 	}
 	require.NotNil(t, index, "the create never reported an index phase; saw %s", summarize(seen))
-	// THE GATE IS WHY THAT EVENT EXISTS, and these two turn "the gate stopped
-	// being honoured" from a returning flake into a named failure. The first:
-	// the heal was still held when the mirror emitted, so the event is not a
-	// race won. The second: the heal did reach the gate at all — delete the
-	// hold from openOne and this fails by name rather than the test going back
-	// to passing on fast machines and failing on loaded runners.
-	require.False(t, healAlreadyPastGate.Load(),
-		"the heal was already past the gate when the mirror emitted, so this "+
-			"index event was luck rather than the gate holding the heal in place")
-	require.True(t, gate.passedThrough(),
-		"the heal never passed through the gate; if the hold was removed from "+
-			"openOne this test is racing the heal again, exactly as it was before")
-	// The stronger evidence — see the same assertion in create_job_test.go. A
-	// hold that does not block normally takes neither select arm, so this
-	// catches it where sampling passedThrough() at one instant need not:
-	// measured 30 detections in 30 on this fixture, 119 in 120 on the preset
-	// one. leftViaRelease documents the single path that escapes.
-	require.True(t, gate.leftViaRelease(),
-		"the heal did not leave the gate by the release arm, so it was never "+
-			"actually held: the gate must BLOCK, not merely be on the path")
+	require.Equal(t, 1, g.count(), "the index job passed its hook exactly once")
 	require.Equal(t, IndexStateIndexing, index.IndexState)
 	require.True(t, strings.HasPrefix(index.Message, "indexing "), "got %q", index.Message)
 	require.GreaterOrEqual(t, index.Pct, indexPctFloor)
 	require.Less(t, index.Pct, 100)
+	require.True(t, syncRanDuringIndex.Load(), "the Sync stage is entered while the index job still runs")
 
-	// And the phases happened in that order.
+	// And the phases happened in that order. There is no "sync" step any more:
+	// the sync loop starts during the mount walk, not after the index.
 	require.Less(t, indexOfPhase(seen, PhaseTransfer), indexOfPhase(seen, PhaseIndex))
 	require.Less(t, indexOfPhase(seen, PhaseIndex), indexOfPhase(seen, PhaseDone))
-
-	// SYNC IS ACTIVATED AFTER THE INDEX, NEVER BEFORE IT. ActivateSync's
-	// synchronous reconcile takes the upstream branch lock that the heal
-	// holds while it indexes, so a "sync" step emitted before the index
-	// phase parks the job at "activating sync" for the whole index — the
-	// user-visible hang this ordering exists to remove. The step must still
-	// be there (sync IS activated), between the last index event and done,
-	// and must not drag the percent backwards past what the index reported.
-	syncAt := indexOfStep(seen, "sync")
-	require.NotEqual(t, -1, syncAt, "the create never activated sync; saw %s", summarize(seen))
-	require.Less(t, lastIndexOfPhase(seen, PhaseIndex), syncAt,
-		"sync was activated before the index finished narrating; saw %s", summarize(seen))
-	require.Less(t, syncAt, indexOfPhase(seen, PhaseDone))
-	require.GreaterOrEqual(t, seen[syncAt].Pct, seen[lastIndexOfPhase(seen, PhaseIndex)].Pct,
-		"the sync step must not step the bar backwards")
+	require.Equal(t, -1, indexOfStep(seen, "sync"), "no sync step; saw %s", summarize(seen))
 }
 
 func indexOfPhase(seen []Event, phase string) int {
@@ -292,8 +225,8 @@ func TestCreatePreflight_RefusesAnOriginOutsideTheGate(t *testing.T) {
 			// A root that exists but does NOT contain the origin below.
 			LocalOriginRoot: filepath.Join(home, "allowed"),
 		},
-		AgentBranch:           "agent/test",
-		DisableBackgroundSync: true,
+		AgentBranch: "agent/test",
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

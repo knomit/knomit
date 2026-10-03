@@ -168,8 +168,8 @@ func TestHandleHALRepo_IncludesDescriptionFromReadme(t *testing.T) {
 			Home:         home,
 			ClusterCache: config.ClusterCacheConfig{},
 		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		AgentBranch: "machine/test",
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
@@ -237,8 +237,8 @@ func TestHandleHALRepo_IncludesLicenseWhenPresent(t *testing.T) {
 			Home:         home,
 			ClusterCache: config.ClusterCacheConfig{},
 		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		AgentBranch: "machine/test",
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
@@ -294,8 +294,8 @@ func TestHandleHALRepo_ReportsLicenseOversize(t *testing.T) {
 			Home:         home,
 			ClusterCache: config.ClusterCacheConfig{},
 		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		AgentBranch: "machine/test",
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
@@ -369,8 +369,8 @@ func TestHandleHALRepos_OmitsLicenseFromList(t *testing.T) {
 			Home:         home,
 			ClusterCache: config.ClusterCacheConfig{},
 		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		AgentBranch: "machine/test",
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
@@ -413,8 +413,8 @@ func TestHandleHALRepo_IncludesShortID(t *testing.T) {
 			Home:         home,
 			ClusterCache: config.ClusterCacheConfig{},
 		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		AgentBranch: "machine/test",
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
@@ -458,8 +458,8 @@ func TestHandleHALRepos_IncludesShortID(t *testing.T) {
 			Home:         home,
 			ClusterCache: config.ClusterCacheConfig{},
 		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		AgentBranch: "machine/test",
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
@@ -564,9 +564,9 @@ func newRepoPatchServerWithManager(t *testing.T) (http.Handler, *repos.Manager) 
 	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home, ClusterCache: config.ClusterCacheConfig{}},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, ClusterCache: config.ClusterCacheConfig{}},
+		AgentBranch: "machine/test",
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
@@ -983,9 +983,9 @@ func newManagerWithMissingRepoFile(t *testing.T, missing string, alsoCreate ...s
 	home := t.TempDir()
 	newMgr := func() *repos.Manager {
 		return repos.New(context.Background(), repos.Deps{
-			Cfg:                   config.Config{Home: home},
-			AgentBranch:           "machine/test",
-			DisableBackgroundSync: true,
+			Cfg:         config.Config{Home: home},
+			AgentBranch: "machine/test",
+			Machine:     repos.Options{Synchronous: true},
 		})
 	}
 

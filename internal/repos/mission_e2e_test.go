@@ -222,12 +222,12 @@ func newMissionManager(t *testing.T, agent, signer string, extra func(*config.Co
 	}
 	tools := &crashableTools{real: mcp.NewScriptTools(nil)}
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   cfg,
-		AgentBranch:           agent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		Signer:                testsigner.Named(signer),
-		DisableBackgroundSync: true,
-		ScriptTools:           tools,
+		Cfg:         cfg,
+		AgentBranch: agent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Signer:      testsigner.Named(signer),
+		Machine:     repos.Options{Synchronous: true},
+		ScriptTools: tools,
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	// What a booted server records once its listeners are bound: the shipped

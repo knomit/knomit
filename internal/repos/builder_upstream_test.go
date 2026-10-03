@@ -53,9 +53,9 @@ func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 
 	boot := func() (*Manager, func()) {
 		m := New(context.Background(), Deps{
-			Cfg:                   cfg,
-			AgentBranch:           "agent/test-abc",
-			DisableBackgroundSync: true,
+			Cfg:         cfg,
+			AgentBranch: "agent/test-abc",
+			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		// Start opens what the registry says exists — a reboot over an

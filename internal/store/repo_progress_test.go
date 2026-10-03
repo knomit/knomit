@@ -23,7 +23,7 @@ func TestInitSubscription_ForwardsSidebandProgress(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Close()
 
-	upstream, err := sub.InitSubscription(srv.URL, nil, "", func(line string) {
+	upstream, err := sub.InitSubscription(context.Background(), srv.URL, nil, "", func(line string) {
 		mu.Lock()
 		lines = append(lines, line)
 		mu.Unlock()
@@ -47,7 +47,7 @@ func TestInitSubscription_NilProgressStillClones(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Close()
 
-	upstream, err := sub.InitSubscription(srv.URL, nil, "", nil)
+	upstream, err := sub.InitSubscription(context.Background(), srv.URL, nil, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "main", upstream)
 

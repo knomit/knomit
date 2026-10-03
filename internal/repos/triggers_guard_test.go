@@ -42,13 +42,16 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"d.wakeSync", "d.ri.wakeSync",
 		"crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
-		"newTriggerStats", "triggerIdentityFor", "isHex8", "currentTriggerHooks", "d.triggerKick", "d.loop", "d.safeRun",
-		"d.run", "d.phaseA", "d.advance", "d.sweepDue", "d.phaseB", "d.buffer", "d.maybeFlush", "d.flush", "d.settle", "d.flushOnStop", "d.resetPending",
+		"newTriggerStats", "triggerIdentityFor", "isHex8", "currentTriggerHooks", "d.triggerKick", "d.safeRun",
+		"d.runOnce", "d.phaseA", "d.advance", "d.sweepDue", "d.phaseB", "d.buffer", "d.maybeFlush", "d.flush", "d.settle", "d.flushOnStop", "d.resetPending",
 		"d.overlayPending", "d.verifyModeOn", "d.verifiedBelow", "d.buildChange", "d.emit", "d.recordSet",
 		"d.lastCompiledSet", "d.logInvalidOnce", "d.logOntologyErrorOnce", "d.clearOntologyError", "d.clock",
 		"d.stats.record", "d.stats.recordRun", "d.stats.recordSelfCaused", "d.stats.view", "d.stats.runView", "d.pending.empty", "rs.didWork",
 		"cr.metaOf", "factGlobal", "nameStates", "episodeOf", "shortHash", "capForLog", "appendTrigger",
-		"d.life.begin", "d.life.end", "cancel", "timer.Stop", "h",
+		"cancel", "timer.Stop", "h",
+		// the due sweep's gate: a read of the repo's derived lifecycle status
+		// (an atomic snapshot), never the store
+		"d.indexIsReady", "d.indexReady", "ri.Status",
 		// the `do: script` half (trigger_script.go has its own list below):
 		// the phase-A load, the phase-B run, the report overlay, the trace
 		"newScriptState", "d.loadScripts", "d.runScript", "d.scriptError", "deriveTrace", "hostMS.Milliseconds",
@@ -60,7 +63,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// flush)
 		"newRecipeState", "d.startRecipe", "rs.fireRange", "d.drainLate", "tr.RecordTriggerResults", "?.TriggerFiresByRun", "?.Wait",
 		// sync and context
-		"d.mu.Lock", "d.mu.Unlock", "d.wg.Wait", "d.wg.Done", "triggerHooksMu.Lock", "triggerHooksMu.Unlock",
+		"d.mu.Lock", "d.mu.Unlock", "triggerHooksMu.Lock", "triggerHooksMu.Unlock",
 		"context.WithTimeout", "context.Background", "ctx.Err", "ctx.Done",
 		// pure helpers
 		"time.Now", "time.Since", "time.Duration", "time.Sleep", "time.NewTimer", "?.Milliseconds", "?.UTC", "?.Truncate", "rs.now.Unix",

@@ -81,13 +81,6 @@ type consensusMerger struct {
 	agentBranch string
 	kick        chan struct{}
 
-	// life guards cancel/started/stopped: start is idempotent and a no-op
-	// once stop has run, because SwapStore may start the merger after the
-	// heal that would have started it was cancelled, concurrently with a
-	// teardown (see lifetimeGuard).
-	life lifetimeGuard
-	wg   sync.WaitGroup
-
 	mu sync.Mutex
 	// refused maps a pushed branch to the tip whose merge was refused: that
 	// tip is not tried again, a new one is.
@@ -106,26 +99,6 @@ func newConsensusMerger(ri *RepoInstance, repo, agentBranch string) *consensusMe
 		refused:     map[string]plumbing.Hash{},
 		warned:      map[string]bool{},
 	}
-}
-
-// start launches the merger on its own context derived from parent (never
-// the sync loop's, which ActivateSync restarts) and kicks it once, so pushes
-// that landed while the server was down are merged on restart. A second call,
-// or a call after stop, is a no-op.
-func (m *consensusMerger) start(parent context.Context) {
-	ctx, ok := m.life.begin(parent, &m.wg)
-	if !ok {
-		return
-	}
-	m.kickNow()
-	go m.loop(ctx)
-}
-
-// stop cancels the merger and waits for a running merge to return. Safe when
-// start never ran; a later start is then a no-op.
-func (m *consensusMerger) stop() {
-	m.life.end()
-	m.wg.Wait()
 }
 
 // kickNow is ri.onCommit's whole job for the merger: O(1), never blocks.
@@ -151,8 +124,12 @@ func consensusKicks(branch, agentBranch string) bool {
 	return branch != agentBranch && !strings.HasPrefix(branch, "exp/")
 }
 
-func (m *consensusMerger) loop(ctx context.Context) {
-	defer m.wg.Done()
+// run is the merger's lifetime, under the Serve stage's life: it kicks itself
+// once, so pushes that landed while the repo was not served are merged now,
+// then merges on every kick until ctx ends. Each pass reaches the store
+// through Acquire.
+func (m *consensusMerger) run(ctx context.Context) {
+	m.kickNow()
 	for {
 		select {
 		case <-ctx.Done():
@@ -171,7 +148,7 @@ func (m *consensusMerger) safeRun(ctx context.Context) {
 				Msg("consensus: run panicked; the next kick retries")
 		}
 	}()
-	m.run(ctx)
+	m.runOnce(ctx)
 }
 
 // warnOnce logs msg at WARN the first time key is seen, and records it.
@@ -199,9 +176,9 @@ func blobKey(data []byte) string {
 	return hex.EncodeToString(h[:8])
 }
 
-// run is one pass: read the setting at the consensus branch's tip, then try
+// runOnce is one pass: read the setting at the consensus branch's tip, then try
 // every pushed branch.
-func (m *consensusMerger) run(ctx context.Context) {
+func (m *consensusMerger) runOnce(ctx context.Context) {
 	defer func() {
 		m.mu.Lock()
 		m.stats.Runs++

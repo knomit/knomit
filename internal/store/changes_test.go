@@ -22,7 +22,7 @@ func newChangesService(t *testing.T) *Service {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "main", "agent/a"))
+	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "main", "agent/a"))
 	return svc
 }
 

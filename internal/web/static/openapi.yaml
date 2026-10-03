@@ -1325,14 +1325,49 @@ paths:
       tags: [jobs]
       summary: Start index rebuild
       operationId: startIndexRebuild
+      description: |
+        Sends Rebuild to the repo's lifecycle machine: drop the vector index
+        and rebuild it from every branch. A rebuild never conflicts with
+        indexing — a running heal is REPLACED by the full rebuild (201, a new
+        job), and a running full rebuild ABSORBS the request (200, the job
+        already running).
       responses:
         "201":
-          description: Job started
+          description: Job started (a running heal, if any, was replaced)
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "200":
+          description: A full rebuild was already running; this is that job
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Job" }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/index:cancel:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [jobs]
+      summary: Cancel the repo's indexing
+      operationId: cancelIndex
+      description: |
+        Sends CancelIndex: the index job (heal or full rebuild) is cancelled —
+        it stops after its in-flight embedding batch — and drained. The repo
+        stays usable: `index_state` becomes `error` with `index_reason`
+        "indexing cancelled", search answers from the partial index, and
+        origin attach/detach, the session commit and rebuild are accepted
+        again. A no-op when nothing is indexing. This is the link carried by
+        every 409 "Repo is indexing".
+      responses:
+        "200":
+          description: The repo's row after the cancel has drained
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/RepoSummary" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches/{branch}/index-rebuilds/{id}:
     parameters:
@@ -1735,6 +1770,12 @@ paths:
         its own remote. A remote that could not be read refuses nothing: it
         establishes neither answer, and the create-time checks still apply to
         anything it later turns out to be.
+
+        The change is the AttachOrigin event on the repo's lifecycle machine.
+        Its guard runs before anything is written: the remote must answer a
+        ref listing within the configured git network timeout, else 502 and
+        nothing changes. Refused with 409 "Repo is indexing" while the index
+        job runs; that problem links to the cancel-index action.
       requestBody:
         required: true
         content:
@@ -1748,8 +1789,22 @@ paths:
               schema: { $ref: "#/components/schemas/OriginSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { $ref: "#/components/responses/Problem" }
+        "409":
+          description: |
+            Refused. "Repo is indexing" (origin changes are exclusive with
+            indexing) carries `_links.cancel-index` {href, method: POST}: wait
+            for the index, or cancel it and retry. Otherwise the remote is a
+            different knowledge base (ontology id mismatch).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+        "502":
+          description: Origin not attached — the remote could not be reached or refused the credentials; nothing changed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
     delete:
       tags: [origin]
       summary: Remove origin configuration
@@ -1760,11 +1815,13 @@ paths:
         "409":
           description: >
             Subscription requires its origin — a repo that follows its origin
-            read-only has no content of its own; archive it instead.
+            read-only has no content of its own; archive it instead. Or "Repo
+            is indexing", carrying `_links.cancel-index` {href, method: POST}.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin/upstream:
     parameters:
@@ -1925,14 +1982,46 @@ paths:
       tags: [origin, events]
       summary: Finalize connection (SSE stream)
       operationId: commitOriginSession
+      description: |
+        Sends SwapStore (disjoint/empty: the session's clone becomes the repo's
+        store) or AttachOrigin (shared history) to the repo's lifecycle
+        machine. Refusals decided before the machine starts are HTTP problems,
+        not stream events: 409 "Repo is indexing" (with a cancel-index link)
+        unless `cancel_indexing` is true, and the swap guard's identity and
+        ontology refusals. Failures after the machine began are an `error`
+        phase on the stream.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cancel_indexing:
+                  type: boolean
+                  description: Cancel the repo's running index job first, then commit.
       responses:
         "200":
-          description: SSE stream (phases swapping → configuring → rebuilding → done)
+          description: |
+            SSE stream of phases: swapping → configuring → indexing → done.
+            `done` may carry `warning` (the store was installed but a follow-up
+            step, such as persisting the origin, failed) and `index_state`.
+            `error` carries the failure.
           content:
             text/event-stream:
               schema: { type: string }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { $ref: "#/components/responses/Problem" }
+        "409":
+          description: |
+            Refused. "Repo is indexing" (a store swap or origin change is
+            exclusive with indexing) carries `_links.cancel-index` {href, method: POST}: wait
+            for the index, or cancel it and retry. Otherwise the swap guard
+            refused: the clone is a knowledge base another active repo holds,
+            or its ontology differs.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /fleet:
     get:
@@ -2178,7 +2267,8 @@ paths:
             first.
           * `index` — one repo's index state:
             `{"repo": "...", "state": "ready|indexing|error", "done": N,
-            "total": M}`. `state` uses the same vocabulary as the `index_state`
+            "total": M, "reason": "..."}`. `reason` is present on `error`
+            only: "indexing cancelled", or the index job's error. `state` uses the same vocabulary as the `index_state`
             field of `/repos`, so a consumer can patch a list row from the
             event without translating anything.
 
@@ -3320,6 +3410,22 @@ components:
         detail:
           type: string
           description: Human-readable amplification of a non-active state. Omitted when the repo is active.
+        stage:
+          type: string
+          description: |
+            Lifecycle stage of an active row: `populate`, `open`, `identify`,
+            `index`, `serve` or `sync` while its machine walks (a repo being
+            created sits at `populate`), `ready` once it is up. Absent on a
+            non-active row. Treat an unrecognised value as "not ready".
+        index_state:
+          type: string
+          enum: [ready, indexing, error]
+          description: Derived index state of an active row. Absent on a non-active row.
+        index_done:  { type: integer, description: "Items indexed so far, while indexing." }
+        index_total: { type: integer, description: "Items to index, while indexing; 0 before the job has counted." }
+        index_reason:
+          type: string
+          description: Why an `index_state` of `error` is one — "indexing cancelled", or the index job's error. Absent otherwise.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ReposCollection:

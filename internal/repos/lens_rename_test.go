@@ -209,9 +209,9 @@ func TestRenameLens_PersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	boot := func() *Manager {
 		m := New(context.Background(), Deps{
-			Cfg:                   config.Config{Home: dir},
-			AgentBranch:           "machine/test",
-			DisableBackgroundSync: true,
+			Cfg:         config.Config{Home: dir},
+			AgentBranch: "machine/test",
+			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		return m

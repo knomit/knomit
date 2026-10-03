@@ -72,7 +72,7 @@ const readmeCommitMsg = "docs: update README.md"
 func (ri *RepoInstance) ReadReadme(ctx context.Context) (string, error) {
 	// readBranch is the agent branch or the followed upstream; never empty for
 	// a registered repo.
-	branch := ri.readBranch
+	branch := ri.ReadBranch()
 	if branch == "" {
 		return "", ErrAgentBranchUnset
 	}
@@ -236,7 +236,7 @@ const LicensePath = "LICENSE"
 func (ri *RepoInstance) ReadLicense(ctx context.Context) (content string, oversize bool, err error) {
 	// readBranch is the agent branch or the followed upstream; never empty for
 	// a registered repo. WriteLicense stays on the agent branch.
-	branch := ri.readBranch
+	branch := ri.ReadBranch()
 	if branch == "" {
 		return "", false, ErrAgentBranchUnset
 	}

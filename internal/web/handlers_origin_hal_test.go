@@ -26,8 +26,6 @@ import (
 type stubOriginProvider struct {
 	remote         *store.Remote
 	getErr         error
-	setErr         error
-	deleteErr      error
 	upstreamErr    error
 	upstreamBranch string // captures the branch passed to SetOriginUpstream
 }
@@ -36,17 +34,9 @@ func (s *stubOriginProvider) GetOrigin(_ context.Context, _ *repos.RepoInstance)
 	return s.remote, s.getErr
 }
 
-func (s *stubOriginProvider) SetOrigin(_ context.Context, _ *repos.Manager, _ *repos.RepoInstance, _ setOriginRequest) error {
-	return s.setErr
-}
-
 func (s *stubOriginProvider) SetOriginUpstream(_ context.Context, _ *repos.Manager, _ *repos.RepoInstance, branch string) error {
 	s.upstreamBranch = branch
 	return s.upstreamErr
-}
-
-func (s *stubOriginProvider) DeleteOrigin(_ context.Context, _ *repos.Manager, _ *repos.RepoInstance) error {
-	return s.deleteErr
 }
 
 func TestHandleHALGetOrigin_ReturnsOriginData(t *testing.T) {
@@ -174,27 +164,32 @@ func TestHandleHALGetOrigin_UnknownRepo_Returns404(t *testing.T) {
 }
 
 func TestHandleHALSetOrigin_Returns200(t *testing.T) {
-	op := &stubOriginProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
+	originsRoot := t.TempDir()
+	s, _, ri := newControlDBTestServer(t, originsRoot)
 	r := s.NewAPIRouter()
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
 
-	body := `{"url":"https://github.com/example/repo.git","auth_method":"token","token":"tok"}`
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
-
+	rec := putOrigin(t, r, "alpha", `{"url":"`+url+`","branch":"main","auth_method":"none"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
 		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
 	}
+	// The reply comes after the Sync stage re-entered on the new origin.
+	if got := ri.Status().Sync.Origin; got != url {
+		t.Errorf("Sync follows %q, want %q", got, url)
+	}
+}
+
+// putOrigin sends PUT /repos/{repo}/origin with a JSON body.
+func putOrigin(t *testing.T, r http.Handler, repo, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/"+repo+"/origin", strings.NewReader(body)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	return rec
 }
 
 // TestHandleHALSetOrigin_LocalOriginGate pins that PUT /origin rejects a local
@@ -242,59 +237,84 @@ func TestHandleHALSetOrigin_UnknownRepo_Returns404(t *testing.T) {
 	}
 }
 
-func TestHandleHALSetOrigin_SetError_Returns500(t *testing.T) {
-	op := &stubOriginProvider{setErr: errors.New("db error")}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
+// A failed durable write answers 500 and changes nothing: the attach's apply
+// writes the git remote first, then the record, and puts the git remote back
+// when the record cannot be written (TestSetOrigin_FailedPersistRestoresTheGitRemote
+// pins the restore).
+func TestHandleHALSetOrigin_FailedPersistIs500(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServerOpt(t, originsRoot, false) // no key → a token cannot be stored
 	r := s.NewAPIRouter()
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
 
-	body := `{"url":"https://github.com/example/repo.git"}`
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
-
+	rec := putOrigin(t, r, "alpha", `{"url":"`+url+`","branch":"main","auth_method":"token","token":"tok"}`)
 	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("status: got %d, want 500", rec.Code)
+		t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	if o, err := m.Origins().Get(ri.UID()); err != nil || o != nil {
+		t.Fatalf("nothing may be persisted: %+v %v", o, err)
 	}
 }
 
-// TestHandleHALSetOrigin_ActivateError_Returns502 pins the contract that when
-// SetOrigin persists the row successfully but ActivateSync fails (bad token,
-// unreachable origin), the response is a 502 problem detail rather than the
-// misleading 200 OK the previous code returned. Without this, a user retrying
-// with a corrected token could not distinguish a fixed state from a broken one.
-func TestHandleHALSetOrigin_ActivateError_Returns502(t *testing.T) {
-	m := repos.New(context.Background(), repos.Deps{})
-	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-		Name: "alpha",
-		StartSync: func(string) error {
-			return errors.New("auth failed: bad token")
-		},
-	})
-	m.Set("alpha", ri)
-
-	s := &Server{Manager: m, providers: storeProviders{origin: &stubOriginProvider{}}}
+// TestHandleHALSetOrigin_UnreachableIs502AndPersistsNothing pins the
+// fail-fast attach: the AttachOrigin guard probes the remote (bounded by the
+// network timeout) BEFORE anything is stopped or written, so an unreachable
+// remote, a refused credential or a timeout is an immediate 502 "origin was
+// not attached" — with NOTHING persisted and the running sync loop untouched.
+// It used to persist the row and only then fail the reconcile ("origin was
+// saved but the initial reconcile failed").
+func TestHandleHALSetOrigin_UnreachableIs502AndPersistsNothing(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
 	r := s.NewAPIRouter()
+	syncGen := ri.Status()
 
-	body := `{"url":"https://github.com/example/repo.git","auth_method":"token","token":"tok"}`
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
-
+	nowhere := fileuri.New(filepath.Join(originsRoot, "nowhere.git"))
+	rec := putOrigin(t, r, "alpha", `{"url":"`+nowhere+`","branch":"main","auth_method":"none"}`)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status: got %d, want 502; body=%s", rec.Code, rec.Body.String())
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("content-type: got %q, want application/problem+json", got)
 	}
-	if !strings.Contains(rec.Body.String(), "auth failed: bad token") {
-		t.Errorf("body should include underlying error; got %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "origin was not attached") {
+		t.Errorf("body should say the origin was not attached; got %s", rec.Body.String())
+	}
+	if o, err := m.Origins().Get(ri.UID()); err != nil || o != nil {
+		t.Fatalf("nothing may be persisted: %+v %v", o, err)
+	}
+	if after := ri.Status(); after.Sync != syncGen.Sync {
+		t.Fatalf("the running sync loop must not have been touched: %+v → %+v", syncGen.Sync, after.Sync)
+	}
+}
+
+// TestHandleHALSetOrigin_DuringIndexingIs409WithACancelLink: Attach is
+// exclusive with indexing — refused before any guard or network read, with a
+// problem body that links the way out.
+func TestHandleHALSetOrigin_DuringIndexingIs409WithACancelLink(t *testing.T) {
+	r, m, release := heldIndexServer(t)
+	defer release()
+	ri := m.Get("alpha")
+
+	rec := putOrigin(t, r, "alpha", `{"url":"https://unreachable.invalid/kb.git","branch":"main","auth_method":"none"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var problem struct {
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
+		Links  map[string]struct {
+			Href   string `json:"href"`
+			Method string `json:"method"`
+		} `json:"_links"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &problem))
+	require.Equal(t, "Repo is indexing", problem.Title)
+	require.Equal(t, "wait for it to finish or cancel indexing", problem.Detail)
+	require.Equal(t, "/api/v1/repos/alpha/index:cancel", problem.Links["cancel-index"].Href)
+	require.Equal(t, http.MethodPost, problem.Links["cancel-index"].Method)
+	if o, err := m.Origins().Get(ri.UID()); err != nil || o != nil {
+		t.Fatalf("nothing may be persisted: %+v %v", o, err)
 	}
 }
 
@@ -374,13 +394,7 @@ func TestHandleHALSetOriginUpstream_InvalidBranch_Returns400(t *testing.T) {
 }
 
 func TestHandleHALDeleteOrigin_Returns204(t *testing.T) {
-	op := &stubOriginProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
+	s, _, _ := newControlDBTestServer(t, t.TempDir())
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
@@ -412,8 +426,8 @@ func TestHandleHALDeleteOrigin_UnknownRepo_Returns404(t *testing.T) {
 }
 
 // runGitForTest runs a git command in dir, failing the test on error. Used to
-// build a real bare remote that ActivateSync's synchronous reconcile can
-// fetch from without touching the network.
+// build a real bare remote the attach guard can probe and the Sync stage's
+// reconcile can fetch from without touching the network.
 func runGitForTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -431,8 +445,8 @@ func runGitForTest(t *testing.T, dir string, args ...string) {
 
 // seedBareRemoteForTest builds a bare git repo with one commit on "main"
 // under bare and returns a file:// URL pointing at it — a local stand-in for
-// a real remote so PUT /origin's synchronous ActivateSync reconcile succeeds
-// without any network access.
+// a real remote so PUT /origin's probe and reconcile succeed without any
+// network access.
 func seedBareRemoteForTest(t *testing.T, bare string) string {
 	t.Helper()
 	if err := os.MkdirAll(bare, 0o755); err != nil {
@@ -452,11 +466,9 @@ func seedBareRemoteForTest(t *testing.T, bare string) string {
 }
 
 // newControlDBTestServer boots a REAL Manager — control.db opened via
-// Start(), a repo registered via the real Create path — and wires the
-// production (non-stub) origin provider. Unlike the stub-based tests above,
-// this exercises defaultOriginProvider itself, which is what
-// TestPutOrigin_PersistsToControlDB needs in order to observe the write
-// actually landing in control.db (and not the repo's own remotes row).
+// Start(), a repo mounted via the real Create path — and wires the production
+// (non-stub) origin provider, so PUT/DELETE send real lifecycle events and
+// the writes actually land in control.db (and not the repo's own remotes row).
 //
 // A real agent key is written so credential encryption is available —
 // otherwise Origins.Set would refuse to store the test's token. originsRoot
@@ -485,10 +497,10 @@ func newControlDBTestServerOpt(t *testing.T, originsRoot string, withKey bool) (
 	}
 
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
-		AgentBranch:           "agent/test",
-		KeyPath:               keyPath,
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
+		AgentBranch: "agent/test",
+		KeyPath:     keyPath,
+		Machine:     repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {
@@ -724,36 +736,25 @@ func TestDeleteOrigin_RemovesFromControlDB(t *testing.T) {
 	}
 }
 
-// DeleteOrigin used to destroy the durable record BEFORE anything that could
-// fail, and then discard ri.WithRead's return.
-//
-// ri.WithRead returns Acquire's error WITHOUT invoking the closure. Against a
-// detached store — a SwapStore in flight, or a recovery reopen that failed —
-// `err` therefore stayed nil, the handler wrote 204, and the URL, auth_method
-// and encrypted auth_token were gone while the git remote was still configured
-// and still pushing. Since this branch moved connection identity out of the
-// repo database, that token exists NOWHERE else: there is nothing to recover
-// from and nothing was reported.
-func TestDeleteOrigin_DetachedStoreKeepsTheDurableRecord(t *testing.T) {
+// A detach that cannot do its job must keep the durable record: the URL,
+// auth_method and encrypted auth_token exist nowhere else. A detach against a
+// repo that is going away (here: already unmounted) is refused by its machine
+// before anything is touched.
+func TestDeleteOrigin_UnmountedRepoKeepsTheDurableRecord(t *testing.T) {
 	originsRoot := t.TempDir()
 	s, m, ri := newControlDBTestServer(t, originsRoot)
 	r := s.NewAPIRouter()
 
 	wantURL := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
-	body := `{"url":"` + wantURL + `","branch":"main","auth_method":"token","token":"tok-secret"}`
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
+	rec := putOrigin(t, r, "alpha", `{"url":"`+wantURL+`","branch":"main","auth_method":"token","token":"tok-secret"}`)
 	if rec.Code < 200 || rec.Code >= 300 {
 		t.Fatalf("PUT status: got %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Detach the store: Acquire now fails, exactly as it does mid-swap.
-	m.Remove("alpha")
+	m.Remove("alpha") // unmount: the store is closed for good
 
-	if err := (defaultOriginProvider{}).DeleteOrigin(context.Background(), m, ri); err == nil {
-		t.Fatal("DeleteOrigin against a detached store returned nil; the handler answers 204 on that")
+	if _, err := m.Send(context.Background(), ri, repos.DetachOrigin()); !errors.Is(err, repos.ErrClosed) {
+		t.Fatalf("a detach against an unmounted repo: got %v, want ErrClosed", err)
 	}
 
 	origin, err := m.Origins().Get(ri.UID())
@@ -761,22 +762,18 @@ func TestDeleteOrigin_DetachedStoreKeepsTheDurableRecord(t *testing.T) {
 		t.Fatalf("Origins().Get: %v", err)
 	}
 	if origin == nil {
-		t.Fatal("the control.db record was destroyed by a delete that could not do its job; " +
-			"the url, auth_method and encrypted token exist nowhere else")
+		t.Fatal("the control.db record was destroyed by a detach that could not do its job")
 	}
-	if origin.URL != wantURL {
-		t.Errorf("origin url: got %q, want %q", origin.URL, wantURL)
-	}
-	if origin.AuthMethod != "token" || origin.AuthToken != "tok-secret" {
-		t.Errorf("credential must survive: got method=%q token=%q", origin.AuthMethod, origin.AuthToken)
+	if origin.URL != wantURL || origin.AuthMethod != "token" || origin.AuthToken != "tok-secret" {
+		t.Errorf("the record must survive intact: %+v", origin)
 	}
 }
 
-// SetOrigin must not record a connection it failed to wire up. The git write
-// (ConfigureRemote) goes first: persisting ahead of it leaves control.db
-// reporting a URL whose refspecs were never rewritten, which the next boot
-// silently adopts — a PUT that answered 500 taking effect on restart. This is
-// the discipline SetOriginUpstream documents; SetOrigin now keeps it too.
+// An attach must not record a connection it failed to wire up. The git write
+// (ConfigureRemote) goes first in its apply: persisting ahead of it leaves
+// control.db reporting a URL whose refspecs were never rewritten, which the
+// next boot silently adopts — a PUT that answered 500 taking effect on
+// restart. This is the discipline SetOriginUpstream documents.
 //
 // The forced failure is a branch carrying a colon, which makes the fetch
 // refspec malformed and CreateRemote refuse it.
@@ -785,10 +782,10 @@ func TestSetOrigin_FailedRefspecRewriteStoresNothing(t *testing.T) {
 	_, m, ri := newControlDBTestServer(t, originsRoot)
 
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
-	err := (defaultOriginProvider{}).SetOrigin(context.Background(), m, ri, setOriginRequest{
+	_, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{
 		URL:    url,
 		Branch: "bad:branch",
-	})
+	}))
 	if err == nil {
 		t.Fatal("a refspec that cannot be built must fail the call")
 	}
@@ -820,16 +817,16 @@ func TestSetOrigin_FailedPersistRestoresTheGitRemote(t *testing.T) {
 	_, m, ri := newControlDBTestServerOpt(t, originsRoot, false) // no agent key → crypt == nil
 
 	first := seedBareRemoteForTest(t, filepath.Join(originsRoot, "one.git"))
-	if err := (defaultOriginProvider{}).SetOrigin(context.Background(), m, ri, setOriginRequest{
+	if _, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{
 		URL: first, Branch: "main", AuthMethod: "none",
-	}); err != nil {
-		t.Fatalf("first SetOrigin (no credential, so storable without a crypt): %v", err)
+	})); err != nil {
+		t.Fatalf("first attach (no credential, so storable without a crypt): %v", err)
 	}
 
 	second := seedBareRemoteForTest(t, filepath.Join(originsRoot, "two.git"))
-	err := (defaultOriginProvider{}).SetOrigin(context.Background(), m, ri, setOriginRequest{
-		URL: second, Branch: "main", AuthMethod: "token", Token: "tok-secret",
-	})
+	_, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{
+		URL: second, Branch: "main", AuthMethod: "token", AuthToken: "tok-secret",
+	}))
 	if err == nil {
 		t.Fatal("Origins.Set must refuse a credential it cannot encrypt")
 	}
@@ -871,10 +868,10 @@ func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
 	_, m, ri := newControlDBTestServer(t, originsRoot)
 
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
-	if err := (defaultOriginProvider{}).SetOrigin(context.Background(), m, ri, setOriginRequest{
+	if _, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{
 		URL: url, Branch: "main", AuthMethod: "none",
-	}); err != nil {
-		t.Fatalf("SetOrigin: %v", err)
+	})); err != nil {
+		t.Fatalf("attach: %v", err)
 	}
 	if err := m.Origins().Delete(ri.UID()); err != nil {
 		t.Fatalf("Origins().Delete: %v", err)
@@ -921,14 +918,8 @@ func TestOriginWrites_RefuseAStoppedManager(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{"SetOrigin", func() error {
-			return p.SetOrigin(context.Background(), m, nil, setOriginRequest{URL: "https://example.test/a.git"})
-		}},
 		{"SetOriginUpstream", func() error {
 			return p.SetOriginUpstream(context.Background(), m, nil, "main")
-		}},
-		{"DeleteOrigin", func() error {
-			return p.DeleteOrigin(context.Background(), m, nil)
 		}},
 	}
 	for _, c := range calls {
@@ -1021,18 +1012,23 @@ func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T
 }
 
 func TestHandleHALDeleteOrigin_SubscriptionIs409(t *testing.T) {
-	m := repos.New(context.Background(), repos.Deps{})
-	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "sub", Subscribed: true, ReadBranch: "main"}))
-	// If the provider were reached its error would surface as a 500, so a 409
-	// proves the refusal happened first.
-	op := &stubOriginProvider{deleteErr: errors.New("provider must not be reached")}
-	s := &Server{Manager: m, providers: storeProviders{origin: op}}
+	originsRoot := t.TempDir()
+	s, m, _ := newControlDBTestServer(t, originsRoot)
+	url := seedBareRemoteKBForTest(t, filepath.Join(originsRoot, "kb.git"))
+	if _, err := m.Create(context.Background(), repos.CreateSpec{
+		Name: "sub", Mode: "subscribe", Origin: &repos.OriginSpec{URL: url},
+	}, nil); err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/sub/origin", nil)))
 	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
 	require.Contains(t, rec.Body.String(), "Subscription requires its origin")
+	o, err := m.Origins().Get(m.Get("sub").UID())
+	require.NoError(t, err)
+	require.NotNil(t, o, "the refusal changed nothing")
 }
 
 // seedBareRemoteKBForTest is seedBareRemoteForTest plus an ontology, so the

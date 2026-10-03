@@ -144,7 +144,7 @@ func TestReposHandler_SubscriptionMountCarriesMode(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	sub := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "sub", UID: nextTestRepoUID(), Svc: svc, Subscribed: true, ReadBranch: "main",
 		Ontology: fact.CodeOntology(), OntologyRoot: "kb",

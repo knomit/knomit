@@ -20,7 +20,7 @@ func TestVerify_FreshRepoIsClean(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{Deep: true})
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestVerify_DetectsMissingBlob(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	res, err := svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\nbody", "add x", "test")
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestVerify_DetectsCommitLogGap(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	r1, err := svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\na", "add x", "test")
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestVerify_DetectsBranchFactsGap(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
 	require.NoError(t, err)
@@ -137,7 +137,7 @@ func TestVerify_DetectsBranchFactsBlobMismatch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestVerify_DetectsMissingEmbedding(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(&stub768Embedder{})
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
 	require.NoError(t, err)
@@ -239,7 +239,7 @@ func TestVerify_DetectsMissingBranchesTableRow(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
 	require.NoError(t, err)
 
@@ -272,7 +272,7 @@ func TestVerify_DetectsBranchesTableRefMismatch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.rh.gits.DB().Exec(`UPDATE branches SET git_ref = 'refs/heads/wrong' WHERE name = 'agent/test'`)
 	require.NoError(t, err)
@@ -299,7 +299,7 @@ func TestVerify_DeepDetectsBadYAML(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Write malformed YAML through the real WriteFact path. WriteFact may or
 	// may not reject this upfront; if it rejects, the test needs a different
@@ -346,7 +346,7 @@ func TestVerify_SoftDeletedGraphNodeIsClean(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
 	require.NoError(t, err)
@@ -369,7 +369,7 @@ func TestVerify_DetectsMissingGraphFactNode(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
 	require.NoError(t, err)

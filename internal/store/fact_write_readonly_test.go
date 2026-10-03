@@ -17,7 +17,7 @@ func TestReadOnlyStore_RefusesAuthoredWritesOnEveryBranch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	svc.SetReadOnly(true)
 
 	ctx := context.Background()
@@ -53,7 +53,7 @@ func TestReadOnlyStore_RefusesBeforeTakingTheBranchLock(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	svc.SetReadOnly(true)
 
 	unlock := svc.rh.lockBranch("main")

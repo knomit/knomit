@@ -40,7 +40,7 @@ func TestIndex_SkipsFilesOutsideOntologyRoot(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 	ctx := context.Background()
 
 	// Frontmatter + an H1 — the ordinary shape of a markdown document, and
@@ -80,7 +80,7 @@ func TestIndex_DeleteEvictsPathOutsideOntologyRoot(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 	ctx := context.Background()
 
 	// A file outside the root, in the tree but (correctly) not indexed...
@@ -113,7 +113,7 @@ func TestIndex_HonoursConfiguredOntologyRoot(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetOntologyRoot("knowledge")
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 	ctx := context.Background()
 
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "knowledge/obs/a.md", testFactBody("A", 0.9, nil), "add", "")
@@ -134,7 +134,7 @@ func TestIndex_SkipsPrivatePathsUnderOntologyRoot(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 	ctx := context.Background()
 
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/.drafts/draft.md",

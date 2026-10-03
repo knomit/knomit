@@ -70,7 +70,7 @@ func TestPathHistory_MissingBlobIsContentUnavailable(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "k.db")
 	svc, err := Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	c := writeVersionsStore(t, svc, 3)
 	removeObject(t, svc, plumbing.NewHash(blobOf(t, svc, c[0], "kb/t.md")))
 	clearDerived(t, svc, "") // an upgraded database

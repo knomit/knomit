@@ -262,11 +262,11 @@ func newGHInstance(t *testing.T, root string, o *ghOrigin, agent, signer string)
 	cfg := config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: root}
 	cfg.Git.LocalReconcileInterval = time.Minute
 	m := New(context.Background(), Deps{
-		Cfg:                   cfg,
-		AgentBranch:           agent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		Signer:                testsigner.Named(signer),
-		DisableBackgroundSync: true,
+		Cfg:         cfg,
+		AgentBranch: agent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Signer:      testsigner.Named(signer),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	require.NoError(t, m.Start())

@@ -13,7 +13,7 @@ func TestRootCommit_StableAcrossBranchesAndCalls(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	ctx := context.Background()
 	root, err := svc.RootCommit(ctx, "agent/test")
@@ -44,7 +44,7 @@ func TestRootCommit_DistinctAcrossRepos(t *testing.T) {
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
-		require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+		require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 		return svc
 	}
 
@@ -70,7 +70,7 @@ func TestRootCommit_UnknownBranchErrors(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.RootCommit(context.Background(), "no-such-branch")
 	require.Error(t, err)

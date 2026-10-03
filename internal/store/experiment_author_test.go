@@ -240,7 +240,7 @@ func TestCheckRange_ExperimentRangeNamesTheOwningAgent(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}, "main"))
 	signer := newTestSigner(t)
 	svc.SetSigner(signer)
 	require.NoError(t, svc.Branches().CreateBranch(ctx, testAgentBranch, "main"))

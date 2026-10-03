@@ -39,7 +39,7 @@ func newEffortTestReviewer(t *testing.T, effort Effort) *Reviewer {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	// Enough epistemic facts that Plan has real work — the gate is reached
 	// during planning, so a session that completes early never exercises it.

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 
-vi.mock('./api', () => ({
+vi.mock('./api', async importOriginal => ({
+  // The real class, so the wizard's instanceof check sees what api.ts throws.
+  RepoIndexingError: (await importOriginal<typeof import('./api')>()).RepoIndexingError,
   api: {
     getOrigin: vi.fn(),
     listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
@@ -18,7 +20,7 @@ vi.mock('./api', () => ({
   deleteSession: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { api, createSession, streamTest, streamPreview, streamApply, streamCommit } from './api';
+import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, RepoIndexingError } from './api';
 type Fn = ReturnType<typeof vi.fn>;
 
 describe('RemoteConnectWizard', () => {
@@ -353,6 +355,62 @@ describe('RemoteConnectWizard', () => {
 
       await new Promise(r => setTimeout(r, 1400));   // longer than the 1200ms pause
       expect(onDone).not.toHaveBeenCalled();
+    });
+
+    // The commit is refused BEFORE its stream opens while the repo's index job
+    // runs: a 409 problem, not an SSE error. It is the one refusal with a way
+    // through — re-send the commit with cancel_indexing — and that is offered
+    // beside Retry rather than replacing it.
+    it('offers "Cancel indexing and continue" on the indexing refusal, and re-commits with it', async () => {
+      let refuse = true;
+      await driveToCommit(async onEvent => {
+        if (refuse) {
+          refuse = false;
+          throw new RepoIndexingError('wait for it to finish or cancel indexing', '/api/v1/repos/knomit-kb/index:cancel');
+        }
+        onEvent({ phase: 'cancelling-index' });
+        onEvent({ phase: 'swapping' });
+        onEvent({ phase: 'indexing', current: 3, total: 9 });
+        onEvent({ phase: 'done' });
+      });
+
+      expect(await screen.findByText('wait for it to finish or cancel indexing')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+      expect(vi.mocked(streamCommit).mock.calls[0][3]).toBeUndefined();
+
+      fireEvent.click(screen.getByTestId('wizard-cancel-indexing'));
+      await waitFor(() => expect(streamCommit).toHaveBeenCalledTimes(2));
+      expect(vi.mocked(streamCommit).mock.calls[1][3]).toEqual({ cancelIndexing: true });
+      expect(await screen.findByText('Remote connected successfully.')).toBeInTheDocument();
+    });
+
+    // Every other pre-stream refusal ("Different knowledge base", "Origin not
+    // attached", …) is shown as its detail with no indexing escape hatch.
+    it('shows any other pre-stream refusal as its detail, without the cancel offer', async () => {
+      await driveToCommit(async () => { throw new Error('origin was not attached: authentication required'); });
+      expect(await screen.findByText('origin was not attached: authentication required')).toBeInTheDocument();
+      expect(screen.queryByTestId('wizard-cancel-indexing')).not.toBeInTheDocument();
+    });
+
+    it('narrates the indexing phase with its counts', async () => {
+      await driveToCommit(() => new Promise<void>(() => {}));
+      const onEvent = vi.mocked(streamCommit).mock.calls[0][2] as (e: unknown) => void;
+      act(() => onEvent({ phase: 'indexing', current: 4, total: 10 }));
+      expect(await screen.findByText('Indexing… 4/10')).toBeInTheDocument();
+    });
+
+    // A warned success does not auto-return: the warning would be on screen for
+    // the 1.2s pause and then gone. The reader leaves when they have read it.
+    it('holds a warned success on screen until the reader continues', async () => {
+      const onDone = vi.fn();
+      await driveToCommit(async onEvent => {
+        onEvent({ phase: 'done', warning: 'the index did not finish: indexing cancelled', index_state: 'error' });
+      }, { onDone });
+      expect(await screen.findByTestId('wizard-done-warning')).toHaveTextContent('indexing cancelled');
+      await new Promise(r => setTimeout(r, 1400));
+      expect(onDone).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId('wizard-done-continue'));
+      expect(onDone).toHaveBeenCalledTimes(1);
     });
   });
 });

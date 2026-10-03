@@ -25,7 +25,7 @@ func openRepo(t *testing.T) *store.Service {
 	t.Cleanup(func() { _ = svc.Close() })
 	// Init commits are written by the plumbing layer, which never signs: a new
 	// repository must still be creatable without a signer.
-	if err := svc.InitRepo(map[string]string{"README.md": "seed"}, "agent/test-deadbeef"); err != nil {
+	if err := svc.InitRepo(context.Background(), map[string]string{"README.md": "seed"}, "agent/test-deadbeef"); err != nil {
 		t.Fatalf("InitRepo without a signer must still work: %v", err)
 	}
 	return svc

@@ -40,7 +40,7 @@ func TestFactsOriginColumnBackfill(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	const synthPath = "kb/synth/s.md"

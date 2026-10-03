@@ -34,7 +34,7 @@ func motifEnvEmbedded(t *testing.T) (*Service, string) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	svc.SetEmbedder(&stub768Embedder{})
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	return svc, "main"
 }
 

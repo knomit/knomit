@@ -56,9 +56,9 @@ func (e *blockingEmbedder) EmbedDocuments(ctx context.Context, titles, bodies []
 }
 
 // seedReembedRepo creates a repo with a few facts and forces a re-embedding
-// rebuild on the next open (schema marked stale AND facts_vec cleared), so
-// opening it takes the heavy background-index path. Returns the manager Home
-// dir and the repo db path.
+// rebuild on the next mount (schema marked stale AND facts_vec cleared), so
+// its index job takes the heavy path. The database sits at RepoPath("kb"), so
+// a mount of uid "kb" opens it. Returns the manager Home dir and the db path.
 func seedReembedRepo(t *testing.T) (home, dbPath string) {
 	t.Helper()
 	home = t.TempDir()
@@ -68,7 +68,7 @@ func seedReembedRepo(t *testing.T) (home, dbPath string) {
 
 	svc, err := store.Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "machine/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "machine/test"))
 	svc.SetEmbedder(testEmbedder{})
 	for i := 0; i < 3; i++ {
 		f := fact.NewFact("placeholder.md")
@@ -98,11 +98,12 @@ func seedReembedRepo(t *testing.T) (home, dbPath string) {
 	return home, dbPath
 }
 
-// TestOpenOne_BackgroundsHeavyIndex regresses the startup-blocking bug: opening
+// TestMount_BackgroundsHeavyIndex regresses the startup-blocking bug: mounting
 // a repo whose index needs a heavy (re-embedding) rebuild must NOT block — the
-// store comes up immediately (so the HTTP server/UI do too) and the rebuild
-// runs in the background, with the repo reporting "indexing" until it's "ready".
-func TestOpenOne_BackgroundsHeavyIndex(t *testing.T) {
+// walk reaches Ready before the index job reports (so the HTTP server/UI come
+// up), and the rebuild runs under the Index life, with the repo reporting
+// "indexing" until it is "ready".
+func TestMount_BackgroundsHeavyIndex(t *testing.T) {
 	home, dbPath := seedReembedRepo(t)
 
 	emb := &blockingEmbedder{started: make(chan struct{}), release: make(chan struct{})}
@@ -111,20 +112,25 @@ func TestOpenOne_BackgroundsHeavyIndex(t *testing.T) {
 		Cfg:         config.Config{Home: home},
 		AgentBranch: "machine/test",
 		Embedder:    emb,
-		// NOTE: DisableBackgroundSync is intentionally false so openOne takes
-		// the production BACKGROUND path (with it set, open indexes inline).
-		// No origin is configured, so the sync loops are harmless no-ops.
+		// No origin is configured, so the sync loop is a harmless no-op.
 	})
 	t.Cleanup(func() { releaseOnce(); _ = m.Close() })
 
-	// Add must return promptly even though indexing blocks in the embedder.
+	// The mount must reply promptly even though indexing blocks in the embedder.
+	_ = dbPath
 	addDone := make(chan error, 1)
-	go func() { addDone <- m.Add("kb", "", dbPath, nil) }()
+	go func() {
+		ri, err := m.mountExisting("kb", "kb", nil)
+		if err == nil {
+			m.Set("kb", ri)
+		}
+		addDone <- err
+	}()
 	select {
 	case err := <-addDone:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("Add blocked on indexing — open did not background the heavy rebuild")
+		t.Fatal("the mount blocked on indexing — the index job is not in the background")
 	}
 
 	// Background heal must be running (reached the embedder) and report indexing.
@@ -135,22 +141,21 @@ func TestOpenOne_BackgroundsHeavyIndex(t *testing.T) {
 	}
 	ri := m.Get("kb")
 	require.NotNil(t, ri)
-	state, _, _ := ri.IndexStatus()
-	require.Equal(t, "indexing", state, "repo must report 'indexing' while the background rebuild runs")
+	st := ri.Status()
+	require.Equal(t, "ready", st.Stage, "the walk reached Ready before the index job reported")
+	require.Equal(t, IndexStateIndexing, st.Index.State, "repo must report 'indexing' while the rebuild runs")
 
 	// Unblock; it must reach ready.
 	releaseOnce()
-	require.Eventually(t, func() bool {
-		s, _, _ := ri.IndexStatus()
-		return s == "ready"
-	}, 10*time.Second, 50*time.Millisecond, "repo must reach 'ready' after the background rebuild completes")
+	require.Equal(t, IndexStateReady, waitIndexSettled(t, ri).Index.State,
+		"repo must reach 'ready' after the rebuild completes")
 }
 
 // TestManagerClose_WaitsForBackgroundIndex regresses PR #82 review finding #1:
-// the background heal goroutine was not tracked by ri.syncWg, so Manager.Close
-// (and Archive/SwapStore) ran svc.Close() while the heal was still issuing SQL
-// on the same *sql.DB — a use-after-close. Close must now block until the
-// in-flight heal returns.
+// a teardown that closed the store while the index job was still issuing SQL
+// on the same *sql.DB — a use-after-close. Unmount drains the Index life
+// before the Open stage closes the store, so Close must block until the
+// in-flight job returns (this embedder ignores its ctx, the worst case).
 func TestManagerClose_WaitsForBackgroundIndex(t *testing.T) {
 	home, dbPath := seedReembedRepo(t)
 
@@ -163,22 +168,25 @@ func TestManagerClose_WaitsForBackgroundIndex(t *testing.T) {
 	})
 	t.Cleanup(func() { releaseOnce() })
 
-	require.NoError(t, m.Add("kb", "", dbPath, nil))
+	_ = dbPath
+	ri, err := m.mountExisting("kb", "kb", nil)
+	require.NoError(t, err)
+	m.Set("kb", ri)
 
-	// Heal is now parked inside EmbedDocuments (write tx not yet opened).
+	// The job is now parked inside EmbedDocuments (write tx not yet opened).
 	select {
 	case <-emb.started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("background index never reached the embedding phase")
 	}
 
-	// Close must NOT complete while the heal is still in-flight: it cancels the
-	// sync ctx (which the blocked embed ignores) and then waits on syncWg.
+	// Close must NOT complete while the job is still in flight: it cancels the
+	// machine's root ctx (which the blocked embed ignores) and drains.
 	closeDone := make(chan struct{})
 	go func() { _ = m.Close(); close(closeDone) }()
 	select {
 	case <-closeDone:
-		t.Fatal("Manager.Close returned while the background index was still running — it closed the store out from under the heal")
+		t.Fatal("Manager.Close returned while the index job was still running — it closed the store out from under it")
 	case <-time.After(300 * time.Millisecond):
 		// Good: Close is blocked waiting for the heal.
 	}
@@ -200,30 +208,27 @@ func (failingEmbedder) EmbedDocuments(context.Context, []string, []string) ([][]
 	return nil, errors.New("embed boom")
 }
 
-// TestOpenOne_FailedBackgroundIndexReportsError regresses PR #82 review finding
-// #1: a background index that genuinely FAILS must report "error", not falsely
-// report "ready". Before the fix healIndexBranches swallowed all errors and the
-// caller unconditionally marked the repo ready; "error" was only ever set on a
-// clean shutdown (a non-failure).
-func TestOpenOne_FailedBackgroundIndexReportsError(t *testing.T) {
+// TestMount_FailedBackgroundIndexReportsError regresses PR #82 review finding
+// #1: an index job that genuinely FAILS must report "error" — with a reason —
+// not falsely report "ready".
+func TestMount_FailedBackgroundIndexReportsError(t *testing.T) {
 	home, dbPath := seedReembedRepo(t)
 
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home},
 		AgentBranch: "machine/test",
 		Embedder:    failingEmbedder{},
-		// Background path (DisableBackgroundSync false); no origin configured.
 	})
 	t.Cleanup(func() { _ = m.Close() })
 
-	require.NoError(t, m.Add("kb", "", dbPath, nil))
-	ri := m.Get("kb")
-	require.NotNil(t, ri)
+	_ = dbPath
+	ri, err := m.mountExisting("kb", "kb", nil)
+	require.NoError(t, err)
+	m.Set("kb", ri)
 
-	require.Eventually(t, func() bool {
-		s, _, _ := ri.IndexStatus()
-		return s == "error"
-	}, 10*time.Second, 50*time.Millisecond, "a failed background rebuild must report 'error', not 'ready'")
+	st := waitIndexSettled(t, ri)
+	require.Equal(t, IndexStateError, st.Index.State, "a failed rebuild must report 'error', not 'ready'")
+	require.NotEmpty(t, st.Index.Reason, "and say why")
 }
 
 // EmbedShortStrings satisfies store.BatchEmbedder. Short strings render

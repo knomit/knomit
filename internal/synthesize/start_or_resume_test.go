@@ -34,7 +34,7 @@ func newResumeFixture(t *testing.T) *resumeFixture {
 	svc, err := store.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, resumeBranch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, resumeBranch))
 	for _, slug := range []string{"alpha", "beta", "gamma"} {
 		f := fact.NewFact("kb/test/" + slug + ".md")
 		f.Title = slug

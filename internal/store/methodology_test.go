@@ -65,7 +65,7 @@ func TestRelevantMethodologyForFact_FiltersByTypeAndBranch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	branch := "agent/a"
@@ -122,7 +122,7 @@ func TestRelevantMethodologyForFact_EmptyCandidateSet(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "x", nil, nil)
 
@@ -146,7 +146,7 @@ func TestRelevantMethodologyForFact_SourceFactMissing_DegradesToTagOnly(t *testi
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	// Methodology exists but no source fact at this path.
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/a",
@@ -205,7 +205,7 @@ func TestRelevantMethodologyForFact_TagOverlap_RanksByMatch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	branch := "agent/a"
@@ -263,7 +263,7 @@ func TestRelevantMethodologyForFact_TagOverlap_EmptySourceTags(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "src", nil, nil)
 
@@ -290,7 +290,7 @@ func TestRelevantMethodologyForFact_VectorOnly_Fallback(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(&stub768Embedder{})
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	branch := "agent/a"
@@ -327,7 +327,7 @@ func TestRelevantMethodologyForFact_Composite_FormulaIsApplied(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(&stub768Embedder{})
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	branch := "agent/a"
@@ -379,7 +379,7 @@ func TestRelevantMethodologyForFact_NoEmbedder_TagOnly(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	// No embedder: facts_vec stays empty.
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	branch := "agent/a"
@@ -419,7 +419,7 @@ func TestRelevantMethodologyForFact_TopK(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(&stub768Embedder{})
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "src", nil, nil)
@@ -457,7 +457,7 @@ func TestRelevantMethodologyForFact_MinScoreFiltering_DBSidePrune(t *testing.T) 
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(&stub768Embedder{})
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "source body",
@@ -494,7 +494,7 @@ func TestRelevantMethodologyForFact_MinScoreFiltering_GoSidePrune(t *testing.T) 
 	require.NoError(t, err)
 	defer svc.Close()
 	// No embedder → tag-only ranking.
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "src",
@@ -534,7 +534,7 @@ func TestRelevantMethodologyForFact_VectorCoverage_WithSiblingBranchNoise(t *tes
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(&stub768Embedder{})
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/sibling"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/sibling"))
 
 	ctx := context.Background()
 
@@ -592,7 +592,7 @@ func TestRelevantMethodologyForFact_VectorCoverage_WithNoiseInIndex(t *testing.T
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(&stub768Embedder{})
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	branch := "agent/a"
@@ -656,7 +656,7 @@ func TestRelevantMethodologyForFact_ExcludesTheSourceFactItself(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 	svc.SetEmbedder(&stub768Embedder{})
 
 	ctx := context.Background()

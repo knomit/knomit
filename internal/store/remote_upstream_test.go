@@ -37,7 +37,7 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Bound the fetch. Open leaves netTimeout at 0, which netCtxWith reads as
 	// "no deadline", so the bogus-URL fetch below took however long the host's
@@ -90,7 +90,7 @@ func TestConfigureRemote_RefspecUsesConfiguredUpstream(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "master", "agent/test"))
 
@@ -120,7 +120,7 @@ func TestReconcileMain_UsesConfiguredUpstream(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	// Initialize the repo using master as the consensus branch.
-	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "master", "agent/test"))
+	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "master", "agent/test"))
 
 	// Move master back to parent so reconcile has work to do.
 	newMasterCommit := writeMergeFact(t, svc, "master", "kb/m.md", "M", "v1")
@@ -167,7 +167,7 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 
 	// Empty upstreamMain → detection must find "master", and must REPORT it:
 	// the caller persists the returned name into control.db's origin.
-	upstream, wasEmpty, err := svc.InitFromRemote(fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
+	upstream, wasEmpty, err := svc.InitFromRemote(context.Background(), fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "master", upstream, "InitFromRemote must return the branch it resolved")
 	require.False(t, wasEmpty, "a remote with refs must be reported as the CLONE path, not the empty one")
@@ -218,7 +218,7 @@ func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 
 	// Empty upstreamMain → the one non-agent branch, NOT the agent-branch HEAD.
-	upstream, wasEmpty, err := svc.InitFromRemote(fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
+	upstream, wasEmpty, err := svc.InitFromRemote(context.Background(), fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "main", upstream, "InitFromRemote must return the branch it resolved")
 	require.False(t, wasEmpty, "a remote with refs must be reported as the CLONE path, not the empty one")
@@ -279,7 +279,7 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	upstream, err := svc.InitSubscription(fileuri.New(bareDir), nil, "", nil)
+	upstream, err := svc.InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "main", upstream)
 
@@ -346,7 +346,7 @@ func TestInitSubscription_EmptyRemoteIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	_, err = svc.InitSubscription(fileuri.New(bareDir), nil, "", nil)
+	_, err = svc.InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
 	require.ErrorIs(t, err, transport.ErrEmptyRemoteRepository)
 }
 
@@ -371,7 +371,7 @@ func TestInitSubscription_ResolvesRemoteHEADWhenNoMain(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	upstream, err := svc.InitSubscription(fileuri.New(bareDir), nil, "", nil)
+	upstream, err := svc.InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "master", upstream)
 	_, mainErr := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))

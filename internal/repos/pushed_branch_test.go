@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestIsPushedBranch(t *testing.T) {
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/host-0a1b2c3d"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/host-0a1b2c3d"))
 
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "r", AgentBranch: "agent/host-0a1b2c3d", Svc: svc})
 	for branch, want := range map[string]bool{

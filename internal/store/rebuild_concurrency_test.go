@@ -41,7 +41,7 @@ func TestRebuildEmbeddings_DoesNotHoldWriteLockDuringEmbed(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	emb := &blockingBatchEmbedder{started: make(chan struct{}), release: make(chan struct{})}
 	svc.SetEmbedder(emb)
@@ -110,7 +110,7 @@ func TestRebuildEmbeddings_RejectsBatchLengthMismatch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	svc.SetEmbedder(&shortBatchEmbedder{})
 
 	ctx := context.Background()
@@ -155,7 +155,7 @@ func TestRebuild_SerializedWithConcurrentSyncLocked(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	emb := &blockingBatchEmbedder{started: make(chan struct{}), release: make(chan struct{})}
 	svc.SetEmbedder(emb)

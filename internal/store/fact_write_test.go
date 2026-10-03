@@ -16,7 +16,7 @@ func TestWriteRootFile_PreservesCase(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	fi := svc.Facts()
 
 	_, err = fi.WriteRootFile(context.Background(), "main",
@@ -36,7 +36,7 @@ func TestWriteRootFile_RejectsNestedPath(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	_, err = svc.Facts().WriteRootFile(context.Background(), "main",
 		"kb/Architecture/X.md", "# x", "msg", "update")
@@ -51,7 +51,7 @@ func TestWriteFact_StillLowercasesPath(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	fi := svc.Facts()
 
 	_, err = fi.WriteFact(context.Background(), "main",
@@ -71,7 +71,7 @@ func TestWriteFactIfUnchanged_RefusesStaleBlob(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	fi := svc.Facts()
 	ctx := context.Background()
 	const path = ".knomit/jobs/x/y.md"

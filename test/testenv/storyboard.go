@@ -207,11 +207,11 @@ func (sb *Storyboard) repoConfig(name string) config.Config {
 // credential encryption, which is what most repos want (see credentialKey).
 func (sb *Storyboard) bootManager(cfg config.Config, keyPath string) (*repos.Manager, error) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   cfg,
-		AgentBranch:           "agent/test",
-		Embedder:              sb.embedder,
-		KeyPath:               keyPath,
-		DisableBackgroundSync: true,
+		Cfg:         cfg,
+		AgentBranch: "agent/test",
+		Embedder:    sb.embedder,
+		KeyPath:     keyPath,
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		return nil, err
@@ -559,11 +559,11 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 // before any origin is configured, then call ConnectKeepingWork to
 // model a user running `knomit set-origin` after they've already used
 // the agent for offline edits. Mirrors the production HAL flow
-// (PUT /api/v1/{repo}/origin → persist origin + wire git remote + ActivateSync)
-// exactly — no destructive re-init, the existing branch refs and
-// SQLite rows survive, and ActivateSync runs one synchronous reconcile
-// that should fetch origin and replay the local commits onto the
-// resolved upstream.
+// (PUT /api/v1/{repo}/origin → the AttachOrigin lifecycle event) exactly — no
+// destructive re-init, the existing branch refs and SQLite rows survive, and
+// the restarted Sync stage runs one synchronous reconcile (the storyboard's
+// machines are Synchronous) that should fetch origin and replay the local
+// commits onto the resolved upstream.
 //
 // Idempotent: calling with the already-configured remote URL is a no-op.
 // Returns the same RepoHandle for chaining.
@@ -576,37 +576,22 @@ func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
 	}
 	r.originURL = remote.URL()
 
-	// Persist the origin in control.db, inject it into the live store so
-	// GetRemote and the sync paths see it without a reopen, then write the git
-	// config so go-git can fetch/push by name. This is the three-step the HAL
-	// origin handler runs; control.db is the source of truth and the git config
-	// is a derived cache.
-	if err := r.manager.Origins().Set(r.ri.UID(), repos.Origin{URL: remote.URL(), Branch: remote.UpstreamBranch()}); err != nil {
-		t.Fatalf("ConnectKeepingWork(%s): persist origin: %v", remote.Name(), err)
-	}
-	var setErr error
-	r.ri.WithRead(func(svc *store.Service) {
-		svc.SetOrigin(&store.Origin{URL: remote.URL(), Branch: remote.UpstreamBranch()})
-		setErr = svc.ConfigureRemote(remote.URL(), remote.UpstreamBranch(), "agent/test")
-	})
-	if setErr != nil {
-		t.Fatalf("ConnectKeepingWork(%s): configure remote: %v", remote.Name(), setErr)
-	}
-
-	// Trigger one synchronous reconcile via the production ActivateSync
-	// path. This is exactly what the HAL handler does on
-	// PUT /api/v1/{repo}/origin.
-	if err := r.ri.ActivateSync(remote.URL()); err != nil {
-		t.Fatalf("ConnectKeepingWork(%s): ActivateSync: %v", remote.Name(), err)
+	// The production attach: the event's guard probes the remote, its apply
+	// persists the origin in control.db, injects it and rewrites the git
+	// remote, and the Sync stage re-enters on it.
+	if _, err := r.manager.Send(context.Background(), r.ri, repos.AttachOrigin(repos.OriginSpec{
+		URL: remote.URL(), Branch: remote.UpstreamBranch(),
+	})); err != nil {
+		t.Fatalf("ConnectKeepingWork(%s): attach origin: %v", remote.Name(), err)
 	}
 	return r
 }
 
 // TryReConnect is the error-returning, goroutine-safe variant of
 // ConnectKeepingWork. It RE-POINTS an already-connected repo's origin to a new
-// remote via the SAME production path (persist the origin in control.db, inject
-// it, rewrite the git remote, then ri.ActivateSync's synchronous reconcile) but
-// returns any error instead of calling t.Fatalf, so a cell can run it under a
+// remote via the SAME production path (the AttachOrigin lifecycle event: a
+// probe of the new remote bounded by the network timeout, then the persisted
+// origin and a Sync stage restart) but returns any error instead of calling t.Fatalf, so a cell can run it under a
 // deadline (e.g. to
 // detect that re-pointing to a hung remote never aborts). It touches no
 // *testing.T and is safe to invoke from a goroutine. Unlike TryConnect it does
@@ -619,23 +604,12 @@ func (r *RepoHandle) TryReConnect(remote *RemoteHandle) error {
 	}
 	r.originURL = remote.URL()
 
-	if err := r.manager.Origins().Set(r.ri.UID(), repos.Origin{URL: remote.URL(), Branch: remote.UpstreamBranch()}); err != nil {
-		return fmt.Errorf("TryReConnect(%s): persist origin: %w", remote.Name(), err)
-	}
-	var setErr error
-	r.ri.WithRead(func(svc *store.Service) {
-		svc.SetOrigin(&store.Origin{URL: remote.URL(), Branch: remote.UpstreamBranch()})
-		setErr = svc.ConfigureRemote(remote.URL(), remote.UpstreamBranch(), "agent/test")
-	})
-	if setErr != nil {
-		return fmt.Errorf("TryReConnect(%s): configure remote: %w", remote.Name(), setErr)
-	}
-
-	// ActivateSync runs one synchronous reconcile (fetch bounded by the
-	// configured network timeout) exactly like the HAL handler. If the new
-	// remote hangs, this must abort at the timeout rather than block forever.
-	if err := r.ri.ActivateSync(remote.URL()); err != nil {
-		return fmt.Errorf("TryReConnect(%s): ActivateSync: %w", remote.Name(), err)
+	// The attach's guard probes the new remote under the configured network
+	// timeout: a hung remote must abort there rather than block forever.
+	if _, err := r.manager.Send(context.Background(), r.ri, repos.AttachOrigin(repos.OriginSpec{
+		URL: remote.URL(), Branch: remote.UpstreamBranch(),
+	})); err != nil {
+		return fmt.Errorf("TryReConnect(%s): attach origin: %w", remote.Name(), err)
 	}
 	return nil
 }
@@ -683,6 +657,19 @@ func (r *RepoHandle) Restart() {
 	r.manager = m
 	r.ri = ri
 	r.branches = map[string]*BranchHandle{}
+
+	// A mount replies once its walk is up; the index job runs in the
+	// background. "Survives restart" cells assert on the index, so wait for
+	// it to settle.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	for tr := range ri.Watch(ctx) {
+		if tr.Status.Index.State != repos.IndexStateIndexing {
+			return
+		}
+	}
+	r.expectDirty = true
+	t.Fatalf("Restart(%q): the index never settled", r.name)
 }
 
 // RestartWithEmbedder restarts the repo using a different embedder, simulating
