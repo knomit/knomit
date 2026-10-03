@@ -86,6 +86,7 @@ type lensFactItem struct {
 	Score       float64        `json:"score"`
 	Expires     string         `json:"expires,omitempty"`
 	Expired     bool           `json:"expired,omitempty"`
+	Context     map[string]any `json:"context,omitempty"`
 	Source      lensFactSource `json:"source"`
 }
 
@@ -283,6 +284,9 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 		if !applyExpiryParams(w, r, &base, now) {
 			return
 		}
+		if !applyContextParams(w, r, &base) {
+			return
+		}
 
 		// Each mount answers the count with its own SELECT COUNT(*), independent
 		// of how many rows this page asked for. Discarding it and reporting
@@ -419,6 +423,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 					Operation:   e.Operation,
 					Score:       e.Score,
 					Expires:     e.Expires,
+					Context:     e.Context,
 					Expired:     expiredAt(e.Expires, now),
 					Source: lensFactSource{
 						Repo:   t.RT.RI.Name(),
@@ -739,6 +744,7 @@ type lensSearchItem struct {
 	Confidence float64        `json:"confidence,omitempty"`
 	Expires    string         `json:"expires,omitempty"`
 	Expired    bool           `json:"expired,omitempty"`
+	Context    map[string]any `json:"context,omitempty"`
 	Source     lensFactSource `json:"source"`
 }
 
@@ -896,6 +902,9 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 		if !applyExpiryParams(w, r, &base, now) {
 			return
 		}
+		if !applyContextParams(w, r, &base) {
+			return
+		}
 
 		// Fan out to every selected mount at its Binding-resolved branch. Any mount
 		// error fails the whole request — a lens must never silently shrink its read
@@ -962,6 +971,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 				Motifs:     res.Motifs,
 				Confidence: res.Confidence,
 				Expires:    res.Expires,
+				Context:    res.Context,
 				Expired:    expiredAt(res.Expires, now),
 				Source: lensFactSource{
 					Repo:   t.RT.RI.Name(),

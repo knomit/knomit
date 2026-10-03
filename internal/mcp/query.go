@@ -62,7 +62,7 @@ func pageSizeFor(limit int, includeBody bool) int {
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
-		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required (not needed when paging with cursor). Set sort=recent to browse most-recently-updated facts (optionally filtered by type/domain/path); sort=recent needs no other filter."),
+		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, origin, context, or min_confidence is required (not needed when paging with cursor). Set sort=recent to browse most-recently-updated facts (optionally filtered by type/domain/path); sort=recent needs no other filter."),
 		bindingArg(true),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
@@ -127,6 +127,10 @@ func queryTool() mcpgo.Tool {
 		mcpgo.WithString("expires_after",
 			mcpgo.Description(expiresAfterParamDescription),
 		),
+		mcpgo.WithObject("context",
+			mcpgo.Description(contextParamDescription),
+			mcpgo.AdditionalProperties(map[string]any{"type": []string{"string", "number", "boolean"}}),
+		),
 		mcpgo.WithString("motif_match",
 			mcpgo.Description("How strictly `motifs` must match, loosest last: exact (default; the same motif, however it is spelled), stem, token-2, token-1 (noisiest), soft (not yet available). Only meaningful alongside `motifs`."),
 			mcpgo.Enum(motifMatchEnum()...),
@@ -167,6 +171,8 @@ type frontmatterOutput struct {
 	CommittedAt    int64    `json:"committed_at,omitempty"`
 	// Expires is the fact's optional RFC 3339 expiry, as written.
 	Expires string `json:"expires,omitempty"`
+	// Context is the fact's F22 context map, omitted when empty.
+	Context map[string]any `json:"context,omitempty"`
 }
 
 // queryResponse is the knomit_query envelope. Cursor is non-nil only while more
@@ -482,7 +488,12 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
 	if err := store.ValidateMinSimilarity(minSim); err != nil {
 		return store.SearchOptions{}, err
 	}
+	ctxFilter, err := parseContextFilter(req)
+	if err != nil {
+		return store.SearchOptions{}, err
+	}
 	return store.SearchOptions{
+		Context: ctxFilter,
 		// ONE clock per query: the expiry filters and every page's `expired`
 		// marker are computed from this instant (see pagedRowState.AsOf).
 		Now:            timeNow(),
@@ -525,7 +536,41 @@ func hasAnyFilter(q store.SearchOptions) bool {
 		// omitting it here would reject that as "no filter supplied".
 		len(q.Motifs) > 0 ||
 		// So is an expiry-only one: "every expired fact" is the review list.
-		q.Expired != nil || !q.ExpiresBefore.IsZero() || !q.ExpiresAfter.IsZero()
+		q.Expired != nil || !q.ExpiresBefore.IsZero() || !q.ExpiresAfter.IsZero() ||
+		// And a context-only one (F22): "every verdict for task t-17".
+		len(q.Context) > 0
+}
+
+// contextParamDescription is knomit_query's `context` filter (F22).
+const contextParamDescription = `Filter by the facts' context map (F22): an object of key: value pairs, ALL of which must match exactly, ` +
+	`e.g. {"task": "t-17", "verdict": "disagree"}. Values are strings, numbers or booleans, compared by their canonical text ` +
+	`(a number in shortest form, true/false; a time in UTC with a Z, as stored). Combines with every other filter, path included. ` +
+	`With text, the filter applies after the semantic nearest-neighbour window, so it can return fewer matches than exist; without text the result is exact.`
+
+// parseContextFilter reads knomit_query's `context` argument into canonical
+// text per key. A key that is not a legal context key, or a value that is not
+// a scalar, is refused rather than silently matching nothing.
+func parseContextFilter(req mcpgo.CallToolRequest) (map[string]string, error) {
+	raw, ok := req.GetArguments()["context"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("context must be an object of key: value pairs")
+	}
+	m = fact.NormalizeContextValues(m)
+	if err := fact.ValidateContextShape(m); err != nil {
+		return nil, fmt.Errorf("context filter: %v", err)
+	}
+	if len(m) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = fact.ContextText(v)
+	}
+	return out, nil
 }
 
 // Parameter descriptions for the expiry filters, shared with the REST docs'
@@ -912,6 +957,7 @@ func buildFactOutput(r store.SearchResult, includeBody bool, now time.Time) fact
 			EvidenceWeight: r.EvidenceWeight,
 			CommittedAt:    r.CommittedAt,
 			Expires:        r.Expires,
+			Context:        r.Context,
 		},
 	}
 }
@@ -941,6 +987,7 @@ func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, co
 			EvidenceWeight: f.EvidenceWeight,
 			CommittedAt:    committedAt,
 			Expires:        f.Expires,
+			Context:        f.Context,
 		},
 	}
 }

@@ -69,13 +69,14 @@ type domainEntry struct {
 
 // factSummaryItem is a fact summary (no body) used in domain fact lists.
 type factSummaryItem struct {
-	Path       string      `json:"path"`
-	Title      string      `json:"title"`
-	Type       string      `json:"type,omitempty"`
-	Confidence float64     `json:"confidence,omitempty"`
-	Expires    string      `json:"expires,omitempty"`
-	Expired    bool        `json:"expired,omitempty"`
-	Links      hal.LinkMap `json:"_links"`
+	Path       string         `json:"path"`
+	Title      string         `json:"title"`
+	Type       string         `json:"type,omitempty"`
+	Confidence float64        `json:"confidence,omitempty"`
+	Expires    string         `json:"expires,omitempty"`
+	Expired    bool           `json:"expired,omitempty"`
+	Context    map[string]any `json:"context,omitempty"`
+	Links      hal.LinkMap    `json:"_links"`
 }
 
 // handleHALDomains serves GET /repos/{repo}/branches/{branch}/domains.
@@ -157,6 +158,7 @@ func handleHALDomainFacts(b hal.URLBuilder, provider domainsProvider) http.Handl
 				Type:       res.Type,
 				Confidence: res.Confidence,
 				Expires:    res.Expires,
+				Context:    res.Context,
 				Expired:    expiredAt(res.Expires, now),
 				Links:      hal.LinkMap{"self": {Href: b.Fact(repoName, a, res.Path)}},
 			})

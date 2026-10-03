@@ -76,6 +76,10 @@ type explainFactEntry struct {
 	// (a by-path read has no query clock to share). Knomit never acts on it.
 	Expires string `json:"expires,omitempty"`
 	Expired bool   `json:"expired,omitempty"`
+	// Context (F22) rides on every node too: it is small by construction (at
+	// most 16 one-line labels), and it is how a reader tells which task a
+	// cited verdict belongs to.
+	Context map[string]any `json:"context,omitempty"`
 
 	// Root-only fields (omitted on summary nodes).
 	Domain   []string `json:"domain,omitempty"`
@@ -505,6 +509,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		Deleted:        deleted,
 		Expires:        parsed.Expires,
 		Expired:        parsed.IsExpired(timeNow()),
+		Context:        parsed.Context,
 		Domain:         parsed.Domain,
 		Sources:        parsed.Sources,
 		Entities:       parsed.Entities,
@@ -713,6 +718,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 				Summary:    true,
 				Expires:    parsed.Expires,
 				Expired:    parsed.IsExpired(timeNow()),
+				Context:    parsed.Context,
 			})
 		}
 

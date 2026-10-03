@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	pathpkg "path"
 	"slices"
 	"strings"
 
@@ -172,7 +173,7 @@ func refuseNonFactPath(w http.ResponseWriter, r *http.Request, path string) bool
 // handleFactUpdate serves PUT /repos/{repo}/branches/{branch}/facts/{path...}.
 // Body: JSON {"content": "<full markdown with YAML frontmatter>"}.
 // Returns HAL FactView with 200 OK.
-func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
+func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -228,6 +229,25 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 				"Invalid expires", strings.Join(f.ExpiresWarnings, "; "), r.URL.Path)
 			return
 		}
+		// F22 context, the same two rules for the same reason: ParseFact drops a
+		// malformed map (lenient read), and this path commits the client's
+		// bytes, so a newline or a list value would land on disk. Then the
+		// typed gate: "undeclared keys are refused on write" holds on every
+		// write path, this one included — it runs the context part of the
+		// ontology check (not the JS rules, which this endpoint has never run).
+		if len(f.ContextWarnings) > 0 {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity,
+				"Invalid context", strings.Join(f.ContextWarnings, "; "), r.URL.Path)
+			return
+		}
+		ctxTopic := pathpkg.Dir(strings.TrimPrefix(path, ontologyRoot+"/"))
+		normContext := knomitfact.NormalizeContext(ri.Ontology(), ctxTopic, knomitfact.CopyContext(f.Context))
+		if err := knomitfact.ValidateContext(ri.Ontology(), ctxTopic, normContext); err != nil {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Invalid context", err.Error(), r.URL.Path)
+			return
+		}
+		contextChanged := !knomitfact.EqualContext(normContext, f.Context)
+		f.Context = normContext
 
 		// Same gate as knomit_learn / knomit_update / POST. A PUT replaces the
 		// ref list wholesale, so only the refs it ADDS are checked — whatever
@@ -280,7 +300,7 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		// something — a PUT that needs no rewriting must not be silently
 		// reformatted by a round trip through SerializeFact.
 		content := body.Content
-		if changed || motifsChanged || expiresChanged {
+		if changed || motifsChanged || expiresChanged || contextChanged {
 			f.Refs = canonRefs
 			// SerializeFact strips again on its way out; assigning here keeps
 			// the fact handed to BuildFactView below telling the same story as

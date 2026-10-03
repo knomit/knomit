@@ -447,13 +447,14 @@ func motifCarrierLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 // motifCarrierItem is one carrier fact in the detail preview, recency-ordered
 // like the /facts pivot it previews.
 type motifCarrierItem struct {
-	Path        string      `json:"path"`
-	Title       string      `json:"title"`
-	Type        string      `json:"type,omitempty"`
-	CommittedAt int64       `json:"committed_at,omitempty"`
-	Expires     string      `json:"expires,omitempty"`
-	Expired     bool        `json:"expired,omitempty"`
-	Links       hal.LinkMap `json:"_links"`
+	Path        string         `json:"path"`
+	Title       string         `json:"title"`
+	Type        string         `json:"type,omitempty"`
+	CommittedAt int64          `json:"committed_at,omitempty"`
+	Expires     string         `json:"expires,omitempty"`
+	Expired     bool           `json:"expired,omitempty"`
+	Context     map[string]any `json:"context,omitempty"`
+	Links       hal.LinkMap    `json:"_links"`
 }
 
 // motifAliasItem is one member spelling with the audit trail of how it joined
@@ -557,6 +558,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 				Type:        e.Type,
 				CommittedAt: e.CommittedAt,
 				Expires:     e.Expires,
+				Context:     e.Context,
 				Expired:     expiredAt(e.Expires, timeNow()),
 				Links:       hal.LinkMap{"self": {Href: b.Fact(repoName, a, e.Path)}},
 			})
