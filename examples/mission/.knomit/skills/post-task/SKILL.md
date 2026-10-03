@@ -43,6 +43,40 @@ not a deadline: set it about 5 minutes ahead. If no session has taken the copy
 by then, the `lease` trigger wakes one; nothing ever retracts a copy because
 its lease ran out.
 
+## Tasks that write hypotheses
+
+A task that asks for predictions (a forecast task, or a synthesis task that
+ends in hypotheses) carries the hypothesis format IN ITS BODY, every time.
+The session that takes it reads only the task and its skill; a format that
+lives anywhere else is a format it never sees. The mission's charter says
+WHAT is predicted (the subject, the granularities that matter, which
+instruments settle it); the format below says how every prediction is written,
+and is the same for every mission.
+
+Paste this block into the task body, after what to do, and fill in the
+subject and the granularity (`<...>` marks what to fill; the three format
+lines keep their placeholders, the session fills those):
+
+```text hypothesis-format
+Hypotheses: write each prediction as one knomit_learn fact with
+topic: forecast, category: <subject>/<granularity> (granularity is year,
+month or day), type: hypothesis, and confidence = the probability you give it.
+Its body starts with these three lines, each on its own line, unindented,
+exactly as shown (no bullet, no bold), then your reasoning:
+predicted: <the period: YYYY, YYYY-MM or YYYY-MM-DD, at the granularity>
+settles_true_if: <an instrument that already exists and can be observed, and what it must show>
+settles_false_if: <an instrument that already exists and can be observed, and what it must show>
+Add a line "counters: <path>" when it counters another hypothesis.
+expires = the last second of the predicted period, in UTC: YYYY-12-31T23:59:59Z
+for a year, the last day of the month at 23:59:59Z for a month, the day
+itself at 23:59:59Z for a day. refs: the evidence facts. Never retract a
+hypothesis because it settled; people decide that.
+```
+
+The knowledge base's ontology refuses a hypothesis that breaks this
+(`examples/mission-kb/`, README "The knowledge base"), by rule name, so a
+session that gets it wrong is told which line and fixes it.
+
 ## Re-offering
 
 knomit never re-offers. A task that expired untaken, or whose ack says

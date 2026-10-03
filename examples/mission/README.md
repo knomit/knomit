@@ -431,6 +431,34 @@ again, the coordinator posts it again under a NEW task id, in one
 `knomit_learn` that also retracts the old task if it is still there. No
 script is needed.
 
+## The knowledge base
+
+The mission repo holds signals; what the agents learn goes to a knowledge
+base the tasks name (`knowledge base: repo <name>` or `lens <name>`).
+
+### The hypothesis format
+
+Every task that asks for predictions carries the hypothesis format in its
+body (the `post-task` skill has the block to paste, marked `hypothesis-format`).
+A session reads only its task and its skill, so a format kept anywhere else is
+never seen. The format is the same for every mission; the mission's charter
+supplies the subject, the granularities that matter and the instruments that
+settle a prediction.
+
+- `topic: forecast`, `category: <subject>/<granularity>`, the granularity
+  being `year`, `month` or `day`;
+- `type: hypothesis`, `confidence` = the probability;
+- the body starts with three lines, unindented:
+  - `predicted: <period>`: `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, at the granularity;
+  - `settles_true_if: <instrument>` and `settles_false_if: <instrument>`, each
+    naming an instrument that already exists and can be observed;
+  - plus `counters: <path>` for a counter-hypothesis;
+- `expires` = the last second of the predicted period in UTC (31 December, the
+  last day of the month, or the day itself, at `23:59:59Z`);
+- `refs`: the evidence.
+
+Nobody retracts a hypothesis because it settled: people decide that.
+
 ## Skills
 
 `.knomit/skills/<name>/SKILL.md` are served by knomit's MCP server from the
