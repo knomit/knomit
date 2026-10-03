@@ -43,7 +43,7 @@ type syncHooks struct {
 	window func(d time.Duration) <-chan time.Time
 	// tick runs at the top of each runReconcileLoop tick (after the deferred
 	// dispatcher kick) and before each local-loop advance: a test counts the
-	// ticks of a loop it did not start (ActivateSync's, startSyncLoops') and
+	// ticks of a loop it did not start (the Sync stage's) and
 	// can park one on its ctx.
 	tick func(ctx context.Context, repo string)
 	// now replaces time.Now for the circuit breakers (a fake clock).
@@ -168,11 +168,11 @@ func remoteStatusIsError(status *string) bool { return status != nil && *status 
 // cancelled, rather than because the remote said something.
 //
 // Such a tick established nothing, so it is not broadcast to clients and does
-// not count toward failure escalation. Creating a repo against a remote ends
-// with ActivateSync, which cancels this loop to restart it (builder.go); the
-// loop starts with an immediate tick, so a fetch is routinely in flight when
-// that lands. Reporting it put "sync failed — Sync: fetch: ...: context
-// canceled" on the repo screen of a create that had just fully succeeded.
+// not count toward failure escalation. An origin attach restarts the Sync
+// stage, which cancels this loop; the loop starts with an immediate tick, so a
+// fetch is routinely in flight when that lands. Reporting it put "sync failed
+// — Sync: fetch: ...: context canceled" on the repo screen of an attach that
+// had just fully succeeded.
 //
 // CANCELLATION ONLY, and the error must be the cancellation itself. A tick that
 // ran out of time, or a real refusal that happens to land as the loop is being
@@ -234,7 +234,7 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 //
 // wake (nil-safe) is the OTHER direction (F07 PR 4): the 1-slot channel a
 // `do: push` fire or knomit.push() sends on (ri.wakeSync). It lives on the
-// RepoInstance, not here, so it survives ActivateSync's loop restart. A wake
+// RepoInstance, not here, so it survives a Sync stage restart. A wake
 // opens the push countdown (awaitPushWindow) and then runs one ordinary
 // tick. The slot is drained once before the first tick, which covers any
 // wake left over from before this loop existed.
@@ -250,25 +250,31 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // [git].realtime_pull_interval, and `push: realtime` is published for
 // ri.onCommit, whose wakes arrive on the same wake arm as a `do: push`. A
 // realtime round is an ordinary doTick, so it passes the same breakers.
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode) {
-	defer wg.Done()
+//
+// It ends ONLY on its ctx (the Sync stage's life). A remote that cannot be
+// read, or that has disappeared, is a skipped tick: the Sync stage chose this
+// loop because the repo had an origin, and the origin's comings and goings
+// are the stage's to act on (a Detach restarts Sync), never the loop's.
+//
+// once runs the immediate first round and returns: the Synchronous mode the
+// test harness uses, where no loop may race its assertions.
+func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, once bool) {
 	defer mode.clear()
 
-	// Initial config read for logging context.
-	remote, err := svc.Remote().GetRemote("origin")
-	if err != nil {
-		log.Error().Err(err).Str("repo", repo).Msg("reconcile loop: initial remote read failed; not starting")
-		return
+	// Initial config read for logging context; a failed one only loses the
+	// URL from the log lines.
+	lgc := log.With().Str("repo", repo)
+	if remote, err := svc.Remote().GetRemote("origin"); err != nil {
+		log.Warn().Err(err).Str("repo", repo).Msg("reconcile loop: initial remote read failed; ticks will retry it")
+	} else if remote != nil {
+		lgc = lgc.Str("remote", remote.URL)
 	}
-	if remote == nil {
-		return
-	}
-	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
+	lg := lgc.Logger()
 	lg.Info().Msg("reconcile loop started")
 
 	var syncFails, pushFails int
 	// The two circuit breakers. They live here, on the loop goroutine, and
-	// start closed: a restarted loop (ActivateSync, a server restart) makes a
+	// start closed: a restarted loop (a Sync stage restart, a server restart) makes a
 	// fresh attempt at once, which a changed origin or credential deserves.
 	var fetchBrk, pushBrk breaker
 	breakers.publish(fetchBrk, pushBrk)
@@ -494,24 +500,28 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 	mode.refresh(ctx)
 	drainWake(wake)
 	doTick(ctx)
+	if once {
+		return
+	}
 
 	for {
-		// A cancelled loop (ActivateSync is restarting it, or shutdown) stops
-		// here, before the select could consume a wake it would not act on:
-		// the next loop's first tick then drains it deterministically.
+		// A cancelled loop (the Sync stage is exiting) stops here, before the
+		// select could consume a wake it would not act on: the next loop's
+		// first tick then drains it deterministically.
 		if ctx.Err() != nil {
 			lg.Info().Msg("reconcile loop stopped")
 			return
 		}
 		// Re-read remote config every iteration to pick up interval changes.
-		fresh, err := svc.Remote().GetRemote("origin")
-		if err != nil {
-			lg.Error().Err(err).Msg("reconcile loop stopped: remote read failed")
-			return
-		}
-		if fresh == nil {
-			lg.Info().Msg("reconcile loop stopped: remote disappeared")
-			return
+		// A read that fails, or finds no remote, skips to the default wait:
+		// the next tick asks again.
+		var remoteForWait store.Remote
+		if fresh, err := svc.Remote().GetRemote("origin"); err != nil {
+			lg.Warn().Err(err).Msg("reconcile loop: remote read failed; skipping to the next tick")
+		} else if fresh == nil {
+			lg.Warn().Msg("reconcile loop: the repo has no remote; skipping to the next tick")
+		} else {
+			remoteForWait = *fresh
 		}
 		// The `sync` setting, at the consensus branch's tip as the round that
 		// just ended left it. The wait is recomputed only here, after a round
@@ -523,7 +533,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		case <-ctx.Done():
 			lg.Info().Msg("reconcile loop stopped")
 			return
-		case <-loopWait(mode.wait(loopInterval(fresh))):
+		case <-loopWait(mode.wait(loopInterval(&remoteForWait))):
 			doTick(ctx)
 		case <-wake:
 			if !awaitPushWindow(ctx, wake) {
@@ -547,17 +557,20 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 // finds the two tips equal costs two ref reads and does nothing. It runs once
 // at start so a restarted instance converges without waiting an interval.
 //
-// It exits — rather than skipping — as soon as the repo has an origin, so the
-// two loops are mutually exclusive by the same fact. A subscription has no
-// agent branch and is excluded by the same guard.
+// It SKIPS its advance — never exits — while the repo has an origin: the Sync
+// stage chose this loop because the repo had none, one loop runs per Sync
+// life, and an origin appearing is the stage's to act on (an Attach restarts
+// Sync with the origin loop). A subscription has no agent branch and is
+// excluded by the same guard.
 //
 // wake is the push wake (see runReconcileLoop): with no origin, a push fire
 // moves main up to this machine's own branch after the countdown instead of
 // within the interval (D-local, user, 2026-09-28). It never publishes other
 // agents' branches: main follows only this machine's agent branch.
-func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}, mode *syncMode) {
-	defer wg.Done()
-	runLocalReconcile(ctx, repo, agentBranch, interval, mode,
+//
+// once runs the first round and returns (Synchronous).
+func runLocalReconcileLoop(ctx context.Context, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}, mode *syncMode, once bool) {
+	runLocalReconcile(ctx, repo, agentBranch, interval, mode, once,
 		func() (bool, error) {
 			r, err := svc.Remote().GetRemote("origin")
 			return r != nil, err
@@ -591,8 +604,11 @@ func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.S
 // sweep needs neither — so a failing advance never silences the sweep.
 //
 // wake (nil-safe) is the push wake: after the countdown and the drain it runs
-// exactly the timer's body — kickTriggers, then ownsMain with its exit on a
-// definite origin, then advance only when this loop owns main.
+// exactly the timer's body — kickTriggers, then ownsMain, then advance only
+// when this loop owns main.
+//
+// A DEFINITE origin is a skipped advance, like an unreadable one: the loop
+// ends only on its ctx.
 //
 // mode (nil-safe: today's behaviour) is the `sync` root attribute (F21 S2),
 // refreshed at start and before every wait. On a host, `pull: realtime` is
@@ -606,6 +622,7 @@ func runLocalReconcile(
 	repo, agentBranch string,
 	interval time.Duration,
 	mode *syncMode,
+	once bool,
 	hasOrigin func() (bool, error),
 	advance func() error,
 	kick func(),
@@ -645,36 +662,32 @@ func runLocalReconcile(
 		}
 	}
 
-	// One round of the ticker's body; false means "stop: the repo gained an
-	// origin" (reconcileMain owns main now).
-	round := func() bool {
+	// One round of the ticker's body. A repo that has an origin skips the
+	// advance: reconcileMain owns main then, and this loop must never move it
+	// behind that loop's back.
+	round := func() {
 		kickTriggers() // unconditional: before the origin read, before advance
 		owns, definite := ownsMain()
 		if definite && !owns {
-			lg.Info().Msg("local reconcile loop stopped: repo gained an origin")
-			return false
+			lg.Debug().Msg("local reconcile: the repo has an origin; skipping this tick")
 		}
 		if owns {
 			tick()
 		}
-		return true
 	}
 
 	// The first tick below covers every commit so far: drain a leftover wake.
 	mode.refresh(ctx)
 	drainWake(wake)
 
-	// Exit at start only on a definite "this repo has an origin" — then
-	// reconcileMain owns main and the two loops stay mutually exclusive by the
-	// same fact. An unreadable answer enters the loop without ticking, rather
-	// than either advancing main behind reconcileMain's back or never starting.
-	if owns, definite := ownsMain(); definite && !owns {
-		return
-	} else if owns {
-		lg.Info().Dur("interval", interval).Msg("local reconcile loop started")
+	lg.Info().Dur("interval", interval).Msg("local reconcile loop started")
+	if owns, _ := ownsMain(); owns {
 		tick()
 	}
 	kickTriggers()
+	if once {
+		return
+	}
 
 	// A per-round timer rather than a ticker, so the wait can follow the
 	// setting: it is recomputed after each round returns.
@@ -685,17 +698,13 @@ func runLocalReconcile(
 			lg.Info().Msg("local reconcile loop stopped")
 			return
 		case <-loopWait(mode.wait(interval)):
-			if !round() {
-				return
-			}
+			round()
 		case <-wake:
 			if !awaitPushWindow(ctx, wake) {
 				lg.Info().Msg("local reconcile loop stopped")
 				return
 			}
-			if !round() {
-				return
-			}
+			round()
 		}
 	}
 }

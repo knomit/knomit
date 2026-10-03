@@ -279,6 +279,40 @@ func (h *TaskHub) broadcastPushError(remote, errMsg string) {
 	})
 }
 
+// publishTask records and broadcasts a task event for work the hub did not
+// start itself — the lifecycle machine's manual index rebuild — so the jobs
+// UI sees it exactly as it sees a Start task: running while it runs, then
+// one terminal, and the Subscribe snapshot carries either.
+func (h *TaskHub) publishTask(ev TaskEvent) {
+	h.mu.Lock()
+	switch ev.Status {
+	case "running":
+		h.active[ev.Op] = ev
+	case "done", "error":
+		if cur, ok := h.active[ev.Op]; ok && cur.ID == ev.ID {
+			delete(h.active, ev.Op)
+		}
+		h.lastDone[ev.Op] = ev
+	}
+	h.mu.Unlock()
+	h.ob.Publish(ev)
+}
+
+// cancelTasks cancels every running task's context without shutting the hub
+// down: the store a task holds is about to be closed (Open.Exit), and the
+// drain waits for each task's release. Subscribers stay connected.
+func (h *TaskHub) cancelTasks() {
+	h.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(h.cancels))
+	for _, c := range h.cancels {
+		cancels = append(cancels, c)
+	}
+	h.mu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+}
+
 // Shutdown cancels all active task contexts.
 func (h *TaskHub) Shutdown() {
 	h.cancel()

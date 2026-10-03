@@ -679,7 +679,7 @@ func TestConsensus_HostTriggersFireOnMergedFacts(t *testing.T) {
 // T-B7: the push POST returns while the merge is still held: the merge runs
 // on the merger's goroutine, never inside receive-pack's register.
 //
-// SABOTAGE: running the merger inside ri.onCommit (m.run(ctx) instead of the
+// SABOTAGE: running the merger inside ri.onCommit (m.runOnce(ctx) instead of the
 // kick) → the push blocks on the held merge → red.
 func TestConsensus_PushLatencyUnchanged(t *testing.T) {
 	h := newConsensusHost(t, triggerOntology(autoAttrs), hostOpts{})

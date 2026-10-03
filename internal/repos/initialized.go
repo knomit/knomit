@@ -570,7 +570,7 @@ func (b *budgetedStorage) SetEncodedObject(obj plumbing.EncodedObject) (plumbing
 // initClone and initInitialize both run it against the branch they just built
 // from the remote, so neither depends on a probe taken earlier in time against
 // a remote that may have changed. It walks the same rungs
-// fact.OntologyPathsNewestFirst gives repoBuilder.loadOntology, so "this repo
+// fact.OntologyPathsNewestFirst gives RepoInstance.loadOntology, so "this repo
 // has an ontology" means the same thing at create time and at open time.
 //
 // A read that FAILS is returned as an error, never as false: the caller refuses

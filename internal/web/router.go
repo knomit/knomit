@@ -292,6 +292,12 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, p.origin))
 			r.Delete("/origin", handleHALDeleteOrigin(b, s.Manager, p.origin))
 
+			// Cancels the repo's index job: an ACTION on the repo, a POST on a
+			// colon-suffixed sub-resource like /repo-creates/{id}:cancel. It is
+			// the way out of the 409 "Repo is indexing" that Attach, Detach and
+			// Swap answer while the index job runs.
+			r.Post("/index:cancel", handleCancelIndex(b, s.Manager))
+
 			r.Route("/origin-sessions", func(r chi.Router) {
 				r.Get("/", handleListSessions(b, s.SessionManager))
 				r.Post("/", handleCreateSession(b, s.SessionManager))
@@ -374,7 +380,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.Delete("/synthesis-runs/{id}", handleDeleteJob(s.JobRegistry))
 				r.Get("/synthesis-runs/{id}/events", handleJobEvents(s.JobRegistry))
 
-				r.Post("/index-rebuilds", handleStartRebuild())
+				r.Post("/index-rebuilds", handleStartRebuild(b, s.Manager))
 				r.Get("/index-rebuilds", handleListJobs(s.JobRegistry, "index-rebuild"))
 				r.Get("/index-rebuilds/{id}", handleGetJob(s.JobRegistry))
 				r.Delete("/index-rebuilds/{id}", handleDeleteJob(s.JobRegistry))

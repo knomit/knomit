@@ -42,9 +42,10 @@
 // write-kicked — sweeps. The run's clock is read ONCE, as UTC; it is the one
 // clock comparison in F07.
 //
-// The dispatcher has its OWN context and wait group. It must not share
-// syncCtx: ActivateSync cancels that to restart the reconcile loop and would
-// kill the dispatcher whenever an origin is attached.
+// The dispatcher runs under the Serve stage's life, not Sync's: an origin
+// attach or detach restarts Sync and must not touch the dispatcher. The due
+// sweep is gated on the index being ready (indexReady), and the index job's
+// success kicks the dispatcher.
 package repos
 
 import (
@@ -135,11 +136,11 @@ type triggerDispatcher struct {
 	kick     chan struct{}
 	cache    fact.TriggerCache
 	stats    *triggerStats
-
-	// life guards the cancel func and the started/stopped flags: start is
-	// idempotent and a no-op once stop has run (see lifetimeGuard).
-	life lifetimeGuard
-	wg   sync.WaitGroup
+	// indexReady gates the `on: due` sweep, which reads index tables
+	// (branch_facts ⋈ fact_expires): while the repo's index is not ready the
+	// sweep is skipped, and the index job's success kicks the dispatcher so it
+	// runs then. Bound to the machine's status; nil reads as ready.
+	indexReady func() bool
 
 	mu       sync.Mutex
 	lastSet  *fact.TriggerSet
@@ -182,8 +183,8 @@ type triggerDispatcher struct {
 	// rc is the `do: run` state (trigger_recipe.go): the recipe caches, the
 	// concurrency slots and the running recipes' wait group.
 	rc recipeState
-	// runCtx is the loop's ctx (set by start): every recipe derives from it,
-	// so stop() interrupts them and kills their processes.
+	// runCtx is the loop's ctx (set by run): every recipe derives from it, so
+	// the Serve stage's exit interrupts them and kills their processes.
 	runCtx context.Context
 	// lateIn is the inbox of recipe RESULT rows, filled by runner goroutines
 	// (addLate) and drained into pending.late by the dispatcher goroutine only
@@ -193,8 +194,9 @@ type triggerDispatcher struct {
 }
 
 // newTriggerDispatcher builds the dispatcher for ri WITHOUT starting it, so
-// the kick slot exists from build() (a write during the background heal kicks
-// it) while the goroutine starts from activate() after the initial index.
+// the kick slot exists from the instance's construction (a write during the
+// index job kicks it) while run starts under the Serve stage's life. Its
+// due sweep is gated on ri's index being ready.
 // ratePerMinute is [triggers].script_rate_per_minute; tools the injected
 // in-process MCP tool set of `do: script` (nil on a build with none); home
 // the knomit home whose recipes/ folder holds this machine's recipes.
@@ -207,6 +209,7 @@ func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh
 		repo:       repo,
 		branch:     agentBranch,
 		identity:   triggerIdentityFor(agentBranch, signer),
+		indexReady: func() bool { return ri.Status().Index.State == IndexStateReady },
 		slow:       time.Duration(slowMS) * time.Millisecond,
 		kick:       make(chan struct{}, 1),
 		stats:      newTriggerStats(),
@@ -249,27 +252,9 @@ func isHex8(s string) bool {
 	return true
 }
 
-// start launches the actor with its own context derived from parent. It kicks
-// itself once so advances made while the server was down fire on restart (the
-// watermark makes that at-least-once). A second call, or a call after stop,
-// is a no-op.
-func (d *triggerDispatcher) start(parent context.Context) {
-	ctx, ok := d.life.begin(parent, &d.wg)
-	if !ok {
-		return
-	}
-	d.runCtx = ctx
-	d.triggerKick()
-	go d.loop(ctx)
-}
-
-// stop cancels the actor and waits for the current run to notice (phase B
-// checks ctx per path, so it returns within one evaluation), then for every
-// running recipe to be killed and to hand in its `stopped` row, which the
-// final flush writes.
-func (d *triggerDispatcher) stop() {
-	d.life.end()
-	d.wg.Wait()
+// indexIsReady reports whether the due sweep may read the index now.
+func (d *triggerDispatcher) indexIsReady() bool {
+	return d.indexReady == nil || d.indexReady()
 }
 
 // triggerKick is the observer's whole job for triggers: record "the agent
@@ -304,11 +289,19 @@ func (ri *RepoInstance) wakeSync() {
 // wakeSync on the dispatcher is how phase B and the script host reach it.
 func (d *triggerDispatcher) wakeSync() { d.ri.wakeSync() }
 
-// loop receives kicks. The kick is RECEIVED before the head ref is read
-// (inside run): the reverse order would swallow the kick of a commit that
-// lands between the ref read and the drain, the lost-wake-up shape.
-func (d *triggerDispatcher) loop(ctx context.Context) {
-	defer d.wg.Done()
+// run is the dispatcher's lifetime, under the Serve stage's life. It kicks
+// itself once so advances made while the repo was not served fire now (the
+// watermark makes that at-least-once), then receives kicks until ctx ends.
+// The kick is RECEIVED before the head ref is read (inside runOnce): the
+// reverse order would swallow the kick of a commit that lands between the ref
+// read and the drain, the lost-wake-up shape.
+//
+// On ctx's end it waits for every running recipe to be killed and to hand in
+// its `stopped` row, then flushes what is buffered — while the store is still
+// attached, because the Serve stage is drained before Open closes the store.
+func (d *triggerDispatcher) run(ctx context.Context) {
+	d.runCtx = ctx
+	d.triggerKick()
 	for {
 		select {
 		case <-ctx.Done():
@@ -387,7 +380,7 @@ func (d *triggerDispatcher) safeRun(ctx context.Context) {
 	if h := currentTriggerHooks().afterKick; h != nil {
 		h()
 	}
-	d.run(ctx)
+	d.runOnce(ctx)
 }
 
 // pendingFire is one (trigger, path) evaluation phase A prepared for phase B.
@@ -520,7 +513,7 @@ func (d *triggerDispatcher) clock() time.Time {
 	return time.Now().UTC().Truncate(time.Second)
 }
 
-func (d *triggerDispatcher) run(ctx context.Context) {
+func (d *triggerDispatcher) runOnce(ctx context.Context) {
 	rs := &runState{newWM: map[string]string{}, started: time.Now()}
 	defer func() {
 		d.mu.Lock()
@@ -894,7 +887,11 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 	if !d.advance(ctx, tr, rs, cr, head, byW, root, verifyOn, verifiedSet) {
 		return false
 	}
-	if len(dueTrigs) > 0 && !d.sweepDue(ctx, tr, rs, cr, head, root, dueTrigs, verifyOn, verifiedSet) {
+	// The due sweep reads the index (branch_facts ⋈ fact_expires), so it waits
+	// for the index to be ready; the index job's success kicks this
+	// dispatcher. Due fires are late during indexing, never wrong: the
+	// advance above reads git alone and runs regardless.
+	if len(dueTrigs) > 0 && d.indexIsReady() && !d.sweepDue(ctx, tr, rs, cr, head, root, dueTrigs, verifyOn, verifiedSet) {
 		return false
 	}
 	return len(byW) > 0 || len(rs.dueMarks) > 0 || len(rs.newWM) > 0 || len(rs.del) > 0

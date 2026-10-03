@@ -18,10 +18,10 @@ import (
 // consults them, whatever started it: the first round, the timer, or a wake
 // (`do: push`, knomit.push(), the consensus merger). The state lives on the
 // loop goroutine; rounds never overlap, so exactly one probe runs per open
-// period. A loop restart (ActivateSync) or a server restart starts closed.
+// period. A loop restart (the Sync stage re-entering) or a server restart
+// starts closed.
 //
-// What does NOT consult or change them: the one-shot network calls —
-// recoverFromOrigin's startup Sync, ActivateSync's synchronous Sync, the
+// What does NOT consult or change them: the one-shot network calls — the
 // create-time push and the fleet register/unregister push. None of them loops.
 // The local (no-origin) loop has no breaker: it does no network I/O.
 
@@ -117,8 +117,9 @@ func viewOf(b breaker, now time.Time) BreakerView {
 
 // syncBreakers is the read-only copy of the loop's two breakers that the
 // origin view reads. The loop owns the state and publishes after each round;
-// nothing else writes it. It lives on the RepoInstance (set once in build), so
-// it outlives an ActivateSync loop restart, which publishes closed again.
+// nothing else writes it. It lives on the RepoInstance (set once at
+// construction), so it outlives a Sync stage restart, which publishes closed
+// again.
 type syncBreakers struct {
 	mu          sync.Mutex
 	fetch, push breaker

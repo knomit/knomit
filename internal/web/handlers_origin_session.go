@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -148,110 +147,6 @@ func handleDeleteSession(sm *SessionManager) http.HandlerFunc {
 		sm.Delete(repo, sessionID)
 		w.WriteHeader(http.StatusNoContent)
 	}
-}
-
-// rootCommitOfDB opens the database at dbPath read-only, resolves the root
-// commit reachable from branch, and closes it again on every path.
-//
-// Used at /commit to re-read the identity of the temp clone AFTER it has been
-// checkpointed and closed — the clone's *store.Service is gone by then, but
-// the file it left behind is exactly what SwapStore is about to install.
-func rootCommitOfDB(ctx context.Context, dbPath, branch string) (string, error) {
-	svc, err := store.Open(dbPath)
-	if err != nil {
-		return "", fmt.Errorf("open clone db: %w", err)
-	}
-	defer svc.Close()
-	if err := svc.OpenRepo(); err != nil {
-		return "", fmt.Errorf("open clone git: %w", err)
-	}
-	return svc.RootCommit(ctx, branch)
-}
-
-// currentOrigin reports whether the repo has an origin right now, and its URL,
-// read from the live store's injected origin — the same record the running
-// sync loop and ActivateSync read, which control.db's Origins row backs and
-// which SwapStore's recovery path re-injects. The Acquire is released before
-// returning, so this is safe to call just before SwapStore. An unreadable
-// store reads as "no origin": a local loop is the conservative restart.
-func currentOrigin(ri *repos.RepoInstance) (bool, string) {
-	var url string
-	var had bool
-	err := ri.WithRead(func(svc *store.Service) {
-		if r, rerr := svc.Remote().GetRemote("origin"); rerr == nil && r != nil {
-			had, url = true, r.URL
-		}
-	})
-	if err != nil {
-		log.Warn().Err(err).Str("repo", ri.Name()).Msg("commit: could not read the current origin before the swap")
-	}
-	return had, url
-}
-
-// restorePreviousSync restarts the sync mode the repo ran before a failed
-// SwapStore. SwapStore stops sync and never restarts it — that is its
-// caller's contract — and its failure paths put the old store back with the
-// loop still dead, so without this the repo silently stops syncing until the
-// process restarts. A restart error is logged, not returned: the request is
-// already failing with the swap's own error, which is the one to report.
-// ActivateSync and StartLocalSync both honour DisableBackgroundSync.
-func restorePreviousSync(ri *repos.RepoInstance, repo string, hadOrigin bool, previousURL string) {
-	var err error
-	if hadOrigin {
-		err = ri.ActivateSync(previousURL)
-	} else {
-		err = ri.StartLocalSync()
-	}
-	if err != nil {
-		log.Warn().Err(err).Str("repo", repo).Bool("had_origin", hadOrigin).
-			Msg("commit: could not restart sync after a failed store swap")
-	}
-}
-
-// persistSessionOrigin writes the connection the session negotiated to
-// control.db and then updates the running store — the same three-step
-// PUT /origin runs (defaultOriginProvider.SetOrigin). control.db owns
-// url/branch/auth so a lost .db can be re-cloned from a record that outlives
-// it; svc.SetOrigin makes GetRemote reflect it without a reopen; and
-// svc.ConfigureRemote rewires the git fetch/push refspecs so the reconcile
-// loop uses it immediately.
-func persistSessionOrigin(rm *repos.Manager, ri *repos.RepoInstance, svc *store.Service,
-	url, upstreamMain, agentBranch, authMethod, authToken string) error {
-	origins := rm.Origins()
-	if origins == nil {
-		return fmt.Errorf("origin store unavailable")
-	}
-	// Carry the stored mode through, for the same reason SetOrigin does:
-	// Origins.Set is a full replacement and an EMPTY Mode DELETES the
-	// subscription row, so writing without it silently demotes a subscription
-	// to sync. handleCreateSession refuses a subscription before a session can
-	// exist, so this is unreachable for one today — it is here so the rule
-	// holds at the write itself rather than depending on a guard three calls
-	// away that a future caller might not go through.
-	stored, gerr := origins.Get(ri.UID())
-	if gerr != nil {
-		return gerr
-	}
-	mode := repos.OriginModeSync
-	if stored != nil {
-		mode = stored.Mode
-	}
-	if err := origins.Set(ri.UID(), repos.Origin{
-		URL:        url,
-		Branch:     upstreamMain,
-		AuthMethod: authMethod,
-		AuthToken:  authToken,
-		Mode:       mode,
-	}); err != nil {
-		return err
-	}
-	svc.SetOrigin(&store.Origin{
-		URL:        url,
-		Branch:     upstreamMain,
-		AuthMethod: authMethod,
-		AuthToken:  authToken,
-	})
-	return svc.ConfigureRemote(url, upstreamMain, agentBranch)
 }
 
 // connectivityResult is the JSON payload sent in the "done" phase of a test connectivity SSE stream.
@@ -890,9 +785,35 @@ func handleListSessions(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc {
 	}
 }
 
+// commitRequest is the optional JSON body of POST .../commit.
+type commitRequest struct {
+	// CancelIndexing asks the commit to cancel the repo's index job first
+	// ("cancel indexing and continue"). Without it, a commit while the repo is
+	// indexing is refused with 409 and a cancel-index link.
+	CancelIndexing bool `json:"cancel_indexing"`
+}
+
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
-// It finalizes the origin connection by swapping the session's remote store
-// into the repo instance, saving remote config, and starting sync loops.
+//
+// It finalizes the origin connection as ONE lifecycle event on the repo's
+// machine, streaming the machine's transitions as progress phases:
+//
+//   - shared history: AttachOrigin (phases configuring, done). The local store
+//     already shares commits with the remote; the sync loop's own merge
+//     primitives reconcile them, and swapping would discard local-only facts.
+//   - disjoint history: SwapStore with the session's origin (phases swapping,
+//     configuring, indexing with progress, done). The machine exits every
+//     stage, installs the clone over the repo's database and persists the
+//     origin as one apply, then walks the repo up again — the heal of the new
+//     store is the post-swap index. A failed install restores the previous
+//     store and still walks it up; the reply says so.
+//
+// Both are exclusive with indexing: refused with 409 (and a cancel-index link)
+// before anything is touched, unless the body asks to cancel indexing first —
+// then the stream opens with phase cancelling-index. A refusal that arrives
+// before the machine changed anything (a different knowledge base, a remote
+// already held by another repo) is still a plain HTTP problem: the stream
+// opens only once the event is under way.
 func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
@@ -902,6 +823,11 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		if !ok {
 			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
 				"session not found", r.URL.Path)
+			return
+		}
+
+		var body commitRequest
+		if !decodeOptionalJSON(w, r, &body, 0) {
 			return
 		}
 
@@ -927,352 +853,231 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		b := hal.URLBuilder{Base: APIBase}
 
-		// The same gate PUT /origin applies, at the same point in the flow:
-		// before anything is written and before the stream opens, so the
-		// refusal is a 409 the client can act on rather than an error line in
-		// a committed SSE body. A repo's ontology is fixed at create time, so a
-		// remote governed by a different one can never be reconciled with it.
-		if remoteURL != "" && ri != nil && ri.Ontology() != nil {
-			if err := rm.CheckOriginOntology(r.Context(), ri.Ontology().ID, repos.OriginSpec{
-				URL:        remoteURL,
-				Branch:     appliedRemoteBranch,
-				AuthMethod: authCfg.Method,
-				// Assembled exactly as the flow below assembles it: a basic
-				// credential is "user:password", and probing with the raw token
-				// would ask about a different request than the one being made.
-				AuthToken: assembleAuthToken(authCfg.Method, authCfg.Token, authCfg.User, authCfg.Password),
-			}); err != nil {
-				hal.WriteProblem(w, http.StatusConflict, "Different knowledge base",
-					err.Error(), r.URL.Path)
-				return
-			}
-		}
-
-		sendEvent, ok := beginSSE(w)
-		if !ok {
+		// Exclusive with indexing, checked before the session's clone is
+		// closed, so a refused commit can be retried with cancel_indexing.
+		if ri.Status().IndexRunning() && !body.CancelIndexing {
+			writeLifecycleProblem(w, r, b, repo, repos.ErrIndexing)
 			return
 		}
 
-		// Shared history: the local store already shares commits with the
-		// remote, so the standard sync loop's fetch+merge primitives are
-		// what reconcile them — no swap, no rebuild. The clone that /test
-		// produced has served its purpose; close it, wire the remote into
-		// the existing local store, and start sync. Swapping here would
-		// silently discard any local-only facts (the user's 209 → 0 bug).
+		// The branch the user chose at /apply time, else the remote's own
+		// default (the test clone's HEAD). With neither there is no branch to
+		// record, and the attach refuses rather than inventing one.
+		upstreamMain := appliedRemoteBranch
+		if upstreamMain == "" {
+			upstreamMain = testResult.DefaultBranch
+		}
+		origin := repos.OriginSpec{
+			URL:        remoteURL,
+			Branch:     upstreamMain,
+			AuthMethod: authCfg.Method,
+			AuthToken:  assembleAuthToken(authCfg.Method, authCfg.Token, authCfg.User, authCfg.Password),
+		}
+
+		var e repos.MachineEvent
 		if testResult.History == "shared" {
-			s.commitSharedHistory(sendEvent, sess, rm, ri, sm,
-				repo, sessionID, remoteStore, remoteURL, authCfg,
-				appliedRemoteBranch, testResult.DefaultBranch, agentBranch)
+			// Shared history means the remote holds the SAME knowledge base
+			// this repo already does, so the one-copy-per-knowledge-base rule
+			// bites here too. /test refuses this first; re-check while
+			// refusing is still free.
+			if rootCommit := ri.ID(); rootCommit != "" {
+				holder, hErr := repos.HeldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
+				if hErr != nil {
+					hal.WriteProblem(w, http.StatusServiceUnavailable, "Registry unavailable", hErr.Error(), r.URL.Path)
+					return
+				}
+				if holder != "" {
+					hal.WriteProblem(w, http.StatusConflict, "Knowledge base already local", fmt.Sprintf(
+						"this remote holds the same knowledge base as the repo %q; connect aborted before any change was made", holder), r.URL.Path)
+					return
+				}
+			}
+			e = repos.AttachOrigin(origin)
+		} else {
+			swapBranch := appliedBranch
+			if swapBranch == "" {
+				swapBranch = agentBranch
+			}
+			e = repos.SwapStore(repos.SwapSpec{
+				TempDB:         filepath.Join(sess.TempDir, "clone.db"),
+				Origin:         origin,
+				IdentityBranch: swapBranch,
+			})
+		}
+
+		// The clone has served its purpose: checkpoint its WAL so the swap
+		// copies a complete file, close it, and detach it from the session so
+		// a retry cannot reuse a closed handle (re-entry then hits the "no
+		// remote store" guard above).
+		if err := remoteStore.Checkpoint(); err != nil {
+			log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
+		}
+		remoteStore.Close()
+		sess.mu.Lock()
+		sess.RemoteStore = nil
+		sess.mu.Unlock()
+
+		stream := &lazyStream{w: w}
+		if body.CancelIndexing {
+			if !stream.event(map[string]string{"phase": "cancelling-index"}) {
+				return
+			}
+			if _, err := rm.Send(r.Context(), ri, repos.CancelIndex()); err != nil {
+				stream.event(map[string]string{"phase": "error", "message": err.Error()})
+				return
+			}
+		}
+		if !streamLifecycle(w, r, b, rm, ri, repo, stream, e) {
 			return
 		}
 
-		// Disjoint history: the temp clone has the replayed merged state
-		// that must become the local store. Swap, rebuild, configure, sync.
-
-		// Phase: swapping — replace the git store on the repo instance.
-		sendEvent(map[string]string{"phase": "swapping"})
-
-		// Checkpoint the temp DB's WAL so all data is in the main .db file before copying.
-		if remoteStore != nil {
-			if err := remoteStore.Checkpoint(); err != nil {
-				log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
-			}
-			remoteStore.Close()
-			// Detach the now-closed clone from the session so a retry (e.g. after a
-			// later step fails) can't reuse a closed handle — that produced the
-			// "WAL checkpoint failed: database is closed" warning and a redundant
-			// re-swap. With it nil, re-entry hits the "no remote store" guard.
-			sess.mu.Lock()
-			sess.RemoteStore = nil
-			sess.mu.Unlock()
-		}
-
-		tempDBPath := filepath.Join(sess.TempDir, "clone.db")
-
-		// Re-check: a repo holding this knowledge base may have been created
-		// between /test and here. This is the LAST point at which refusing is
-		// still recoverable — the swap below cannot be undone, so nothing that
-		// can fail the request may be added after it.
-		swapBranch := appliedBranch
-		if swapBranch == "" {
-			swapBranch = agentBranch
-		}
-		if rootCommit, rcErr := rootCommitOfDB(r.Context(), tempDBPath, swapBranch); rcErr == nil && rootCommit != "" {
-			holder, hErr := repos.HeldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
-			if hErr != nil {
-				sendEvent(map[string]string{"phase": "error", "message": hErr.Error()})
-				return
-			}
-			if holder != "" {
-				log.Warn().Str("repo", repo).Str("holder", holder).
-					Msg("commit: refused before swap — remote already registered to another repo")
-				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf(
-					"this remote holds the same knowledge base as the repo %q; connect aborted before any change was made", holder)})
-				return
-			}
-		}
-
-		// The sync mode the repo runs NOW, captured before the swap: SwapStore
-		// stops sync and leaves restarting it to us on every return path, and
-		// on failure the mode to restart is this one, not the session's.
-		hadOrigin, previousURL := currentOrigin(ri)
-
-		if err := rm.SwapStore(ri, tempDBPath); err != nil {
-			// The swap put the old store back but left its sync loop dead.
-			restorePreviousSync(ri, repo, hadOrigin, previousURL)
-			// If the swap cancelled the initial heal, the index state is
-			// pinned at 'indexing' with no writer left — the heal has exited
-			// (SwapStore waited for it) — and handleStartRebuild refuses with
-			// 409 while it reads 'indexing', so the UI could never recover.
-			// The restored store's index is whatever the cancelled heal left,
-			// so 'error' is the truthful terminal, and it re-enables rebuild.
-			if state, _, _ := ri.IndexStatus(); state == repos.IndexStateIndexing {
-				ri.MarkIndexRebuildDone(fmt.Errorf("index heal cancelled by a failed store swap: %w", err))
-			}
-			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("swap failed: %v", err)})
-			return
-		}
-
-		// MCP handlers are stateless — they acquire the current svc from ri on
-		// each request, so no rebind is needed after SwapStore.
-
-		// Acquire AFTER the swap (never before: SwapStore drains acquirers, so
-		// holding one across it would deadlock on our own reference). The pin
-		// keeps the freshly swapped-in store open for the config/rebuild steps
-		// below; nil svc is tolerated by the guards on each step.
-		var svc *store.Service
-		var acquireErr error
-		if s, release, err := ri.Acquire(); err == nil {
-			svc = s
-			defer release()
-		} else {
-			acquireErr = err
-		}
-
-		// INDEX STATE. The new store's index is not built until the rebuild
-		// below, so the state says 'indexing' from here, and the rebuild
-		// marks the terminal. Without this bracket a swap that cancelled the
-		// initial heal left the state at 'indexing' for the life of the
-		// process (the heal's cancelled exit marks nothing), and the rebuild
-		// endpoint's 409 made that unrecoverable (issue #400).
-		//
-		// Single writer holds: SwapStore has already cancelled the heal and
-		// waited for it to exit, and drained any manual rebuild (which holds
-		// an Acquire on the old store for its whole run), so nothing else is
-		// writing the state when we mark; once we have, handleStartRebuild
-		// refuses with 409 until our terminal. Marked straight after the
-		// swap rather than beside the rebuild to keep the window in which a
-		// manual rebuild could slip in as short as the endpoint's own
-		// check-then-mark window.
-		if svc != nil {
-			ri.MarkIndexRebuildStart()
-		}
-
-		// Phase: configuring — save remote config and start sync.
-		sendEvent(map[string]string{"phase": "configuring"})
-
-		// configWarning carries a non-fatal failure to persist remote config. The
-		// swap above is the commit's point of no return — the local store already
-		// IS the merged result — so a config hiccup must not abort into a
-		// retryable half-done state (the swap can't be undone, and a retry would
-		// re-enter the swap path on an already-closed clone). We surface it and
-		// continue, consistent with the best-effort Rebuild/ActivateSync below.
-		var configWarning string
-		if svc != nil {
-			// Build the auth token for storage.
-			authMethod := authCfg.Method
-			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
-
-			// persistSessionOrigin takes both the upstream consensus branch
-			// (discovered by the test-connectivity flow) and the local agent
-			// branch. Prefer the branch the user chose at /apply time (which
-			// may differ from the remote's default — e.g. a master-default
-			// repo where the user explicitly chose to track a release
-			// branch). Fall back to the test result's default: the remote
-			// clone's own HEAD branch. With neither there is no branch to
-			// record, and persistSessionOrigin refuses rather than inventing
-			// one (surfaced as the config warning below).
-			upstreamMain := appliedRemoteBranch
-			if upstreamMain == "" {
-				upstreamMain = testResult.DefaultBranch
-			}
-			if err := persistSessionOrigin(rm, ri, svc, remoteURL, upstreamMain, agentBranch, authMethod, authToken); err != nil {
-				log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — swap already applied)")
-				configWarning = fmt.Sprintf("save remote config: %v", err)
-			}
-		}
-
-		// Use the branch written during apply (may differ from local agentBranch
-		// when the swapped store is the clone, e.g. after shared-history merge).
-		rebuildBranch := appliedBranch
-		if rebuildBranch == "" {
-			rebuildBranch = agentBranch
-		}
-
-		// Rebuild the index from the new git store so facts/recent/search work.
-		sendEvent(map[string]any{"phase": "rebuilding", "current": 0, "total": 0})
-		if svc != nil {
-			th := newProgressThrottle(250 * time.Millisecond)
-			progress := func(subPhase string, done, total int) {
-				if th.allow(done, total) {
-					sendEvent(map[string]any{
-						"phase":     "rebuilding",
-						"sub_phase": subPhase,
-						"current":   done,
-						"total":     total,
-					})
-				}
-			}
-			rebuildErr := svc.IndexManager().Rebuild(r.Context(), rebuildBranch, progress)
-			// The terminal for the MarkIndexRebuildStart above, on both
-			// outcomes: returning without it would pin the state at
-			// 'indexing', the failure this bracket exists to end.
-			ri.MarkIndexRebuildDone(rebuildErr)
-			if err := rebuildErr; err != nil {
-				log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
-			} else {
-				log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
-				// Set pipeline watermarks to HEAD so the first review/hypothesize
-				// doesn't treat every cloned fact as dirty.
-				if head, err := svc.Branches().HeadCommit(r.Context(), rebuildBranch); err == nil {
-					for _, tool := range []string{"review", "hypothesize"} {
-						if err := svc.Pipeline().SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
-							log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
-						}
-					}
-				}
-			}
-		} else if !errors.Is(acquireErr, repos.ErrRepoClosed) {
-			// No store to rebuild on, so no rebuild runs. A cancelled heal
-			// may have left the state at 'indexing' with no writer, and the
-			// new store's index was never built either way: 'error' is the
-			// truthful state and leaves the rebuild endpoint usable. A repo
-			// that is being torn down (ErrRepoClosed) is not marked — its
-			// state is no longer observed, as on every teardown path.
-			ri.MarkIndexRebuildDone(fmt.Errorf("index not rebuilt after store swap: %w", acquireErr))
-		}
-
-		// Start sync/push loops.
-		if err := ri.ActivateSync(remoteURL); err != nil {
-			log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
-			// Non-fatal: remote is configured, sync can be started later.
-		}
-
-		if configWarning != "" {
-			sendEvent(map[string]any{"phase": "done", "warning": configWarning})
-		} else {
-			sendEvent(map[string]string{"phase": "done"})
-		}
-
-		// Update session state and clean up.
 		sess.mu.Lock()
 		sess.State = StateCommitted
 		sess.mu.Unlock()
-
 		sm.Delete(repo, sessionID)
-
-		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).Msg("commit completed — store swapped and remote configured")
+		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).
+			Str("history", testResult.History).Msg("commit completed")
 	}
 }
 
-// commitSharedHistory finalises a shared-history reconnect: it closes the
-// transient clone produced by /test, writes the origin row into the operator's
-// existing local store, and starts the sync loop. The local *store.Service is
-// preserved (no swap), so any local-only facts remain in place and are
-// reconciled by the standard sync primitives on the next cycle.
-func (s *Server) commitSharedHistory(
-	sendEvent func(any),
-	sess *OriginSession,
-	rm *repos.Manager,
-	ri *repos.RepoInstance,
-	sm *SessionManager,
-	repo, sessionID string,
-	remoteStore *store.Service,
-	remoteURL string,
-	authCfg AuthConfig,
-	appliedRemoteBranch, defaultBranch, agentBranch string,
-) {
-	// Shared history means the remote holds the SAME knowledge base this repo
-	// already does, so the one-copy-per-knowledge-base rule bites here too:
-	// another active repo registered against that root commit would end up
-	// pushing the same agent/<host> branch to the same origin. /test refuses
-	// this first; re-check before touching anything, while refusing is still
-	// free — the transient clone is still open and nothing has been written.
-	if rootCommit := ri.ID(); rootCommit != "" {
-		holder, hErr := repos.HeldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
-		if hErr != nil {
-			sendEvent(map[string]string{"phase": "error", "message": hErr.Error()})
-			return
+// lazyStream is an SSE stream that opens on its first event, so a handler can
+// still answer with a plain HTTP problem until something has happened.
+type lazyStream struct {
+	w    http.ResponseWriter
+	send func(any)
+}
+
+func (s *lazyStream) opened() bool { return s.send != nil }
+
+// event opens the stream if needed and writes v; false when the response
+// cannot stream.
+func (s *lazyStream) event(v any) bool {
+	if s.send == nil {
+		send, ok := beginSSE(s.w)
+		if !ok {
+			return false
 		}
-		if holder != "" {
-			log.Warn().Str("repo", repo).Str("holder", holder).
-				Msg("commit: refused — remote already registered to another repo")
-			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf(
-				"this remote holds the same knowledge base as the repo %q; connect aborted before any change was made", holder)})
-			return
+		s.send = send
+	}
+	s.send(v)
+	return true
+}
+
+// streamLifecycle sends e to ri's machine and streams its transitions as
+// phases until the repo's index has left "indexing": swapping (the machine is
+// rewinding to Populate), configuring (Open, Identify), indexing with
+// current/total, then done (carrying index_state, and the index's reason when
+// it ended in error) or error with the event's own failure. A refusal that
+// arrives while the stream is still closed is answered as an HTTP problem.
+// It reports whether the event succeeded.
+func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, rm *repos.Manager,
+	ri *repos.RepoInstance, repo string, stream *lazyStream, e repos.MachineEvent) bool {
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	watch := ri.Watch(ctx)
+
+	type result struct{ err error }
+	done := make(chan result, 1)
+	go func() {
+		_, err := rm.Send(ctx, ri, e)
+		done <- result{err}
+	}()
+
+	phase := ""
+	emitPhase := func(st repos.Status) {
+		switch st.Stage {
+		case "populate":
+			if phase == "" {
+				phase = "swapping"
+				stream.event(map[string]string{"phase": "swapping"})
+			}
+		case "open", "identify":
+			if phase != "configuring" {
+				if phase == "" {
+					stream.event(map[string]string{"phase": "swapping"})
+				}
+				phase = "configuring"
+				stream.event(map[string]string{"phase": "configuring"})
+			}
 		}
 	}
 
-	sendEvent(map[string]string{"phase": "configuring"})
-
-	if err := remoteStore.Checkpoint(); err != nil {
-		log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
+	var sent bool
+	var sendErr error
+	for !sent {
+		select {
+		case t, ok := <-watch:
+			if !ok {
+				watch = nil
+				continue
+			}
+			emitPhase(t.Status)
+		case res := <-done:
+			sent, sendErr = true, res.err
+		}
 	}
-	remoteStore.Close()
-	// Detach the now-closed clone so a retry after a later failure (e.g. persisting the origin)
-	// can't reuse a closed handle; re-entry then hits the "no remote store" guard.
-	sess.mu.Lock()
-	sess.RemoteStore = nil
-	sess.mu.Unlock()
-
-	// Acquire pins the local store for the config/sync steps below; a
-	// concurrent SwapStore/Archive drains this flow instead of closing the
-	// service under it.
-	svc, release, err := ri.Acquire()
-	if err != nil {
-		sendEvent(map[string]string{"phase": "error", "message": "local store unavailable"})
-		return
+	if sendErr != nil {
+		// A refusal changed nothing: still a plain HTTP problem while the
+		// stream is closed. Anything else failed after the machine had begun
+		// (a failed install, an unopenable store) and is a phase.
+		if !stream.opened() && isCommitRefusal(sendErr) {
+			writeCommitProblem(w, r, b, repo, sendErr)
+			return false
+		}
+		stream.event(map[string]string{"phase": "error", "message": sendErr.Error()})
+		return false
 	}
-	defer release()
-
-	// The branch the user chose, else the remote's own default (the test
-	// clone's HEAD). With neither, persistSessionOrigin refuses and the
-	// config warning says so; no name is invented for it.
-	upstreamMain := appliedRemoteBranch
-	if upstreamMain == "" {
-		upstreamMain = defaultBranch
+	if phase == "" {
+		stream.event(map[string]string{"phase": "configuring"})
 	}
-
-	authMethod := authCfg.Method
-	authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
-	// configWarning carries a non-fatal failure to persist remote config. The
-	// transient clone was already closed and detached above, so re-entry hits the
-	// "no remote store" guard — aborting here would strand the session in the
-	// applied state with no way to retry. Surface the failure and continue,
-	// consistent with the disjoint-history path in handleCommit.
-	var configWarning string
-	if err := persistSessionOrigin(rm, ri, svc, remoteURL, upstreamMain, agentBranch, authMethod, authToken); err != nil {
-		log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — clone already closed)")
-		configWarning = fmt.Sprintf("save remote config: %v", err)
+	// The event is applied; the index job of the (possibly new) store runs in
+	// the background. Narrate it until it leaves "indexing".
+	st := ri.Status()
+	for st.Index.State == repos.IndexStateIndexing && watch != nil {
+		stream.event(map[string]any{"phase": "indexing", "current": st.Index.Done, "total": st.Index.Total})
+		t, ok := <-watch
+		if !ok {
+			break
+		}
+		st = t.Status
 	}
-
-	if err := ri.ActivateSync(remoteURL); err != nil {
-		log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
-		// Non-fatal: remote is saved; sync can be retried later.
+	doneEv := map[string]any{"phase": "done", "index_state": st.Index.State}
+	if st.Index.Reason != "" {
+		doneEv["warning"] = "index: " + st.Index.Reason
 	}
+	stream.event(doneEv)
+	return true
+}
 
-	if configWarning != "" {
-		sendEvent(map[string]any{"phase": "done", "warning": configWarning})
-	} else {
-		sendEvent(map[string]string{"phase": "done"})
+// isCommitRefusal reports whether err is a refusal that changed nothing: the
+// machine's own checks, or an event guard's verdict.
+func isCommitRefusal(err error) bool {
+	return isLifecycleRefusal(err) ||
+		errors.Is(err, repos.ErrOriginOntologyConflict) ||
+		errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal) ||
+		errors.Is(err, repos.ErrOriginUnreachable) ||
+		errors.Is(err, repos.ErrLocalOriginDenied) ||
+		errors.Is(err, repos.ErrRegistryUnavailable)
+}
+
+// writeCommitProblem maps a commit refused before anything changed.
+func writeCommitProblem(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, repo string, err error) {
+	switch {
+	case isLifecycleRefusal(err):
+		writeLifecycleProblem(w, r, b, repo, err)
+	case errors.Is(err, repos.ErrOriginOntologyConflict):
+		hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
+		hal.WriteProblem(w, http.StatusConflict, "Knowledge base already local", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrOriginUnreachable):
+		hal.WriteProblem(w, http.StatusBadGateway, "Origin not attached", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrLocalOriginDenied):
+		hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrRegistryUnavailable):
+		hal.WriteProblem(w, http.StatusServiceUnavailable, "Registry unavailable", err.Error(), r.URL.Path)
+	default:
+		hal.WriteProblem(w, http.StatusInternalServerError, "Commit failed", err.Error(), r.URL.Path)
 	}
-
-	sess.mu.Lock()
-	sess.State = StateCommitted
-	sess.mu.Unlock()
-	sm.Delete(repo, sessionID)
-
-	log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).
-		Msg("commit completed (shared history — local store preserved)")
 }
