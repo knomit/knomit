@@ -20,6 +20,7 @@ files on two instances, so they do not rot.
 | `.knomit/skills/post-task/SKILL.md` | How a session posts a task. |
 | `.knomit/skills/work-task/SKILL.md` | How a session drains its queue: take each copy, work it in a knowledge-base experiment, acknowledge it. |
 | `.knomit/recipes/work-task.js` | The sample recipe the `wake` and `lease` triggers run: one headless Claude Code session that drains the queue. |
+| `../mission-kb/.knomit/ontology.yaml` | The companion KNOWLEDGE BASE's ontology: lanes, `forecast` (the hypothesis format, enforced), syntheses, meta. See "The knowledge base". |
 
 ## Copy it
 
@@ -458,6 +459,64 @@ settle a prediction.
 - `refs`: the evidence.
 
 Nobody retracts a hypothesis because it settled: people decide that.
+
+### The knowledge-base template
+
+`examples/mission-kb/.knomit/ontology.yaml` is the ontology of a mission's
+knowledge base. It lives beside this directory, not in it, so that copying
+the mission repo never carries it along. Create the knowledge base from it the
+same way as the mission repo (a repo's ontology is read when knomit opens the
+repo, so it must be there when the repo is created):
+
+```sh
+git init my-mission-kb
+cp -R examples/mission-kb/. my-mission-kb/
+```
+
+Rename the `findings` lane topic, and add one topic per lane, BEFORE you
+create the repo. The ontology is never edited afterwards (knomit reads it when
+it opens the repo and offers no sanctioned way to change it), so a knowledge
+base that already exists does not gain `forecast`. Create the mission's
+knowledge base from this template, and mount older knowledge bases in the
+mission's lens to read them.
+
+It sets the same `consensus`, `conflicts` and `sync` as the mission repo, and
+its topics are:
+
+| Topic | Holds | Settings |
+|---|---|---|
+| `findings` (rename; one per lane) | the evidence a lane gathers | |
+| `forecast` | hypotheses only, `forecast/<subject>/<granularity>/` | `learn_dedup: off`; validations below |
+| `syntheses` | syntheses across lanes | |
+| `meta` | definitions, conventions, reasoning (`knomit_hypothesize` writes its methodology to `meta/reasoning`) | |
+
+**The validations on `forecast`** refuse, by rule name, on `knomit_learn` and
+on `knomit_update` alike:
+
+| Rule | Refuses |
+|---|---|
+| `hypothesis-only` | any type but `hypothesis` (so the format cannot be dodged by writing an `insight`) |
+| `predicted` | no unindented `predicted: <YYYY \| YYYY-MM \| YYYY-MM-DD>` line, or a period that does not exist (`2026-02-30`, `2026-13`) |
+| `settles-true-if`, `settles-false-if` | a missing settlement line |
+| `expires-ends-period` | `expires` absent, or not the last second of the predicted period (compared as instants, so `+02:00` for the same instant passes) |
+| `granularity-in-path` | a hypothesis not filed under `…/<granularity>/` matching its period (a day prediction under `/month/`) |
+
+A refused session reads the rule's message and writes the line again.
+
+**`learn_dedup: off` on `forecast`.** Two agents' hypotheses on one subject
+look alike by design, and a counter-hypothesis looks like what it counters.
+With dedup on, `knomit_learn` merges the second into the first: the second
+writer's experiment then edits the FIRST writer's file. That is a write to a
+shared fact even though no instruction asked for one: two tasks doing it in
+parallel conflict at their experiment commits (the first mission's stop), and
+a counter is swallowed. With it off, every hypothesis lands at its own path.
+`knomit_review` still reads them: `learn_dedup` governs `knomit_learn` only.
+The lane topics keep dedup on; whether a counter written there with
+`distinct_from` can still be merged away is an open question for knomit (the
+first mission's F-R2), not something this template settles.
+
+Nothing on this knowledge base acts on `expires`: there is no `on: due`
+trigger. A hypothesis's `expires` is its settlement date, not its end.
 
 ## Skills
 
