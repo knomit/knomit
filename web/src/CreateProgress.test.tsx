@@ -16,33 +16,22 @@ const renderedSteps = (): string[] =>
     .map(el => (el.getAttribute('data-testid') ?? '').replace('create-step-', ''));
 
 describe('CreateProgress step order', () => {
-  // THE INDEX IS NARRATED BEFORE SYNC, on every remote mode.
+  // THERE IS NO SYNC STEP, on any mode.
   //
-  // This is the reported bug, and it is an ORDERING bug rather than a wording
-  // one: ActivateSync runs a synchronous reconcile that takes the branch lock
-  // the background index heal already holds, so with sync emitted first the
-  // job sat on "Activating sync" for the whole of the index. A user who looked
-  // at the repo saw it already indexing while the wizard said it was doing
-  // something else. lifecycle.go now emits the index first; this list mirrors
-  // the server, and a mirror that disagrees puts the lie back on screen.
-  it.each(['clone', 'initialize', 'subscribe'])('puts index before sync for mode %s', mode => {
+  // The sync loop starts during the repo's mount walk, before the index
+  // finishes, so the create has no "Activating sync" phase to narrate: after
+  // register the job only observes the index, and "done" means indexed. The
+  // lists mirror the emit() calls in lifecycle.go, so the whole order is
+  // asserted — a stale 'sync' row, or an index drawn after it, both fail.
+  it.each([
+    ['preset', ['validate', 'ontology', 'init-git', 'register', 'index', 'done']],
+    ['custom', ['validate', 'ontology', 'init-git', 'register', 'index', 'done']],
+    ['clone', ['validate', 'clone', 'persist-origin', 'register', 'index', 'done']],
+    ['initialize', ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'index', 'done']],
+    ['subscribe', ['validate', 'subscribe', 'persist-origin', 'register', 'index', 'done']],
+  ])('renders the server step order for mode %s', (mode, want) => {
     render(<CreateProgress status={status({ mode, step: 'register' })} />);
-    const steps = renderedSteps();
-    expect(steps).toContain('index');
-    expect(steps).toContain('sync');
-    expect(steps.indexOf('index')).toBeLessThan(steps.indexOf('sync'));
-    // And both sit after the repo is registered and before it is called done,
-    // so this is not satisfied by some unrelated reshuffle of the list.
-    expect(steps.indexOf('register')).toBeLessThan(steps.indexOf('index'));
-    expect(steps.indexOf('sync')).toBeLessThan(steps.indexOf('done'));
-  });
-
-  it('leaves the local modes alone: they have no sync step to order', () => {
-    for (const mode of ['preset', 'custom']) {
-      const { unmount } = render(<CreateProgress status={status({ mode, step: 'register' })} />);
-      expect(renderedSteps()).not.toContain('sync');
-      unmount();
-    }
+    expect(renderedSteps()).toEqual(want);
   });
 });
 

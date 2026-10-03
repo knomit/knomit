@@ -369,7 +369,7 @@ describe('CreateRepoWizard cancel', () => {
     await act(async () => { onStatusRef!(seen[2]); });
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('scratch'));
     // ONCE, however many further statuses arrive.
-    await act(async () => { onStatusRef!(status({ step: 'sync', index_state: 'ready' })); });
+    await act(async () => { onStatusRef!(status({ step: 'done', index_state: 'ready' })); });
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
