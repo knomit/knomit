@@ -63,7 +63,7 @@ const (
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
-		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked."),
+		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis."),
 		bindingArg(true),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
@@ -124,7 +124,7 @@ func learnToolSchemaProperties() map[string]any {
 		"confidence":    map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
 		"sources":       map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
 		"entities":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
-		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. Needed only after a call was refused: the refusal lists the candidates it found, and naming them here asserts the distinction and retries. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
+		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. It does two things for THIS call: the automatic dedup merge never folds this fact into a path named here (the fact is written at its own new path), and the same-subject refusal skips those paths. Use it after a refusal (the refusal lists the candidates it found), and when you write a fact that deliberately sits next to a near-identical one — a counter-hypothesis to an existing hypothesis, a competing claim — so both are kept. It is not stored with the fact, and a later knomit_review may still merge the two. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
 		"motifs":        motifsProperty(),
 		"expires":       expiresProperty(),
 		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
@@ -540,6 +540,21 @@ func subsumeHypothesis(f fact.Fact, retract []string, hypothesisPath string) (fa
 	return f, retract
 }
 
+// hypothesisMergeNote is the learn-response note for incoming hypothesis i
+// folded into the existing hypothesis at path. mergeFacts keeps ONE title and
+// body — the winner's (newFactWins) — so one of the two predictions is gone,
+// and the note says which, in words a caller cannot read as "both stored".
+// When the incoming one wins, the original prediction at path was overwritten.
+func hypothesisMergeNote(i int, path string, incoming, existing fact.Fact) string {
+	kept, keptSide, dropped, droppedSide := existing, "existing", incoming, "incoming"
+	if newFactWins(incoming, existing) {
+		kept, keptSide, dropped, droppedSide = incoming, "incoming", existing, "existing"
+	}
+	return fmt.Sprintf(
+		"fact %d: merged into existing hypothesis %s; kept the %s prediction %q (confidence %g) and DROPPED the %s prediction %q (confidence %g); sources unchanged. To keep both as separate hypotheses, resubmit with distinct_from: [%q].",
+		i, path, keptSide, kept.Title, kept.Confidence, droppedSide, dropped.Title, dropped.Confidence, path)
+}
+
 // dedupEmbed batch-embeds every incoming fact upfront so each dedup Search can
 // reuse a precomputed vector instead of paying a fresh ONNX call. Returns nil
 // when no embedder is configured or the batch fails — both are non-fatal, and
@@ -604,7 +619,8 @@ func applyDedupMerge(
 	files map[string]string,
 	localRepoID string,
 	retracting map[string]bool,
-) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, error) {
+	distinctFrom [][]string,
+) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, map[int]string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/embeddings/params).
 	dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
 	// dedupVecs is computed by the CALLER now, because the same-subject stage
@@ -622,6 +638,11 @@ func applyDedupMerge(
 	// uncounted[i] is why the merge at index i did not add the incoming
 	// sources (#361); it feeds the learn response's notes.
 	uncounted := make(map[int]string)
+	// hypMerged[i] is the note for a hypothesis folded into an existing
+	// hypothesis: which prediction was kept and which was DROPPED. Only one
+	// of the two predictions survives such a merge, so "wrote 1 fact" alone
+	// would hide a lost claim.
+	hypMerged := make(map[int]string)
 
 	// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to, or
 	// "" to suppress donation (used when the merge kept the EXISTING fact's
@@ -772,6 +793,23 @@ func applyDedupMerge(
 			}
 			continue
 		}
+		// distinct_from: the caller has read this match and says it is a
+		// DIFFERENT subject (a counter-hypothesis, a competing claim). Folding
+		// the fact into it would discard one of the two claims, so the match
+		// is declined and the fact is written at its own freshly-minted path,
+		// like the consumed and retracting declines above. That includes
+		// hypothesis subsumption: a caller that names the hypothesis has said
+		// this fact does not settle it.
+		//
+		// The index stays UNtouched, so the same-subject stage still judges
+		// this fact, and validates every distinct_from path exists (a typo is
+		// refused there, before anything is written). distinct_from belongs to
+		// THIS call only and is never stored: review's dedup can still merge
+		// the two facts later. As with the other declines, the next-best match
+		// is not tried (Limit 1).
+		if i < len(distinctFrom) && namedIn(distinctFrom[i], match.Path) {
+			continue
+		}
 		// Read existing fact to get its full metadata (refs, etc.)
 		readResult, readErr := s.facts.ReadFact(ctx, writeBranch, match.Path, nil)
 		if readErr != nil {
@@ -791,7 +829,7 @@ func applyDedupMerge(
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
 			if err := reserialize(files, paths[i], f); err != nil {
-				return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
+				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
 			}
 			touched[i] = true
 			continue
@@ -800,6 +838,9 @@ func applyDedupMerge(
 		merged := mergeFacts(f, existingFact, localRepoID)
 		if ok, why := mergeCorroborates(f, existingFact, localRepoID); !ok {
 			uncounted[i] = why
+		}
+		if f.Type == fact.Hypothesis && existingFact.Type == fact.Hypothesis {
+			hypMerged[i] = hypothesisMergeNote(i, match.Path, f, existingFact)
 		}
 		if newFactWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
@@ -821,7 +862,7 @@ func applyDedupMerge(
 		// would surface later as an opaque serialize error.
 		if ontology != nil {
 			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
-				return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
+				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
 		}
 
@@ -835,7 +876,7 @@ func applyDedupMerge(
 		paths[i] = match.Path
 		priorRefs[match.Path] = existingFact.Refs
 		if err := reserialize(files, match.Path, merged); err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
 		}
 		facts[i] = merged
 		touched[i] = true
@@ -853,7 +894,7 @@ func applyDedupMerge(
 		}
 		embByPath[donatePaths[i]] = dedupVecs[i]
 	}
-	return embByPath, retract, priorRefs, touched, uncounted, nil
+	return embByPath, retract, priorRefs, touched, uncounted, hypMerged, nil
 }
 
 // computeEvidenceWeights stamps an evidence weight on machine-origin derived
@@ -1022,7 +1063,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Embedding happens HERE, once, because two stages need the same
 		// vectors: the dedup merge below and the same-subject gate after it.
 		dedupVecs := dedupEmbed(ctx, batchEmb, facts)
-		embByPath, retract, priorRefs, touched, uncounted, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID(), retracting)
+		distinctFrom := make([][]string, len(factInputs))
+		for i, in := range factInputs {
+			distinctFrom[i] = in.DistinctFrom
+		}
+		embByPath, retract, priorRefs, touched, uncounted, hypMerged, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -1146,7 +1191,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			result["commit"] = hash
 		}
 		notes := expiresNotAppliedNotes(factInputs, facts)
-		notes = append(notes, uncountedMergeNotes(uncounted, facts)...)
+		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, facts)...)
 		if len(notes) > 0 {
 			result["notes"] = notes
 			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")
@@ -1162,15 +1207,27 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 // uncountedMergeNotes names every dedup merge that did not add the incoming
 // sources (#361), so a caller re-reading one page is told its re-read was not
 // counted. Corroborating merges and plain learns add nothing.
-func uncountedMergeNotes(uncounted map[int]string, facts []fact.Fact) []string {
-	idx := make([]int, 0, len(uncounted))
+//
+// A hypothesis merged into a hypothesis gets its hypMerged note INSTEAD: it
+// says which prediction was dropped, which matters more than the count.
+func uncountedMergeNotes(uncounted, hypMerged map[int]string, facts []fact.Fact) []string {
+	idx := make([]int, 0, len(uncounted)+len(hypMerged))
 	for i := range uncounted {
 		idx = append(idx, i)
+	}
+	for i := range hypMerged {
+		if _, dup := uncounted[i]; !dup {
+			idx = append(idx, i)
+		}
 	}
 	sort.Ints(idx)
 	var notes []string
 	for _, i := range idx {
 		if i >= len(facts) {
+			continue
+		}
+		if n, ok := hypMerged[i]; ok {
+			notes = append(notes, n)
 			continue
 		}
 		notes = append(notes, fmt.Sprintf("fact %d: merged into existing fact %s; %s, sources unchanged.",
