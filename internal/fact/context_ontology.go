@@ -243,6 +243,29 @@ func ValidateContext(o *Ontology, topicPath string, ctx map[string]any) error {
 	return nil
 }
 
+// ContextKeyAllowed reports why key=v may NOT be written under topicPath (nil
+// when it may): undeclared, a poisoned declaration, or a value its declaration
+// refuses. It does not check `required` — it judges one key, for a writer
+// that carries keys over rather than authoring a map (review's prune merge).
+// A nil ontology allows nothing.
+func (o *Ontology) ContextKeyAllowed(topicPath, key string, v any) error {
+	if o == nil {
+		return ErrContextWithoutOntology
+	}
+	topic := strings.ToLower(topicPath)
+	d, ok := o.ContextSpec(topicPath)[key]
+	switch {
+	case !ok:
+		return &ContextError{Topic: topic, Key: key, Msg: "not declared"}
+	case d.problem != "":
+		return &ContextError{Topic: topic, Key: key, Msg: "its ontology declaration is invalid (" + d.problem + ")"}
+	}
+	if msg := checkContextValue(d, v); msg != "" {
+		return &ContextError{Topic: topic, Key: key, Msg: msg}
+	}
+	return nil
+}
+
 // checkContextValue checks one value against its declaration ("" when fine).
 func checkContextValue(d *compiledContextDecl, v any) string {
 	switch d.Type {

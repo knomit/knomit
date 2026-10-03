@@ -190,6 +190,7 @@ func joinCousinsForPrune(
 					File: r.Path, Title: r.Title, Body: r.Body,
 					Type: r.Type, Kind: r.Kind, Domain: r.Domain, Entities: r.Entities,
 					Motifs: r.Motifs, Confidence: r.Confidence, Sources: r.Sources,
+					Context: r.Context,
 				}})
 			}
 			return nil

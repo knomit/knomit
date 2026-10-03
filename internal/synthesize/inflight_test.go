@@ -217,7 +217,7 @@ func TestApplyPrune_RetiredNamesOnlyFactsThatActuallyLeft(t *testing.T) {
 	gs := failingDelete{FactIndex: env.svc.Facts(), refuse: "kb/keep-me.md"}
 	stats, err := ApplyPruneDecisions(ctx, gs, env.svc.Search(),
 		[]PruneDecision{{Path: "kb/keep-me.md", Action: "retract"}, {Path: "kb/goes.md", Action: "retract"}},
-		nil, reviewTool, d.OnProgress, env.branch, "", "kb")
+		nil, reviewTool, d.OnProgress, env.branch, "", "kb", nil)
 	require.NoError(t, err)
 
 	require.NotContains(t, stats.Retired, "kb/keep-me.md",
@@ -384,7 +384,7 @@ func TestApplyPrune_RewrittenExcludesPathsTheSameApplyRetired(t *testing.T) {
 		// Raise dup-a's confidence, then merge it away in the same response.
 		[]PruneDecision{{Path: dupAPath, Action: "update", Confidence: 0.42}},
 		[]MergeEntry{{Paths: []string{dupAPath, dupBPath}, Merged: merged}},
-		reviewTool, d.OnProgress, env.branch, "", "kb")
+		reviewTool, d.OnProgress, env.branch, "", "kb", nil)
 	require.NoError(t, err)
 
 	require.Contains(t, stats.Retired, dupAPath, "the fixture must actually retire the updated path")

@@ -694,6 +694,7 @@ func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
 			Sources:     f.Sources,
 			Origin:      string(f.Origin),
 			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
+			Context:     f.Context,
 		})
 	}
 	return out
@@ -945,7 +946,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		// Returns nil for ordinary cluster items.
 		judged := resolveShortlistPair(ctx, d, sess, item)
 
-		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
+		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.RI.Ontology())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply prune")
 		}

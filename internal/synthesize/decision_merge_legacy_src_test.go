@@ -57,7 +57,7 @@ func runMerge(t *testing.T, svc *store.Service, branch, title string, refs []str
 			if e.Phase == "warn" {
 				warns = append(warns, e.Message)
 			}
-		}, branch, bareRefFixture, "kb")
+		}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	return warns
 }
@@ -111,7 +111,7 @@ func TestApplyPruneDecisions_MergeKeepsRefsOfAMemberRetractedEarlierInTheCall(t 
 			if e.Phase == "warn" && strings.Contains(e.Message, "rejected") {
 				warns = append(warns, e.Message)
 			}
-		}, branch, bareRefFixture, "kb")
+		}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, warns, "a member's refs are carried even when the member was retracted first")
 	mergedFactPath(t, svc, branch, "Merged")
@@ -139,7 +139,7 @@ func TestApplyPruneDecisions_SecondMergeKeepsRefsOfAMemberTheFirstConsumed(t *te
 			if e.Phase == "warn" && strings.Contains(e.Message, "rejected") {
 				warns = append(warns, e.Message)
 			}
-		}, branch, bareRefFixture, "kb")
+		}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, warns, "a member consumed by an earlier merge in the call still carries its refs")
 }

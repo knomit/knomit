@@ -365,6 +365,13 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// on every rewrite (an older binary dropped it).
 		if setContext {
 			fact.Context = newContext
+		} else if len(fact.ContextWarnings) > 0 {
+			// The stored map is malformed (it arrived via git) and ParseFact
+			// dropped it; writing this update would delete it silently. Make the
+			// caller decide what the fact's context is.
+			return mcpgo.NewToolResultError(fmt.Sprintf(
+				"the stored context of %s is malformed and would be dropped by this update (%s); send a corrected context, or {} to clear it",
+				file, strings.Join(fact.ContextWarnings, "; "))), nil
 		}
 		// Refs replace wholesale, like Domain and Entities — the caller
 		// sends the complete new list. Dropping a ref only affects this

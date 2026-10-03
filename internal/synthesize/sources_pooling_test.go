@@ -254,7 +254,7 @@ func TestApplyPruneDecisions_MergePoolsSubsumedSources(t *testing.T) {
 		},
 	}}
 	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
-		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
+		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged)
 
@@ -283,7 +283,7 @@ func TestApplyPruneDecisions_MergeExcludesHypothesisSources(t *testing.T) {
 		},
 	}}
 	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
-		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
+		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 2, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
@@ -305,7 +305,7 @@ func TestApplyPruneDecisions_MergeWarnsWhenSourcesUnreadable(t *testing.T) {
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb")
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
@@ -423,7 +423,7 @@ func TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable(t *testing
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb")
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),

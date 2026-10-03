@@ -43,6 +43,7 @@ func TestSeedScanPaths_ProduceTheSameFact(t *testing.T) {
 	f.Sources = 1
 	f.EvidenceWeight = 2.5
 	f.Expires = "2026-10-01T02:00:00+02:00"
+	f.Context = map[string]any{"task": "t-17", "score": 0.5, "final": true}
 	f.Refs = []string{"kb/gotchas/uitesting/other.md"}
 	content, err := fact.SerializeFact(f)
 	require.NoError(t, err)

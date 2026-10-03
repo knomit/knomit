@@ -177,3 +177,25 @@ func TestMigration000034_FactContextIdempotent(t *testing.T) {
 		`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('fact_context', 'fact_context_key_value')`).Scan(&n))
 	require.Equal(t, 2, n)
 }
+
+// C3: replay's dead-ref repair parses and re-serializes a fact; its context
+// survives the rewrite.
+func TestResolveDeadRefs_KeepsContext(t *testing.T) {
+	svc, branch := motifEnv(t)
+	f := fact.NewFact("kb/subject.md")
+	f.Title, f.Body, f.Type = "Subject", "Body.", fact.Observation
+	f.Domain, f.Entities = []string{"alpha"}, []string{}
+	f.Refs = []string{"kb/live.md", "kb/dead.md"}
+	f.Confidence, f.Sources = 0.5, 1
+	f.Context = map[string]any{"task": "t-17", "score": 0.5}
+	content, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+
+	out, _, dropped, err := resolveDeadRefs(context.Background(), svc, branch, content, "kb/subject.md",
+		map[string]bool{"kb/live.md": true}, map[string]bool{}, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, dropped, "fixture: a ref must be dropped so the fact is re-serialized")
+	back, err := fact.ParseFact("kb/subject.md", out)
+	require.NoError(t, err)
+	require.Equal(t, f.Context, back.Context)
+}

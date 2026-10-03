@@ -366,6 +366,28 @@ func TestUpdate_HandPushedUndeclaredContextMustBeFixedOnNextWrite(t *testing.T) 
 	require.False(t, r.IsError, resultText(t, r))
 }
 
+// A fact whose map arrived MALFORMED via git (ParseFact dropped it) is not
+// silently rewritten without it: an update that does not say what the context
+// is, is refused; one that sends a map or {} decides it.
+func TestUpdate_MalformedStoredContextIsNotDroppedSilently(t *testing.T) {
+	_, svc, ctx, _ := newContextRepo(t, contextOntologyYAML)
+	const p = "kb/notes/a/cccccccc.md"
+	raw := "---\ntype: observation\ndomain: []\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\ncontext: {note: [x]}\n---\n# Malformed\n\nbody\n"
+	_, err := svc.Facts().WriteFact(context.Background(), "agent/test", p, raw, "sync", "test")
+	require.NoError(t, err)
+
+	before := branchTip(t, svc)
+	r := callUpdate(t, ctx, map[string]any{"file": p, "moment_name": "m", "updates": map[string]any{"confidence": 0.5}})
+	require.True(t, r.IsError)
+	require.Contains(t, resultText(t, r), "is malformed and would be dropped by this update")
+	require.Contains(t, resultText(t, r), "send a corrected context, or {} to clear it")
+	require.Equal(t, before, branchTip(t, svc))
+
+	r = callUpdate(t, ctx, map[string]any{"file": p, "moment_name": "m", "updates": map[string]any{"confidence": 0.5, "context": map[string]any{"note": "x"}}})
+	require.False(t, r.IsError, resultText(t, r))
+	require.Contains(t, readContent(t, svc, p), "context: {note: x}")
+}
+
 // C3, F04 move: learn with retract writes the moved fact at its NEW topic.
 // The moved fact carries only the context the caller sends — learn builds a
 // new fact, nothing is copied from the retracted one — and the new topic's

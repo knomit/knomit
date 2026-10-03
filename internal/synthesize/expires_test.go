@@ -55,7 +55,7 @@ func TestApplyPruneDecisions_MergedFactCarriesNoExpires(t *testing.T) {
 		Merged: mergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
 	}}
 	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
-		"review-test", sink, branch, bareRefFixture, "kb")
+		"review-test", sink, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged, "fixture: the merge must have happened")
 
@@ -82,7 +82,7 @@ func TestApplyPruneDecisions_UndatedMembersNoWarn(t *testing.T) {
 	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(), nil, []MergeEntry{{
 		Paths:  []string{"kb/technology/a.md", "kb/technology/b.md"},
 		Merged: mergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
-	}}, "review-test", sink, branch, bareRefFixture, "kb")
+	}}, "review-test", sink, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	for _, w := range *warns {
 		require.NotContains(t, w, "expires not carried")
