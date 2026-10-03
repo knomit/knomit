@@ -38,7 +38,13 @@ type repoSummary struct {
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
 
-	// IndexState mirrors RepoInstance.IndexStatus for an ACTIVE row:
+	// Stage is the lifecycle stage of an ACTIVE row: populate | open |
+	// identify | index | serve | sync while its machine walks (a repo being
+	// created sits at populate), ready once it is up. Absent on an
+	// unavailable row.
+	Stage string `json:"stage,omitempty"`
+
+	// IndexState is the repo's derived index state for an ACTIVE row:
 	// ready | indexing | error. Absent on an unavailable row, where there is
 	// no store to ask.
 	//
@@ -53,8 +59,28 @@ type repoSummary struct {
 	// claim about it rather than as an absence.
 	IndexDone  int `json:"index_done,omitempty"`
 	IndexTotal int `json:"index_total,omitempty"`
+	// IndexReason says why an index_state of "error" is one: "indexing
+	// cancelled", or the index job's error. Absent otherwise.
+	IndexReason string `json:"index_reason,omitempty"`
 
 	Links hal.LinkMap `json:"_links"`
+}
+
+// summaryFor is an ACTIVE repo's row, read from its machine's status.
+func summaryFor(b hal.URLBuilder, name string, ri *repos.RepoInstance) repoSummary {
+	st := ri.Status()
+	return repoSummary{
+		Name:        name,
+		UID:         ri.UID(),
+		ID:          ri.ShortID(),
+		State:       repoStateActive,
+		Stage:       st.Stage,
+		IndexState:  st.Index.State,
+		IndexDone:   st.Index.Done,
+		IndexTotal:  st.Index.Total,
+		IndexReason: st.Index.Reason,
+		Links:       hal.LinkMap{"self": {Href: b.Repo(name)}},
+	}
 }
 
 // repoStateActive is the state of a repo that has a live store. Every other
@@ -71,9 +97,11 @@ const repoStateActive = "active"
 // by name, with a state on every row.
 //
 // The merge happens HERE and not in the Manager. Unavailable repos deliberately
-// never enter m.repos: every consumer of Get/ForEach/Names relies on "this has a
-// live store", and the presentation problem of listing them is not a reason to
-// break that.
+// never enter m.repos: every consumer of Get/ForEach/Names relies on "this repo
+// is mounted", and the presentation problem of listing them is not a reason to
+// break that. A repo being CREATED is mounted (its machine is at stage
+// populate, and its Acquire answers "repo is populating"), so it is listed with
+// its stage.
 func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
@@ -85,17 +113,7 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 
 		items := make([]repoSummary, 0, len(names))
 		for _, name := range names {
-			indexState, indexDone, indexTotal := instances[name].IndexStatus()
-			items = append(items, repoSummary{
-				Name:       name,
-				UID:        instances[name].UID(),
-				ID:         instances[name].ShortID(),
-				State:      repoStateActive,
-				IndexState: indexState,
-				IndexDone:  indexDone,
-				IndexTotal: indexTotal,
-				Links:      hal.LinkMap{"self": {Href: b.Repo(name)}},
-			})
+			items = append(items, summaryFor(b, name, instances[name]))
 		}
 		for _, u := range m.Unavailable() {
 			// No id: the root-commit identity is a property of a store this repo

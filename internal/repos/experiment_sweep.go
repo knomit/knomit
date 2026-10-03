@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,7 +27,7 @@ const defaultExperimentSweepInterval = time.Hour
 // experimentSweepIntervalOverride is a TEST-ONLY seam: when positive it
 // replaces defaultExperimentSweepInterval for sweepers started afterwards, so a
 // test can observe a tick that lands after something else has happened (an
-// ActivateSync, a teardown) without waiting an hour. Production never sets it;
+// origin attach, an unmount) without waiting an hour. Production never sets it;
 // the cadence stays deliberately unconfigurable (see the const above).
 var experimentSweepIntervalOverride atomic.Int64
 
@@ -39,70 +38,34 @@ func experimentSweepInterval() time.Duration {
 	return defaultExperimentSweepInterval
 }
 
-// experimentSweeper owns the expiry sweep's lifetime, in the shape of the
-// trigger dispatcher and the consensus merger: built in repoBuilder.build(),
-// started once (from activate(), or from SwapStore when a swap cancelled the
-// heal before activate() ran — lifetimeGuard makes the start idempotent) on
-// its own context derived from the manager
-// context, stopped (cancel + wait) by RepoInstance.shutdown and Manager.Close
-// before closeFn closes the store.
+// experimentSweeper is the expiry sweep, in the shape of the trigger
+// dispatcher and the consensus merger: built with the instance, run under the
+// Serve stage's life, which the machine drains before the Open stage closes
+// the store.
 //
-// It must NOT run on syncCtx/syncWg. Those belong to the origin-dependent
-// reconcile loops, which ActivateSync and StartLocalSync cancel and restart;
-// the sweep is origin-independent (an experiment is local-only), and when it
-// shared syncCtx every origin attach killed it for the life of the process
-// (issue #377) — the same failure the index heal had before it got indexCtx.
+// It is origin-independent (an experiment is local-only), which is why it
+// lives in Serve and not in Sync: an origin attach or detach restarts Sync and
+// leaves Serve alone (issue #377 was the sweep dying on every attach when it
+// shared the reconcile loop's lifetime).
 //
-// Because it is no longer drained by the syncWg waits that SwapStore performs,
-// it holds no *store.Service: every tick reaches the store through acquire
+// It holds no *store.Service: every tick reaches the store through acquire
 // (ri.Acquire), so an in-flight tick is covered by the store handle's refcount
-// drain and a tick that lands mid-swap gets ErrStoreUnavailable and retries on
-// the next one (kb/invariants/repos/store-lifetime).
+// drain and a tick that finds no store retries on the next one
+// (kb/invariants/repos/store-lifetime).
 type experimentSweeper struct {
 	acquire    func() (*store.Service, func(), error)
 	repo       string
 	expiryDays int
-
-	// life guards the cancel func and the started/stopped flags: start is
-	// idempotent and a no-op once stop has run (see lifetimeGuard).
-	life lifetimeGuard
-	wg   sync.WaitGroup
-	// done is closed when the loop goroutine returns. Only tests read it, to
-	// assert that teardown actually stopped the sweep.
-	done chan struct{}
 }
 
 func newExperimentSweeper(acquire func() (*store.Service, func(), error), repo string, expiryDays int) *experimentSweeper {
-	return &experimentSweeper{acquire: acquire, repo: repo, expiryDays: expiryDays, done: make(chan struct{})}
+	return &experimentSweeper{acquire: acquire, repo: repo, expiryDays: expiryDays}
 }
 
-// start launches the loop on a context derived from parent. Called from
-// activate(), or from SwapStore when a swap cancelled the heal before
-// activate() ran. A second call, or a call after stop, is a no-op: the Add
-// happens under the guard that stop() closes, so a start racing a teardown
-// either lands before stop's Wait or not at all.
-func (s *experimentSweeper) start(parent context.Context) {
-	ctx, ok := s.life.begin(parent, &s.wg)
-	if !ok {
-		return
-	}
-	interval := experimentSweepInterval()
-	go func() {
-		defer s.wg.Done()
-		defer close(s.done)
-		runExperimentSweepLoop(ctx, s.acquire, s.repo, s.expiryDays, interval)
-	}()
-}
-
-// stop cancels the loop and waits for it to return, including a tick in
-// flight. Nil-safe, and safe when start never ran (a teardown that landed
-// before activate).
-func (s *experimentSweeper) stop() {
-	if s == nil {
-		return
-	}
-	s.life.end()
-	s.wg.Wait()
+// run is the sweep's lifetime: it returns when ctx ends, including a tick in
+// flight.
+func (s *experimentSweeper) run(ctx context.Context) {
+	runExperimentSweepLoop(ctx, s.acquire, s.repo, s.expiryDays, experimentSweepInterval())
 }
 
 // runExperimentSweepLoop drops experiments nobody has committed to in
@@ -119,8 +82,8 @@ func (s *experimentSweeper) stop() {
 // immediately.
 //
 // The store is reached through acquire PER TICK and released before the tick
-// returns, on every path. An acquire that fails (ErrStoreUnavailable mid
-// SwapStore, ErrRepoClosed once teardown has begun) is a failed tick: logged,
+// returns, on every path. An acquire that fails (ErrStoreUnavailable while the
+// store is reopened, ErrRepoClosed once teardown has begun) is a failed tick: logged,
 // retried next tick, never a reason to exit.
 func runExperimentSweepLoop(ctx context.Context, acquire func() (*store.Service, func(), error), repo string, expiryDays int, interval time.Duration) {
 	// The ONE place a non-positive interval is resolved. runExperimentSweep

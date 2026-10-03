@@ -433,7 +433,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 					must(svc.Triggers().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil, nil))
 				}
 				b.StartTimer()
-				d.run(ctx)
+				d.runOnce(ctx)
 				d.flush(ctx)
 			}
 			b.StopTimer()
