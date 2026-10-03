@@ -34,6 +34,7 @@ type issuerFixture struct {
 	base      string // the issuer: srv.URL, or srv.URL+prefix behind the stripping proxy
 	iss       *oauth.Issuer
 	store     *oauth.Store
+	db        *sql.DB // control.db, for tests that must age a stored token
 	tokenHits atomic.Int32
 }
 
@@ -56,7 +57,7 @@ func newIssuerFixtureAt(t *testing.T, accessTTL time.Duration, prefix string) *i
 	if err := migrate.Control(db); err != nil {
 		t.Fatal(err)
 	}
-	f := &issuerFixture{store: oauth.NewStore(db, accessTTL, 14*24*time.Hour)}
+	f := &issuerFixture{store: oauth.NewStore(db, accessTTL, 14*24*time.Hour), db: db}
 	grants := auth.NewSQLGrants(db)
 	var h http.Handler
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
@@ -206,15 +207,35 @@ func TestLogin_FullFlowWritesCredentialsAt0600(t *testing.T) {
 
 // A 401 invalid_token makes the client refresh ONCE, save the rotated pair
 // and replay the request — body included.
+//
+// The first access token is expired by rewriting its expires_at in control.db,
+// not by sleeping past a short TTL (#379,
+// kb/gotchas/bridge/testing/bearer-refresh-replay-flake/0595e654.md): the
+// store keeps expiry in WHOLE SECONDS (accessExp.Unix()), so with a 1 s TTL
+// the REFRESHED token could itself be dead when the replay arrived, and the
+// transport refreshes only once. A minute TTL keeps the refreshed token valid.
+// The 401 still comes from the real verifier: LookupAccess compares s.now()
+// against the stored expiry, and the stored expiry is now in the past.
 func TestBearer_ExpiredAccessRefreshesOnceAndReplays(t *testing.T) {
 	useHome(t)
-	f := newIssuerFixture(t, time.Second)
+	f := newIssuerFixture(t, time.Minute)
 	first, err := login(t, f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	hitsAfterLogin := f.tokenHits.Load()
-	time.Sleep(2100 * time.Millisecond) // the access token's second-granular expiry passes
+	// "access" is oauth's unexported kindAccess (internal/oauth/store.go).
+	res, err := f.db.Exec(`UPDATE oauth_tokens SET expires_at = ? WHERE kind = ?`, time.Now().Add(-time.Minute).Unix(), "access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("expired %d access tokens (%v), want exactly the one login minted", n, err)
+	}
+	// The fixture answers 401 for ANY verify error; this pins that the first 401 is expiry.
+	if _, err := f.store.LookupAccess(context.Background(), first.AccessToken); !errors.Is(err, oauth.ErrExpired) {
+		t.Fatalf("LookupAccess after aging the token = %v, want oauth.ErrExpired", err)
+	}
 
 	resp, err := NewHTTPClient("", true, 5*time.Second).Post(f.srv.URL+"/protected", "text/plain", strings.NewReader("payload"))
 	if err != nil {
