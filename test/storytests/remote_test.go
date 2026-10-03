@@ -9,6 +9,7 @@
 package storytests
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -176,6 +177,18 @@ func TestRemote_PushWithConcurrentRemoteUpdate(t *testing.T) {
 
 	// Step 1: A writes "kb/a.md" on its agent branch and does NOT push yet.
 	aSnap := aAgent.Write("kb/a.md", testenv.Fact("from-a"), "A writes a")
+
+	// A's mount ran the Sync stage's first round, which pushed A's agent/test
+	// (the clone's own init commit, unsigned by design) to origin — what a
+	// production clone does too. Both repos share the agent-branch NAME here,
+	// which production never does, so B's clone would find commits on "its"
+	// agent branch that it did not sign and refuse. Model the forge merging
+	// that branch into main and deleting it (delete-branch-on-merge), so B
+	// bootstraps from main with no agent/test on origin, as the scenario needs.
+	remote.MergeIntoMain("agent/test", "merge A's init")
+	if out, err := exec.Command("git", "-C", remote.Dir(), "update-ref", "-d", "refs/heads/agent/test").CombinedOutput(); err != nil {
+		t.Fatalf("delete origin's agent/test: %v: %s", err, out)
+	}
 
 	// Step 2: B comes online, connects (sees baseline via origin/main).
 	b := sb.Repo("b").Connect(remote)
