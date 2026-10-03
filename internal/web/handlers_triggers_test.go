@@ -220,8 +220,13 @@ func TestSSE_TriggerOnlyOnItsBranchStream(t *testing.T) {
 func TestREST_TriggersByRun(t *testing.T) {
 	m, home := newTestLensManager(t, "alpha")
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "recipes"), 0o755))
+	// Two back-to-back seeds can coalesce into ONE dispatcher pass, and a
+	// concurrent:1 recipe (the default) would then drop the second fire as
+	// `busy`, never retried (#409). Concurrency is not what this test checks
+	// (TestRun_ConcurrencyCap does), so allow both; TestRun_RunIDCorrelates
+	// does the same.
 	require.NoError(t, os.WriteFile(filepath.Join(home, "recipes", "worker.js"),
-		[]byte(`({status: "done", message: "ran " + run.id});`), 0o600))
+		[]byte("// knomit: {\"concurrent\": 2}\n"+`({status: "done", message: "ran " + run.id});`), 0o600))
 	ri := m.Get("alpha")
 	var head string
 	ontology := "id: t\nname: T\ntopics:\n  tasks:\n    description: t\n    triggers:\n" +
