@@ -561,6 +561,22 @@ and with dedup on the second would merge into the first. Its validations:
 The work-task skill says the same from the session's side ("Shared facts"): a
 session updates only a fact its task tells it to update, by path.
 
+**A cross-check lists the exact paths to check.** Its body carries one
+`check: <path>` line per fact, and the session checks exactly those. "Do
+not check your own" does not work: a session cannot tell who wrote a fact,
+and in the first mission a checker updated its own hypotheses under that very
+instruction. Authorship is in git, so the coordinator picks the paths (the
+`post-task` skill has the steps):
+- the writer of a fact is the author of the commit that ADDED it,
+  `git log --diff-filter=A --format=%an -1 <consensus branch> -- <path>`;
+- a checker's own name is the author who added a fact its own earlier task
+  wrote, or `git log --no-merges -1 --format=%an <its agent branch>`. Never
+  read it off the newest commit with merges: a sync merge on an agent branch
+  can carry another author.
+
+Each checker gets facts other agents wrote, so that every fact gets at least
+one checker other than its writer.
+
 ## Skills
 
 `.knomit/skills/<name>/SKILL.md` are served by knomit's MCP server from the

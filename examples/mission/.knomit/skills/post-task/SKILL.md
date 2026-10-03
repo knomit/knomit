@@ -103,8 +103,9 @@ it writes one new verdict fact per fact checked, under its own task id. Paste
 this block into its body:
 
 ```text verdict-format
-Cross-check: never knomit_update the facts you check. For each fact you
-check, write ONE new fact with knomit_learn: topic: verdicts,
+Cross-check: check exactly the facts on the check: lines below, and no
+other, whoever wrote them. Never knomit_update the facts you check. For each
+fact you check, write ONE new fact with knomit_learn: topic: verdicts,
 category: <this task's id>, type: observation, confidence: how sure you
 are of the verdict, refs: the fact you checked AND your evidence. Its body
 starts with these three lines, each on its own line, unindented, exactly as
@@ -112,7 +113,30 @@ shown (no bullet, no bold), then your reasons:
 verdict: <corroborate or contradict>
 target: <the path of the fact you checked>
 suggested_confidence: <the confidence you think it deserves, 0 to 1>
+The facts to check:
+check: <path>
+check: <path>
 ```
+
+Fill one `check: <path>` line per fact this checker checks, with the exact
+path. Never write "do not check your own" instead: a session cannot tell who
+wrote a fact (in the first mission a checker updated its own hypotheses
+under exactly that instruction). Who wrote what is in git, so the coordinator
+picks the paths, with git access to the knowledge base (a clone, or the
+repo's directory under the hosting instance's knomit home):
+
+1. The facts to check:
+   `git ls-tree -r --name-only <consensus branch> -- kb/forecast/`.
+2. Who wrote each one: the author of the commit that ADDED it,
+   `git log --diff-filter=A --format=%an -1 <consensus branch> -- <path>`
+   (git does not diff merge commits here, so this is the writer).
+3. Each checker's own author name: the author who added a fact its own
+   earlier task wrote (the same command on that path), or
+   `git log --no-merges -1 --format=%an <its agent branch>`. Never the last
+   commit with merges: a sync merge on an agent branch can carry someone
+   else's name.
+4. Give each checker paths whose author is not its own, so that every fact
+   gets at least one checker other than its writer.
 
 ### 2. The fold, after them, alone
 

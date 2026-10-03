@@ -436,14 +436,16 @@ func TestMissionKB_VerdictValidations(t *testing.T) {
 // the round's acks, the only writer.
 //
 // SABOTAGE: tell the cross-check to knomit_update its target with a higher
-// confidence → red; drop "posted only after EVERY cross-check" → red.
+// confidence → red; drop "posted only after EVERY cross-check" → red; replace
+// the check: lines with "do not check your own" → red (F-R4); read a
+// checker's author off a commit that may be a merge (no --no-merges) → red.
 func TestMissionTemplate_CrossCheckNeverUpdates(t *testing.T) {
 	files := templateFiles(t)
 	post := files[".knomit/skills/post-task/SKILL.md"]
 	xcheck := fencedBlock(t, post, "text", "verdict-format")
 	for _, l := range strings.Split(normalized(xcheck), ". ") {
 		if strings.Contains(l, "knomit_update") {
-			require.Contains(t, l, "never knomit_update", "a cross-check may only be told NOT to update: %q", l)
+			require.Contains(t, strings.ToLower(l), "never knomit_update", "a cross-check may only be told NOT to update: %q", l)
 		}
 	}
 	require.Contains(t, normalized(xcheck), "topic: verdicts, category: <this task's id>")
@@ -458,6 +460,17 @@ func TestMissionTemplate_CrossCheckNeverUpdates(t *testing.T) {
 		require.Contains(t, normalized(post), anchor)
 	}
 	work := files[".knomit/skills/work-task/SKILL.md"]
+	// F-R4: the paths are named, never "not your own".
+	require.Contains(t, normalized(xcheck), "check exactly the facts on the check: lines below, and no other")
+	require.Contains(t, xcheck, "\ncheck: <path>\n")
+	for _, anchor := range []string{
+		"git log --diff-filter=A --format=%an -1 <consensus branch> -- <path>",
+		"git log --no-merges -1 --format=%an <its agent branch>",
+		"Never write \"do not check your own\" instead",
+	} {
+		require.Contains(t, normalized(post), anchor)
+	}
+	require.Contains(t, normalized(work), "A task that lists `check: <path>` lines checks exactly those paths, and no other")
 	for _, anchor := range []string{
 		"`knomit_update` only a fact your task tells you to update, by its path.",
 		"never updates the facts it checks.",

@@ -54,6 +54,8 @@ conflicts, and that task fails.
   Write what you found as NEW facts otherwise.
 - A cross-check writes verdict facts (`topic: verdicts`, the format in its
   body) and never updates the facts it checks.
+- A task that lists `check: <path>` lines checks exactly those paths, and
+  no other, whoever wrote them: do not judge authorship yourself.
 - Only a fold task updates the facts the verdicts point at.
 
 ## Call shapes
