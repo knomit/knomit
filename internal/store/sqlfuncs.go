@@ -52,6 +52,11 @@ type parsedFact struct {
 	// omitted (JSON null on extract) when the fact has none.
 	Expires   string `json:"expires,omitempty"`
 	ExpiresAt *int64 `json:"expires_at,omitempty"`
+	// Context (canonical text) and ContextNum (numbers only) fill the
+	// fact_context side table on rebuild; absent when the fact has none or
+	// ParseFact dropped a malformed map.
+	Context    map[string]string  `json:"context,omitempty"`
+	ContextNum map[string]float64 `json:"context_num,omitempty"`
 }
 
 // sqlParseFact parses a knomit fact markdown blob (YAML frontmatter + body)
@@ -83,6 +88,18 @@ func sqlParseFact(data []byte) interface{} {
 		Origin:         string(origin),
 		Expires:        f.Expires,
 		ExpiresAt:      fact.ExpiresUnix(f.Expires),
+	}
+	for k, v := range f.Context {
+		if pf.Context == nil {
+			pf.Context = map[string]string{}
+		}
+		pf.Context[k] = fact.ContextText(v)
+		if x, ok := fact.ContextNum(v); ok {
+			if pf.ContextNum == nil {
+				pf.ContextNum = map[string]float64{}
+			}
+			pf.ContextNum[k] = x
+		}
 	}
 	b, err := json.Marshal(pf)
 	if err != nil {

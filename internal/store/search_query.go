@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
 
 	"github.com/rs/zerolog/log"
@@ -29,7 +30,17 @@ type RecentFactEntry struct {
 	CommitHash  string   `json:"commit_hash"`
 	Operation   string   `json:"operation,omitempty"`
 	Score       float64  `json:"score,omitempty"`
+	// Context is the fact's F22 context map, read from its blob.
+	Context map[string]any `json:"context,omitempty"`
 }
+
+// contextBlobColumn selects a fact's blob only when the fact HAS context rows,
+// so a listing that does not otherwise read blobs pays for one only where
+// there is a context to read (typed, from the blob — see FactRecord.Context).
+// NULL otherwise.
+var contextBlobColumn = fmt.Sprintf(
+	`(SELECT o2.data FROM objects o2 WHERE o2.hash = f.blob_hash AND o2.type = %d AND EXISTS (SELECT 1 FROM fact_context fc WHERE fc.fact_id = f.id))`,
+	blobObjectType)
 
 // RecentFacts returns facts on the given branch ordered by most recent commit,
 // paginated by opts.Offset/opts.Limit. If opts.Text is non-empty, it performs
@@ -81,7 +92,7 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(fe.expires, ''),
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash, `+contextBlobColumn+`
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
@@ -100,12 +111,14 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 	for rows.Next() {
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON, motifsJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.Expires, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
+		var ctxBlob []byte
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.Expires, &e.CommittedAt, &e.Operation, &e.CommitHash, &ctxBlob); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		var refs []string
 		logFactJSONUnmarshal("RecentFacts", e.Path, domainJSON, entitiesJSON, "null", &e.Domain, &e.Entities, &refs)
 		unmarshalMotifs("RecentFacts", e.Path, motifsJSON, &e.Motifs)
+		e.Context = fact.ExtractContext(ctxBlob)
 		entries = append(entries, e)
 	}
 	return entries, total, rows.Err()
@@ -146,7 +159,7 @@ func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 
 	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(fe.expires, ''),
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash, `+contextBlobColumn+`
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
@@ -164,12 +177,14 @@ func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 	for rows.Next() {
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON, motifsJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.Expires, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
+		var ctxBlob []byte
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.Expires, &e.CommittedAt, &e.Operation, &e.CommitHash, &ctxBlob); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		var refs []string
 		logFactJSONUnmarshal("RecentFacts.search", e.Path, domainJSON, entitiesJSON, "null", &e.Domain, &e.Entities, &refs)
 		unmarshalMotifs("RecentFacts.search", e.Path, motifsJSON, &e.Motifs)
+		e.Context = fact.ExtractContext(ctxBlob)
 		e.Score = scoreByPath[e.Path]
 		all = append(all, e)
 	}
@@ -316,6 +331,13 @@ type SearchOptions struct {
 	// the same value for the `expired` marker on results, so filter and marker
 	// agree. Zero means time.Now() at filter-build time.
 	Now time.Time
+
+	// Context (F22) filters by the fact's context map: every key must be
+	// present with exactly this canonical text (fact.ContextText: the string,
+	// true/false, a number in shortest form). AND across keys. Combined with
+	// Text it applies after the vector window, as the expiry filters do, so it
+	// can return fewer matches than exist; without Text it is exact.
+	Context map[string]string
 }
 
 // MotifMatchTier is the §6 strictness knob for motif filtering.
@@ -394,6 +416,18 @@ func newFactFilter(q SearchOptions) *factFilter {
 	}
 	if !q.ExpiresAfter.IsZero() {
 		f.add(" AND fe.expires_at IS NOT NULL AND fe.expires_at > ?", q.ExpiresAfter.Unix())
+	}
+	// One EXISTS per context key, in sorted order. `f` is always the facts row
+	// a branch_facts pointer makes LIVE on the branch, so the side table is
+	// never read alone (kb/gotchas/store/expires/liveness: its rows outlive
+	// superseded and retracted versions).
+	ctxKeys := make([]string, 0, len(q.Context))
+	for k := range q.Context {
+		ctxKeys = append(ctxKeys, k)
+	}
+	sort.Strings(ctxKeys)
+	for _, k := range ctxKeys {
+		f.add(" AND EXISTS (SELECT 1 FROM fact_context fc WHERE fc.fact_id = f.id AND fc.key = ? AND fc.value = ?)", k, q.Context[k])
 	}
 	if q.MinConfidence > 0 {
 		f.add(" AND f.confidence >= ?", q.MinConfidence)
@@ -1133,6 +1167,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	out := make([]SearchResult, 0, len(candidates))
 	for _, c := range candidates {
 		c.rec.Body = bodies[c.rec.BlobHash]
+		c.rec.Context = fact.ExtractContext([]byte(c.rec.Body))
 		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
 	}
 	return fq.filterByEpisodeOps(ctx, out, q.EpisodeOps)

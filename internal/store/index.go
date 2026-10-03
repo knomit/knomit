@@ -37,6 +37,11 @@ type FactRecord struct {
 	// never acts on it; see fact/expires.go.
 	Expires      string `json:"expires,omitempty"`
 	SourceCommit string `json:"source_commit,omitempty"` // commit at which this version was written
+	// Context is the fact's F22 context map. On a write it fills the
+	// fact_context side table; on a read it is taken from the BLOB (typed:
+	// the table's text cannot tell the string "true" from the bool true), on
+	// every read path that already holds the blob.
+	Context map[string]any `json:"context,omitempty"`
 }
 
 // NewFactRecord constructs a FactRecord from a parsed fact and git metadata.
@@ -70,6 +75,7 @@ func NewFactRecord(f fact.Fact, blobHash string) FactRecord {
 		EvidenceWeight: f.EvidenceWeight,
 		Origin:         string(origin),
 		Expires:        f.Expires,
+		Context:        f.Context,
 	}
 }
 
