@@ -145,6 +145,7 @@ conditional omissions. Note that `origin` sits between `evidence_weight` and
 | 8 | `entities` | always (empty → `[]`) | inline flow sequence |
 | 9 | `motifs` | only when non-empty | inline flow sequence |
 | 10 | `refs` | always (empty → `[]`) | inline flow sequence |
+| 11 | `context` | only when non-empty; last (after `expires` when that is present) | inline flow mapping, keys sorted |
 
 "Shortest numeric form" means `1.0` renders as `1`, and very small floats may
 render in exponent notation (valid YAML — readers must accept it).
@@ -181,6 +182,7 @@ an explicit 0 from the caller is a legal value and survives.
 | `entities` | string[] | `[]` | not validated | Flat entity tags for discovery; a lightweight search index. |
 | `motifs` | string[] | absent (NOT `[]` — see §2.10) | **asymmetric**: invalid entries dropped on read, rejected on write; subject motifs silently stripped on write (§2.10) | Names for the general regularity the fact instantiates, independent of its subject (§2.10). |
 | `refs` | string[] | `[]` | not validated; stored verbatim | Evidence pointers (§2.9). |
+| `context` | map of key → string, number or boolean | absent | **asymmetric**: a malformed map is dropped WHOLE on read (the fact still loads); on write the shape is enforced on every write path, and the keys and types against the ontology's `context:` declarations (§3.2) | Short typed labels that make a fact findable by a property that is not its subject (§2.13). |
 
 ### 2.4 Kinds and Types
 
@@ -434,6 +436,44 @@ in §4.9):
 4. Explicit `kind: epistemic` is legal input but never survives a rewrite.
 5. The frontmatter split is textual, not YAML-aware (§2.1).
 6. Title heading level is lossy (§2.7).
+7. An unquoted date in `context` (`due: 2026-10-01`) is a STRING, not a
+   timestamp: values are read by YAML tag, and a timestamp tag keeps its text
+   (§2.13). An unquoted number is a number, so a key declared `string` that
+   holds a hand-written `017` is refused on the next write — quote it.
+
+### 2.13 Context (`context`)
+
+`context` is one optional map of short, typed labels — the properties a
+reader needs to FIND a fact by that are not its subject: the task a verdict
+belongs to, the verdict, a score.
+
+```yaml
+context: {target: kb/forecast/ipo/9a1b2c3d.md, task: t-17, verdict: disagree}
+```
+
+- **Shape** (enforced on every write): keys match `[a-z][a-z0-9_]*`, at most
+  32 characters; at most 16 keys; values are strings, numbers or booleans —
+  never lists, maps or null; a string is ONE line of valid UTF-8 with no
+  control character (and no U+2028/U+2029), at most 256 bytes.
+- **Types** (enforced on write against the ontology, §3.2): every key must be
+  declared by the `context:` block of the fact's topic or a parent topic; the
+  value must satisfy its declaration; a `required` key must be present. A
+  string is at most 128 bytes unless its declaration's `max_len` allows up to
+  256. A `time` value is stored in UTC with an explicit `Z`. A path with no
+  topic (private state) or a repository with no ontology accepts no context.
+- **Read is lenient**: a malformed map is dropped WHOLE and reported; the fact
+  still loads. The ontology is not consulted on read, so a well-shaped map with
+  an undeclared key (pushed by hand, or declared once and removed) stays
+  readable; the next write through knomit must correct it.
+- **Rendering**: one inline flow mapping, keys sorted, strings quoted only
+  where YAML would read them as another type, numbers in shortest form.
+- **It is data, never an instruction**: an implementation never acts on a
+  value and never places one in instruction text.
+- **Merges**: a dedup merge of two DIFFERENT facts keeps the winner's whole
+  map; a merge that writes a NEW fact from several (review's prune) keeps only
+  the keys every member carries with the same value; a distilled, reflected or
+  discovered fact carries none; a three-way merge of two versions of ONE fact
+  merges the map key by key.
 
 ## 3. The Ontology
 
@@ -499,7 +539,8 @@ topics:
 
 Schema: the root carries `id`, `name`, `description`, `topics`, and an
 optional `validations` list; each node carries `description`, optional
-`children`, optional `validations`, and optional `attributes`; each
+`children`, optional `validations`, optional `attributes`, and optional
+`context`; each
 validation carries `name`, `message`, and `rule` (§3.4). Required: `id`,
 `name`, and at least one topic.
 
@@ -540,6 +581,31 @@ reported as a warning and ignored, so an ontology written by a newer
 implementation still opens. It follows that each key's value set is CLOSED:
 a new behaviour is introduced as a new key, never as a new value of an
 existing key, which an older reader would reject.
+
+`context` is a map on a topic or child node (not the root) that DECLARES the
+`context` keys a fact under that node may carry (§2.13), each with its type.
+It resolves by the same walk as `attributes`: a node's keys are added to its
+parent's, the nearest declaration of a key wins, and a topic with no `context`
+anywhere on its walk accepts no context at all.
+
+```yaml
+topics:
+  verdicts:
+    context:
+      task:    {type: string, required: true, pattern: "^t-[a-z0-9-]{1,40}$"}
+      verdict: {type: enum, values: [agree, disagree, unsure], required: true}
+      score:   {type: number, min: 0, max: 1}
+      note:    {type: string, max_len: 200}
+      due:     {type: time}
+```
+
+Types: `string`, `number`, `bool`, `enum` (with `values`), `time` (RFC 3339).
+Constraints: `required`; `pattern` (string only, a regular expression matched
+unanchored — anchor it yourself); `min`/`max` (number only, inclusive);
+`max_len` (string only, 1–256 bytes, default 128). A bad declaration (unknown
+type, bad key name, a pattern that does not compile, a constraint on the wrong
+type) is a warning when an existing repository opens and refuses a new
+ontology; a write of that key is then refused with the reason.
 
 Topic and category keys MUST match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase
 kebab-case) at every depth. Writers do not necessarily enforce the grammar
