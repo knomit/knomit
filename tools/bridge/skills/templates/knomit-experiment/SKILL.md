@@ -128,8 +128,18 @@ So, when any fact in the experiment carries one, before `{action: "commit"}`:
 ## When commit is REFUSED
 
 `commit` refuses whenever the agent branch and the experiment both changed the
-same fact since the fork. Nothing is merged and nothing changes — a refusal is
-free, and it is the ONLY reliable signal that your edits collide.
+same fact since the fork — unless the repo's `conflicts` setting settles it.
+Nothing is merged and nothing changes — a refusal is free, and it is the ONLY
+reliable signal that your edits collide.
+
+**With a `conflicts` setting** (read at the repo's consensus branch; under
+`consensus: auto` an absent setting means `facts: merge`, `state: consensus`),
+the commit settles what the setting covers — field-merging a fact, or taking
+the agent branch's version, since the agent branch is the consensus side — and
+refuses only what is left. The summary names every settled path and says when
+the experiment's version was DROPPED; read what it lists. If it is refused,
+resolve the paths the refusal names: your resolutions override the setting for
+those paths only, and the setting still settles the rest.
 
 **Do not sync to avoid a refusal.** `sync` resolves every collision in the
 agent branch's favour, silently: it overwrites the experiment's version of

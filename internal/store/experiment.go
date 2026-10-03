@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/fact"
 )
 
 // ExperimentPrefix is the ref namespace every experiment branch lives under.
@@ -436,7 +438,26 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	// stamped on the merge commit this writes — the experiment's own merge
 	// opts in explicitly; a fast-forward writes no commit, so it stamps
 	// nothing (the fact commits it carries keep the traces their writes had).
-	res, err := rh.mergeExperiment(ctx, exp.Branch(), exp.Parent, StrategyRefuse, resolutions)
+	//
+	// THE REPO'S `conflicts` SETTING APPLIES HERE TOO. It is read where every
+	// other merge site reads it — the tip of the consensus branch
+	// (UpstreamBranch), never the experiment's or the parent's own ontology,
+	// so an experiment cannot vote itself a merge policy. With it on, the
+	// parent is the consensus side (it is the branch that reaches consensus,
+	// as the host's own branch is for MergePushed), and whatever a key set to
+	// off leaves is refused as before. Under `consensus: auto` an absent
+	// `conflicts` reads facts: merge / state: consensus, so such a repo
+	// field-merges by default. The caller's resolutions are laid over the
+	// setting per path (overlayResolutions), so following a refusal never
+	// switches the setting off for the paths it already settled.
+	strategy, opts := StrategyRefuse, mergeOpts{}
+	if rh.consensusBranch != nil {
+		if s, on := rh.conflictsStrategy(ctx, rh.consensusBranch()); on {
+			strategy = s
+			opts = mergeOpts{factConsensus: fact.MergeDst, factFallback: StrategyRefuse, overlayResolutions: true}
+		}
+	}
+	res, err := rh.mergeExperiment(ctx, exp.Branch(), exp.Parent, strategy, resolutions, opts)
 	if err != nil {
 		return AgentReconcileResult{}, err
 	}
@@ -453,10 +474,11 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 // sync: the parent into exp) under the dst lock, with the call's agent trace
 // (the ctx set store.WithAgentTrace put there) opted in for the merge commit.
 // No other merge reads the ctx trace: they keep the transport-commit contract.
-func (rh *repoHandler) mergeExperiment(ctx context.Context, src, dst string, strategy ConflictStrategy, resolutions map[string]Resolution) (AgentReconcileResult, error) {
+func (rh *repoHandler) mergeExperiment(ctx context.Context, src, dst string, strategy ConflictStrategy, resolutions map[string]Resolution, o mergeOpts) (AgentReconcileResult, error) {
 	unlock := rh.lockBranch(dst)
 	defer unlock()
-	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, resolutions, mergeOpts{trace: trailersFromContext(ctx)})
+	o.trace = trailersFromContext(ctx)
+	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, resolutions, o)
 }
 
 // SyncExperiment merges the parent INTO the experiment, parent-wins on
@@ -479,7 +501,7 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 	if err := rh.checkExperimentParentCurrent(ctx, exp); err != nil {
 		return AgentReconcileResult{}, err
 	}
-	res, err := rh.mergeExperiment(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins, nil)
+	res, err := rh.mergeExperiment(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins, nil, mergeOpts{})
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: %w", name, err)
 	}
