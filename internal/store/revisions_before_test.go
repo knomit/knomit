@@ -30,7 +30,7 @@ func TestRevisionsBefore_WalksAncestryNewestFirst(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 
 	c1, c2, c3 := writeThreeVersions(t, svc, ctx, "main")
@@ -56,7 +56,7 @@ func TestRevisionsBefore_BoundedToAnchor(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 
 	c1, c2, _ := writeThreeVersions(t, svc, ctx, "main")
@@ -76,7 +76,7 @@ func TestRevisionsBefore_ScopedToBranch(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 
 	r1, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v1", 0.9, nil), "create t", "")
@@ -107,7 +107,7 @@ func TestRevisionsBefore_RespectsLimit(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 
 	_, c2, c3 := writeThreeVersions(t, svc, ctx, "main")
@@ -138,7 +138,7 @@ func TestRevisionsBefore_MergeAnomalyPicksFirstParent(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v1", 0.9, nil), "v1 on main", "")

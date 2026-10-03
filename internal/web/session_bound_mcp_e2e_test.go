@@ -51,7 +51,7 @@ func newE2EMount(t *testing.T, m *repos.Manager, name string, subscribed bool) {
 	svc, err := store.Open(filepath.Join(t.TempDir(), name+".db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	uid := "uid-" + name
 	require.NoError(t, m.Repos().Insert(repos.RepoRecord{

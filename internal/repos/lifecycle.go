@@ -912,7 +912,7 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
-	if err := svc.InitRepo(map[string]string{
+	if err := svc.InitRepo(context.Background(), map[string]string{
 		OntologyPath: string(y),
 	}, m.deps.AgentBranch); err != nil {
 		return fmt.Errorf("init git: %w", err)
@@ -1038,7 +1038,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// InitFromRemote found at the moment it actually fetched, and a remote that
 	// lost its refs in between must not be silently turned into a fresh local
 	// knowledge base with a minted identity nobody else shares.
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(context.Background(), spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
 		transferProgress(emit, "clone"))
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
@@ -1187,7 +1187,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// ontology is written below instead — as an ordinary commit on the agent
 	// branch, through the same fact machinery every later write uses.
 	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "reading " + spec.Origin.URL, Pct: 40})
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(context.Background(), spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
 		transferProgress(emit, "clone"))
 	if err != nil {
 		return "", fmt.Errorf("initialize: %w", err)
@@ -1325,7 +1325,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
 	svc.SetAcceptList(m.acceptListFor(uid))
 
-	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch,
+	upstream, err := svc.InitSubscription(context.Background(), spec.Origin.URL, auth, spec.Origin.Branch,
 		transferProgress(emit, "subscribe"))
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return "", fmt.Errorf("subscribe: %w", ErrRemoteNoBranches)

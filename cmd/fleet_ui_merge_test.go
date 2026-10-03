@@ -141,7 +141,7 @@ func TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = svc.Close() })
 		svc.SetSigner(host.signer)
-		_, _, err = svc.InitFromRemote(fileuri.New(bare), nil, "main", fleetServerAgent, nil, nil)
+		_, _, err = svc.InitFromRemote(context.Background(), fileuri.New(bare), nil, "main", fleetServerAgent, nil, nil)
 		return err
 	}
 	if err := reclone(); err != nil {

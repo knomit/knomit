@@ -16,7 +16,7 @@ func TestResolveRef_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	_, err = svc.rh.resolveRef(context.Background(), "does-not-exist")
 	if err == nil {
@@ -36,7 +36,7 @@ func TestBranchID_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	_, err = svc.rh.branchID(context.Background(), "does-not-exist")
 	if err == nil {

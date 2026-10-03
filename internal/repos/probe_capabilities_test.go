@@ -56,7 +56,7 @@ func knomitServed(t *testing.T) (*httptest.Server, *atomic.Value) {
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{OntologyPath: mustDefaultOntology(t)}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{OntologyPath: mustDefaultOntology(t)}, "main"))
 	h, last := recordUploadPack(svc.Handler())
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

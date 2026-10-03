@@ -26,7 +26,7 @@ func TestResolveDeadRefs_PreservesNonLocalRefs(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	const (
 		srcNew    = "src://7b4887ce51d9/internal/x.go@4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e"
@@ -70,7 +70,7 @@ func TestResolveDeadRefs_NoLocalRefsIsANoOp(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	content := testFactBody("subject", 0.5, []string{
 		"https://example.com/a",
@@ -103,7 +103,7 @@ func TestResolveDeadRefs_PreservesRetractedButReachableTarget(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	const target = "kb/target.md"
 	_, err = svc.Facts().WriteFact(ctx, "main", target,
@@ -141,7 +141,7 @@ func TestResolveDeadRefs_StillDropsTargetThatNeverExisted(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	content := testFactBody("citing", 0.8, []string{"kb/never-existed.md"})
 	out, _, dropped, err := resolveDeadRefs(

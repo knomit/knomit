@@ -33,7 +33,7 @@ func servedKnomitOrigin(t *testing.T, n int) string {
 
 	ont, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{OntologyPath: string(ont)}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{OntologyPath: string(ont)}, "main"))
 
 	ctx := context.Background()
 	for i := range n {

@@ -111,7 +111,7 @@ func TestUpsert_EmbedderError_FailsWrite(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(failingEmbedder(ctrl))
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/a",
 		"kb/synth/x.md",
@@ -130,7 +130,7 @@ func TestUpsert_EmbedderEmptyVector_FailsWrite(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(emptyVecEmbedder(ctrl))
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/a",
 		"kb/synth/x.md",
@@ -148,7 +148,7 @@ func TestUpsert_EmbedderWrongDim_FailsWrite(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	svc.SetEmbedder(wrongDimEmbedder(ctrl))
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/a",
 		"kb/synth/x.md",
@@ -170,7 +170,7 @@ func TestRelevantMethodologyForFact_NoEmbedder_StillRetrievableByTag(t *testing.
 	require.NoError(t, err)
 	defer svc.Close()
 	// Deliberately no SetEmbedder: facts index without vectors.
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/a",
 		"kb/synth/src.md",

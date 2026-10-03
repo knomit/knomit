@@ -80,7 +80,7 @@ func realRepo(t *testing.T, emb failEmb) (*repos.RepoInstance, *store.Service) {
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 	svc.SetEmbedder(emb)
-	if err := svc.InitRepo(map[string]string{}, "agent/test"); err != nil {
+	if err := svc.InitRepo(context.Background(), map[string]string{}, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{

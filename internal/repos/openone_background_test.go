@@ -68,7 +68,7 @@ func seedReembedRepo(t *testing.T) (home, dbPath string) {
 
 	svc, err := store.Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "machine/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "machine/test"))
 	svc.SetEmbedder(testEmbedder{})
 	for i := 0; i < 3; i++ {
 		f := fact.NewFact("placeholder.md")

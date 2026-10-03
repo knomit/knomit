@@ -23,7 +23,7 @@ func newExperimentRESTManager(t *testing.T, name string) (*repos.Manager, *store
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = svc.Close() })
-	if err := svc.InitRepo(map[string]string{}, "agent/test"); err != nil {
+	if err := svc.InitRepo(context.Background(), map[string]string{}, "agent/test"); err != nil {
 		t.Fatalf("init repo: %v", err)
 	}
 	m := repos.New(context.Background(), repos.Deps{})

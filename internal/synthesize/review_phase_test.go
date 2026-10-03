@@ -338,7 +338,7 @@ func newPhaseTestReviewer(t *testing.T) (*Reviewer, *store.Service) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Seed the fact the shared distill fixtures cite. A distilled fact's refs
 	// go through the same gate as every other write, so a response citing a

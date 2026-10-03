@@ -73,7 +73,7 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	// Two auth facts in different communities so filtered bridges fires.
@@ -330,7 +330,7 @@ func TestApplyDiscoveredProposals_EmptyToken_CommitMessage(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	// Seed two member facts so refs-cover-seeds can pass.
@@ -420,7 +420,7 @@ func TestApplyDiscoveredProposals_EmptyToken_NoScopeLabel_FallsBackToScoped(t *t
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	memberPaths := []string{"kb/auth/seed-c.md", "kb/auth/seed-d.md"}
@@ -475,7 +475,7 @@ func TestForward_Unscoped_EffortNormal_ByteIdentical(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	branch := "agent/test"
 
 	for _, slug := range []string{"alpha", "beta"} {

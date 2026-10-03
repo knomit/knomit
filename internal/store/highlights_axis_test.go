@@ -37,7 +37,7 @@ func TestDefaultAxis_ConfidenceWhenGraphIsFlat(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	ctx := context.Background()
 	// Two leaf observations for others to derive from.
@@ -78,7 +78,7 @@ func TestDefaultAxis_ZeroTopLayerShortCircuits(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	ctx := context.Background()
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/o/leaf.md",
@@ -117,7 +117,7 @@ func TestDefaultAxis_ImpactViaRatioNotShortCircuit(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	ctx := context.Background()
 	leaves := []string{"kb/o/leaf1.md", "kb/o/leaf2.md", "kb/o/leaf3.md", "kb/o/leaf4.md"}
@@ -163,7 +163,7 @@ func TestDefaultAxis_EmptyRepoDefaultsToConfidence(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	res, err := svc.FactQuery().Stats(context.Background(), branch, "", "")
 	require.NoError(t, err)

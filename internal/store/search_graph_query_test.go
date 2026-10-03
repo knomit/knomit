@@ -19,7 +19,7 @@ func TestIncomingAtCommit_TwoSourceVersions(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -59,7 +59,7 @@ func TestOutgoingAtCommit_WalksBackSparseHistory(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -93,7 +93,7 @@ func TestIncomingAtCommit_WalksBackSparseHistory(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -123,7 +123,7 @@ func TestOutgoingAtCommit(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -148,7 +148,7 @@ func TestExplainFact_MatchesIncomingAtCommit_AtHEAD(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -184,7 +184,7 @@ func TestIncomingAtCommit_PopulatesType(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -219,7 +219,7 @@ func TestExplainFact_RetractedAtHEAD(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -243,7 +243,7 @@ func TestExplainFact_NeverIndexed(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	_, err = svc.Search().ExplainFact(context.Background(), "main", "kb/never.md")
 	require.Error(t, err)
@@ -260,7 +260,7 @@ func TestOutgoingAtCommit_DropsMissingCommitLog(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -294,7 +294,7 @@ func TestOutgoingAtCommit_PopulatesType(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -323,7 +323,7 @@ func TestIncomingAtCommit_IncludesRetractedSource(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -352,7 +352,7 @@ func TestOutgoingAtCommit_FiltersStaleSelfLoop(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"

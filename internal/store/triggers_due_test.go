@@ -204,7 +204,7 @@ func BenchmarkDueCandidates(b *testing.B) {
 			svc, err := Open(filepath.Join(b.TempDir(), "k.db"))
 			require.NoError(b, err)
 			b.Cleanup(func() { svc.Close() })
-			require.NoError(b, svc.InitRepoWithUpstream(map[string]string{}, "main", "agent/a"))
+			require.NoError(b, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "main", "agent/a"))
 			ctx := context.Background()
 			var branchID int64
 			require.NoError(b, svc.rh.db.QueryRow(`SELECT id FROM branches WHERE name = 'agent/a'`).Scan(&branchID))

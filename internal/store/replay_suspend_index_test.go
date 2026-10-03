@@ -44,7 +44,7 @@ func TestReplay_SkipIndexSync(t *testing.T) {
 		svc, err := Open(filepath.Join(dir, "local.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { svc.Close() })
-		require.NoError(t, svc.InitRepo(map[string]string{}, agent))
+		require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, agent))
 		_, err = svc.Facts().WriteFact(ctx, agent, "kb/a.md", testFactBody("A", 0.9, nil), "a", "")
 		require.NoError(t, err)
 		_, err = svc.Facts().WriteFact(ctx, agent, "kb/b.md", testFactBody("B", 0.8, nil), "b", "")
@@ -59,7 +59,7 @@ func TestReplay_SkipIndexSync(t *testing.T) {
 		svc, err := Open(filepath.Join(dir, "clone.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { svc.Close() })
-		require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+		require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 		return svc
 	}
 
@@ -126,7 +126,7 @@ func TestSchemaVersionState(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	si := svc.si
 
 	setVersion := func(v string) {

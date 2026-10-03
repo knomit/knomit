@@ -86,7 +86,7 @@ func newTraceReviewE2E(t *testing.T) *reviewE2E {
 	t.Cleanup(func() { _ = svc.Close() })
 	emb := traceEmbedder{}
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	seedTraceCorpus(t, svc, "first")
 	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
 		UID: "uid-alpha", Name: "alpha", State: repos.StateActive, Profile: "code", CreatedAt: 1,

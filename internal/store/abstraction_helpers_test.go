@@ -34,7 +34,7 @@ func openAbstractionTestServiceAt(t *testing.T, path string, emb BatchEmbedder) 
 	if existed {
 		require.NoError(t, svc.OpenRepo())
 	} else {
-		require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+		require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	}
 	return svc
 }

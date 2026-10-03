@@ -17,7 +17,7 @@ func TestReadFact_ReturnsErrPathNotFound_HEAD(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	_, err = svc.Facts().ReadFact(context.Background(), "main", "kb/missing.md", nil)
 	require.Error(t, err)
@@ -32,7 +32,7 @@ func TestReadFact_ReturnsErrPathNotFound_AtCommit(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	c0, err := svc.Facts().WriteFact(ctx, "main", "kb/e.md", testFactBody("e", 0.9, nil), "init", "")
@@ -52,7 +52,7 @@ func TestReadFact_BeforeCommit_NoPrior_ReturnsErrPathNotFound(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	// Write a fact then read with BeforeCommit pointing at its own commit:
@@ -73,7 +73,7 @@ func TestReadFact_HappyPath_ReturnsContent(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/e.md", testFactBody("e", 0.9, nil), "init", "")

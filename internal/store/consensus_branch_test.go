@@ -21,7 +21,7 @@ func TestConsensusBranch_RecordedNotDefaulted(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "k.db")
 		svc, err := Open(path)
 		require.NoError(t, err)
-		require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "trunk", "agent/host-1"))
+		require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "trunk", "agent/host-1"))
 		require.Equal(t, "trunk", svc.UpstreamBranch())
 		require.NoError(t, svc.Close())
 
@@ -36,7 +36,7 @@ func TestConsensusBranch_RecordedNotDefaulted(t *testing.T) {
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		defer svc.Close()
-		require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "trunk", "agent/host-1"))
+		require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "trunk", "agent/host-1"))
 		svc.SetOrigin(&Origin{URL: "https://example.invalid/kb.git", Branch: "develop"})
 		require.Equal(t, "develop", svc.UpstreamBranch())
 		svc.SetOrigin(nil)
@@ -47,7 +47,7 @@ func TestConsensusBranch_RecordedNotDefaulted(t *testing.T) {
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		defer svc.Close()
-		require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "trunk", "agent/host-1"))
+		require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "trunk", "agent/host-1"))
 		// Forget the record, as on a repo from an older binary; add a pushed
 		// peer branch and an experiment, which are never candidates.
 		_, err = svc.rh.db.Exec(`DELETE FROM meta WHERE key = ?`, consensusBranchKey)
