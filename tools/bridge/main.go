@@ -61,6 +61,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/platform/version"
 	"knomit/internal/serveraddr"
 	"knomit/tools/bridge/antigravity"
 	"knomit/tools/bridge/bridgelog"
@@ -288,18 +289,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := serveProxy(srv, conn, os.Stdin, os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "stdin read error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// serveProxy is the proxy's life once connected: the version check beside it,
+// the stdio loop, and the closing DELETE. out carries the MCP stream and
+// nothing else; the version warning, when there is one, goes to errw.
+func serveProxy(srv knomitapi.Server, conn connection, in io.Reader, out, errw io.Writer) error {
+	// One stderr line when this kb and the server are different builds.
+	// Beside the proxy loop, not in front of it: the handshake never waits.
+	go warnVersionSkew(errw, knomitapi.NewServerClient(srv, versionCheckTimeout), srv.Base, srv.Raw, version.String())
+
 	// Identity is computed once and never re-read: this process is one
 	// instance for its whole life.
 	hdr := clientHeaders(buildIdentity(conn.branch, time.Now()))
 
-	sessionID, err := runProxy(os.Stdin, os.Stdout, conn.client, conn.serverURL, hdr)
+	sessionID, err := runProxy(in, out, conn.client, conn.serverURL, hdr)
 	// stdin closed: the host is gone. Tell the server so the row is marked
 	// ended instead of going dead by silence. Fire-and-forget.
 	terminateSession(conn.client, conn.serverURL, sessionID, hdr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "stdin read error: %v\n", err)
-		os.Exit(1)
-	}
+	return err
 }
 
 // runProxy is the stdio↔HTTP loop: one JSON-RPC line in, one POST out, the
