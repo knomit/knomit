@@ -51,7 +51,7 @@ func NewGeminiAdapter(ctx context.Context, model string, cfg config.LLMConfig) (
 		apiKey = os.Getenv("GOOGLE_AI_API_KEY")
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY (or GOOGLE_AI_API_KEY) is required for Gemini provider")
+		return nil, fmt.Errorf("%w: GEMINI_API_KEY (or GOOGLE_AI_API_KEY) is required for Gemini provider", ErrNoCredentials)
 	}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,

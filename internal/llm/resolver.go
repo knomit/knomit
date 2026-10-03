@@ -2,10 +2,18 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"knomit/internal/config"
 	"strings"
 )
+
+// ErrNoCredentials is what an adapter returns, wrapped, when its provider's
+// API key is not in the environment. It is a CONFIGURATION, not a fault: a
+// server without a key only loses server-side synthesis (the web jobs), while
+// knomit_review and knomit_hypothesize hand the LLM work to the calling
+// agent. internal/app logs it once at info for that reason.
+var ErrNoCredentials = errors.New("no API key in the environment")
 
 // ResolveProvider determines the provider name from a model string.
 // If explicit is non-empty it is returned as-is. Otherwise the model name

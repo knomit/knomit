@@ -177,7 +177,7 @@ func Open(path string) (*Service, error) {
 		return nil, fmt.Errorf("store.Open: session DB: %w", err)
 	}
 
-	return &Service{
+	s := &Service{
 		rh:            rh,
 		fi:            fi,
 		si:            si,
@@ -194,7 +194,9 @@ func Open(path string) (*Service, error) {
 		dbPath:        canonPath,
 		sessionDB:     sessionDB,
 		sessionDBPath: sessionPath,
-	}, nil
+	}
+	rh.consensusBranch = s.UpstreamBranch
+	return s, nil
 }
 
 // SessionDBSuffix is the filename suffix of a Service's ephemeral session

@@ -174,14 +174,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 
 	// LLM adapter.
 	var llmAdapter llm.LLMAdapter
+	var llmInitErr error
 	provider, err := llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
 	if err != nil {
 		log.Warn().Err(err).Msg("LLM provider resolution failed")
 	} else {
-		llmAdapter, err = llm.NewAdapter(ctx, provider, cfg.LLM.Model, cfg.LLM)
-		if err != nil {
-			log.Warn().Err(err).Msg("LLM adapter init failed")
-		}
+		llmAdapter, llmInitErr = llm.NewAdapter(ctx, provider, cfg.LLM.Model, cfg.LLM)
 	}
 
 	if tracePath := os.Getenv("KNOMIT_LLM_TRACE"); tracePath != "" && llmAdapter != nil {
@@ -195,11 +193,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		}
 	}
 
-	if llmAdapter != nil {
-		log.Info().Msg("synthesis enabled")
-	} else {
-		log.Warn().Msg("synthesis disabled (no LLM adapter)")
-	}
+	logLLMSetup(log.Logger, llmAdapter, llmInitErr)
 
 	// Repo manager.
 	a.manager = repos.New(ctx, repos.Deps{

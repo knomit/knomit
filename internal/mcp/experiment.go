@@ -31,13 +31,13 @@ import (
 // which is a state it has to know how to leave.
 func experimentTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_experiment",
-		mcpgo.WithDescription("Work on an isolated branch of this knowledge base. `open` forks exp/<name> from the agent branch and MOVES THIS SESSION onto it: every later call — learn, update, retract, query, review — reads and writes the experiment until you commit or roll back. `commit` merges it into the agent branch and deletes it. If both sides changed the same fact the commit is REFUSED, nothing changes, and you are told the conflicting paths plus THREE COMMITS for each: the fork point, the experiment's version, and the agent branch's version. Read the fact at all three with knomit_explain {file, commit}, decide per path, and retry `commit` with `resolutions`. `rollback` throws the work away. `list` shows this repo's experiments and marks the one you are in. Experiments are local: never pushed, never fetched, never visible to a peer. An experiment with no commits for the configured expiry is rolled back automatically.\n\nOURS AND THEIRS: `commit` merges the EXPERIMENT INTO the agent branch, so the experiment is the merge SOURCE. From where you are sitting — inside the experiment — \"ours\" is the experiment's version and \"theirs\" is the agent branch's. That is the OPPOSITE of git's own merge convention, where \"ours\" is the branch being merged into. If you are used to git, read these two words carefully.\n\nRESOLVING: when the merge is obvious — a fact you wrote this session, or two edits that plainly compose — resolve it yourself and commit. When the two versions disagree about a CLAIM rather than its wording, or the other version is someone else's work, show the human ours, theirs and your proposed merge, and commit with their picks. That choice is yours to make; there is no flag for it."),
+		mcpgo.WithDescription("Work on an isolated branch of this knowledge base. `open` forks exp/<name> from the agent branch and MOVES THIS SESSION onto it: every later call — learn, update, retract, query, review — reads and writes the experiment until you commit or roll back. `commit` merges it into the agent branch and deletes it. If both sides changed the same path, the repo's `conflicts` setting (read at its consensus branch; under `consensus: auto` an absent setting means facts: merge / state: consensus) settles what it can, with the agent branch as the consensus side, and the summary names each settled path and any version it DROPPED. Whatever the setting does not settle (every conflict, when the repo has no setting) makes the commit REFUSED: nothing changes, and you are told the conflicting paths plus THREE COMMITS for each: the fork point, the experiment's version, and the agent branch's version. Read the fact at all three with knomit_explain {file, commit}, decide per path, and retry `commit` with `resolutions`. `rollback` throws the work away. `list` shows this repo's experiments and marks the one you are in. Experiments are local: never pushed, never fetched, never visible to a peer. An experiment with no commits for the configured expiry is rolled back automatically.\n\nOURS AND THEIRS: `commit` merges the EXPERIMENT INTO the agent branch, so the experiment is the merge SOURCE. From where you are sitting — inside the experiment — \"ours\" is the experiment's version and \"theirs\" is the agent branch's. That is the OPPOSITE of git's own merge convention, where \"ours\" is the branch being merged into. If you are used to git, read these two words carefully.\n\nRESOLVING: when the merge is obvious — a fact you wrote this session, or two edits that plainly compose — resolve it yourself and commit. When the two versions disagree about a CLAIM rather than its wording, or the other version is someone else's work, show the human ours, theirs and your proposed merge, and commit with their picks. That choice is yours to make; there is no flag for it."),
 		mcpgo.WithString("action", mcpgo.Required(),
 			mcpgo.Description("One of: list, open, commit, rollback, sync.")),
 		mcpgo.WithString("name",
 			mcpgo.Description("The experiment name: kebab-case, unique in this repo (e.g. \"widen-the-gate\"). Required for open; for commit/rollback/sync it defaults to the experiment you are currently in.")),
 		mcpgo.WithObject("resolutions",
-			mcpgo.Description("Only for `commit`, and only after one was refused: how to settle each conflicting path, keyed by the fact path exactly as the refusal listed it. Each value is \"ours\" (keep THIS EXPERIMENT's version — it is the merge source, the opposite of git's \"ours\"), \"theirs\" (take the agent branch's version), or {\"body\": \"<full merged fact text>\"} to land content that is neither. Every path in the refusal needs an entry — one left out is refused again, and a path that did not conflict is an error rather than a no-op. The merge is still ONE merge: everything else merges exactly as it would have.")),
+			mcpgo.Description("Only for `commit`, and only after one was refused: how to settle each conflicting path, keyed by the fact path exactly as the refusal listed it. Each value is \"ours\" (keep THIS EXPERIMENT's version — it is the merge source, the opposite of git's \"ours\"), \"theirs\" (take the agent branch's version), or {\"body\": \"<full merged fact text>\"} to land content that is neither. Every path in the refusal needs an entry — one left out is refused again, and a path that did not conflict is an error rather than a no-op. With a `conflicts` setting on, your entries override it for the paths you name and the setting still settles the rest. The merge is still ONE merge: everything else merges exactly as it would have.")),
 		mcpgo.WithString("description",
 			mcpgo.Description("Free text saying what this experiment is for. Only used by `open`; stored locally, never committed to git. Re-opening with a new description replaces it; re-opening with none keeps it.")),
 		mcpgo.WithObject(traceArgument,
@@ -435,10 +435,55 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 			"experiment %q added nothing to %q — the merged result was identical to it, so no commit was written and %q did not move. The experiment is deleted and this session is back on %q",
 			name, agent, agent, agent)
 	}
+	if s := settledSummary(result.Settled); s != "" {
+		summary += ". " + s
+	}
 	return experimentResult{
 		Branch:  agent,
 		Summary: summary,
 	}, nil
+}
+
+// settledSummary says, per path, how a commit settled a conflict instead of
+// refusing it — above all which side's change was DROPPED. The repo's
+// `conflicts` setting can discard the experiment's own version of a path, and
+// the experiment is deleted on success, so "merged" alone would read as if
+// nothing was lost. The experiment is the merge source (src), the agent
+// branch the destination (dst).
+func settledSummary(settled []store.SettledPath) string {
+	if len(settled) == 0 {
+		return ""
+	}
+	side := map[string]string{"src": "the experiment", "dst": "the parent"}
+	other := map[string]string{"src": "the parent", "dst": "the experiment"}
+	change := func(dropped string) string {
+		switch {
+		case strings.HasSuffix(dropped, "-delete"):
+			return "deletion"
+		case strings.HasSuffix(dropped, "-add"):
+			return "addition"
+		default:
+			return "edit"
+		}
+	}
+	parts := make([]string, 0, len(settled))
+	for _, p := range settled {
+		var what string
+		switch {
+		case p.Kept == "merged":
+			what = "field-merged"
+		case p.Chosen:
+			what = fmt.Sprintf("your resolution: %s's version", side[p.Kept])
+		case p.Deleted:
+			what = fmt.Sprintf("%s's deletion was kept; %s's %s was DROPPED", side[p.Kept], other[p.Kept], change(p.Dropped))
+		default:
+			what = fmt.Sprintf("kept %s's version; %s's %s was DROPPED", side[p.Kept], other[p.Kept], change(p.Dropped))
+		}
+		parts = append(parts, p.Path+": "+what)
+	}
+	return fmt.Sprintf(
+		"%d conflicting path(s) were settled by this repo's `conflicts` setting or your resolutions instead of refusing the commit — %s. Every dropped version stays readable at the merge commit's parents (knomit_explain {file, commit})",
+		len(settled), strings.Join(parts, "; "))
 }
 
 // experimentRollback discards the experiment.

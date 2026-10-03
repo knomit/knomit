@@ -78,6 +78,11 @@ type repoHandler struct {
 
 	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 
+	// consensusBranch is Service.UpstreamBranch: the branch whose tip carries
+	// the repo's `conflicts` setting, the one every other merge site reads it
+	// at. Set by Open; nil only on a repoHandler built bare in a test.
+	consensusBranch func() string
+
 	// acceptList is the operator's accept list (control.db), bound to this
 	// repository. Nil is empty. Set by Service.SetAcceptList at build/swap
 	// time, never mutated afterwards.

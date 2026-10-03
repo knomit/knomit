@@ -314,6 +314,104 @@ func sideResolutionLines(baseCommit, srcCommit, dstCommit *object.Commit, detect
 	return lines, nil
 }
 
+// overlayCallerResolutions lays the caller's own resolutions over what a
+// `conflicts` setting decided (mergeOpts.overlayResolutions, the experiment
+// commit only): each path the caller named takes the caller's resolution, and
+// the setting's record line for it is replaced. A side resolution is recorded
+// as a whole-set choice is, `reason=chosen`; a body resolution records no line,
+// exactly as a caller body resolution never has (it has no kept side, and the
+// merge commit's tree holds what landed).
+func overlayCallerResolutions(
+	res map[string]Resolution, lines []string, caller map[string]Resolution,
+	baseCommit, srcCommit, dstCommit *object.Commit,
+) (map[string]Resolution, []string, error) {
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return nil, nil, err
+	}
+	srcTree, err := srcCommit.Tree()
+	if err != nil {
+		return nil, nil, err
+	}
+	dstTree, err := dstCommit.Tree()
+	if err != nil {
+		return nil, nil, err
+	}
+	if res == nil {
+		res = make(map[string]Resolution, len(caller))
+	}
+	kept := lines[:0:0]
+	for _, l := range lines {
+		if _, named := caller[trailerPath(l)]; !named {
+			kept = append(kept, l)
+		}
+	}
+	paths := make([]string, 0, len(caller))
+	for p := range caller {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		r := caller[p]
+		res[p] = r
+		if len(r.Body) == 0 && r.Side != "" {
+			kept = append(kept, conflictLine(shapeOf(p, baseTree, srcTree, dstTree), r.Side, StrategyRefuse, "chosen"))
+		}
+	}
+	return res, kept, nil
+}
+
+// trailerPath is the path a Knomit-Merge / Knomit-Conflict line names.
+func trailerPath(line string) string {
+	_, rest, _ := strings.Cut(line, ": ")
+	path, _, _ := strings.Cut(rest, " ")
+	return path
+}
+
+// settledFrom reads a merge's record lines back as per-path outcomes (see
+// SettledPath). Lines with any other key are skipped.
+func settledFrom(lines []string) []SettledPath {
+	var out []SettledPath
+	for _, l := range lines {
+		key, rest, ok := strings.Cut(l, ": ")
+		if !ok || (key != TrailerMerge && key != TrailerConflict) {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		sp := SettledPath{Path: fields[0]}
+		kv := map[string]string{}
+		for _, f := range fields[1:] {
+			if k, v, ok := strings.Cut(f, "="); ok {
+				kv[k] = v
+			}
+		}
+		sp.Dropped = kv["dropped"]
+		if key == TrailerMerge {
+			// A field merge drops nothing. A delete-vs-edit records the
+			// losing edit: the side that deleted is the one that landed.
+			switch {
+			case strings.HasPrefix(sp.Dropped, "src-"):
+				sp.Kept = string(ResolveDst)
+			case strings.HasPrefix(sp.Dropped, "dst-"):
+				sp.Kept = string(ResolveSrc)
+			default:
+				sp.Kept = "merged"
+			}
+			sp.Deleted = kv["decided"] == "delete"
+		} else {
+			sp.Kept = kv["kept"]
+			sp.Chosen = kv["reason"] == "chosen"
+			sp.Deleted = sp.Kept != "" && kv[sp.Kept] == "none"
+		}
+		out = append(out, sp)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
 func (rh *repoHandler) blobBytes(h plumbing.Hash) ([]byte, error) {
 	blob, err := object.GetBlob(rh.gits, h)
 	if err != nil {

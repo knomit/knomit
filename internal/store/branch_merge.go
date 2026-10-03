@@ -130,6 +130,17 @@ type mergeOpts struct {
 	// stays a transport commit with no trace, as before. A fast-forward or a
 	// no-op writes no commit and so stamps nothing.
 	trace Trailers
+	// overlayResolutions lets a `conflicts` strategy take the caller's
+	// resolutions as well: each path the caller named takes the caller's
+	// resolution, and the setting settles every other conflicting path. ONLY
+	// CommitExperiment sets it. Without it a `conflicts` strategy refuses any
+	// caller resolution, which is what every other site keeps.
+	//
+	// Without the overlay the setting would stop applying the moment an agent
+	// followed a refusal's instructions: the refusal lists only what the
+	// setting left, so a retry naming just those paths would turn the setting
+	// off and be refused again for paths it had already settled.
+	overlayResolutions bool
 }
 
 func (o mergeOpts) factMerge(p conflictsPolicy) factMerge {
@@ -251,7 +262,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	baseCommit := bases[0]
 
 	policy, mergeFacts := conflictsPolicyOf(strategy)
-	if mergeFacts && (len(resolutions) > 0 || o.side != "") {
+	if mergeFacts && ((len(resolutions) > 0 && !o.overlayResolutions) || o.side != "") {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %s computes its own resolutions; none may be given", strategy)
 	}
 
@@ -309,11 +320,20 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		if ferr != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge facts: %w", ferr)
 		}
+		if o.overlayResolutions && len(resolutions) > 0 {
+			// The caller's map was already checked against the real conflict
+			// set above (noLeftoverResolutions), so every entry names a path
+			// the setting just decided; the caller's decision replaces it.
+			if res, lines, ferr = overlayCallerResolutions(res, lines, resolutions, baseCommit, srcCommit, dstCommit); ferr != nil {
+				return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: overlay resolutions: %w", ferr)
+			}
+		}
 		resolutions, trailers, walk = res, lines, StrategyRefuse
 	}
 
 	mergedTreeHash, walkTrailers, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, walk, resolutions)
 	trailers = append(trailers, walkTrailers...)
+	settled := settledFrom(trailers)
 	if err != nil {
 		// A refusal is not a malfunction: name the branches on the typed
 		// error and return it UNWRAPPED in shape, so errors.As reaches it and
@@ -340,7 +360,10 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 			Str("src", src).Str("dst", dst).
 			Str("strategy", string(strategy)).
 			Msg("mergeIntoBranch: no-op (merged tree identical to dst)")
-		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
+		// Settled even here: a setting that kept dst's version of every
+		// conflicting path DROPPED src's changes without writing a commit,
+		// and the caller must be able to say so.
+		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String(), Settled: settled}, nil
 	}
 	if mergedTreeHash == dstCommit.TreeHash && o.skipMergeOnly {
 		only, err := rh.onlyMergeCommits(srcHash, dstHash)
@@ -389,7 +412,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		Str("merge_commit", mergeHash.String()[:8]).
 		Msg("mergeIntoBranch: three-way merge complete")
 
-	return AgentReconcileResult{Mode: ModeMerge, NewTip: mergeHash.String()}, nil
+	return AgentReconcileResult{Mode: ModeMerge, NewTip: mergeHash.String(), Settled: settled}, nil
 }
 
 // mergeTreesWithStrategy performs a three-way tree merge anchored on
