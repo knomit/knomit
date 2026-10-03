@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
-import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, deleteSession } from './api';
+import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, deleteSession, RepoIndexingError } from './api';
 import type { SSEEvent, TestResult, PreviewResult, ApplyResult } from './api';
 import { GlobeIcon } from './icons';
 import { btn, card } from './manageStyles';
@@ -57,7 +57,10 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   const [selectedBranch, setSelectedBranch] = useState<string>('');
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [progress, setProgress] = useState('');
-  const [error, setError] = useState<{ section: Step; message: string } | null>(null);
+  // `indexing` marks the commit's 409 "Repo is indexing" refusal — the one
+  // error with a way through other than Retry (see handleCommit).
+  const [error, setError] = useState<{ section: Step; message: string; indexing?: boolean } | null>(null);
+  const [doneWarning, setDoneWarning] = useState('');
 
   // The URL this wizard CLASSIFIES and SENDS, as opposed to the raw field.
   // With a leading space isSSHURL and isHTTPURL below were both false, so
@@ -184,30 +187,46 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
     }
   };
 
-  const handleCommit = async () => {
+  // cancelIndexing re-sends the commit asking the server to cancel the repo's
+  // running index job first — the way through the 409 "Repo is indexing"
+  // refusal, offered only after that refusal has been seen.
+  const handleCommit = async (cancelIndexing = false) => {
     if (!sessionId) return;
-    setError(null); setStep('committing'); setProgress('Finalizing…');
+    setError(null); setDoneWarning(''); setStep('committing'); setProgress('Finalizing…');
     try {
       await streamCommit(repo, sessionId, (ev: SSEEvent) => {
         if (ev.phase === 'done') {
           setStep('done'); setProgress('');
-          doneTimerRef.current = setTimeout(() => onDone(), 1200);
+          // A warning is the server saying the swap landed but something after
+          // it did not (the index, typically). Auto-returning would show it for
+          // 1.2s and take it away, so a warned success waits for the reader.
+          if (ev.warning) setDoneWarning(ev.warning);
+          else doneTimerRef.current = setTimeout(() => onDone(), 1200);
         } else if (ev.phase === 'error') {
           // Keep step at 'committing' — it is what keeps the Sync block, and so
           // this error and its Retry, on screen. `leavable` reads the error, not
           // the step, to know the commit is no longer in flight.
           setError({ section: 'committing', message: ev.message }); setProgress('');
+        } else if (ev.phase === 'cancelling-index') {
+          setProgress('Cancelling indexing…');
         } else if (ev.phase === 'swapping') {
           setProgress('Swapping store…');
         } else if (ev.phase === 'configuring') {
           setProgress('Configuring remote…');
-        } else if (ev.phase === 'rebuilding') {
-          const sub = ev.sub_phase || ''; const cur = ev.current || 0; const tot = ev.total || 0;
-          setProgress(tot > 0 ? `Rebuilding ${sub}… ${cur}/${tot}` : 'Rebuilding index…');
+        } else if (ev.phase === 'indexing') {
+          const cur = ev.current || 0; const tot = ev.total || 0;
+          setProgress(tot > 0 ? `Indexing… ${cur}/${tot}` : 'Indexing…');
         } else { setProgress(ev.phase + '…'); }
-      });
+      }, cancelIndexing ? { cancelIndexing: true } : undefined);
     } catch (e) {
-      setError({ section: 'committing', message: (e instanceof Error && e.message) || 'Commit failed' });
+      // Refusals that arrive before the stream opens (409, 502, 400) land
+      // here with the problem's detail as the message. The indexing one is
+      // flagged so the Sync block can offer the way through it.
+      setError({
+        section: 'committing',
+        message: (e instanceof Error && e.message) || 'Commit failed',
+        indexing: e instanceof RepoIndexingError,
+      });
       setProgress('');
     }
   };
@@ -456,7 +475,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
                     only for an instant on its way into the commit it chains, so
                     in practice this button belongs to the retry. */}
                 {step === 'applied' && !error && (
-                  <button type="button" data-testid="wizard-connect" style={btn(false, 'primary')} onClick={handleCommit}>Connect →</button>
+                  <button type="button" data-testid="wizard-connect" style={btn(false, 'primary')} onClick={() => handleCommit()}>Connect →</button>
                 )}
                 {step === 'applied' && !error && !isSharedHistory && (
                   <button type="button" style={btn(false)} onClick={() => { setApplyResult(null); setStep('previewed'); }}>Try different strategy</button>
@@ -476,9 +495,22 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
               <div style={sectionBox}>
                 {step === 'committing' && <div style={progressText}>{progress}</div>}
                 {step === 'done' && <div style={{ color: '#4caf50' }}>Remote connected successfully.</div>}
+                {step === 'done' && doneWarning && (
+                  <div>
+                    <div data-testid="wizard-done-warning" style={{ ...warnText, marginTop: 6 }}>{doneWarning}</div>
+                    <button type="button" data-testid="wizard-done-continue" style={{ ...btn(false), marginTop: 8 }} onClick={onDone}>Back to {repo}</button>
+                  </div>
+                )}
                 {error && error.section === 'committing' && (
                   <div><div style={{ color: '#f88' }}>{error.message}</div>
-                    <button type="button" style={{ ...btn(false), marginTop: 8 }} onClick={handleRetry}>Retry</button></div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      {/* The indexing refusal's way through: the same commit,
+                          asking the server to cancel the index job first. */}
+                      {error.indexing && (
+                        <button type="button" data-testid="wizard-cancel-indexing" style={btn(false, 'primary')} onClick={() => handleCommit(true)}>Cancel indexing and continue</button>
+                      )}
+                      <button type="button" style={btn(false)} onClick={handleRetry}>Retry</button>
+                    </div></div>
                 )}
               </div>
             </section>

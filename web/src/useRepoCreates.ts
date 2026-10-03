@@ -205,8 +205,8 @@ export function activeCreateByRepo(list: RepoCreateStatus[]): Map<string, RepoCr
 // createRepoIsRegistered reports whether the job's REPO now exists.
 //
 // A create passes through a point — m.Add — after which the repository is
-// real, listable and browsable, while the job behind it goes on indexing and
-// then activating sync. Waiting for the job's terminal state before letting
+// real, listable and browsable, while the job behind it goes on observing the
+// index. Waiting for the job's terminal state before letting
 // anyone in means waiting out the whole index for a repo that has been
 // browsable for minutes; the user's words were that on reaching "Building the
 // search index" the only way to see the repo was to reload the page.
@@ -223,5 +223,5 @@ export function activeCreateByRepo(list: RepoCreateStatus[]): Map<string, RepoCr
 // believes it registered, and only the list can say the repo is really there.
 export function createRepoIsRegistered(s: RepoCreateStatus): boolean {
   if (s.index_state) return true;
-  return s.step === 'index' || s.step === 'sync' || s.step === 'done';
+  return s.step === 'index' || s.step === 'done';
 }

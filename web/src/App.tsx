@@ -798,7 +798,7 @@ export default function App() {
       // An event is NEWER than any refetch in flight, so it retires them.
       repoListGen.current += 1;
       setRepos(prev => prev.map(r => r.name === ev.repo
-        ? { ...r, index_state: ev.state, index_done: ev.done, index_total: ev.total }
+        ? { ...r, index_state: ev.state, index_done: ev.done, index_total: ev.total, index_reason: ev.reason }
         : r));
       // The banner speaks for the ACTIVE repo only, and this stream carries
       // every repo — so it is filtered here rather than at the source.
