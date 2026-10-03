@@ -28,7 +28,7 @@ func TestUpdateHandler_RejectsUnknownUpdatesKeys(t *testing.T) {
 		require.True(t, res.IsError, "updates.%s must be refused", key)
 		text := resultText(t, res)
 		require.Contains(t, text, `"`+key+`"`, "the error names the unknown key")
-		require.Contains(t, text, "confidence, domain", "the error lists the accepted keys")
+		require.Contains(t, text, "confidence, context, domain", "the error lists the accepted keys")
 	}
 
 	res := callUpdate(t, ctx, map[string]any{

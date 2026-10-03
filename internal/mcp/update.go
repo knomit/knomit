@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -106,6 +107,9 @@ func updateToolSchemaProperties() map[string]any {
 		"motifs": motifsProperty(),
 		// An explicit "" CLEARS the expiry; omitting the field leaves it.
 		"expires": map[string]any{"type": "string", "description": expiresFieldDescription + ` On update, "" clears it; omit the field to leave it unchanged.`},
+		// F22: absent keeps the map, an object REPLACES it whole (no per-key
+		// patch: send every key the fact should keep), {} clears it.
+		"context": contextProperty(` On update: omit the field to leave the map unchanged; an object REPLACES the whole map (send every key the fact should keep — a key you leave out is dropped); {} clears it.`),
 		"refs":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces the ENTIRE refs list. Send every ref the fact should keep — any existing ref you leave out is dropped. To add or refresh a ref, read the current refs first and resend the full merged list. Omit the field to leave refs unchanged."},
 	}
 }
@@ -124,6 +128,28 @@ type updateInput struct {
 	Motifs     []string `json:"motifs"`
 	// Expires is a pointer so "" (clear) differs from absent (unchanged).
 	Expires *string `json:"expires"`
+	// Context is raw so absent (keep), an object (replace whole), {} (clear)
+	// and null (refused — ambiguous) can all be told apart.
+	Context json.RawMessage `json:"context"`
+}
+
+// updateContext decodes updates.context. ok is false when the field is
+// absent (keep the map).
+func updateContext(raw json.RawMessage) (ctx map[string]any, ok bool, err error) {
+	if len(raw) == 0 {
+		return nil, false, nil
+	}
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return nil, false, errors.New("updates.context: null is not accepted; send {} to clear the context, or omit the field to keep it")
+	}
+	if err := json.Unmarshal(raw, &ctx); err != nil {
+		return nil, false, fmt.Errorf("updates.context: must be an object of key: value: %v", err)
+	}
+	ctx = factpkg.NormalizeContextValues(ctx)
+	if err := factpkg.ValidateContextShape(ctx); err != nil {
+		return nil, false, fmt.Errorf("updates.context: %v", err)
+	}
+	return ctx, true, nil
 }
 
 // UpdateHandler returns the handler function for knomit_update.
@@ -220,6 +246,11 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 					return mcpgo.NewToolResultError(fmt.Sprintf("updates.title: %v", err)), nil
 				}
 			}
+		}
+		// F22: shape-checked with the arguments, before the file is read.
+		newContext, setContext, err := updateContext(updates.Context)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		// Strict: an unknown key on an op (say replace_all, or an occurrence
 		// index) is refused rather than ignored, because ignoring it would
@@ -329,6 +360,12 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if updates.Motifs != nil {
 			fact.Motifs = updates.Motifs
 		}
+		// Replace whole, like every list field; {} decodes to an empty map and
+		// clears. Absent leaves what ParseFact read — a map this build keeps
+		// on every rewrite (an older binary dropped it).
+		if setContext {
+			fact.Context = newContext
+		}
 		// Refs replace wholesale, like Domain and Entities — the caller
 		// sends the complete new list. Dropping a ref only affects this
 		// and future revisions: prior revisions keep their refs in git
@@ -366,12 +403,18 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// top-level `validations:` would let a job allocate its slot with learn
 		// and then refuse every update to it — its whole write path after run
 		// one.
+		topicCategory := path.Dir(strings.TrimPrefix(file, ontologyRoot+"/"))
+		// F22: the typed layer normalises time-typed values before the gate.
+		fact.Context = factpkg.NormalizeContext(ontology, topicCategory, fact.Context)
 		if ontology != nil && !factpkg.IsWritablePrivatePath(file) {
-			topicCategory := strings.TrimPrefix(file, ontologyRoot+"/")
-			topicCategory = path.Dir(topicCategory)
 			if err := factpkg.ValidateFact(ontology, topicCategory, fact); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
+		} else if len(fact.Context) > 0 {
+			// Private state, or no ontology: ValidateFact is skipped, but
+			// nothing declares a context key there, so a context is refused —
+			// never written unchecked.
+			return mcpgo.NewToolResultError(factpkg.ErrContextWithoutOntology.Error()), nil
 		}
 
 		// Refs this update ADDS must resolve; refs it carries forward are not
