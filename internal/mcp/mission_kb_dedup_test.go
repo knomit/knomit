@@ -91,3 +91,45 @@ func TestMissionKB_ForecastNeverMerges(t *testing.T) {
 		})
 	}
 }
+
+// Two cross-checkers' verdicts on ONE target: near-identical by design
+// (templated lines, one target, one entity). They must land as two facts, so
+// that no cross-check ever writes to a file another one wrote and the fold
+// sees every verdict.
+//
+// SABOTAGE: delete `learn_dedup: off` under verdicts in the shipped
+// knowledge-base ontology → the second verdict folds into the first → red.
+func TestMissionKB_VerdictsNeverMerge(t *testing.T) {
+	v := func(task, verdict string) map[string]any {
+		return map[string]any{
+			"topic": "verdicts", "category": "xcheck", "type": "observation",
+			"title": "Verdict of " + task, "confidence": 0.7,
+			"body": "verdict: " + verdict + "\ntarget: kb/forecast/subject-a/month/aaaa.md\n" +
+				"suggested_confidence: 0.55\n\nReasons of " + task + ".",
+			"entities": []any{"subject-a"}, "refs": []any{"https://example.org/target/kb/forecast/subject-a/month/aaaa.md"},
+		}
+	}
+	for _, c := range []struct {
+		name     string
+		dedupOff bool
+	}{{"shipped", true}, {"without learn_dedup off", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, emb, _ := newMissionDedupRepo(t, missionKBOntology(t, "verdicts", c.dedupOff))
+			// One category for both, the worst case: the dedup search scope is
+			// the category directory, so per-task categories alone would hide
+			// the merge. Same-length text puts them at cosine 1.0.
+			r1, err := LearnHandler(emb)(ctx, learnOne(v("xcheck-a", "corroborate")))
+			require.NoError(t, err)
+			require.False(t, r1.IsError, resultText(t, r1))
+			first := mergedFactPath(t, r1)
+			r2, err := LearnHandler(emb)(ctx, learnOne(v("xcheck-b", "contradict ")))
+			require.NoError(t, err)
+			require.False(t, r2.IsError, resultText(t, r2))
+			if !c.dedupOff {
+				require.Equal(t, first, mergedFactPath(t, r2), "control: the second verdict folds into the first")
+				return
+			}
+			require.NotEqual(t, first, mergedFactPath(t, r2), "two verdicts, two files")
+		})
+	}
+}

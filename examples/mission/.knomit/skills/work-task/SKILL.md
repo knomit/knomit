@@ -45,6 +45,17 @@ turn every run of characters other than `a-z` and `0-9` into one `-`, drop
 `Task_42.b` becomes `task-42-b`. For the copy named in your context, use the
 context's `experiment` as given.
 
+## Shared facts
+
+Facts other agents wrote are shared. Two tasks that update one fact in
+parallel cannot both land: the second experiment commit is refused for
+conflicts, and that task fails.
+- `knomit_update` only a fact your task tells you to update, by its path.
+  Write what you found as NEW facts otherwise.
+- A cross-check writes verdict facts (`topic: verdicts`, the format in its
+  body) and never updates the facts it checks.
+- Only a fold task updates the facts the verdicts point at.
+
 ## Call shapes
 
 Every knomit call below takes exactly these arguments. Copy the skeleton and

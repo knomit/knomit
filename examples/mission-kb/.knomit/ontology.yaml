@@ -96,6 +96,40 @@ topics:
             return seg.length >= 3 && seg[seg.length - 2] === g;
           })()
 
+  # Cross-check verdicts, verdicts/<cross-check task id>/. A cross-check never
+  # updates the facts it checks: it writes one NEW verdict fact per fact
+  # checked (the post-task skill's verdict-format block), and ONE later fold
+  # task, the only writer, folds them into the hypotheses. Parallel
+  # cross-checks therefore never touch one file.
+  #
+  # learn_dedup: off. Verdicts on one target are near-identical by design;
+  # with dedup on they would merge into each other, across tasks and agents.
+  verdicts:
+    description: Cross-check verdicts, verdicts/<cross-check task id>/. One new fact per fact checked; folded by one later task.
+    attributes:
+      learn_dedup: off
+    validations:
+      - name: verdict
+        message: "a verdict body needs a line 'verdict: corroborate' or 'verdict: contradict' (unindented, no bullet)"
+        rule: "/^verdict:[ \\t]*(corroborate|contradict)[ \\t]*$/m.test(fact.body)"
+      - name: target
+        message: "a verdict body needs a line 'target: <the path of the fact checked>'"
+        rule: "/^target:[ \\t]*\\S+\\.md[ \\t]*$/m.test(fact.body)"
+      - name: suggested-confidence
+        message: "a verdict body needs a line 'suggested_confidence: <a number from 0 to 1>'"
+        rule: "/^suggested_confidence:[ \\t]*(0(\\.\\d+)?|1(\\.0+)?|\\.\\d+)[ \\t]*$/m.test(fact.body)"
+      - name: refs-target
+        message: "a verdict's refs must include its target (and the evidence)"
+        rule: |
+          (function () {
+            var m = /^target:[ \t]*(\S+\.md)[ \t]*$/m.exec(fact.body);
+            if (!m) return false;
+            var t = m[1];
+            return fact.refs.some(function (r) {
+              return r === t || r.slice(-(t.length + 1)) === '/' + t;
+            });
+          })()
+
   syntheses:
     description: Syntheses across lanes, written by sessions (knomit_review distills them).
 

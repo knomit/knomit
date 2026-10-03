@@ -87,6 +87,55 @@ The knowledge base's ontology refuses a hypothesis that breaks this
 (`examples/mission-kb/`, README "The knowledge base"), by rule name, so a
 session that gets it wrong is told which line and fixes it.
 
+## Cross-checks and the fold
+
+Hypotheses are SHARED facts: every agent reads them, and only ONE task at a
+time may change them. Two tasks that update the same fact in parallel cannot
+both land: each works in its own experiment, the first commit wins, and the
+second is refused for conflicts (this stopped the first mission). So a round
+of cross-checks is two kinds of task.
+
+### 1. Cross-checks, in parallel
+
+One task per checker, assigned to it (`topic: inbox`,
+`category: <agent id>/working`). A cross-check NEVER updates what it checks:
+it writes one new verdict fact per fact checked, under its own task id. Paste
+this block into its body:
+
+```text verdict-format
+Cross-check: never knomit_update the facts you check. For each fact you
+check, write ONE new fact with knomit_learn: topic: verdicts,
+category: <this task's id>, type: observation, confidence: how sure you
+are of the verdict, refs: the fact you checked AND your evidence. Its body
+starts with these three lines, each on its own line, unindented, exactly as
+shown (no bullet, no bold), then your reasons:
+verdict: <corroborate or contradict>
+target: <the path of the fact you checked>
+suggested_confidence: <the confidence you think it deserves, 0 to 1>
+```
+
+### 2. The fold, after them, alone
+
+ONE task, assigned to ONE agent, posted only after EVERY cross-check of the
+round has acknowledged ("Done:" or "Failed:"). It is the only writer of the
+hypotheses. Paste this block into its body, with the cross-check task ids:
+
+```text fold-task
+Fold the verdicts of the cross-checks <task ids> into what they checked.
+For each id, knomit_query path verdicts/<id>/. Group the verdicts by their
+target line. For each target: knomit_explain it, weigh its verdicts and
+their evidence, and make ONE knomit_update: the new confidence, and refs =
+every ref it has now plus each verdict's path (refs replace the whole
+list), moment_name "fold: <task ids>". Where the verdicts contradict it
+strongly, also write a counter-hypothesis (a new hypothesis with a
+counters: line). Change nothing else. If a cross-check failed, fold the
+verdicts that exist and name the missing checker in your acknowledgement.
+```
+
+knomit does not hold the fold back until the acks are in: the coordinator
+posts it then. Posted early, it folds a partial round, which is safe (nothing
+else writes the hypotheses), only incomplete.
+
 ## Re-offering
 
 knomit never re-offers. A task that expired untaken, or whose ack says

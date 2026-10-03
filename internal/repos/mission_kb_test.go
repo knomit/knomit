@@ -242,6 +242,7 @@ func TestMissionKB_Settings(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, sy.RealtimePush() && sy.RealtimePull())
 	require.True(t, o.LearnDedupOff("forecast"), "forecast must be learn_dedup: off")
+	require.True(t, o.LearnDedupOff("verdicts"), "verdicts must be learn_dedup: off")
 	var trig struct {
 		Topics map[string]struct {
 			Triggers []struct {
@@ -345,4 +346,123 @@ func TestMissionKB_ForecastValidations(t *testing.T) {
 	isErr, text = update(map[string]any{"ops": []any{map[string]any{"op": "str_replace", "old_str": month[2], "new_str": ""}}})
 	require.True(t, isErr)
 	require.Contains(t, text, `"settles-false-if"`)
+}
+
+// verdictLines is the post-task skill's verdict-format block reduced to the
+// three lines a verdict body starts with, filled.
+func verdictLines(t *testing.T, verdict, target, confidence string) []string {
+	t.Helper()
+	block := fencedBlock(t, templateFiles(t)[".knomit/skills/post-task/SKILL.md"], "text", "verdict-format")
+	fill := regexp.MustCompile(`<[^>]*>`)
+	var out []string
+	for _, l := range strings.Split(block, "\n") {
+		switch {
+		case strings.Contains(l, "verdict:"):
+			out = append(out, fill.ReplaceAllString(l, verdict))
+		case strings.Contains(l, "target:"):
+			out = append(out, fill.ReplaceAllString(l, target))
+		case strings.Contains(l, "suggested_confidence:"):
+			out = append(out, fill.ReplaceAllString(l, confidence))
+		}
+	}
+	require.Len(t, out, 3, "the block has the three verdict lines: %q", block)
+	return out
+}
+
+func verdictFact(category string, lines []string, refs ...string) map[string]any {
+	r := make([]any, len(refs))
+	for i, x := range refs {
+		r[i] = x
+	}
+	return map[string]any{
+		"topic": "verdicts", "category": category, "type": "observation",
+		"title": "Verdict on a hypothesis", "confidence": 0.7, "sources": 1,
+		"body":     strings.Join(lines, "\n") + "\n\nReasons: the evidence.",
+		"entities": []any{"subject-a"}, "refs": r,
+	}
+}
+
+// TestMissionKB_VerdictValidations: a cross-check's verdict written from the
+// skill's own verdict-format block is accepted on a real instance, and each
+// broken line is refused by its rule.
+//
+// SABOTAGE: delete the refs-target rule → the verdict whose refs omit its
+// target is accepted → red; bullet the block's lines → red.
+func TestMissionKB_VerdictValidations(t *testing.T) {
+	newMissionClock(t)
+	k := newMissionKB(t)
+	out, isErr, text := k.call(t, "learn", map[string]any{"moment_name": "forecast", "facts": []any{
+		hypothesis("subject-a/month", hypothesisLines(t, "2026-10"), "2026-10-31T23:59:59Z")}})
+	require.False(t, isErr, text)
+	target := out["commits"].([]any)[0].(map[string]any)["file"].(string)
+	evidence := "https://example.org/registry/record-1"
+	learn := func(f map[string]any) (bool, string) {
+		_, isErr, text := k.call(t, "learn", map[string]any{"moment_name": "xcheck-1", "facts": []any{f}})
+		return isErr, text
+	}
+
+	for name, f := range map[string]map[string]any{
+		"corroborate":       verdictFact("xcheck-1", verdictLines(t, "corroborate", target, "0.55"), target, evidence),
+		"contradict":        verdictFact("xcheck-1", verdictLines(t, "contradict", target, "0.3"), target, evidence),
+		"confidence 1":      verdictFact("xcheck-2", verdictLines(t, "corroborate", target, "1"), target),
+		"confidence 0":      verdictFact("xcheck-2", verdictLines(t, "contradict", target, "0"), target),
+		"same target again": verdictFact("xcheck-2", verdictLines(t, "corroborate", target, "0.55"), target, evidence),
+	} {
+		isErr, text := learn(f)
+		require.False(t, isErr, "%s: the skill's own verdict format must be accepted: %s", name, text)
+	}
+
+	good := verdictLines(t, "corroborate", target, "0.55")
+	for _, c := range []struct {
+		name, rule string
+		f          map[string]any
+	}{
+		{"no verdict line", "verdict", verdictFact("xcheck-1", without(good, "verdict:"), target)},
+		{"a verdict that is neither", "verdict", verdictFact("xcheck-1", verdictLines(t, "maybe", target, "0.5"), target)},
+		{"bulleted verdict line", "verdict", verdictFact("xcheck-1", append([]string{"- " + good[0]}, good[1:]...), target)},
+		{"no target line", "target", verdictFact("xcheck-1", without(good, "target:"), target)},
+		{"no suggested confidence", "suggested-confidence", verdictFact("xcheck-1", without(good, "suggested_confidence:"), target)},
+		{"confidence above 1", "suggested-confidence", verdictFact("xcheck-1", verdictLines(t, "corroborate", target, "1.4"), target)},
+		{"refs without the target", "refs-target", verdictFact("xcheck-1", good, evidence)},
+	} {
+		isErr, text := learn(c.f)
+		require.True(t, isErr, "%s must be refused", c.name)
+		require.Contains(t, text, `"`+c.rule+`"`, "%s is refused by rule %s", c.name, c.rule)
+	}
+}
+
+// TestMissionTemplate_CrossCheckNeverUpdates: the skills never have a
+// cross-check update what it checks, and the fold is one task, posted after
+// the round's acks, the only writer.
+//
+// SABOTAGE: tell the cross-check to knomit_update its target with a higher
+// confidence → red; drop "posted only after EVERY cross-check" → red.
+func TestMissionTemplate_CrossCheckNeverUpdates(t *testing.T) {
+	files := templateFiles(t)
+	post := files[".knomit/skills/post-task/SKILL.md"]
+	xcheck := fencedBlock(t, post, "text", "verdict-format")
+	for _, l := range strings.Split(normalized(xcheck), ". ") {
+		if strings.Contains(l, "knomit_update") {
+			require.Contains(t, l, "never knomit_update", "a cross-check may only be told NOT to update: %q", l)
+		}
+	}
+	require.Contains(t, normalized(xcheck), "topic: verdicts, category: <this task's id>")
+	fold := fencedBlock(t, post, "text", "fold-task")
+	require.Contains(t, normalized(fold), "make ONE knomit_update")
+	require.Contains(t, normalized(fold), "refs replace the whole list")
+	for _, anchor := range []string{
+		"posted only after EVERY cross-check of the round has acknowledged",
+		"It is the only writer of the hypotheses.",
+		"knomit does not hold the fold back until the acks are in",
+	} {
+		require.Contains(t, normalized(post), anchor)
+	}
+	work := files[".knomit/skills/work-task/SKILL.md"]
+	for _, anchor := range []string{
+		"`knomit_update` only a fact your task tells you to update, by its path.",
+		"never updates the facts it checks.",
+		"Only a fold task updates the facts the verdicts point at.",
+	} {
+		require.Contains(t, normalized(work), anchor)
+	}
 }

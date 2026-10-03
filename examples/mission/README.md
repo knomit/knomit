@@ -20,7 +20,7 @@ files on two instances, so they do not rot.
 | `.knomit/skills/post-task/SKILL.md` | How a session posts a task. |
 | `.knomit/skills/work-task/SKILL.md` | How a session drains its queue: take each copy, work it in a knowledge-base experiment, acknowledge it. |
 | `.knomit/recipes/work-task.js` | The sample recipe the `wake` and `lease` triggers run: one headless Claude Code session that drains the queue. |
-| `../mission-kb/.knomit/ontology.yaml` | The companion KNOWLEDGE BASE's ontology: lanes, `forecast` (the hypothesis format, enforced), syntheses, meta. See "The knowledge base". |
+| `../mission-kb/.knomit/ontology.yaml` | The companion KNOWLEDGE BASE's ontology: lanes, `forecast` (the hypothesis format, enforced), `verdicts`, syntheses, meta. See "The knowledge base". |
 
 ## Copy it
 
@@ -490,6 +490,7 @@ its topics are:
 |---|---|---|
 | `findings` (rename; one per lane) | the evidence a lane gathers | |
 | `forecast` | hypotheses only, `forecast/<subject>/<granularity>/` | `learn_dedup: off`; validations below |
+| `verdicts` | cross-check verdicts, `verdicts/<cross-check task id>/` | `learn_dedup: off`; validations below |
 | `syntheses` | syntheses across lanes | |
 | `meta` | definitions, conventions, reasoning (`knomit_hypothesize` writes its methodology to `meta/reasoning`) | |
 
@@ -520,6 +521,45 @@ first mission's F-R2), not something this template settles.
 
 Nothing on this knowledge base acts on `expires`: there is no `on: due`
 trigger. A hypothesis's `expires` is its settlement date, not its end.
+
+### Cross-checks write verdicts; one fold writes the hypotheses
+
+A hypothesis is a SHARED fact: every agent reads it. Two tasks that
+`knomit_update` one fact in parallel cannot both land. Each works in its own
+experiment; the first commit wins, realtime sync carries its edit into the
+other agents' branches within seconds, and every later experiment commit is
+refused for conflicts. In the first mission, three parallel cross-checks
+updated the same nine hypotheses: one landed and two failed, which stopped
+the run. So the template never has two tasks update one fact:
+
+- **A cross-check never updates what it checks.** For each fact it checks it
+  writes one NEW fact under `verdicts/<its task id>/` (the `post-task`
+  skill's `verdict-format` block goes in its body). The body starts with
+  `verdict: corroborate|contradict`, `target: <path>` and
+  `suggested_confidence: <0..1>`, and its refs include the target and the
+  evidence. Cross-checks run in parallel; they never touch one file.
+- **One fold task folds them.** It is assigned to one agent and posted after
+  every cross-check of the round has acknowledged (the `fold-task` block).
+  It reads `verdicts/<id>/` for each cross-check and makes one `knomit_update`
+  per target: the confidence, and refs = the current refs plus the verdicts.
+  It is the only writer of the hypotheses. If a cross-check failed, it folds
+  what exists and names the missing checker in its ack.
+- "Posted after every ack" is the coordinator's discipline: knomit does not
+  enforce it. A fold posted early folds a partial round, which is safe
+  (nothing else writes the hypotheses), only incomplete.
+
+`verdicts` is `learn_dedup: off`: verdicts on one target look alike by design,
+and with dedup on the second would merge into the first. Its validations:
+
+| Rule | Refuses |
+|---|---|
+| `verdict` | no unindented `verdict: corroborate` or `verdict: contradict` line |
+| `target` | no `target: <path>.md` line |
+| `suggested-confidence` | no `suggested_confidence:` line with a number from 0 to 1 |
+| `refs-target` | refs that do not include the target |
+
+The work-task skill says the same from the session's side ("Shared facts"): a
+session updates only a fact its task tells it to update, by path.
 
 ## Skills
 
