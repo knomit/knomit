@@ -517,7 +517,11 @@ a counter is swallowed. With it off, every hypothesis lands at its own path.
 `knomit_review` still reads them: `learn_dedup` governs `knomit_learn` only.
 The lane topics keep dedup on; whether a counter written there with
 `distinct_from` can still be merged away is an open question for knomit (the
-first mission's F-R2), not something this template settles.
+first mission's F-R2), not something this template settles. For the same
+reason, two lane tasks running in parallel can still both be merged into ONE
+existing finding and conflict at their experiment commits; no instruction
+causes it, and the fix belongs to knomit (an experiment commit that honours
+the repo's `conflicts` setting), not to this template.
 
 Nothing on this knowledge base acts on `expires`: there is no `on: due`
 trigger. A hypothesis's `expires` is its settlement date, not its end.

@@ -167,6 +167,19 @@ func hypothesis(category string, lines []string, expires string) map[string]any 
 	return f
 }
 
+// emptied keeps the line that starts with key but replaces its value with
+// rest (empty, or whitespace only).
+func emptied(lines []string, key, rest string) []string {
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if strings.HasPrefix(l, key) {
+			l = key + rest
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
 func without(lines []string, token string) []string {
 	var out []string
 	for _, l := range lines {
@@ -270,7 +283,8 @@ func TestMissionKB_Settings(t *testing.T) {
 // the rule that names the broken line.
 //
 // SABOTAGE: delete the settles-false-if rule → the case without that line is
-// accepted → red; compare expires by date only → the one-second-early cases
+// accepted → red; loosen it to the key alone (/^settles_false_if:/m) → the
+// empty and blank settles_false_if cases are accepted → red; compare expires by date only → the one-second-early cases
 // are accepted → red; bullet the format lines in the skill → the accepted
 // cases are refused → red; delete hypothesis-only → the insight is accepted
 // → red.
@@ -314,6 +328,12 @@ func TestMissionKB_ForecastValidations(t *testing.T) {
 		{"no such month", "predicted", hypothesis("subject-a/month", hypothesisLines(t, "2026-13"), "2027-01-31T23:59:59Z")},
 		{"no settles_true_if", "settles-true-if", hypothesis("subject-a/month", without(month, "settles_true_if:"), "2026-10-31T23:59:59Z")},
 		{"no settles_false_if", "settles-false-if", hypothesis("subject-a/month", without(month, "settles_false_if:"), "2026-10-31T23:59:59Z")},
+		// A settlement line that names nothing is no settlement line: the key
+		// alone must not pass.
+		{"empty settles_true_if", "settles-true-if", hypothesis("subject-a/month", emptied(month, "settles_true_if:", ""), "2026-10-31T23:59:59Z")},
+		{"blank settles_true_if", "settles-true-if", hypothesis("subject-a/month", emptied(month, "settles_true_if:", "   \t"), "2026-10-31T23:59:59Z")},
+		{"empty settles_false_if", "settles-false-if", hypothesis("subject-a/month", emptied(month, "settles_false_if:", ""), "2026-10-31T23:59:59Z")},
+		{"blank settles_false_if", "settles-false-if", hypothesis("subject-a/month", emptied(month, "settles_false_if:", "   \t"), "2026-10-31T23:59:59Z")},
 		{"no expires", "expires-ends-period", hypothesis("subject-a/month", month, "")},
 		{"year, a second early", "expires-ends-period", hypothesis("subject-a/year", year, "2026-12-31T23:59:58Z")},
 		{"month, a second early", "expires-ends-period", hypothesis("subject-a/month", month, "2026-10-31T23:59:58Z")},
@@ -438,7 +458,9 @@ func TestMissionKB_VerdictValidations(t *testing.T) {
 // SABOTAGE: tell the cross-check to knomit_update its target with a higher
 // confidence → red; drop "posted only after EVERY cross-check" → red; replace
 // the check: lines with "do not check your own" → red (F-R4); read a
-// checker's author off a commit that may be a merge (no --no-merges) → red.
+// checker's author off a commit that may be a merge (no --no-merges) → red;
+// a fold-task block that writes counters without carrying the hypothesis
+// format → red.
 func TestMissionTemplate_CrossCheckNeverUpdates(t *testing.T) {
 	files := templateFiles(t)
 	post := files[".knomit/skills/post-task/SKILL.md"]
@@ -452,6 +474,10 @@ func TestMissionTemplate_CrossCheckNeverUpdates(t *testing.T) {
 	fold := fencedBlock(t, post, "text", "fold-task")
 	require.Contains(t, normalized(fold), "make ONE knomit_update")
 	require.Contains(t, normalized(fold), "refs replace the whole list")
+	// The fold may write counter-hypotheses, so it carries the format too
+	// (item 1: every task that writes hypotheses carries it in its body).
+	require.Contains(t, normalized(fold), "in the hypothesis format pasted below in this task")
+	require.Contains(t, normalized(post), "and AFTER it the `hypothesis-format` block above")
 	for _, anchor := range []string{
 		"posted only after EVERY cross-check of the round has acknowledged",
 		"It is the only writer of the hypotheses.",

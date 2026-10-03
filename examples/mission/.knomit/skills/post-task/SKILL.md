@@ -142,7 +142,9 @@ repo's directory under the hosting instance's knomit home):
 
 ONE task, assigned to ONE agent, posted only after EVERY cross-check of the
 round has acknowledged ("Done:" or "Failed:"). It is the only writer of the
-hypotheses. Paste this block into its body, with the cross-check task ids:
+hypotheses. Paste this block into its body, with the cross-check task ids,
+and AFTER it the `hypothesis-format` block above: the fold may write
+counter-hypotheses, and a task that writes hypotheses carries the format.
 
 ```text fold-task
 Fold the verdicts of the cross-checks <task ids> into what they checked.
@@ -152,7 +154,8 @@ their evidence, and make ONE knomit_update: the new confidence, and refs =
 every ref it has now plus each verdict's path (refs replace the whole
 list), moment_name "fold: <task ids>". Where the verdicts contradict it
 strongly, also write a counter-hypothesis (a new hypothesis with a
-counters: line). Change nothing else. If a cross-check failed, fold the
+counters: line), in the hypothesis format pasted below in this task.
+Change nothing else. If a cross-check failed, fold the
 verdicts that exist and name the missing checker in your acknowledgement.
 ```
 

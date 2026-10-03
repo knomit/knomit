@@ -112,11 +112,11 @@ The experiment (steps 3, 5, 6, 7):
 ```
 
 ```json knomit_experiment
-{"binding": "<kb>", "action": "commit", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "action": "commit", "name": "<experiment name>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ```json knomit_experiment
-{"binding": "<kb>", "action": "rollback", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "action": "rollback", "name": "<experiment name>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 The work (step 4): new facts, an update the task asks for, a retraction.
