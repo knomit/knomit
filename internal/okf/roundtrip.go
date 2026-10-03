@@ -34,6 +34,10 @@ func ParseConcept(content []byte) (fact.Fact, error) {
 		KnomitDomain  []string `yaml:"knomit_domain"`
 		KnomitEnts    []string `yaml:"knomit_entities"`
 		KnomitRefs    []string `yaml:"knomit_refs"`
+		// KnomitContext is kept as a NODE and handed back unchanged, so
+		// ParseFact reads it by tag exactly as it reads a fact file (an
+		// unquoted date stays a string).
+		KnomitContext yaml.Node `yaml:"knomit_context"`
 	}
 	if err := yaml.Unmarshal(fm, &m); err != nil {
 		return fact.Fact{}, fmt.Errorf("okf: parse concept frontmatter: %w", err)
@@ -42,15 +46,16 @@ func ParseConcept(content []byte) (fact.Fact, error) {
 	// Reconstruct the knomit on-disk frontmatter (exact keys/types ParseFact
 	// reads) and re-marshal, so the round-trip goes through the canonical parser.
 	var knomitFM struct {
-		Kind           string   `yaml:"kind"`
-		Type           string   `yaml:"type"`
-		Domain         []string `yaml:"domain,omitempty"`
-		Confidence     float64  `yaml:"confidence"`
-		Sources        int      `yaml:"sources"`
-		Entities       []string `yaml:"entities,omitempty"`
-		Refs           []string `yaml:"refs,omitempty"`
-		EvidenceWeight float64  `yaml:"evidence_weight,omitempty"`
-		Origin         string   `yaml:"origin,omitempty"`
+		Kind           string     `yaml:"kind"`
+		Type           string     `yaml:"type"`
+		Domain         []string   `yaml:"domain,omitempty"`
+		Confidence     float64    `yaml:"confidence"`
+		Sources        int        `yaml:"sources"`
+		Entities       []string   `yaml:"entities,omitempty"`
+		Refs           []string   `yaml:"refs,omitempty"`
+		EvidenceWeight float64    `yaml:"evidence_weight,omitempty"`
+		Origin         string     `yaml:"origin,omitempty"`
+		Context        *yaml.Node `yaml:"context,omitempty"`
 	}
 	knomitFM.Kind = m.KnomitKind
 	knomitFM.Type = m.KnomitType
@@ -61,6 +66,9 @@ func ParseConcept(content []byte) (fact.Fact, error) {
 	knomitFM.Refs = m.KnomitRefs
 	knomitFM.EvidenceWeight = m.KnomitEvidWt
 	knomitFM.Origin = m.KnomitOrigin
+	if m.KnomitContext.Kind != 0 {
+		knomitFM.Context = &m.KnomitContext
+	}
 
 	yb, err := yaml.Marshal(knomitFM)
 	if err != nil {
