@@ -34,6 +34,10 @@ type Fact struct {
 	// Expires is an optional RFC 3339 timestamp; see expires.go. Knomit never
 	// acts on it — it is searchable, and results say whether it has passed.
 	Expires string `json:"expires,omitempty"`
+	// Context (F22) is an optional map of short typed labels — string,
+	// float64 or bool values only — declared per topic in the ontology. See
+	// context.go. nil and empty are one thing.
+	Context map[string]any `json:"context,omitempty"`
 
 	// RefWarnings describes refs whose SHAPE is malformed, as ParseFact found
 	// them. Derived on read, never stored: it is absent from the frontmatter
@@ -55,6 +59,13 @@ type Fact struct {
 	// is not RFC 3339 — derived on read, never stored, on the same terms as
 	// RefWarnings and MotifWarnings. SerializeFact refuses such a value.
 	ExpiresWarnings []string `json:"expires_warnings,omitempty"`
+
+	// ContextWarnings describes a `context` map ParseFact DROPPED because it is
+	// malformed (not a map, a list or object value, a newline, too many keys,
+	// a duplicate key, …) — derived on read, never stored, on the same terms
+	// as ExpiresWarnings. The whole map is dropped, never half of it.
+	// SerializeFact refuses such a map.
+	ContextWarnings []string `json:"context_warnings,omitempty"`
 }
 
 // NewFact is the sole constructor. path is always lowercased.
@@ -68,20 +79,21 @@ func (f Fact) Path() string { return f.path }
 // no change in shape for epistemic facts.
 func (f Fact) MarshalJSON() ([]byte, error) {
 	type plain struct {
-		Path           string   `json:"path"`
-		Title          string   `json:"title"`
-		Body           string   `json:"body"`
-		Kind           Kind     `json:"kind,omitempty"`
-		Type           Type     `json:"type"`
-		Domain         []string `json:"domain"`
-		Confidence     float64  `json:"confidence"`
-		Sources        int      `json:"sources"`
-		Entities       []string `json:"entities"`
-		Motifs         []string `json:"motifs,omitempty"`
-		Refs           []string `json:"refs"`
-		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
-		Origin         Origin   `json:"origin,omitempty"`
-		Expires        string   `json:"expires,omitempty"`
+		Path           string         `json:"path"`
+		Title          string         `json:"title"`
+		Body           string         `json:"body"`
+		Kind           Kind           `json:"kind,omitempty"`
+		Type           Type           `json:"type"`
+		Domain         []string       `json:"domain"`
+		Confidence     float64        `json:"confidence"`
+		Sources        int            `json:"sources"`
+		Entities       []string       `json:"entities"`
+		Motifs         []string       `json:"motifs,omitempty"`
+		Refs           []string       `json:"refs"`
+		EvidenceWeight float64        `json:"evidence_weight,omitempty"`
+		Origin         Origin         `json:"origin,omitempty"`
+		Expires        string         `json:"expires,omitempty"`
+		Context        map[string]any `json:"context,omitempty"`
 	}
 	kind := f.Kind
 	if kind == DefaultKind {
@@ -106,6 +118,7 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 		EvidenceWeight: f.EvidenceWeight,
 		Origin:         origin,
 		Expires:        f.Expires,
+		Context:        f.Context,
 	})
 }
 
@@ -113,20 +126,21 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 // Missing "kind" defaults to epistemic.
 func (f *Fact) UnmarshalJSON(data []byte) error {
 	type plain struct {
-		Path           string   `json:"path"`
-		Title          string   `json:"title"`
-		Body           string   `json:"body"`
-		Kind           Kind     `json:"kind,omitempty"`
-		Type           Type     `json:"type"`
-		Domain         []string `json:"domain"`
-		Confidence     float64  `json:"confidence"`
-		Sources        int      `json:"sources"`
-		Entities       []string `json:"entities"`
-		Motifs         []string `json:"motifs,omitempty"`
-		Refs           []string `json:"refs"`
-		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
-		Origin         Origin   `json:"origin,omitempty"`
-		Expires        string   `json:"expires,omitempty"`
+		Path           string         `json:"path"`
+		Title          string         `json:"title"`
+		Body           string         `json:"body"`
+		Kind           Kind           `json:"kind,omitempty"`
+		Type           Type           `json:"type"`
+		Domain         []string       `json:"domain"`
+		Confidence     float64        `json:"confidence"`
+		Sources        int            `json:"sources"`
+		Entities       []string       `json:"entities"`
+		Motifs         []string       `json:"motifs,omitempty"`
+		Refs           []string       `json:"refs"`
+		EvidenceWeight float64        `json:"evidence_weight,omitempty"`
+		Origin         Origin         `json:"origin,omitempty"`
+		Expires        string         `json:"expires,omitempty"`
+		Context        map[string]any `json:"context,omitempty"`
 	}
 	var p plain
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -152,6 +166,7 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 		f.Origin = DefaultOrigin
 	}
 	f.Expires = p.Expires
+	f.Context = NormalizeContextValues(p.Context)
 	return nil
 }
 
@@ -168,6 +183,9 @@ type frontmatter struct {
 	EvidenceWeight float64  `yaml:"evidence_weight,omitempty"`
 	Origin         string   `yaml:"origin"`
 	Expires        string   `yaml:"expires,omitempty"`
+	// Context is read as a node, by tag: decoding it into Go types would turn
+	// an unquoted 2026-10-01 into a time.Time (see decodeContext).
+	Context yaml.Node `yaml:"context,omitempty"`
 }
 
 // ExtractBody strips the YAML frontmatter and the leading "# Title" heading
@@ -333,6 +351,12 @@ func ParseFact(path, content string) (Fact, error) {
 	} else {
 		f.Expires = fm.Expires
 	}
+	// Lenient on read, like expires: a malformed map is dropped whole and
+	// reported, and the fact still loads. The ontology is NOT consulted here —
+	// a well-shaped map with a key the ontology does not (or no longer)
+	// declares is kept, because a version legal when committed must stay
+	// readable; the typed gate runs on the next write.
+	f.Context, f.ContextWarnings = decodeContext(&fm.Context)
 	return f, nil
 }
 
@@ -400,6 +424,13 @@ func SerializeFact(f Fact) (string, error) {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
 	f.Expires = norm
+	// The context shape gate (F22). Every write path reaches it, so a newline
+	// or a list value cannot reach a file whatever wrote it. The ontology's
+	// types are checked earlier, by ValidateFact, where the ontology is known.
+	f.Context = NormalizeContextValues(f.Context)
+	if err := ValidateContextShape(f.Context); err != nil {
+		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+	}
 	// Order is load-bearing: VALIDATE first, then strip. A malformed motif is
 	// a misunderstanding of the field and the caller is told; a subject motif
 	// is an ordinary miss and is dropped in silence. Stripping first would let
@@ -498,6 +529,11 @@ func SerializeFact(f Fact) (string, error) {
 	// resolve the value as a timestamp.
 	if f.Expires != "" {
 		add("expires", strScalar(f.Expires))
+	}
+	// Emitted only when non-empty, after expires, so every fact without
+	// context stays byte-identical. One flow map, sorted keys.
+	if len(f.Context) > 0 {
+		add("context", contextNode(f.Context))
 	}
 
 	var buf bytes.Buffer

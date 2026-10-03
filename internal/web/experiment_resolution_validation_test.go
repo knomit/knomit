@@ -140,6 +140,25 @@ var badResolutionBodies = []struct {
 			"']\n---\n# demo fact\n\nbody\n",
 		want: "full form",
 	},
+	{
+		name: "a malformed context map is refused, not silently dropped",
+		// F22. ParseFact drops it (lenient read), so serializing the parsed
+		// fact would land the body WITHOUT the map the resolver wrote.
+		body: "---\ntype: observation\ncontext: {task: \"a\\nb\"}\n---\n# demo fact\n\nbody\n",
+		want: "context dropped",
+	},
+	{
+		name: "a context value with a bidi override is refused, not silently dropped",
+		body: "---\ntype: observation\ncontext: {task: \"t-1\\u202E\"}\n---\n# demo fact\n\nbody\n",
+		want: "bidirectional formatting characters",
+	},
+	{
+		name: "an undeclared context key is refused by the typed gate",
+		// Well-shaped, so ParseFact keeps it; no topic of this ontology
+		// declares any context key.
+		body: "---\ntype: observation\ncontext: {task: t-1}\n---\n# demo fact\n\nbody\n",
+		want: "not declared",
+	},
 }
 
 const (

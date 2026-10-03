@@ -49,7 +49,7 @@ func mergeTwoInto(t *testing.T, env *restatementEnv, a, b string) (*ReviewStats,
 	d := env.deps()
 	stats, err := ApplyPruneDecisions(context.Background(), env.svc.Facts(), env.svc.Search(),
 		nil, []MergeEntry{{Paths: []string{a, b}, Merged: mf}},
-		reviewTool, d.OnProgress, env.branch, "", "kb")
+		reviewTool, d.OnProgress, env.branch, "", "kb", nil)
 	require.NoError(t, err)
 	return stats, mergedFactPath(t, env.svc, env.branch, mergedTitle)
 }

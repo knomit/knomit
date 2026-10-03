@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"knomit/internal/fact"
@@ -306,6 +307,14 @@ func dedupCluster(
 		fullWinner, err := fact.ParseFact(winnerFact.File, winnerResult.Content)
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse winner %s: %v", winnerFact.File, err)})
+			continue
+		}
+		// F22: the winner is rewritten below; a context map ParseFact had to
+		// drop (malformed, arrived via git) would be deleted. Skip the pair.
+		if len(fullWinner.ContextWarnings) > 0 {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"dedup %s skipped: its context is malformed and a rewrite would drop it (%s)",
+				winnerFact.File, strings.Join(fullWinner.ContextWarnings, "; "))})
 			continue
 		}
 

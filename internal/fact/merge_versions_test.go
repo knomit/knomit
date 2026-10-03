@@ -20,6 +20,7 @@ type mv struct {
 	motifs      []string
 	refs        []string
 	expires     string
+	context     map[string]any
 }
 
 func (v mv) bytes(t testing.TB) []byte {
@@ -43,6 +44,7 @@ func (v mv) bytes(t testing.TB) []byte {
 		f.Refs = []string{}
 	}
 	f.Expires = v.expires
+	f.Context = v.context
 	s, err := SerializeFact(f)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)

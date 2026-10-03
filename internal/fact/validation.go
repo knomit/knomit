@@ -71,7 +71,20 @@ func factToJS(f Fact) map[string]any {
 		"origin":          string(resolvedOrigin(f)),
 		"evidence_weight": f.EvidenceWeight,
 		"expires":         f.Expires,
+		// F22: a copy, so a rule cannot mutate the fact; {} when absent, so
+		// `fact.context.task === 't-17'` never throws on a fact without one.
+		"context": contextForJS(f.Context),
 	}
+}
+
+// contextForJS is the context map a rule or trigger condition sees. Values are
+// bound by vm.ToValue as plain data; nothing evaluates them.
+func contextForJS(ctx map[string]any) map[string]any {
+	out := make(map[string]any, len(ctx))
+	for k, v := range ctx {
+		out[k] = v
+	}
+	return out
 }
 
 // resolvedMotifs is the motif list a rule sees: the value that will actually
@@ -157,7 +170,15 @@ func (e *ValidationError) Error() string {
 // ValidateFact walks the ontology from root → leaf for the given topic path
 // and evaluates every Validation rule encountered. Returns the first failing
 // rule as a *ValidationError. Compilation errors return a plain error.
+//
+// The context typed gate (F22, ValidateContext) runs FIRST, so a rule reading
+// fact.context sees a map that already satisfies its declarations. With a nil
+// ontology no rule runs, but a non-empty context is still refused: nothing
+// declares a key, so every key is undeclared.
 func ValidateFact(o *Ontology, topicPath string, f Fact) error {
+	if err := ValidateContext(o, topicPath, f.Context); err != nil {
+		return err
+	}
 	if o == nil {
 		return nil
 	}

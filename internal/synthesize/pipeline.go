@@ -971,6 +971,9 @@ func factFromSearchResult(sr store.SearchResult) fact.Fact {
 	// Expires (F03): authored data, so the full-scan seed must carry the same
 	// value the incremental ParseFact path does (TestSeedScanPaths_ProduceTheSameFact).
 	f.Expires = sr.Expires
+	// Context (F22), for the same parity: the result carries the map read
+	// from the blob, exactly what ParseFact gives the incremental path.
+	f.Context = sr.Context
 	f.Origin = fact.Origin(sr.Origin)
 	return f
 }

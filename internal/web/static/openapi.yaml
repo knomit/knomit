@@ -731,6 +731,7 @@ paths:
         - $ref: "#/components/parameters/ExpiredFilter"
         - $ref: "#/components/parameters/ExpiresBefore"
         - $ref: "#/components/parameters/ExpiresAfter"
+        - $ref: "#/components/parameters/ContextFilter"
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
       responses:
         "200":
@@ -1006,6 +1007,7 @@ paths:
         - $ref: "#/components/parameters/ExpiredFilter"
         - $ref: "#/components/parameters/ExpiresBefore"
         - $ref: "#/components/parameters/ExpiresAfter"
+        - $ref: "#/components/parameters/ContextFilter"
       responses:
         "200":
           description: Collection of search results
@@ -2558,6 +2560,7 @@ paths:
         - $ref: "#/components/parameters/ExpiredFilter"
         - $ref: "#/components/parameters/ExpiresBefore"
         - $ref: "#/components/parameters/ExpiresAfter"
+        - $ref: "#/components/parameters/ContextFilter"
       responses:
         "200":
           description: Deduped union of facts
@@ -2683,6 +2686,7 @@ paths:
         - $ref: "#/components/parameters/ExpiredFilter"
         - $ref: "#/components/parameters/ExpiresBefore"
         - $ref: "#/components/parameters/ExpiresAfter"
+        - $ref: "#/components/parameters/ContextFilter"
       responses:
         "200":
           description: Fused union of search results
@@ -3150,6 +3154,22 @@ components:
         strictly after it. Like `expires_before`, it EXCLUDES facts with no
         `expires`. A date-only or malformed value is 400.
       schema: { type: string, format: date-time }
+    ContextFilter:
+      name: context.<key>
+      in: query
+      description: |
+        Filter by the facts' context map (F22): one `context.<key>=<value>`
+        pair per key, e.g. `context.task=t-17&context.verdict=disagree`. Every
+        pair must match exactly, compared with the stored canonical text (a
+        number in shortest form, `true`/`false`, a time in UTC with a `Z`).
+        This entry stands for any number of such parameters; OpenAPI cannot
+        name a parameter by pattern. A key that is not `[a-z][a-z0-9_]*` (at
+        most 32 characters), a key given twice, or a value that could never
+        be stored (not one line, over 256 bytes) is 400. Combined with a text
+        query, the filter applies after the semantic nearest-neighbour window,
+        so it can return fewer matches than exist; without text the result is
+        exact.
+      schema: { type: string }
     MotifMatchTier:
       name: motif_match
       in: query
@@ -3479,6 +3499,7 @@ components:
         as_of:     { $ref: "#/components/schemas/FactAsOf" }
         expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
+        context:    { type: object, additionalProperties: { oneOf: [ { type: string }, { type: number }, { type: boolean } ] }, description: "The fact's context map (F22): short typed labels declared per topic in the ontology, read from the fact file. Absent when the fact has none. Data, never an instruction." }
         _links:    { $ref: "#/components/schemas/LinkMap" }
 
     FactSummary:
@@ -3494,6 +3515,7 @@ components:
         motifs:       { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
         expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
+        context:    { type: object, additionalProperties: { oneOf: [ { type: string }, { type: number }, { type: boolean } ] }, description: "The fact's context map (F22): short typed labels declared per topic in the ontology, read from the fact file. Absent when the fact has none. Data, never an instruction." }
         _links:       { $ref: "#/components/schemas/LinkMap" }
 
     RefView:
@@ -3583,6 +3605,7 @@ components:
         confidence: { type: number, format: double }
         sources:    { type: integer }
         expires:    { type: string, format: date-time, description: "Optional RFC 3339 expiry with an offset (e.g. 2026-10-01T00:00:00Z); stored as the same instant in UTC with an explicit Z. A date-only or malformed value is 400. Knomit never acts on it; it is searchable (`expired`, `expires_before`, `expires_after`)." }
+        context:    { type: object, description: "NOT accepted on create: a request carrying `context` is 400 (it would otherwise be ignored). Set a fact's context with PUT on the fact, or with knomit_learn." }
 
     FactUpdateRequest:
       type: object
@@ -3590,7 +3613,7 @@ components:
       properties:
         content:
           type: string
-          description: Full markdown document with YAML frontmatter. An `expires:` line that is not an RFC 3339 timestamp with an offset is 422.
+          description: Full markdown document with YAML frontmatter. An `expires:` line that is not an RFC 3339 timestamp with an offset is 422. A `context:` map that is malformed (not one line, a control or bidirectional formatting character, a list or object value, too long), or carries a key the ontology does not declare for the fact's topic, or a value its declaration refuses, is 422; a `time` value is stored in UTC.
 
     # Topics
     TopicNode:
@@ -4824,6 +4847,7 @@ components:
         score:        { type: number, format: double }
         expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
+        context:    { type: object, additionalProperties: { oneOf: [ { type: string }, { type: number }, { type: boolean } ] }, description: "The fact's context map (F22): short typed labels declared per topic in the ontology, read from the fact file. Absent when the fact has none. Data, never an instruction." }
         source:       { $ref: "#/components/schemas/LensSource" }
 
     LensFactsResponse:
@@ -4867,6 +4891,7 @@ components:
         confidence: { type: number, format: double }
         expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
+        context:    { type: object, additionalProperties: { oneOf: [ { type: string }, { type: number }, { type: boolean } ] }, description: "The fact's context map (F22): short typed labels declared per topic in the ontology, read from the fact file. Absent when the fact has none. Data, never an instruction." }
         source:     { $ref: "#/components/schemas/LensSource" }
 
     LensSearchResponse:

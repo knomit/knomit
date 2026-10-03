@@ -907,6 +907,7 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSe
 				Confidence: f.Confidence,
 				Sources:    f.Sources,
 				Origin:     f.Origin,
+				Context:    f.Context,
 			})
 		}
 		if len(facts) != 2 {

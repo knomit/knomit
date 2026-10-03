@@ -46,18 +46,19 @@ func (defaultFactsCollectionProvider) RecentFacts(
 
 // recentFactItem is one item in the facts collection response.
 type recentFactItem struct {
-	Path        string      `json:"path"`
-	Title       string      `json:"title"`
-	Kind        string      `json:"kind,omitempty"` // omitted when epistemic (the default)
-	Type        string      `json:"type,omitempty"`
-	Domain      []string    `json:"domain,omitempty"`
-	Entities    []string    `json:"entities,omitempty"`
-	Motifs      []string    `json:"motifs,omitempty"`
-	CommittedAt int64       `json:"committed_at,omitempty"`
-	Operation   string      `json:"operation,omitempty"`
-	Expires     string      `json:"expires,omitempty"`
-	Expired     bool        `json:"expired,omitempty"`
-	Links       hal.LinkMap `json:"_links"`
+	Path        string         `json:"path"`
+	Title       string         `json:"title"`
+	Kind        string         `json:"kind,omitempty"` // omitted when epistemic (the default)
+	Type        string         `json:"type,omitempty"`
+	Domain      []string       `json:"domain,omitempty"`
+	Entities    []string       `json:"entities,omitempty"`
+	Motifs      []string       `json:"motifs,omitempty"`
+	CommittedAt int64          `json:"committed_at,omitempty"`
+	Operation   string         `json:"operation,omitempty"`
+	Expires     string         `json:"expires,omitempty"`
+	Expired     bool           `json:"expired,omitempty"`
+	Context     map[string]any `json:"context,omitempty"`
+	Links       hal.LinkMap    `json:"_links"`
 }
 
 // handleHALFactsCollection serves GET /repos/{repo}/branches/{branch}/facts
@@ -129,6 +130,9 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 		}
 		now := timeNow()
 		if !applyExpiryParams(w, r, &opts, now) {
+			return
+		}
+		if !applyContextParams(w, r, &opts) {
 			return
 		}
 
@@ -209,6 +213,7 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 				CommittedAt: e.CommittedAt,
 				Operation:   e.Operation,
 				Expires:     e.Expires,
+				Context:     e.Context,
 				Expired:     expiredAt(e.Expires, now),
 				Links:       hal.LinkMap{"self": {Href: b.Fact(repoName, a, e.Path)}},
 			})

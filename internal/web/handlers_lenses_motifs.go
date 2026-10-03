@@ -349,6 +349,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 				Type:        e.Type,
 				CommittedAt: e.CommittedAt,
 				Expires:     e.Expires,
+				Context:     e.Context,
 				Expired:     expiredAt(e.Expires, timeNow()),
 				// PathEscape, unlike the repo builder's raw append: a qualified
 				// path is kb://<id12>/… and its "//" would otherwise be a path

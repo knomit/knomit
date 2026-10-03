@@ -96,6 +96,37 @@ func TestOpenAPI_ExpiryFiltersAndFieldsDeclared(t *testing.T) {
 	require.Contains(t, schemas["FactCreateRequest"].(map[string]any)["properties"], "expires")
 }
 
+// TestOpenAPI_ContextFilterAndFieldDeclared (F22): every surface that takes
+// the context filter declares it, and the row/fact schemas declare the field.
+func TestOpenAPI_ContextFilterAndFieldDeclared(t *testing.T) {
+	doc := servedOpenAPI(t)
+	comps := doc["components"].(map[string]any)
+	params := comps["parameters"].(map[string]any)
+	require.Contains(t, params, "ContextFilter")
+	require.Contains(t, params["ContextFilter"].(map[string]any)["description"], "context.task=t-17&context.verdict=disagree")
+
+	paths := doc["paths"].(map[string]any)
+	for _, op := range []string{
+		"/repos/{repo}/branches/{branch}/facts",
+		"/repos/{repo}/branches/{branch}/search",
+		"/lenses/{lens}/facts",
+		"/lenses/{lens}/search",
+	} {
+		get := paths[op].(map[string]any)["get"].(map[string]any)
+		var refs []string
+		for _, p := range get["parameters"].([]any) {
+			if r, ok := p.(map[string]any)["$ref"].(string); ok {
+				refs = append(refs, r)
+			}
+		}
+		require.Contains(t, refs, "#/components/parameters/ContextFilter", "%s must declare the context filter", op)
+	}
+	schemas := comps["schemas"].(map[string]any)
+	for _, s := range []string{"Fact", "FactSummary", "LensFactItem", "LensSearchItem"} {
+		require.Contains(t, schemas[s].(map[string]any)["properties"], "context", s)
+	}
+}
+
 // TestOpenAPI_ChangesDeclared (F05): the changes route is served in the spec
 // with the plain-English contract a client acts on — the bookmark idiom, the
 // net-difference semantics, the rename note and the 409 refusal — and its

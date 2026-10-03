@@ -270,5 +270,6 @@ func liveMember(ctx context.Context, d Deps, branch string, stale factForLLM) (f
 		Confidence: rec.Confidence,
 		Sources:    rec.Sources,
 		Origin:     rec.Origin,
+		Context:    rec.Context,
 	}, true
 }

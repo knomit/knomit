@@ -101,6 +101,14 @@ type factForLLM struct {
 	Confidence float64  `json:"confidence"`
 	Sources    int      `json:"sources"`
 	Origin     string   `json:"origin,omitempty"`
+	// Context (F22) is shown to the judges as DATA inside the fact's JSON,
+	// next to its body — never interpolated into instruction text (no prompt
+	// template references it). omitempty, so a context-free cluster's bytes,
+	// goldens and page sizes are unchanged. Filled where a projection reads an
+	// existing fact (prune and distill members, cousins, the in-flight
+	// refresh, the restatement shortlist); bridge and discovery seeds and
+	// freshly distilled facts carry none.
+	Context map[string]any `json:"context,omitempty"`
 	// Kind is the fact's kind as the index or the parsed fact carries it
 	// ("epistemic" / "pragmatic"). It exists for dedupCluster's cross-kind
 	// guard (knomit#308): that guard fails CLOSED on "", so every projection

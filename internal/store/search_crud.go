@@ -234,6 +234,22 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 			return fmt.Errorf("upsert fact_expires: %w", err)
 		}
 	}
+	// The F22 context map, one row per key, in the fact_context side table
+	// (migration 000034), keyed by the same immutable row. OR IGNORE for the
+	// same reason as above. A map ParseFact dropped is simply absent here, so
+	// a malformed map never reaches the index.
+	for k, v := range rec.Context {
+		var num any
+		if x, ok := fact.ContextNum(v); ok {
+			num = x
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO fact_context(fact_id, key, value, num) VALUES (?, ?, ?, ?)`,
+			factID, k, fact.ContextText(v), num,
+		); err != nil {
+			return fmt.Errorf("upsert fact_context: %w", err)
+		}
+	}
 
 	// COW hit check: are junction tables already populated for this fact?
 	var junctionExists int
@@ -577,6 +593,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	logFactJSONUnmarshal("scanFactWithBody", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
 	unmarshalMotifs("scanFactWithBody", f.Path, motifsJSON, &f.Motifs)
 	f.Body = extractBody(rawData)
+	f.Context = fact.ExtractContext(rawData)
 	if committedAt.Valid {
 		f.CommittedAt = committedAt.Int64
 	}
@@ -626,6 +643,7 @@ func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, err
 	logFactJSONUnmarshal("scanFactWithBodyFromRowsWithCommittedAt", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
 	unmarshalMotifs("scanFactWithBodyFromRowsWithCommittedAt", f.Path, motifsJSON, &f.Motifs)
 	f.Body = extractBody(rawData)
+	f.Context = fact.ExtractContext(rawData)
 	return &f, nil
 }
 
