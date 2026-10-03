@@ -132,7 +132,10 @@ func startModeLoop(t *testing.T, ri *RepoInstance, agent, upstream string, mode 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), agent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, mode)
+	go func() {
+		defer wg.Done()
+		runReconcileLoop(ctx, svc, ri.hub, ri.Name(), agent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, mode, false)
+	}()
 	t.Cleanup(func() {
 		cancel()
 		l.gates.Range(func(_, g any) bool {
@@ -157,7 +160,10 @@ func startRealModeLoop(t *testing.T, ri *RepoInstance, originRoot string, mode *
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, mode)
+	go func() {
+		defer wg.Done()
+		runReconcileLoop(ctx, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, mode, false)
+	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks
 }
@@ -518,7 +524,10 @@ func TestSyncMode_LocalLoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runLocalReconcileLoop(ctx, &wg, svc, ri.Name(), trigAgent, 30*time.Second, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, 5*time.Second))
+	go func() {
+		defer wg.Done()
+		runLocalReconcileLoop(ctx, svc, ri.Name(), trigAgent, 30*time.Second, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, 5*time.Second), false)
+	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 
 	waitForWaits(t, ws, 1)
@@ -549,12 +558,10 @@ func TestSyncMode_LocalIntervalZero(t *testing.T) {
 			ticks.Add(1)
 		}
 	})
-	var wg sync.WaitGroup
-	wg.Add(1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcileLoop(context.Background(), &wg, testService(t, ri), ri.Name(), trigAgent, 0, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, time.Second))
+		runLocalReconcileLoop(context.Background(), testService(t, ri), ri.Name(), trigAgent, 0, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, time.Second), false)
 	}()
 	select {
 	case <-done:
@@ -570,13 +577,13 @@ func TestSyncMode_LocalIntervalZero(t *testing.T) {
 	require.Len(t, ri.syncWake, 0, "a commit does not wake a loop nobody runs")
 }
 
-// ---- the builder passes the mode to the loops it starts
+// ---- the Sync stage passes the mode to the loop it starts
 
-// T15a SyncMode_BuilderWiresLocalLoop: background sync on, no origin, a 1 h
+// T15a SyncMode_SyncStageWiresLocalLoop: background sync on, no origin, a 1 h
 // local interval and [git].realtime_pull_interval = 5 s. Once the consensus
-// branch carries `pull: realtime`, the loop startSyncLoops started chooses a
-// 5 s wait. Sabotage: startSyncLoops passes a nil mode → only 1 h waits → red.
-func TestSyncMode_BuilderWiresLocalLoop(t *testing.T) {
+// branch carries `pull: realtime`, the loop Sync.Enter started chooses a 5 s
+// wait. Sabotage: Sync.Enter passes a nil mode → only 1 h waits → red.
+func TestSyncMode_SyncStageWiresLocalLoop(t *testing.T) {
 	_, ws := modeSeams(t, true, nil)
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
@@ -584,7 +591,7 @@ func TestSyncMode_BuilderWiresLocalLoop(t *testing.T) {
 			Git: config.GitConfig{LocalReconcileInterval: time.Hour, RealtimePullInterval: 5 * time.Second}},
 		AgentBranch: trigAgent,
 		KeyPath:     filepath.Join(home, "agent.key"),
-		// DisableBackgroundSync deliberately NOT set: the builder's loop is the point.
+		// Machine.Synchronous deliberately NOT set: the stage's loop is the point.
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)
@@ -598,15 +605,15 @@ func TestSyncMode_BuilderWiresLocalLoop(t *testing.T) {
 		}
 		ws.releaseAll() // a round advances the consensus branch; the next wait follows it
 		return false
-	}, 20*time.Second, 20*time.Millisecond, "the builder's local loop must follow pull: realtime")
+	}, 20*time.Second, 20*time.Millisecond, "the Sync stage's local loop must follow pull: realtime")
 	require.False(t, ri.realtimePush.Load(), "pull alone does not publish push")
 }
 
-// T15b SyncMode_BuilderWiresOriginLoop: a clone-mode create whose origin's
-// main carries `pull: realtime`; the loop ActivateSync starts chooses
-// [git].realtime_pull_interval (7 s). Sabotage: ActivateSync passes a nil
-// mode → the wait is 300 s → red.
-func TestSyncMode_BuilderWiresOriginLoop(t *testing.T) {
+// T15b SyncMode_SyncStageWiresOriginLoop: a clone-mode create whose origin's
+// main carries `pull: realtime`; the origin loop an AttachOrigin's Sync
+// restart starts chooses [git].realtime_pull_interval (7 s). Sabotage:
+// Sync.Enter passes a nil mode → the wait is 300 s → red.
+func TestSyncMode_SyncStageWiresOriginLoop(t *testing.T) {
 	_, ws := modeSeams(t, true, nil)
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "remote.git")
@@ -644,8 +651,8 @@ func TestSyncMode_BuilderWiresOriginLoop(t *testing.T) {
 	ri, err := m.Create(context.Background(), CreateSpec{Name: testRepoName, Mode: "clone",
 		Origin: &OriginSpec{URL: url, Branch: "main"}}, nil)
 	require.NoError(t, err)
-	// Let the loops the create started settle, then restart through
-	// ActivateSync alone: the wait chosen after it is that loop's.
+	// Let the loop the create started settle, then restart Sync through
+	// AttachOrigin alone: the wait chosen after it is that loop's.
 	var settled int
 	require.Eventually(t, func() bool {
 		n := ws.count()
@@ -653,8 +660,9 @@ func TestSyncMode_BuilderWiresOriginLoop(t *testing.T) {
 		settled = ws.count()
 		return n >= 1 && n == settled
 	}, 20*time.Second, 10*time.Millisecond)
-	require.NoError(t, ri.ActivateSync(url))
+	_, err = m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))
+	require.NoError(t, err)
 	require.Eventually(t, func() bool { return ws.count() > settled }, 20*time.Second, 10*time.Millisecond,
-		"the loop ActivateSync started chose a wait")
-	require.Equal(t, 7*time.Second, ws.waits()[settled], "the origin loop ActivateSync starts must follow pull: realtime")
+		"the loop the Sync restart started chose a wait")
+	require.Equal(t, 7*time.Second, ws.waits()[settled], "the origin loop Sync.Enter starts must follow pull: realtime")
 }

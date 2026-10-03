@@ -27,9 +27,9 @@ import (
 func newProbeTestManager(t *testing.T, root string) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: t.TempDir(), LocalOriginRoot: root},
-		AgentBranch:           "agent/test",
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentBranch: "agent/test",
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	return m
@@ -108,7 +108,7 @@ func TestProbeOrigin_UnresolvableCredentialIsAuthNotUnreachable(t *testing.T) {
 	// ResolveAuth auto-detects ssh and then fails for want of a key.
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "agent/test", KeyPath: "", DisableBackgroundSync: true,
+		AgentBranch: "agent/test", KeyPath: "", Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 
@@ -231,7 +231,7 @@ func TestProbeOrigin_HonoursNetworkTimeout(t *testing.T) {
 
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: t.TempDir(), Git: config.GitConfig{NetworkTimeout: 150 * time.Millisecond}},
-		AgentBranch: "agent/test", DisableBackgroundSync: true,
+		AgentBranch: "agent/test", Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 

@@ -85,10 +85,10 @@ func newDisjointSession(t *testing.T, keyPath string) (*Server, *repos.RepoInsta
 func newRegisteredManager(t *testing.T, keyPath, name, uid string) *repos.Manager {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: t.TempDir()},
-		AgentBranch:           "machine/test",
-		KeyPath:               keyPath,
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: t.TempDir()},
+		AgentBranch: "machine/test",
+		KeyPath:     keyPath,
+		Machine:     repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {

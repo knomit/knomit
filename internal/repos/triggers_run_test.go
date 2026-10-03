@@ -486,7 +486,7 @@ var r = knomit.exec([%s, run.id], {env: %s});
 func TestRun_StopKillsAndRecords(t *testing.T) {
 	home := t.TempDir()
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
-		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true, ScriptTools: &stubTools{}}
+		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}, ScriptTools: &stubTools{}}
 	m := New(context.Background(), deps)
 	m.SetServerAddress(testServerAddr) // as a booted server records it
 	ri := bootRepo(t, m)
@@ -499,7 +499,7 @@ func TestRun_StopKillsAndRecords(t *testing.T) {
 	t.Cleanup(func() { killProcess(child.Pid) })
 
 	t0 := time.Now()
-	ri.triggers.stop()
+	restartServe(t, ri)
 	require.Less(t, time.Since(t0), recipeWaitDelay+5*time.Second, "stop() waits for the killed recipe, not for its program")
 	require.Eventually(t, func() bool { return !processAlive(child.Pid) }, 10*time.Second, 20*time.Millisecond, "the program survived stop()")
 	rows := rowsOf(t, ri, "w")
@@ -530,7 +530,7 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 		t.Run(fmt.Sprintf("crash=%v", crash), func(t *testing.T) {
 			home := t.TempDir()
 			deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
-				KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true, ScriptTools: &stubTools{}}
+				KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}, ScriptTools: &stubTools{}}
 			m := New(context.Background(), deps)
 			m.SetServerAddress(testServerAddr) // as a booted server records it
 			ri := bootRepo(t, m)
@@ -694,7 +694,7 @@ func TestRun_NotOnReadOnlyOrSubscribed(t *testing.T) {
 	putLocalRecipe(t, home, "worker", `({status: "done"});`)
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
-		AgentBranch: trigAgent, KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true,
+		AgentBranch: trigAgent, KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)

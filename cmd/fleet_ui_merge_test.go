@@ -45,7 +45,7 @@ func TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable(t *testing.T) {
 	}
 	aBranch := "agent/alpha-" + pki.Short(aMember.Fingerprint())
 	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		KeyPath: aKey, Signer: keySigner(t, aKey), AgentBranch: aBranch, DisableBackgroundSync: true})
+		KeyPath: aKey, Signer: keySigner(t, aKey), AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}

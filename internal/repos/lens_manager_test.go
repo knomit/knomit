@@ -54,9 +54,11 @@ func makeLensRepo(t *testing.T, m *Manager, name string) *RepoInstance {
 //
 // The clone gets its OWN registry row (and therefore its own uid): lens
 // membership is keyed by uid, so a clone with no row could not be named in a
-// lens at all and the replica guard would never be reached. repo_id is left
-// unset on the row — recording it would trip repos_active_repo_id, the very
-// uniqueness rule that makes a replica hard to manufacture outside a test.
+// lens at all and the replica guard would never be reached. It is a BARE
+// instance over the copied store, not a mounted one: mounting it would run
+// Identify, whose RecordRepoID trips repos_active_repo_id — the uniqueness
+// rule that makes a replica impossible to mount, and the reason the validator
+// only ever meets one through a 12-hex prefix collision this stands in for.
 func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 	t.Helper()
 	srcRI := m.Get(src)
@@ -73,7 +75,13 @@ func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 	}))
 	dstPath := m.RepoPath(uid)
 	require.NoError(t, os.WriteFile(dstPath, data, 0o644))
-	require.NoError(t, m.Add(dst, uid, dstPath, nil))
+	svc, err := store.Open(dstPath)
+	require.NoError(t, err)
+	require.NoError(t, svc.OpenRepo())
+	t.Cleanup(func() { svc.Close() })
+	m.Set(dst, NewTestInstanceWithDeps(TestInstanceConfig{
+		Name: dst, UID: uid, AgentBranch: srcRI.AgentBranch(), Svc: svc,
+	}))
 	ri := m.Get(dst)
 	require.NotNil(t, ri)
 	require.Equal(t, uid, ri.UID())

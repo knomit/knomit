@@ -254,7 +254,7 @@ func guardSwap(ctx context.Context, r *RepoInstance, s SwapSpec) error {
 	m := r.env.m
 	branch := s.IdentityBranch
 	if branch == "" {
-		branch = r.agentBranch
+		branch = r.ReadBranch()
 	}
 	root, err := rootCommitOfDB(ctx, s.TempDB, branch)
 	if err != nil {
@@ -424,6 +424,9 @@ func applySwap(m *Machine, s SwapSpec) error {
 			return fmt.Errorf("swap failed: %v; restoring the previous store also failed: %w", err, rerr)
 		}
 		return fmt.Errorf("swap failed: %w; previous store restored", err)
+	}
+	if s.Origin.URL == "" {
+		return nil // no new origin: the stored one stays
 	}
 	origins := r.env.m.Origins()
 	if origins == nil {

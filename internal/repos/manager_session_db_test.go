@@ -32,9 +32,9 @@ func TestStart_skipsSessionSidecarDB(t *testing.T) {
 	home := t.TempDir()
 	newManager := func() *Manager {
 		return New(context.Background(), Deps{
-			Cfg:                   config.Config{Home: home},
-			AgentBranch:           "machine/test",
-			DisableBackgroundSync: true,
+			Cfg:         config.Config{Home: home},
+			AgentBranch: "machine/test",
+			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 	}
 

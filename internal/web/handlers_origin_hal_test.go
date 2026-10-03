@@ -485,10 +485,10 @@ func newControlDBTestServerOpt(t *testing.T, originsRoot string, withKey bool) (
 	}
 
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
-		AgentBranch:           "agent/test",
-		KeyPath:               keyPath,
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
+		AgentBranch: "agent/test",
+		KeyPath:     keyPath,
+		Machine:     repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {

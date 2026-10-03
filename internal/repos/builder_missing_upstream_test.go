@@ -40,9 +40,9 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 
 	boot := func() (*Manager, func()) {
 		m := New(context.Background(), Deps{
-			Cfg:                   cfg,
-			AgentBranch:           "agent/test-abc",
-			DisableBackgroundSync: true,
+			Cfg:         cfg,
+			AgentBranch: "agent/test-abc",
+			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		// Start opens what the registry says exists — a reboot over an
@@ -88,7 +88,7 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 	ri2 := m2.Get(testRepoName)
 	require.NotNil(t, ri2)
 
-	state, _, _ := ri2.IndexStatus()
+	state := waitIndexSettled(t, ri2).Index.State
 	require.Equal(t, "ready", state, "an unreachable upstream must not fail the repo's index")
 
 	stale, err := testService(t, ri2).IndexManager().NeedsRebuild(ctx, agentBranch)
@@ -108,6 +108,6 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 	require.False(t, stale,
 		"a permanently unusable upstream must not force the agent branch to rebuild every boot")
 
-	state, _, _ = ri3.IndexStatus()
+	state = waitIndexSettled(t, ri3).Index.State
 	require.Equal(t, "ready", state)
 }

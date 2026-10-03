@@ -64,8 +64,8 @@ func TestCreate_LocalOriginRejectedWithoutRoot(t *testing.T) {
 			Home: dir,
 			// LocalOriginRoot intentionally empty → filesystem origins disabled.
 		},
-		AgentBranch:           "agent/test-abc",
-		DisableBackgroundSync: true,
+		AgentBranch: "agent/test-abc",
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	// Release the control.db handle before t.TempDir removes the home:
 	// Windows refuses to unlink an open file.
@@ -95,8 +95,8 @@ func TestCreate_LocalOriginRejectedOutsideRoot(t *testing.T) {
 			Home:            dir,
 			LocalOriginRoot: filepath.Join(dir, "allowed"),
 		},
-		AgentBranch:           "agent/test-abc",
-		DisableBackgroundSync: true,
+		AgentBranch: "agent/test-abc",
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	// Release the control.db handle before t.TempDir removes the home:
 	// Windows refuses to unlink an open file.

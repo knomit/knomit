@@ -24,9 +24,9 @@ import (
 func newRemoteModeManager(t *testing.T, dir string) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch:           "agent/test-abc",
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentBranch: "agent/test-abc",
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { m.Close() })
@@ -448,9 +448,10 @@ func TestCreate_CloneMode_AdoptsThisMachinesExistingAgentBranch(t *testing.T) {
 // which is exactly the shape of the bug it was added for, since Create enforced
 // the invariant and the attach paths did not.
 //
-// So ActivateSync, which EVERY path that points a repo at a remote calls,
-// re-asserts it itself. This test goes around the handlers entirely.
-func TestActivateSync_RefusesARemoteGovernedByADifferentOntology(t *testing.T) {
+// So the AttachOrigin event's guard, which EVERY path that points a live repo
+// at a remote goes through, re-asserts it itself. This test goes around the
+// handlers entirely.
+func TestAttachOrigin_RefusesARemoteGovernedByADifferentOntology(t *testing.T) {
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 
@@ -469,7 +470,7 @@ func TestActivateSync_RefusesARemoteGovernedByADifferentOntology(t *testing.T) {
 	svc.SetOrigin(&store.Origin{URL: url, Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote(url, "main", ri.AgentBranch()))
 
-	err = ri.ActivateSync(url)
+	_, err = m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))
 	require.Error(t, err, "sync must not start against a remote that would overwrite this repo's taxonomy")
 	require.ErrorIs(t, err, ErrOriginOntologyConflict)
 }
@@ -477,7 +478,7 @@ func TestActivateSync_RefusesARemoteGovernedByADifferentOntology(t *testing.T) {
 // And the case that must keep working: the SAME knowledge base. Re-attaching a
 // repo to its own remote is the ordinary path after a machine is rebuilt, and
 // a gate that refused it would be worse than the hole it closes.
-func TestActivateSync_AllowsTheSameKnowledgeBase(t *testing.T) {
+func TestAttachOrigin_AllowsTheSameKnowledgeBase(t *testing.T) {
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git")) // the DEFAULT ontology
@@ -489,8 +490,8 @@ func TestActivateSync_AllowsTheSameKnowledgeBase(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ri)
 
-	require.NoError(t, ri.ActivateSync(url),
-		"a repo must be able to sync with the knowledge base it came from")
+	_, err = m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))
+	require.NoError(t, err, "a repo must be able to sync with the knowledge base it came from")
 }
 
 // TestCreate_InitializeSignsTheOntologyCommitWithTheInstanceKey: the initialize
@@ -505,10 +506,10 @@ func TestCreate_InitializeSignsTheOntologyCommitWithTheInstanceKey(t *testing.T)
 
 	instance := testsigner.Named("initialize-instance")
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch:           "agent/test-abc",
-		Signer:                instance,
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentBranch: "agent/test-abc",
+		Signer:      instance,
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { m.Close() })

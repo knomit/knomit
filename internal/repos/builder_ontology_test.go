@@ -13,23 +13,23 @@ import (
 	"knomit/internal/fact"
 )
 
-// A builder with no store establishes NOTHING about a repo's taxonomy, so it
-// gets no ontology — and, as before, does not panic.
+// A repo whose Identify stage has not run (or has exited for a swap)
+// establishes NOTHING about its taxonomy, so it has no ontology — and every
+// write is refused.
 //
-// This test used to assert the opposite: that the default ontology was handed
-// out here. That fallback was the mechanism behind the worst failure this
+// This test used to assert the absence of a fallback for a builder with no
+// store. That fallback was the mechanism behind the worst failure this
 // codebase has had — a repo silently running on a taxonomy nobody chose, with
 // every fact validated against the wrong topics and no way back, because a
 // repo's ontology is fixed when it is created. ALL REPOS MUST HAVE AN
 // ONTOLOGY; none may be given one it did not choose.
-func TestLoadOntology_NoStoreEstablishesNothing(t *testing.T) {
-	b := &repoBuilder{
-		name:        "test",
-		agentBranch: "machine/test",
-	}
-	b.loadOntology()
-	require.Nil(t, b.ontology, "a stand-in ontology is not this repo's ontology")
-	require.Error(t, b.ontologyErr)
+func TestOntology_NotIdentifiedEstablishesNothing(t *testing.T) {
+	m := newTestManager(t)
+	ri := m.newInstance("test", "uid-not-mounted", false)
+	t.Cleanup(func() { unmount(ri, "test") })
+	require.Nil(t, ri.Ontology(), "a stand-in ontology is not this repo's ontology")
+	require.ErrorIs(t, ri.OntologyError(), errNotIdentified)
+	require.False(t, ri.WritableBranch(ri.AgentBranch()), "nothing is writable before Identify")
 }
 
 // staleCodeOntologyYAML is a minimal source-code ontology: same id as

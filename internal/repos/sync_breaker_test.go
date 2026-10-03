@@ -169,7 +169,10 @@ func startBreakerLoop(t *testing.T, ri *RepoInstance, originRoot string, pre fun
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, kick, ri.syncWake, ri.breakers, l.mode)
+	go func() {
+		defer wg.Done()
+		runReconcileLoop(ctx, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, kick, ri.syncWake, ri.breakers, l.mode, false)
+	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	l.waitRounds(t, 1)
 	return l

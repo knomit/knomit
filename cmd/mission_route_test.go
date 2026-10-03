@@ -175,7 +175,7 @@ func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
 			hCfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: filepath.Join(hCfg.Home, "pki")}
 			hKey, _ := pkitest.NewKey(t)
 			newHost := func() *repos.Manager {
-				m := repos.New(ctx, repos.Deps{Cfg: hCfg, KeyPath: hKey, AgentBranch: fleetServerAgent, DisableBackgroundSync: true})
+				m := repos.New(ctx, repos.Deps{Cfg: hCfg, KeyPath: hKey, AgentBranch: fleetServerAgent, Machine: repos.Options{Synchronous: true}})
 				if err := m.Start(); err != nil {
 					t.Fatal(err)
 				}
@@ -216,7 +216,7 @@ func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
 				t.Fatalf("install transport: %v", err)
 			}
 			pMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-				KeyPath: pKey, AgentBranch: "agent/alpha-" + pki.Short(pMember.Fingerprint()), DisableBackgroundSync: true})
+				KeyPath: pKey, AgentBranch: "agent/alpha-" + pki.Short(pMember.Fingerprint()), Machine: repos.Options{Synchronous: true}})
 			if err := pMgr.Start(); err != nil {
 				t.Fatal(err)
 			}

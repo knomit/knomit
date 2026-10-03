@@ -33,10 +33,10 @@ func bootFleet(t *testing.T, dir string, mut func(*config.Config)) (*Manager, fu
 	}
 	require.NoError(t, os.MkdirAll(cfg.Home, 0o755))
 	m := New(context.Background(), Deps{
-		Cfg:                   cfg,
-		AgentBranch:           "agent/test-fleet",
-		Signer:                testsigner.Named("fleet-test"),
-		DisableBackgroundSync: true,
+		Cfg:         cfg,
+		AgentBranch: "agent/test-fleet",
+		Signer:      testsigner.Named("fleet-test"),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start(), "the fleet reconcile never fails Start")
 	m.fleetBootWg.Wait()

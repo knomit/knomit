@@ -114,8 +114,8 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 			OntologyRoot:    "kb",
 			LocalOriginRoot: f.originRoot,
 		},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		AgentBranch: "machine/test",
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, f.m.Start())
 	t.Cleanup(func() { _ = f.m.Close() })
