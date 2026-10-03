@@ -148,6 +148,7 @@ const (
 	DivergenceShape      = "shape"      // a topic, child, or validation other lacks
 	DivergenceAttributes = "attributes" // taxonomy is a subset; attributes differ
 	DivergenceTriggers   = "triggers"   // taxonomy and attributes are a subset; only triggers differ
+	DivergenceContext    = "context"    // taxonomy, attributes and triggers are a subset; only context declarations differ
 )
 
 // SubsetDivergence reports why o is NOT a subset of other: "" when it is,
@@ -181,6 +182,8 @@ func (o *Ontology) SubsetDivergence(other *Ontology) string {
 		return DivergenceAttributes
 	case d.triggers:
 		return DivergenceTriggers
+	case d.context:
+		return DivergenceContext
 	}
 	return ""
 }
@@ -189,6 +192,10 @@ func (o *Ontology) SubsetDivergence(other *Ontology) string {
 type behaviourDivergence struct {
 	attrs    bool
 	triggers bool
+	// context: n declares context keys (F22) other does not declare
+	// identically. Overwriting with the preset would erase them, so the boot
+	// refresh must leave the file alone, exactly as for attributes.
+	context bool
 }
 
 // nodeIsSubsetOf returns true if every Validation and child in n also appears
@@ -212,6 +219,9 @@ func nodeIsSubsetOf(n, other *OntologyNode, d *behaviourDivergence) bool {
 	}
 	if !triggersSubset(n.Triggers, other.Triggers) {
 		d.triggers = true
+	}
+	if !contextDeclsSubset(n.Context, other.Context) {
+		d.context = true
 	}
 	for key, child := range n.Children {
 		otherChild, ok := other.Children[key]
@@ -317,6 +327,12 @@ type compiledRulesCache struct {
 	// shared between a parent and any child that adds nothing — never write
 	// to one.
 	attrsByTopic map[string]map[string]any
+
+	// contextByTopic maps every declared topic path to its RESOLVED context
+	// declarations (F22): its own laid over everything inherited. Built in the
+	// same walk as attrsByTopic, with the same sharing rule — never write to
+	// one.
+	contextByTopic map[string]map[string]*compiledContextDecl
 }
 
 // buildRulesCache compiles every Validation rule in the ontology (root +
@@ -324,8 +340,9 @@ type compiledRulesCache struct {
 // Returns an error if any rule fails to compile.
 func (o *Ontology) buildRulesCache() error {
 	o.cache = compiledRulesCache{
-		byTopic:      map[string][]compiledRule{},
-		attrsByTopic: map[string]map[string]any{},
+		byTopic:        map[string][]compiledRule{},
+		attrsByTopic:   map[string]map[string]any{},
+		contextByTopic: map[string]map[string]*compiledContextDecl{},
 	}
 	o.cache.compileCalls++
 
@@ -335,8 +352,23 @@ func (o *Ontology) buildRulesCache() error {
 		o.cache.byTopic["<root>"] = rs
 	}
 
-	var walk func(prefix string, n *OntologyNode, inherited map[string]any) error
-	walk = func(prefix string, n *OntologyNode, inherited map[string]any) error {
+	var walk func(prefix string, n *OntologyNode, inherited map[string]any, inheritedCtx map[string]*compiledContextDecl) error
+	walk = func(prefix string, n *OntologyNode, inherited map[string]any, inheritedCtx map[string]*compiledContextDecl) error {
+		// Context declarations resolve exactly like attributes: this node's
+		// keys laid over its parent's, nearest declaration winning.
+		resolvedCtx := inheritedCtx
+		if n != nil && len(n.Context) > 0 {
+			resolvedCtx = make(map[string]*compiledContextDecl, len(inheritedCtx)+len(n.Context))
+			for k, v := range inheritedCtx {
+				resolvedCtx[k] = v
+			}
+			for k, v := range compileContextDecls(n.Context) {
+				resolvedCtx[k] = v
+			}
+		}
+		if len(resolvedCtx) > 0 {
+			o.cache.contextByTopic[prefix] = resolvedCtx
+		}
 		// A bare key (`research:` with nothing under it) is a nil node but is
 		// still DECLARED — Attr's walk, like ValidateFact's, stops one step
 		// past it — so it records what it inherits before the nil return.
@@ -362,14 +394,14 @@ func (o *Ontology) buildRulesCache() error {
 			o.cache.byTopic[prefix] = rs
 		}
 		for k, c := range n.Children {
-			if err := walk(prefix+"/"+k, c, resolved); err != nil {
+			if err := walk(prefix+"/"+k, c, resolved, resolvedCtx); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	for k, n := range o.Topics {
-		if err := walk(k, n, nil); err != nil {
+		if err := walk(k, n, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -649,6 +681,10 @@ type OntologyNode struct {
 	// Compile them with CompileTriggers (or a TriggerCache), never by reading
 	// this field directly.
 	Triggers TriggerList `yaml:"triggers,omitempty"`
+	// Context (F22) declares the per-fact `context:` keys a fact under this
+	// node may carry, and their types. Inherited down the walk like
+	// attributes; resolve with Ontology.ContextSpec. See context_ontology.go.
+	Context map[string]ContextDecl `yaml:"context,omitempty"`
 }
 
 // Validation is one ontology-declared rule evaluated against a fact on write.
@@ -809,6 +845,12 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) error {
 
 	if len(node.Validations) > 0 {
 		serializeValidations(valNode, node.Validations)
+	}
+
+	if len(node.Context) > 0 {
+		if err := serializeContextDecls(valNode, node.Context); err != nil {
+			return err
+		}
 	}
 
 	// Triggers are written back exactly as they were read, unknown keys and

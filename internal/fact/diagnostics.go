@@ -147,6 +147,12 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 		diags = append(diags, attributeDiags(key, o.Topics[key], valueForKey(topicsNode, key))...)
 	}
 	diags = append(diags, rootAttributeDiags(o.Attributes, valueForKey(documentRoot(&doc), "attributes"))...)
+	// Context declarations (F22): every problem is a warning on the open path
+	// and fatal for a new ontology; the bad declaration is poisoned, never
+	// dropped (see compiledContextDecl).
+	for _, key := range sortedKeys(o.Topics) {
+		diags = append(diags, contextDiags(key, o.Topics[key], valueForKey(topicsNode, key))...)
+	}
 	// Triggers: every problem is a WARNING and drops only that trigger — see
 	// triggers.go for why a trigger may never fail the ontology.
 	diags = append(diags, triggerDiags(&o)...)

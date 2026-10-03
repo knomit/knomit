@@ -31,6 +31,7 @@ func OntologySchema() []SchemaField {
 		{"OntologyNode", "attributes", "Store behaviour for facts under this topic and every sub-topic that does not override it. One key today: learn_dedup: off (or on) — skip knomit_learn's auto-merge and same-subject refusal"},
 
 		{"OntologyNode", "triggers", "Rules fired by changes to facts under this topic: name, match, on, if, do. A bad trigger is skipped with a warning, never fatal"},
+		{"OntologyNode", "context", "The per-fact context keys a fact under this topic (and every sub-topic) may carry, each with its type: key: {type: string|number|bool|enum|time, required, pattern, min, max, max_len, values}. A key not declared here or on a parent topic is refused on write. Keys are snake_case, at most 32 characters; string values are one line, at most 128 bytes unless max_len says otherwise (never above 256)"},
 
 		{"Validation", "name", "Short identifier for the rule"},
 		{"Validation", "message", "Message shown when the rule rejects a fact"},
