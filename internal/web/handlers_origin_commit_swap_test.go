@@ -2,187 +2,166 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
-// Issue #400: a disjoint-history commit swaps the store, and SwapStore cancels
-// the repo's initial index heal if it is still running. The heal's cancelled
-// exit marks nothing, so the index state stayed 'indexing' for the life of the
-// process — the handler's own rebuild built a correct index but never marked
-// it, and the rebuild endpoint refuses with 409 while the state reads
-// 'indexing', so nothing in the UI could clear it.
-//
-// The heal itself cannot be held from this package (the gate is unexported in
-// repos, and repos' own test holds it — TestSwapStore_DuringInitialHeal_*).
-// What a cancelled heal leaves behind is exactly a state of 'indexing' with no
-// writer, so the test puts the instance in that state through the production
-// mutator and asserts the commit clears it.
-func TestHandleCommit_Disjoint_ClearsAnIndexingStateLeftByACancelledHeal(t *testing.T) {
-	s, ri, _, sess, _ := newDisjointSession(t, "")
-	ri.TestMarkIndexing()
+// indexHold holds the machines' index job at its hook once armed, until
+// released. Like every hook it watches the life's ctx, so a held job still
+// unmounts.
+type indexHold struct {
+	armed       atomic.Bool
+	arrived     chan struct{}
+	release     chan struct{}
+	arriveOnce  sync.Once
+	releaseOnce sync.Once
+}
 
-	rec := postCommit(t, s, sess.ID)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if body := rec.Body.String(); !strings.Contains(body, `"phase":"done"`) {
-		t.Fatalf("expected the commit to complete; body=%s", body)
-	}
+func newIndexHold() *indexHold {
+	return &indexHold{arrived: make(chan struct{}), release: make(chan struct{})}
+}
 
-	state, _, _ := ri.IndexStatus()
-	if state != repos.IndexStateReady {
-		t.Fatalf("index state after the post-swap rebuild: got %q, want %q — "+
-			"'indexing' here is pinned for the life of the process", state, repos.IndexStateReady)
+func (h *indexHold) hook(_ repos.StageID, point string, ctx context.Context) {
+	if point != "index-job" || !h.armed.Load() {
+		return
+	}
+	h.arriveOnce.Do(func() { close(h.arrived) })
+	select {
+	case <-h.release:
+	case <-ctx.Done():
 	}
 }
 
-// failingSwapSession is newDisjointSession with two differences that reach
-// SwapStore's FILE-BACKED failure path: the instance is file-backed (DBPath),
-// and the session's clone path is a directory, so copying it over the live
-// database fails and SwapStore restores the backup and reattaches the old
-// store. Both sync restarts are recorded.
-type syncCalls struct {
-	mu          sync.Mutex
-	activateURL []string
-	local       int
-}
+func (h *indexHold) open() { h.releaseOnce.Do(func() { close(h.release) }) }
 
-func failingSwapSession(t *testing.T, withOrigin bool) (*Server, *repos.RepoInstance, *OriginSession, *syncCalls) {
+func (h *indexHold) waitArrived(t *testing.T) {
 	t.Helper()
-
-	dbPath := filepath.Join(t.TempDir(), "local.db")
-	localSvc, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open local svc: %v", err)
+	select {
+	case <-h.arrived:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the index job never reached the hook")
 	}
-	if err := localSvc.InitRepo(context.Background(), map[string]string{"local.md": "local"}, "machine/test"); err != nil {
-		t.Fatalf("init local git: %v", err)
-	}
-	// SwapStore closes this generation and reopens dbPath; closing it again
-	// here is harmless if it is still the attached one.
-	t.Cleanup(func() { _ = localSvc.Close() })
-
-	calls := &syncCalls{}
-	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-		Name:        "alpha",
-		UID:         "alpha-uid",
-		AgentBranch: "machine/test",
-		Svc:         localSvc,
-		DBPath:      dbPath,
-		StartSync: func(url string) error {
-			calls.mu.Lock()
-			calls.activateURL = append(calls.activateURL, url)
-			calls.mu.Unlock()
-			return nil
-		},
-		StartLocalSync: func() error {
-			calls.mu.Lock()
-			calls.local++
-			calls.mu.Unlock()
-			return nil
-		},
-	})
-
-	m := newRegisteredManager(t, "", "alpha", "alpha-uid")
-	m.Set("alpha", ri)
-	// A test instance has no closeFn, and a failed swap reattaches a store
-	// reopened from dbPath that nothing else owns: close whichever generation
-	// is attached so no handle outlives the TempDir.
-	t.Cleanup(func() {
-		if svc, release, err := ri.Acquire(); err == nil {
-			release()
-			_ = svc.Close()
-		}
-	})
-
-	if withOrigin {
-		// The injected origin is what the running sync loop reads.
-		localSvc.SetOrigin(&store.Origin{URL: "https://previous.test/kb.git", Branch: "main"})
-	}
-
-	sm := NewSessionManager()
-	t.Cleanup(sm.Shutdown)
-	sess, err := sm.Create("alpha", "https://example.com/repo.git", AuthConfig{Method: "token", Token: "tok"})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	// A real clone to satisfy the session's guards, at a path other than the
-	// one the handler swaps from; that one is a directory, so the swap's copy
-	// fails after the live database has been closed.
-	remoteSvc, err := store.Open(filepath.Join(sess.TempDir, "elsewhere.db"))
-	if err != nil {
-		t.Fatalf("open remote svc: %v", err)
-	}
-	if err := remoteSvc.InitRepo(context.Background(), map[string]string{"seed.md": "seed"}, "machine/test"); err != nil {
-		t.Fatalf("init remote git: %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(sess.TempDir, "clone.db"), 0o755); err != nil {
-		t.Fatalf("mkdir clone.db: %v", err)
-	}
-
-	sess.mu.Lock()
-	sess.State = StateApplied
-	sess.RemoteStore = remoteSvc
-	sess.TestResult = connectivityResult{History: "disjoint", DefaultBranch: "main"}
-	sess.RemoteBranch = "main"
-	sess.AppliedBranch = "machine/test"
-	sess.mu.Unlock()
-
-	return &Server{Manager: m, SessionManager: sm, AgentBranch: "machine/test"}, ri, sess, calls
 }
 
-// A failed swap leaves the repo on its old store, and SwapStore stopped that
-// store's sync loop on the way in — restarting sync is its caller's contract.
-// Before the fix the handler returned the error without restarting anything,
-// so the repo silently stopped syncing until the process restarted.
+// waitIndexSettledWeb waits, through Watch, until ri's index has left
+// "indexing", and returns the state it settled in.
+func waitIndexSettledWeb(t *testing.T, ri *repos.RepoInstance) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for tr := range ri.Watch(ctx) {
+		if tr.Status.Index.State != repos.IndexStateIndexing {
+			return tr.Status.Index.State
+		}
+	}
+	t.Fatalf("index of %s did not settle", ri.Name())
+	return ""
+}
+
+// A swap is exclusive with indexing. A commit while the repo's index job runs
+// is refused with 409 — before the stream opens and before the session's clone
+// is touched — and its body links the way out (index:cancel). Retried with
+// {"cancel_indexing": true} it cancels the job, swaps, and narrates the new
+// store's index to ready.
+func TestHandleCommit_Disjoint_SwapDuringIndexingIs409_CancelAndContinueReachesReady(t *testing.T) {
+	hold := newIndexHold()
+	f := newCommitFixture(t, "", hold.hook)
+	t.Cleanup(hold.open)
+	hold.armed.Store(true)
+	if _, err := f.m.Send(context.Background(), f.ri, repos.Rebuild(f.ri.AgentBranch())); err != nil {
+		t.Fatalf("start a rebuild: %v", err)
+	}
+	hold.waitArrived(t)
+
+	rec := postCommit(t, f.s, f.sess.ID)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("commit while indexing: got %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var problem struct {
+		Title string `json:"title"`
+		Links map[string]struct {
+			Href   string `json:"href"`
+			Method string `json:"method"`
+		} `json:"_links"`
+	}
+	if err := json.Unmarshal([]byte(rec.Body.String()), &problem); err != nil {
+		t.Fatalf("409 body: %v (%s)", err, rec.Body.String())
+	}
+	if problem.Title != "Repo is indexing" || problem.Links["cancel-index"].Href != "/api/v1/repos/alpha/index:cancel" ||
+		problem.Links["cancel-index"].Method != http.MethodPost {
+		t.Fatalf("409 must name the state and link index:cancel; got %+v", problem)
+	}
+
+	// Cancel and continue. The swapped-in store's own index job is not held.
+	hold.armed.Store(false)
+	rec = postCommitBody(t, f.s, f.sess.ID, `{"cancel_indexing": true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("commit with cancel_indexing: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"phase":"cancelling-index"`) || !strings.Contains(body, `"phase":"done"`) {
+		t.Fatalf("expected cancelling-index … done; body=%s", body)
+	}
+	if !strings.Contains(body, `"index_state":"ready"`) {
+		t.Fatalf("the commit's done must report the new store's index ready; body=%s", body)
+	}
+	if got := f.ri.Status().Index.State; got != repos.IndexStateReady {
+		t.Fatalf("index state after the swap: got %q, want ready", got)
+	}
+}
+
+// A failed swap replies with the failure, and the repo comes back on its
+// previous store running the previous sync mode: the walk forward always runs
+// after the exits, and Open reopens the restored store through its one wiring
+// function, origin included. The install is made to fail at its first step: a
+// directory sits where the backup would be written.
 func TestHandleCommit_Disjoint_FailedSwapRestartsThePreviousSyncMode(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		withOrigin bool
 	}{
-		{"origin: ActivateSync with the previous URL", true},
-		{"no origin: StartLocalSync", false},
+		{"origin: the previous origin's loop", true},
+		{"no origin: the local loop", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, ri, sess, calls := failingSwapSession(t, tc.withOrigin)
-			// A swap that cancels the initial heal leaves this behind; the
-			// failure path must not keep it with no writer.
-			ri.TestMarkIndexing()
+			f := newCommitFixture(t, "", nil)
+			previous := ""
+			if tc.withOrigin {
+				previous = seedBareKBOn(t, f.root+"/previous.git", "main")
+				if _, err := f.m.Send(context.Background(), f.ri, repos.AttachOrigin(repos.OriginSpec{URL: previous, Branch: "main"})); err != nil {
+					t.Fatalf("attach the previous origin: %v", err)
+				}
+			}
+			idBefore := f.ri.ID()
+			if err := os.Mkdir(f.m.RepoPath(f.ri.UID())+".bak", 0o755); err != nil {
+				t.Fatal(err)
+			}
 
-			rec := postCommit(t, s, sess.ID)
+			rec := postCommit(t, f.s, f.sess.ID)
 			body := rec.Body.String()
 			if !strings.Contains(body, `"phase":"error"`) || !strings.Contains(body, "swap failed") {
-				t.Fatalf("fixture must make the swap fail; body=%s", body)
+				t.Fatalf("the swap must fail and say so; body=%s", body)
 			}
-
-			// The old store is back, so the restart below has a store to run on.
-			if err := ri.WithRead(func(*store.Service) {}); err != nil {
-				t.Fatalf("a failed swap must reattach the old store: %v", err)
+			st := f.ri.Status()
+			if st.Stage != "ready" {
+				t.Fatalf("the repo must come back: stage %q", st.Stage)
 			}
-
-			calls.mu.Lock()
-			activated, local := append([]string(nil), calls.activateURL...), calls.local
-			calls.mu.Unlock()
-			if tc.withOrigin {
-				if len(activated) != 1 || activated[0] != "https://previous.test/kb.git" || local != 0 {
-					t.Fatalf("want one ActivateSync with the PREVIOUS origin and no local sync; got activate=%v local=%d", activated, local)
-				}
-			} else {
-				if len(activated) != 0 || local != 1 {
-					t.Fatalf("want one StartLocalSync and no ActivateSync; got activate=%v local=%d", activated, local)
-				}
+			if st.Sync.Origin != previous {
+				t.Fatalf("Sync must run on the previous origin %q, got %q", previous, st.Sync.Origin)
 			}
-
-			if state, _, _ := ri.IndexStatus(); state == repos.IndexStateIndexing {
-				t.Fatalf("index state after a failed swap: %q with no writer left", state)
+			if f.ri.ID() != idBefore {
+				t.Fatalf("the previous store must be back")
+			}
+			if got := waitIndexSettledWeb(t, f.ri); got != repos.IndexStateReady {
+				t.Fatalf("index state after a failed swap: %q, want ready (the restored store is healed)", got)
 			}
 		})
 	}

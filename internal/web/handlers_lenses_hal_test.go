@@ -48,7 +48,11 @@ func newTestLensManager(t *testing.T, names ...string) (*repos.Manager, string) 
 //
 // The clone gets its own registry row, and therefore its own uid: lens
 // membership is keyed by uid, so a clone with no row could not be named in a
-// lens at all and the replica guard would never be reached.
+// lens at all and the replica guard would never be reached. It is a BARE
+// instance over the copied store: mounting a replica is refused by its
+// Identify stage (the knowledge base is already held by an active repo), so
+// the validator meets one only through a root-prefix collision, which this
+// stands in for.
 func cloneRepo(t *testing.T, m *repos.Manager, home, src, dst string) {
 	t.Helper()
 	srcRI := m.Get(src)
@@ -79,9 +83,17 @@ func cloneRepo(t *testing.T, m *repos.Manager, home, src, dst string) {
 	if err := os.WriteFile(dstPath, data, 0o644); err != nil {
 		t.Fatalf("write dst db: %v", err)
 	}
-	if err := m.Add(dst, uid, dstPath, nil); err != nil {
-		t.Fatalf("add clone %q: %v", dst, err)
+	svc, err := store.Open(dstPath)
+	if err != nil {
+		t.Fatalf("open clone %q: %v", dst, err)
 	}
+	if err := svc.OpenRepo(); err != nil {
+		t.Fatalf("open the clone's repository %q: %v", dst, err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	m.Set(dst, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: dst, UID: uid, AgentBranch: srcRI.AgentBranch(), Svc: svc,
+	}))
 }
 
 // lensViewBody mirrors the wire shape of a single lens for decoding in tests.

@@ -224,8 +224,6 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 		return ErrRepoClosed
 	}
 	ok = true
-	// A new store generation: whatever the index said described the old one.
-	r.indexVerdict = nil
 	if bak := r.machine.pendingBak; bak != "" {
 		os.Remove(bak)
 		r.machine.pendingBak = ""
@@ -524,13 +522,12 @@ type indexSpec struct {
 func (indexStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 	m := r.machine
 	spec := m.indexSpec
-	r.indexVerdict = nil
-	r.indexProgress.Store(&indexProgress{})
+	gen := life.gen
 	svc, release, err := r.Acquire()
 	if err != nil {
-		// No store: nothing to index. The verdict says so, and the status
-		// stops reading "indexing".
-		r.indexVerdict = &verdict{err: fmt.Errorf("index: %w", err)}
+		// No store: nothing to index. That is the job's result, reported the
+		// way every result is, so the status stops reading "indexing".
+		life.post(indexDone{gen: gen, err: fmt.Errorf("index: %w", err)})
 		return nil
 	}
 	var branches []healBranch
@@ -540,7 +537,6 @@ func (indexStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error 
 		branches = r.planIndex(ctx, svc)
 	}
 	hook := m.opts.Hook
-	gen := life.gen
 	progress := func(phase string, done, total int) {
 		r.indexProgress.Store(&indexProgress{phase: phase, done: done, total: total})
 		m.postProgress(gen)

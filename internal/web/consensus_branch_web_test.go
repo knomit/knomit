@@ -45,9 +45,9 @@ func seedBareKBOn(t *testing.T, bare, branch string) string {
 	return fileuri.New(bare)
 }
 
-// newSyncingServer is a real Manager WITH background sync (no
-// DisableBackgroundSync: startSyncLoops returns early on it, which would make
-// a loop test vacuous) and a short local reconcile interval, plus a repo
+// newSyncingServer is a real Manager WITH background sync (not Synchronous:
+// Sync.Enter would run one inline round and no loop, which would make a loop
+// test vacuous) and a short local reconcile interval, plus a repo
 // "mission" cloned from a knowledge base whose only branch is trunk.
 func newSyncingServer(t *testing.T, interval time.Duration) (*Server, *repos.Manager, *repos.RepoInstance, string) {
 	t.Helper()

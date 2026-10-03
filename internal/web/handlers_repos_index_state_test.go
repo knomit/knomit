@@ -45,7 +45,7 @@ func TestGetRepos_RowsCarryIndexState(t *testing.T) {
 	if ri == nil {
 		t.Fatal("repo not registered")
 	}
-	state, _, _ := ri.IndexStatus()
+	state := ri.Status().Index.State
 	if row["index_state"] != state {
 		t.Fatalf("row says %v, the instance says %q", row["index_state"], state)
 	}

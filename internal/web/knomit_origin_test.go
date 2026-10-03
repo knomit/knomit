@@ -86,8 +86,10 @@ func TestKnomitOrigin_SubscribeFollowsPeerMain(t *testing.T) {
 		require.Equal(t, store.ModeFF, res.Mode)
 	}))
 
-	// B's periodic sync — one synchronous reconcile under DisableBackgroundSync.
-	require.NoError(t, riB.ActivateSync(originURL))
+	// B's sync — restarting its Sync stage runs one inline reconcile under a
+	// Synchronous machine.
+	_, err = b.Send(ctx, riB, repos.AttachOrigin(repos.OriginSpec{URL: originURL}))
+	require.NoError(t, err)
 	require.NoError(t, riB.WithRead(func(s *store.Service) {
 		f, rerr := s.Facts().ReadFact(ctx, "main", "kb/second.md", nil)
 		require.NoError(t, rerr)

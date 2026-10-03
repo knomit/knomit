@@ -15,8 +15,8 @@ import (
 )
 
 // newLifetimeTestManager boots a Manager in a temp home and creates the test
-// repo in it. DisableBackgroundSync keeps construction synchronous and free of
-// network activity.
+// repo in it. A Synchronous machine runs no sync loop, so nothing races the
+// assertions.
 func newLifetimeTestManager(t *testing.T) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{

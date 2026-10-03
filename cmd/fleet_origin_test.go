@@ -352,9 +352,11 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	}
 
 	// 3. Sync — the path that resolves auth from the stored origin plus the
-	//    GLOBAL [remote] config — brings B's next fact.
+	//    GLOBAL [remote] config — brings B's next fact. Re-attaching the same
+	//    origin restarts A's Sync stage, whose first round (inline, under a
+	//    Synchronous machine) is that sync.
 	publish(t, riB, bAgent, "second")
-	if err := riA.ActivateSync(fleetURL); err != nil {
+	if _, err := aMgr.Send(ctx, riA, repos.AttachOrigin(repos.OriginSpec{URL: fleetURL})); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if !hasFact(t, riA, "second") {
@@ -385,7 +387,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	if !hasFact(t, riP, "plainfact") {
 		t.Fatal("plaintext origin: fact missing")
 	}
-	if err := riP.ActivateSync(plainURL); err != nil {
+	if _, err := aMgr.Send(ctx, riP, repos.AttachOrigin(repos.OriginSpec{URL: plainURL})); err != nil {
 		t.Fatalf("plaintext sync: %v", err)
 	}
 	if hdrs.count("plain") == 0 {
@@ -393,13 +395,23 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	}
 
 	// 6. B revokes A. After the idle timeout closes the kept-alive
-	//    connection, A's next sync handshakes and is refused by name.
+	//    connection, A's next handshake is refused by name: an attach's guard
+	//    probe says so (and changes nothing), and the next sync round — here
+	//    the first round of a remount — records it on the remote status.
 	f.Revoke(t, aMember, bCfg.TLS.Dir)
 	time.Sleep(500 * time.Millisecond)
 	publish(t, riB, bAgent, "third")
-	err = riA.ActivateSync(fleetURL)
+	_, err = aMgr.Send(ctx, riA, repos.AttachOrigin(repos.OriginSpec{URL: fleetURL}))
 	if !errors.Is(err, pki.ErrRefusedByPeer) && (err == nil || !strings.Contains(err.Error(), pki.ErrRefusedByPeer.Error())) {
-		t.Fatalf("sync after revocation: err=%v, want the ErrRefusedByPeer refusal", err)
+		t.Fatalf("attach after revocation: err=%v, want the ErrRefusedByPeer refusal", err)
+	}
+	archived, err := aMgr.Archive("peer")
+	if err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	riA, err = aMgr.Restore(archived.ID, "")
+	if err != nil {
+		t.Fatalf("restore: %v", err)
 	}
 	if hasFact(t, riA, "third") {
 		t.Fatal("a revoked instance still fetched")

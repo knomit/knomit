@@ -130,7 +130,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 }
 
 // TestOpenOne_EnsureBranchRunsBeforeLoadOntology pins the statement order in
-// Manager.openOne. loadOntology reads — and may rewrite — the ontology file
+// the Identify stage. loadOntology reads — and may rewrite — the ontology file
 // on the agent branch, so on a restored home it must run AFTER ensureBranch has
 // adopted that branch. Running it first fell back to the default ontology and
 // skipped the preset refresh on the first boot after a restore, self-correcting

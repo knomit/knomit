@@ -385,8 +385,12 @@ func TestConnect_RemoteClaimedBetweenTestAndCommitRejectedBeforeSwap(t *testing.
 		t.Fatalf("clone alpha from the contested remote: %v", err)
 	}
 
-	commitBody := sseCall(t, s, http.MethodPost, base+"/commit", "")
-	if !strings.Contains(commitBody, `"phase":"error"`) {
+	// The Swap guard refuses before anything changed, so the refusal is a
+	// plain 409 problem — the stream never opened.
+	commitRec := newStreamRecorder()
+	s.NewAPIRouter().ServeHTTP(commitRec, fromLoopback(httptest.NewRequest(http.MethodPost, base+"/commit", nil)))
+	commitBody := commitRec.Body.String()
+	if commitRec.Code != http.StatusConflict || !strings.Contains(commitBody, "Knowledge base already local") {
 		t.Fatalf("commit must refuse a swap that duplicates a registered knowledge base; body=%s", commitBody)
 	}
 	if !strings.Contains(commitBody, "alpha") {

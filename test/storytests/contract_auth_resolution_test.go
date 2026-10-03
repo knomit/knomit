@@ -30,20 +30,18 @@ import (
 //     record is reconfigured to auth_method="ssh" with NO key path available
 //     (record has no key, fallback cfg has none, Deps.KeyPath is empty). So the
 //     next auth resolution fails with "ssh auth requires a key path".
-//   - We then drive one PRODUCTION reconcile through the real auth factory via
-//     RepoInstance.ActivateSync (the startSync closure calls makeRemoteAuthFn →
-//     resolveAuthWithOrigin, exactly the reconcile-loop path). This is what the
-//     background tick / PUT /api/v1/{repo}/origin does.
+//   - We then drive one PRODUCTION reconcile through the real auth factory: a
+//     restart mounts the repo again, and its Sync stage's first round (inline,
+//     under the storyboard's Synchronous machines) calls makeRemoteAuthFn →
+//     resolveAuthWithOrigin, exactly the reconcile-loop path.
 //
-// CONTRACT: after that tick the persisted remote status is an ERROR whose
+// CONTRACT: after that round the persisted remote status is an ERROR whose
 // last_error names the auth/credential resolution failure — it must NOT be
-// status="ok" (which would prove the silent-anonymous downgrade), and the
-// reconcile call itself must return a non-nil error.
+// status="ok" (which would prove the silent-anonymous downgrade).
 //
 // RED before the fix (makeRemoteAuthFn swallows the resolution error, returns
-// nil, Sync succeeds anonymously → status "ok", ActivateSync returns nil).
-// GREEN after the fix (the resolution error is propagated, persisted via
-// RecordSyncError, and returned from ActivateSync).
+// nil, Sync succeeds anonymously → status "ok"). GREEN after the fix (the
+// resolution error is propagated and persisted via RecordSyncError).
 func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 	sb := testenv.NewStoryboard(t)
 
@@ -71,10 +69,10 @@ func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 	// "ok") — exactly the silent downgrade it exists to catch.
 	repo.SetOriginAuth("ssh", "")
 
-	// Drive one production reconcile through the real auth factory. ActivateSync
-	// → startSync → makeRemoteAuthFn(cfg.Remote, keyPath) → resolveAuthWithOrigin
-	// is exactly the reconcile-loop / origin-refresh path that harbours the bug.
-	syncErr := repo.Instance().ActivateSync(remote.URL())
+	// Drive one production reconcile through the real auth factory: the
+	// restart's Sync stage runs a round → makeRemoteAuthFn(cfg.Remote, keyPath)
+	// → resolveAuthWithOrigin, the reconcile-loop path that harbours the bug.
+	repo.Restart()
 
 	st := repo.RemoteStatus()
 	if st == nil {
@@ -86,15 +84,15 @@ func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 	if st.LastStatus == nil || *st.LastStatus != "error" {
 		t.Fatalf("CONTRACT VIOLATION (symptom #4: silent-anonymous auth downgrade): "+
 			"an unresolvable SSH credential did not surface — expected persisted "+
-			"last_status \"error\", got %q (ActivateSync returned err=%v). The reconcile "+
+			"last_status \"error\", got %q. The reconcile "+
 			"silently downgraded to anonymous and synced against a remote that permits "+
 			"anonymous access, masking the broken credential.",
-			statusStr(st), syncErr)
+			statusStr(st))
 	}
 	if st.LastError == nil || *st.LastError == "" {
-		t.Fatalf("CONTRACT VIOLATION (symptom #4: silent-anonymous auth downgrade): "+
-			"last_status is \"error\" but last_error is empty — the reason for the "+
-			"auth-resolution failure is not visible (ActivateSync err=%v)", syncErr)
+		t.Fatalf("CONTRACT VIOLATION (symptom #4: silent-anonymous auth downgrade): " +
+			"last_status is \"error\" but last_error is empty — the reason for the " +
+			"auth-resolution failure is not visible")
 	}
 	// last_error must name the credential/auth resolution problem, not some
 	// unrelated failure.
@@ -103,12 +101,6 @@ func TestContract_AuthResolutionFailure_SurfacesVisibleError(t *testing.T) {
 		t.Fatalf("CONTRACT VIOLATION (symptom #4: silent-anonymous auth downgrade): "+
 			"last_error does not name an auth/credential resolution failure: %q", *st.LastError)
 	}
-	// The reconcile call itself must have returned the error, not swallowed it.
-	if syncErr == nil {
-		t.Fatalf("CONTRACT VIOLATION (symptom #4: silent-anonymous auth downgrade): " +
-			"ActivateSync returned nil against an unresolvable SSH credential — the auth " +
-			"failure was silently swallowed / downgraded to anonymous")
-	}
-	t.Logf("auth-resolution failure surfaced: last_status=%q last_error=%q activate_err=%v",
-		*st.LastStatus, *st.LastError, syncErr)
+	t.Logf("auth-resolution failure surfaced: last_status=%q last_error=%q",
+		*st.LastStatus, *st.LastError)
 }
