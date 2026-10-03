@@ -45,7 +45,111 @@ turn every run of characters other than `a-z` and `0-9` into one `-`, drop
 `Task_42.b` becomes `task-42-b`. For the copy named in your context, use the
 context's `experiment` as given.
 
+## Call shapes
+
+Every knomit call below takes exactly these arguments. Copy the skeleton and
+fill the `<...>` values; do not flatten a fact's fields to the top level, and
+do not leave out `moment_name`, `facts`, `binding` or `trace` where shown (a
+call without them is refused). If your harness lists a knomit tool without its
+schema, load that tool's schema before the first call. `<trace>` is the
+copy's trace object (see "The trace"), for example
+`{"Knomit-Trace": "task-7", "Knomit-Run": "r-123"}`; `<mission>` and `<kb>`
+are the two handles `knomit_bind` returned.
+
+Bind (once per handle; the second form for a task naming `lens <name>`):
+
+```json knomit_bind
+{"repo": "<mission_repo, or the repo the task names>"}
+```
+
+```json knomit_bind
+{"lens": "<the lens the task names>"}
+```
+
+This skill, and the repo ids for `kb://` refs:
+
+```json knomit_skill
+{"binding": "<mission>", "name": "work-task"}
+```
+
+```json knomit_repos
+{"binding": "<kb>"}
+```
+
+Read: the queue, a path's exact presence, one fact:
+
+```json knomit_query
+{"binding": "<mission>", "path": "<root>/inbox/<agent-id>/working/", "limit": 20}
+```
+
+```json knomit_explain
+{"binding": "<mission>", "file": "<the copy's path>"}
+```
+
+The take (step 2), one move:
+
+```json knomit_learn
+{"binding": "<mission>", "moment_name": "take <task id>", "facts": [{"topic": "inbox", "category": "<agent-id>/active", "kind": "pragmatic", "type": "signal", "title": "<the copy's title>", "body": "<the copy's body>", "entities": ["<task id>"], "expires": "<the context's lease>"}], "retract": ["<the copy's path>"], "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+The experiment (steps 3, 5, 6, 7):
+
+```json knomit_experiment
+{"binding": "<kb>", "action": "open", "name": "<experiment name>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+```json knomit_experiment
+{"binding": "<kb>", "action": "commit", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+```json knomit_experiment
+{"binding": "<kb>", "action": "rollback", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+The work (step 4): new facts, an update the task asks for, a retraction.
+`updates.refs` REPLACES the whole list, so read the fact first and send every
+ref it keeps plus the new ones.
+
+```json knomit_learn
+{"binding": "<kb>", "moment_name": "<task id>: <what you learned>", "facts": [{"topic": "<topic>", "category": "<category>", "type": "observation", "title": "<one line>", "body": "<the fact>", "confidence": 0.7, "entities": ["<entity>"], "refs": ["<evidence>"]}], "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+```json knomit_update
+{"binding": "<kb>", "file": "<the fact's path>", "moment_name": "<label>", "updates": {"confidence": 0.55, "refs": ["<every ref it keeps>", "<each new ref>"]}, "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+```json knomit_retract
+{"binding": "<kb>", "file": "<the fact's path>", "moment_name": "<why>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+A review or hypothesize session, if the task asks for one: start with no
+`session_id`, then answer each item until the result says `done: true`.
+
+```json knomit_review
+{"binding": "<kb>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+```json knomit_review
+{"binding": "<kb>", "session_id": "<from the last result>", "item_id": 1, "response": "<your JSON decisions for that item>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+```json knomit_hypothesize
+{"binding": "<kb>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+```json knomit_hypothesize
+{"binding": "<kb>", "session_id": "<from the last result>", "item_id": 1, "response": "<your answer for that item>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+The ack (step 8), one move:
+
+```json knomit_learn
+{"binding": "<mission>", "moment_name": "ack <task id>", "facts": [{"topic": "acks", "category": "<task id>", "kind": "pragmatic", "type": "signal", "title": "Done: <task title>", "body": "<what was done, two lines>", "entities": ["<task id>"], "refs": ["kb://<repo id>/<result path>"]}], "retract": ["<your active copy's path>"], "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
 ## The loop
+
+Every call in these steps is spelled out under "Call shapes" above.
 
 Repeat until step 1 finds nothing:
 

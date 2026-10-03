@@ -26,6 +26,16 @@ Call `knomit_learn` with one fact:
   Past it the `expire` trigger retracts the task, whether or not anyone took it.
 - `refs`: the mission charter or the facts the task depends on
 
+The exact call (fill the `<...>` values; `binding` is the mission repo's
+handle from `knomit_bind`, and `trace` is optional here):
+
+```json knomit_learn
+{"binding": "<mission>", "moment_name": "post <task id>", "facts": [{"topic": "tasks", "category": "<lane>", "kind": "pragmatic", "type": "signal", "title": "<one line>", "body": "<what to do and what done means>\nknowledge base: lens <name>", "entities": ["<task id>"], "expires": "2026-10-07T12:00:00Z", "refs": ["<the charter's path>"]}], "trace": {"Knomit-Trace": "<task id>"}}
+```
+
+For an offer or an assigned task, change only `topic` and `category` as
+below.
+
 Every participating machine claims it; after the claim window the first by
 rank takes it with one atomic move.
 

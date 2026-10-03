@@ -384,7 +384,10 @@ name `work-task`, follow it. It carries one JSON literal of data: the mission
 repo's name (read from the args of knomit's own MCP entry for this repo, so
 a copy of the template under any name works), the copy's path, its
 experiment name, the session's lease and the trace. The task's text never
-enters argv or the prompt; the session reads it through knomit.
+enters argv or the prompt; the session reads it through knomit. The prompt
+also says that the skill spells out every knomit call's exact arguments, and
+to load a knomit tool's schema first if the harness lists the tool without
+one (Claude Code defers MCP tool schemas).
 
 **Two handles.** The session calls `knomit_bind` twice: once for the mission
 repo, once for the knowledge base the task names in its body (`knowledge
@@ -530,6 +533,18 @@ them. Nothing is installed into any harness.
   `active/`), do the work in a knowledge-base experiment, commit it, then
   acknowledge with one move (write `acks/<task-id>/`, delete the `active/`
   copy). Stop when `working/` is empty.
+
+**Call shapes.** Both skills spell out the exact arguments of every knomit
+call they ask for, as copy-able JSON skeletons in fenced blocks marked with the
+tool's name (```` ```json knomit_learn ````): the binding, `moment_name`, the
+`facts` array, `retract` and the trace where they apply. A session that has
+only the tool's name (a harness that defers MCP schemas) can still make the
+call right the first time. In the first mission, every session's first take was
+refused with "moment_name is required", and two sessions gave up. A test
+(`TestMissionTemplate_SkillCallShapes`) holds every skeleton against the
+schema the tool serves: an unknown key, a missing required key, a missing
+`binding`, or a write without `trace` fails it. Keep the skeletons when you
+edit the skills.
 
 ## Editing the template
 
