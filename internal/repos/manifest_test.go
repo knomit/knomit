@@ -63,7 +63,7 @@ func TestWriteReadme_ClosedInstance_ReportsError(t *testing.T) {
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
-	ri.shutdown()
+	unmount(ri, "test")
 
 	committed, err := ri.WriteReadme(context.Background(), "# after close")
 	require.ErrorIs(t, err, ErrRepoClosed)
@@ -389,7 +389,7 @@ func TestWriteLicense_ClosedInstance_ReportsError(t *testing.T) {
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
-	ri.shutdown()
+	unmount(ri, "test")
 
 	committed, err := ri.WriteLicense(context.Background(), "# after close")
 	require.ErrorIs(t, err, ErrRepoClosed)

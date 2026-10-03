@@ -446,7 +446,7 @@ func TestDispatch_AuthorVerifiedOnlyUnderF09(t *testing.T) {
 func TestDispatch_VerifiedAfterRestart(t *testing.T) {
 	home := t.TempDir()
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
-		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true}
+		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}}
 	m := New(context.Background(), deps)
 	ri := bootRepo(t, m)
 	entries := []string{trig("verified-only", "learn", "", "change.author.verified === true")}
@@ -768,7 +768,7 @@ func TestDispatch_OneRunRowPerRun(t *testing.T) {
 func TestDispatch_CrashBetweenFireAndWatermark(t *testing.T) {
 	home := t.TempDir()
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
-		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true}
+		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}}
 	m := New(context.Background(), deps)
 	ri := bootRepo(t, m)
 	setOntology(t, ri, triggerOntology("", trig("all", "learn", "", "")))
@@ -840,14 +840,17 @@ func TestDispatch_NonlinearRewindDiffs(t *testing.T) {
 
 // ---- Lifecycle
 
-// SurvivesSyncRestart: the dispatcher has its OWN context. DeactivateSync
-// cancels syncCtx (the same cancel ActivateSync uses to restart the reconcile
-// loop); a write afterwards still fires. Sabotage: derive the dispatcher's
-// context from syncCtx.
+// SurvivesSyncRestart: the dispatcher runs under the Serve stage's life, not
+// Sync's. An origin detach restarts Sync (and only Sync); a write afterwards
+// still fires. Sabotage: run the dispatcher under the Sync life.
 func TestDispatch_SurvivesSyncRestart(t *testing.T) {
-	_, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
+	m, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	write(t, ri, "kb/tasks/before.md")
-	ri.DeactivateSync()
+	serveGen, syncGen := ri.Status().gens[StageServe], ri.Status().gens[StageSync]
+	_, err := m.Send(context.Background(), ri, DetachOrigin())
+	require.NoError(t, err)
+	require.Equal(t, serveGen, ri.Status().gens[StageServe], "Serve was not touched")
+	require.NotEqual(t, syncGen, ri.Status().gens[StageSync], "Sync was restarted")
 	write(t, ri, "kb/tasks/after.md")
 	require.Equal(t, []string{"kb/tasks/after.md", "kb/tasks/before.md"}, pathsOf(firesOf(t, ri, "all")))
 }
@@ -863,7 +866,7 @@ func TestDispatch_SurvivesSwapStore(t *testing.T) {
 	require.NoError(t, ri.WithRead(func(svc *store.Service) { require.NoError(t, svc.Checkpoint()) }))
 	tmp := filepath.Join(t.TempDir(), "copy.db")
 	copyDB(t, m.RepoPath(ri.UID()), tmp)
-	require.NoError(t, m.SwapStore(ri, tmp))
+	require.NoError(t, swapStore(m, ri, tmp))
 	write(t, ri, "kb/tasks/after.md")
 	require.Equal(t, []string{"kb/tasks/after.md", "kb/tasks/before.md"}, pathsOf(firesOf(t, ri, "all")))
 }
@@ -886,11 +889,11 @@ func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "copy.db")
 	copyDB(t, m.RepoPath(ri.UID()), tmp)
 	started := time.Now()
-	require.NoError(t, m.SwapStore(ri, tmp))
-	require.Less(t, time.Since(started), time.Second, "SwapStore must not drain behind a run's if phase")
+	require.NoError(t, swapStore(m, ri, tmp))
+	require.Less(t, time.Since(started), time.Second, "a swap must not drain behind a run's if phase")
 
 	started = time.Now()
-	ri.triggers.stop()
+	restartServe(t, ri)
 	require.Less(t, time.Since(started), 500*time.Millisecond, "cancel stops the run within one evaluation")
 }
 
@@ -899,10 +902,10 @@ func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
 func TestDispatch_NotStartedReadOnlyOrSubscribed(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
-		AgentBranch:           trigAgent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
+		AgentBranch: trigAgent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)

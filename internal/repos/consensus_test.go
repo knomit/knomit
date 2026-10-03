@@ -68,11 +68,11 @@ func newConsensusHost(t *testing.T, ont string, o hostOpts) *cHost {
 	cfg := config.Config{Home: home, OntologyRoot: "kb", ReadOnly: o.readOnly}
 	cfg.Git.LocalReconcileInterval = time.Minute
 	m := New(context.Background(), Deps{
-		Cfg:                   cfg,
-		AgentBranch:           cHostAgent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		Signer:                testsigner.Named("consensus-host"),
-		DisableBackgroundSync: !o.background,
+		Cfg:         cfg,
+		AgentBranch: cHostAgent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Signer:      testsigner.Named("consensus-host"),
+		Machine:     Options{Synchronous: !o.background, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	require.NoError(t, m.Start())
@@ -197,11 +197,11 @@ func newConsensusPeer(t *testing.T, url string) *cPeer {
 	t.Helper()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch:           cPeerAgent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		Signer:                testsigner.Named("consensus-peer"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
+		AgentBranch: cPeerAgent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Signer:      testsigner.Named("consensus-peer"),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	require.NoError(t, m.Start())
@@ -746,10 +746,10 @@ func TestConsensus_EnabledAtRuntime(t *testing.T) {
 func TestConsensus_ReadOnlyHasNoMerger(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
-		AgentBranch:           cHostAgent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
+		AgentBranch: cHostAgent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	require.NoError(t, m.Start())

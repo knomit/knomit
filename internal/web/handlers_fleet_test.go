@@ -66,7 +66,7 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	require.NoError(t, os.MkdirAll(home, 0o755))
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), DisableBackgroundSync: true,
+		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), Machine: repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

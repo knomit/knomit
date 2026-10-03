@@ -26,10 +26,10 @@ func newPeerManager(t *testing.T, agent string) *repos.Manager {
 	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch:           agent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
+		AgentBranch: agent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

@@ -25,9 +25,9 @@ func newTestLensManager(t *testing.T, names ...string) (*repos.Manager, string) 
 	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home},
+		AgentBranch: "machine/test",
+		Machine:     repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)

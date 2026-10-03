@@ -95,6 +95,7 @@ type Status struct {
 	terminal     terminal
 	job          string // the manual rebuild's job id, "" for a heal
 	jobFull      bool
+	gens         [StageReady]uint64 // each entered stage's life generation, 0 when not entered
 }
 
 // IndexRunning reports whether the index job is in flight — what makes
@@ -610,6 +611,11 @@ func (m *Machine) computeStatus() Status {
 		s.Stage = stageName(m.entering)
 	}
 	s.terminal = m.term
+	for k, l := range m.lives {
+		if l != nil {
+			s.gens[k] = l.gen
+		}
+	}
 	s.open = m.lives[StageOpen] != nil
 	s.indexRunning = m.indexRunning()
 	switch v := r.indexVerdict; {

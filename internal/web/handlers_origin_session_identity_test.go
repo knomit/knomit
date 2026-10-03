@@ -118,9 +118,9 @@ func newIdentitySessionServer(t *testing.T) (*Server, *repos.Manager, string) {
 			OntologyRoot:    "kb",
 			LocalOriginRoot: remotesRoot,
 		},
-		AgentBranch:           "agent/test",
-		KeyPath:               keyPath,
-		DisableBackgroundSync: true,
+		AgentBranch: "agent/test",
+		KeyPath:     keyPath,
+		Machine:     repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {

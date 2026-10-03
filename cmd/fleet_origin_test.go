@@ -219,7 +219,7 @@ func newFleetServerOpts(t *testing.T, f *pkitest.Fleet, signed bool) *fleetServe
 	if signed {
 		bSigner = keySigner(t, bKey)
 	}
-	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, Signer: bSigner, AgentBranch: fleetServerAgent, DisableBackgroundSync: true})
+	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, Signer: bSigner, AgentBranch: fleetServerAgent, Machine: repos.Options{Synchronous: true}})
 	if err := bMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestFleetOrigin_ReinstallPresentsTheNewPrincipal(t *testing.T) {
 			t.Fatalf("install %s: %v", host, err)
 		}
 		mgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-			KeyPath: key, AgentBranch: "agent/" + host + "-00000000", DisableBackgroundSync: true})
+			KeyPath: key, AgentBranch: "agent/" + host + "-00000000", Machine: repos.Options{Synchronous: true}})
 		if err := mgr.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -323,7 +323,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	}
 	aCfg := config.Config{Home: aHome, OntologyRoot: "kb",
 		Remote: config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_global_forge_token"}}
-	aMgr := repos.New(ctx, repos.Deps{Cfg: aCfg, KeyPath: aKey, AgentBranch: "agent/alpha-00000000", DisableBackgroundSync: true})
+	aMgr := repos.New(ctx, repos.Deps{Cfg: aCfg, KeyPath: aKey, AgentBranch: "agent/alpha-00000000", Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestFleetOrigin_PeerPushesOwnBranchOverKnomitHTTPS(t *testing.T) {
 	}
 	aBranch := "agent/alpha-" + pki.Short(aMember.Fingerprint())
 	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		KeyPath: aKey, AgentBranch: aBranch, DisableBackgroundSync: true})
+		KeyPath: aKey, AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}

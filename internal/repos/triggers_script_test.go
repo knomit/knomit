@@ -138,7 +138,7 @@ func newScriptRepo(t *testing.T, rate int, entries ...string) (*Manager, *RepoIn
 	cfg.Triggers.ScriptRatePerMinute = rate
 	tools := &stubTools{}
 	m := New(context.Background(), Deps{Cfg: cfg, AgentBranch: trigAgent,
-		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true, ScriptTools: tools})
+		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}, ScriptTools: tools})
 	t.Cleanup(func() { _ = m.Close() })
 	// What a booted server records once its listeners are bound; a recipe's
 	// exec waits for it (recipeEnv). Nothing listens at this address.
@@ -957,11 +957,11 @@ func TestScript_NoStoreHeldDuringScript(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "copy.db")
 	copyDB(t, m.RepoPath(ri.UID()), tmp)
 	started := time.Now()
-	require.NoError(t, m.SwapStore(ri, tmp))
-	require.Less(t, time.Since(started), time.Second, "SwapStore must not wait behind a running script")
+	require.NoError(t, swapStore(m, ri, tmp))
+	require.Less(t, time.Since(started), time.Second, "a swap must not wait behind a running script")
 
 	started = time.Now()
-	ri.triggers.stop()
+	restartServe(t, ri)
 	require.Less(t, time.Since(started), 500*time.Millisecond, "cancel interrupts the script within the interrupt latency, not the 5 s budget")
 }
 

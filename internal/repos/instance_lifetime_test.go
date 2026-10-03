@@ -20,9 +20,9 @@ import (
 func newLifetimeTestManager(t *testing.T) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: t.TempDir()},
-		AgentBranch:           "agent/test",
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: t.TempDir()},
+		AgentBranch: "agent/test",
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	bootRepo(t, m)
@@ -36,7 +36,7 @@ func TestAcquire_AfterClose_ReturnsErrRepoClosed(t *testing.T) {
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
-	ri.shutdown()
+	unmount(ri, "test")
 
 	_, _, err := ri.Acquire()
 	require.ErrorIs(t, err, ErrRepoClosed)
@@ -63,7 +63,7 @@ func TestClose_WaitsForInFlightAcquire(t *testing.T) {
 
 	closed := make(chan struct{})
 	go func() {
-		ri.shutdown()
+		unmount(ri, "test")
 		close(closed)
 	}()
 
@@ -122,21 +122,20 @@ func TestWithRead_ConcurrentWithClose_NeverSeesClosedStore(t *testing.T) {
 	}
 
 	time.Sleep(20 * time.Millisecond)
-	ri.shutdown()
+	unmount(ri, "test")
 	close(stop)
 	wg.Wait()
 	require.Zero(t, sqlErrs.Load(), "no acquired reader may ever observe a closed/failed store")
 }
 
-// TestSwapStore_DrainsInFlightUsers: an in-memory SwapStore must wait for
+// TestSwapStore_DrainsInFlightUsers: a store swap's Open.Exit must wait for
 // outstanding acquisitions of the old generation before closing it, and new
 // acquisitions after the swap must see the new service.
 func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
-	// Force the in-memory (pointer-swap) path.
-	ri.dbPath = ""
+	waitIndexSettled(t, ri)
 
 	oldSvc, release, err := ri.Acquire()
 	require.NoError(t, err)
@@ -149,12 +148,12 @@ func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	seed.Close()
 
 	swapped := make(chan error, 1)
-	go func() { swapped <- m.SwapStore(ri, tempDB) }()
+	go func() { swapped <- swapStore(m, ri, tempDB) }()
 
 	// The swap must not finish while the old generation is held.
 	select {
 	case <-swapped:
-		t.Fatal("SwapStore completed while an Acquire on the old store was outstanding")
+		t.Fatal("the swap completed while an Acquire on the old store was outstanding")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -166,8 +165,8 @@ func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	select {
 	case err := <-swapped:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("SwapStore did not complete after release")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the swap did not complete after release")
 	}
 
 	// New acquisitions see the swapped-in service, and it works.

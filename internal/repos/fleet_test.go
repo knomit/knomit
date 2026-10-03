@@ -44,10 +44,10 @@ func seedFleetRemote(t *testing.T, bare string) string {
 func newFleetManager(t *testing.T, dir string) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: filepath.Join(dir, "home"), OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch:           "agent/test-fleet",
-		Signer:                testsigner.Named("fleet-test"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: filepath.Join(dir, "home"), OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentBranch: "agent/test-fleet",
+		Signer:      testsigner.Named("fleet-test"),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "home"), 0o755))
 	require.NoError(t, m.Start())

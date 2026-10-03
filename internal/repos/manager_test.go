@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -41,12 +40,12 @@ func TestStart_freshHomeHasNoRepos(t *testing.T) {
 func TestManager_Set_EvictsStaleUID(t *testing.T) {
 	m := New(context.Background(), Deps{})
 
-	first := &RepoInstance{uid: "uid-1", syncCancel: func() {}, syncWg: &sync.WaitGroup{}, indexCancel: func() {}, indexWg: &sync.WaitGroup{}}
+	first := &RepoInstance{uid: "uid-1"}
 	first.setName("core")
 	m.Set("core", first)
 	require.Same(t, first, m.GetByUID("uid-1"))
 
-	second := &RepoInstance{uid: "uid-2", syncCancel: func() {}, syncWg: &sync.WaitGroup{}, indexCancel: func() {}, indexWg: &sync.WaitGroup{}}
+	second := &RepoInstance{uid: "uid-2"}
 	second.setName("core")
 	m.Set("core", second)
 
@@ -61,9 +60,9 @@ func TestStart_reopensExistingReposOnly(t *testing.T) {
 	dir := t.TempDir()
 	boot := func() *Manager {
 		m := New(context.Background(), Deps{
-			Cfg:                   config.Config{Home: dir},
-			AgentBranch:           "machine/test",
-			DisableBackgroundSync: true,
+			Cfg:         config.Config{Home: dir},
+			AgentBranch: "machine/test",
+			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		return m
@@ -78,51 +77,4 @@ func TestStart_reopensExistingReposOnly(t *testing.T) {
 	t.Cleanup(func() { _ = m2.Close() })
 	require.ElementsMatch(t, []string{"alpha", "beta"}, m2.Names(),
 		"reboot must re-open exactly the repos on disk — no more, no fewer")
-}
-
-// TestShutdown_concurrentSyncCancelUpdate verifies that Shutdown() does not
-// race with concurrent writes to ri.syncCancel (as happens when ActivateSync
-// is called while a shutdown is in progress). Run with -race to detect
-// violations.
-func TestShutdown_concurrentSyncCancelUpdate(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	m := New(ctx, Deps{})
-	ri := &RepoInstance{
-		syncWg:     &sync.WaitGroup{},
-		syncCancel: func() {},
-	}
-	ri.setName("test")
-	m.Set("test", ri)
-
-	const n = 500
-	var wg sync.WaitGroup
-	ready := make(chan struct{})
-
-	// Simulate the write that startSync performs after restarting sync loops.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-ready
-		for i := 0; i < n; i++ {
-			f := func() {}
-			ri.mu.Lock()
-			ri.syncCancel = f
-			ri.mu.Unlock()
-		}
-	}()
-
-	// Concurrently call Shutdown, which reads ri.syncCancel.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-ready
-		for i := 0; i < n; i++ {
-			m.Close()
-		}
-	}()
-
-	close(ready)
-	wg.Wait()
 }
