@@ -689,9 +689,12 @@ func applyDedupMerge(
 		//
 		// Because this skip sits BEFORE the search, a flagged fact also skips
 		// hypothesis subsumption below: an observation that settles a
-		// hypothesis under a flagged topic leaves BOTH live, and review never
-		// touches the topic either. Accepted — coordination topics do not carry
-		// hypotheses — but it is a consequence, not an accident.
+		// hypothesis under a flagged topic leaves BOTH live. Accepted —
+		// coordination topics do not carry hypotheses — but it is a
+		// consequence, not an accident. Review is NOT affected: learn_dedup
+		// governs knomit_learn only, and review still seeds and dedups
+		// knowledge facts under a flagged topic
+		// (TestDirtyFacts_LearnDedupOffDoesNotAffectSeeds).
 		if ontology.LearnDedupOff(topicCategories[i]) {
 			continue
 		}
