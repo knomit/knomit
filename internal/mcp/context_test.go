@@ -143,7 +143,7 @@ func TestLearn_ContextShapeRefusedWholeCall(t *testing.T) {
 		{"257 bytes", map[string]any{"note": strings.Repeat("x", 257)}, `key "note"`},
 		{"newline", map[string]any{"note": "a\nb"}, `key "note"`},
 		{"tab", map[string]any{"note": "a\tb"}, `key "note"`},
-		{"line separator", map[string]any{"note": "a b"}, `key "note"`},
+		{"line separator", map[string]any{"note": "a\u2028b"}, `key "note"`},
 		// Invalid UTF-8 cannot reach this handler: decodeArg's JSON round trip
 		// turns it into U+FFFD. SerializeFact's own gate refuses it
 		// (fact.TestContext_SerializeShapeGate).
@@ -160,6 +160,11 @@ func TestLearn_ContextShapeRefusedWholeCall(t *testing.T) {
 			text := resultText(t, res)
 			require.Contains(t, text, "fact 1:", "names the fact's index")
 			require.Contains(t, text, c.key, "names the key")
+			// The SHAPE gate refused it, not the typed gate behind it: an
+			// over-long key is also undeclared, and a 257-byte value also
+			// breaks the 128-byte default, so "refused" alone would pass even
+			// with the hard caps gone.
+			require.Contains(t, text, "invalid context", "refused by the shape gate")
 			require.Equal(t, before, branchTip(t, svc), "nothing written: the branch tip did not move")
 		})
 	}

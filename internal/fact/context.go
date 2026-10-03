@@ -112,7 +112,7 @@ func contextStringShape(s string) error {
 		return fmt.Errorf("a string is %d bytes, at most %d", len(s), MaxContextValueBytes)
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) || r == ' ' || r == ' ' {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
 			return fmt.Errorf("a string must be one line with no control characters (found %U)", r)
 		}
 	}
