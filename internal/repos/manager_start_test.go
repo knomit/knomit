@@ -80,7 +80,7 @@ func TestStart_ClassifiesUnavailableReasons(t *testing.T) {
 
 	// Case A ("missing"): zeta's uid has no file at m.RepoPath at all.
 	// Case B ("unopenable"): alpha's uid has a file, but it isn't a valid
-	// store — openOne must fail rather than panic or silently succeed.
+	// store — its Open stage must fail rather than panic or silently succeed.
 	require.NoError(t, os.WriteFile(m.RepoPath(unopenableUID), []byte("not a sqlite db"), 0o644))
 
 	require.NoError(t, m.Start())

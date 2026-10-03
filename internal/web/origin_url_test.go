@@ -187,21 +187,15 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 		}
 	})
 
-	// PUT /repos/{repo}/origin PERSISTS the URL without a network round trip
-	// first — the handler's own comment says the origin row is kept even when
-	// the following ActivateSync fails. An untrimmed URL here is STORED, and
-	// becomes the identity key ActiveRepoWithOrigin matches on, so this is the
-	// entry point whose trim most needs pinning.
-	//
-	// Adapted from the reviewer's own fixture, which is better than what this
-	// table had first: the assertion is on what lands in control.db, NOT on
-	// the response status. This endpoint answers 502 either way — the
-	// example.invalid host never resolves, so ActivateSync fails regardless —
-	// so a status assertion would pin nothing at all.
+	// PUT /repos/{repo}/origin PERSISTS the URL once its attach guard has
+	// probed it. An untrimmed URL here is STORED, and becomes the identity key
+	// ActiveRepoWithOrigin matches on, so this is the entry point whose trim
+	// most needs pinning. The remote is a real (recording) knowledge base, so
+	// the probe passes and the assertion is on what lands in control.db.
 	t.Run("PUT /repos/{repo}/origin", func(t *testing.T) {
-		const clean = "https://example.invalid/kb.git"
 		for name, pad := range whitespaceForms {
 			t.Run(name, func(t *testing.T) {
+				clean, _, _ := recordingRemote(t)
 				s, m, ri := newControlDBTestServer(t, t.TempDir())
 				rec := httptest.NewRecorder()
 				req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin",

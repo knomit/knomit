@@ -657,6 +657,19 @@ func (r *RepoHandle) Restart() {
 	r.manager = m
 	r.ri = ri
 	r.branches = map[string]*BranchHandle{}
+
+	// A mount replies once its walk is up; the index job runs in the
+	// background. "Survives restart" cells assert on the index, so wait for
+	// it to settle.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	for tr := range ri.Watch(ctx) {
+		if tr.Status.Index.State != repos.IndexStateIndexing {
+			return
+		}
+	}
+	r.expectDirty = true
+	t.Fatalf("Restart(%q): the index never settled", r.name)
 }
 
 // RestartWithEmbedder restarts the repo using a different embedder, simulating

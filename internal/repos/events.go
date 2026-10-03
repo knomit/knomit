@@ -129,6 +129,10 @@ type Reply struct {
 	// identical rebuild was already running and this one joined it.
 	JobID    string
 	Absorbed bool
+	// Warning is what the event's apply could not do without failing the
+	// event: a swap is past its point of no return once the store is
+	// installed, so an origin row that could not be saved is reported here.
+	Warning string
 	// Status is the machine's status after the event was handled.
 	Status Status
 }
@@ -428,13 +432,21 @@ func applySwap(m *Machine, s SwapSpec) error {
 	if s.Origin.URL == "" {
 		return nil // no new origin: the stored one stays
 	}
+	// The store IS swapped from here on — the point of no return. A failure
+	// to persist the origin is a WARNING on the reply, not the event's error:
+	// the swap cannot be undone, and the repo comes up on the new store with
+	// the origin control.db still holds.
+	warn := func(err error) error {
+		m.applyWarning = fmt.Sprintf("save remote config: %v", err)
+		return nil
+	}
 	origins := r.env.m.Origins()
 	if origins == nil {
-		return ErrManagerStopped
+		return warn(ErrManagerStopped)
 	}
 	stored, err := origins.Get(r.uid)
 	if err != nil {
-		return fmt.Errorf("store swapped, but the origin was not saved: %w", err)
+		return warn(err)
 	}
 	mode := OriginModeSync
 	if stored != nil {
@@ -442,7 +454,7 @@ func applySwap(m *Machine, s SwapSpec) error {
 	}
 	o := s.Origin
 	if err := origins.Set(r.uid, Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
-		return fmt.Errorf("store swapped, but the origin was not saved: %w", err)
+		return warn(err)
 	}
 	return nil
 }

@@ -900,8 +900,8 @@ func countActiveWithOrigin(m *Manager, url string) int {
 
 // seedBareRemoteWithFact builds a bare git repo on `main` containing one valid
 // kb fact (plus the default ontology), returning a file:// URL. The fact gives a
-// clone-mode Create real index work to do, so the background heal is still in
-// flight when Create's ActivateSync fires.
+// clone-mode Create real index work to do, so the index job is still in flight
+// while the rest of the mount walk (Serve, Sync) runs.
 func seedBareRemoteWithFact(t *testing.T, bare string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))

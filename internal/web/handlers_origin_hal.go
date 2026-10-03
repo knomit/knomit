@@ -283,6 +283,17 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 		// the partial-update case (reuse what is stored).
 		req.URL = trimOriginURL(req.URL)
 
+		// The local-origin policy at the write edge, before anything else
+		// reads req.URL (the attach guard re-asserts it). A partial update
+		// (empty url) reuses the stored URL, gated when it was first written.
+		if req.URL != "" {
+			if err := m.ValidateLocalOrigin(req.URL); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
+					detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
+				return
+			}
+		}
+
 		existing, err := op.GetOrigin(r.Context(), ri)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "No store available", err.Error(), r.URL.Path)

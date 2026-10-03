@@ -226,8 +226,12 @@ type Machine struct {
 	jobID      string // the current manual rebuild's job id
 	closing    bool   // set before an Unmount's exits: Open.Exit marks the instance closed
 	pendingBak string // a swap's backup, deleted by the next successful Open
-	lastPub    Status
-	pub        indexPublisher
+	// applyWarning is what the current event's apply could not do without
+	// failing the event (a swap whose origin row was not saved); it becomes
+	// Reply.Warning.
+	applyWarning string
+	lastPub      Status
+	pub          indexPublisher
 
 	progressPending atomic.Bool
 	status          atomic.Pointer[Status]
@@ -307,7 +311,7 @@ func (m *Machine) Status() Status { return *m.status.Load() }
 // current status is delivered first. A slow reader sees the latest status,
 // not every intermediate one.
 func (m *Machine) Watch(ctx context.Context) <-chan Transition {
-	return m.watchers.subscribe(ctx, m.Status(), m.done)
+	return m.watchers.subscribe(ctx, m.Status, m.done)
 }
 
 // Done is closed once the machine has unmounted.
@@ -413,7 +417,9 @@ func (m *Machine) handleExternal(e *MachineEvent) bool {
 		m.jobID = fmt.Sprintf("rebuild-%d", m.jobSeq)
 		rep.JobID = m.jobID
 	}
+	m.applyWarning = ""
 	applyErr := e.apply(m)
+	rep.Warning = m.applyWarning
 	if e.kind != evCancelIndex {
 		m.walk(e.target)
 	}
@@ -553,6 +559,12 @@ func (m *Machine) enter(k StageID) error {
 	l := &Life{ctx: ctx, cancel: cancel, gen: m.nextGen, stage: k, post: m.post}
 	m.lives[k] = l
 	m.entering = k
+	// A new store generation (Open) or a new index job (Index) has no index
+	// result yet: whatever the last one said described other work.
+	if k == StageOpen || k == StageIndex {
+		m.r.indexVerdict = nil
+		m.r.indexProgress.Store(&indexProgress{})
+	}
 	m.publish()
 	if h := m.opts.Hook; h != nil {
 		h(k, "enter", ctx)
@@ -591,8 +603,10 @@ func (m *Machine) unmount() {
 	}
 	m.inbox.close()
 	s := m.computeStatus()
+	m.watchers.mu.Lock()
 	m.status.Store(&s)
-	m.watchers.closeAll(Transition{Status: s})
+	m.watchers.closeAllLocked(Transition{Status: s})
+	m.watchers.mu.Unlock()
 	close(m.done)
 }
 
@@ -645,22 +659,27 @@ func (m *Machine) computeStatus() Status {
 // when the index state changed or its throttled progress moved.
 func (m *Machine) publish() {
 	s := m.computeStatus()
+	// The snapshot first (an event must not outrun the state a reader polls),
+	// then the events, then the watchers — all under the broadcaster's lock,
+	// which a new Watch takes for its first value, so a watcher that reacts to
+	// a transition (the create job's done) does so after its event is out.
+	m.watchers.mu.Lock()
+	defer m.watchers.mu.Unlock()
 	m.status.Store(&s)
-	m.watchers.send(Transition{Status: s})
-	if m.term == termClosed {
-		return
+	if m.term != termClosed {
+		prev := m.lastPub
+		m.lastPub = s
+		changed := s.Index.State != prev.Index.State || s.Index.Reason != prev.Index.Reason || s.job != prev.job
+		moved := s.Index.Done != prev.Index.Done || s.Index.Total != prev.Index.Total
+		switch {
+		case changed:
+			m.publishIndex(s, false)
+		case moved && s.Index.State == IndexStateIndexing:
+			m.publishIndex(s, true)
+		}
+		m.publishRebuildTask(prev, s)
 	}
-	prev := m.lastPub
-	m.lastPub = s
-	changed := s.Index.State != prev.Index.State || s.Index.Reason != prev.Index.Reason || s.job != prev.job
-	moved := s.Index.Done != prev.Index.Done || s.Index.Total != prev.Index.Total
-	switch {
-	case changed:
-		m.publishIndex(s, false)
-	case moved && s.Index.State == IndexStateIndexing:
-		m.publishIndex(s, true)
-	}
-	m.publishRebuildTask(prev, s)
+	m.watchers.sendLocked(Transition{Status: s})
 }
 
 // publishRebuildTask keeps the jobs UI contract for a manual rebuild — hub
@@ -703,19 +722,22 @@ func (m *Machine) publishRebuildTask(prev, s Status) {
 	}
 }
 
-// broadcaster fans status transitions out to watchers, latest-value-wins.
+// broadcaster fans status transitions out to watchers, latest-value-wins. Its
+// lock also orders a new watcher against publish: a Watch takes its first
+// value under the same lock publish holds across store, events and send, so a
+// watcher never sees a status whose events have not gone out yet.
 type broadcaster struct {
 	mu     sync.Mutex
 	subs   map[chan Transition]struct{}
 	closed bool
 }
 
-func (b *broadcaster) subscribe(ctx context.Context, current Status, done <-chan struct{}) <-chan Transition {
+func (b *broadcaster) subscribe(ctx context.Context, current func() Status, done <-chan struct{}) <-chan Transition {
 	ch := make(chan Transition, 1)
 	b.mu.Lock()
+	ch <- Transition{Status: current()}
 	if b.closed {
 		b.mu.Unlock()
-		ch <- Transition{Status: current}
 		close(ch)
 		return ch
 	}
@@ -723,7 +745,6 @@ func (b *broadcaster) subscribe(ctx context.Context, current Status, done <-chan
 		b.subs = map[chan Transition]struct{}{}
 	}
 	b.subs[ch] = struct{}{}
-	ch <- Transition{Status: current}
 	b.mu.Unlock()
 	go func() {
 		select {
@@ -740,10 +761,9 @@ func (b *broadcaster) subscribe(ctx context.Context, current Status, done <-chan
 	return ch
 }
 
-// send replaces whatever a watcher has not read yet with t.
-func (b *broadcaster) send(t Transition) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+// sendLocked replaces whatever a watcher has not read yet with t. The caller
+// holds b.mu.
+func (b *broadcaster) sendLocked(t Transition) {
 	for ch := range b.subs {
 		select {
 		case <-ch:
@@ -753,10 +773,9 @@ func (b *broadcaster) send(t Transition) {
 	}
 }
 
-// closeAll ends every watch with the final transition left readable.
-func (b *broadcaster) closeAll(last Transition) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+// closeAllLocked ends every watch with the final transition left readable.
+// The caller holds b.mu.
+func (b *broadcaster) closeAllLocked(last Transition) {
 	b.closed = true
 	for ch := range b.subs {
 		select {

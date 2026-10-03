@@ -877,6 +877,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		}
 
 		var e repos.MachineEvent
+		attach := true // false: the shared-history commit has no branch to record
 		if testResult.History == "shared" {
 			// Shared history means the remote holds the SAME knowledge base
 			// this repo already does, so the one-copy-per-knowledge-base rule
@@ -893,6 +894,12 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 						"this remote holds the same knowledge base as the repo %q; connect aborted before any change was made", holder), r.URL.Path)
 					return
 				}
+			}
+			// With neither a chosen branch nor the remote's default, the session
+			// established no consensus branch: record NO origin (the warning
+			// says why) rather than let the attach fall back to one.
+			if upstreamMain == "" {
+				attach = false
 			}
 			e = repos.AttachOrigin(origin)
 		} else {
@@ -929,8 +936,14 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 				return
 			}
 		}
-		if !streamLifecycle(w, r, b, rm, ri, repo, stream, e) {
-			return
+		if attach {
+			if !streamLifecycle(w, r, b, rm, ri, repo, stream, e) {
+				return
+			}
+		} else {
+			stream.event(map[string]string{"phase": "configuring"})
+			stream.event(map[string]any{"phase": "done", "index_state": ri.Status().Index.State,
+				"warning": "save remote config: " + store.ErrNoConsensusBranch.Error()})
 		}
 
 		sess.mu.Lock()
@@ -968,8 +981,9 @@ func (s *lazyStream) event(v any) bool {
 // streamLifecycle sends e to ri's machine and streams its transitions as
 // phases until the repo's index has left "indexing": swapping (the machine is
 // rewinding to Populate), configuring (Open, Identify), indexing with
-// current/total, then done (carrying index_state, and the index's reason when
-// it ended in error) or error with the event's own failure. A refusal that
+// current/total, then done (carrying index_state, and a warning: an origin row
+// a swap could not save, the index's reason when it ended in error) or error
+// with the event's own failure. A refusal that
 // arrives while the stream is still closed is answered as an HTTP problem.
 // It reports whether the event succeeded.
 func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, rm *repos.Manager,
@@ -978,11 +992,14 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 	defer cancel()
 	watch := ri.Watch(ctx)
 
-	type result struct{ err error }
+	type result struct {
+		rep repos.Reply
+		err error
+	}
 	done := make(chan result, 1)
 	go func() {
-		_, err := rm.Send(ctx, ri, e)
-		done <- result{err}
+		rep, err := rm.Send(ctx, ri, e)
+		done <- result{rep, err}
 	}()
 
 	phase := ""
@@ -1006,6 +1023,7 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 
 	var sent bool
 	var sendErr error
+	var warning string
 	for !sent {
 		select {
 		case t, ok := <-watch:
@@ -1015,7 +1033,7 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 			}
 			emitPhase(t.Status)
 		case res := <-done:
-			sent, sendErr = true, res.err
+			sent, sendErr, warning = true, res.err, res.rep.Warning
 		}
 	}
 	if sendErr != nil {
@@ -1045,7 +1063,10 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 	}
 	doneEv := map[string]any{"phase": "done", "index_state": st.Index.State}
 	if st.Index.Reason != "" {
-		doneEv["warning"] = "index: " + st.Index.Reason
+		warning = strings.TrimPrefix(warning+"; index: "+st.Index.Reason, "; ")
+	}
+	if warning != "" {
+		doneEv["warning"] = warning
 	}
 	stream.event(doneEv)
 	return true

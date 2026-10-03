@@ -163,7 +163,7 @@ func gitOut(t *testing.T, bare string, args ...string) string {
 
 // THE BUG THIS PLAN EXISTS TO CLOSE. Creating the repository with a README made
 // it non-empty, so the wizard routed to clone; clone refused the ontology the
-// user had chosen and then let repoBuilder.loadOntology silently substitute
+// user had chosen and then let the open path's loadOntology silently substitute
 // fact.DefaultOntology() at the next open. They picked "Code", got "General",
 // and were never told — permanently, since the ontology is immutable after
 // creation.

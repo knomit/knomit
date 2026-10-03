@@ -417,7 +417,7 @@ func TestDue_SweepRunsOnReconcileTick(t *testing.T) {
 			Git: config.GitConfig{LocalReconcileInterval: 100 * time.Millisecond}},
 		AgentBranch: trigAgent,
 		KeyPath:     filepath.Join(home, "agent.key"),
-		// DisableBackgroundSync deliberately NOT set: the tick is the point.
+		// Machine.Synchronous deliberately NOT set: the tick is the point.
 	})
 	t.Cleanup(func() { m.Close() })
 	ri := bootRepo(t, m)
