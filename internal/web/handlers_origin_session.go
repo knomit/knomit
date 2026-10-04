@@ -903,6 +903,16 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			}
 			e = repos.AttachOrigin(origin)
 		} else {
+			// A swap installs the remote's store; with no consensus branch
+			// there is no origin to record alongside it, and installing the
+			// store without its origin would leave it under whatever origin
+			// control.db held before. Refused while refusing is still free.
+			if upstreamMain == "" {
+				hal.WriteProblem(w, http.StatusBadRequest, "No consensus branch",
+					"save remote config: "+store.ErrNoConsensusBranch.Error()+"; choose the remote branch to follow and commit again",
+					r.URL.Path)
+				return
+			}
 			swapBranch := appliedBranch
 			if swapBranch == "" {
 				swapBranch = agentBranch
@@ -981,9 +991,8 @@ func (s *lazyStream) event(v any) bool {
 // streamLifecycle sends e to ri's machine and streams its transitions as
 // phases until the repo's index has left "indexing": swapping (the machine is
 // rewinding to Populate), configuring (Open, Identify), indexing with
-// current/total, then done (carrying index_state, and a warning: an origin row
-// a swap could not save, the index's reason when it ended in error) or error
-// with the event's own failure. A refusal that
+// current/total, then done (carrying index_state, and a warning carrying the
+// index's reason when it ended in error) or error with the event's own failure. A refusal that
 // arrives while the stream is still closed is answered as an HTTP problem.
 // It reports whether the event succeeded.
 func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, rm *repos.Manager,
@@ -1023,7 +1032,6 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 
 	var sent bool
 	var sendErr error
-	var warning string
 	for !sent {
 		select {
 		case t, ok := <-watch:
@@ -1033,7 +1041,7 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 			}
 			emitPhase(t.Status)
 		case res := <-done:
-			sent, sendErr, warning = true, res.err, res.rep.Warning
+			sent, sendErr = true, res.err
 		}
 	}
 	if sendErr != nil {
@@ -1063,10 +1071,7 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 	}
 	doneEv := map[string]any{"phase": "done", "index_state": st.Index.State}
 	if st.Index.Reason != "" {
-		warning = strings.TrimPrefix(warning+"; index: "+st.Index.Reason, "; ")
-	}
-	if warning != "" {
-		doneEv["warning"] = warning
+		doneEv["warning"] = "index: " + st.Index.Reason
 	}
 	stream.event(doneEv)
 	return true

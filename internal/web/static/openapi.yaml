@@ -2004,12 +2004,16 @@ paths:
         "200":
           description: |
             SSE stream of phases: swapping → configuring → indexing → done.
-            `done` may carry `warning` (the store was installed but a follow-up
-            step, such as persisting the origin, failed) and `index_state`.
-            `error` carries the failure.
+            `done` carries `index_state`, and a `warning` when the new store's
+            index ended in error (its reason) or, on a shared-history commit,
+            when no consensus branch was known and no origin was recorded.
+            `error` carries the failure; a swap that fails restores the
+            previous store and origin. A disjoint-history commit with no
+            consensus branch is refused with 400 before anything changes.
           content:
             text/event-stream:
               schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409":
           description: |

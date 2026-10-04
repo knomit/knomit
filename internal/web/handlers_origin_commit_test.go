@@ -139,37 +139,34 @@ func postCommitBody(t *testing.T, s *Server, sessID, body string) *streamRecorde
 	return rec
 }
 
-// TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes: once the
-// store is installed the swap is past its point of no return, so a failure to
-// persist the origin must NOT abort into a retryable half-done state. With no
-// agent key, control.db has no Crypt, so Origins.Set refuses to store the
-// session's token — the commit must still reach "done" (carrying a non-fatal
-// warning, the swap reply's) and delete the session, not error out.
-func TestHandleCommit_Disjoint_PostSwapConfigFailureStillCompletes(t *testing.T) {
-	s, _, sm, sess, _ := newDisjointSession(t, "" /* no key → no Crypt → Origins.Set refuses the token */)
+// TestHandleCommit_Disjoint_OriginPersistFailureAbortsTheSwap: the swap
+// persists the origin BEFORE its one irreversible step (the copy), so a failure
+// to save the origin aborts the swap with nothing changed — never a new store
+// left under the old origin. With no agent key, control.db has no Crypt, so
+// Origins.Set refuses the session's token. The stream ends in an error phase,
+// no origin row is written, and the repo's previous store is still the live
+// one (its ontology still answers).
+func TestHandleCommit_Disjoint_OriginPersistFailureAbortsTheSwap(t *testing.T) {
+	s, ri, _, sess, _ := newDisjointSession(t, "" /* no key → no Crypt → Origins.Set refuses the token */)
+	idBefore := ri.ID()
 
 	rec := postCommit(t, s, sess.ID)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
-	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `"phase":"done"`) {
-		t.Errorf("commit must complete despite config failure; body=%s", body)
+	if strings.Contains(body, `"phase":"done"`) {
+		t.Fatalf("a swap whose origin could not be saved must not complete; body=%s", body)
 	}
-	if !strings.Contains(body, "warning") || !strings.Contains(body, "save remote config") {
-		t.Errorf("expected a non-fatal config warning in the stream; body=%s", body)
+	if !strings.Contains(body, "save remote config") || !strings.Contains(body, "nothing changed") {
+		t.Errorf("expected the persist failure, saying nothing changed; body=%s", body)
 	}
-	if strings.Contains(body, `"phase":"error"`) {
-		t.Errorf("post-swap config failure must not emit an error phase; body=%s", body)
+	o, err := s.Manager.Origins().Get(ri.UID())
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Session was committed and removed — a retry gets a clean 404, never a
-	// re-entry into the swap path on a closed store.
-	if _, ok := sm.Get("alpha", sess.ID); ok {
-		t.Error("session must be deleted after a completed commit")
+	if o != nil {
+		t.Errorf("no origin row may be written by an aborted swap: %+v", o)
 	}
-	if rec2 := postCommit(t, s, sess.ID); rec2.Code != http.StatusNotFound {
-		t.Errorf("retry after commit: got %d, want 404", rec2.Code)
+	if got := ri.ID(); got != idBefore {
+		t.Errorf("the previous store must stay live: repo id %q, want %q", got, idBefore)
 	}
 }
 

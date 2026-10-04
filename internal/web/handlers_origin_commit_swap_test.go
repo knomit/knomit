@@ -14,6 +14,17 @@ import (
 	"knomit/internal/repos"
 )
 
+// writeAgentKey writes an agent key file and returns its path: with it,
+// control.db has a Crypt and Origins.Set can store a credential.
+func writeAgentKey(t *testing.T) string {
+	t.Helper()
+	keyPath := t.TempDir() + "/agent.key"
+	if err := os.WriteFile(keyPath, []byte("agent-key-material-for-hkdf"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return keyPath
+}
+
 // indexHold holds the machines' index job at its hook once armed, until
 // released. Like every hook it watches the life's ctx, so a held job still
 // unmounts.
@@ -73,7 +84,10 @@ func waitIndexSettledWeb(t *testing.T, ri *repos.RepoInstance) string {
 // store's index to ready.
 func TestHandleCommit_Disjoint_SwapDuringIndexingIs409_CancelAndContinueReachesReady(t *testing.T) {
 	hold := newIndexHold()
-	f := newCommitFixture(t, "", hold.hook)
+	// An agent key, so control.db can store the session's credential: the
+	// swap persists its origin before installing the store, and a refused
+	// credential would abort the swap.
+	f := newCommitFixture(t, writeAgentKey(t), hold.hook)
 	t.Cleanup(hold.open)
 	hold.armed.Store(true)
 	if _, err := f.m.Send(context.Background(), f.ri, repos.Rebuild(f.ri.AgentBranch())); err != nil {

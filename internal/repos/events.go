@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -129,10 +130,6 @@ type Reply struct {
 	// identical rebuild was already running and this one joined it.
 	JobID    string
 	Absorbed bool
-	// Warning is what the event's apply could not do without failing the
-	// event: a swap is past its point of no return once the store is
-	// installed, so an origin row that could not be saved is reported here.
-	Warning string
 	// Status is the machine's status after the event was handled.
 	Status Status
 }
@@ -226,6 +223,15 @@ func (e *MachineEvent) guard(ctx context.Context, r *RepoInstance) error {
 // (kb/invariants/repos/probe/four-states-not-three): reachable, empty and
 // auth-required are distinct, and only a confirmed different ontology is a
 // conflict.
+//
+// BUDGET: it makes TWO network reads in sequence on the driver goroutine —
+// ProbeOriginRefs, then CheckOriginOntology. Each derives its own
+// cfg.Git.NetworkTimeout deadline (probeCtx), but both run under the ONE ctx
+// guardContext made, whose deadline is also NetworkTimeout. So the driver
+// waits at most one NetworkTimeout for the pair, not two; the cost is that a
+// slow probe leaves the ontology check only the remainder, and an ontology
+// read that runs out refuses nothing (an unreadable remote decides neither
+// way). With NetworkTimeout 0 neither read is bounded.
 func guardAttach(ctx context.Context, r *RepoInstance, o OriginSpec) error {
 	m := r.env.m
 	// The local-origin policy, re-asserted where the attach happens.
@@ -412,51 +418,75 @@ func restoreRemote(svc *store.Service, r *RepoInstance, prev *store.Remote) {
 }
 
 // applySwap installs the incoming database and its origin as one apply. Open
-// has been exited, so the store is closed and drained. On a copy failure the
-// backup is restored and the origin is NOT persisted: the walk then reopens
-// the previous store, with its previous origin. The backup is deleted by the
-// first successful Open after this.
+// has been exited, so the store is closed and drained.
+//
+// The irreversible step is LAST. In order: read the stored origin row, back up
+// the current store, persist the new origin (reversible), then copy the new
+// database over the old one. A failure before the copy changes nothing that is
+// not undone here; a copy failure restores both the backup and the previous
+// origin row. Persisting the origin after the copy would let a failed write
+// leave the NEW store under the OLD origin: Open.Enter injects control.db's
+// origin and Sync would push the new store's agent branch to the old remote.
+//
+// With no origin URL in the spec the stored origin stays as it is. The backup
+// is deleted by the first successful Open after this.
 func applySwap(m *Machine, s SwapSpec) error {
 	r := m.r
+	origins := r.env.m.Origins()
+	var stored *Origin
+	if s.Origin.URL != "" {
+		if origins == nil {
+			return fmt.Errorf("swap failed: save remote config: %w; nothing changed", ErrManagerStopped)
+		}
+		var err error
+		if stored, err = origins.Get(r.uid); err != nil {
+			return fmt.Errorf("swap failed: read remote config: %w; nothing changed", err)
+		}
+	}
 	backup := r.dbPath + ".bak"
 	if err := copyFile(r.dbPath, backup); err != nil {
-		return fmt.Errorf("swap failed: back up the current store: %w; previous store kept", err)
+		return fmt.Errorf("swap failed: back up the current store: %w; nothing changed", err)
 	}
 	m.pendingBak = backup
-	if err := copyFile(s.TempDB, r.dbPath); err != nil {
-		if rerr := copyFile(backup, r.dbPath); rerr != nil {
-			return fmt.Errorf("swap failed: %v; restoring the previous store also failed: %w", err, rerr)
+	if s.Origin.URL != "" {
+		mode := OriginModeSync
+		if stored != nil {
+			mode = stored.Mode
 		}
-		return fmt.Errorf("swap failed: %w; previous store restored", err)
+		o := s.Origin
+		if err := origins.Set(r.uid, Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
+			return fmt.Errorf("swap failed: save remote config: %w; nothing changed", err)
+		}
 	}
-	if s.Origin.URL == "" {
-		return nil // no new origin: the stored one stays
-	}
-	// The store IS swapped from here on — the point of no return. A failure
-	// to persist the origin is a WARNING on the reply, not the event's error:
-	// the swap cannot be undone, and the repo comes up on the new store with
-	// the origin control.db still holds.
-	warn := func(err error) error {
-		m.applyWarning = fmt.Sprintf("save remote config: %v", err)
-		return nil
-	}
-	origins := r.env.m.Origins()
-	if origins == nil {
-		return warn(ErrManagerStopped)
-	}
-	stored, err := origins.Get(r.uid)
-	if err != nil {
-		return warn(err)
-	}
-	mode := OriginModeSync
-	if stored != nil {
-		mode = stored.Mode
-	}
-	o := s.Origin
-	if err := origins.Set(r.uid, Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
-		return warn(err)
+	if err := swapCopy(s.TempDB, r.dbPath); err != nil {
+		var msgs []string
+		if rerr := copyFile(backup, r.dbPath); rerr != nil {
+			msgs = append(msgs, fmt.Sprintf("restoring the previous store also failed: %v", rerr))
+		}
+		if s.Origin.URL != "" {
+			if oerr := restoreOrigin(origins, r.uid, stored); oerr != nil {
+				msgs = append(msgs, fmt.Sprintf("restoring the previous remote config also failed: %v", oerr))
+			}
+		}
+		if len(msgs) > 0 {
+			return fmt.Errorf("swap failed: %w; %s", err, strings.Join(msgs, "; "))
+		}
+		return fmt.Errorf("swap failed: %w; previous store and remote config restored", err)
 	}
 	return nil
+}
+
+// swapCopy is the swap's install copy; a test replaces it to fail the one
+// irreversible step.
+var swapCopy = copyFile
+
+// restoreOrigin puts uid's origin row back to stored: Set it again, or Delete
+// the row when there was none.
+func restoreOrigin(origins *Origins, uid string, stored *Origin) error {
+	if stored == nil {
+		return origins.Delete(uid)
+	}
+	return origins.Set(uid, *stored)
 }
 
 // copyFile copies src to dst, creating dst if needed.

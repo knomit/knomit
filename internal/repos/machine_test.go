@@ -435,6 +435,63 @@ func TestWalkthrough_SwapOK(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr), "the first successful Open after a swap deletes its backup")
 }
 
+// A swap persists its origin BEFORE the one irreversible step, the copy. An
+// origin row that cannot be saved (here: no consensus branch) aborts the swap
+// with nothing changed — the copy is never attempted, the origin row is what it
+// was, and the repo comes back on its own store.
+func TestSwap_OriginPersistFailureAbortsWithNothingChanged(t *testing.T) {
+	f := newMFix(t, StageIndex, "index-job", true)
+	url := f.remote(t, "r")
+	tmp := f.copyOfOwnDB(t)
+	copied := false
+	prev := swapCopy
+	swapCopy = func(src, dst string) error { copied = true; return prev(src, dst) }
+	t.Cleanup(func() { swapCopy = prev })
+
+	_, err := send(f.m, f.ri, SwapStore(SwapSpec{TempDB: tmp, Origin: OriginSpec{URL: url, Branch: ""}}))
+	require.ErrorContains(t, err, "save remote config")
+	require.ErrorContains(t, err, "nothing changed")
+	require.False(t, copied, "the install copy must not run once the origin could not be saved")
+	o, gerr := f.m.Origins().Get(f.ri.UID())
+	require.NoError(t, gerr)
+	require.Nil(t, o, "the origin row is untouched")
+	st := f.ri.Status()
+	require.Equal(t, "ready", st.Stage)
+	require.Empty(t, st.Sync.Origin, "Sync is back on the local loop")
+}
+
+// A copy failure (the irreversible step, failing midway) restores BOTH the
+// store file from its backup and the previous origin row, so the repo comes
+// back on its old store under its old origin.
+func TestSwap_CopyFailureRestoresStoreAndOrigin(t *testing.T) {
+	f := newMFix(t, StageIndex, "index-job", true)
+	previous := f.remote(t, "previous")
+	_, err := send(f.m, f.ri, AttachOrigin(OriginSpec{URL: previous, Branch: "main"}))
+	require.NoError(t, err)
+	idBefore := f.ri.ID()
+	incoming := f.remote(t, "incoming")
+	tmp := f.copyOfOwnDB(t)
+	prev := swapCopy
+	swapCopy = func(src, dst string) error {
+		// Clobber the destination, then fail: the restore must undo it.
+		require.NoError(t, os.WriteFile(dst, []byte("half-written"), 0o600))
+		return errors.New("disk full")
+	}
+	t.Cleanup(func() { swapCopy = prev })
+
+	_, err = send(f.m, f.ri, SwapStore(SwapSpec{TempDB: tmp, Origin: OriginSpec{URL: incoming, Branch: "main"}}))
+	require.ErrorContains(t, err, "disk full")
+	require.ErrorContains(t, err, "previous store and remote config restored")
+	o, gerr := f.m.Origins().Get(f.ri.UID())
+	require.NoError(t, gerr)
+	require.NotNil(t, o)
+	require.Equal(t, previous, o.URL, "the previous origin row is restored")
+	st := f.ri.Status()
+	require.Equal(t, "ready", st.Stage, "the restored store opens")
+	require.Equal(t, previous, st.Sync.Origin)
+	require.Equal(t, idBefore, f.ri.ID())
+}
+
 // Swap during indexing is refused; cancel-and-continue (CancelIndex, then
 // SwapStore) reaches ready with all three workers running on the new store.
 func TestWalkthrough_SwapDuringIndexingAndCancelAndContinue(t *testing.T) {
@@ -603,7 +660,13 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	rep, err := send(m, host.ri, Rebuild(cHostAgent))
 	require.NoError(t, err)
 	require.True(t, rep.Absorbed)
-	time.Sleep(50 * testCrashBackoff) // far past the backoff: the waiter is what holds the restart
+	// The ONE deliberate sleep in this suite, and it is a negative wait: the
+	// claim is that something does NOT happen (no re-entry while a Serve
+	// worker is still parked), and absence has no event to wait on. It sleeps
+	// far past the crash backoff, so a restart driven by the timer alone would
+	// have fired; only the waiter (still blocked on the parked worker) can be
+	// holding it. Everything else in the suite synchronises on hooks or Watch.
+	time.Sleep(50 * testCrashBackoff)
 	require.False(t, host.ri.Status().Serve.Running, "no re-entry while a Serve worker is still parked")
 	require.Equal(t, gen, host.ri.Status().gens[StageServe])
 

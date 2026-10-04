@@ -226,12 +226,8 @@ type Machine struct {
 	jobID      string // the current manual rebuild's job id
 	closing    bool   // set before an Unmount's exits: Open.Exit marks the instance closed
 	pendingBak string // a swap's backup, deleted by the next successful Open
-	// applyWarning is what the current event's apply could not do without
-	// failing the event (a swap whose origin row was not saved); it becomes
-	// Reply.Warning.
-	applyWarning string
-	lastPub      Status
-	pub          indexPublisher
+	lastPub    Status
+	pub        indexPublisher
 
 	progressPending atomic.Bool
 	status          atomic.Pointer[Status]
@@ -417,9 +413,7 @@ func (m *Machine) handleExternal(e *MachineEvent) bool {
 		m.jobID = fmt.Sprintf("rebuild-%d", m.jobSeq)
 		rep.JobID = m.jobID
 	}
-	m.applyWarning = ""
 	applyErr := e.apply(m)
-	rep.Warning = m.applyWarning
 	if e.kind != evCancelIndex {
 		m.walk(e.target)
 	}
