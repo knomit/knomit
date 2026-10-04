@@ -86,6 +86,11 @@ type searchIndex struct {
 	beforeSimTx func()
 	inSimTx     func()
 	inSimEdgeTx func()
+	// beforeGraphTx fires in rebuildGraph after the git-read cache is built
+	// and before its write transaction opens: the window in which a
+	// cross-branch writer could change `facts` under a snapshot taken
+	// outside the transaction.
+	beforeGraphTx func()
 }
 
 // simEdgeKey identifies a fact version for node-id caching during the
@@ -1151,41 +1156,6 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
 func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress RebuildProgress) (int, error) {
-	// Read all facts ordered by oldest commit first so that when a fact's
-	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight, f.origin
-		FROM facts f
-		LEFT JOIN (
-			SELECT path, MIN(committed_at) AS first_committed FROM commit_log GROUP BY path
-		) cl ON cl.path = f.path
-		ORDER BY cl.first_committed ASC`)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildGraph: query facts: %w", err)
-	}
-
-	var facts []FactRecord
-	for rows.Next() {
-		var rec FactRecord
-		var domainJSON, entitiesJSON, refsJSON string
-		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
-			&domainJSON, &entitiesJSON, &rec.Confidence, &rec.Sources,
-			&refsJSON, &rec.EvidenceWeight, &rec.Origin); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("rebuildGraph: scan: %w", err)
-		}
-		json.Unmarshal([]byte(domainJSON), &rec.Domain)
-		json.Unmarshal([]byte(entitiesJSON), &rec.Entities)
-		json.Unmarshal([]byte(refsJSON), &rec.Refs)
-		facts = append(facts, rec)
-	}
-	rows.Close()
-
-	total := len(facts)
-	if progress != nil {
-		progress("graph", 0, total)
-	}
-
 	// P2 git-read dedupe: Phase A.5 (historical Fact-node restore) and Phase B
 	// (DERIVED_FROM edges) both walk the identical commit_log ref-event list,
 	// and each historically re-read every (commit, path) from git
@@ -1194,10 +1164,6 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// cache. Git reads (go-git) touch no DB connection, so building the cache
 	// here (before the write-locked tx) also keeps this I/O off the
 	// _txlock=immediate critical section.
-	currentSet := make(map[string]struct{}, len(facts))
-	for _, f := range facts {
-		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
-	}
 	// commit_log ref-events on this branch, oldest first — the shared walk
 	// order for both phases. Queried before the tx so its connection is
 	// released before BEGIN IMMEDIATE (no pool straddle under
@@ -1262,12 +1228,66 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		factAtCommit[key] = commitFact{blobHash: blobHash, rec: rec, ok: true}
 	}
 
+	if si.beforeGraphTx != nil {
+		si.beforeGraphTx()
+	}
+
 	// Single transaction for all graph sync operations.
 	tx, err := si.rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildGraph: begin tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	// The facts snapshot is read INSIDE the write transaction. `facts` rows and
+	// graph Fact nodes are keyed by version and shared by every branch, while
+	// lockBranch is per branch: a delete on another branch runs concurrently
+	// with this rebuild. Read outside the transaction, a delete landing between
+	// the snapshot and BEGIN would remove the facts row and soft-delete the
+	// node, and the sync below would re-merge it live from the stale snapshot.
+	// Under _txlock=immediate the transaction holds the write lock from BEGIN,
+	// so any other writer lands wholly before this read or wholly after commit.
+	// The git-read cache above stays outside: it reads no table this
+	// transaction writes, and keeps git I/O off the write lock.
+	// Read all facts ordered by oldest commit first so that when a fact's
+	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
+	rows, err := tx.QueryContext(ctx, `
+		SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight, f.origin
+		FROM facts f
+		LEFT JOIN (
+			SELECT path, MIN(committed_at) AS first_committed FROM commit_log GROUP BY path
+		) cl ON cl.path = f.path
+		ORDER BY cl.first_committed ASC`)
+	if err != nil {
+		return 0, fmt.Errorf("rebuildGraph: query facts: %w", err)
+	}
+
+	var facts []FactRecord
+	for rows.Next() {
+		var rec FactRecord
+		var domainJSON, entitiesJSON, refsJSON string
+		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
+			&domainJSON, &entitiesJSON, &rec.Confidence, &rec.Sources,
+			&refsJSON, &rec.EvidenceWeight, &rec.Origin); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("rebuildGraph: scan: %w", err)
+		}
+		json.Unmarshal([]byte(domainJSON), &rec.Domain)
+		json.Unmarshal([]byte(entitiesJSON), &rec.Entities)
+		json.Unmarshal([]byte(refsJSON), &rec.Refs)
+		facts = append(facts, rec)
+	}
+	rows.Close()
+
+	total := len(facts)
+	if progress != nil {
+		progress("graph", 0, total)
+	}
+
+	currentSet := make(map[string]struct{}, len(facts))
+	for _, f := range facts {
+		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
+	}
 
 	for i, rec := range facts {
 		if err := si.graphSyncFactTx(ctx, tx, rec); err != nil {
