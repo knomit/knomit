@@ -19,16 +19,16 @@ import type { RepoCreateStatus } from './api';
 const CREATE_STEPS: Record<string, string[]> = {
   preset: ['validate', 'ontology', 'init-git', 'register', 'index', 'done'],
   custom: ['validate', 'ontology', 'init-git', 'register', 'index', 'done'],
-  // INDEX BEFORE SYNC on every remote mode, and the order is not cosmetic.
-  // ActivateSync runs a synchronous reconcile that takes the branch lock the
-  // background index heal already holds, so with sync first the job sat on
-  // "Activating sync" for the whole of the index — narrating a step that was
-  // not the work being done, under a repo that was in fact already indexing.
-  // lifecycle.go now emits the index before the sync step; this list mirrors
-  // that, and a mirror that disagrees is how the wizard lies about the phase.
-  clone: ['validate', 'clone', 'persist-origin', 'register', 'index', 'sync', 'done'],
-  initialize: ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'index', 'sync', 'done'],
-  subscribe: ['validate', 'subscribe', 'persist-origin', 'register', 'index', 'sync', 'done'],
+  // NO SYNC STEP on any remote mode, and its absence is not an omission. The
+  // sync loop starts during the repo's own mount walk, before the index
+  // finishes, so there is no point in the create at which sync "activates" — a
+  // row for it could only narrate work the job does not do. After register the
+  // job owns nothing: it observes the repo's index, and "done" means indexed.
+  // lifecycle.go emits exactly these steps; a mirror that disagrees is how the
+  // wizard lies about the phase.
+  clone: ['validate', 'clone', 'persist-origin', 'register', 'index', 'done'],
+  initialize: ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'index', 'done'],
+  subscribe: ['validate', 'subscribe', 'persist-origin', 'register', 'index', 'done'],
 };
 
 const LABELS: Record<string, string> = {
@@ -41,7 +41,6 @@ const LABELS: Record<string, string> = {
   push: 'Pushing agent branch',
   'persist-origin': 'Saving remote config',
   register: 'Registering repo',
-  sync: 'Activating sync',
   subscribe: 'Subscribing to the remote',
   index: 'Building the search index',
   done: 'Repo ready',

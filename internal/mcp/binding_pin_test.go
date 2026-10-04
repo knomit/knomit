@@ -80,7 +80,7 @@ func newUidlessTestRepo(t *testing.T) (*repos.RepoInstance, context.Context) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "uidless",

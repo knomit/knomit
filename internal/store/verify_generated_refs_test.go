@@ -17,7 +17,7 @@ func TestVerify_NoGeneratedRefs(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/decisions/x/aaaaaaaa.md",
 		testFactBody("A", 0.9, nil), "seed", "learn")

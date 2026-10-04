@@ -61,7 +61,7 @@ func newPushHost(t *testing.T, mode string, facts int) *pushHost {
 	svc, err := Open(filepath.Join(t.TempDir(), "host.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{fact.OntologyFile: kbOntology(mode)}, hostBranch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{fact.OntologyFile: kbOntology(mode)}, hostBranch))
 	ctx := context.Background()
 	for i := range facts {
 		_, err := svc.Facts().WriteFact(ctx, "main", fmt.Sprintf("kb/notes/host-%02d.md", i),

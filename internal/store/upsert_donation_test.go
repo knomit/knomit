@@ -49,7 +49,7 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 
 	emb := &countingEmbedder{}
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	ctx := context.Background()
 
@@ -119,7 +119,7 @@ func TestUpsert_DonatedVectorWrongDimRejected(t *testing.T) {
 
 	emb := &countingEmbedder{}
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	ctx := context.Background()
 

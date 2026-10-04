@@ -35,16 +35,18 @@ func bootNamedRepo(t *testing.T, m *Manager, name string) *RepoInstance {
 	return createRepo(t, m, name)
 }
 
-// newTestManager returns an unstarted Manager rooted at a temp home, with
-// background sync disabled so the loops cannot race assertions.
+// newTestManager returns an unstarted Manager rooted at a temp home whose
+// machines are Synchronous, so no sync loop races the assertions. The index
+// job still runs in the background: a test that needs it done waits with
+// waitIndexSettled (Create already does).
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch:           "agent/test",
-		KeyPath:               filepath.Join(home, "agent.key"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
+		AgentBranch: "agent/test",
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	return m

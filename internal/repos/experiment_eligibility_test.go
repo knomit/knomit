@@ -104,7 +104,7 @@ func TestWritableBranch_OntologyLessRepoRefusesExperiments(t *testing.T) {
 	branch := openExperimentOn(t, ri, "mine", agent)
 	require.True(t, ri.WritableBranch(branch), "precondition: writable while the ontology is fine")
 
-	ri.ontologyErr = errors.New("ontology could not be established")
+	ri.ident.Store(&identity{ontologyErr: errors.New("ontology could not be established")})
 
 	require.False(t, ri.WritableBranch(branch),
 		"no ontology, no writes — on an experiment exactly as on the agent branch")

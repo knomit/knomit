@@ -219,7 +219,7 @@ func newFleetServerOpts(t *testing.T, f *pkitest.Fleet, signed bool) *fleetServe
 	if signed {
 		bSigner = keySigner(t, bKey)
 	}
-	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, Signer: bSigner, AgentBranch: fleetServerAgent, DisableBackgroundSync: true})
+	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, Signer: bSigner, AgentBranch: fleetServerAgent, Machine: repos.Options{Synchronous: true}})
 	if err := bMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestFleetOrigin_ReinstallPresentsTheNewPrincipal(t *testing.T) {
 			t.Fatalf("install %s: %v", host, err)
 		}
 		mgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-			KeyPath: key, AgentBranch: "agent/" + host + "-00000000", DisableBackgroundSync: true})
+			KeyPath: key, AgentBranch: "agent/" + host + "-00000000", Machine: repos.Options{Synchronous: true}})
 		if err := mgr.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -323,7 +323,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	}
 	aCfg := config.Config{Home: aHome, OntologyRoot: "kb",
 		Remote: config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_global_forge_token"}}
-	aMgr := repos.New(ctx, repos.Deps{Cfg: aCfg, KeyPath: aKey, AgentBranch: "agent/alpha-00000000", DisableBackgroundSync: true})
+	aMgr := repos.New(ctx, repos.Deps{Cfg: aCfg, KeyPath: aKey, AgentBranch: "agent/alpha-00000000", Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -352,9 +352,11 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	}
 
 	// 3. Sync — the path that resolves auth from the stored origin plus the
-	//    GLOBAL [remote] config — brings B's next fact.
+	//    GLOBAL [remote] config — brings B's next fact. Re-attaching the same
+	//    origin restarts A's Sync stage, whose first round (inline, under a
+	//    Synchronous machine) is that sync.
 	publish(t, riB, bAgent, "second")
-	if err := riA.ActivateSync(fleetURL); err != nil {
+	if _, err := aMgr.Send(ctx, riA, repos.AttachOrigin(repos.OriginSpec{URL: fleetURL})); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if !hasFact(t, riA, "second") {
@@ -385,7 +387,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	if !hasFact(t, riP, "plainfact") {
 		t.Fatal("plaintext origin: fact missing")
 	}
-	if err := riP.ActivateSync(plainURL); err != nil {
+	if _, err := aMgr.Send(ctx, riP, repos.AttachOrigin(repos.OriginSpec{URL: plainURL})); err != nil {
 		t.Fatalf("plaintext sync: %v", err)
 	}
 	if hdrs.count("plain") == 0 {
@@ -393,13 +395,23 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	}
 
 	// 6. B revokes A. After the idle timeout closes the kept-alive
-	//    connection, A's next sync handshakes and is refused by name.
+	//    connection, A's next handshake is refused by name: an attach's guard
+	//    probe says so (and changes nothing), and the next sync round — here
+	//    the first round of a remount — records it on the remote status.
 	f.Revoke(t, aMember, bCfg.TLS.Dir)
 	time.Sleep(500 * time.Millisecond)
 	publish(t, riB, bAgent, "third")
-	err = riA.ActivateSync(fleetURL)
+	_, err = aMgr.Send(ctx, riA, repos.AttachOrigin(repos.OriginSpec{URL: fleetURL}))
 	if !errors.Is(err, pki.ErrRefusedByPeer) && (err == nil || !strings.Contains(err.Error(), pki.ErrRefusedByPeer.Error())) {
-		t.Fatalf("sync after revocation: err=%v, want the ErrRefusedByPeer refusal", err)
+		t.Fatalf("attach after revocation: err=%v, want the ErrRefusedByPeer refusal", err)
+	}
+	archived, err := aMgr.Archive("peer")
+	if err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	riA, err = aMgr.Restore(archived.ID, "")
+	if err != nil {
+		t.Fatalf("restore: %v", err)
 	}
 	if hasFact(t, riA, "third") {
 		t.Fatal("a revoked instance still fetched")
@@ -456,7 +468,7 @@ func TestFleetOrigin_PeerPushesOwnBranchOverKnomitHTTPS(t *testing.T) {
 	}
 	aBranch := "agent/alpha-" + pki.Short(aMember.Fingerprint())
 	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		KeyPath: aKey, AgentBranch: aBranch, DisableBackgroundSync: true})
+		KeyPath: aKey, AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}

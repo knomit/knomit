@@ -43,7 +43,7 @@ func newReviewE2E(t *testing.T) *reviewE2E {
 	svc, err := store.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	for _, slug := range []string{"alpha", "beta", "gamma", "delta", "epsilon"} {
 		f := fact.NewFact("kb/architecture/test/" + slug + ".md")
 		f.Title = "Embedding model note " + slug

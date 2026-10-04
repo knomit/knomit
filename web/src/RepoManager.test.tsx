@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
-import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
+import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, RepoIndexingError, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
 import { FakeEventSource, installFakeEventSource } from './testEventSource';
 
 // `api` and the origin-session streams are stubbed; the module's other exports
@@ -41,6 +41,7 @@ vi.mock('./api', async importOriginal => ({
     renameRepo: vi.fn().mockResolvedValue({ name: 'core' }),
     getOrigin: vi.fn().mockResolvedValue(null),
     deleteOrigin: vi.fn(),
+    cancelIndex: vi.fn().mockResolvedValue({ name: 'core', uid: 'uid-core', index_state: 'error', index_reason: 'indexing cancelled' }),
     rebuild: vi.fn().mockResolvedValue({ id: 'job1', state: 'running' }),
     restoreRepo: vi.fn().mockResolvedValue({ name: 'old' }),
     purgeRepo: vi.fn().mockResolvedValue(undefined),
@@ -559,6 +560,35 @@ describe('RepoManager', () => {
     fireEvent.click(screen.getByTestId('disconnect-confirm'));
     await waitFor(() => expect(api.deleteOrigin).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  // A detach is refused (409) while the repo's index job runs. That refusal
+  // has a way through — cancel the index — so it is offered in place, and the
+  // detach is retried by pressing Disconnect again once the cancel lands.
+  it('offers to cancel indexing when the detach is refused for it, then retries', async () => {
+    (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+    });
+    (api.deleteOrigin as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new RepoIndexingError('wait for it to finish or cancel indexing', '/api/v1/repos/core/index:cancel'))
+      .mockResolvedValueOnce(undefined);
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+
+    fireEvent.click(within(await screen.findByTestId('remote-card')).getByTestId('remote-disconnect'));
+    fireEvent.click(screen.getByTestId('disconnect-confirm'));
+    expect(await screen.findByTestId('disconnect-indexing')).toHaveTextContent('wait for it to finish or cancel indexing');
+    // Not reported as a generic failure: the box above IS the report.
+    expect(screen.queryByText(/disconnect failed/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('disconnect-cancel-indexing'));
+    // It follows the refusal's link rather than building the URL.
+    await waitFor(() => expect(api.cancelIndex).toHaveBeenCalledWith('/api/v1/repos/core/index:cancel'));
+    await waitFor(() => expect(screen.queryByTestId('disconnect-indexing')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('disconnect-confirm'));
+    await waitFor(() => expect(api.deleteOrigin).toHaveBeenCalledTimes(2));
   });
 
   // A failed origin load is a THIRD state, not "unconnected": the block carries
@@ -1091,6 +1121,19 @@ describe('RepoManager', () => {
     await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
     await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));
+  });
+
+  // The server no longer refuses a rebuild with 409: a click that lands on an
+  // identical running rebuild is absorbed (200, same envelope as a new job's
+  // 201). Any error that does come back is shown as itself, never rewritten
+  // into the old "already running" copy.
+  it('reports a rebuild error verbatim, without the retired "already running" copy', async () => {
+    vi.mocked(api.rebuild).mockRejectedValueOnce(new Error('/api/v1/repos/core/branches/agent:test/index-rebuilds → 409 something else'));
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+    fireEvent.click(await screen.findByTestId('repo-rebuild'));
+    expect(await screen.findByText(/^rebuild failed: .*409 something else/)).toBeInTheDocument();
+    expect(screen.queryByText(/already running/)).not.toBeInTheDocument();
   });
 
   it('lists lenses fetched via api.listLenses', async () => {

@@ -92,6 +92,16 @@ export interface RepoInfo {
    *  counted its work. A ready repo carries neither. */
   index_done?: number;
   index_total?: number;
+  /**
+   * Why index_state is 'error' — "indexing cancelled", or the index job's own
+   * error. Absent on any other state, and on a server that predates it.
+   */
+  index_reason?: string;
+  /**
+   * Where the repo's lifecycle has got to: populate | open | identify | index
+   * | serve | sync | ready. Informational; gate on `state` and `index_state`.
+   */
+  stage?: string;
 }
 
 // repoAvailable reports whether a repo can be read at all.
@@ -406,7 +416,7 @@ export interface Stats {
   highlights: Highlight[];
   default_axis: Exclude<RankAxis, 'recent'>;
 }
-export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number; writable?: boolean; experiment?: ExperimentInfo | null }
+export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number; index_reason?: string; writable?: boolean; experiment?: ExperimentInfo | null }
 
 /**
  * ExperimentInfo is the branch row's `experiment` object, present only when
@@ -510,6 +520,8 @@ export interface BranchRootBody {
   index_done?: number;
   index_total?: number;
   index_percent?: number;
+  /** Why index_state is 'error'; absent otherwise. */
+  index_reason?: string;
   writable?: boolean;
   experiment?: ExperimentInfo | null;
 }
@@ -538,6 +550,7 @@ export function statusFromBranchBody(data: BranchRootBody, branch: string): Stat
     index_done: data.index_done,
     index_total: data.index_total,
     index_percent: data.index_percent,
+    index_reason: data.index_reason,
     // DEFAULTS TO TRUE, deliberately. An older server omits the key, and
     // reading absence as "not writable" would make every mutating control
     // disappear against it. A server that means "not writable" says so.
@@ -714,10 +727,11 @@ export type SSEEvent =
   | { phase: "comparing" }
   | { phase: "replaying"; current?: number; total?: number }
   | { phase: "merging" }
+  | { phase: "cancelling-index" }
   | { phase: "swapping" }
   | { phase: "configuring" }
-  | { phase: "rebuilding"; sub_phase?: string; current?: number; total?: number }
-  | { phase: "done"; result: any }
+  | { phase: "indexing"; current?: number; total?: number }
+  | { phase: "done"; result: any; warning?: string; index_state?: string }
   | { phase: "error"; message: string };
 
 function sessionBase(repo: string, sessionId: string) {
@@ -764,10 +778,36 @@ function errorText(body: unknown, fallback: string): string {
   return b?.detail || b?.title || b?.error || fallback;
 }
 
+/**
+ * RepoIndexingError is the 409 "Repo is indexing" problem: attaching,
+ * detaching or committing an origin is refused while the repo's index job
+ * runs. It is its own class because it is the one refusal with a way through
+ * — the problem's `cancel-index` link — and a caller that offers "Cancel
+ * indexing" must tell it apart from every other 409 without matching on copy.
+ * The message is the problem's detail, so String(err) reads like any other.
+ */
+export class RepoIndexingError extends Error {
+  /** The problem's cancel-index href, API-relative as the server sent it. */
+  cancelHref: string;
+  constructor(message: string, cancelHref: string) {
+    super(message);
+    this.cancelHref = cancelHref;
+  }
+}
+
+// repoIndexingError returns a RepoIndexingError when body is the 409 indexing
+// problem, else null. Keyed on the link, not the title: the link is what makes
+// the refusal actionable, and a 409 without one has nothing to offer.
+function repoIndexingError(status: number, body: unknown): RepoIndexingError | null {
+  if (status !== 409) return null;
+  const href = (body as { _links?: { 'cancel-index'?: { href?: string } } } | null)?._links?.['cancel-index']?.href;
+  return href ? new RepoIndexingError(errorText(body, 'Repo is indexing'), href) : null;
+}
+
 export async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
   if (!res.ok) {
     const err = await res.json().catch(() => null);
-    throw new Error(errorText(err, res.statusText));
+    throw repoIndexingError(res.status, err) ?? new Error(errorText(err, res.statusText));
   }
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -873,6 +913,8 @@ export interface RepoIndexEvent {
   state: 'ready' | 'indexing' | 'error';
   done: number;
   total: number;
+  /** Why state is 'error' — the row's index_reason under the event's name. */
+  reason?: string;
 }
 
 // subscribeRepoEvents opens the SERVER-WIDE repo-event stream and reports every
@@ -972,8 +1014,19 @@ export async function streamApply(repo: string, sessionId: string, strategy: str
   await readSSEStream(res, onEvent);
 }
 
-export async function streamCommit(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): Promise<void> {
-  const res = await fetch(`${sessionBase(repo, sessionId)}/commit`, { method: 'POST' });
+// streamCommit swaps the session's store in. It can be refused BEFORE the
+// stream opens, as an ordinary problem response — 409 "Repo is indexing"
+// (thrown as RepoIndexingError), 409 "Different knowledge base", 409
+// "Knowledge base already local", 502 "Origin not attached", 400 — and
+// readSSEStream throws each with its detail.
+//
+// cancelIndexing is the way through the indexing refusal: the server cancels
+// the repo's index job first, streaming "cancelling-index" before the swap.
+export async function streamCommit(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void, opts?: { cancelIndexing?: boolean }): Promise<void> {
+  const init: RequestInit = opts?.cancelIndexing
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cancel_indexing: true }) }
+    : { method: 'POST' };
+  const res = await fetch(`${sessionBase(repo, sessionId)}/commit`, init);
   await readSSEStream(res, onEvent);
 }
 
@@ -2200,8 +2253,20 @@ export const api = {
   synthesize: (repo: string, branch: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/synthesis-runs`, { method: 'POST', body: recipe }),
 
+  // rebuild answers 201 with a new job, or 200 with the SAME envelope when an
+  // identical rebuild is already running and absorbs this one. Both are
+  // success and read alike: either way a rebuild of this branch is running.
+  // There is no 409 any more — another branch's running index job is replaced.
   rebuild: (repo: string, branch: string): Promise<{ id?: string; kind?: string; state?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
+
+  // cancelIndex FOLLOWS a RepoIndexingError's cancel-index link (its
+  // cancelHref, an absolute API path as the server sent it) rather than
+  // building the URL: the link is the server's statement of the way through.
+  // It stops the repo's running index job and answers the repo's row (the GET
+  // /repos item shape); 503 when the repo is not open.
+  cancelIndex: (cancelHref: string): Promise<RepoInfo> =>
+    fetchJSON<RepoInfo>(apiUrl(cancelHref), { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
     opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[];
@@ -2245,9 +2310,18 @@ export const api = {
   // handler has never returned — a shape nobody could have relied on without
   // finding out the hard way.
 
+  // deleteOrigin throws RepoIndexingError for the 409 the server answers while
+  // the repo's index job runs, so the caller can offer to cancel it.
   deleteOrigin: (repo: string): Promise<void> =>
     fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })
-      .then(r => { if (!r.ok) throw new Error(`disconnect → ${r.status} ${r.statusText}`); }),
+      .then(async r => {
+        if (r.ok) return;
+        let body: unknown = null;
+        try { body = await r.json(); } catch { /* non-JSON body */ }
+        const indexing = repoIndexingError(r.status, body);
+        if (indexing) throw indexing;
+        throw new Error(`disconnect → ${r.status} ${r.statusText}`);
+      }),
 
   // setOriginUpstream changes ONLY the consensus ("main") branch of an existing
   // origin (no reconnect, no auth change). The reconcile loop picks it up next tick.

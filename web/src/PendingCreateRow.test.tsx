@@ -184,6 +184,16 @@ describe('RepoIndexChip', () => {
     expect(screen.getByTestId('repo-index-error')).toHaveTextContent('index error');
   });
 
+  // The server says WHY an index is in error; a cancel and a failure both
+  // render "index error", so the reason is what tells them apart.
+  it('carries the server’s reason in its tooltip', () => {
+    const { rerender } = render(<RepoIndexChip repo={{ index_state: 'error', index_reason: 'indexing cancelled' }} />);
+    expect(screen.getByTestId('repo-index-error')).toHaveAttribute('title',
+      expect.stringContaining('did not finish: indexing cancelled.'));
+    rerender(<RepoIndexChip repo={{ index_state: 'error' }} />);
+    expect(screen.getByTestId('repo-index-error').getAttribute('title')).toMatch(/^The background index did not finish\. /);
+  });
+
   // Nothing for a ready repo, and nothing when the server said nothing —
   // absence is "no answer", not "ready", and both render the same way because
   // there is nothing honest to say in either case.

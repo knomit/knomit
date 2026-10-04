@@ -38,9 +38,7 @@ func TestRunLocalReconcileLoop_AdvancesMainOnTick(t *testing.T) {
 
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go runLocalReconcileLoop(loopCtx, &wg, svc, ri.Name(), ri.AgentBranch(), 20*time.Millisecond, nil, nil, nil)
+	wait := goLocalLoop(loopCtx, svc, ri.Name(), ri.AgentBranch(), 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		u, err := svc.Branches().HeadCommit(ctx, "main")
@@ -65,7 +63,19 @@ func TestRunLocalReconcileLoop_AdvancesMainOnTick(t *testing.T) {
 	require.NotEmpty(t, got.Content)
 
 	cancel()
-	wg.Wait()
+	wait()
+}
+
+// goLocalLoop runs the local reconcile loop on its own goroutine, as the Sync
+// stage does under its life, and returns a func that waits for it to end.
+func goLocalLoop(ctx context.Context, svc *store.Service, repo, agent string, interval time.Duration) (wait func()) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runLocalReconcileLoop(ctx, svc, repo, agent, interval, nil, nil, nil, false)
+	}()
+	return wg.Wait
 }
 
 // The loop runs once at start, so a restarted instance converges without
@@ -83,24 +93,24 @@ func TestRunLocalReconcileLoop_ConvergesAtStart(t *testing.T) {
 	require.NoError(t, err)
 
 	loopCtx, cancel := context.WithCancel(ctx)
-	var wg sync.WaitGroup
-	wg.Add(1)
 	// An interval far longer than the test: only the start-up tick can
 	// satisfy this.
-	go runLocalReconcileLoop(loopCtx, &wg, svc, ri.Name(), ri.AgentBranch(), time.Hour, nil, nil, nil)
+	wait := goLocalLoop(loopCtx, svc, ri.Name(), ri.AgentBranch(), time.Hour)
 
 	require.Eventually(t, func() bool {
 		u, err := svc.Branches().HeadCommit(ctx, "main")
 		return err == nil && u == agentTip
 	}, 2*time.Second, 10*time.Millisecond)
 	cancel()
-	wg.Wait()
+	wait()
 }
 
 // The two loops are mutually exclusive by the same fact: a repo WITH an origin
 // gets main from the remote, and the local loop must not also push it forward
-// from the agent branch behind reconcileMain's back.
-func TestRunLocalReconcileLoop_ExitsWhenTheRepoHasAnOrigin(t *testing.T) {
+// from the agent branch behind reconcileMain's back. It does not EXIT on it
+// either: the loop ends only on its ctx (the Sync stage's life), and an origin
+// is a skipped tick.
+func TestRunLocalReconcileLoop_SkipsTheAdvanceWhileTheRepoHasAnOrigin(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
 	svc := testService(t, ri)
@@ -113,20 +123,35 @@ func TestRunLocalReconcileLoop_ExitsWhenTheRepoHasAnOrigin(t *testing.T) {
 	mainBefore, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go runLocalReconcileLoop(ctx, &wg, svc, ri.Name(), ri.AgentBranch(), 10*time.Millisecond, nil, nil, nil)
-	wg.Wait() // returns on its own; no cancel needed
+	var ticks atomic.Int64
+	setSyncHooks(t, syncHooks{tick: func(context.Context, string) { ticks.Add(1) }})
+	loopCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		runLocalReconcile(loopCtx, ri.Name(), ri.AgentBranch(), 10*time.Millisecond, nil, false,
+			func() (bool, error) { r, err := svc.Remote().GetRemote("origin"); return r != nil, err },
+			func() error { ticks.Add(1); return nil }, nil, nil)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("the local loop exited on an origin; it must keep running and skip")
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.Zero(t, ticks.Load(), "no advance while the repo has an origin")
+	cancel()
+	<-stopped
 
 	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, mainBefore, mainAfter, "an origin-backed repo's main is reconcileMain's to move")
 }
 
-// The wiring: a real origin-less repo, built through Manager.Create with
-// background sync ENABLED, gets the local loop started for it. The unit tests
+// The wiring: a real origin-less repo, mounted through Manager.Create with
+// background sync ENABLED, gets the local loop from Sync.Enter. The unit tests
 // above call the loop directly and would keep passing if nobody ever did.
-func TestStartSyncLoops_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
+func TestSyncEnter_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{
@@ -136,7 +161,7 @@ func TestStartSyncLoops_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
 		},
 		AgentBranch: "agent/test",
 		KeyPath:     filepath.Join(home, "agent.key"),
-		// DisableBackgroundSync deliberately NOT set: this is the path under test.
+		// Machine.Synchronous deliberately NOT set: the loop is the path under test.
 	})
 	t.Cleanup(func() { m.Close() })
 	ri := bootRepo(t, m)
@@ -159,9 +184,9 @@ func TestStartSyncLoops_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
 // between machines, or one written before local init bootstrapped it. A live
 // instance was found that way, and the served advertisement takes HEAD from
 // the LOCAL ref, so until this is repaired a peer cloning that repo gets an
-// advertisement with no HEAD. The repair runs at open, before the startup
-// reconcile, so an unreachable origin does not leave the endpoint headless for
-// the length of the outage.
+// advertisement with no HEAD. The repair runs in Sync.Enter, before the loop's
+// first round, so an unreachable origin does not leave the endpoint headless
+// for the length of the outage.
 func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
@@ -192,8 +217,8 @@ func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
 	// for the length of the outage.
 	require.NoError(t, os.RemoveAll(filepath.Join(dir, "remote.git")))
 
-	// Reopen the same home: the registry re-opens "kb" through the same
-	// builder path a server restart uses.
+	// Reopen the same home: the registry mounts "kb" through the same walk a
+	// server restart uses.
 	m2 := newRemoteModeManager(t, dir)
 	ri2 := m2.Get("kb")
 	require.NotNil(t, ri2)
@@ -232,7 +257,7 @@ func TestRunLocalReconcile_TransientOriginReadErrorSkipsOneTickOnly(t *testing.T
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcile(ctx, "repo", "agent/a", 10*time.Millisecond, nil, hasOrigin, advance, nil, nil)
+		runLocalReconcile(ctx, "repo", "agent/a", 10*time.Millisecond, nil, false, hasOrigin, advance, nil, nil)
 	}()
 
 	require.Eventually(t, func() bool { return advances.Load() >= 2 }, 2*time.Second, 5*time.Millisecond,
@@ -246,40 +271,50 @@ func TestRunLocalReconcile_TransientOriginReadErrorSkipsOneTickOnly(t *testing.T
 		"the tick whose origin read failed must not have advanced anything")
 }
 
-// A definite "this repo has an origin" still exits — the two loops stay
-// mutually exclusive by the same fact.
-func TestRunLocalReconcile_ExitsOnADefiniteOrigin(t *testing.T) {
-	var advances atomic.Int64
+// A definite "this repo has an origin" is a skipped advance, never an exit.
+func TestRunLocalReconcile_KeepsRunningOnADefiniteOrigin(t *testing.T) {
+	var advances, reads atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcile(context.Background(), "repo", "agent/a", 10*time.Millisecond, nil,
-			func() (bool, error) { return true, nil },
+		runLocalReconcile(ctx, "repo", "agent/a", 10*time.Millisecond, nil, false,
+			func() (bool, error) { reads.Add(1); return true, nil },
 			func() error { advances.Add(1); return nil }, nil, nil)
 	}()
+	require.Eventually(t, func() bool { return reads.Load() >= 3 }, 2*time.Second, 5*time.Millisecond,
+		"the loop must keep asking, tick after tick")
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("loop did not exit on a definite origin")
+		t.Fatal("loop exited on a definite origin")
+	default:
 	}
+	cancel()
+	<-done
 	require.Zero(t, advances.Load())
 }
 
-// An origin that appears mid-life still stops the loop.
-func TestRunLocalReconcile_ExitsWhenAnOriginAppearsLater(t *testing.T) {
-	var reads atomic.Int64
+// An origin that appears mid-life stops the ADVANCES, not the loop: it keeps
+// running (and would advance again if the origin went away) until its ctx ends.
+func TestRunLocalReconcile_SkipsOnceAnOriginAppearsLater(t *testing.T) {
+	var reads, advances atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcile(context.Background(), "repo", "agent/a", 10*time.Millisecond, nil,
+		runLocalReconcile(ctx, "repo", "agent/a", 10*time.Millisecond, nil, false,
 			func() (bool, error) { return reads.Add(1) > 2, nil },
-			func() error { return nil }, nil, nil)
+			func() error { advances.Add(1); return nil }, nil, nil)
 	}()
+	require.Eventually(t, func() bool { return reads.Load() >= 5 }, 2*time.Second, 5*time.Millisecond)
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("loop did not exit once an origin appeared")
+		t.Fatal("loop exited once an origin appeared")
+	default:
 	}
+	cancel()
+	<-done
+	require.LessOrEqual(t, advances.Load(), int64(2), "no advance after the origin appeared")
 }
 
 // A subscription is read-only and has no agent branch; there is nothing to
@@ -289,8 +324,5 @@ func TestRunLocalReconcileLoop_ExitsWithoutAnAgentBranch(t *testing.T) {
 	ri := bootRepo(t, m)
 	svc := testService(t, ri)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go runLocalReconcileLoop(context.Background(), &wg, svc, ri.Name(), "", 10*time.Millisecond, nil, nil, nil)
-	wg.Wait()
+	goLocalLoop(context.Background(), svc, ri.Name(), "", 10*time.Millisecond)() // returns on its own
 }

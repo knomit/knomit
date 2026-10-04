@@ -26,10 +26,10 @@ func newPeerManager(t *testing.T, agent string) *repos.Manager {
 	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch:           agent,
-		KeyPath:               filepath.Join(home, "agent.key"),
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
+		AgentBranch: agent,
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -86,8 +86,10 @@ func TestKnomitOrigin_SubscribeFollowsPeerMain(t *testing.T) {
 		require.Equal(t, store.ModeFF, res.Mode)
 	}))
 
-	// B's periodic sync — one synchronous reconcile under DisableBackgroundSync.
-	require.NoError(t, riB.ActivateSync(originURL))
+	// B's sync — restarting its Sync stage runs one inline reconcile under a
+	// Synchronous machine.
+	_, err = b.Send(ctx, riB, repos.AttachOrigin(repos.OriginSpec{URL: originURL}))
+	require.NoError(t, err)
 	require.NoError(t, riB.WithRead(func(s *store.Service) {
 		f, rerr := s.Facts().ReadFact(ctx, "main", "kb/second.md", nil)
 		require.NoError(t, rerr)

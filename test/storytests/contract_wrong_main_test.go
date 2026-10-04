@@ -59,11 +59,11 @@ func TestContract_WrongMain_MasterOnlyRemoteAdopted(t *testing.T) {
 	// (master) AND inherited onto the agent branch. An empty repo here would
 	// mean detection silently produced an empty "main".
 	if !repo.Branch("master").HasFile("kb/seed.md") {
-		t.Fatalf("CONTRACT VIOLATION (symptom #5): local \"master\" branch is missing "+
+		t.Fatalf("CONTRACT VIOLATION (symptom #5): local \"master\" branch is missing " +
 			"kb/seed.md — the remote's master content was not adopted (empty-main default)")
 	}
 	if !repo.Branch("agent/test").HasFile("kb/seed.md") {
-		t.Fatalf("CONTRACT VIOLATION (symptom #5): agent branch did not inherit the "+
+		t.Fatalf("CONTRACT VIOLATION (symptom #5): agent branch did not inherit the " +
 			"master seed — upstream detection did not resolve to master")
 	}
 	t.Logf("master-only remote adopted correctly: upstream=%q, seed present", stored.Branch)

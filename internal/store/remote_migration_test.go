@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func TestMigration017_UpgradesPreMigrationDatabase(t *testing.T) {
 	// the real prior schema rather than a hand-built approximation.
 	svc, err := Open(path)
 	require.NoError(t, err)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	require.NoError(t, svc.Close())
 
 	downSQL, err := os.ReadFile(filepath.Join(

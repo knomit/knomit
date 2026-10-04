@@ -16,7 +16,7 @@ func newCaseFixture(t *testing.T) (*Service, string, string) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	const path = "kb/decisions/x/abc.md"
 	_, err = svc.Facts().WriteFact(

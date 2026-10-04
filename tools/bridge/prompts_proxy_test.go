@@ -32,7 +32,7 @@ func TestBridge_ProxiesPrompts(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 	svc.SetSigner(testsigner.Signer())
-	if err := svc.InitRepo(map[string]string{}, "agent/test"); err != nil {
+	if err := svc.InitRepo(context.Background(), map[string]string{}, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
 	src := "---\nname: work-task\ndescription: Work one task.\n---\nWORK BODY\n"

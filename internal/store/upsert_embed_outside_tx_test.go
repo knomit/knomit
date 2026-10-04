@@ -69,7 +69,7 @@ func TestUpsert_EmbedsOutsideWriteTransaction(t *testing.T) {
 		dsn: path + "?_journal_mode=WAL&_busy_timeout=200&_foreign_keys=1&_txlock=immediate",
 	}
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	ctx := context.Background()
 	_, err = svc.Facts().WriteFact(ctx, "agent/test", "kb/a.md",
@@ -96,7 +96,7 @@ func TestUpsert_CowHitStillSkipsInference(t *testing.T) {
 
 	emb := &countingEmbedder{}
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	ctx := context.Background()
 	content := "---\ntype: observation\nentities: [alpha]\n---\n# A\n\nbody-a"

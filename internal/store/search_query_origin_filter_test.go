@@ -38,7 +38,7 @@ func seedMixedOriginFacts(t *testing.T, branch string) *Service {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	ctx := context.Background()
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/obs/a.md",

@@ -127,7 +127,8 @@ func branchRootBody(
 	embeddingsEnabled bool,
 	experimentExpiryDays int,
 ) map[string]any {
-	idxState, idxDone, idxTotal := ri.IndexStatus()
+	st := ri.Status()
+	idxState, idxDone, idxTotal := st.Index.State, st.Index.Done, st.Index.Total
 
 	// ALL REPOS MUST HAVE AN ONTOLOGY. When one could not be established
 	// the repo is readable but writes are refused everywhere
@@ -160,6 +161,8 @@ func branchRootBody(
 		"index_done":     idxDone,
 		"index_total":    idxTotal,
 		"index_percent":  indexPercent(idxState, idxDone, idxTotal), // 0–100; 100 when ready
+		"index_reason":   st.Index.Reason,                           // why an "error" is one; "" otherwise
+		"stage":          st.Stage,
 
 		"_links": hal.LinkMap{
 			"self":           {Href: branchURL},

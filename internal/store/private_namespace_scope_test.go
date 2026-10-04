@@ -23,7 +23,7 @@ func TestPrivateNamespaceIsNotAFactPath(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/a"))
 	ctx := context.Background()
 
 	// A well-formed fact hand-placed at .knomit/jobs/x.md — the real shape a

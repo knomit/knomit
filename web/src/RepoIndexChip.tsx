@@ -15,15 +15,21 @@ import type { RepoInfo } from './api';
 // is nothing honest to say in either case. A chip on every ready row would be
 // the screen answering a question nobody asked — the same rule RepoStateChip
 // follows.
-export function RepoIndexChip({ repo }: { repo: Pick<RepoInfo, 'index_state' | 'index_done' | 'index_total'> }) {
+export function RepoIndexChip({ repo }: { repo: Pick<RepoInfo, 'index_state' | 'index_done' | 'index_total' | 'index_reason'> }) {
   const state = repo.index_state;
   if (state !== 'indexing' && state !== 'error') return null;
 
   if (state === 'error') {
+    // The server's reason leads when it gave one — "indexing cancelled" is a
+    // very different thing to read than a job that failed, and the chip alone
+    // says the same "index error" for both.
+    const why = 'The repository is there; search over it may be incomplete until it is rebuilt.';
     return (
       <span
         data-testid="repo-index-error"
-        title="The background index did not finish. The repository is there; search over it may be incomplete until it is rebuilt."
+        title={repo.index_reason
+          ? `The background index did not finish: ${repo.index_reason}. ${why}`
+          : `The background index did not finish. ${why}`}
         style={{ ...chip, ...errorChip }}
       >index error</span>
     );

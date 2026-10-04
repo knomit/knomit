@@ -3,28 +3,29 @@ package repos
 // Index-state change events.
 //
 // A repo's index state is the one piece of repo status that changes with NO
-// commit behind it: the background heal flips ready→indexing→ready without
-// touching a branch ref, so the `status` event never fires and a UI that
-// snapshotted the list mid-heal keeps showing "indexing" until something else
-// forces a refetch. These events close that gap.
+// commit behind it: the index job flips indexing→ready without touching a
+// branch ref, so the `status` event never fires and a UI that snapshotted the
+// list mid-heal keeps showing "indexing" until something else forces a
+// refetch. These events close that gap.
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"github.com/ysmood/goob"
 )
 
 // IndexEvent reports a repo's index state. The vocabulary is the repos list's,
-// deliberately — `ready | indexing | error`, the same strings IndexStatus and
-// the REST payload use — so a consumer can patch a list entry from an event
-// without translating anything.
+// deliberately — `ready | indexing | error`, the same strings Status().Index
+// and the REST payload use — so a consumer can patch a list entry from an
+// event without translating anything. Reason says why an `error` is one
+// ("indexing cancelled", or the job's own error).
 type IndexEvent struct {
-	Repo  string `json:"repo"`
-	State string `json:"state"`
-	Done  int    `json:"done"`
-	Total int    `json:"total"`
+	Repo   string `json:"repo"`
+	State  string `json:"state"`
+	Done   int    `json:"done"`
+	Total  int    `json:"total"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // indexProgressInterval bounds PROGRESS events to one per repo per second. A
@@ -44,7 +45,7 @@ const indexProgressInterval = time.Second
 // renders an index chip for EVERY repo in its list — so a per-repo event
 // reaches the chip of the one repo whose chip was least likely to be stale.
 // Rather than open a stream per repo (which scales with the fleet and was
-// explicitly not wanted), the instances publish here as well and the app holds
+// explicitly not wanted), the machines publish here as well and the app holds
 // one extra stream for all of them.
 type RepoEventHub struct {
 	ob *goob.Observable
@@ -73,68 +74,36 @@ func (h *RepoEventHub) publish(ev IndexEvent) {
 	h.ob.Publish(ev)
 }
 
-// indexPublisher is the per-instance throttle state.
+// indexPublisher is the per-machine progress throttle. Driver-owned.
 type indexPublisher struct {
-	lastProgress atomic.Int64 // unix nanos of the last PROGRESS event
+	lastProgress time.Time // when the last PROGRESS event went out
 }
 
-// publishIndex is THE chokepoint for index events. Every index-state change
-// goes through it, and nothing else may publish an IndexEvent.
+// publishIndex emits one IndexEvent describing s. Its only caller is the
+// machine's publish(), the one publish point: index state is DERIVED from the
+// machine (cursor + Index result) and an event goes out only after a
+// transition, so "every exit path marks" and "every exit path announces" are
+// one rule rather than two kept in sync. Nothing else constructs an
+// IndexEvent, and a closed machine publishes nothing.
 //
-// WHY A CHOKEPOINT rather than a call at each site: index state changes in five
-// places today, ALL of them inside Manager.openOne — the synchronous
-// (DisableBackgroundSync) branch's two exits, and the background heal's
-// markIndexing plus its two exits — and a sixth will be added by someone who
-// does not know this event exists. Publishing inside the mark* methods makes
-// the event a property of the STATE CHANGE rather than of remembering to
-// announce it, the same reason every branch-ref mutation goes through
-// notifyCommit rather than each mutation emitting its own.
-//
-// A SIXTH site now exists, outside this package: the manual rebuild endpoint
-// (handleStartRebuild) brackets its rebuild with MarkIndexRebuildStart and
-// MarkIndexRebuildDone, which are exported aliases for these same marks. It
-// used to touch index state not at all, so IndexStatus read "ready" throughout
-// a rebuild; that was a separate defect and is fixed. The chokepoint still
-// holds — the rebuild publishes only by marking — but the single-writer
-// property it relies on is now enforced by that endpoint's 409, not by there
-// being only one code path. Read handleStartRebuild before adding a seventh.
-//
-// It also inherits the stuck-indexing incident's guarantee for free. That
-// incident was a heal exit path that reached neither markIndexReady nor
-// markIndexFailed, pinning the UI at "indexing" forever; the repair made every
-// exit path mark. Because the event rides ON the mark, "every exit path marks"
-// and "every exit path announces" are ONE rule that cannot drift apart, rather
-// than two that have to be kept in sync.
-//
-// It reads IndexStatus() rather than taking the state as an argument, so the
-// event can never describe something other than what a reader polling the REST
-// endpoint would see.
-func (ri *RepoInstance) publishIndex(throttled bool) {
-	state, done, total := ri.IndexStatus()
-
+// Progress events are THROTTLED (one per repo per second); entry and terminal
+// events never are, and each resets the window so the next progress event is
+// not suppressed by a now-irrelevant tick.
+func (m *Machine) publishIndex(s Status, throttled bool) {
+	now := time.Now()
 	if throttled {
-		// Progress only. Terminal and entry events never reach here.
-		now := time.Now().UnixNano()
-		last := ri.indexPub.lastProgress.Load()
-		if now-last < int64(indexProgressInterval) {
+		if now.Sub(m.pub.lastProgress) < indexProgressInterval {
 			return
 		}
-		// CAS so two concurrent progress callbacks cannot both pass the window.
-		if !ri.indexPub.lastProgress.CompareAndSwap(last, now) {
-			return
-		}
+		m.pub.lastProgress = now
 	} else {
-		// A terminal or entry event supersedes the throttle window: the next
-		// progress event after it should not be suppressed because a
-		// now-irrelevant tick happened to be recent.
-		ri.indexPub.lastProgress.Store(0)
+		m.pub.lastProgress = time.Time{}
 	}
-
-	ev := IndexEvent{Repo: ri.Name(), State: state, Done: done, Total: total}
+	ev := IndexEvent{Repo: m.r.Name(), State: s.Index.State, Done: s.Index.Done, Total: s.Index.Total, Reason: s.Index.Reason}
 	// Per-repo stream, for a client watching one repo.
-	if ri.hub != nil {
-		ri.hub.broadcastIndex(ev)
+	if m.r.hub != nil {
+		m.r.hub.broadcastIndex(ev)
 	}
 	// Server-wide stream, for the fleet-wide chip.
-	ri.repoEventHub.publish(ev)
+	m.r.repoEventHub.publish(ev)
 }

@@ -26,7 +26,7 @@ func TestRebuildGraph_PrunesStaleSimilarityEdges(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	// Without an embedder the similarity phase is skipped entirely and every
 	// assertion below would pass vacuously on an empty edge set.
 	svc.SetEmbedder(&stub768Embedder{})
@@ -121,7 +121,7 @@ func TestRebuildGraph_SimilarityRespectsTopKCap(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	// Without an embedder the similarity phase is skipped entirely and every
 	// assertion below would pass vacuously on an empty edge set.
 	svc.SetEmbedder(&stub768Embedder{})
@@ -194,7 +194,7 @@ func TestRebuildGraph_SimilarityIsIdempotent(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	// Without an embedder the similarity phase is skipped entirely and every
 	// assertion below would pass vacuously on an empty edge set.
 	svc.SetEmbedder(&stub768Embedder{})
@@ -240,7 +240,7 @@ func TestRebuild_LeavesPlannerStatistics(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	// Without an embedder the similarity phase is skipped entirely and every
 	// assertion below would pass vacuously on an empty edge set.
 	svc.SetEmbedder(&stub768Embedder{})

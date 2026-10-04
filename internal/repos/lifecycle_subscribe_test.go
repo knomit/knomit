@@ -16,16 +16,16 @@ import (
 )
 
 // newSubscribeTestManager builds Deps inline because these tests need BOTH a
-// LocalOriginRoot (the file:// remotes below) and DisableBackgroundSync — the
-// never-pushes test depends on ActivateSync running one synchronous reconcile
-// and starting no loop. newLifecycleManagerWithRoot sets only the first,
+// LocalOriginRoot (the file:// remotes below) and a Synchronous machine — the
+// never-pushes test depends on a Sync restart running one inline reconcile and
+// starting no loop. newLifecycleManagerWithRoot sets only the first,
 // newTestManager only the second.
 func newSubscribeTestManager(t *testing.T, root string) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:                   config.Config{Home: t.TempDir(), LocalOriginRoot: root},
-		AgentBranch:           "machine/test",
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentBranch: "machine/test",
+		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -136,7 +136,9 @@ func TestSubscription_SyncFollowsUpstreamAndNeverPushes(t *testing.T) {
 	runGit(t, work, "push", "origin", "main")
 
 	refsBefore := gitRefs(t, bare)
-	require.NoError(t, ri.ActivateSync(url)) // one synchronous reconcile; no loop under DisableBackgroundSync
+	// Restarting Sync runs one inline reconcile under Synchronous; no loop.
+	_, err = m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: url}))
+	require.NoError(t, err)
 
 	var after string
 	require.NoError(t, ri.WithRead(func(s *store.Service) {

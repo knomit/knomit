@@ -3,40 +3,71 @@ package repos
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// mirrorIndexing narrates the heal and returns the state it ended in — and it
-// renders the heal's OWN done/total, never an invented fraction.
-func TestMirrorIndexing_NarratesProgressAndEndsReady(t *testing.T) {
-	ri := &RepoInstance{}
-	ri.markIndexing()
-	ri.setIndexProgress(3, 12)
+// heldIndexRepo creates a repo, then restarts its Index stage as a full
+// rebuild held at the index job's hook, so the status reads "indexing" for as
+// long as the test wants. It returns the repo and the gate.
+func heldIndexRepo(t *testing.T) (*Manager, *RepoInstance, *gate) {
+	t.Helper()
+	g := newGate(StageIndex, "index-job")
+	var armed atomic.Bool
+	m := newTestManager(t)
+	m.deps.Machine.Hook = func(s StageID, p string, ctx context.Context) {
+		if armed.Load() {
+			g.hook(s, p, ctx)
+		}
+	}
+	ri := bootRepo(t, m)
+	armed.Store(true)
+	_, err := m.Send(context.Background(), ri, Rebuild(ri.AgentBranch()))
+	require.NoError(t, err)
+	g.waitArrived(t)
+	t.Cleanup(g.open)
+	require.Equal(t, IndexStateIndexing, ri.Status().Index.State)
+	return m, ri, g
+}
 
-	// The emit callback runs on the MIRROR's goroutine (in production, the
-	// create's), so the collector is locked: reading it from the test
-	// goroutine without one is a genuine race, not a testing formality.
+// reportProgress reports index progress exactly as the index job does: the
+// counts into the instance, one coalesced internal event to the driver, which
+// publishes.
+func reportProgress(t *testing.T, ri *RepoInstance, done, total int) {
+	t.Helper()
+	ri.indexProgress.Store(&indexProgress{done: done, total: total})
+	ri.machine.postProgress(ri.Status().gens[StageIndex])
+	waitStatus(t, ri, "progress published", func(s Status) bool { return s.Index.Done == done && s.Index.Total == total })
+}
+
+// watchIndex narrates the index job and returns the state it ended in — and
+// it renders the job's OWN done/total, never an invented fraction.
+func TestWatchIndex_NarratesProgressAndEndsReady(t *testing.T) {
+	_, ri, g := heldIndexRepo(t)
+	reportProgress(t, ri, 3, 12)
+
+	// The emit callback runs on the watcher's goroutine (in production, the
+	// create's), so the collector is locked.
 	var mu sync.Mutex
 	var got []Event
 	collect := func(e Event) { mu.Lock(); got = append(got, e); mu.Unlock() }
 	seen := func() int { mu.Lock(); defer mu.Unlock(); return len(got) }
 
 	done := make(chan string, 1)
-	go func() { done <- mirrorIndexing(context.Background(), ri, collect) }()
+	go func() { done <- watchIndex(context.Background(), ri, collect) }()
 
-	// Let the mirror emit at least once at 3/12, then finish the heal.
+	// Let it emit at least once at 3/12, then let the job finish.
 	require.Eventually(t, func() bool { return seen() > 0 }, 5*time.Second, 5*time.Millisecond)
-	ri.setIndexProgress(12, 12)
-	ri.markIndexReady()
+	g.open()
 
 	select {
 	case state := <-done:
 		require.Equal(t, IndexStateReady, state)
-	case <-time.After(5 * time.Second):
-		t.Fatal("mirrorIndexing did not return after the heal reported ready")
+	case <-time.After(30 * time.Second):
+		t.Fatal("watchIndex did not return after the job reported ready")
 	}
 
 	mu.Lock()
@@ -46,68 +77,62 @@ func TestMirrorIndexing_NarratesProgressAndEndsReady(t *testing.T) {
 	require.Equal(t, PhaseIndex, first.Phase)
 	require.Equal(t, "index", first.Step)
 	require.Equal(t, IndexStateIndexing, first.IndexState)
-	require.Equal(t, "indexing 3/12", first.Message, "the message carries the heal's own counts")
-	// 3/12 of the band 95..99 is 96 — a value derived from the heal, which is
+	require.Equal(t, "indexing 3/12", first.Message, "the message carries the job's own counts")
+	// 3/12 of the band 95..99 is 96 — a value derived from the job, which is
 	// the whole point: a constant here would pass an "is it between 95 and 99"
 	// assertion just as well.
 	require.Equal(t, 96, first.Pct)
 	require.False(t, first.Indeterminate, "indexing HAS a percent; only transfer does not")
 }
 
-// A heal that ends in error is reported as an error state — and the CREATE
-// still succeeds, because the repo is there. mirrorIndexing's job is to say
-// which, never to fail.
-func TestMirrorIndexing_ReportsErrorWithoutFailing(t *testing.T) {
-	ri := &RepoInstance{}
-	ri.markIndexing()
+// An index that ends in error is reported as an error state — and the CREATE
+// still succeeds, because the repo is there. watchIndex's job is to say which,
+// never to fail.
+func TestWatchIndex_ReportsErrorWithoutFailing(t *testing.T) {
+	m, ri, _ := heldIndexRepo(t)
 	done := make(chan string, 1)
-	go func() { done <- mirrorIndexing(context.Background(), ri, func(Event) {}) }()
-	time.Sleep(10 * time.Millisecond)
-	ri.markIndexFailed()
+	go func() { done <- watchIndex(context.Background(), ri, func(Event) {}) }()
+	_, err := m.Send(context.Background(), ri, CancelIndex())
+	require.NoError(t, err)
 
 	select {
 	case state := <-done:
 		require.Equal(t, IndexStateError, state)
-	case <-time.After(5 * time.Second):
-		t.Fatal("mirrorIndexing did not return after the heal failed")
+	case <-time.After(30 * time.Second):
+		t.Fatal("watchIndex did not return after the index ended in error")
 	}
 }
 
-// A heal that is STILL RUNNING when the job's context ends stops being
-// narrated and nothing else: the mirror returns promptly, reporting the state
-// it last saw. The heal has its own context and keeps going.
-func TestMirrorIndexing_ContextEndsTheNarrationNotTheCreate(t *testing.T) {
-	ri := &RepoInstance{}
-	ri.markIndexing()
+// An index job that is STILL RUNNING when the job's context ends stops being
+// narrated and nothing else: watchIndex returns promptly, reporting the state
+// it last saw. The index job runs under the machine and keeps going.
+func TestWatchIndex_ContextEndsTheNarrationNotTheCreate(t *testing.T) {
+	_, ri, _ := heldIndexRepo(t)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan string, 1)
-	go func() { done <- mirrorIndexing(ctx, ri, func(Event) {}) }()
-	time.Sleep(10 * time.Millisecond)
+	go func() { done <- watchIndex(ctx, ri, func(Event) {}) }()
 	cancel()
 
 	select {
 	case state := <-done:
 		require.Equal(t, IndexStateIndexing, state, "the last state it actually saw")
 	case <-time.After(5 * time.Second):
-		t.Fatal("mirrorIndexing ignored its context")
+		t.Fatal("watchIndex ignored its context")
 	}
-	state, _, _ := ri.IndexStatus()
-	require.Equal(t, IndexStateIndexing, state, "the heal itself is untouched")
+	require.Equal(t, IndexStateIndexing, ri.Status().Index.State, "the index job itself is untouched")
 }
 
-// A heal that has already finished is not narrated at all — the mirror returns
-// immediately with no index events. This is the ordinary answer under
-// DisableBackgroundSync, where openOne heals inline before Add returns.
-func TestMirrorIndexing_AlreadyReadyEmitsNothing(t *testing.T) {
-	ri := &RepoInstance{}
-	ri.markIndexReady()
+// An index that has already settled is not narrated at all — watchIndex
+// returns immediately with no index events.
+func TestWatchIndex_AlreadyReadyEmitsNothing(t *testing.T) {
+	m := newTestManager(t)
+	ri := bootRepo(t, m)
 	var got []Event
 	require.Equal(t, IndexStateReady,
-		mirrorIndexing(context.Background(), ri, func(e Event) { got = append(got, e) }))
+		watchIndex(context.Background(), ri, func(e Event) { got = append(got, e) }))
 	require.Empty(t, got)
 }
-
 func TestScaleIndexPct(t *testing.T) {
 	// An uncounted heal reports the floor, never an invented fraction.
 	require.Equal(t, indexPctFloor, scaleIndexPct(0, 0))

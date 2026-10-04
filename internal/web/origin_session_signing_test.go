@@ -32,11 +32,11 @@ func TestConnect_DisjointReplaySignsWithTheInstanceKey(t *testing.T) {
 	}
 	instance := testsigner.Named("wizard-instance")
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: remotesRoot},
-		AgentBranch:           "agent/test",
-		KeyPath:               keyPath,
-		Signer:                instance,
-		DisableBackgroundSync: true,
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: remotesRoot},
+		AgentBranch: "agent/test",
+		KeyPath:     keyPath,
+		Signer:      instance,
+		Machine:     repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {

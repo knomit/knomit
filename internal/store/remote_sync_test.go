@@ -80,7 +80,7 @@ func TestSync_CallerCancellationLeavesStatusAlone(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
@@ -108,7 +108,7 @@ func TestPush_CallerCancellationLeavesStatusAlone(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
@@ -141,7 +141,7 @@ func TestSync_CallerDeadlineIsRecorded(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
@@ -165,7 +165,7 @@ func TestPush_EmptyBranchIsRefused(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.ri.Push(context.Background(), "", nil)
 	require.ErrorIs(t, err, ErrNoAgentBranch)

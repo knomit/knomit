@@ -16,7 +16,7 @@ func newVerifyRepo(t *testing.T) *Service {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/decisions/x/aaaaaaaa.md",
 		testFactBody("A", 0.9, nil), "seed", "learn")
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestVerify_FreshRepoStillChecksItsAgentBranch(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	var metaRows int
 	require.NoError(t, svc.rh.gits.DB().QueryRow(

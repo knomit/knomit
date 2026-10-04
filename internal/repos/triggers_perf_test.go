@@ -27,7 +27,7 @@ func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoIn
 	cfg := config.Config{Home: home, OntologyRoot: "kb"}
 	cfg.Log.SlowTriggerMS = slowMS
 	m := New(context.Background(), Deps{Cfg: cfg, AgentBranch: trigAgent,
-		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true})
+		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}})
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)
 	setOntology(t, ri, triggerOntology("", entries...))
@@ -127,7 +127,7 @@ func TestDispatch_SlowTriggerThresholdFromConfig(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Home = home
 	m := New(context.Background(), Deps{Cfg: cfg, AgentBranch: trigAgent,
-		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true})
+		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}})
 	t.Cleanup(func() { _ = m.Close() })
 	ri2 := bootRepo(t, m)
 	require.Equal(t, 50*time.Millisecond, ri2.triggers.slow)
@@ -316,7 +316,7 @@ func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 	require.True(t, withinRace(bm, lm), "median with busy triggers (%s) is not within max(3×, +250ms) of 0 triggers (%s)", lm, bm)
 	// Teardown must not wait for the backlog: ctx is checked per evaluation.
 	started := time.Now()
-	ri.triggers.stop()
+	restartServe(t, ri)
 	require.Less(t, time.Since(started), 2*time.Second)
 }
 
@@ -436,7 +436,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			home := b.TempDir()
 			m := New(context.Background(), Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
-				KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true})
+				KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}})
 			defer m.Close()
 			if err := m.Start(); err != nil {
 				b.Fatal(err)
@@ -525,7 +525,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 					must(svc.Triggers().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil, nil))
 				}
 				b.StartTimer()
-				d.run(ctx)
+				d.runOnce(ctx)
 				d.flush(ctx)
 			}
 			b.StopTimer()

@@ -64,7 +64,7 @@ func newCMRepo(t *testing.T) *cmRepo {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{fact.OntologyFile: cmOntology("")}, "agent/seed"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{fact.OntologyFile: cmOntology("")}, "agent/seed"))
 	return &cmRepo{t: t, svc: svc}
 }
 

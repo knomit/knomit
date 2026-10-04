@@ -69,7 +69,7 @@ func newMissionDedupRepo(t *testing.T, o *fact.Ontology) (context.Context, store
 	t.Cleanup(func() { _ = svc.Close() })
 	emb := newLenEmbedder(t)
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "mission", UID: nextTestRepoUID(), AgentBranch: "agent/test", Svc: svc,
 		Ontology: o, OntologyRoot: "kb", Embedder: emb,

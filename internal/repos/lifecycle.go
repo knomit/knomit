@@ -440,15 +440,17 @@ func (m *Manager) reserveNameAndOrigin(name, origin string) (func(), error) {
 	return release, nil
 }
 
-// Create initialises a new repo on disk per spec, registers it, and (for clone
-// mode) attaches the origin and activates sync. Progress is reported via emit.
+// Create validates spec, reserves the name (and origin), inserts the registry
+// row, and mounts a new machine with a create spec: Populate runs the mode's
+// init path under the stage's life, then the walk opens, identifies, indexes,
+// serves and syncs the repo. Progress is reported via emit; the job reports
+// done once the index has left "indexing".
 //
-// Cancellation is honoured at step boundaries: ctx is checked before each
-// init step and again before the repo is registered, and a cancelled Create
-// removes the partial .db before returning ctx.Err(). The network fetch inside
-// clone mode is not itself interruptible (the store's clone is not yet
-// context-aware), so an in-flight clone runs to completion before the next
-// boundary check fires.
+// Cancellation: a ctx that ends while the machine is populating unmounts it,
+// which cancels the init in flight (the clone is ctx-aware), and the partial
+// .db and registry row are removed before ctx.Err() is returned. Past the
+// Mount reply the repo is registered and serving; ctx then only stops the
+// index narration, and the caller (StartCreate's worker) deletes the repo.
 func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event)) (*RepoInstance, error) {
 	if emit == nil {
 		emit = func(Event) {}
@@ -456,7 +458,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	if !isValidRepoName(spec.Name) {
 		return nil, ErrInvalidName
 	}
-	reg, origins, err := m.controlHandles()
+	reg, _, err := m.controlHandles()
 	if err != nil {
 		return nil, err
 	}
@@ -523,173 +525,121 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		return nil, cerr
 	}
 
-	var resolvedUpstream string
-	switch spec.Mode {
-	case "preset", "custom":
-		if ierr := m.initLocal(ctx, spec, dbPath, emit); ierr != nil {
-			cleanup()
-			return nil, ierr
-		}
-	case "clone":
-		// Name/origin presence and uniqueness were validated and reserved up
-		// front via reserveNameAndOrigin; just clone.
-		upstream, ierr := m.initClone(ctx, spec, uid, dbPath, emit)
-		if ierr != nil {
-			cleanup()
-			return nil, ierr
-		}
-		resolvedUpstream = upstream
-	case "initialize":
-		// Name/origin presence and uniqueness were validated and reserved up
-		// front via reserveNameAndOrigin; just initialize.
-		upstream, ierr := m.initInitialize(ctx, spec, uid, dbPath, emit)
-		if ierr != nil {
-			cleanup()
-			return nil, ierr
-		}
-		resolvedUpstream = upstream
-	case "subscribe":
-		upstream, ierr := m.initSubscribe(ctx, spec, uid, dbPath, emit)
-		if ierr != nil {
-			cleanup()
-			return nil, ierr
-		}
-		resolvedUpstream = upstream
-	default:
+	// The machine goes into the map BEFORE it is mounted: while it populates,
+	// GET /repos shows it at stage "populate", a request that resolves it gets
+	// the "repo is populating" 503, and the reservation above keeps any other
+	// create off this name and origin.
+	ri := m.newInstance(spec.Name, uid, spec.Mode == "subscribe")
+	m.Set(spec.Name, ri)
+
+	_, merr := m.Send(ctx, ri, Mount(MountSpec{Mode: MountCreate, Create: spec, Emit: emit}))
+	if merr != nil {
+		// Read the origin an initialize already pushed under BEFORE cleanup
+		// deletes its row, so the error can say what is left on the remote.
+		pushedTo := m.pushedUpstream(spec, uid)
+		// Remove unmounts: the root context is cancelled first, so a clone
+		// still in flight (the ctx-cancelled case) aborts, and every entered
+		// stage is drained before the file is deleted.
+		m.Remove(spec.Name)
 		cleanup()
-		return nil, fmt.Errorf("%w: unknown mode %q", ErrInvalidName, spec.Mode)
-	}
-
-	// An initialize that got this far has already PUSHED its agent branch.
-	// Every failure from here on calls cleanup() — deleting the local .db and
-	// the registry row — while the remote KEEPS that branch. It is a far
-	// gentler state than seed's used to be (the consensus branch is untouched,
-	// so nothing is stranded and no later create is blocked: re-running the
-	// same create simply adopts the agent branch it finds), but it is still not
-	// guessable from a bare "persist origin: …", and this is the last frame
-	// that still knows a push happened.
-	explainPushed := func(err error) error {
-		if spec.Mode != "initialize" || !spec.hasRemote() {
-			return err
-		}
-		return agentBranchAlreadyPushed(err, spec.Origin.URL, m.deps.AgentBranch, resolvedUpstream)
-	}
-
-	if cerr := ctx.Err(); cerr != nil {
-		cleanup()
-		return nil, explainPushed(cerr)
-	}
-
-	var originRec *Origin
-	if spec.hasRemote() {
-		emit(Event{Step: "persist-origin", Phase: PhaseRegister, Message: "saving remote config", Pct: 70})
-		// The upstream InitFromRemote RESOLVED, never the one requested — see
-		// initClone/initInitialize, both of which return it for exactly this reason.
-		originRec = &Origin{
-			URL:        spec.Origin.URL,
-			Branch:     resolvedUpstream,
-			AuthMethod: spec.Origin.AuthMethod,
-			AuthToken:  spec.Origin.AuthToken,
-			Mode:       originModeFor(spec.Mode),
-		}
-		if oerr := origins.Set(uid, *originRec); oerr != nil {
-			cleanup()
-			return nil, explainPushed(fmt.Errorf("persist origin: %w", oerr))
-		}
-	}
-
-	emit(Event{Step: "register", Phase: PhaseRegister, Message: "registering repo", Pct: 85})
-
-	if aerr := m.Add(spec.Name, uid, dbPath, originRec); aerr != nil {
-		cleanup()
-		return nil, explainPushed(fmt.Errorf("register repo: %w", aerr))
-	}
-	ri := m.Get(spec.Name)
-	if ri != nil {
-		if id := ri.ID(); id != "" {
-			if rerr := reg.RecordRepoID(uid, id); rerr != nil {
-				// Only a genuine identity collision (another ACTIVE repo already
-				// holds this knowledge base) justifies throwing away an
-				// already-completed clone/init. Any other error (e.g. a transient
-				// SQLite failure) leaves repo_id unset, which openRegistered simply
-				// retries on the next boot (manager.go, same pattern) — so warn and
-				// keep the repo rather than destroying real work over it.
-				if errors.Is(rerr, ErrRepoAlreadyRegistered) {
-					m.Remove(spec.Name)
-					cleanup()
-					return nil, explainPushed(rerr)
-				}
-				log.Warn().Err(rerr).Str("repo", spec.Name).Str("uid", uid).
-					Msg("recording repo identity failed; repo stays registered")
-			}
-		}
-	}
-
-	// DONE MEANS INDEXED, not "registered". The repo exists from m.Add onwards,
-	// but a knowledge base whose search index is still being built is not a
-	// knowledge base anyone can use — and reporting 100% while a 3254-commit
-	// backfill ran in silence is the other half of the incident this work comes
-	// from.
-	//
-	// THE INDEX IS NARRATED BEFORE SYNC IS ACTIVATED, and the order is
-	// load-bearing. ActivateSync runs one SYNCHRONOUS reconcile, and that
-	// reconcile takes lockBranch(upstream) — the very lock the background
-	// heal openOne just started holds for as long as it indexes that branch.
-	// With sync first, the job sat at "95% activating sync" for the whole of
-	// the index, reporting a step that was not the work being done; a reader
-	// who refreshed saw the repo already indexing under a wizard that said
-	// otherwise. Now the job narrates the index while the heal holds the lock,
-	// and activates sync once the lock is free, which is also when the call
-	// is quick.
-	indexState := IndexStateReady
-	message := "repo ready"
-	if ri != nil {
-		indexState = mirrorIndexing(ctx, ri, emit)
-		if indexState == IndexStateError {
-			message = "repo ready; index needs attention"
-		}
-	}
-
-	// A DEAD CONTEXT SKIPS SYNC ACTIVATION.
-	//
-	// This is the one place past m.Add where the context still buys anything,
-	// and it is worth the check because ActivateSync is the LONGEST-BLOCKING
-	// call in the whole function: its synchronous reconcile takes
-	// lockBranch(upstream), which the background heal holds for the entire
-	// index. So a cancel arriving during the index used to have no effect for
-	// as long as the index ran — mirrorIndexing returned promptly on
-	// ctx.Done(), then Create parked in ActivateSync behind the heal's lock,
-	// and the worker goroutine could not run DeleteRepo until it came back.
-	// Observed live: a job reading state=cancelling, step=sync, pct=99 for
-	// many minutes while its repo sat at index 32/697.
-	//
-	// An earlier comment here said the opposite — that sync is never skipped
-	// on account of how the narration ended — and it was wrong for the
-	// cancelled case specifically. Activating sync on a repo that is about to
-	// be deleted configures a remote for something that will not exist: at
-	// best wasted, at worst a reconcile loop started against a repo being
-	// purged underneath it.
-	//
-	// Only the sync step is skipped — "done" is still emitted and ri is still
-	// returned. ri MUST come back non-nil: the repo IS registered, and the
-	// worker goroutine can only delete what it is handed.
-	if spec.hasRemote() && ri != nil {
 		if cerr := ctx.Err(); cerr != nil {
-			log.Debug().Err(cerr).Str("repo", spec.Name).
-				Msg("create: context ended before sync activation; skipping it")
-		} else {
-			// Pct is the index band's ceiling, not 95: the mirror has already
-			// reported up to indexPctCeil, and a bar that steps backwards for
-			// the sync activation would read as the create losing ground.
-			emit(Event{Step: "sync", Phase: PhaseRegister, Message: "activating sync", Pct: indexPctCeil, IndexState: indexState})
-			if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
-				log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
+			merr = cerr
+		}
+		var se *StageError
+		if errors.As(merr, &se) {
+			merr = se.Err
+			if se.Stage > StagePopulate {
+				merr = fmt.Errorf("register repo: %w", merr)
 			}
 		}
+		if pushedTo != "" {
+			merr = agentBranchAlreadyPushed(merr, spec.Origin.URL, m.deps.AgentBranch, pushedTo)
+		}
+		return nil, merr
 	}
 
+	// DONE MEANS INDEXED, not "registered" (kb/decisions/repos/create-job/
+	// done-means-indexed). The job only OBSERVES: Mount replied at Ready, the
+	// sync loop and the triggers are already running, and nothing in the
+	// machine waits for the index. A rebuild that replaces the heal keeps the
+	// card on indexing until the rebuild ends.
+	indexState := watchIndex(ctx, ri, emit)
+	message := "repo ready"
+	if indexState == IndexStateError {
+		message = "repo ready; index needs attention"
+	}
 	emit(Event{Step: "done", Phase: PhaseDone, Message: message, Pct: 100, IndexState: indexState})
 	return ri, nil
+}
+
+// pushedUpstream is the consensus branch an initialize create already pushed
+// its agent branch alongside, read from the origin row it persisted — "" when
+// the create is not an initialize or got no further than its own push.
+func (m *Manager) pushedUpstream(spec CreateSpec, uid string) string {
+	if spec.Mode != "initialize" || !spec.hasRemote() {
+		return ""
+	}
+	origins := m.Origins()
+	if origins == nil {
+		return ""
+	}
+	o, err := origins.Get(uid)
+	if err != nil || o == nil {
+		return ""
+	}
+	return o.Branch
+}
+
+// populate is the Populate stage of a create: the mode's init path, run under
+// the stage's life ctx so an Unmount aborts it, then the origin row (for the
+// remote-bearing modes). It writes into r.dbPath and closes what it opened;
+// the Open stage opens the result.
+func (m *Manager) populate(ctx context.Context, r *RepoInstance, spec MountSpec) error {
+	emit := spec.Emit
+	if emit == nil {
+		emit = func(Event) {}
+	}
+	cs := spec.Create
+	var upstream string
+	var err error
+	switch cs.Mode {
+	case "preset", "custom":
+		err = m.initLocal(ctx, cs, r.dbPath, emit)
+	case "clone":
+		upstream, err = m.initClone(ctx, cs, r.uid, r.dbPath, emit)
+	case "initialize":
+		upstream, err = m.initInitialize(ctx, cs, r.uid, r.dbPath, emit)
+	case "subscribe":
+		upstream, err = m.initSubscribe(ctx, cs, r.uid, r.dbPath, emit)
+	default:
+		err = fmt.Errorf("%w: unknown mode %q", ErrInvalidName, cs.Mode)
+	}
+	if err != nil {
+		return err
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	if cs.hasRemote() {
+		emit(Event{Step: "persist-origin", Phase: PhaseRegister, Message: "saving remote config", Pct: 70})
+		origins := m.Origins()
+		if origins == nil {
+			return ErrManagerStopped
+		}
+		// The upstream the init RESOLVED, never the one requested: the local
+		// branch and the fetch refspecs were built from it.
+		if oerr := origins.Set(r.uid, Origin{
+			URL:        cs.Origin.URL,
+			Branch:     upstream,
+			AuthMethod: cs.Origin.AuthMethod,
+			AuthToken:  cs.Origin.AuthToken,
+			Mode:       originModeFor(cs.Mode),
+		}); oerr != nil {
+			return fmt.Errorf("persist origin: %w", oerr)
+		}
+	}
+	emit(Event{Step: "register", Phase: PhaseRegister, Message: "registering repo", Pct: 85})
+	return nil
 }
 
 // DeleteRepo removes an ACTIVE repo outright: Archive then Purge in one
@@ -725,80 +675,52 @@ func (m *Manager) deleteRepo(name string) error {
 	return nil
 }
 
-// indexMirrorInterval is how often the create job re-reads the repo's index
-// state while narrating it.
-//
-// CLASSIFICATION (MN13): a POLL RATE, not a corpus property. It measures
-// nothing about any repository; it trades how promptly the UI's bar moves
-// against how often a finished create's goroutine wakes up. Four times a
-// second is well under the interval at which a human perceives a bar as stuck
-// and well above the cost of an atomic load.
-const indexMirrorInterval = 250 * time.Millisecond
-
 // The percent band the index phase occupies. Everything before it has already
-// spent 0–95 (validate, transfer, register, sync), so indexing narrates the
-// tail — and never reaches 100, because 100 is what the terminal event means.
+// spent 0–95 (validate, transfer, register), so indexing narrates the tail —
+// and never reaches 100, because 100 is what the terminal event means.
 const (
 	indexPctFloor = 95
 	indexPctCeil  = 99
 )
 
-// mirrorIndexing narrates the background index heal on the create job until
-// the heal leaves the "indexing" state, and returns the state it left in.
+// watchIndex narrates the repo's index on the create job until the status
+// leaves "indexing", and returns the state it left in.
 //
-// WHAT THIS MUST NOT DO: fail the create. By the time it runs the repo exists,
-// is registered and is in m.repos, and Create has no rollback left that would
-// be honest. So EVERY way out — ready, error, the job's deadline, shutdown —
-// ends with the create succeeding, and only the reported IndexState varies. A
-// heal that ends in error is a repo that is there and needs attention, not a
-// repo that failed to be created.
+// WHAT THIS MUST NOT DO: fail the create. By the time it runs the repo exists
+// and is serving, so EVERY way out — ready, error, the job's deadline,
+// shutdown — ends with the create succeeding, and only the reported
+// IndexState varies.
 //
-// It only OBSERVES. The heal runs on indexCtx, derived from the MANAGER's
-// context in repoBuilder.build precisely so a create's deadline cannot cancel
-// it (kb/incidents/repos/clone-create-index-stuck-indexing). This loop
-// returning early changes nothing about whether the heal completes; it stops
-// narrating, nothing more.
-//
-// Race-free by placement rather than by locking: ri.markIndexing() runs
-// SYNCHRONOUSLY inside openOne before m.Add returns (manager.go), so the first
-// IndexStatus() read here cannot land in a window before the heal has claimed
-// the state. A "ready" on the first read therefore means a heal that is
-// genuinely finished — which is the ordinary answer under
-// DisableBackgroundSync, where openOne heals inline.
-//
-// THAT ORDERING IS NO LONGER THE WHOLE ARGUMENT. It establishes that the heal
-// has claimed the state before this loop first reads it; it does NOT establish
-// that the heal is the only thing that can change it afterwards. Since the
-// manual rebuild endpoint began marking the same cell, what makes "state left
-// indexing" mean "the heal finished" is a POLICY — a rebuild is refused with
-// 409 while the state is indexing (internal/web/handlers_jobs.go), so the two
-// never overlap — and not a fact about which code paths write. Without that
-// refusal a rebuild could finish first and flip the cell to ready, and this
-// function would return ready, and the create job would report done at 100%
-// over a half-built index. A THIRD writer of this cell breaks the inference
-// again unless it is serialised the same way; do not add one on the strength
-// of the ordering paragraph above.
-func mirrorIndexing(ctx context.Context, ri *RepoInstance, emit func(Event)) string {
-	for {
-		state, done, total := ri.IndexStatus()
-		if state != IndexStateIndexing {
-			return state
+// It only OBSERVES, through Watch. The index job runs under the machine's
+// Index life, so this returning early changes nothing about whether it
+// completes.
+func watchIndex(ctx context.Context, ri *RepoInstance, emit func(Event)) string {
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	last := IndexStatus{State: "-"}
+	for t := range ri.Watch(wctx) {
+		ix := t.Status.Index
+		if ix.State != IndexStateIndexing {
+			return ix.State
 		}
+		if ix.Done == last.Done && ix.Total == last.Total && last.State == IndexStateIndexing {
+			continue
+		}
+		last = ix
 		emit(Event{
 			Step:       "index",
 			Phase:      PhaseIndex,
-			Message:    fmt.Sprintf("indexing %d/%d", done, total),
-			Pct:        scaleIndexPct(done, total),
+			Message:    fmt.Sprintf("indexing %d/%d", ix.Done, ix.Total),
+			Pct:        scaleIndexPct(ix.Done, ix.Total),
 			IndexState: IndexStateIndexing,
 		})
-		select {
-		case <-ctx.Done():
-			// The job's deadline, or shutdown. The heal keeps going; we stop
-			// watching, and the job reports the last thing we saw.
-			return IndexStateIndexing
-		case <-time.After(indexMirrorInterval):
-		}
 	}
+	// The job's deadline, shutdown, or the repo unmounted: the job reports
+	// the last thing it saw.
+	if st := ri.Status().Index.State; st != IndexStateIndexing && ctx.Err() == nil {
+		return st
+	}
+	return IndexStateIndexing
 }
 
 // scaleIndexPct maps the heal's own done/total onto the index phase's band.
@@ -912,7 +834,7 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
-	if err := svc.InitRepo(map[string]string{
+	if err := svc.InitRepo(ctx, map[string]string{
 		OntologyPath: string(y),
 	}, m.deps.AgentBranch); err != nil {
 		return fmt.Errorf("init git: %w", err)
@@ -1038,7 +960,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// InitFromRemote found at the moment it actually fetched, and a remote that
 	// lost its refs in between must not be silently turned into a fresh local
 	// knowledge base with a minted identity nobody else shares.
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(ctx, spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
 		transferProgress(emit, "clone"))
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
@@ -1058,7 +980,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	//
 	// Until this existed the clone SUCCEEDED there, and the missing ontology was
 	// silently replaced by fact.DefaultOntology() at the repo's next open
-	// (repoBuilder.loadOntology). The user who created their project with a
+	// (the open path's loadOntology). The user who created their project with a
 	// README, was routed here because that made it non-empty, and picked "Code"
 	// on the way, got "General" — permanently, since the ontology is immutable
 	// after creation, and with nothing in the UI ever saying so.
@@ -1187,7 +1109,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// ontology is written below instead — as an ordinary commit on the agent
 	// branch, through the same fact machinery every later write uses.
 	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "reading " + spec.Origin.URL, Pct: 40})
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(ctx, spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
 		transferProgress(emit, "clone"))
 	if err != nil {
 		return "", fmt.Errorf("initialize: %w", err)
@@ -1325,7 +1247,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
 	svc.SetAcceptList(m.acceptListFor(uid))
 
-	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch,
+	upstream, err := svc.InitSubscription(ctx, spec.Origin.URL, auth, spec.Origin.Branch,
 		transferProgress(emit, "subscribe"))
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return "", fmt.Errorf("subscribe: %w", ErrRemoteNoBranches)
@@ -1538,7 +1460,7 @@ func (m *Manager) archive(name string) (ArchiveInfo, error) {
 		origin = org.URL
 	}
 
-	ri.shutdown() // releases the SQLite file handle
+	unmount(ri, "archived") // drains every stage and releases the SQLite file handle
 
 	// The session sidecar is ephemeral — drop it so a restore starts clean.
 	sess := store.SessionDBPathFor(m.RepoPath(uid))
@@ -1672,59 +1594,27 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 		return nil, serr // ErrRepoAlreadyRegistered when its identity is taken
 	}
 
-	if aerr := m.Add(target, uid, m.RepoPath(uid), origin); aerr != nil {
-		// Put it back: the file is untouched, so recovery is two UPDATEs.
+	// Mount what is on disk. Identify records which knowledge base this repo
+	// holds (the one RecordRepoID site): an archived repo registered with a
+	// NULL repo_id has its FIRST successful open right here, and the
+	// repos_active_repo_id index (WHERE repo_id IS NOT NULL) would not have
+	// caught a conflict at SetState. A conflict — another ACTIVE repo already
+	// holds this knowledge base — makes the mount fail, and the restore is
+	// undone: the file is untouched, so this is two UPDATEs. The sync loop
+	// starts during the walk, for an origin-backed repo and a local one alike.
+	ri, merr := m.mountExisting(target, uid, origin)
+	if merr != nil {
 		_ = reg.SetState(uid, StateArchived, rec.ArchivedAt)
 		if target != rec.Name {
 			_ = reg.Rename(uid, rec.Name)
 		}
-		return nil, fmt.Errorf("restore register: %w", aerr)
-	}
-
-	ri := m.Get(target)
-
-	// Record which knowledge base this repo holds. The invariant "an ACTIVE
-	// repo's repo_id is recorded" is established in exactly three places —
-	// Create (above), Start's openRegistered (manager.go), and SwapStore
-	// (swapstore.go) — and Restore is the fourth first-open there is: an
-	// archived repo that was archived before repo_id existed, or registered
-	// with a NULL one by the since-removed pre-registry converter, has its
-	// FIRST successful open right here.
-	//
-	// Leaning on SetState to catch a conflict is not enough. The
-	// repos_active_repo_id index is WHERE state='active' AND repo_id IS NOT
-	// NULL, so a NULL row flips to active unchallenged and STAYS null —
-	// silently disarming heldByAnotherActiveRepo for that repo from then on.
-	if ri != nil {
-		if id := ri.ID(); id != "" {
-			if rerr := reg.RecordRepoID(uid, id); rerr != nil {
-				if errors.Is(rerr, ErrRepoAlreadyRegistered) {
-					// Another ACTIVE repo already holds this knowledge base.
-					// Two live copies both write agent/<host> and clobber each
-					// other on push, so undo the restore rather than leave the
-					// second one running. The file is untouched, so this is a
-					// detach and two UPDATEs.
-					m.Remove(target)
-					_ = reg.SetState(uid, StateArchived, rec.ArchivedAt)
-					if target != rec.Name {
-						_ = reg.Rename(uid, rec.Name)
-					}
-					return nil, rerr
-				}
-				// Any other error (a transient SQLite failure) leaves repo_id
-				// unset, which the next boot's openRegistered simply retries —
-				// so warn and keep the restored repo rather than undoing it.
-				log.Warn().Err(rerr).Str("repo", target).Str("uid", uid).
-					Msg("restore: recording repo identity failed; repo stays restored")
-			}
+		var se *StageError
+		if errors.As(merr, &se) && errors.Is(se.Err, ErrRepoAlreadyRegistered) {
+			return nil, se.Err
 		}
+		return nil, fmt.Errorf("restore register: %w", merr)
 	}
-
-	if ri != nil && originURL != "" {
-		if serr := ri.ActivateSync(originURL); serr != nil {
-			log.Warn().Err(serr).Str("repo", target).Msg("restore: activate sync failed")
-		}
-	}
+	m.Set(target, ri)
 	log.Info().Str("uid", uid).Str("repo", target).Msg("restored repo")
 	return ri, nil
 }
@@ -1778,8 +1668,8 @@ func (m *Manager) Purge(uid string) error {
 // RenameRepo changes a repo's display name. The store is NOT closed: a name is
 // display-only (the .db is <home>/repos/<uid>.db, lens membership is uid-keyed,
 // and the lens wire format derives its name field), so this is a control.db
-// UPDATE plus a map-key move. Remove+Add — what Restore does — would call
-// ri.shutdown(), closing the store, dropping SSE subscribers and forcing an
+// UPDATE plus a map-key move. An unmount and a remount would close the
+// store, dropping SSE subscribers and forcing an
 // index re-warm, all to change a string.
 //
 // A rename used to have a consequence here: the MCP cursor-pinning identity

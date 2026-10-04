@@ -43,7 +43,7 @@ func actorE2E(t *testing.T) (*httptest.Server, *store.Service) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Seed enough facts to cluster. Without them a start call finds no seeds,
 	// completes the session on the spot, and leaves nothing ACTIVE — which

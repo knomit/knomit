@@ -19,7 +19,7 @@ func newMergeTestStore(t *testing.T) *Service {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	return svc
 }
 
@@ -248,7 +248,7 @@ func TestMergeIntoBranch_NoopWhenSrcAncestorOfDst(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// main and agent both at init commit; src=main, dst=agent → no-op.
 	res, err := svc.rh.mergeIntoBranch(context.Background(), "main", "agent/test", StrategyLocalWins)
@@ -261,7 +261,7 @@ func TestMergeIntoBranch_FastForwardWhenDstAncestorOfSrc(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	mainHash := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 
@@ -277,7 +277,7 @@ func TestMergeIntoBranch_DivergentCreatesOneMergeCommit(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Divergent: agent writes one file, main writes another.
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")

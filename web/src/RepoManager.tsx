@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, repoAvailable, brokenLensMember, isTerminalCreateState, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef, type RepoCreateStatus } from './api';
+import { api, repoAvailable, brokenLensMember, isTerminalCreateState, RepoIndexingError, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef, type RepoCreateStatus } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { PendingCreateRow } from './PendingCreateRow';
@@ -923,6 +923,10 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<'disconnect' | null>(null);
+  // The detail of a detach refused because the repo is indexing; see disconnect.
+  const [detachIndexing, setDetachIndexing] = useState('');
+  // The refusal's cancel-index link, followed by "Cancel indexing".
+  const [cancelHref, setCancelHref] = useState('');
   // Rename draft + its typed confirmation. Local to the danger zone; cleared
   // when the pane switches repos by the same effect that clears description.
   const [renameTo, setRenameTo] = useState('');
@@ -961,8 +965,11 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
   }, [rebuildMsg]);
 
   // Rebuild is a fire-and-forget background job (TaskHub) — the POST returns as
-  // soon as it's queued, the re-index runs server-side. We confirm it started;
-  // a 409 means one is already running.
+  // soon as it's queued, the re-index runs server-side. We confirm it started.
+  // There is no "already running" refusal to translate: a click that lands on
+  // an identical running rebuild is absorbed into it (200, same job envelope as
+  // a new job's 201), and either way a rebuild is now running — which is what
+  // the banner says.
   const rebuild = async () => {
     onError(''); setRebuilding(true); setRebuildMsg('');
     try {
@@ -970,9 +977,8 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
       await api.rebuild(name, branch);
       setRebuildMsg('✓ Rebuild started — re-indexing in the background.');
     } catch (e) {
-      const msg = String(e);
       setRebuildMsg('');
-      onError(/409|conflict/i.test(msg) ? 'A rebuild is already running for this repo.' : `rebuild failed: ${msg}`);
+      onError(`rebuild failed: ${String(e)}`);
     } finally {
       setRebuilding(false);
     }
@@ -983,16 +989,29 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
     catch (e) { onError(`archive failed: ${String(e)}`); }
     finally { setBusy(false); }
   };
+  // A detach is refused while the repo's index job runs. That refusal is the
+  // one with a way through, so it stays in the confirm box — the server's own
+  // detail plus "Cancel indexing" — instead of joining the generic error line;
+  // once the cancel lands, Disconnect is simply pressed again.
   const disconnect = async () => {
-    onError(''); setBusy(true);
+    onError(''); setDetachIndexing(''); setBusy(true);
     try { await api.deleteOrigin(name); remote.reload(); setConfirming(null); onChanged(); }
-    catch (e) { onError(`disconnect failed: ${String(e)}`); }
+    catch (e) {
+      if (e instanceof RepoIndexingError) { setDetachIndexing(e.message); setCancelHref(e.cancelHref); }
+      else onError(`disconnect failed: ${String(e)}`);
+    }
     finally { setBusy(false); }
   };
-  // Unlike rebuild's 409, this one is NOT rewritten into invented copy: the
-  // server's detail for the "changed during rename" conflict already tells the
-  // user the one true thing to do (re-read and retry), and every sibling
-  // mutation in this file (archive, disconnect, restore, purge…) already
+  const cancelIndexing = async () => {
+    onError(''); setBusy(true);
+    try { await api.cancelIndex(cancelHref); setDetachIndexing(''); setCancelHref(''); onChanged(); }
+    catch (e) { onError(`cancel indexing failed: ${String(e)}`); }
+    finally { setBusy(false); }
+  };
+  // A rename's 409 is NOT rewritten into invented copy: the server's detail
+  // for the "changed during rename" conflict already tells the user the one
+  // true thing to do (re-read and retry), and every sibling mutation in this
+  // file (archive, disconnect, restore, purge…) already
   // surfaces `String(e)` verbatim rather than guessing at friendlier words.
   const rename = async () => {
     onError(''); setRenaming(true);
@@ -1240,9 +1259,17 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
           {confirming === 'disconnect' && (
             <div style={confirmBox}>
               <div style={{ fontSize: 13, marginBottom: 10 }}>Stop syncing and remove this remote? The repo stays as a local-only knowledge base — no facts are deleted.</div>
+              {detachIndexing && (
+                <div data-testid="disconnect-indexing" style={{ fontSize: 13, color: '#e2c07a', marginBottom: 10 }}>
+                  Repo is indexing — {detachIndexing}.
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" data-testid="disconnect-confirm" style={btn(busy, 'danger')} disabled={busy} onClick={disconnect}>{busy ? 'Disconnecting…' : 'Disconnect'}</button>
-                <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+                {detachIndexing && (
+                  <button type="button" data-testid="disconnect-cancel-indexing" style={btn(busy)} disabled={busy} onClick={cancelIndexing}>Cancel indexing</button>
+                )}
+                <button type="button" style={btn(busy)} disabled={busy} onClick={() => { setConfirming(null); setDetachIndexing(''); }}>Cancel</button>
               </div>
             </div>
           )}

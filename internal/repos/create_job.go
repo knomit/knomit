@@ -602,15 +602,11 @@ func (m *Manager) reapCreateJobsLocked(now time.Time) {
 // matters precisely because the client that asked may no longer be there to
 // read the status.
 //
-// WHAT THIS MUST NEVER TOUCH: the background index heal. Manager.Add → openOne
-// takes no context at all; the builder reads m.ctx, from which indexCtx is
-// derived (builder.go). The create deadline is therefore NOT an ancestor of
-// indexCtx, and cancelling it — including the defer cancel() below, which
-// fires the instant Create returns — cannot stop a heal that is still running.
-// Threading this context into openOne would reinstate incident
-// kb/incidents/repos/clone-create-index-stuck-indexing: a cancelled heal
-// returns without markIndexReady/markIndexFailed and pins IndexStatus at
-// 'indexing' forever. Guarded by
+// WHAT THIS MUST NEVER TOUCH: the index job. The repo's machine derives every
+// stage life from the Manager's context, never from this deadline, so
+// cancelling it — including the defer cancel() below, which fires the instant
+// Create returns — ends only the create's Populate (through Unmount) or its
+// index narration, never an index job that is still running. Guarded by
 // TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing.
 func (m *Manager) StartCreate(spec CreateSpec) *CreateJob {
 	now := time.Now().UTC()

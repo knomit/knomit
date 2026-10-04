@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -389,81 +388,15 @@ func TestCreateJobs_OmitsCancelledButKeepsFailed(t *testing.T) {
 	require.Len(t, fm.CreateJobs(), 1, "a failed job must stay listed — it carries an error worth reading")
 }
 
-// TestCreate_CancelledDuringIndexSkipsSyncActivation is the UNIT half of the
-// late-cancel fix, and it names the exact call that made a cancel take minutes.
-//
-// ActivateSync runs one SYNCHRONOUS reconcile, and that reconcile takes
-// lockBranch(upstream) — the lock the background heal holds for the whole of
-// the index. So a cancel arriving DURING the index used to do nothing visible:
-// mirrorIndexing returned promptly on ctx.Done(), Create then parked in
-// ActivateSync behind the heal's lock, and the worker goroutine could not run
-// DeleteRepo until the entire index had finished. Observed live on a 697-fact
-// repo: state=cancelling, step=sync, pct=99, for minutes.
-//
-// The assertion is on the STEP, not on elapsed time: a create whose context
-// died before sync activation must never emit "sync" at all. That is a
-// property, not a race, so it cannot flake — whereas timing the call would.
-// The cancel is fired from inside an index-phase emit, the same trick
-// TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing uses, because that
-// is the one moment the heal is PROVABLY in flight and therefore holding the
-// lock this test is about.
-func TestCreate_CancelledDuringIndexSkipsSyncActivation(t *testing.T) {
-	url := servedKnomitOrigin(t, 3)
-
-	home := t.TempDir()
-	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
-	})
-	require.NoError(t, m.Start())
-	t.Cleanup(func() { _ = m.Close() })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var mu sync.Mutex
-	var steps []string
-	var sawIndex bool
-	ri, err := m.Create(ctx, CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}},
-		func(e Event) {
-			mu.Lock()
-			steps = append(steps, e.Step)
-			mu.Unlock()
-			if e.Phase == PhaseIndex {
-				// The heal is in flight right now, holding the branch lock.
-				mu.Lock()
-				sawIndex = true
-				mu.Unlock()
-				cancel()
-			}
-		})
-	require.NoError(t, err)
-	// The repo IS registered, and Create must hand it back — the worker
-	// goroutine can only delete what it is given.
-	require.NotNil(t, ri, "a cancelled create past m.Add must still return its repo to be deleted")
-
-	mu.Lock()
-	defer mu.Unlock()
-	// ANTI-VACUITY: without an index event the cancel never landed at a
-	// discriminating moment and this test proves nothing.
-	require.True(t, sawIndex,
-		"no index phase was reported, so the context was never cancelled while the "+
-			"heal held the branch lock; this test cannot detect the regression")
-	require.NotContains(t, steps, "sync",
-		"a create cancelled before sync activation must not activate sync on a repo "+
-			"that is about to be deleted: %v", steps)
-}
-
 // TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex is the end-to-end
 // half: the user's actual complaint, which was that a late cancel appeared to
 // do nothing at all.
 //
-// It asserts on the STEP, not on the clock. Under the bug the job parks on
-// "sync" behind the heal's branch lock for the whole remaining index, so the
-// 5ms poll below cannot miss it; a cancelled job must never report that step.
-// The deterministic check of the mechanism itself is
-// TestCreate_CancelledDuringIndexSkipsSyncActivation.
+// It asserts on the STEP, not on the clock. Under the old bug the job parked
+// on a "sync" step behind the index heal's branch lock for the whole remaining
+// index. The lifecycle machine has no such step — the sync loop starts during
+// the mount walk, and the create only observes the index — and the cancel
+// unmounts a repo whose index job lands after its in-flight batch.
 //
 // There is deliberately no timing assertion. An earlier version compared the
 // cancel's latency with a baseline create taken at a different moment. That
@@ -503,12 +436,11 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 
 	// Poll to terminal, WATCHING THE STEP.
 	//
-	// The step is what discriminates, not the clock. Under the bug the job
-	// parks on step "sync" — Create sits in ActivateSync behind the heal's
-	// branch lock — and stays there for the whole remaining index; that is
-	// precisely what was observed live (state=cancelling, step=sync, pct=99,
-	// for minutes). So a cancelled job that ever reports "sync" has waited on
-	// the lock, whatever the wall clock happened to say on this machine.
+	// The step is what discriminates, not the clock. Under the old bug the job
+	// parked on step "sync" behind the heal's branch lock for the whole
+	// remaining index (observed live: state=cancelling, step=sync, pct=99, for
+	// minutes). A cancelled job that ever reports "sync" has waited on the
+	// lock, whatever the wall clock happened to say on this machine.
 	//
 	// The elapsed time is only logged, and the 120s bound is a hang detector:
 	// a timing assertion is a machine-speed assertion (see the doc comment).

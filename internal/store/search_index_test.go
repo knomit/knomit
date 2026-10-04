@@ -54,7 +54,7 @@ func TestNeedsRebuildDetectsModelChange(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	si := svc.si
@@ -93,7 +93,7 @@ func TestRebuild_BumpsGraphSchemaVersion(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	require.NoError(t, svc.si.Rebuild(context.Background(), "main", nil))
 
@@ -112,7 +112,7 @@ func TestRebuildGraph_WritesEdgePerRefEvent(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -145,7 +145,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"
@@ -208,7 +208,7 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
 	ctx := context.Background()
 	branch := "main"

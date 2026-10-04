@@ -21,8 +21,11 @@ var (
 	errOriginInvalidURL  = errors.New("invalid url")
 )
 
-// originProvider is the narrow interface the origin HAL handlers depend on.
-// Tests inject a stub; production wires through RepoInstance.WithRead.
+// originProvider is the narrow interface the origin HAL handlers read and
+// patch through. Tests inject a stub; production wires through
+// RepoInstance.WithRead. Attaching and detaching an origin are NOT here: they
+// are lifecycle events (AttachOrigin, DetachOrigin) sent to the repo's
+// machine, which restarts the Sync stage around the change.
 //
 // The ctx these methods take is currently unused by the default provider: the
 // store's Remote sub-service (svc.Remote()) takes no context, so there is
@@ -31,16 +34,13 @@ var (
 // and so this interface matches every sibling provider rather than being the
 // one exception a reader has to explain to themselves.
 //
-// SetOrigin/SetOriginUpstream/DeleteOrigin take the Manager because they write
-// through it: connection identity (url/branch/auth) is control.db's now (via
+// SetOriginUpstream takes the Manager because it writes through it: connection identity (url/branch/auth) is control.db's now (via
 // Manager.Origins()), not the repo's own store — a lost .db can be re-cloned
 // from the record that outlives it. GetOrigin needs no Manager: the injected
 // origin already makes GetRemote return the control.db-backed record.
 type originProvider interface {
 	GetOrigin(ctx context.Context, ri *repos.RepoInstance) (*store.Remote, error)
-	SetOrigin(ctx context.Context, m *repos.Manager, ri *repos.RepoInstance, req setOriginRequest) error
 	SetOriginUpstream(ctx context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error
-	DeleteOrigin(ctx context.Context, m *repos.Manager, ri *repos.RepoInstance) error
 }
 
 // defaultOriginProvider is the production originProvider backed by the store.
@@ -136,136 +136,6 @@ func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance
 	return remote, err
 }
 
-// SetOrigin rewires the running store's git remote and then persists the
-// connection identity that produced it: svc.ConfigureRemote rewrites the
-// fetch/push refspecs so the reconcile loop picks the new origin up without a
-// restart, Origins.Set makes it durable in control.db, and svc.SetOrigin makes
-// GetRemote reflect it immediately. The repo's own remotes row (status only) is
-// untouched by this write — see remote.go's GetRemote for why identity no
-// longer lives there.
-//
-// That order is SetOriginUpstream's, for SetOriginUpstream's reason: the git
-// write is the fallible one, so nothing may record success ahead of it.
-// Persisting first and failing in ConfigureRemote leaves control.db reporting a
-// URL the refspecs were never rewritten for, which the next boot silently
-// adopts — a PUT that answered 500 taking effect on restart.
-//
-// Failing the other way round is NOT self-healing, which is why the rollback
-// below is part of the ordering and not decoration. Between ConfigureRemote and
-// Origins.Set the git remote names the new url while the injected origin — and
-// so GetRemote, and so the reconcile loop's auth and upstream branch — still
-// answer with the old one: the loop fetches the NEW url carrying the OLD
-// credential, on every tick, until a restart re-derives the git config from the
-// record that was never written. restoreRemoteConfig closes that window by
-// putting the git remote back before the error is returned, so a failed PUT
-// leaves the repo exactly as it found it.
-func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, req setOriginRequest) error {
-	origins, oerr := originsOf(m)
-	if oerr != nil {
-		return oerr
-	}
-	var err error
-	if aerr := ri.WithRead(func(svc *store.Service) {
-		// Load existing remote to support partial updates — and to have
-		// something to restore the git remote from if the durable write below
-		// fails. The read error is no longer discarded precisely because of
-		// that second job: "no origin" is (nil, nil) here, so a non-nil error
-		// means the status row could not be read at all, and treating that as
-		// "there was no origin" would make the rollback path delete the git
-		// remote of a repo that has one.
-		existing, gerr := svc.Remote().GetRemote("origin")
-		if gerr != nil {
-			err = gerr
-			return
-		}
-
-		// Resolve URL: use request value, fall back to existing.
-		u := req.URL
-		if u == "" && existing != nil {
-			u = existing.URL
-		}
-		if u == "" {
-			err = errOriginURLRequired
-			return
-		}
-		if req.URL != "" && !isGitURL(req.URL) {
-			err = errOriginInvalidURL
-			return
-		}
-
-		// Resolve auth.
-		authMethod := req.AuthMethod
-		if authMethod == "" && existing != nil {
-			authMethod = existing.AuthMethod
-		}
-		authToken := assembleAuthToken(authMethod, req.Token, req.User, req.Password)
-		if authToken == "" && existing != nil {
-			authToken = existing.AuthToken
-		}
-
-		// Validate URL/auth compatibility.
-		if verr := validateURLAuth(u, authMethod); verr != nil {
-			err = verr
-			return
-		}
-
-		// Resolve the upstream consensus branch: explicit request > existing
-		// remote record > the repo's own consensus branch (recorded at init,
-		// kept across a detach: store.UpstreamBranch). Attaching an origin to a
-		// trunk repo therefore tracks trunk. There is no name to fall back to:
-		// with none of the three, ConfigureRemote refuses below.
-		upstreamMain := req.Branch
-		if upstreamMain == "" && existing != nil {
-			upstreamMain = existing.Branch
-		}
-		if upstreamMain == "" {
-			upstreamMain = svc.UpstreamBranch()
-		}
-
-		if cerr := svc.ConfigureRemote(u, upstreamMain, ri.AgentBranch()); cerr != nil {
-			err = cerr
-			return
-		}
-		// Carry the stored mode through. Origins.Set is a full replacement and
-		// an EMPTY Mode DELETES the subscription row (see Origins.Set), so a
-		// credential or URL update written without it would silently demote a
-		// subscription to sync. Read from control.db, never from `existing` —
-		// that is the store's own remotes row, which carries no mode.
-		stored, gerr := origins.Get(ri.UID())
-		if gerr != nil {
-			err = gerr
-			restoreRemoteConfig(svc, ri, existing, "SetOrigin")
-			return
-		}
-		mode := repos.OriginModeSync
-		if stored != nil {
-			mode = stored.Mode
-		}
-		if serr := origins.Set(ri.UID(), repos.Origin{
-			URL:        u,
-			Branch:     upstreamMain,
-			AuthMethod: authMethod,
-			AuthToken:  authToken,
-			Mode:       mode,
-		}); serr != nil {
-			err = serr
-			// The git remote now names a url control.db does not record. Put it
-			// back before returning — see restoreRemoteConfig.
-			restoreRemoteConfig(svc, ri, existing, "SetOrigin")
-			return
-		}
-		svc.SetOrigin(&store.Origin{
-			URL:        u,
-			Branch:     upstreamMain,
-			AuthMethod: authMethod,
-			AuthToken:  authToken,
-		})
-	}); aerr != nil {
-		return acquireFailed(aerr)
-	}
-	return err
-}
-
 // SetOriginUpstream changes only the upstream branch, preserving the ordering
 // discipline SetUpstreamBranch used to enforce in one place: rewrite the git
 // fetch refspec FIRST (ConfigureRemote), and only on success touch the stored
@@ -315,76 +185,6 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manag
 		return acquireFailed(aerr)
 	}
 	return err
-}
-
-// DeleteOrigin drops the git remote, deletes the durable record from
-// control.db, and only THEN clears the injected origin on the running store.
-//
-// Every fallible step runs before the one that cannot fail, and the injected
-// origin is that one. It goes last because clearing it is what SILENCES the
-// repo: runReconcileLoop's tick reads GetRemote and returns on a nil origin
-// without logging (there is nothing to report about a repo that has no remote),
-// so nil-ing it ahead of a step that then fails would answer 500 while leaving
-// the repo permanently, invisibly unsynced — git remote still configured,
-// credential still stored, and no trace in the log until someone notices the
-// facts stopped arriving.
-//
-// The control.db row is deleted before, not after, that point for the reason
-// the previous ordering was wrong the other way: the old code deleted the row
-// FIRST, before anything that could fail, and discarded ri.WithRead's return —
-// which reports Acquire's error WITHOUT running the closure. Against a detached
-// store (a swap in flight, a failed recovery reopen) err stayed nil, the
-// handler answered 204, and the URL, auth_method and encrypted auth_token were
-// gone while the git remote was still configured and still pushing. Since this
-// branch moved connection identity out of the repo database, that token existed
-// nowhere else. The order here keeps both properties: the record outlives every
-// step that can fail, and nothing goes quiet until all of them have succeeded.
-func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, ri *repos.RepoInstance) error {
-	origins, oerr := originsOf(m)
-	if oerr != nil {
-		return oerr
-	}
-	var err error
-	if aerr := ri.WithRead(func(svc *store.Service) {
-		// Read before tearing anything down: this is what a failed teardown is
-		// restored from. (nil, nil) means there is no origin, which makes the
-		// whole body idempotent — both deletes below tolerate absence.
-		existing, gerr := svc.Remote().GetRemote("origin")
-		if gerr != nil {
-			err = gerr
-			return
-		}
-		if derr := svc.Remote().DeleteRemote("origin"); derr != nil {
-			err = derr
-			return
-		}
-		if derr := origins.Delete(ri.UID()); derr != nil {
-			err = derr
-			// The git remote is gone but the record is not. Put the remote back
-			// so the repo keeps syncing through the origin the caller failed to
-			// remove, rather than sitting on a record it can no longer act on.
-			// Sync/push status is not restored with it — that is derived state
-			// the next tick rewrites.
-			restoreRemoteConfig(svc, ri, existing, "DeleteOrigin")
-			return
-		}
-		svc.SetOrigin(nil)
-	}); aerr != nil {
-		return acquireFailed(aerr)
-	}
-	if err != nil {
-		return err
-	}
-	// The remote is gone: stop its loop and start the one a repo without an
-	// origin runs, now rather than at the next open, so the consensus branch
-	// keeps following the agent branch (kb/gotchas/repos/origin/
-	// detach-starts-no-local-loop). It runs AFTER SetOrigin(nil): the local
-	// loop exits on a definite origin, so starting it earlier would end it.
-	// The detach itself has succeeded; a failure here is logged, not returned.
-	if serr := ri.StartLocalSync(); serr != nil {
-		log.Warn().Err(serr).Str("repo", ri.Name()).Msg("DeleteOrigin: origin removed, but the local reconcile loop did not start")
-	}
-	return nil
 }
 
 // originView is the HAL response body for GET /repos/{repo}/origin. It mirrors
@@ -460,7 +260,15 @@ func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 }
 
 // handleHALSetOrigin serves PUT /repos/{repo}/origin.
-// Accepts JSON body matching setOriginRequest. Returns 200 with HAL response.
+//
+// The request is resolved against the stored origin (an empty field keeps
+// what is stored) and validated here; the attach itself is the lifecycle
+// event AttachOrigin. Its guard probes the remote under the network timeout
+// BEFORE anything is stopped or written: an unreachable remote or a refused
+// credential is a 502 with NOTHING persisted and the running sync loop
+// untouched, a different knowledge base a 409. While the repo is indexing the
+// attach is refused with 409 and a cancel-index link. On success the Sync
+// stage has been restarted on the new origin when this answers 200.
 func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
@@ -470,17 +278,14 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
-		// Before every read of req.URL below — the local-origin gate, the
-		// ontology check and op.SetOrigin must all see the same string, or a
-		// URL could clear the gate in one form and be stored in another. A url
-		// of only spaces stays the partial-update case (reuse what is stored),
-		// which is what an empty url has always meant here.
+		// Before every read of req.URL below, so the policy gate, the probe
+		// and the write all see the same string. A url of only spaces stays
+		// the partial-update case (reuse what is stored).
 		req.URL = trimOriginURL(req.URL)
 
-		// Enforce the local-origin policy here, at the write edge, where the real
-		// Manager is in hand. PUT /origin defers the clone to the sync loop, so
-		// this is the gate for that deferred path. A partial update (empty url)
-		// reuses the stored URL, which was already gated when first written.
+		// The local-origin policy at the write edge, before anything else
+		// reads req.URL (the attach guard re-asserts it). A partial update
+		// (empty url) reuses the stored URL, gated when it was first written.
 		if req.URL != "" {
 			if err := m.ValidateLocalOrigin(req.URL); err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
@@ -489,56 +294,63 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			}
 		}
 
-		// A remote that is a DIFFERENT knowledge base cannot govern this repo.
-		// Create enforces this on both of its remote modes; attaching an origin
-		// is the other door into the same situation, and the repo's ontology is
-		// fixed at create time, so there is no way back from getting it wrong.
-		//
-		// Before SetOrigin, not after: the origin row and the git remote are
-		// written there, and a refusal that arrives afterwards has already
-		// pointed the repo at the remote it is refusing.
-		if req.URL != "" && ri.Ontology() != nil {
-			if err := m.CheckOriginOntology(r.Context(), ri.Ontology().ID, repos.OriginSpec{
-				URL:        req.URL,
-				Branch:     req.Branch,
-				AuthMethod: req.AuthMethod,
-				AuthToken:  assembleAuthToken(req.AuthMethod, req.Token, req.User, req.Password),
-			}); err != nil {
-				hal.WriteProblem(w, http.StatusConflict, "Different knowledge base",
-					err.Error(), r.URL.Path)
-				return
-			}
+		existing, err := op.GetOrigin(r.Context(), ri)
+		if err != nil {
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "No store available", err.Error(), r.URL.Path)
+			return
 		}
-
-		if err := op.SetOrigin(r.Context(), m, ri, req); err != nil {
-			// errors.Is, not ==: the provider WRAPS the acquire failure that
-			// carries the reason (ErrStoreUnavailable / ErrRepoClosed).
-			switch {
-			case errors.Is(err, errOriginNoStore):
-				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
-					err.Error(), r.URL.Path)
-			case errors.Is(err, errOriginURLRequired):
-				hal.WriteProblem(w, http.StatusBadRequest, "URL required",
-					err.Error(), r.URL.Path)
-			case errors.Is(err, errOriginInvalidURL):
-				hal.WriteProblem(w, http.StatusBadRequest, "Invalid URL",
-					err.Error(), r.URL.Path)
-			default:
-				hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set origin",
-					err.Error(), r.URL.Path)
-			}
+		u := req.URL
+		if u == "" && existing != nil {
+			u = existing.URL
+		}
+		if u == "" {
+			hal.WriteProblem(w, http.StatusBadRequest, "URL required", errOriginURLRequired.Error(), r.URL.Path)
+			return
+		}
+		if req.URL != "" && !isGitURL(req.URL) {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid URL", errOriginInvalidURL.Error(), r.URL.Path)
+			return
+		}
+		authMethod := req.AuthMethod
+		if authMethod == "" && existing != nil {
+			authMethod = existing.AuthMethod
+		}
+		authToken := assembleAuthToken(authMethod, req.Token, req.User, req.Password)
+		if authToken == "" && existing != nil {
+			authToken = existing.AuthToken
+		}
+		if verr := validateURLAuth(u, authMethod); verr != nil {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", verr.Error(), r.URL.Path)
 			return
 		}
 
-		// Activate sync now (synchronous initial reconcile). If it fails,
-		// the origin row IS persisted — surfacing a 502 lets the operator
-		// distinguish a bad token / unreachable origin from a successful
-		// configure without forcing them to re-enter the URL. The session
-		// flow (handlers_origin_session.go) returns the analogous error.
-		if aerr := ri.ActivateSync(req.URL); aerr != nil {
-			log.Warn().Err(aerr).Str("repo", repoName).Msg("sync activation failed")
-			hal.WriteProblem(w, http.StatusBadGateway, "Sync activation failed",
-				"origin was saved but the initial reconcile failed: "+aerr.Error(), r.URL.Path)
+		_, err = m.Send(r.Context(), ri, repos.AttachOrigin(repos.OriginSpec{
+			URL:        u,
+			Branch:     req.Branch,
+			AuthMethod: authMethod,
+			AuthToken:  authToken,
+		}))
+		switch {
+		case err == nil:
+		case isLifecycleRefusal(err):
+			writeLifecycleProblem(w, r, b, repoName, err)
+			return
+		case errors.Is(err, repos.ErrLocalOriginDenied):
+			hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
+				detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
+			return
+		case errors.Is(err, repos.ErrOriginOntologyConflict):
+			hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)
+			return
+		case errors.Is(err, repos.ErrOriginUnreachable):
+			log.Warn().Err(err).Str("repo", repoName).Msg("origin attach refused by its probe")
+			hal.WriteProblem(w, http.StatusBadGateway, "Origin not attached", err.Error(), r.URL.Path)
+			return
+		case errors.Is(err, repos.ErrManagerStopped):
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Server stopping", err.Error(), r.URL.Path)
+			return
+		default:
+			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set origin", err.Error(), r.URL.Path)
 			return
 		}
 
@@ -633,27 +445,28 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 }
 
 // handleHALDeleteOrigin serves DELETE /repos/{repo}/origin.
-// Returns 204 No Content on success.
-func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+//
+// It sends DetachOrigin: the Sync stage is exited, the git remote, the
+// control.db record and the injected origin are removed, and Sync re-enters
+// with the origin-less local loop, so the consensus branch keeps following
+// the agent branch at once. A subscription IS its origin and is refused (409),
+// as is a repo that is indexing (409 with a cancel-index link). Returns 204.
+func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, _ originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-
-		// A subscription IS its origin: it has no content of its own, so
-		// detaching the origin would leave a repo that can neither sync nor be
-		// written to. Refused before the provider is reached.
-		if ri.Subscribed() {
+		_, err := m.Send(r.Context(), ri, repos.DetachOrigin())
+		switch {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, repos.ErrSubscriptionOrigin):
 			hal.WriteProblem(w, http.StatusConflict, "Subscription requires its origin",
 				"this repo follows its origin read-only and has no content of its own; archive it instead of detaching the origin",
 				r.URL.Path)
-			return
-		}
-
-		if err := op.DeleteOrigin(r.Context(), m, ri); err != nil {
+		case isLifecycleRefusal(err):
+			writeLifecycleProblem(w, r, b, chi.URLParam(r, "repo"), err)
+		default:
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to delete origin",
 				err.Error(), r.URL.Path)
-			return
 		}
-
-		w.WriteHeader(http.StatusNoContent)
 	}
 }

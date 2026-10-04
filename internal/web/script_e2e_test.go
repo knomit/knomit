@@ -25,10 +25,10 @@ import (
 // drop the ScriptTools wiring in app.go (the host throws "no script tools").
 func TestScript_RealToolsEndToEnd(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch:           "agent/test",
-		DisableBackgroundSync: true,
-		ScriptTools:           mcp.NewScriptTools(nil),
+		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentBranch: "agent/test",
+		Machine:     repos.Options{Synchronous: true},
+		ScriptTools: mcp.NewScriptTools(nil),
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -97,10 +97,10 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 // survives (and learn([]) is refused) → red.
 func TestScript_MoveThroughRealTools(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch:           "agent/test",
-		DisableBackgroundSync: true,
-		ScriptTools:           mcp.NewScriptTools(nil),
+		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentBranch: "agent/test",
+		Machine:     repos.Options{Synchronous: true},
+		ScriptTools: mcp.NewScriptTools(nil),
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

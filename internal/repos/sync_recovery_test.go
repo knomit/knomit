@@ -86,11 +86,11 @@ func TestShouldBroadcastPushOK(t *testing.T) {
 // A tick that died because the LOOP was cancelled is not a failure of the
 // remote, and must not be reported as one.
 //
-// The reported case: creating a repo against a remote ends with ActivateSync,
-// which cancels this loop to restart it (builder.go). A tick whose fetch was
-// in flight came back with "context canceled", and the loop broadcast that to
-// the client and counted it toward failure escalation — so a create that
-// fully succeeded put a red "sync failed" line on the repo screen.
+// The reported case: an origin attach restarts the Sync stage, which cancels
+// this loop. A tick whose fetch was in flight came back with "context
+// canceled", and the loop broadcast that to the client and counted it toward
+// failure escalation — so an attach that fully succeeded put a red "sync
+// failed" line on the repo screen.
 //
 // The test is the loop's own context, NOT the error's text: a fetch that hit
 // its netTimeout against an unresponsive remote also carries a context error,

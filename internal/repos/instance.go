@@ -3,12 +3,15 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/store"
 )
@@ -19,13 +22,13 @@ var (
 	// should treat the repo as unregistered.
 	ErrRepoClosed = errors.New("repo is closed")
 	// ErrStoreUnavailable is returned by Acquire/WithRead while no store is
-	// attached — the on-disk database is being replaced (SwapStore) or a test
-	// instance carries no service. Transient; callers may retry.
+	// attached — the repo is populating, its store is being reopened (a swap),
+	// or a test instance carries no service. Transient; callers may retry.
 	ErrStoreUnavailable = errors.New("repo store is unavailable")
 )
 
 // storeHandle pairs one generation of the store service with a refcount of
-// in-flight users. Teardown (closeFn) and replacement (SwapStore) detach the
+// in-flight users. The Open stage's Exit (teardown, or a swap) detaches the
 // handle under the write lock — making it unreachable for new Acquires — then
 // wait for wg to drain before closing svc. This is the single mechanism that
 // makes "snapshot the service, use it after releasing the lock" safe: a caller
@@ -49,14 +52,33 @@ func newStoreHandle(svc *store.Service) *storeHandle {
 	return &storeHandle{svc: svc}
 }
 
-// Index readiness states for a RepoInstance. The store is live for reads in
-// every state; "indexing" means a background (re)build is populating the
-// derived index, so reads may return partial results until it reaches "ready".
-const (
-	indexReady int32 = iota
-	indexIndexing
-	indexFailed
-)
+// identity is what the Identify stage established about the repo: its
+// ontology, or why there is none. Swapped as a whole (Identify enters and
+// exits on a live repo while readers read it lock-free).
+type identity struct {
+	ontology    *fact.Ontology
+	ontologyErr error
+}
+
+// errNotIdentified is the ontology error of a repo whose Identify stage has
+// not run (or has exited for a swap): nothing about its taxonomy is known, so
+// nothing may be written.
+var errNotIdentified = errors.New("the repo's identity is not established yet")
+
+// stageEnv is what the stages need beyond the instance itself.
+type stageEnv struct {
+	// m reaches the control.db tenants (origins, registry, accept lists), the
+	// fleet keys, the ontology gate and the create init paths. It is never
+	// used to Send: no stage sends to its own machine (rule 2).
+	m        *Manager
+	cfg      config.Config
+	signer   ssh.Signer
+	keyPath  string
+	embedder store.BatchEmbedder
+	// onPush observes every push the reconcile loop makes (the fleet state
+	// machine's retry: Manager.fleetPushed).
+	onPush func(repo string, err error)
+}
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
@@ -71,8 +93,10 @@ type RepoInstance struct {
 	// readBranch is the branch this repo's content is read from by default:
 	// the agent branch when the repo has one, else the upstream it follows.
 	// A subscription has no agent branch, so every reader that answers a
-	// question about CONTENT asks ReadBranch(), never AgentBranch().
-	readBranch string
+	// question about CONTENT asks ReadBranch(), never AgentBranch(). Set by
+	// the Open stage (a subscription's upstream is known only once its store
+	// is open), hence atomic.
+	readBranch atomic.Pointer[string]
 	// subscribed marks a subscription: follows its origin read-only, no agent
 	// branch, never pushes. Explicit rather than inferred from an empty
 	// agentBranch so the DTO and the lens gate have a name for it.
@@ -93,12 +117,12 @@ type RepoInstance struct {
 	// decision 11). Resolved lazily; "" when unresolvable.
 	// idMu guards id. ID() caches only successful resolution so a transient
 	// failure (e.g. during a store swap) is retried on the next call.
-	idMu     sync.Mutex
-	id       string
-	ontology *fact.Ontology
-	// ontologyErr is non-nil when the ontology could not be established. The
-	// repo is then readable but not writable — see WritableBranch.
-	ontologyErr         error
+	idMu sync.Mutex
+	id   string
+	// ident is the Identify stage's result; nil reads as not identified. A
+	// non-nil ontologyErr makes the repo readable but not writable — see
+	// WritableBranch.
+	ident               atomic.Pointer[identity]
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
 	methodologyMinScore float64
@@ -121,28 +145,32 @@ type RepoInstance struct {
 	discoveryWCoh         float64
 	discoveryWGap         float64
 	discoveryWSpec        float64
-	onCommit              func(string, string) // re-applied to new svc after SwapStore
+	// onCommit is the store's commit callback, built once with the instance
+	// and installed on every store generation by the Open stage.
+	onCommit func(string, string)
+	// observer is the current store generation's commit observer (Open
+	// stage); onCommit, which runs under a writer's branch lock, only Loads it.
+	observer atomic.Pointer[commitObserver]
 	// triggers is the F07 trigger dispatcher, nil when this repo has none (a
-	// read-only server, or a subscription with no agent branch). Set once in
-	// build() and never reassigned, so ri.onCommit reads it without a lock;
-	// its goroutine starts from activate() and stops in shutdown().
+	// read-only server, or a subscription with no agent branch). Built once
+	// with the instance and never reassigned, so ri.onCommit reads it without
+	// a lock and its kick slot exists from the first commit; it runs under the
+	// Serve stage's life.
 	triggers *triggerDispatcher
 	// consensus is the F08 consensus merger (`consensus: auto`), nil when this
 	// repo can have none: a read-only server, or a subscription with no agent
-	// branch. Set once in build() and never reassigned, like triggers; its
-	// goroutine starts from activate() and stops in shutdown().
+	// branch. Built once and never reassigned, like triggers; it runs under
+	// the Serve stage's life.
 	consensus *consensusMerger
 	// sweep is the experiment expiry sweeper, nil when this repo runs none (a
-	// subscription, experiments.expiry_days = 0, or DisableBackgroundSync).
-	// Set once in build() and never reassigned; its goroutine starts from
-	// activate() on its own context (never syncCtx, which ActivateSync
-	// restarts) and stops in shutdown() and Manager.Close.
+	// subscription, or experiments.expiry_days = 0). Built once; the Serve
+	// stage runs it unless the machine is Synchronous.
 	sweep *experimentSweeper
 	// syncWake is the push wake (F07 PR 4): a 1-slot channel a `do: push`
 	// fire or knomit.push() sends on without blocking (wakeSync), and the
 	// sync loop — runReconcileLoop, or runLocalReconcile with no origin —
-	// receives. It lives HERE, not in a loop, so a wake sent while
-	// ActivateSync restarts the loop is not lost. Set once in build().
+	// receives. It lives HERE, not in a loop, so a wake sent while the Sync
+	// stage re-enters is not lost.
 	syncWake chan struct{}
 	// realtimePush is the cached `sync: {push: realtime}` setting (F21 S2).
 	// The running sync loop reads the ontology at the consensus branch's tip
@@ -152,144 +180,64 @@ type RepoInstance struct {
 	// = 0, a subscription) it stays false.
 	realtimePush atomic.Bool
 	// breakers is the origin loop's published fetch/push circuit-breaker
-	// state, read by the origin view (SyncBreakers). Set once in build();
+	// state, read by the origin view (SyncBreakers). Set once at construction;
 	// nil-safe (reads as closed).
 	breakers *syncBreakers
 	// handle is the current store generation; nil while no store is attached
-	// (mid-SwapStore, or a test instance without a service). closed marks the
-	// beginning of permanent teardown. Both are guarded by mu; all store access
-	// goes through Acquire so close/swap can drain in-flight users before
-	// closing the underlying service.
-	handle     *storeHandle
-	closed     bool
-	hub        *TaskHub
-	syncCancel context.CancelFunc
-	syncWg     *sync.WaitGroup
-	// indexCancel/indexWg own the background index-heal lifecycle, SEPARATE from
-	// syncCancel/syncWg (the reconcile loop). Only teardown and SwapStore
-	// cancel/wait these (SwapStore then starts what the skipped activate()
-	// would have — see startLifetimeAfterSwap); startSync's loop-restart must
-	// not touch them. See repoBuilder.build.
-	indexCancel context.CancelFunc
-	indexWg     *sync.WaitGroup
-	startSync   func(url string) error
-	// startLocalSync is startSync's origin-less twin (repoBuilder.build), run
-	// when the origin is removed from a live repo.
-	startLocalSync func() error
-	// startLifetime starts the lifetime components (trigger dispatcher,
-	// consensus merger, experiment sweep) — the swap-safe half of
-	// repoBuilder.activate. Nil for an instance built without the builder.
-	startLifetime func()
-	// activated is set once repoBuilder.activate has run. A heal cancelled by
-	// SwapStore exits without activating, and nothing else would ever start
-	// the lifetime components, so SwapStore reads this to know it must
-	// (issue #400).
-	activated atomic.Bool
-	closeFn   func()
-
-	indexState atomic.Int32 // indexReady | indexIndexing | indexFailed
-	indexDone  atomic.Int64
-	indexTotal atomic.Int64
+	// (Populate, a reopen, or a test instance without a service). closed marks
+	// the beginning of permanent teardown. Both are guarded by mu; all store
+	// access goes through Acquire so the Open stage's Exit can drain in-flight
+	// users before closing the underlying service.
+	handle *storeHandle
+	closed bool
+	hub    *TaskHub
 	// repoEventHub is the server-wide repo-event stream; nil in tests and in
 	// any Manager built without one, which publishIndex handles.
 	repoEventHub *RepoEventHub
-	indexPub     indexPublisher
+
+	// machine drives this repo's lifecycle; nil for a bare test instance.
+	machine *Machine
+	// env is what the stages need beyond the instance.
+	env stageEnv
+	// indexVerdict is the Index job's result for the current Index life: nil
+	// while it runs (and before Index is entered). Driver-owned.
+	indexVerdict *verdict
+	// indexProgress is the running job's last progress report, written by the
+	// job and read by the driver when it publishes.
+	indexProgress atomic.Pointer[indexProgress]
+	// upstreamMain is the consensus branch the origin tracks, rehydrated by
+	// the Open stage; empty means no origin. syncOrigin is the origin URL the
+	// running Sync loop follows. Both driver-owned (written and read by stage
+	// Enter/Exit only).
+	upstreamMain string
+	syncOrigin   string
 }
 
-// IndexStatus reports the repo's background-index readiness for the API/UI.
-// state is "ready" | "indexing" | "error"; done/total are populated while
-// indexing (0/0 when unknown).
-func (ri *RepoInstance) IndexStatus() (state string, done, total int) {
-	switch ri.indexState.Load() {
-	case indexIndexing:
-		state = "indexing"
-	case indexFailed:
-		state = "error"
-	default:
-		state = "ready"
+// Status is the repo's lifecycle status, derived by its machine. A bare test
+// instance (no machine) reads as open, ready and indexed.
+func (ri *RepoInstance) Status() Status {
+	if ri.machine == nil {
+		return Status{Stage: "ready", Index: IndexStatus{State: IndexStateReady}, open: true}
 	}
-	return state, int(ri.indexDone.Load()), int(ri.indexTotal.Load())
+	return ri.machine.Status()
 }
 
-// markIndexing flips the repo into the indexing state (progress reset).
-//
-// This and the two mark* below are the ONLY places index state changes, and
-// each announces the change through publishIndex — see the chokepoint rationale
-// there. Do not add a fourth mutator, and do not publish from a call site.
-func (ri *RepoInstance) markIndexing() {
-	ri.indexDone.Store(0)
-	ri.indexTotal.Store(0)
-	ri.indexState.Store(indexIndexing)
-	ri.publishIndex(false)
-}
-
-// setIndexProgress records heal progress. Its event is THROTTLED (one per repo
-// per second); the state itself is not, so a reader polling IndexStatus always
-// sees the latest counts.
-func (ri *RepoInstance) setIndexProgress(done, total int) {
-	ri.indexDone.Store(int64(done))
-	ri.indexTotal.Store(int64(total))
-	ri.publishIndex(true)
-}
-
-func (ri *RepoInstance) markIndexReady() {
-	ri.indexState.Store(indexReady)
-	ri.publishIndex(false)
-}
-
-func (ri *RepoInstance) markIndexFailed() {
-	ri.indexState.Store(indexFailed)
-	ri.publishIndex(false)
-}
-
-// MarkIndexRebuildStart and MarkIndexRebuildDone bracket a MANUAL index
-// rebuild with the same marks the startup heal uses, so IndexStatus and the
-// index event stream describe a rebuild exactly as they describe a heal —
-// rather than reading "ready" throughout one, which is what they did before.
-//
-// They are exported for internal/web's rebuild endpoint and for nothing else.
-// Everything inside this package uses the unexported marks directly.
-//
-// SAFE ONLY UNDER SERIALISATION. The index-state cell has no notion of who
-// owns it, so a second concurrent writer would let whichever finishes first
-// publish a terminal describing the other's work. The endpoint therefore
-// REFUSES a rebuild with 409 while the state is already "indexing" — see
-// handleStartRebuild, which carries the full argument. If you are reaching for
-// these from a new caller, that caller needs the same refusal, and the
-// structural argument about openOne's callers has to be re-checked for it.
-func (ri *RepoInstance) MarkIndexRebuildStart() { ri.markIndexing() }
-
-// MarkIndexRebuildDone marks the terminal for a manual rebuild: ready on
-// success, error on failure. See MarkIndexRebuildStart for the serialisation
-// requirement.
-func (ri *RepoInstance) MarkIndexRebuildDone(err error) {
-	if err != nil {
-		ri.markIndexFailed()
-		return
+// Watch streams the repo's status transitions until ctx ends (see
+// Machine.Watch). A bare test instance yields its one status and closes.
+func (ri *RepoInstance) Watch(ctx context.Context) <-chan Transition {
+	if ri.machine == nil {
+		ch := make(chan Transition, 1)
+		ch <- Transition{Status: ri.Status()}
+		close(ch)
+		return ch
 	}
-	ri.markIndexReady()
+	return ri.machine.Watch(ctx)
 }
 
-// TestSetIndexProgress, TestMarkIndexReady and TestMarkIndexFailed drive the
-// index-state chokepoint from a sibling package's test.
-//
-// They exist because two properties of the event path cannot be reached
-// through a real heal with any reliability: the progress THROTTLE's behaviour
-// at its window boundary, and the `error` terminal, which needs a heal that
-// fails. Inducing either by timing or by corrupting a store would test the
-// inducement rather than the property. They are thin aliases — no separate
-// logic to drift from production — so what they exercise IS the production
-// path.
-func (ri *RepoInstance) TestSetIndexProgress(done, total int) { ri.setIndexProgress(done, total) }
-
-// TestMarkIndexing enters the indexing state, publishing as production does.
-func (ri *RepoInstance) TestMarkIndexing() { ri.markIndexing() }
-
-// TestMarkIndexReady marks the index ready, publishing as production does.
-func (ri *RepoInstance) TestMarkIndexReady() { ri.markIndexReady() }
-
-// TestMarkIndexFailed marks the index failed, publishing as production does.
-func (ri *RepoInstance) TestMarkIndexFailed() { ri.markIndexFailed() }
+// errPopulating is Acquire's answer while a create is still populating the
+// repo: the store does not exist yet. It wraps ErrStoreUnavailable, so every
+// existing 503 mapping applies, and says why.
+var errPopulating = fmt.Errorf("%w: repo is populating", ErrStoreUnavailable)
 
 // Acquire returns the current store service together with a release func the
 // caller MUST invoke when it is done with the service (idempotent). Between
@@ -315,6 +263,9 @@ func (ri *RepoInstance) Acquire() (*store.Service, func(), error) {
 	}
 	h := ri.handle
 	if h == nil {
+		if ri.machine != nil && ri.machine.Status().Stage == "populate" {
+			return nil, nil, errPopulating
+		}
 		return nil, nil, ErrStoreUnavailable
 	}
 	h.wg.Add(1)
@@ -395,8 +346,17 @@ func (ri *RepoInstance) UID() string { return ri.uid }
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
 
 // ReadBranch returns the branch this repo reads by default — the agent branch
-// for a writable repo, the followed upstream for a subscription.
-func (ri *RepoInstance) ReadBranch() string { return ri.readBranch }
+// for a writable repo, the followed upstream for a subscription. Empty until
+// the Open stage has run.
+func (ri *RepoInstance) ReadBranch() string {
+	if p := ri.readBranch.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// setReadBranch publishes the read branch (Open stage, test constructors).
+func (ri *RepoInstance) setReadBranch(b string) { ri.readBranch.Store(&b) }
 
 // Subscribed reports whether this repo is a subscription (see readBranch).
 func (ri *RepoInstance) Subscribed() bool { return ri.subscribed }
@@ -419,7 +379,7 @@ func (ri *RepoInstance) ID() string {
 		if svc == nil {
 			return
 		}
-		root, err := svc.RootCommit(context.Background(), ri.readBranch)
+		root, err := svc.RootCommit(context.Background(), ri.ReadBranch())
 		if err != nil {
 			log.Warn().Err(err).Str("repo", ri.Name()).Msg("repo id: root commit unresolved")
 			return
@@ -457,7 +417,7 @@ func (ri *RepoInstance) WritableBranch(branch string) bool {
 	// is unestablished either validates against a taxonomy nobody chose or
 	// skips validation entirely, and both write data the repo cannot vouch
 	// for.
-	if ri.ontologyErr != nil {
+	if ri.OntologyError() != nil {
 		return false
 	}
 	// Both sides must be non-empty, and that is load-bearing rather than
@@ -525,15 +485,23 @@ func (ri *RepoInstance) writableExperiment(branch string) bool {
 // at create time there is no later correction. OntologyError says what went
 // wrong.
 func (ri *RepoInstance) Ontology() *fact.Ontology {
-	if ri.ontologyErr != nil {
+	id := ri.ident.Load()
+	if id == nil || id.ontologyErr != nil {
 		return nil
 	}
-	return ri.ontology
+	return id.ontology
 }
 
 // OntologyError reports why this repo has no usable ontology, or nil when it
-// has one. A non-nil value means the repo is open for READING only.
-func (ri *RepoInstance) OntologyError() error { return ri.ontologyErr }
+// has one. A non-nil value means the repo is open for READING only; a repo
+// whose Identify stage has not run reports errNotIdentified.
+func (ri *RepoInstance) OntologyError() error {
+	id := ri.ident.Load()
+	if id == nil {
+		return errNotIdentified
+	}
+	return id.ontologyErr
+}
 
 // Embedder returns the batch embedder for this repo, or nil if unavailable.
 func (ri *RepoInstance) Embedder() store.BatchEmbedder { return ri.embedder }
@@ -645,96 +613,6 @@ func (ri *RepoInstance) DiscoveryWSpec() float64 { return ri.discoveryWSpec }
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
 
-// ActivateSync starts sync and push loops for the given remote URL.
-// Returns an error if the remote cannot be configured.
-func (ri *RepoInstance) ActivateSync(url string) error {
-	if ri.startSync == nil {
-		return nil
-	}
-	return ri.startSync(url)
-}
-
-// StartLocalSync replaces the running loops with the ones a repo WITHOUT an
-// origin runs (the local reconcile loop), at once,
-// with no reopen. Call it after the origin has been removed; the origin-backed
-// loop is cancelled and drained first. An instance built without the builder's
-// wiring (a unit test) only stops its loops, as DeactivateSync does.
-func (ri *RepoInstance) StartLocalSync() error {
-	if ri.startLocalSync == nil {
-		ri.DeactivateSync()
-		return nil
-	}
-	return ri.startLocalSync()
-}
-
-// DeactivateSync cancels the running sync/push loops so the repo stops talking
-// to a remote (used when the remote is disconnected). Safe to call when no
-// loop is running; a later ActivateSync starts a fresh loop.
-func (ri *RepoInstance) DeactivateSync() {
-	ri.mu.Lock()
-	cancel := ri.syncCancel
-	ri.syncCancel = func() {}
-	ri.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
-
-// Close stops the observer and closes the store.
-func (ri *RepoInstance) Close() {
-	if ri.closeFn != nil {
-		ri.closeFn()
-	}
-}
-
-// shutdown performs the full teardown sequence for a single instance:
-// cancel the background index heal and the sync loop, wait for both to wind
-// down (heal first), shut the task hub, then release store/observer resources.
-// Used by Manager.Close (bulk) and the lifecycle Archive path (single).
-func (ri *RepoInstance) shutdown() {
-	ri.mu.RLock()
-	cancel := ri.syncCancel
-	indexCancel := ri.indexCancel
-	ri.mu.RUnlock()
-	if indexCancel != nil {
-		indexCancel()
-	}
-	if cancel != nil {
-		cancel()
-	}
-	// Wait the index heal BEFORE the loop: the heal's activate() does
-	// syncWg.Add(1) for the reconcile loop, so indexWg.Wait() must complete
-	// before syncWg.Wait() to avoid the loop's Add racing past a syncWg that
-	// transiently read zero. Both must finish before closeFn closes the store.
-	if ri.indexWg != nil {
-		ri.indexWg.Wait()
-	}
-	if ri.syncWg != nil {
-		ri.syncWg.Wait()
-	}
-	// The trigger dispatcher has its own ctx (not syncCtx, which ActivateSync
-	// restarts). Stop it before the store closes: its phases A and C hold an
-	// Acquire, which closeFn's drain would otherwise wait on.
-	if ri.triggers != nil {
-		ri.triggers.stop()
-	}
-	// The consensus merger holds an Acquire for each run, like the
-	// dispatcher: stop it before the store closes.
-	if ri.consensus != nil {
-		ri.consensus.stop()
-	}
-	// The experiment sweep has its own ctx too (issue #377) and Acquires per
-	// tick: stop it before closeFn, whose drain would otherwise wait on a tick
-	// in flight and whose closed tombstone would fail every later one.
-	ri.sweep.stop()
-	if ri.hub != nil {
-		ri.hub.Shutdown()
-	}
-	if ri.closeFn != nil {
-		ri.closeFn()
-	}
-}
-
 // Verify runs the integrity check against the current store while holding a
 // store reference (Acquire), so a concurrent SwapStore/Archive drains this
 // call before closing the service instead of closing it mid-check. Delegates
@@ -767,14 +645,11 @@ func (ri *RepoInstance) PruneGeneratedRefs(ctx context.Context) (store.PruneResu
 
 // NewTestInstance creates a minimal RepoInstance for use in tests that
 // exercise Manager operations (Set, Get, Replace, ForEach, Names, context).
-// Production code must use Manager.openOne instead.
+// It has no machine: its Status reads ready. Production code mounts repos
+// through the Manager instead.
 func NewTestInstance(name string) *RepoInstance {
-	ri := &RepoInstance{
-		syncCancel:  func() {},
-		syncWg:      &sync.WaitGroup{},
-		indexCancel: func() {},
-		indexWg:     &sync.WaitGroup{},
-	}
+	ri := &RepoInstance{}
+	ri.ident.Store(&identity{})
 	ri.setName(name)
 	return ri
 }
@@ -808,15 +683,6 @@ type TestInstanceConfig struct {
 	Embedder            store.BatchEmbedder
 	OntologyRoot        string
 	MethodologyMinScore float64
-	StartSync           func(url string) error
-	// StartLocalSync stands in for the origin-less sync restart. Nil keeps the
-	// default (StartLocalSync only stops the loops, as DeactivateSync does).
-	StartLocalSync func() error
-	// DBPath makes the instance file-backed for Manager.SwapStore: Svc must
-	// have been opened from this path. Empty (the default) takes SwapStore's
-	// in-memory branch. A test sets it to reach the file-backed failure
-	// paths, which only that branch has.
-	DBPath string
 	// Quality carries the bridge-quality knobs (CohFloor, MaxMembers, the Q
 	// weights). Optional and zero by default, which is the historical
 	// behaviour — but note that a zero MaxMembers gates out EVERY bridge
@@ -845,7 +711,8 @@ type TestQualityConfig struct {
 
 // NewTestInstanceWithDeps creates a RepoInstance pre-populated with the given
 // dependencies. Intended for handler/integration tests in sibling packages.
-// Production code must use Manager.openOne instead.
+// It has no machine (its Status reads ready, and nothing can be Sent to it);
+// a test that drives the lifecycle mounts a repo through a Manager instead.
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	agent := cfg.AgentBranch
 	if cfg.Subscribed {
@@ -858,10 +725,8 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	ri := &RepoInstance{
 		uid:                  cfg.UID,
 		agentBranch:          agent,
-		readBranch:           read,
 		subscribed:           cfg.Subscribed,
 		handle:               newStoreHandle(cfg.Svc),
-		ontology:             cfg.Ontology,
 		embedder:             cfg.Embedder,
 		ontologyRoot:         cfg.OntologyRoot,
 		methodologyMinScore:  cfg.MethodologyMinScore,
@@ -875,14 +740,9 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		discoveryConfidenceThreshold:  0.5,
 		discoveryBlastRadiusThreshold: 1,
 		hub:                           cfg.Hub,
-		startSync:                     cfg.StartSync,
-		startLocalSync:                cfg.StartLocalSync,
-		dbPath:                        cfg.DBPath,
-		syncCancel:                    func() {},
-		syncWg:                        &sync.WaitGroup{},
-		indexCancel:                   func() {},
-		indexWg:                       &sync.WaitGroup{},
 	}
+	ri.setReadBranch(read)
+	ri.ident.Store(&identity{ontology: cfg.Ontology})
 	if q := cfg.Quality; q != nil {
 		ri.discoveryCohFloor = q.CohFloor
 		ri.discoveryQualityFloor = q.QualityFloor
