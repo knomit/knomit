@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,23 +192,17 @@ func timedWrites(t *testing.T, ri *RepoInstance, prefix string, n int) []time.Du
 	return out
 }
 
-// within reports whether b is within max(1.25×a, a+2ms) of a [M1, M5]. It is
-// the bound of the load-bearing sabotage target (_BusyIf: synchronous
-// dispatch adds about a second per write, which no bound hides).
-func within(a, b time.Duration) bool {
-	bound := a + a/4
-	if a+2*time.Millisecond > bound {
-		bound = a + 2*time.Millisecond
-	}
-	return b <= bound
-}
-
-// withinRace is the -race bound for _BusyIf, max(3×a, a+250ms). Under the race
-// detector on a shared CI runner the loaded arm measured 1.25–1.50× the base
-// (Race runs 36354285281..36614313171): each busy `if` spins a core to its
-// interrupt and the runner is also running other packages, so the writer loses
-// CPU although dispatch is asynchronous. The synchronous-dispatch sabotage adds
-// about a second per write, which this bound still catches.
+// withinRace is _BusyIf's bound, max(3×a, a+250ms), with and without -race
+// (#369). It replaced a tight max(1.25×a, a+2ms) bound that the non-race CI run
+// failed at 1.77× and 1.82× on CPU contention alone: each busy `if` spins a
+// core to its 100 ms interrupt, the shared runner is also testing other
+// packages, and the writer loses CPU although dispatch is asynchronous. Under
+// -race the loaded arm had already measured 1.25–1.50× the base (Race runs
+// 36354285281..36614313171). The sabotage this bound exists for, synchronous
+// dispatch, adds about a second per write (10 triggers × 100 ms), roughly 100×
+// a ~10 ms base, so the loose bound still catches it with a wide margin. The
+// deterministic check of the same property is
+// TestDispatch_WriteReturnsWhileTriggerEvaluationIsHeld.
 func withinRace(a, b time.Duration) bool {
 	bound := 3 * a
 	if a+250*time.Millisecond > bound {
@@ -297,8 +292,12 @@ func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 // The sabotage target [M5]: 10 triggers whose `if` busy-loops to the 100 ms
 // interrupt. Asynchronous dispatch leaves the writes untouched; synchronous
 // dispatch would add about a second to every write, a difference no bound
-// hides. Under -race the bound is withinRace, max(3×, +250ms): the tight one
-// failed on CPU contention alone (see withinRace).
+// hides. The bound is withinRace, max(3×, +250ms), on every path (#369): the
+// earlier non-race bound, max(1.25×, +2ms), failed on CI at 1.77× and 1.82×
+// from CPU contention alone, while the sabotage it exists for is roughly 100×
+// (see withinRace). This test is the timing view of the property;
+// TestDispatch_WriteReturnsWhileTriggerEvaluationIsHeld is the deterministic
+// one.
 // The valid sabotage is "the writer waits for its own run" (triggerKick
 // blocks until the run it kicked completes). Running the dispatcher directly
 // inside triggerKick is not: onCommit runs under the writer's branch lock
@@ -314,15 +313,108 @@ func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
 	t.Logf("median: 0 triggers %s, 10 busy triggers %s (%.2f×)", bm, lm, float64(lm)/float64(bm))
-	if raceEnabled {
-		require.True(t, withinRace(bm, lm), "median with busy triggers (%s) is not within max(3×, +250ms) of 0 triggers (%s) under -race", lm, bm)
-	} else {
-		require.True(t, within(bm, lm), "median with busy triggers (%s) is not within max(1.25×, +2ms) of 0 triggers (%s)", lm, bm)
-	}
+	require.True(t, withinRace(bm, lm), "median with busy triggers (%s) is not within max(3×, +250ms) of 0 triggers (%s)", lm, bm)
 	// Teardown must not wait for the backlog: ctx is checked per evaluation.
 	started := time.Now()
 	ri.triggers.stop()
 	require.Less(t, time.Since(started), 2*time.Second)
+}
+
+// WriteReturnsWhileTriggerEvaluationIsHeld (#369): the OUTCOME behind the
+// latency tests above, asserted without timing. A trigger's evaluation is
+// held indefinitely (an evalDelay hook that blocks on a gate inside phase B,
+// before the `if`), and while it is held another write on the same branch
+// must return. Asynchronous dispatch makes that true however slow the
+// trigger is; synchronous dispatch makes it impossible, so the write never
+// returns and the 10 s bound (a hang detector, never a latency gate) fails.
+// No ratio, no median, no noise band: the result does not depend on CPU load.
+//
+// It covers what TestDispatch_TriggerKickNeverBlocksWriter cannot see: that
+// test parks the dispatcher at afterKick, BEFORE it does any work, so trigger
+// evaluation run inline on the writer's goroutine (the writer waiting for its
+// own run) would never reach the park and would pass it. Here the hold is on
+// the evaluation itself, and the trigger's run is asserted to complete after
+// the release, so the hold really was on trigger work.
+//
+// Sabotage: make the writer wait for the run it kicked (triggerKick blocks
+// until runSequence advances). Write A then never returns, write B waits
+// behind it, and the hang detector fails.
+func TestDispatch_WriteReturnsWhileTriggerEvaluationIsHeld(t *testing.T) {
+	_, ri := newTriggerRepo(t, trig("held", "learn", "", "true"))
+	const pathA, pathB = "kb/tasks/held-a.md", "kb/tasks/free-b.md"
+
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	var enterOnce, releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(gate) }) }
+	h := currentTriggerHooks()
+	h.evalDelay = func(name, path string) time.Duration {
+		if name == "held" && path == pathA {
+			enterOnce.Do(func() { close(entered) })
+			<-gate
+		}
+		return 0
+	}
+	setHooks(t, h)
+	// Registered after newTriggerRepo and setHooks, so it runs FIRST
+	// (t.Cleanup is LIFO): the gate opens before the hooks are cleared and
+	// before the manager closes, and the dispatcher's shutdown never waits on
+	// a held evaluation, even when the test fails.
+	t.Cleanup(release)
+
+	// The writes run on their own goroutines so that a write that never
+	// returns fails the test at its bound instead of hanging the binary.
+	// They report through buffered channels and never touch t.
+	svc := testService(t, ri)
+	type result struct {
+		commit string
+		err    error
+	}
+	writeAsync := func(path string) <-chan result {
+		ch := make(chan result, 1)
+		go func() {
+			r, err := svc.Facts().WriteFact(context.Background(), trigAgent, path, factBody(path), "learn: "+path, "learn")
+			if err != nil {
+				ch <- result{err: err}
+				return
+			}
+			ch <- result{commit: r.CommitHash}
+		}()
+		return ch
+	}
+
+	// 1. Write A: its run reaches the trigger and holds there.
+	doneA := writeAsync(pathA)
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the trigger's evaluation of write A never started: the hold was never reached")
+	}
+
+	// 2. While the evaluation is held, write B must return.
+	var commitB string
+	select {
+	case r := <-writeAsync(pathB):
+		require.NoError(t, r.err)
+		commitB = r.commit
+	case <-time.After(10 * time.Second):
+		t.Fatal("write B did not return while a trigger evaluation was held: the writer is waiting for trigger work (dispatch is synchronous)")
+	}
+	var commitA string
+	select {
+	case r := <-doneA:
+		require.NoError(t, r.err)
+		commitA = r.commit
+	case <-time.After(10 * time.Second):
+		t.Fatal("write A did not return while its trigger evaluation was held: the writer is waiting for trigger work (dispatch is synchronous)")
+	}
+	require.NotEqual(t, commitA, commitB)
+
+	// 3. Release: the held run completes, then a run covers B; both fired.
+	release()
+	waitTriggerHead(t, ri, commitB)
+	require.ElementsMatch(t, []string{pathA, pathB}, pathsOf(firesOf(t, ri, "held")),
+		"the held evaluation was real trigger work and completed after the release")
 }
 
 // ---- Benchmark (numbers go in the PR body; not gated)
