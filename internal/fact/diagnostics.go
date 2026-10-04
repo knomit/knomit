@@ -153,6 +153,12 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 	for _, key := range sortedKeys(o.Topics) {
 		diags = append(diags, contextDiags(key, o.Topics[key], valueForKey(topicsNode, key))...)
 	}
+	// Guidance (F23): every problem is a warning on the open path and fatal
+	// for a new ontology; a refused value resolves to no file (guidance.go).
+	diags = append(diags, guidanceDiags("root", o.Guidance)...)
+	for _, key := range sortedKeys(o.Topics) {
+		diags = append(diags, guidanceTreeDiags(key, o.Topics[key])...)
+	}
 	// Triggers: every problem is a WARNING and drops only that trigger — see
 	// triggers.go for why a trigger may never fail the ontology.
 	diags = append(diags, triggerDiags(&o)...)

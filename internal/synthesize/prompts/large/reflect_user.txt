@@ -1,4 +1,6 @@
-The following hypothesis transitions occurred during this review session:
+{{if .Guidance}}{{.Guidance}}
+
+{{end}}The following hypothesis transitions occurred during this review session:
 
 {{.Facts}}
 

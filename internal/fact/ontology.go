@@ -149,6 +149,7 @@ const (
 	DivergenceAttributes = "attributes" // taxonomy is a subset; attributes differ
 	DivergenceTriggers   = "triggers"   // taxonomy and attributes are a subset; only triggers differ
 	DivergenceContext    = "context"    // taxonomy, attributes and triggers are a subset; only context declarations differ
+	DivergenceGuidance   = "guidance"   // everything else is a subset; only guidance blocks differ
 )
 
 // SubsetDivergence reports why o is NOT a subset of other: "" when it is,
@@ -170,7 +171,10 @@ func (o *Ontology) SubsetDivergence(other *Ontology) string {
 	// Root attributes are compared exactly like a node's: the refresh would
 	// otherwise write a preset without them over the stored file and erase a
 	// repository-level setting (verify_signatures) on every boot.
-	d := behaviourDivergence{attrs: attrsNotSubset(o.Attributes, other.Attributes)}
+	d := behaviourDivergence{
+		attrs:    attrsNotSubset(o.Attributes, other.Attributes),
+		guidance: !guidanceSubset(o.Guidance, other.Guidance),
+	}
 	for key, node := range o.Topics {
 		otherNode, ok := other.Topics[key]
 		if !ok || !nodeIsSubsetOf(node, otherNode, &d) {
@@ -184,6 +188,8 @@ func (o *Ontology) SubsetDivergence(other *Ontology) string {
 		return DivergenceTriggers
 	case d.context:
 		return DivergenceContext
+	case d.guidance:
+		return DivergenceGuidance
 	}
 	return ""
 }
@@ -196,6 +202,9 @@ type behaviourDivergence struct {
 	// identically. Overwriting with the preset would erase them, so the boot
 	// refresh must leave the file alone, exactly as for attributes.
 	context bool
+	// guidance: n (or the root) declares a guidance block (F23) other does
+	// not declare identically; the refresh would erase it.
+	guidance bool
 }
 
 // nodeIsSubsetOf returns true if every Validation and child in n also appears
@@ -222,6 +231,9 @@ func nodeIsSubsetOf(n, other *OntologyNode, d *behaviourDivergence) bool {
 	}
 	if !contextDeclsSubset(n.Context, other.Context) {
 		d.context = true
+	}
+	if !guidanceSubset(n.Guidance, other.Guidance) {
+		d.guidance = true
 	}
 	for key, child := range n.Children {
 		otherChild, ok := other.Children[key]
@@ -309,6 +321,9 @@ type Ontology struct {
 	// does not declare are kept, so Serialize writes back what a newer knomit
 	// wrote.
 	Attributes map[string]any `yaml:"attributes,omitempty"`
+	// Guidance (F23) names, by path, the guidance files every topic's
+	// synthesis prompts get. See guidance.go.
+	Guidance GuidanceBlock `yaml:"guidance,omitempty"`
 
 	cache compiledRulesCache
 }
@@ -333,6 +348,11 @@ type compiledRulesCache struct {
 	// same walk as attrsByTopic, with the same sharing rule — never write to
 	// one.
 	contextByTopic map[string]map[string]*compiledContextDecl
+
+	// guidanceByTopic maps every declared topic path to its RESOLVED topic
+	// guidance (F23): its own block laid over its ancestors'. The root block
+	// is not in it (GuidanceFor adds it). Same sharing rule — never write.
+	guidanceByTopic map[string]resolvedGuidance
 }
 
 // buildRulesCache compiles every Validation rule in the ontology (root +
@@ -340,9 +360,10 @@ type compiledRulesCache struct {
 // Returns an error if any rule fails to compile.
 func (o *Ontology) buildRulesCache() error {
 	o.cache = compiledRulesCache{
-		byTopic:        map[string][]compiledRule{},
-		attrsByTopic:   map[string]map[string]any{},
-		contextByTopic: map[string]map[string]*compiledContextDecl{},
+		byTopic:         map[string][]compiledRule{},
+		attrsByTopic:    map[string]map[string]any{},
+		contextByTopic:  map[string]map[string]*compiledContextDecl{},
+		guidanceByTopic: map[string]resolvedGuidance{},
 	}
 	o.cache.compileCalls++
 
@@ -352,8 +373,16 @@ func (o *Ontology) buildRulesCache() error {
 		o.cache.byTopic["<root>"] = rs
 	}
 
-	var walk func(prefix string, n *OntologyNode, inherited map[string]any, inheritedCtx map[string]*compiledContextDecl) error
-	walk = func(prefix string, n *OntologyNode, inherited map[string]any, inheritedCtx map[string]*compiledContextDecl) error {
+	var walk func(prefix string, n *OntologyNode, inherited map[string]any, inheritedCtx map[string]*compiledContextDecl, inheritedGuidance resolvedGuidance) error
+	walk = func(prefix string, n *OntologyNode, inherited map[string]any, inheritedCtx map[string]*compiledContextDecl, inheritedGuidance resolvedGuidance) error {
+		// Guidance resolves like attributes too; a bare key inherits.
+		resolvedGuid := inheritedGuidance
+		if n != nil {
+			resolvedGuid = resolveGuidance(prefix, n.Guidance, inheritedGuidance)
+		}
+		if len(resolvedGuid) > 0 {
+			o.cache.guidanceByTopic[prefix] = resolvedGuid
+		}
 		// Context declarations resolve exactly like attributes: this node's
 		// keys laid over its parent's, nearest declaration winning.
 		resolvedCtx := inheritedCtx
@@ -394,14 +423,14 @@ func (o *Ontology) buildRulesCache() error {
 			o.cache.byTopic[prefix] = rs
 		}
 		for k, c := range n.Children {
-			if err := walk(prefix+"/"+k, c, resolved, resolvedCtx); err != nil {
+			if err := walk(prefix+"/"+k, c, resolved, resolvedCtx, resolvedGuid); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	for k, n := range o.Topics {
-		if err := walk(k, n, nil, nil); err != nil {
+		if err := walk(k, n, nil, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -685,6 +714,10 @@ type OntologyNode struct {
 	// node may carry, and their types. Inherited down the walk like
 	// attributes; resolve with Ontology.ContextSpec. See context_ontology.go.
 	Context map[string]ContextDecl `yaml:"context,omitempty"`
+	// Guidance (F23) names, by path, the guidance files the synthesis prompts
+	// get for facts under this node. Inherited down the walk, nearest wins;
+	// resolve with Ontology.GuidanceFor. See guidance.go.
+	Guidance GuidanceBlock `yaml:"guidance,omitempty"`
 }
 
 // Validation is one ontology-declared rule evaluated against a fact on write.
@@ -797,6 +830,11 @@ func (o *Ontology) Serialize() ([]byte, error) {
 			return nil, fmt.Errorf("serialize ontology: %w", err)
 		}
 	}
+	// Written back exactly as read, unknown keys and refused values included,
+	// like triggers: a newer knomit's keys survive a round trip.
+	if o.Guidance.node != nil {
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "guidance"}, o.Guidance.node)
+	}
 
 	topicsKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "topics"}
 	topicsVal := &yaml.Node{Kind: yaml.MappingNode}
@@ -851,6 +889,11 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) error {
 		if err := serializeContextDecls(valNode, node.Context); err != nil {
 			return err
 		}
+	}
+
+	if node.Guidance.node != nil {
+		valNode.Content = append(valNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "guidance"}, node.Guidance.node)
 	}
 
 	// Triggers are written back exactly as they were read, unknown keys and

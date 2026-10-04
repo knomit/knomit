@@ -17,11 +17,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"golang.org/x/crypto/ssh"
 
@@ -95,6 +99,16 @@ var ErrNoScriptAtCommit = errors.New("script not found at the head")
 // ErrNoRecipeAtCommit: the commit's tree holds no `.knomit/recipes/<name>.js`.
 // The dispatcher then falls through to the machine-local recipe.
 var ErrNoRecipeAtCommit = errors.New("recipe not found at the commit")
+
+// ErrNoGuidanceAtCommit: the commit's tree holds no file at the guidance path
+// the ontology names (F23). The reader skips that key with a warning.
+var ErrNoGuidanceAtCommit = errors.New("guidance file not found at the commit")
+
+// ErrGuidanceUnusable: the guidance path names something that is not a
+// regular UTF-8 text file of at most fact.MaxGuidanceBytes (a directory, a
+// symlink, a submodule, a larger file, binary or invalid UTF-8 content). The
+// reader skips that key with a warning, exactly as for a missing file.
+var ErrGuidanceUnusable = errors.New("guidance file unusable")
 
 // ErrNoOntologyAtCommit: the commit's tree holds no ontology file at any of the
 // known paths. The dispatcher keeps its last good trigger set.
@@ -243,6 +257,13 @@ type TriggerIndex interface {
 	// ruling D1) — with the same rules as ScriptAt. ErrNoRecipeAtCommit when
 	// the file is not there.
 	RecipeAt(ctx context.Context, commit plumbing.Hash, name string) (blob string, data []byte, err error)
+	// GuidanceAt reads one guidance file (F23), file being the repository
+	// path fact.GuidanceFile returns, from the commit's own tree — callers
+	// pass the tip of the consensus branch, the commit they read the ontology
+	// at, never the agent branch. ErrNoGuidanceAtCommit when absent;
+	// ErrGuidanceUnusable (wrapped, naming why) unless it is a regular UTF-8
+	// text file of at most fact.MaxGuidanceBytes.
+	GuidanceAt(ctx context.Context, commit plumbing.Hash, file string) (blob string, data []byte, err error)
 	// Toucher finds the commit that introduced the blob path carries at head:
 	// git's own history simplification, with no clock. See the method.
 	Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error)
@@ -379,6 +400,48 @@ func (rh *repoHandler) ScriptAt(ctx context.Context, commit plumbing.Hash, name 
 // the name is validated kebab-case by every caller.
 func (rh *repoHandler) RecipeAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
 	return rh.privateFileAt(commit, "recipe", fact.TriggerRecipePath(name), ErrNoRecipeAtCommit)
+}
+
+// GuidanceAt implements TriggerIndex. Unlike privateFileAt it refuses a
+// symlink (whose blob is only its target's name) and checks the size BEFORE
+// reading the blob, so an oversized file is never loaded.
+func (rh *repoHandler) GuidanceAt(ctx context.Context, commit plumbing.Hash, file string) (string, []byte, error) {
+	if !strings.HasPrefix(file, fact.GuidanceDir+"/") || path.Clean(file) != file || slices.Contains(strings.Split(file, "/"), "..") {
+		return "", nil, fmt.Errorf("%w: %q is not under %s/", ErrGuidanceUnusable, file, fact.GuidanceDir)
+	}
+	c, err := rh.repo.CommitObject(commit)
+	if err != nil {
+		return "", nil, fmt.Errorf("guidance: commit %s: %w", commit, err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		return "", nil, fmt.Errorf("guidance: tree of %s: %w", commit, err)
+	}
+	entry, err := tree.FindEntry(file)
+	if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+		return "", nil, ErrNoGuidanceAtCommit
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("guidance: entry %q at %s: %w", file, commit, err)
+	}
+	if entry.Mode != filemode.Regular && entry.Mode != filemode.Executable && entry.Mode != filemode.Deprecated {
+		return "", nil, fmt.Errorf("%w: %q is not a regular file (mode %s)", ErrGuidanceUnusable, file, entry.Mode)
+	}
+	f, err := tree.TreeEntryFile(entry)
+	if err != nil {
+		return "", nil, fmt.Errorf("guidance: blob %q at %s: %w", file, commit, err)
+	}
+	if f.Size > fact.MaxGuidanceBytes {
+		return "", nil, fmt.Errorf("%w: %q is %d bytes, over the %d-byte limit", ErrGuidanceUnusable, file, f.Size, fact.MaxGuidanceBytes)
+	}
+	body, err := f.Contents()
+	if err != nil {
+		return "", nil, fmt.Errorf("guidance: contents %q at %s: %w", file, commit, err)
+	}
+	if !utf8.ValidString(body) || strings.ContainsRune(body, 0) {
+		return "", nil, fmt.Errorf("%w: %q is not UTF-8 text", ErrGuidanceUnusable, file)
+	}
+	return entry.Hash.String(), []byte(body), nil
 }
 
 // privateFileAt reads one file of a commit's own tree: absent is notFound; a
