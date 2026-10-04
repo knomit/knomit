@@ -35,17 +35,17 @@ describe('api.rebuild', () => {
 });
 
 describe('api.cancelIndex', () => {
-  it('POSTs index:cancel and resolves with the repo row', async () => {
+  it('POSTs the cancel-index link and resolves with the repo row', async () => {
     const row = { name: 'kb', uid: 'u1', state: 'active', stage: 'ready', index_state: 'error', index_reason: 'indexing cancelled' };
     globalThis.fetch = vi.fn().mockResolvedValue(respond(200, row));
-    await expect(api.cancelIndex('kb')).resolves.toEqual(row);
+    await expect(api.cancelIndex('/api/v1/repos/kb/index:cancel')).resolves.toEqual(row);
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringMatching(/\/api\/v1\/repos\/kb\/index:cancel$/), { method: 'POST' });
   });
 
   it('rejects when the repo is not open (503)', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(respond(503, { detail: 'repo is not open' }));
-    await expect(api.cancelIndex('kb')).rejects.toThrow(/503 repo is not open/);
+    await expect(api.cancelIndex('/api/v1/repos/kb/index:cancel')).rejects.toThrow(/503 repo is not open/);
   });
 });
 

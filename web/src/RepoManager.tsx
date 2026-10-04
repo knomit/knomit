@@ -925,6 +925,8 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
   const [confirming, setConfirming] = useState<'disconnect' | null>(null);
   // The detail of a detach refused because the repo is indexing; see disconnect.
   const [detachIndexing, setDetachIndexing] = useState('');
+  // The refusal's cancel-index link, followed by "Cancel indexing".
+  const [cancelHref, setCancelHref] = useState('');
   // Rename draft + its typed confirmation. Local to the danger zone; cleared
   // when the pane switches repos by the same effect that clears description.
   const [renameTo, setRenameTo] = useState('');
@@ -995,14 +997,14 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
     onError(''); setDetachIndexing(''); setBusy(true);
     try { await api.deleteOrigin(name); remote.reload(); setConfirming(null); onChanged(); }
     catch (e) {
-      if (e instanceof RepoIndexingError) setDetachIndexing(e.message);
+      if (e instanceof RepoIndexingError) { setDetachIndexing(e.message); setCancelHref(e.cancelHref); }
       else onError(`disconnect failed: ${String(e)}`);
     }
     finally { setBusy(false); }
   };
   const cancelIndexing = async () => {
     onError(''); setBusy(true);
-    try { await api.cancelIndex(name); setDetachIndexing(''); onChanged(); }
+    try { await api.cancelIndex(cancelHref); setDetachIndexing(''); setCancelHref(''); onChanged(); }
     catch (e) { onError(`cancel indexing failed: ${String(e)}`); }
     finally { setBusy(false); }
   };

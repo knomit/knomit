@@ -2260,11 +2260,13 @@ export const api = {
   rebuild: (repo: string, branch: string): Promise<{ id?: string; kind?: string; state?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
-  // cancelIndex stops the repo's running index job and answers the repo's row
-  // (the GET /repos item shape); 503 when the repo is not open. It is the
-  // action behind a RepoIndexingError's cancel-index link.
-  cancelIndex: (repo: string): Promise<RepoInfo> =>
-    fetchJSON<RepoInfo>(`${repoBase(repo)}/index:cancel`, { method: 'POST' }),
+  // cancelIndex FOLLOWS a RepoIndexingError's cancel-index link (its
+  // cancelHref, an absolute API path as the server sent it) rather than
+  // building the URL: the link is the server's statement of the way through.
+  // It stops the repo's running index job and answers the repo's row (the GET
+  // /repos item shape); 503 when the repo is not open.
+  cancelIndex: (cancelHref: string): Promise<RepoInfo> =>
+    fetchJSON<RepoInfo>(apiUrl(cancelHref), { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
     opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[];

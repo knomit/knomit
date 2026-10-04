@@ -583,7 +583,8 @@ describe('RepoManager', () => {
     expect(screen.queryByText(/disconnect failed/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('disconnect-cancel-indexing'));
-    await waitFor(() => expect(api.cancelIndex).toHaveBeenCalledWith('core'));
+    // It follows the refusal's link rather than building the URL.
+    await waitFor(() => expect(api.cancelIndex).toHaveBeenCalledWith('/api/v1/repos/core/index:cancel'));
     await waitFor(() => expect(screen.queryByTestId('disconnect-indexing')).not.toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('disconnect-confirm'));
