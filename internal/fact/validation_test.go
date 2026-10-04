@@ -236,6 +236,10 @@ var factToJSOmitted = map[string]string{
 	"ExpiresWarnings": "derived on read, never stored, and unusable from a rule for the same reason " +
 		"RefWarnings is: always empty on the knomit_learn path (SerializeFact refuses a malformed " +
 		"expires) and stale on the knomit_update path. The validated `expires` string is exposed instead.",
+	"ContextWarnings": "derived on read, never stored, and unusable from a rule for the same reason " +
+		"RefWarnings is: always empty on the knomit_learn path (SerializeFact refuses a malformed " +
+		"context map) and stale on the knomit_update path (the handler may replace the map before " +
+		"ValidateFact runs). The validated `context` map is exposed instead.",
 }
 
 // TestFactToJS_ExposesEveryFactField is the regression guard for the omission

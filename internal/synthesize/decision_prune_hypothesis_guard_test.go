@@ -59,6 +59,7 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 		"agent/test",
 		bareRefFixture,
 		"kb",
+		nil,
 	)
 	require.NoError(t, err, "ApplyPruneDecisions itself must not error on a rejected merge")
 	require.Equal(t, 0, stats.Merged, "no merge committed when type=hypothesis")
@@ -119,6 +120,7 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 		"agent/test",
 		bareRefFixture,
 		"kb",
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged, "synthesis-type merge must commit")

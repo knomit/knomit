@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -30,6 +31,11 @@ type factCreateRequest struct {
 	// Expires is knomit_learn's field; SerializeFact refuses a non-RFC 3339
 	// value, which surfaces as a 400 below.
 	Expires string `json:"expires"`
+	// Context (F22) is NOT accepted here, and is declared only so it can be
+	// REFUSED: this decoder ignores unknown keys, so without the field a
+	// `context` would be dropped silently and the caller told 201. Set it
+	// with PUT or knomit_learn, which run its gates.
+	Context json.RawMessage `json:"context"`
 }
 
 // Defaults for the optional numeric fields above, matching knomit_learn's.
@@ -53,6 +59,11 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 
 		var req factCreateRequest
 		if !decodeJSON(w, r, &req, 0) {
+			return
+		}
+		if len(req.Context) > 0 {
+			hal.WriteProblem(w, http.StatusBadRequest, "Unsupported field",
+				"context is not accepted when creating a fact here; set it with PUT on the fact, or with knomit_learn", r.URL.Path)
 			return
 		}
 		if err := knomitfact.ValidateTitle(req.Title); err != nil {

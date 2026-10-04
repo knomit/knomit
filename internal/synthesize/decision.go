@@ -121,6 +121,9 @@ func ApplyPruneDecisions(ctx context.Context,
 	// local edge from a foreign one; passing "" reads them all as foreign.
 	localRepoID string,
 	ontologyRoot string,
+	// ontology decides which agreed context keys a merged fact may carry at
+	// its own topic (F22). nil carries none.
+	ontology *fact.Ontology,
 ) (*ReviewStats, error) {
 	stats := &ReviewStats{}
 	// Track deleted paths to avoid double-deletion when a path appears in
@@ -174,6 +177,15 @@ func ApplyPruneDecisions(ctx context.Context,
 			f, err := fact.ParseFact(d.Path, readResult.Content)
 			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update parse %s: %v", d.Path, err)})
+				continue
+			}
+			// F22: a context map ParseFact had to drop (malformed, arrived
+			// via git) would be deleted by this rewrite. A confidence change
+			// is not worth losing authored data over: skip, and say why.
+			if len(f.ContextWarnings) > 0 {
+				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+					"update %s skipped: its context is malformed and a rewrite would drop it (%s)",
+					d.Path, strings.Join(f.ContextWarnings, "; "))})
 				continue
 			}
 			f.Confidence = d.Confidence
@@ -272,6 +284,12 @@ func ApplyPruneDecisions(ctx context.Context,
 		// one.
 		merged.Motifs = fact.DropInvalidMotifs(mf.Motifs)
 		merged.EvidenceWeight = weight
+		// F22: only the context keys every member agrees on, and only those
+		// the merged fact's own topic allows. The judge's output carries no
+		// context field at all: it never authors one.
+		mergedTopic := path.Dir(strings.TrimPrefix(merged.Path(), strings.ToLower(ontologyRoot)+"/"))
+		var contextDropped []string
+		merged.Context, contextDropped = agreedContext(ctx, gs, agentBranch, m.Paths, ontology, mergedTopic)
 
 		// Same gate as every other write path. Citing the facts it subsumes
 		// (deleted just below) resolves: they are live at the pre-write head
@@ -372,6 +390,11 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"merge %s: expires not carried (a merge writes a new fact, which carries none; set one with knomit_update if it should expire): %s",
 				merged.Path(), strings.Join(notCarried, ", "))})
+		}
+		if len(contextDropped) > 0 {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"merge %s: context keys not carried (a merge keeps only the keys every member carries with the same value, and only those the merged fact's topic declares; the members keep theirs in history): %s",
+				merged.Path(), strings.Join(contextDropped, ", "))})
 		}
 		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
 		stats.Merged++
@@ -779,6 +802,64 @@ func memberRefs(ctx context.Context, gs store.FactIndex, branch string, paths []
 		}
 	}
 	return out
+}
+
+// agreedContext is the F22 prune-merge rule: the merged fact is NEW, so it
+// carries only the context keys on which EVERY member carries the SAME value —
+// a merge never invents a value and never pools values from facts that
+// disagree (the expires merge rule, kb/decisions/fact/expires/merge-rule).
+// Each key not carried is named in `dropped` (key names only), whether the
+// members disagreed on it or some lacked it.
+//
+// An unreadable member makes agreement unknowable, so nothing is carried and
+// every key any readable member had is dropped. The carried keys must also be
+// allowed at the merged fact's OWN topic (the judge chooses its directory, and
+// review runs no other ontology check): a key that is not is dropped too, so a
+// prune merge can never write an undeclared key. A nil ontology allows none.
+func agreedContext(ctx context.Context, gs store.FactIndex, branch string, members []string,
+	o *fact.Ontology, mergedTopic string) (carried map[string]any, dropped []string) {
+	memberMaps := make([]map[string]any, 0, len(members))
+	allKeys := map[string]bool{}
+	readable := true
+	for _, p := range members {
+		res, err := gs.ReadFact(ctx, branch, p, nil)
+		if err != nil {
+			readable = false
+			continue
+		}
+		f, err := fact.ParseFact(p, res.Content)
+		if err != nil {
+			readable = false
+			continue
+		}
+		memberMaps = append(memberMaps, f.Context)
+		for k := range f.Context {
+			allKeys[k] = true
+		}
+	}
+	carried = map[string]any{}
+	for k := range allKeys {
+		agree := readable && len(memberMaps) > 0
+		var v any
+		for i, m := range memberMaps {
+			mv, ok := m[k]
+			if !ok || (i > 0 && !fact.EqualContext(map[string]any{k: mv}, map[string]any{k: v})) {
+				agree = false
+				break
+			}
+			v = mv
+		}
+		if agree && o.ContextKeyAllowed(mergedTopic, k, v) == nil {
+			carried[k] = v
+			continue
+		}
+		dropped = append(dropped, k)
+	}
+	sort.Strings(dropped)
+	if len(carried) == 0 {
+		carried = nil
+	}
+	return carried, dropped
 }
 
 // memberExpiries names each merge member that carries an expires, as

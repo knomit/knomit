@@ -94,11 +94,24 @@ func normalizeOne(
 	// in — the same derivation knomit_update uses. Private state is skipped
 	// wholesale, as every write path skips it: a .knomit/<area>/ path has no
 	// ontology placement and ValidateFact runs the ROOT rules unconditionally.
-	if ontology := ri.Ontology(); ontology != nil && !knomitfact.IsWritablePrivatePath(file) {
-		topicCategory := path.Dir(strings.TrimPrefix(file, ri.OntologyRoot()+"/"))
+	//
+	// F22 context: ParseFact DROPS a malformed map (lenient read); a write is
+	// strict, and this one lands the caller's body, so the drop is refused
+	// rather than silently written away. Time values are normalised by the
+	// typed layer first. With no ontology, or on a private path, nothing
+	// declares a context key, so a context is refused rather than skipped.
+	if len(f.ContextWarnings) > 0 {
+		return nil, fmt.Errorf("resolution body for %q: %s", file, strings.Join(f.ContextWarnings, "; "))
+	}
+	ontology := ri.Ontology()
+	topicCategory := path.Dir(strings.TrimPrefix(file, ri.OntologyRoot()+"/"))
+	f.Context = knomitfact.NormalizeContext(ontology, topicCategory, f.Context)
+	if ontology != nil && !knomitfact.IsWritablePrivatePath(file) {
 		if err := knomitfact.ValidateFact(ontology, topicCategory, f); err != nil {
 			return nil, fmt.Errorf("resolution body for %q: %w", file, err)
 		}
+	} else if len(f.Context) > 0 {
+		return nil, fmt.Errorf("resolution body for %q: %w", file, knomitfact.ErrContextWithoutOntology)
 	}
 
 	// 3. The refs gate. Only refs the resolver ADDS are judged: prior is every

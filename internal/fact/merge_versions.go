@@ -4,6 +4,7 @@ import (
 	"crypto/sha1" //nolint:gosec // a git blob id, not a security digest
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -63,6 +64,9 @@ const (
 	MergeFieldRefs           = "refs"
 	MergeFieldEvidenceWeight = "evidence_weight"
 	MergeFieldExpires        = "expires"
+	// MergeFieldContextPrefix prefixes each context KEY the strategy decided
+	// ("context.verdict"); context merges per key, so each key is a field.
+	MergeFieldContextPrefix = "context."
 )
 
 // MergeRecord is what one MergeVersions call did, for the merge commit's
@@ -186,6 +190,7 @@ func MergeVersions(path string, base, src, dst []byte, strategy MergeStrategy) (
 	m.EvidenceWeight = pick(decide(MergeFieldEvidenceWeight, b.EvidenceWeight == s.EvidenceWeight, b.EvidenceWeight == d.EvidenceWeight, s.EvidenceWeight == d.EvidenceWeight)).EvidenceWeight
 	be, se, de := normExpires(b.Expires), normExpires(s.Expires), normExpires(d.Expires)
 	m.Expires = pick(decide(MergeFieldExpires, be == se, be == de, se == de)).Expires
+	m.Context = mergeContext(hasBase, b.Context, s.Context, d.Context, rec.Winner, &rec)
 	if m.Domain == nil {
 		m.Domain = []string{}
 	}
@@ -207,6 +212,58 @@ func MergeVersions(path string, base, src, dst []byte, strategy MergeStrategy) (
 		return nil, rec, false
 	}
 	return []byte(text), rec, true
+}
+
+// mergeContext merges the context map KEY BY KEY, three-way against the base
+// (F22). Two versions of ONE fact share each key's history, so each key is a
+// field of its own: a key one side changed takes that side — including a
+// deletion; both sides making the same change takes it; both changing it
+// differently goes to the strategy's winner and is recorded in rec.Decided as
+// "context.<key>" (the key's NAME only, never its value, so the trailer stays
+// a list of field names). Absence is a value. Keys are visited in sorted order
+// so Decided, and therefore the trailer, is deterministic.
+//
+// This is deliberately unlike the dedup merges, which keep the winner's whole
+// map: dedup merges two DIFFERENT facts, and mixing their keys would describe
+// neither.
+func mergeContext(hasBase bool, base, src, dst map[string]any, winner MergeSide, rec *MergeRecord) map[string]any {
+	keys := map[string]bool{}
+	for _, m := range []map[string]any{base, src, dst} {
+		for k := range m {
+			keys[k] = true
+		}
+	}
+	sorted := make([]string, 0, len(keys))
+	for k := range keys {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	same := func(a, b map[string]any, k string) bool {
+		av, aok := a[k]
+		bv, bok := b[k]
+		if aok != bok {
+			return false
+		}
+		return !aok || equalContextValue(av, bv)
+	}
+	out := map[string]any{}
+	for _, k := range sorted {
+		side, byRule := chooseSide(hasBase, same(base, src, k), same(base, dst, k), same(src, dst, k), winner)
+		if byRule {
+			rec.Decided = append(rec.Decided, MergeFieldContextPrefix+k)
+		}
+		from := src
+		if side == MergeDst {
+			from = dst
+		}
+		if v, ok := from[k]; ok {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // chooseSide is the per-field three-way rule. byRule is true only when both
@@ -357,7 +414,8 @@ func sameFact(a, b Fact) bool {
 		a.Confidence == b.Confidence && a.Sources == b.Sources && a.EvidenceWeight == b.EvidenceWeight &&
 		normExpires(a.Expires) == normExpires(b.Expires) &&
 		equalStrings(a.Domain, b.Domain) && equalStrings(a.Entities, b.Entities) &&
-		equalStrings(a.Motifs, b.Motifs) && equalStrings(a.Refs, b.Refs)
+		equalStrings(a.Motifs, b.Motifs) && equalStrings(a.Refs, b.Refs) &&
+		EqualContext(a.Context, b.Context)
 }
 
 // knownFrontmatterKeys are the keys the frontmatter struct reads; anything
@@ -365,7 +423,7 @@ func sameFact(a, b Fact) bool {
 var knownFrontmatterKeys = map[string]bool{
 	"kind": true, "type": true, "domain": true, "confidence": true, "sources": true,
 	"entities": true, "motifs": true, "refs": true, "evidence_weight": true,
-	"origin": true, "expires": true,
+	"origin": true, "expires": true, "context": true,
 }
 
 // parseLossless parses one version and reports why it cannot be merged
@@ -378,7 +436,7 @@ func parseLossless(path string, data []byte) (Fact, string) {
 	if err != nil {
 		return Fact{}, "unparsable"
 	}
-	if len(f.RefWarnings)+len(f.MotifWarnings)+len(f.ExpiresWarnings) > 0 {
+	if len(f.RefWarnings)+len(f.MotifWarnings)+len(f.ExpiresWarnings)+len(f.ContextWarnings) > 0 {
 		return Fact{}, "lossy"
 	}
 	if !knownKeysOnly(content) {

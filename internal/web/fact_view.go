@@ -47,8 +47,9 @@ type FactView struct {
 	// Expires is the fact's optional RFC 3339 expiry as written; Expired says
 	// whether it is at or before the server's clock at READ time. Knomit never
 	// acts on either — they are there so a reader can decide.
-	Expires string `json:"expires,omitempty"`
-	Expired bool   `json:"expired,omitempty"`
+	Expires string         `json:"expires,omitempty"`
+	Expired bool           `json:"expired,omitempty"`
+	Context map[string]any `json:"context,omitempty"`
 
 	// Links is public so tests can inspect it. Marshaled as _links.
 	Links hal.LinkMap `json:"-"`
@@ -132,6 +133,7 @@ func BuildFactView(
 		RefWarnings: f.RefWarnings,
 		Expires:     f.Expires,
 		Expired:     f.IsExpired(timeNow()),
+		Context:     f.Context,
 	}
 	v.Links = buildFactLinks(b, repo, a, headCommit, f.Path())
 	return v

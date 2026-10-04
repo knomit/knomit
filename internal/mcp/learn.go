@@ -127,6 +127,7 @@ func learnToolSchemaProperties() map[string]any {
 		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. It does two things for THIS call: the automatic dedup merge never folds this fact into a path named here (the fact is written at its own new path), and the same-subject refusal skips those paths. Use it after a refusal (the refusal lists the candidates it found), and when you write a fact that deliberately sits next to a near-identical one — a counter-hypothesis to an existing hypothesis, a competing claim — so both are kept. It is not stored with the fact, and a later knomit_review may still merge the two. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
 		"motifs":        motifsProperty(),
 		"expires":       expiresProperty(),
+		"context":       contextProperty(" Not allowed with path (private state has no topic to declare keys)."),
 		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
 			"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
 			"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
@@ -170,6 +171,12 @@ type learnFactInput struct {
 	// Expires is passed through to SerializeFact, the single gate that
 	// refuses a non-RFC 3339 value.
 	Expires string `json:"expires"`
+	// Context (F22) is checked for shape first (so a newline or a list value
+	// is refused naming the fact and the key), then normalised and checked
+	// against the ontology's declarations by ValidateFact. Scripts reach this
+	// struct through the same JSON round trip, so their numbers are float64
+	// here too.
+	Context map[string]any `json:"context"`
 }
 
 // reserialize re-renders f and overwrites the entry at path in the
@@ -355,7 +362,21 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		if fi.Origin != "" {
 			f.Origin = fact.Origin(fi.Origin)
 		}
-		// A private-state fact has no ontology placement to validate against.
+		// F22 context: shape first, so a newline or a list value is refused
+		// as that, naming the fact and the key, before any typed rule.
+		if err := fact.ValidateContextShape(fact.NormalizeContextValues(fi.Context)); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+		}
+		f.Context = fact.NormalizeContext(ontology, topicCategory, fi.Context)
+		// A private-state fact has no ontology placement to validate against,
+		// so nothing declares a context key there; and with no ontology at
+		// all nothing does either. Both refuse a non-empty context rather
+		// than skipping the typed gate.
+		if topicCategory == "" || ontology == nil {
+			if len(f.Context) > 0 {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, fact.ErrContextWithoutOntology)
+			}
+		}
 		if ontology != nil && topicCategory != "" {
 			if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {
 				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
@@ -457,6 +478,11 @@ func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	// handler says so in its result (expiresNotAppliedNotes) rather than
 	// dropping it silently.
 	merged.Expires = winner.Expires
+	// And its context map, WHOLE (F22, the same rule): two different facts'
+	// keys mixed would describe neither. When the existing fact wins, an
+	// incoming context is not applied and the result says so
+	// (contextNotAppliedNotes).
+	merged.Context = fact.CopyContext(winner.Context)
 
 	merged.Domain = fact.UnionStrings(newFact.Domain, existing.Domain)
 	merged.Entities = fact.UnionStrings(newFact.Entities, existing.Entities)
@@ -865,6 +891,15 @@ func applyDedupMerge(
 				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
 		}
+		// F22: the merged fact lands at the MATCH's path, which the prefix
+		// search can place in a descendant topic whose context declarations
+		// differ from the incoming fact's (kb/gotchas/mcp/learn/
+		// dedup-search-scope-is-a-string-prefix). Its context is checked
+		// where it will live. With no ontology nothing declares a key, so a
+		// winner carrying context is refused rather than written unchecked.
+		if err := fact.ValidateContext(ontology, topicPathOf(ontologyRoot, match.Path), merged.Context); err != nil {
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge into %s: %v", i, match.Path, err)
+		}
 
 		// Retarget the fact from its freshly-minted path to the existing
 		// fact's path. Both keys must be the real on-disk strings: deleting
@@ -1015,6 +1050,12 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		facts, topicCategories, paths, files, err := validateAndBuildFacts(ontology, ontologyRoot, factInputs)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// Each fact's context as built, before the dedup stage may replace a
+		// fact with the existing one it matched (contextNotAppliedNotes).
+		builtContext := make([]map[string]any, len(facts))
+		for i := range facts {
+			builtContext[i] = facts[i].Context
 		}
 
 		// An explicit path is a NAMED SLOT: learn allocates it once, update
@@ -1191,6 +1232,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			result["commit"] = hash
 		}
 		notes := expiresNotAppliedNotes(factInputs, facts)
+		notes = append(notes, contextNotAppliedNotes(builtContext, facts)...)
 		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, facts)...)
 		if len(notes) > 0 {
 			result["notes"] = notes
@@ -1248,6 +1290,24 @@ func expiresNotAppliedNotes(inputs []learnFactInput, facts []fact.Fact) []string
 		}
 		notes = append(notes, fmt.Sprintf(
 			"fact %d: merged into existing fact %s; existing fact kept; expires not applied; set it with knomit_update on %s.",
+			i, facts[i].Path(), facts[i].Path()))
+	}
+	return notes
+}
+
+// contextNotAppliedNotes is expiresNotAppliedNotes for context (F22): it names
+// every incoming fact whose context did not land because a dedup merge kept
+// the EXISTING fact, whose whole map wins. built[i] is fact i's context as the
+// build stage produced it (time values already normalised), captured before
+// the dedup stage; facts[i] is what was written.
+func contextNotAppliedNotes(built []map[string]any, facts []fact.Fact) []string {
+	var notes []string
+	for i, b := range built {
+		if i >= len(facts) || len(b) == 0 || fact.EqualContext(facts[i].Context, b) {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf(
+			"fact %d: merged into existing fact %s; existing fact kept; context not applied; set it with knomit_update on %s.",
 			i, facts[i].Path(), facts[i].Path()))
 	}
 	return notes

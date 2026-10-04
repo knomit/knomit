@@ -55,18 +55,19 @@ func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance,
 // searchResultItem is one item in the search results collection.
 // Body is intentionally absent — collection items omit body.
 type searchResultItem struct {
-	Path       string      `json:"path"`
-	Title      string      `json:"title"`
-	Score      float64     `json:"score"`
-	Kind       string      `json:"kind,omitempty"` // omitted when epistemic (the default)
-	Type       string      `json:"type,omitempty"`
-	Domain     []string    `json:"domain,omitempty"`
-	Entities   []string    `json:"entities,omitempty"`
-	Motifs     []string    `json:"motifs,omitempty"`
-	Confidence float64     `json:"confidence,omitempty"`
-	Expires    string      `json:"expires,omitempty"`
-	Expired    bool        `json:"expired,omitempty"`
-	Links      hal.LinkMap `json:"_links"`
+	Path       string         `json:"path"`
+	Title      string         `json:"title"`
+	Score      float64        `json:"score"`
+	Kind       string         `json:"kind,omitempty"` // omitted when epistemic (the default)
+	Type       string         `json:"type,omitempty"`
+	Domain     []string       `json:"domain,omitempty"`
+	Entities   []string       `json:"entities,omitempty"`
+	Motifs     []string       `json:"motifs,omitempty"`
+	Confidence float64        `json:"confidence,omitempty"`
+	Expires    string         `json:"expires,omitempty"`
+	Expired    bool           `json:"expired,omitempty"`
+	Context    map[string]any `json:"context,omitempty"`
+	Links      hal.LinkMap    `json:"_links"`
 }
 
 // searchView is the search collection plus an optional notice. Notice is
@@ -157,6 +158,9 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 		if !applyExpiryParams(w, r, &q, now) {
 			return
 		}
+		if !applyContextParams(w, r, &q) {
+			return
+		}
 
 		// since_fork narrows the search to what this experiment changed. It is
 		// honoured HERE as well as on the facts collection because the Library
@@ -223,6 +227,7 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 				Motifs:     res.Motifs,
 				Confidence: res.Confidence,
 				Expires:    res.Expires,
+				Context:    res.Context,
 				Expired:    expiredAt(res.Expires, now),
 				Links:      hal.LinkMap{"self": {Href: b.Fact(repoName, a, res.Path)}},
 			}

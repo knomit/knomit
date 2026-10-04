@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,8 +40,12 @@ type conceptFrontmatter struct {
 	KnomitSources    int      `yaml:"knomit_sources,omitempty"`
 	KnomitDomain     []string `yaml:"knomit_domain,omitempty"`
 	KnomitEntities   []string `yaml:"knomit_entities,omitempty"`
-	KnomitRefs       []string `yaml:"knomit_refs,omitempty"`
-	KnomitPath       string   `yaml:"knomit_path"`
+	// KnomitContext is the fact's F22 context map, the same keys and
+	// canonical values as the fact file (yaml sorts map keys). Omitted when
+	// empty; read back by ParseConcept.
+	KnomitContext map[string]any `yaml:"knomit_context,omitempty"`
+	KnomitRefs    []string       `yaml:"knomit_refs,omitempty"`
+	KnomitPath    string         `yaml:"knomit_path"`
 }
 
 // sourceEntry is one OKF v0.2 `sources` entry. `resource` is REQUIRED by the
@@ -190,6 +195,7 @@ func Concept(fi FactInput, repo RepoIdentity, fromDir string, opts RenderOpts) (
 		KnomitSources:    f.Sources,
 		KnomitDomain:     f.Domain,
 		KnomitEntities:   f.Entities,
+		KnomitContext:    f.Context,
 		KnomitRefs:       f.Refs,
 		KnomitPath:       f.Path(),
 	}
@@ -281,6 +287,24 @@ func renderRelated(f fact.Fact, fromDir string, opts RenderOpts) string {
 			b.WriteString("\n")
 		}
 		b.WriteString(s)
+	}
+	// F22: the context map as one plain line, sorted keys, canonical values —
+	// so a human reading the export sees it. No hub pages for context in v1,
+	// so nothing is linked.
+	if len(f.Context) > 0 {
+		keys := make([]string, 0, len(f.Context))
+		for k := range f.Context {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+" = "+escapeLinkText(fact.ContextText(f.Context[k])))
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("**Context:** " + strings.Join(parts, " · ") + "\n")
 	}
 	return b.String()
 }

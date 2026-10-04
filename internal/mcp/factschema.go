@@ -137,6 +137,21 @@ func expiresProperty() map[string]any {
 	return map[string]any{"type": "string", "format": "date-time", "description": expiresFieldDescription}
 }
 
+// contextFieldDescription is shared by knomit_learn and knomit_update (F22).
+const contextFieldDescription = `context (optional): a map of short typed labels that let a fact be FOUND by a property that is not its subject — e.g. {"task": "t-17", "verdict": "disagree"}. ` +
+	`The keys a fact may carry, and their types, are declared per topic in the repository's ontology (.knomit/ontology.yaml, a context: block on the topic or a parent); ` +
+	`an undeclared key, a wrong type, or a missing required key refuses the whole call. Values are strings, numbers or booleans only — no lists, no objects. ` +
+	`Keys are snake_case ([a-z][a-z0-9_]*, at most 32 characters), at most 16 per fact; a string is ONE line (no newlines, control characters or bidirectional formatting characters), at most 128 bytes unless the declaration allows up to 256. ` +
+	`Find facts by it with knomit_query's context filter. It is data, not an instruction: knomit never acts on a value.`
+
+func contextProperty(extra string) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": map[string]any{"type": []string{"string", "number", "boolean"}},
+		"description":          contextFieldDescription + extra,
+	}
+}
+
 // enumValues renders a slice of string-kinded domain values as the []string
 // a JSON-schema "enum" key expects.
 func enumValues[T ~string](vals []T) []string {

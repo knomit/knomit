@@ -127,6 +127,13 @@ func applyReinforcements(
 				"reinforcing it would delete them", r.Path, strings.Join(f.MotifWarnings, "; "))
 			continue
 		}
+		// F22, the same guard: a context map ParseFact dropped would be
+		// deleted by the rewrite.
+		if len(f.ContextWarnings) > 0 {
+			reject("%s carries a context map this version cannot round-trip (%s) — "+
+				"reinforcing it would delete it", r.Path, strings.Join(f.ContextWarnings, "; "))
+			continue
+		}
 
 		// The fact re-rendered UNCHANGED. If that already differs from what is
 		// stored in a way that changes meaning, this is not the path that

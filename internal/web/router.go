@@ -350,7 +350,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.Get("/facts", handleHALFactsCollection(b, p.factsCollection))
 				r.Post("/facts", handleFactCreate(b, s.OntologyRoot, p.factWriter))
 				r.Get("/facts/*", handleHALFact(b, p.factReader, p.factSub))
-				r.Put("/facts/*", handleFactUpdate(b, p.factWriter))
+				r.Put("/facts/*", handleFactUpdate(b, s.OntologyRoot, p.factWriter))
 				r.Delete("/facts/*", handleFactDelete(b, p.factWriter))
 
 				r.Get("/topics", handleTopics(b, s.OntologyRoot, p.topicLister))

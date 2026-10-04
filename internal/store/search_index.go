@@ -51,7 +51,11 @@ import (
 // lived in the dropped _int/_real tables and are rewritten as TEXT. Rebuild
 // reads git (the only source of truth) and preserves embeddings, so this costs
 // a graph rewrite, not a re-embed.
-const GraphSchemaVersion = "6"
+// Version 6: the fact_expires side table (F03).
+// Version 7: the fact_context side table (F22, migration 000034). The forced
+// rebuild fills it from every blob, including hand-written `context:` lines a
+// pre-F22 parser dropped.
+const GraphSchemaVersion = "7"
 
 type searchIndex struct {
 	rh *repoHandler
@@ -853,6 +857,36 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 		WHERE json_extract(parsed, '$.expires_at') IS NOT NULL
 	`, blobObjectType); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: fact_expires: %w", err)
+	}
+
+	// Repopulate the fact_context side table (migration 000034, F22) the same
+	// way. The rebuilt facts' rows are DELETED first (scoped by
+	// _rebuild_entries, so other branches' shared rows stay): a rebuild is the
+	// repair path, and a key an older build wrongly kept must go. Then only
+	// blobs containing the token "context" are re-parsed (the instr prefilter,
+	// as for expires); a malformed map parses to no context and writes no row.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		DELETE FROM fact_context WHERE fact_id IN (
+			SELECT f.id FROM facts f
+			JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		)
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: clear fact_context: %w", err)
+	}
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		WITH labelled AS (
+			SELECT f.id AS fact_id, knomit_parse_fact(o.data) AS parsed
+			FROM _rebuild_entries e
+			JOIN facts f ON f.path = e.path AND f.blob_hash = e.blob_hash
+			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
+			WHERE instr(o.data, 'context') > 0
+		)
+		INSERT OR REPLACE INTO fact_context (fact_id, key, value, num)
+		SELECT l.fact_id, je.key, je.value, json_extract(l.parsed, '$.context_num."' || je.key || '"')
+		FROM labelled l, json_each(l.parsed, '$.context') je
+		WHERE json_extract(l.parsed, '$.context') IS NOT NULL
+	`, blobObjectType); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: fact_context: %w", err)
 	}
 
 	affected, _ := res.RowsAffected()
