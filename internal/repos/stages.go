@@ -703,12 +703,18 @@ func (syncStage) Name() string { return "sync" }
 // skipped tick, never an exit (kb/invariants/store/local-reconcile).
 //
 // Under Synchronous it runs ONE round inline and starts no loop.
+//
+// The store is acquired for the whole Sync life, released only when the loop
+// returns (or the inline round ends), the same as the index job: the loop's
+// svc stays valid by construction (kb/invariants/repos/store-lifetime), not
+// by stage order. Open.Exit's drain cannot wait on it forever, because every
+// exit drains Sync (newest-first) before Open, and the loop returns on its
+// life's ctx.
 func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 	svc, release, err := r.Acquire()
 	if err != nil {
 		return nil
 	}
-	defer release()
 	r.ensureLocalUpstream(ctx, svc)
 	env := r.env
 	cfg := env.cfg
@@ -722,31 +728,31 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 	hasOrigin := remote != nil || rerr != nil
 	once := r.machine.opts.Synchronous
 	r.syncOrigin = ""
+	name := "local-reconcile"
+	run := func(ctx context.Context) {
+		runLocalReconcileLoop(ctx, svc, r.Name(), r.agentBranch, cfg.Git.LocalReconcileInterval,
+			r.triggerKick, r.syncWake, mode(), once)
+	}
 	if hasOrigin {
 		if remote != nil {
 			r.syncOrigin = remote.URL
 		}
 		authFn := makeRemoteAuthFn(cfg.Remote, env.keyPath)
-		run := func(ctx context.Context) {
+		name = "reconcile"
+		run = func(ctx context.Context) {
 			runReconcileLoop(ctx, svc, r.hub, r.Name(), r.agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly,
 				env.onPush, r.triggerKick, r.syncWake, r.breakers, mode(), once)
 		}
-		if once {
-			run(ctx)
-			return nil
-		}
-		life.Go("reconcile", run)
-		return nil
-	}
-	run := func(ctx context.Context) {
-		runLocalReconcileLoop(ctx, svc, r.Name(), r.agentBranch, cfg.Git.LocalReconcileInterval,
-			r.triggerKick, r.syncWake, mode(), once)
 	}
 	if once {
+		defer release()
 		run(ctx)
 		return nil
 	}
-	life.Go("local-reconcile", run)
+	life.Go(name, func(ctx context.Context) {
+		defer release()
+		run(ctx)
+	})
 	return nil
 }
 
