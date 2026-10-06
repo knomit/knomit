@@ -11,11 +11,13 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/testsupport/recipes"
 )
 
 // F26: the mission repo's one topic of facts ABOUT the target knowledge
 // base's facts, annotations/<task id>/, typed by F22 `context` declared in
-// the SHIPPED mission ontology (examples/mission/.knomit/ontology.yaml). A
+// the SHIPPED mission ontology (knomit-recipes .knomit/templates/mission/). A
 // cross-check writes one annotation per fact it checks, with
 // context.kind: verdict and a kb:// ref to the fact; the fold reads them back
 // by path plus context.
@@ -40,7 +42,7 @@ func annotation(task, title string, ctx map[string]any) map[string]any {
 // ontology, parsed as a new one (so a bad declaration is fatal here).
 func missionAnnotationsRepo(t *testing.T) context.Context {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", ".knomit", "ontology.yaml"))
+	raw, err := os.ReadFile(filepath.Join(recipes.MissionTemplate(t), ".knomit", "ontology.yaml"))
 	require.NoError(t, err)
 	_, _, ctx, _ := newContextRepo(t, string(raw))
 	return ctx
@@ -239,7 +241,7 @@ func TestMissionAnnotations_FoldReadsEveryPage(t *testing.T) {
 	require.Len(t, seen, 9, "following the cursor, the fold sees every verdict")
 
 	for _, p := range []string{".knomit/skills/work-task/SKILL.md", ".knomit/skills/post-task/SKILL.md"} {
-		raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", p))
+		raw, err := os.ReadFile(filepath.Join(recipes.MissionTemplate(t), p))
 		require.NoError(t, err)
 		require.Contains(t, strings.ReplaceAll(strings.Join(strings.Fields(string(raw)), " "), "`", ""), "until has_more is false", "%s tells the fold to follow the cursor", p)
 	}

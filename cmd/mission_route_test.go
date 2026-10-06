@@ -3,9 +3,11 @@ package cmd
 // F08 PR D: the mission template's knomit-hosted route, run exactly as its
 // README writes it, over the real web server and the fleet's cert HTTPS /git.
 //
-//  1. git init <branch> my-mission; copy examples/mission/. into it (the
-//     README's `cp -R examples/mission/. my-mission/`, done in Go so it runs
-//     the same on every OS); git add -A; git commit.
+//  1. git init <branch> my-mission; copy the mission template into it
+//     (knomit-recipes .knomit/templates/mission/, read from the pinned
+//     third_party/knomit-recipes checkout) and remove its TEMPLATE.md
+//     manifest: the README's `cp -R` and `rm`, done in Go so it runs the
+//     same on every OS; git add -A; git commit.
 //  2. The host clones that repository, then removes its origin
 //     (DELETE /api/v1/repos/<repo>/origin).
 //  3. A peer clones the repo FROM THE HOST over cert HTTPS.
@@ -38,6 +40,7 @@ import (
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/recipes"
 	"knomit/internal/web"
 )
 
@@ -151,11 +154,7 @@ func requireMissionLoaded(t *testing.T, who string, ri *repos.RepoInstance, want
 }
 
 func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := filepath.Join(wd, "..", "examples", "mission")
+	template := recipes.MissionTemplate(t)
 	for _, br := range []string{"trunk", "master"} {
 		t.Run(br, func(t *testing.T) {
 			ctx := context.Background()
@@ -163,6 +162,9 @@ func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
 			repoDir := filepath.Join(originRoot, "my-mission")
 			missionGit(t, originRoot, "init", "-b", br, "my-mission")
 			copyTree(t, template, repoDir)
+			if err := os.Remove(filepath.Join(repoDir, recipes.ManifestFile)); err != nil {
+				t.Fatalf("the template carries its manifest, which the README removes: %v", err)
+			}
 			missionGit(t, repoDir, "add", "-A")
 			missionGit(t, repoDir, "commit", "-q", "-m", "mission template")
 

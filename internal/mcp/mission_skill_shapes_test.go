@@ -12,6 +12,8 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/testsupport/recipes"
 )
 
 // F-R1 of the first mission: the work-task skill described a fact's fields
@@ -90,7 +92,7 @@ type skeleton struct {
 
 func skeletons(t *testing.T, skill string) []skeleton {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", ".knomit", "skills", skill, "SKILL.md"))
+	raw, err := os.ReadFile(filepath.Join(recipes.MissionTemplate(t), ".knomit", "skills", skill, "SKILL.md"))
 	require.NoError(t, err)
 	var out []skeleton
 	for _, m := range skeletonRe.FindAllStringSubmatch(string(raw), -1) {
@@ -137,7 +139,7 @@ func TestMissionTemplate_SkillCallShapes(t *testing.T) {
 
 	// Every knomit tool the work-task skill tells a session to call has a
 	// skeleton, and the moves the queue depends on are spelled out whole.
-	raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", ".knomit", "skills", "work-task", "SKILL.md"))
+	raw, err := os.ReadFile(filepath.Join(recipes.MissionTemplate(t), ".knomit", "skills", "work-task", "SKILL.md"))
 	require.NoError(t, err)
 	named := map[string]bool{}
 	for _, m := range regexp.MustCompile(`knomit_[a-z_]+`).FindAllString(string(raw), -1) {
@@ -195,11 +197,11 @@ func TestMissionTemplate_SkillCallShapes(t *testing.T) {
 		posted = true
 	}
 	require.True(t, posted, "post-task has the post skeleton")
-	post, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", ".knomit", "skills", "post-task", "SKILL.md"))
+	post, err := os.ReadFile(filepath.Join(recipes.MissionTemplate(t), ".knomit", "skills", "post-task", "SKILL.md"))
 	require.NoError(t, err)
 	require.Contains(t, string(post), "`trace` is REQUIRED")
 	require.NotContains(t, string(post), "optional here")
-	readme, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", "README.md"))
+	readme, err := os.ReadFile(filepath.Join(recipes.MissionTemplate(t), "README.md"))
 	require.NoError(t, err)
 	flat := strings.Join(strings.Fields(string(readme)), " ")
 	require.Contains(t, flat, "A post MUST carry the trace")
