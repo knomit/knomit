@@ -994,33 +994,45 @@ knomit.emit(out);`)
 	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
 }
 
-// ArtifactsRefused (F25): a script writes facts only. The MCP tools accept
-// artifacts/<area>/ from a session, but a script's update, retract and
-// learn-retract of an artifact path throw in the HOST before any tool runs —
-// the conservative default for an open detail the user has not ruled on — and
-// nothing is committed. Sabotage: drop the host's artifacts check → the tool
-// is called → red.
-func TestScript_ArtifactsRefused(t *testing.T) {
+// ArtifactsHostAccepts (F25 follow-up, user ruling 2026-10-06): a script's
+// update, retract and learn's `retract` of a WELL-FORMED artifacts/<area>/
+// path now reach the real tool — the host no longer refuses every artifacts/
+// path unconditionally (T19's second half, reversed by this follow-up) —
+// while a MALFORMED one (no <area> segment: too shallow) is still refused in
+// the HOST, before any tool runs, exactly the shape check update/retract run
+// on a session's call. `.knomit/` stays closed to a script as to everyone
+// (TestScript_PrivatePathRefused). The write actually landing through the
+// REAL learn/update/retract handlers, and never becoming trigger-visible, is
+// TestScript_ArtifactsLandThroughRealTools (internal/web).
+// Sabotage: restore the host's unconditional artifacts refusal → every
+// well-formed call below throws before the stub tool runs → red.
+func TestScript_ArtifactsHostAccepts(t *testing.T) {
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "art"))
+	// Seeded directly (an artifacts/ write is trigger-invisible on its own),
+	// so the script's update/retract/learn-retract each have a real file to
+	// touch through the stub, which — unlike the real handler — does no
+	// path normalization of its own: it just writes whatever `file` the host
+	// let through, which is exactly what this test is checking.
+	for _, p := range []string{"artifacts/runs/u.md", "artifacts/runs/r.md", "artifacts/runs/l.md"} {
+		_, err := testService(t, ri).Facts().WriteFact(context.Background(), trigAgent, p, factBody(p), "seed: "+p, "learn")
+		require.NoError(t, err)
+	}
 	putScript(t, ri, "art", `
 var out = {};
-try { knomit.learn({path: "artifacts/runs/x.md", title: "x"}); } catch (e) { out.learn = e.message; }
-try { knomit.update("artifacts/runs/x.md", {updates: {title: "y"}}); } catch (e) { out.update = e.message; }
-try { knomit.update("Artifacts/Runs/x", {updates: {title: "y"}}); } catch (e) { out.updateMixed = e.message; }
-try { knomit.retract("artifacts/runs/x.md"); } catch (e) { out.retract = e.message; }
-try { knomit.learn([], {retract: ["artifacts/runs/x.md"]}); } catch (e) { out.learnRetract = e.message; }
+try { knomit.update("artifacts/runs/u.md", {updates: {title: "y"}}); } catch (e) { out.update = e.message; }
+try { knomit.retract("artifacts/runs/r.md"); } catch (e) { out.retract = e.message; }
+try { knomit.learn([], {retract: ["artifacts/runs/l.md"]}); } catch (e) { out.learnRetract = e.message; }
+try { knomit.update("artifacts/shallow", {updates: {title: "y"}}); } catch (e) { out.shallow = e.message; }
 knomit.emit(out);`)
 	sink := subscribePayloads(t, ri, "t")
-	before := settle(t, ri)
-	c0 := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
+	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 	settle(t, ri)
 	p := sink.wait(t, 1)[0]
-	require.Contains(t, p["learn"], "a script may not write under .knomit/ (no path", "learn's `path` stays refused to scripts")
-	for _, k := range []string{"update", "updateMixed", "retract", "learnRetract"} {
-		require.Contains(t, p[k], "a script may not write under artifacts/", k)
-	}
-	require.Empty(t, tools.recorded(), "refused before any tool ran")
-	require.Equal(t, []string{c0}, commitsAfter(t, ri, before), "nothing was committed")
+	require.Nil(t, p["update"], "a well-formed artifacts/ update reaches the tool: %v", p["update"])
+	require.Nil(t, p["retract"], "a well-formed artifacts/ retract reaches the tool: %v", p["retract"])
+	require.Nil(t, p["learnRetract"], "a well-formed artifacts/ learn-retract reaches the tool: %v", p["learnRetract"])
+	require.Contains(t, p["shallow"], "is not writable", "a malformed artifact path (no <area>) is still refused in the HOST")
+	require.Len(t, tools.recorded(), 3, "the three well-formed calls reached the stub tool; the malformed one never did")
 }
 
 // ---- F08 PR A, M2: knomit.learn(facts, {retract}) — the F04 move from a

@@ -86,6 +86,10 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"NewBindingOfRepo", "WithBinding", "store.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
 		// the sandbox
 		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath", "fact.IsUnderArtifactsRoot",
+		// F25 follow-up (user ruling 2026-10-06): the same artifact-shape
+		// predicate the MCP tools run on a session's file/path argument, now
+		// also run here on a script's — still a pure predicate, no store.
+		"fact.IsArtifactPath",
 		// an inline js: program, compiled with the ontology (F08 M4): a getter
 		"ct.JSProgram",
 		// the hub (through emit) and the log

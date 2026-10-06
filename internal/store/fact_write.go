@@ -219,7 +219,13 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
 	}
 	if !exists {
-		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
+		// Wrapped as ErrPathNotFound — the same sentinel readFileWithHash
+		// wraps for a missing read — so a caller one layer up (the REST
+		// DELETE handler) can tell "nothing there" from a real backend
+		// failure and answer 404, exactly as a GET of the same missing path
+		// already does, instead of a bare error string that falls through
+		// writeStoreError's default 500.
+		return "", fmt.Errorf("DeleteFile: %q: %w", path, ErrPathNotFound)
 	}
 
 	signer, err := fi.rh.commitSigner()

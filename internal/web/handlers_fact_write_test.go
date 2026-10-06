@@ -361,6 +361,40 @@ func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 	}
 }
 
+// TestHandleFactDelete_MissingPath_Returns404 (F25 follow-up): DELETE of a
+// fact path that is not there — plain, or with a segment percent-encoded —
+// answers 404 "Fact not found", exactly as a GET of the same missing path
+// does, instead of 500. Against the REAL store (contextManager), not the
+// stub writer: the bug was in deleteFile's own existence check
+// (internal/store/fact_write.go), which returned a bare error string
+// writeStoreError's switch could not recognise, so EVERY missing-path
+// delete — encoded or not — fell through to the default 500 case.
+// Sabotage: drop the wrapped store.ErrPathNotFound from deleteFile's
+// existence check, or drop its translation in defaultFactWriter.Delete or
+// the errFactNotFound check in handleFactDelete → 500.
+func TestHandleFactDelete_MissingPath_Returns404(t *testing.T) {
+	m := contextManager(t, "alpha")
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+	branch := urlBranch("machine/test")
+
+	for _, path := range []string{
+		"kb/verdicts/missing.md",
+		"kb/verdicts%2Fmissing.md", // the slash itself percent-encoded
+	} {
+		rec := httptest.NewRecorder()
+		req := fromLoopback(httptest.NewRequest(http.MethodDelete,
+			"/repos/alpha/branches/"+branch+"/facts/"+path, nil))
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("DELETE %s: status: got %d, want 404; body=%s", path, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+			t.Errorf("DELETE %s: content-type: got %q, want application/problem+json", path, got)
+		}
+	}
+}
+
 // TestHandleFactUpdate_InvalidContent_RejectsBeforeWriting: content that
 // ParseFact refuses must be rejected with 422 WITHOUT ever reaching git.
 // Validating after the write commits the bad blob as the branch HEAD for that
