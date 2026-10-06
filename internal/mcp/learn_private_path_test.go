@@ -13,7 +13,7 @@ import (
 	"knomit/internal/store"
 )
 
-const jobSlot = ".knomit/jobs/ae/crawl-state.md"
+const jobSlot = "artifacts/jobs/ae/crawl-state.md"
 
 // TestLearnTool_PathDescriptionIsGeneric verifies the knomit_learn schema's
 // `path` field describes the RULE, not one job's folder: it must mention
@@ -111,10 +111,18 @@ func TestLearn_PrivatePath_RejectsTopicAndCategory(t *testing.T) {
 
 func TestLearn_PrivatePath_OutsideWritableRootRefused(t *testing.T) {
 	ctx := agentCtx(t)
-	for _, p := range []string{"kb/.drafts/x.md", ".github/x.md", ".knomit/x.md", ".knomitjobs/x.md"} {
+	for _, p := range []string{"kb/.drafts/x.md", ".github/x.md", ".knomit/x.md", ".knomitjobs/x.md",
+		// F25: the old agent areas are closed too.
+		".knomit/jobs/ae/crawl-state.md", ".knomit/skills/s/extra.md"} {
 		result := learnAtPath(t, ctx, p, "t", "b")
 		require.Truef(t, result.IsError, "learn must refuse %s", p)
-		require.Containsf(t, resultText(t, result), ".knomit/<area>/", "path %s", p)
+		require.Containsf(t, resultText(t, result), "artifacts/<area>/", "path %s", p)
+	}
+	// Outside both roots without a dot: refused as not an artifact path.
+	for _, p := range []string{"artifacts/x.md", "artifacts/a/.b/x.md", "artifacts//x.md"} {
+		result := learnAtPath(t, ctx, p, "t", "b")
+		require.Truef(t, result.IsError, "learn must refuse %s", p)
+		require.Containsf(t, resultText(t, result), "artifacts/<area>/", "path %s", p)
 	}
 }
 
@@ -149,7 +157,7 @@ func TestLearn_CannotShadowAServerOwnedFileWithADirectory(t *testing.T) {
 	} {
 		result := learnAtPath(t, ctx, p, "t", "b")
 		require.Truef(t, result.IsError, "learn must refuse %s", p)
-		require.Containsf(t, resultText(t, result), ".knomit/<area>/", "path %s", p)
+		require.Containsf(t, resultText(t, result), "artifacts/<area>/", "path %s", p)
 	}
 
 	require.Equal(t, before, readOntologyBlob(t, ri),
@@ -175,10 +183,10 @@ func readOntologyBlob(t *testing.T, ri *repos.RepoInstance) string {
 // with an error naming the wrong cause.
 func TestLearn_PrivatePath_DotDotAnywhereRefused(t *testing.T) {
 	ctx := agentCtx(t)
-	for _, p := range []string{".knomit/jobs/..hidden/x.md", ".knomit/jobs/a..b/x.md"} {
+	for _, p := range []string{"artifacts/jobs/..hidden/x.md", "artifacts/jobs/a..b/x.md"} {
 		result := learnAtPath(t, ctx, p, "t", "b")
 		require.Truef(t, result.IsError, "learn must refuse %s", p)
-		require.Containsf(t, resultText(t, result), ".knomit/<area>/", "path %s", p)
+		require.Containsf(t, resultText(t, result), "artifacts/<area>/", "path %s", p)
 	}
 }
 

@@ -968,8 +968,9 @@ func TestScript_NoStoreHeldDuringScript(t *testing.T) {
 // ---- T19: the private-path refusal
 
 // PrivatePathRefused: learn with a `path`, update and retract of a `.knomit/`
-// path each throw BEFORE any tool runs; nothing is committed. (The same calls
-// through the MCP tool succeed: internal/mcp/script_tools_test.go.)
+// path each throw BEFORE any tool runs; nothing is committed. (The MCP tool
+// refuses them too since F25 — internal/mcp/script_tools_test.go — but the
+// host's own refusal comes first.)
 // Sabotage: drop the host check.
 func TestScript_PrivatePathRefused(t *testing.T) {
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "priv"))
@@ -991,6 +992,35 @@ knomit.emit(out);`)
 	require.Empty(t, tools.recorded(), "refused before any tool ran")
 	require.Equal(t, []string{c0}, commitsAfter(t, ri, before), "nothing was committed")
 	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
+}
+
+// ArtifactsRefused (F25): a script writes facts only. The MCP tools accept
+// artifacts/<area>/ from a session, but a script's update, retract and
+// learn-retract of an artifact path throw in the HOST before any tool runs —
+// the conservative default for an open detail the user has not ruled on — and
+// nothing is committed. Sabotage: drop the host's artifacts check → the tool
+// is called → red.
+func TestScript_ArtifactsRefused(t *testing.T) {
+	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "art"))
+	putScript(t, ri, "art", `
+var out = {};
+try { knomit.learn({path: "artifacts/runs/x.md", title: "x"}); } catch (e) { out.learn = e.message; }
+try { knomit.update("artifacts/runs/x.md", {updates: {title: "y"}}); } catch (e) { out.update = e.message; }
+try { knomit.update("Artifacts/Runs/x", {updates: {title: "y"}}); } catch (e) { out.updateMixed = e.message; }
+try { knomit.retract("artifacts/runs/x.md"); } catch (e) { out.retract = e.message; }
+try { knomit.learn([], {retract: ["artifacts/runs/x.md"]}); } catch (e) { out.learnRetract = e.message; }
+knomit.emit(out);`)
+	sink := subscribePayloads(t, ri, "t")
+	before := settle(t, ri)
+	c0 := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
+	settle(t, ri)
+	p := sink.wait(t, 1)[0]
+	require.Contains(t, p["learn"], "a script may not write under .knomit/ (no path", "learn's `path` stays refused to scripts")
+	for _, k := range []string{"update", "updateMixed", "retract", "learnRetract"} {
+		require.Contains(t, p[k], "a script may not write under artifacts/", k)
+	}
+	require.Empty(t, tools.recorded(), "refused before any tool ran")
+	require.Equal(t, []string{c0}, commitsAfter(t, ri, before), "nothing was committed")
 }
 
 // ---- F08 PR A, M2: knomit.learn(facts, {retract}) — the F04 move from a
@@ -1023,8 +1053,8 @@ knomit.learn([], {retract: [change.path, "kb/tasks/in/other.md"], moment_name: "
 }
 
 // LearnRetractPrivateRefused [T-A7, script half]: a retract path under a
-// private segment — .knomit/ job state (which the MCP tool itself accepts)
-// or a .drafts fact — throws in the HOST before any tool runs; so does a
+// private segment — .knomit/ (closed to the MCP tool as well, F25) or a
+// .drafts fact — throws in the HOST before any tool runs; so does a
 // retract that is not a list of strings. Sabotage: skip the private check on
 // opts.retract → the tool is called → red.
 func TestScript_LearnRetractPrivateRefused(t *testing.T) {

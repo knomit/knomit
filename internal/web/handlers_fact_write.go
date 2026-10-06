@@ -148,18 +148,26 @@ func (defaultFactWriter) Delete(ctx context.Context, ri *repos.RepoInstance, bra
 //
 //   - PRIVATE: a dot segment means the file is machinery, skipped by every
 //     discovery walker, so a fact written there would be committed to git and
-//     visible to nobody. knomit's own .knomit/<area>/ is the exception —
-//     invisibility is the feature there, not the bug.
+//     visible to nobody — or it is the system itself (.knomit/: ontology,
+//     triggers, recipes, skills), which changes only through git. No
+//     exception (F25). Agents' working files live under artifacts/.
+//   - ARTIFACTS: a path under artifacts/ (judged CASE-INSENSITIVELY, because
+//     the store lowercases the whole path when it writes) must be a valid
+//     artifact path, or it would land as a malformed one.
 //   - SERVER-OWNED: knomit's own files are not facts and have their own write
 //     paths (WriteReadme's size cap and exact-case door; for LICENSE, no write
 //     path at all). Most carry no dot, so the private rule cannot cover them —
 //     see repos.IsServerOwnedPath.
 func refuseNonFactPath(w http.ResponseWriter, r *http.Request, path string) bool {
 	switch {
-	case knomitfact.IsPrivatePath(path) && !knomitfact.IsWritablePrivatePath(path):
-		hal.WriteProblem(w, http.StatusBadRequest, "Private path",
-			path+": a path segment beginning with '.' is private and cannot hold a fact, "+
-				"except under "+knomitfact.PrivateRoot+"/<area>/", r.URL.Path)
+	case knomitfact.IsPrivatePath(path):
+		writePrivatePathProblem(w, r, path)
+		return true
+	case knomitfact.IsUnderArtifactsRoot(path) && !knomitfact.IsArtifactPath(strings.ToLower(path)):
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid artifact path",
+			path+": a path under "+knomitfact.ArtifactsRoot+"/ must be "+knomitfact.ArtifactsRoot+
+				"/<area>/<name>, at least one folder deep, with no empty segment, no segment beginning with '.', and no \"..\"",
+			r.URL.Path)
 		return true
 	case repos.IsServerOwnedPath(path):
 		hal.WriteProblem(w, http.StatusBadRequest, "Server-owned path",
@@ -240,9 +248,17 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 				"Invalid context", strings.Join(f.ContextWarnings, "; "), r.URL.Path)
 			return
 		}
+		// An artifact has no ontology placement (F25): nothing declares a
+		// context key there, so a context is refused outright — the same
+		// answer knomit_learn and knomit_update give — instead of being judged
+		// against the made-up topic "artifacts/<area>".
+		ctxOntology := ri.Ontology()
+		if knomitfact.IsUnderArtifactsRoot(path) {
+			ctxOntology = nil
+		}
 		ctxTopic := pathpkg.Dir(strings.TrimPrefix(path, ontologyRoot+"/"))
-		normContext := knomitfact.NormalizeContext(ri.Ontology(), ctxTopic, knomitfact.CopyContext(f.Context))
-		if err := knomitfact.ValidateContext(ri.Ontology(), ctxTopic, normContext); err != nil {
+		normContext := knomitfact.NormalizeContext(ctxOntology, ctxTopic, knomitfact.CopyContext(f.Context))
+		if err := knomitfact.ValidateContext(ctxOntology, ctxTopic, normContext); err != nil {
 			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Invalid context", err.Error(), r.URL.Path)
 			return
 		}
@@ -354,9 +370,8 @@ func handleFactDelete(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		// and DeleteFact performs no fact-shape check, so without this the
 		// endpoint removes anything named: kb/.drafts/x.md, .github/ config,
 		// or .knomit/ontology.yaml itself. Exactly the rule handleFactUpdate
-		// applies, in one shared spelling; knomit's own .knomit/<area>/
-		// namespace is the exception, because a job owns its state and may
-		// drop it.
+		// applies, in one shared spelling, with no exception for .knomit/
+		// (F25); a job drops its own state under artifacts/ instead.
 		if refuseNonFactPath(w, r, path) {
 			return
 		}

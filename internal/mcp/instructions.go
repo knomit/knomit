@@ -202,9 +202,11 @@ Consumers act on the slogan they compress a fact into, not on the fact itself. A
 
 Discipline: do not drown facts in speculative caveats — name only misreadings you can actually foresee.
 
-## Private State
+## Artifacts
 
-Machinery that is not knowledge — a periodic job's bookkeeping — is written by passing **path** to knomit_learn instead of **topic**/**category**, with the path under %s/<area>/ (any area name you choose, containing no dot and no "..") and at least one subdirectory deep — a loose file directly at %s/ is knomit's own and is refused, as is a dotted area name, which could shadow one. Such a fact is INVISIBLE to knomit_query, the UI and export, by design: address it afterwards by its exact path, never by search. knomit_update, knomit_retract and knomit_explain all work on it normally — explain's revision history is the point, and is how a job reconstructs what past runs did: page it with history_cursor, repeating while one is returned. learn allocates the slot once and fails if it already exists; every later write is an update.
+A repo has three roots. Facts live under %s/ (topic and category). Your working files that are not knowledge — a periodic job's bookkeeping — live under %s/<area>/: write one by passing **path** to knomit_learn instead of **topic**/**category** (any area name you choose, at least one folder deep, no segment beginning with a dot, no ".."). An artifact is INVISIBLE to knomit_query, knomit_changes, triggers, the UI and export, by design: address it afterwards by its exact path, never by search. knomit_update, knomit_retract and knomit_explain all work on it normally — explain's revision history is the point, and is how a job reconstructs what past runs did: page it with history_cursor, repeating while one is returned. learn allocates the file once and fails if it already exists; every later write is an update.
+
+%s/ is the system (the ontology, triggers, recipes, skills). It is closed to every fact tool, for reads and writes, together with every other path that has a segment beginning with a dot (kb/.drafts/, .github/): it changes only through git.
 
 ## Fact Frontmatter
 
@@ -277,7 +279,7 @@ Hypothesis body must contain: hypothesis statement, evidence chain (with confide
 
 Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`,
 		ontologyRoot, ontologyRoot, topicList,
-		fact.PrivateRoot, fact.PrivateRoot,
+		ontologyRoot, fact.ArtifactsRoot, fact.PrivateRoot,
 		// The frontmatter vocabulary is rendered from the shared tables in
 		// factschema.go rather than restated here, so the instructions and the
 		// knomit_learn/knomit_update JSON schemas can never drift apart on

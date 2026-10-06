@@ -43,8 +43,10 @@ var errEmptyGlob = errors.New("empty pattern")
 // compileGlob compiles a pattern. It refuses an empty pattern, an empty
 // segment ("a//b", a leading or trailing "/"), a "**" that shares its segment
 // with anything else, and any segment beginning with "." — dot paths are
-// private state and are never trigger-visible (user ruling, 2026-09-27:
-// ".knomit is for data and code only").
+// private and are never trigger-visible (user ruling, 2026-09-27:
+// ".knomit is for data and code only"). The repo-root artifacts/ folder is
+// not trigger-visible either, by location: trigger paths are relative to the
+// ontology root and the trigger diff covers only that subtree (F25).
 func compileGlob(pattern string) (*glob, error) {
 	if pattern == "" {
 		return nil, errEmptyGlob

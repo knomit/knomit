@@ -110,7 +110,7 @@ func learnToolSchemaProperties() map[string]any {
 		// rule instead.
 		"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science). REQUIRED unless you supply path."},
 		"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency). REQUIRED unless you supply path."},
-		"path":     map[string]any{"type": "string", "description": "PRIVATE STATE ONLY. An explicit repo path under " + fact.PrivateRoot + "/<area>/, e.g. " + fact.PrivateRoot + "/<area>/<name>.md, where <area> is a directory name containing no dot, for machinery that is not knowledge — a periodic job's bookkeeping. Mutually exclusive with topic/category: supply one or the other, never both. A fact written here is INVISIBLE to knomit_query, the UI and export, by design; address it later by this exact path. Fails if the path already exists — use knomit_update to write a new revision."},
+		"path":     map[string]any{"type": "string", "description": "ARTIFACTS ONLY. An explicit repo path under " + fact.ArtifactsRoot + "/<area>/, e.g. " + fact.ArtifactsRoot + "/<area>/<name>.md, for an agent's working file that is not knowledge — a periodic job's bookkeeping. At least one folder deep; no segment may be empty or begin with a dot, and no \"..\". Mutually exclusive with topic/category: supply one or the other, never both. A file written here is INVISIBLE to knomit_query, knomit_changes, triggers, the UI and export, by design; address it later by this exact path. " + fact.PrivateRoot + "/ (the system: ontology, triggers, recipes, skills) and every path with a segment beginning with a dot are closed to the fact tools — they change only through git. Fails if the path already exists — use knomit_update to write a new revision."},
 		"title":    map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 		"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one."},
 		// kind/type/origin come from the shared fragments in
@@ -140,8 +140,8 @@ func learnToolSchemaProperties() map[string]any {
 type learnFactInput struct {
 	Topic    string `json:"topic"`
 	Category string `json:"category"`
-	// Path, when set, is an explicit private-state path under
-	// fact.PrivateRoot/<area>/ and REPLACES topic+category: no ontology
+	// Path, when set, is an explicit artifact path under
+	// fact.ArtifactsRoot/<area>/ and REPLACES topic+category: no ontology
 	// validation, no UUID minting, no dedup-merge. See learnTool's description.
 	Path   string   `json:"path"`
 	Title  string   `json:"title"`
@@ -268,16 +268,17 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		var path string
 		var topicCategory string
 		if fi.Path != "" {
-			// Private-state fact: an explicit caller-chosen path, no ontology.
+			// Artifact: an explicit caller-chosen path, no ontology.
 			if fi.Topic != "" || fi.Category != "" {
 				return nil, nil, nil, nil, fmt.Errorf(
 					"fact %d: path cannot be combined with topic or category — supply one or the other", i)
 			}
 			path = fact.NormalizePath(ontologyRoot, fi.Path)
-			if !fact.IsWritablePrivatePath(path) {
-				return nil, nil, nil, nil, fmt.Errorf(
-					"fact %d: %s is not writable; an explicit path must be under %s/<area>/",
-					i, path, fact.PrivateRoot)
+			if msg := closedToFactTools(path); msg != "" {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %s", i, msg)
+			}
+			if !fact.IsArtifactPath(path) {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %s", i, notAnArtifactPath(path))
 			}
 			// Empty topicCategory is the downstream signal: skip ontology
 			// validation and skip dedup-merge for this fact.
@@ -1316,7 +1317,7 @@ func contextNotAppliedNotes(built []map[string]any, facts []fact.Fact) []string 
 // learnRetractPaths reads knomit_learn's `retract` argument (F04): each path
 // is normalised exactly as knomit_retract normalises its one path — resolved
 // against the write repo of a lens, NormalizePath, and refused when private
-// and not writable job state — and duplicates collapse. An absent argument is
+// (F25: no exception) — and duplicates collapse. An absent argument is
 // an empty list.
 func learnRetractPaths(b *repos.Binding, req mcpgo.CallToolRequest, ontologyRoot string) ([]string, error) {
 	if _, ok := req.GetArguments()["retract"]; !ok {
@@ -1336,9 +1337,8 @@ func learnRetractPaths(b *repos.Binding, req mcpgo.CallToolRequest, ontologyRoot
 			return nil, fmt.Errorf("retract %d: %v", i, err)
 		}
 		p = fact.NormalizePath(ontologyRoot, p)
-		if fact.IsPrivatePath(p) && !fact.IsWritablePrivatePath(p) {
-			return nil, fmt.Errorf("retract %d: %s is private: a path segment beginning with '.' cannot hold a fact, "+
-				"except under %s/<area>/", i, p, fact.PrivateRoot)
+		if msg := closedToFactTools(p); msg != "" {
+			return nil, fmt.Errorf("retract %d: %s", i, msg)
 		}
 		out = fact.AppendUnique(out, p)
 	}

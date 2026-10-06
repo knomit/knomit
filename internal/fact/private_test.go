@@ -1,7 +1,6 @@
 package fact
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,114 +34,94 @@ func TestIsPrivatePath(t *testing.T) {
 	}
 }
 
-func TestIsWritablePrivatePath(t *testing.T) {
+// TestIsArtifactPath pins the agents' working-file root (F25): artifacts/
+// <area>/<name…>, at least one folder deep, with no empty segment, no segment
+// beginning with "." at ANY depth, and no ".." anywhere.
+func TestIsArtifactPath(t *testing.T) {
 	cases := []struct {
 		path string
 		want bool
 	}{
-		// Agent areas: any name works. Nothing here knows the word "jobs".
-		{".knomit/jobs/agentic-engineering/crawl-state.md", true},
-		{".knomit/jobs/x.md", true},
-		{".knomit/anything/x.md", true},
-		{".knomit/runs/2026/08/x.md", true},
+		// Any area works. Nothing here knows the word "jobs".
+		{"artifacts/jobs/agentic-engineering/crawl-state.md", true},
+		{"artifacts/runs/x.md", true},
+		{"artifacts/anything/x.md", true},
+		{"artifacts/runs/2026/08/x.md", true},
+		// A dot INSIDE a segment is an ordinary name.
+		{"artifacts/runs/2026.08/x.md", true},
+		{"artifacts/v1.2/x.md", true},
 
-		// The dotless rule binds the AREA segment only. Below it, a dotted
-		// directory name is an ordinary name — nothing server-owned lives
-		// that deep, so there is nothing there to shadow.
-		{".knomit/runs/2026.08/x.md", true},
+		// Too shallow: a loose file at the root, or the root itself.
+		{"artifacts/x.md", false},
+		{"artifacts/", false},
+		{"artifacts", false},
 
-		// Server-owned: loose files at the namespace root.
-		{".knomit/ontology.yaml", false},
-		{".knomit/x.md", false},
+		// No dot segment at ANY depth — unlike the pre-F25 .knomit/<area>/
+		// rule, which checked only <area>. A dot path is private, and the
+		// fact tools never write one.
+		{"artifacts/.hidden/x.md", false},
+		{"artifacts/runs/.git/x.md", false},
+		{"artifacts/runs/.x.md", false},
 
-		// A server-owned loose file must not be reachable as a DIRECTORY
-		// either. Writing .knomit/ontology.yaml/x.md replaces the ontology
-		// BLOB with a tree (store's buildTree drops the same-named entry
-		// whatever its mode), after which the repo silently boots on the
-		// default taxonomy. The depth rule alone protects the name, not the
-		// name's reuse as a directory — hence the dotless-area rule.
-		{".knomit/ontology.yaml/x.md", false},
-		{".knomit/ontology.yaml/deeper/x.md", false},
-		{".knomit/ONTOLOGY.YAML/x.md", false},
+		// "." and empty segments, and ".." anywhere (store.validatePath's
+		// rule: a predicate that authorizes what the writer refuses is a
+		// trap).
+		{"artifacts/./x.md", false},
+		{"artifacts//x.md", false},
+		{"artifacts/runs/", false},
+		{"artifacts/runs/../../kb/x.md", false},
+		{"artifacts/runs/a..b/x.md", false},
 
-		// The rule is general, not a list of known filenames: any dotted area
-		// is refused, so a server-owned loose file added later is covered by
-		// the code that already exists.
-		{".knomit/foo.bar/x.md", false},
-		{".knomit/manifest.json/x.md", false},
+		// Judged as given: the caller lowercases a verbatim path first.
+		{"Artifacts/runs/x.md", false},
+		// Not the root: a prefix that merely starts with the word.
+		{"artifactsx/runs/x.md", false},
+		{"kb/artifacts/runs/x.md", false},
 
-		// A dot-PREFIXED area is a foreign tool's root smuggled inside the
-		// namespace, and is refused by the same rule.
-		{".knomit/.hidden/x.md", false},
-
-		// Not the namespace root at all.
-		{".knomit", false},
-		{"", false},
-		{"kb/architecture/x.md", false},
-		{".github/workflows/ci.yml", false},
-		{".domains/ontology.yaml", false},
-
-		// Segment, not prefix: ".knomitjobs" is a different directory.
-		{".knomitjobs/x.md", false},
-
-		// Under the ontology root is NOT the namespace, even spelled alike.
-		{"kb/.knomit/jobs/x.md", false},
-
-		// Traversal escapes the namespace it claims to be inside. This is an
-		// AUTHORIZATION predicate: its answer must not depend on a `..` check
-		// living in another package (store.validatePath) that this one never
-		// references, or moving the rule behind a new caller silently
-		// authorizes a write anywhere in the tree.
-		{".knomit/a/../../kb/x.md", false},
-		{".knomit/../kb/x.md", false},
-		{".knomit/jobs/../../../etc/passwd", false},
-		{".knomit/jobs/../ontology.yaml", false},
-		{".knomit/..", false},
-		{".knomit/", false},
-
-		// "." and empty segments defeat the DEPTH rule the same way: each of
-		// these names a loose file at the namespace root once normalized, and
-		// the second one is the server-owned ontology.
-		{".knomit/./x.md", false},
-		{".knomit/./ontology.yaml", false},
-		{".knomit//x.md", false},
-		{".knomit/jobs/", false},
-
-		// ".." ANYWHERE, not just as a whole segment: store.validatePath
-		// rejects any path CONTAINING "..", and batchWrite pre-flights every
-		// path through it. An authorization predicate that says yes to what
-		// the writer will refuse is a trap — learn is all-or-nothing, so the
-		// doomed path takes the whole batch down at write time instead of
-		// being refused up front with a comprehensible error.
-		{".knomit/jobs/..hidden/x.md", false},
-		{".knomit/jobs/a..b/x.md", false},
+		// The system and every other dot root: never artifacts.
+		{".knomit/jobs/x.md", false},
+		{".knomit/skills/s/extra.md", false},
 	}
 	for _, c := range cases {
-		require.Equalf(t, c.want, IsWritablePrivatePath(c.path), "path %q", c.path)
+		require.Equalf(t, c.want, IsArtifactPath(c.path), "path %q", c.path)
 	}
 }
 
-// TestServerOwnedLooseFilesAreDotted pins the premise the dotless-area rule
-// rests on: a server-owned loose file inside PrivateRoot carries a dot in its
-// name, so no writable area name can ever collide with it. Add
-// ".knomit/manifest" (no extension) and this test fails — correctly, because
-// such a file WOULD be shadowable as a directory and needs a reservedPrivate
-// entry instead.
-func TestServerOwnedLooseFilesAreDotted(t *testing.T) {
-	for _, p := range []string{OntologyFile} {
-		name, ok := strings.CutPrefix(p, PrivateRoot+"/")
-		require.Truef(t, ok, "%s must sit inside %s", p, PrivateRoot)
-		require.Containsf(t, name, ".",
-			"%s must carry a dot: the dotless-area rule is what keeps it from being shadowed by a directory", p)
-		require.Falsef(t, IsWritablePrivatePath(p+"/x.md"),
-			"%s must not be reachable as a directory either", p)
+// TestIsUnderArtifactsRoot is the case-insensitive "does the caller mean the
+// artifacts folder" test the REST routes use on a verbatim path.
+func TestIsUnderArtifactsRoot(t *testing.T) {
+	for p, want := range map[string]bool{
+		"artifacts":          true,
+		"artifacts/x.md":     true,
+		"ARTIFACTS/a/b.md":   true,
+		"Artifacts/x.md":     true,
+		"artifactsx/a/b.md":  false,
+		"kb/artifacts/a.md":  false,
+		".knomit/artifacts/": false,
+	} {
+		require.Equalf(t, want, IsUnderArtifactsRoot(p), "path %q", p)
 	}
 }
 
-// A writable private path is still PRIVATE: the two predicates answer
-// different questions and must not be conflated.
-func TestWritablePrivateIsStillPrivate(t *testing.T) {
-	p := ".knomit/jobs/agentic-engineering/crawl-state.md"
-	require.True(t, IsPrivatePath(p), "must stay excluded from discovery")
-	require.True(t, IsWritablePrivatePath(p), "but writable")
+// TestKnomitIsClosedToTheFactTools is THE F25 rule at the predicate level:
+// nothing under .knomit/ is a path the fact tools may open — not the agent
+// areas that used to be writable (skills, recipes, triggers, guidance, runs),
+// not the ontology, not the ontology reused as a directory.
+func TestKnomitIsClosedToTheFactTools(t *testing.T) {
+	for _, p := range []string{
+		".knomit/guidance/x.md",
+		".knomit/skills/work-task/extra.md",
+		".knomit/skills/new-skill/skill.md",
+		".knomit/recipes/x.md",
+		".knomit/triggers/x.md",
+		".knomit/runs/x.md",
+		".knomit/jobs/agentic-engineering/crawl-state.md",
+		".knomit/ontology.yaml",
+		".knomit/ontology.yaml/x.md",
+		".knomit/x.md",
+	} {
+		require.Truef(t, IsPrivatePath(p), "%s must be private", p)
+		require.Falsef(t, IsArtifactPath(p), "%s must not be an artifact", p)
+		require.Falsef(t, IsFactFilePath("kb", p), "%s must not be a fact-tool path", p)
+	}
 }

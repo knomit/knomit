@@ -14,7 +14,7 @@ import (
 	"knomit/internal/store"
 )
 
-const opsSlot = ".knomit/jobs/x/y.md"
+const opsSlot = "artifacts/jobs/x/y.md"
 
 // callUpdate runs knomit_update with args and returns the result.
 func callUpdate(t *testing.T, ctx context.Context, args map[string]any) *mcpgo.CallToolResult {
@@ -323,7 +323,7 @@ func TestUpdateOps_IfCommitFromExplainPasses(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &explained))
 	require.NotEmpty(t, explained.Facts)
 
-	writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated")
+	writeRaw(t, ctx, svc, "artifacts/jobs/x/other.md", "unrelated")
 
 	args := opsArgs(opsSlot, replace("slot body", "slot body, edited"))
 	args["if_commit"] = explained.Facts[0].Commit
@@ -337,9 +337,9 @@ func TestUpdateOps_IfCommitFromExplainPasses(t *testing.T) {
 func TestUpdateOps_IfCommitPrivateSlotUnrelatedCommitPasses(t *testing.T) {
 	svc, ctx, _ := newPrinciplesTestRepo(t)
 	writeSlot(t, ctx, svc, "slot body")
-	readAt := writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated one")
+	readAt := writeRaw(t, ctx, svc, "artifacts/jobs/x/other.md", "unrelated one")
 	require.Equal(t, readAt, headCommit(t, svc), "explain-style commit is HEAD")
-	writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated two")
+	writeRaw(t, ctx, svc, "artifacts/jobs/x/other.md", "unrelated two")
 
 	args := opsArgs(opsSlot, replace("slot body", "slot body, edited"))
 	args["if_commit"] = readAt
@@ -351,9 +351,9 @@ func TestUpdateOps_IfCommitPrivateSlotUnrelatedCommitPasses(t *testing.T) {
 func TestUpdateOps_IfCommitPrivateSlotRewrittenRejects(t *testing.T) {
 	svc, ctx, _ := newPrinciplesTestRepo(t)
 	writeSlot(t, ctx, svc, "slot body secret")
-	readAt := writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated")
+	readAt := writeRaw(t, ctx, svc, "artifacts/jobs/x/other.md", "unrelated")
 	writeSlot(t, ctx, svc, "slot body secret, rewritten")
-	tip := writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated again")
+	tip := writeRaw(t, ctx, svc, "artifacts/jobs/x/other.md", "unrelated again")
 
 	args := opsArgs(opsSlot, replace("rewritten", "edited"))
 	args["if_commit"] = readAt
@@ -368,7 +368,7 @@ func TestUpdateOps_IfCommitPrivateSlotRewrittenRejects(t *testing.T) {
 
 func TestUpdateOps_IfCommitUnknownOrAbsentRejects(t *testing.T) {
 	svc, ctx, _ := newPrinciplesTestRepo(t)
-	beforeSlot := writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated")
+	beforeSlot := writeRaw(t, ctx, svc, "artifacts/jobs/x/other.md", "unrelated")
 	writeSlot(t, ctx, svc, "abc")
 
 	for _, c := range []string{strings.Repeat("0", 40), beforeSlot} {

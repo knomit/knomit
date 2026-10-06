@@ -27,6 +27,12 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider f
 		sha := chi.URLParam(r, "sha")
 		path := chi.URLParam(r, "*")
 
+		// F25: a dot path is closed to the fact endpoints for reads too,
+		// sub-resources included.
+		if refusePrivateRead(w, r, path) {
+			return
+		}
+
 		// Dispatch /incoming sub-resource (commit-anchored).
 		if strings.HasSuffix(path, "/incoming") {
 			factPath := strings.TrimSuffix(path, "/incoming")

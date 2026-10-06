@@ -191,18 +191,19 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 		file = factpkg.NormalizePath(ontologyRoot, file)
 		// knomit_learn refuses to ALLOCATE a private path; this refuses to
-		// write one that already exists. Same rule, both halves: a fact under
-		// a dot-prefixed segment is skipped by the indexer, Verify and the OKF
-		// exporter alike, so an update there would commit a revision no reader
-		// ever sees and report success for it.
-		//
-		// The exception is knomit's OWN namespace: a path under
-		// .knomit/<area>/ is job state, which WANTS to be invisible to
-		// readers. Invisibility is the feature there, not the bug.
-		if factpkg.IsPrivatePath(file) && !factpkg.IsWritablePrivatePath(file) {
-			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"%s is private: a path segment beginning with '.' cannot hold a fact, "+
-					"except under %s/<area>/", file, factpkg.PrivateRoot)), nil
+		// write one that already exists. Same rule, both halves, and no
+		// exception (F25): .knomit/ is the system and changes only through
+		// git, and any other dot path is skipped by every discovery walker,
+		// so an update there would commit a revision no reader ever sees.
+		// Agents' working files live under artifacts/ instead.
+		if msg := closedToFactTools(file); msg != "" {
+			return mcpgo.NewToolResultError(msg), nil
+		}
+		// NormalizePath keeps an artifacts/… path at the repo root, so a
+		// malformed one (too shallow, a dot or empty segment) must be refused
+		// here: it is not a kb/ path either.
+		if factpkg.IsUnderArtifactsRoot(file) && !factpkg.IsArtifactPath(file) {
+			return mcpgo.NewToolResultError(notAnArtifactPath(file)), nil
 		}
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
@@ -401,24 +402,24 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// Derive topic/category by stripping the ontologyRoot prefix and
 		// the final /<uuid>.md segment from the normalized fact path.
 		//
-		// Private state is SKIPPED wholesale, exactly as knomit_learn skips it
-		// (it guards on an empty topic path). A .knomit/<area>/ path has no
+		// An artifact is SKIPPED wholesale, exactly as knomit_learn skips it
+		// (it guards on an empty topic path). An artifacts/<area>/ path has no
 		// ontology placement: the TrimPrefix is a no-op, so the derived topic
-		// would be ".knomit/<area>", and while an unknown topic makes the
+		// would be "artifacts/<area>", and while an unknown topic makes the
 		// per-topic walk a no-op, ValidateFact runs the ontology's ROOT rules
 		// UNCONDITIONALLY first. Without this guard, any ontology declaring a
-		// top-level `validations:` would let a job allocate its slot with learn
+		// top-level `validations:` would let a job allocate its file with learn
 		// and then refuse every update to it — its whole write path after run
 		// one.
 		topicCategory := path.Dir(strings.TrimPrefix(file, ontologyRoot+"/"))
 		// F22: the typed layer normalises time-typed values before the gate.
 		fact.Context = factpkg.NormalizeContext(ontology, topicCategory, fact.Context)
-		if ontology != nil && !factpkg.IsWritablePrivatePath(file) {
+		if ontology != nil && !factpkg.IsArtifactPath(file) {
 			if err := factpkg.ValidateFact(ontology, topicCategory, fact); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 		} else if len(fact.Context) > 0 {
-			// Private state, or no ontology: ValidateFact is skipped, but
+			// An artifact, or no ontology: ValidateFact is skipped, but
 			// nothing declares a context key there, so a context is refused —
 			// never written unchecked.
 			return mcpgo.NewToolResultError(factpkg.ErrContextWithoutOntology.Error()), nil

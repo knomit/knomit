@@ -150,7 +150,7 @@ func TestApplyDedupMerge_LearnDedupOffSkipsSearchKeepsDonation(t *testing.T) {
 		}
 	}
 	private := learnFactInput{
-		Path:  ".knomit/jobs/state.md",
+		Path:  "artifacts/jobs/state.md",
 		Title: "Task ready for pickup", Body: "A task is ready for an agent to pick up.",
 		Type: "observation", Confidence: &conf, Sources: &src,
 	}

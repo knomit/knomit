@@ -786,6 +786,11 @@ paths:
         fact view. Each entry carries a `commit` field pinning it to a
         specific version (source for `/incoming`, target for `/outgoing`)
         and `_links.self` is anchored to that commit.
+
+        A path with a segment beginning with `.` (`.knomit/…`, `kb/.drafts/…`)
+        is 400 "Private path" here and on every sub-resource, whether or not
+        the file exists: those paths are closed to the fact routes. See the
+        `path` parameter for the three roots.
       operationId: getFact
       responses:
         "200":
@@ -802,6 +807,13 @@ paths:
     put:
       tags: [facts]
       summary: Update a fact (full content replace)
+      description: |
+        Also the creation route for a caller-chosen path. 400 "Private path"
+        for any path with a segment beginning with `.` — `.knomit/` included,
+        with no exception — and 400 "Invalid artifact path" for a malformed
+        path under `artifacts/` (any case). An `artifacts/<area>/<name>` path
+        is written at the repo root, outside the ontology; a `context` on it
+        is 422.
       operationId: updateFact
       requestBody:
         required: true
@@ -828,6 +840,10 @@ paths:
     delete:
       tags: [facts]
       summary: Delete a fact
+      description: |
+        Same path rule as PUT: 400 for any path with a segment beginning with
+        `.` (`.knomit/` included) and for a malformed `artifacts/` path; an
+        `artifacts/<area>/<name>` file may be deleted.
       operationId: deleteFact
       responses:
         "204": { description: Deleted }
@@ -853,7 +869,8 @@ paths:
       description: |
         Returns commits that touched the given fact path, in reverse chronological
         order. Used by the version walker (right-pane fact header) and the commit
-        drawer's "this fact · N versions" section.
+        drawer's "this fact · N versions" section. 400 "Private path" for a
+        path with a segment beginning with `.`.
       operationId: factCommits
       parameters:
         - { name: limit,  in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -891,6 +908,9 @@ paths:
           of the target the ref resolved to at the anchor); `_links.self`
           points to the target fact at that commit. `deleted=true` items
           omit `_links.self`.
+
+        A path with a segment beginning with `.` is 400 "Private path", here
+        and on both sub-resources.
       operationId: getFactAtCommit
       parameters:
         - name: fallback
@@ -2698,6 +2718,10 @@ paths:
         same read as the fact itself, so a fact you cannot read through the
         lens 404s identically for its sub-resources — including the empty
         commit log that would otherwise be a 200 naming the mount.
+
+        A path with a segment beginning with `.` is 400 "Private path" before
+        any mount is addressed: the rule is the same on every mount, so the
+        answer reveals nothing about the lens.
       operationId: getLensFact
       responses:
         "200":
@@ -3186,7 +3210,24 @@ components:
       name: path
       in: path
       required: true
-      description: Fact path under the ontology root (may contain slashes).
+      description: |
+        A repo path (may contain slashes). A repo has three roots:
+
+        - `kb/…` (the ontology root): facts.
+        - `artifacts/<area>/<name>`: an agent's working file that is not
+          knowledge. Read, written and deleted by this exact path; never
+          indexed, listed, searched, exported or seen by a trigger. At least
+          one folder deep, no empty segment, no segment beginning with `.`,
+          no `..`. Judged case-insensitively: the store lowercases the whole
+          path, so `Artifacts/Runs/x.md` is `artifacts/runs/x.md`. A
+          `context` is refused on an artifact (422).
+        - `.knomit/…`: the system (ontology, triggers, recipes, skills). It
+          is closed to every fact route — GET, PUT and DELETE, sub-resources
+          included — exactly like every other path with a segment beginning
+          with `.` (`kb/.drafts/…`, `.github/…`): 400 "Private path". It
+          changes only through git. Files a repo already holds under
+          `.knomit/<area>/` from before this rule stay in git but are not
+          reachable here.
       schema: { type: string }
     LensFactPath:
       name: path
@@ -3195,7 +3236,9 @@ components:
       description: |
         Either a bare `kb/…` path (reads from the lens's write repo) or a
         mount-qualified `kb://<id12>/kb/…` path. Qualified paths must be
-        percent-encoded by the client.
+        percent-encoded by the client. A path with a segment beginning with
+        `.` (`.knomit/…`, `kb/.drafts/…`), percent-encoded or not, is 400
+        "Private path" on every mount, sub-resources included.
       schema: { type: string }
     MotifFilter:
       name: motifs

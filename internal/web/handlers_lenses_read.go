@@ -567,6 +567,11 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader, subProvider factSubP
 				"fact path is required", r.URL.Path)
 			return
 		}
+		// F25: a dot path is closed to the fact endpoints for reads too, on
+		// every mount and for every sub-resource.
+		if refusePrivateRead(w, r, raw) {
+			return
+		}
 
 		// Strip the sub-resource suffix BEFORE addressing: the mount is
 		// resolved from the fact path, not from the URL that names one of its

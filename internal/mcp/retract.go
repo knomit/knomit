@@ -69,11 +69,13 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		file = fact.NormalizePath(ontologyRoot, file)
 		// A DELETE is a write. Without this, retract would happily remove a
 		// hand-placed kb/.drafts/ file that create and update both refuse to
-		// write — an asymmetry with no rationale behind it.
-		if fact.IsPrivatePath(file) && !fact.IsWritablePrivatePath(file) {
-			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"%s is private: a path segment beginning with '.' cannot hold a fact, "+
-					"except under %s/<area>/", file, fact.PrivateRoot)), nil
+		// write — an asymmetry with no rationale behind it — or a file of the
+		// system under .knomit/, which changes only through git (F25).
+		if msg := closedToFactTools(file); msg != "" {
+			return mcpgo.NewToolResultError(msg), nil
+		}
+		if fact.IsUnderArtifactsRoot(file) && !fact.IsArtifactPath(file) {
+			return mcpgo.NewToolResultError(notAnArtifactPath(file)), nil
 		}
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {

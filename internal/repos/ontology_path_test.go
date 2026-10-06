@@ -37,18 +37,16 @@ func TestOntologyPathsAreCanonicalAndLegacy(t *testing.T) {
 }
 
 // TestPrivateServerOwnedPathsAreNotAgentWritable covers the paths the
-// PRIVATE-path guard is what protects: they are private (so the guard fires)
-// and not agent-writable (so it refuses). The write guard is the conjunction
-// `IsPrivatePath(p) && !IsWritablePrivatePath(p)`, so BOTH halves have to be
-// asserted — !IsWritablePrivatePath alone is also true of README.md, and
-// asserting only that would certify a protection those files do not get from
-// this guard.
+// PRIVATE-path guard is what protects: they are private, and since F25 the
+// fact tools refuse every private path with no exception, so being private
+// IS the protection. Both halves are asserted: private (so the guard fires),
+// and not a path the fact tools may open (so nothing else lets it through).
 func TestPrivateServerOwnedPathsAreNotAgentWritable(t *testing.T) {
 	for _, p := range []string{OntologyPath, LegacyOntologyPath} {
 		require.Truef(t, fact.IsPrivatePath(p),
 			"%s must be private, or the write guard never fires on it", p)
-		require.Falsef(t, fact.IsWritablePrivatePath(p),
-			"%s is server-owned and must not be writable through the fact tools", p)
+		require.Falsef(t, fact.IsFactFilePath("kb", p) || fact.IsArtifactPath(p),
+			"%s is server-owned and must not be reachable through the fact tools", p)
 	}
 }
 

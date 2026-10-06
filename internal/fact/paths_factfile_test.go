@@ -4,8 +4,15 @@ import "testing"
 
 func TestIsFactFilePath(t *testing.T) {
 	for path, want := range map[string]bool{
-		"kb/decisions/x/abc.md":       true,
-		".knomit/jobs/crawl/state.md": true,
+		"kb/decisions/x/abc.md":         true,
+		"artifacts/jobs/crawl/state.md": true,
+		"artifacts/loose.md":            false,
+		"artifacts/jobs/.x/state.md":    false,
+		"artifacts/jobs/crawl/state":    false,
+		// F25: .knomit/ is closed to the fact tools, the old job-slot shape
+		// included.
+		".knomit/jobs/crawl/state.md": false,
+		".knomit/skills/s/extra.md":   false,
 		".github/notes.md":            false,
 		".knomit/loose.md":            false,
 		"kb/.hidden/x.md":             false,

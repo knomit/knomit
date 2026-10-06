@@ -411,7 +411,7 @@ func checkSameSubjectCollisions(
 
 	var refusals []refusedFact
 	for i := range facts {
-		// Private state is not knowledge, has no subject to collide on, and is
+		// An artifact is not knowledge, has no subject to collide on, and is
 		// unindexed — the search would return nothing anyway.
 		if topicCategories[i] == "" || touched[i] {
 			continue

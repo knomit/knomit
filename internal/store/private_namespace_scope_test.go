@@ -44,6 +44,11 @@ func TestPrivateNamespaceIsNotAFactPath(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/.drafts/x.md",
 		testFactBody("Draft", 0.9, nil), "add", "")
 	require.NoError(t, err)
+	// F25: the agents' working files sit beside the ontology root and are
+	// never indexed either — by location, with no filter of their own.
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "artifacts/runs/x.md",
+		testFactBody("Run state", 0.9, nil), "add", "")
+	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/obs/real.md",
 		testFactBody("Real", 0.9, nil), "add", "")
 	require.NoError(t, err)

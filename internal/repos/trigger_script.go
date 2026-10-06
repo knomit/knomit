@@ -35,10 +35,12 @@
 // holds none); a host call after the swap fails with "unavailable", thrown to
 // the script, and the fire is `script-error`.
 //
-// The one place a script is denied what a session may do: `.knomit/` is
-// writable job state for the MCP tools (.knomit/<area>/…) and never for a
-// script (ruling R7), so the host refuses a `path` key on any learn fact and
-// any private path on update/retract BEFORE the handler sees the call.
+// The one place a script is denied what a session may do: artifacts/<area>/
+// is writable working state for a session's MCP tools and never for a script
+// (ruling R7, kept for the artifacts root by F25), so the host refuses a
+// `path` key on any learn fact, and any private or artifacts/ path on
+// update/retract, BEFORE the handler sees the call. (.knomit/ is closed to
+// the handler as well since F25; the host refuses it first.)
 package repos
 
 import (
@@ -405,7 +407,7 @@ func (h *scriptHost) learn(args []any) (any, error) {
 			return nil, fmt.Errorf("knomit.learn: fact %d is not an object", i)
 		}
 		// The one divergence from the MCP tool (ruling R7): `path` is how a
-		// session writes .knomit/<area>/ job state; a script may not.
+		// session writes artifacts/<area>/ working files; a script may not.
 		if _, has := m["path"]; has {
 			return nil, fmt.Errorf("knomit.learn: fact %d: a script may not write under %s/ (no path; use topic and category)", i, fact.PrivateRoot)
 		}
@@ -467,8 +469,8 @@ func (h *scriptHost) retract(args []any) (any, error) {
 // factPath reads the path argument of update/retract and refuses a private
 // one — checked on the path AS THE HANDLER WOULD WRITE IT (after
 // NormalizePath, the handler's own order), so `.knomit/x` and `.knomit/x.md`
-// are refused alike. The handler would accept `.knomit/<area>/…` (job state
-// for sessions); a script never writes under `.knomit/`.
+// are refused alike. The handler would accept `artifacts/<area>/…` (working
+// files for sessions); a script never writes there, nor under `.knomit/`.
 func (h *scriptHost) factPath(tool string, args []any) (string, error) {
 	file, ok := stringArg(args, 0)
 	if !ok || file == "" {
@@ -491,6 +493,13 @@ func (h *scriptHost) privateRefused(tool string, v any) (string, error) {
 	norm := fact.NormalizePath(root, file)
 	if fact.IsPrivatePath(norm) {
 		return "", fmt.Errorf("knomit.%s: a script may not write under %s/ (%s)", tool, fact.PrivateRoot, norm)
+	}
+	// F25: a script writes facts only. It never had a place to keep working
+	// files (learn's `path` is refused to scripts), so artifacts/ stays out of
+	// reach too — the conservative reading of an open detail the user has not
+	// ruled on.
+	if fact.IsUnderArtifactsRoot(norm) {
+		return "", fmt.Errorf("knomit.%s: a script may not write under %s/ (%s)", tool, fact.ArtifactsRoot, norm)
 	}
 	return file, nil
 }

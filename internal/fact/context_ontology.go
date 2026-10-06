@@ -202,7 +202,7 @@ func (e *ContextError) Error() string {
 }
 
 // ErrContextWithoutOntology is the refusal for a non-empty context where no
-// ontology applies: a private-state path, or no ontology at all. Nothing
+// ontology applies: an artifact (artifacts/<area>/…), or no ontology at all. Nothing
 // declares a key there, so every key is undeclared.
 var ErrContextWithoutOntology = errors.New("context is not allowed here: no ontology topic declares any context key for this path; send no context, or {} to clear it")
 

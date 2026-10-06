@@ -808,31 +808,51 @@ well-formed fact placed there is deliberately not part of the knowledge base.
 Private governs *walking*, not *opening*: an implementation still reads known
 paths such as `.knomit/ontology.yaml` by name.
 
-**`.knomit/` is the implementation's own namespace.** Everything an
-implementation owns that is not knowledge lives under this single tree-root
-directory: the ontology definition (§3.2) and, under `.knomit/<area>/`,
-whatever bookkeeping its own machinery keeps — a periodic job's state, for
-instance. Its contents are private in the sense above, so they are excluded
-from discovery like any other dot-prefixed path, and a reader that only reads
-the corpus never needs to look inside it.
+**A repository has three roots.** It holds three kinds of data, and each has
+its own top-level location and its own writers:
 
-Depth carries the ownership boundary. A *loose file at the root* of
-`.knomit/` belongs to the implementation itself; a file at least one
-subdirectory deep, under an `<area>` of the writer's choosing, belongs to
-whoever writes it. Implementations that expose a write API SHOULD enforce
-that split, so that a client which may write its own state under
-`.knomit/<area>/` cannot thereby rewrite `.knomit/ontology.yaml`.
+| Root | Holds | Written by | Discovered |
+|---|---|---|---|
+| the ontology root (`kb/`, §3.7) | facts — the knowledge | clients, through the write API | yes |
+| `.knomit/` | the system: the ontology definition (§3.2), trigger scripts, recipes, skills | people, through Git (a commit, a push, a merge), and the implementation's own code | no |
+| `artifacts/` | clients' untyped working files — a periodic job's bookkeeping | clients, through the write API, by explicit path | no |
 
-Depth alone protects an implementation-owned loose file by *name* only. In
-Git, writing `.knomit/ontology.yaml/x.md` replaces the same-named blob with a
-tree, destroying the ontology just as surely as overwriting it would; the
-repository then reads as having no ontology at all. A write API SHOULD
-therefore also require `<area>` to be a plain directory name containing no
-`.` — which reserves every implementation-owned loose file with a dotted name,
-present and future, without enumerating them — and MUST reject any path
-containing `..`. An implementation that gives a loose file a dotless name
-(`.knomit/manifest`) must reserve that name explicitly instead. Every other
-dot-prefixed top-level directory is FOREIGN — `.github/`, `.vscode/` and the
+**`.knomit/` is the system.** Everything that describes how the knowledge
+base operates — the way a database's system tables describe the database —
+lives under this single tree-root directory. Its contents are private in the
+sense above, so they are excluded from discovery like any other dot-prefixed
+path, and a reader that only reads the corpus never needs to look inside it.
+The implementation still reads its own files there by exact name.
+
+An implementation that exposes a write API MUST refuse every path under
+`.knomit/` — together with every other path that has a segment beginning with
+`.` — on every write (create, update, delete, merge resolution) and every
+read by path. The system changes only through Git, so whatever is on the
+consensus branch under `.knomit/` was put there by someone who can change
+that branch, never by a client of the write API. Reusing a system file's name
+as a directory is covered by the same rule: in Git, writing
+`.knomit/ontology.yaml/x.md` would replace the same-named blob with a tree
+and leave the repository with no ontology at all.
+
+**`artifacts/` holds clients' working files.** A client that needs to keep
+state that is not knowledge writes it under `artifacts/<area>/<name>`, an
+`<area>` of its choosing, by explicit path. The path MUST be at least one
+folder deep and MUST NOT contain an empty segment, a segment beginning with
+`.`, or `..`. Such a file is read back by the same exact path. It sits beside
+the ontology root, so location alone keeps it out of discovery: it is never
+indexed, listed, searched, exported, or seen by a trigger. An implementation
+MUST refuse an ontology root named `artifacts` (or one nested inside it),
+which would make the two roots one folder.
+
+*Migration.* Before this rule, implementations let clients write under
+`.knomit/<area>/`. Files a repository already holds there stay in Git and in
+its history, but become unreachable through the write API: they can no
+longer be read, updated or deleted by path. A repository that still needs
+them moves them by hand with Git (`git mv .knomit/<area> artifacts/<area>`),
+and a client that wrote `.knomit/<area>/` writes `artifacts/<area>/` instead.
+
+Every other dot-prefixed top-level directory is FOREIGN — `.github/`,
+`.vscode/` and the
 like belong to other tools, and an implementation MUST NOT write to them.
 
 ## 4. Git Conventions

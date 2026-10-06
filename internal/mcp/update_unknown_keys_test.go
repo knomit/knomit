@@ -90,7 +90,7 @@ func TestUpdateHandler_RejectsMultilineTitleEarly(t *testing.T) {
 func TestUpdateHandler_UnknownKeyReportedBeforeFileLookup(t *testing.T) {
 	_, ctx, _ := newPrinciplesTestRepo(t)
 	res := callUpdate(t, ctx, map[string]any{
-		"file": ".knomit/jobs/x/missing.md", "moment_name": "m",
+		"file": "artifacts/jobs/x/missing.md", "moment_name": "m",
 		"updates": map[string]any{"origin": "authored"},
 	})
 	require.True(t, res.IsError)

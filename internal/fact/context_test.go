@@ -81,6 +81,9 @@ func TestContext_MalformedMapDroppedWholeFactStillLoads(t *testing.T) {
 		"line separator":   "context: {a: \"x\\u2028y\"}\n",
 		"bidi override":    "context: {a: \"x\\u202Ey\"}\n",
 		"bidi isolate":     "context: {a: \"x\\u2067y\"}\n",
+		"bidi LRM":         "context: {a: \"x\\u200Ey\"}\n",
+		"bidi RLM":         "context: {a: \"x\\u200Fy\"}\n",
+		"bidi ALM":         "context: {a: \"x\\u061Cy\"}\n",
 		"bad key":          "context: {Task: x}\n",
 		"long key":         "context: {" + strings.Repeat("k", 33) + ": x}\n",
 		"over hard cap":    "context: {a: " + strings.Repeat("x", 257) + "}\n",
@@ -141,6 +144,10 @@ func TestContext_SerializeShapeGate(t *testing.T) {
 		// U+206A (deprecated, but not a bidi isolate).
 		{"a": "x y", "b": "x⁪y"},
 	}
+	// Neighbours of the three implicit marks stay allowed: U+200D ZERO WIDTH
+	// JOINER (emoji sequences), U+200B ZERO WIDTH SPACE, U+061B ARABIC
+	// SEMICOLON and U+061D.
+	ok = append(ok, map[string]any{"a": "x\u200dy", "b": "x\u200by", "c": "x\u061by", "d": "x\u061dy"})
 	for _, c := range ok {
 		_, err := SerializeFact(base(c))
 		require.NoError(t, err)
@@ -164,6 +171,10 @@ func TestContext_SerializeShapeGate(t *testing.T) {
 		{map[string]any{"a": "x‮y"}, "bidirectional"},
 		{map[string]any{"a": "x⁦y"}, "bidirectional"},
 		{map[string]any{"a": "x⁩y"}, "bidirectional"},
+		// The implicit directional marks (user ruling 2026-10-06).
+		{map[string]any{"a": "x\u200ey"}, "found U+200E"},
+		{map[string]any{"a": "x\u200fy"}, "found U+200F"},
+		{map[string]any{"a": "x\u061cy"}, "found U+061C"},
 		{map[string]any{"a": "\xff"}, `key "a"`},
 		{map[string]any{"a": []any{"x"}}, `key "a"`},
 		{map[string]any{"a": map[string]any{"b": 1}}, `key "a"`},
@@ -297,6 +308,15 @@ func TestContextDeclarations_ParseRules(t *testing.T) {
 		"max_len 300":       `k: {type: string, max_len: 300}`,
 		"max_len on enum":   `k: {type: enum, values: [a], max_len: 3}`,
 		"bad key":           `Bad-Key: {type: string}`,
+		// An enum value is a context string and takes the same shape rule,
+		// bidi characters included. A git-arrived ontology carrying one keeps
+		// LOADING (no fall-back to the embedded default); only that key is
+		// poisoned. The three implicit marks (user ruling 2026-10-06) take
+		// exactly the path the override and isolate already took.
+		"enum value RLO": `k: {type: enum, values: ["a‮b"]}`,
+		"enum value LRM": `k: {type: enum, values: ["a‎b"]}`,
+		"enum value RLM": `k: {type: enum, values: ["a‏b"]}`,
+		"enum value ALM": `k: {type: enum, values: ["a؜b"]}`,
 	}
 	for name, decl := range bad {
 		t.Run(name, func(t *testing.T) {

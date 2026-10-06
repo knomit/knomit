@@ -90,8 +90,9 @@ func TestScriptTools_HostFunctionsReachTheHandlers(t *testing.T) {
 
 // SameCodePathAsMCP: a validation failure, a bad src:// ref and a stale
 // if_commit are refused exactly as the MCP tool refuses them, and nothing is
-// committed; a `.knomit/<area>/` path is ACCEPTED here — the host's refusal
-// is the host's, not the handler's (T19's second half). Sabotage: bypass
+// committed; an `artifacts/<area>/` path is ACCEPTED here — the host's
+// refusal is the host's, not the handler's (T19's second half) — and a
+// `.knomit/` path is refused here as everywhere (F25). Sabotage: bypass
 // ValidateFact in the tool set.
 func TestScriptTools_SameCodePathAsMCP(t *testing.T) {
 	ontology, err := fact.ParseOntology([]byte(principlesOntologyYAML))
@@ -131,18 +132,27 @@ func TestScriptTools_SameCodePathAsMCP(t *testing.T) {
 	require.True(t, isErr, "a stale if_commit is refused")
 	require.Contains(t, text, "current_commit")
 
-	// The handler allows knomit's own namespace: the script host is what
-	// says no to a script.
+	// The handler allows the artifacts root: the script host is what says no
+	// to a script.
 	priv, _, isErr := callScript(t, tools, ctx, "learn", map[string]any{
+		"moment_name": "trigger:t1",
+		"facts":       []any{map[string]any{"path": "artifacts/jobs/x.md", "title": "job state", "body": "b"}},
+	})
+	require.False(t, isErr, "the MCP tool accepts artifacts/<area>/ job state")
+	require.Equal(t, "artifacts/jobs/x.md", priv["commits"].([]any)[0].(map[string]any)["file"])
+	_, _, isErr = callScript(t, tools, ctx, "update", map[string]any{"file": "artifacts/jobs/x.md", "moment_name": "m", "updates": map[string]any{"body": "c"}})
+	require.False(t, isErr)
+	_, _, isErr = callScript(t, tools, ctx, "retract", map[string]any{"file": "artifacts/jobs/x.md", "moment_name": "m"})
+	require.False(t, isErr)
+	// .knomit/ is the system: the handler itself refuses it (F25).
+	headBefore = headOf(t, ri, "agent/test")
+	_, text, isErr = callScript(t, tools, ctx, "learn", map[string]any{
 		"moment_name": "trigger:t1",
 		"facts":       []any{map[string]any{"path": ".knomit/jobs/x.md", "title": "job state", "body": "b"}},
 	})
-	require.False(t, isErr, "the MCP tool accepts .knomit/<area>/ job state")
-	require.Equal(t, ".knomit/jobs/x.md", priv["commits"].([]any)[0].(map[string]any)["file"])
-	_, _, isErr = callScript(t, tools, ctx, "update", map[string]any{"file": ".knomit/jobs/x.md", "moment_name": "m", "updates": map[string]any{"body": "c"}})
-	require.False(t, isErr)
-	_, _, isErr = callScript(t, tools, ctx, "retract", map[string]any{"file": ".knomit/jobs/x.md", "moment_name": "m"})
-	require.False(t, isErr)
+	require.True(t, isErr, "the MCP tool refuses .knomit/")
+	require.Contains(t, text, "closed to the fact tools")
+	require.Equal(t, headBefore, headOf(t, ri, "agent/test"))
 }
 
 // TrailersThroughUnchangedHandlers [T4, mcp variant]: the trailer set on the
