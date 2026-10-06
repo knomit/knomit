@@ -30,11 +30,12 @@ you run them — on both handles, the take and the ack included, AND on every
 `knomit_experiment` `open`, `commit` and `rollback` (the merge commit that
 lands an experiment carries it). knomit keeps nothing between calls, so a
 write without it is untraced.
+The trace has three entries: `Knomit-Trace` is the mission (the mission
+repo's name), `Mission-Task` is the task, `Knomit-Run` is this session's run.
 - For the copy named in your context: the context's `trace`, unchanged.
-- For every other copy you take: `{"Knomit-Trace": "<that copy's task id>", "Knomit-Run": "<the context trace's Knomit-Run>"}`.
-  Leave out `Knomit-Cause` (it names the commit that woke you, which was not
-  that copy's), and leave out `Knomit-Trace` if the task id has characters
-  other than letters, digits and `. _ : -`.
+- For every other copy you take: `{"Knomit-Trace": "<the context trace's Knomit-Trace>", "Mission-Task": "<that copy's task id>", "Knomit-Run": "<the context trace's Knomit-Run>"}`.
+  Leave out `Mission-Task` if the task id has characters other than letters,
+  digits and `. _ : -`, or is longer than 128 characters.
 - Never add `Knomit-` entries of your own, and never put task text in a trace.
 
 ## The experiment name
@@ -48,15 +49,17 @@ context's `experiment` as given.
 ## Shared facts
 
 Facts other agents wrote are shared. Two tasks that update one fact in
-parallel cannot both land: the second experiment commit is refused for
-conflicts, and that task fails.
+parallel cannot both land as written: the second experiment commit is
+refused for conflicts (that task fails), or merged with one side's change
+dropped.
 - `knomit_update` only a fact your task tells you to update, by its path.
   Write what you found as NEW facts otherwise.
-- A cross-check writes verdict facts (`topic: verdicts`, the format in its
-  body) and never updates the facts it checks.
+- A cross-check writes annotations in the MISSION repo (`topic: annotations`,
+  `category: <task id>`, `context.kind: verdict`, the call below), never
+  updates the facts it checks, and writes nothing to the knowledge base.
 - A task that lists `check: <path>` lines checks exactly those paths, and
   no other, whoever wrote them: do not judge authorship yourself.
-- Only a fold task updates the facts the verdicts point at.
+- Only a fold task updates the facts the annotations point at.
 
 ## Call shapes
 
@@ -66,8 +69,8 @@ do not leave out `moment_name`, `facts`, `binding` or `trace` where shown (a
 call without them is refused). If your harness lists a knomit tool without its
 schema, load that tool's schema before the first call. `<trace>` is the
 copy's trace object (see "The trace"), for example
-`{"Knomit-Trace": "task-7", "Knomit-Run": "r-123"}`; `<mission>` and `<kb>`
-are the two handles `knomit_bind` returned.
+`{"Knomit-Trace": "my-mission", "Mission-Task": "task-7", "Knomit-Run": "run-0123456789abcdef0123456789abcdef"}`;
+`<mission>` and `<kb>` are the two handles `knomit_bind` returned.
 
 Bind (once per handle; the second form for a task naming `lens <name>`):
 
@@ -102,21 +105,21 @@ Read: the queue, a path's exact presence, one fact:
 The take (step 2), one move:
 
 ```json knomit_learn
-{"binding": "<mission>", "moment_name": "take <task id>", "facts": [{"topic": "inbox", "category": "<agent-id>/active", "kind": "pragmatic", "type": "signal", "title": "<the copy's title>", "body": "<the copy's body>", "entities": ["<task id>"], "expires": "<the context's lease>"}], "retract": ["<the copy's path>"], "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<mission>", "moment_name": "take <task id>", "facts": [{"topic": "inbox", "category": "<agent-id>/active", "kind": "pragmatic", "type": "signal", "title": "<the copy's title>", "body": "<the copy's body>", "entities": ["<task id>"], "expires": "<the context's lease>"}], "retract": ["<the copy's path>"], "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 The experiment (steps 3, 5, 6, 7):
 
 ```json knomit_experiment
-{"binding": "<kb>", "action": "open", "name": "<experiment name>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "action": "open", "name": "<experiment name>", "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ```json knomit_experiment
-{"binding": "<kb>", "action": "commit", "name": "<experiment name>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "action": "commit", "name": "<experiment name>", "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ```json knomit_experiment
-{"binding": "<kb>", "action": "rollback", "name": "<experiment name>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "action": "rollback", "name": "<experiment name>", "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 The work (step 4): new facts, an update the task asks for, a retraction.
@@ -124,40 +127,70 @@ The work (step 4): new facts, an update the task asks for, a retraction.
 ref it keeps plus the new ones.
 
 ```json knomit_learn
-{"binding": "<kb>", "moment_name": "<task id>: <what you learned>", "facts": [{"topic": "<topic>", "category": "<category>", "type": "observation", "title": "<one line>", "body": "<the fact>", "confidence": 0.7, "entities": ["<entity>"], "refs": ["<evidence>"]}], "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "moment_name": "<task id>: <what you learned>", "facts": [{"topic": "<topic>", "category": "<category>", "type": "observation", "title": "<one line>", "body": "<the fact>", "confidence": 0.7, "entities": ["<entity>"], "refs": ["<evidence>"]}], "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ```json knomit_update
-{"binding": "<kb>", "file": "<the fact's path>", "moment_name": "<label>", "updates": {"confidence": 0.55, "refs": ["<every ref it keeps>", "<each new ref>"]}, "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "file": "<the fact's path>", "moment_name": "<label>", "updates": {"confidence": 0.55, "refs": ["<every ref it keeps>", "<each new ref>"]}, "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ```json knomit_retract
-{"binding": "<kb>", "file": "<the fact's path>", "moment_name": "<why>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "file": "<the fact's path>", "moment_name": "<why>", "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+A cross-check's annotation, on the MISSION handle: one per fact it checks,
+in its own folder. `context` is required (`kind`; `verdict` is
+`corroborate` or `contradict`; `confidence` is the confidence the checked
+fact deserves, 0 to 1), and the first ref names the checked fact as
+`kb://<repo id>/<its path>`:
+
+```json knomit_learn
+{"binding": "<mission>", "moment_name": "<task id>: verdict on <fact path>", "facts": [{"topic": "annotations", "category": "<task id>", "type": "observation", "title": "<verdict>: <the fact's title>", "body": "<your reasons>", "confidence": 0.8, "entities": ["<task id>"], "context": {"kind": "verdict", "verdict": "contradict", "confidence": 0.4}, "refs": ["kb://<repo id>/<the checked fact's path>", "<your evidence>"]}], "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
+```
+
+A fold's read of one cross-check's verdicts, on the MISSION handle. One page
+holds at most 5: while the result says `has_more: true`, call again with its
+`cursor` (the second form) until `has_more` is false, or the fold misses
+verdicts:
+
+```json knomit_query
+{"binding": "<mission>", "path": "<root>/annotations/<cross-check task id>/", "context": {"kind": "verdict"}, "include_body": true, "limit": 5}
+```
+
+```json knomit_query
+{"binding": "<mission>", "cursor": "<from the last result>", "include_body": true, "limit": 5}
+```
+
+A counter-hypothesis (a fold, if its task asks for one), naming what it
+counters:
+
+```json knomit_learn
+{"binding": "<kb>", "moment_name": "fold: <task ids>", "facts": [{"topic": "<topic>", "category": "<category>", "type": "hypothesis", "title": "<one line>", "body": "<the counter-hypothesis and why>", "confidence": 0.4, "entities": ["<entity>"], "refs": ["<the hypothesis it counters>", "<evidence>"], "distinct_from": ["<the hypothesis it counters>"]}], "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 A review or hypothesize session, if the task asks for one: start with no
 `session_id`, then answer each item until the result says `done: true`.
 
 ```json knomit_review
-{"binding": "<kb>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ```json knomit_review
-{"binding": "<kb>", "session_id": "<from the last result>", "item_id": 1, "response": "<your JSON decisions for that item>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "session_id": "<from the last result>", "item_id": 1, "response": "<your JSON decisions for that item>", "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ```json knomit_hypothesize
-{"binding": "<kb>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ```json knomit_hypothesize
-{"binding": "<kb>", "session_id": "<from the last result>", "item_id": 1, "response": "<your answer for that item>", "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<kb>", "session_id": "<from the last result>", "item_id": 1, "response": "<your answer for that item>", "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 The ack (step 8), one move:
 
 ```json knomit_learn
-{"binding": "<mission>", "moment_name": "ack <task id>", "facts": [{"topic": "acks", "category": "<task id>", "kind": "pragmatic", "type": "signal", "title": "Done: <task title>", "body": "<what was done, two lines>", "entities": ["<task id>"], "refs": ["kb://<repo id>/<result path>"]}], "retract": ["<your active copy's path>"], "trace": {"Knomit-Trace": "<task id>", "Knomit-Run": "<run id>"}}
+{"binding": "<mission>", "moment_name": "ack <task id>", "facts": [{"topic": "acks", "category": "<task id>", "kind": "pragmatic", "type": "signal", "title": "Done: <task title>", "body": "<what was done, two lines>", "entities": ["<task id>"], "refs": ["kb://<repo id>/<result path>"]}], "retract": ["<your active copy's path>"], "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
 ## The loop

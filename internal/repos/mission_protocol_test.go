@@ -82,7 +82,7 @@ func TestMissionTemplate_Settings(t *testing.T) {
 	require.True(t, sy.RealtimePush(), "sync.push is realtime")
 	require.True(t, sy.RealtimePull(), "sync.pull is realtime")
 
-	for _, topic := range []string{"tasks", "claims", "inbox", "acks", "offers", "bids", "awards"} {
+	for _, topic := range []string{"tasks", "claims", "inbox", "acks", "offers", "bids", "awards", "annotations"} {
 		require.True(t, o.LearnDedupOff(topic), "%s must be learn_dedup: off", topic)
 	}
 
