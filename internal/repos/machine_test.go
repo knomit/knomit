@@ -704,6 +704,26 @@ func TestWalkthrough_ArchiveMidIndexWithAParkedSyncRound(t *testing.T) {
 		_, rerr := svc.Facts().ReadFact(context.Background(), "main", "kb/test/f.md", nil)
 		return rerr == nil
 	}, 20*time.Second, 10*time.Millisecond, "main followed the remote")
+	// ReadFact succeeding only means the git ref moved; it says nothing about
+	// the index. The SAME round's advanceBranchTo also calls notifyCommit,
+	// which runs the index's OWN inline Sync() for main (last=="", so its
+	// "full rebuild" fast path indexes and embeds the one fact directly,
+	// unarmed, under lockBranch(main)) — a second, independent embed of the
+	// exact content the explicit Rebuild below targets. facts_vec is global,
+	// not branch-scoped, so if that inline embed lands AFTER clearVectors but
+	// BEFORE the explicit Rebuild's phase-2 count below, the explicit job
+	// finds nothing left to embed and waitStarted hangs for its full timeout
+	// (observed under -race, 6/100 runs). Wait for that inline embed to land
+	// first, so clearVectors has something to clear and the explicit,
+	// gated Rebuild("main") is guaranteed to be the one doing the embedding.
+	require.Eventually(t, func() bool {
+		raw, rerr := sql.Open("sqlite3", f.m.RepoPath(f.ri.UID()))
+		require.NoError(t, rerr)
+		defer raw.Close()
+		var n int
+		require.NoError(t, raw.QueryRow(`SELECT COUNT(*) FROM facts_vec`).Scan(&n))
+		return n > 0
+	}, 20*time.Second, 10*time.Millisecond, "main's fact was embedded by the sync round's own inline index")
 
 	// The index job: a full rebuild of main, parked in a batch, holding
 	// lockBranch(main).
