@@ -109,6 +109,44 @@ func TestRecipesKB_OntologyLoads(t *testing.T) {
 	require.NoError(t, err, "the mission template's ontology loads as a new one")
 }
 
+// TestCheckoutIsLF: every file of the knomit-recipes checkout has LF line
+// endings. The mission tests read the template byte for byte; a CRLF checkout
+// (Git for Windows' default core.autocrlf=true) fails them in ways that do not
+// name the cause. knomit-recipes' .gitattributes pins eol=lf.
+//
+// SABOTAGE: write a CRLF into any file of the checkout → red.
+func TestCheckoutIsLF(t *testing.T) {
+	dir := Dir(t)
+	seen := 0
+	var crlf []string
+	require.NoError(t, filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == ".git" { // a submodule's .git is a file
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		seen++
+		if strings.Contains(string(b), "\r") {
+			rel, _ := filepath.Rel(dir, p)
+			crlf = append(crlf, filepath.ToSlash(rel))
+		}
+		return nil
+	}))
+	require.Greater(t, seen, 8, "the walk read the checkout")
+	require.Empty(t, crlf, "these files were checked out with CR line endings; knomit-recipes' .gitattributes must pin eol=lf")
+}
+
 // TestCIChecksOutSubmodules: every actions/checkout step in the workflows and
 // local actions sets `submodules: true`, so every CI job (every OS, the
 // desktop jobs included) has the knomit-recipes checkout the tests read.
