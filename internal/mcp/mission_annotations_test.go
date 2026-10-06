@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -174,4 +176,71 @@ func TestMissionAnnotations_QueryByContext(t *testing.T) {
 	require.Equal(t, []string{"A1 verdict", "A2 verdict", "B1 verdict"},
 		titles(map[string]any{"path": "kb/annotations/xcheck-1", "context": map[string]any{"kind": "verdict"}}),
 		"fixture: without the trailing slash the path prefix reaches xcheck-12")
+}
+
+// TestMissionAnnotations_FoldReadsEveryPage (review R1 finding 1): a
+// cross-check of nine hypotheses writes nine verdicts in one folder, and the
+// fold's read with include_body returns at most 5 per page. Read with the
+// work-task skill's OWN two query skeletons (the first page, then the cursor
+// form while has_more) the fold sees all nine; the first page alone does not.
+//
+// SABOTAGE: delete the cursor skeleton from the work-task skill → red (no
+// second form to follow); drop "until has_more is false" from either skill →
+// red.
+func TestMissionAnnotations_FoldReadsEveryPage(t *testing.T) {
+	ctx := missionAnnotationsRepo(t)
+	for i := 0; i < 9; i++ {
+		res := learnAnnotation(t, ctx, annotation("xcheck-9", fmt.Sprintf("Verdict %d", i), verdictCtx("contradict")))
+		require.False(t, res.IsError, resultText(t, res))
+	}
+	var first, next map[string]any
+	for _, s := range skeletons(t, "work-task") {
+		if s.tool != "knomit_query" || s.args["binding"] != "<mission>" {
+			continue
+		}
+		if _, ok := s.args["context"]; ok {
+			first = s.args
+		}
+		if _, ok := s.args["cursor"]; ok {
+			next = s.args
+		}
+	}
+	require.NotNil(t, first, "the fold's first read has a skeleton")
+	require.NotNil(t, next, "the fold's cursor read has a skeleton")
+	call := func(sk map[string]any, fill map[string]any) queryResponse {
+		t.Helper()
+		args := map[string]any{}
+		for k, v := range sk {
+			if k != "binding" {
+				args[k] = v
+			}
+		}
+		for k, v := range fill {
+			args[k] = v
+		}
+		resp, res := queryFacts(t, ctx, args)
+		require.False(t, res.IsError, resultText(t, res))
+		return resp
+	}
+	seen := map[string]bool{}
+	page := call(first, map[string]any{"path": "kb/annotations/xcheck-9/"})
+	require.Len(t, page.Facts, 5, "fixture: one page holds 5, so a fold that stops here misses 4")
+	require.True(t, page.HasMore)
+	for {
+		for _, f := range page.Facts {
+			seen[f.Title] = true
+		}
+		if !page.HasMore {
+			break
+		}
+		require.NotNil(t, page.Cursor)
+		page = call(next, map[string]any{"cursor": *page.Cursor})
+	}
+	require.Len(t, seen, 9, "following the cursor, the fold sees every verdict")
+
+	for _, p := range []string{".knomit/skills/work-task/SKILL.md", ".knomit/skills/post-task/SKILL.md"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", p))
+		require.NoError(t, err)
+		require.Contains(t, strings.ReplaceAll(strings.Join(strings.Fields(string(raw)), " "), "`", ""), "until has_more is false", "%s tells the fold to follow the cursor", p)
+	}
 }

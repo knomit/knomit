@@ -423,9 +423,20 @@ copy (the take, the results, the experiment's `open`, `commit` and
 trace itself: the same `Knomit-Trace` and `Knomit-Run`, and `Mission-Task` =
 that copy's task id. So everything one mission wrote, on the mission repo and
 on the target knowledge base, reads back with
-`git log --all --grep='^Knomit-Trace: <mission repo name>'`; one task with
-`--grep='^Mission-Task: <task id>'`; one session with
-`--grep='^Knomit-Run: <run id>'`.
+`git log --all --grep='^Knomit-Trace: <mission repo name>'`, and one session
+with `--grep='^Knomit-Run: <run id>'`.
+
+`--grep='^Mission-Task: <task id>'` finds what the POSTER and the SESSIONS
+wrote for one task (the post, the take, the results, the experiment's merge,
+the ack), and nothing else. The trigger scripts' writes for that task (its
+claims, the take into `working/`, a dup-check back-off, the offer, bid and
+award) carry only knomit's own set: `Knomit-Trace` (the mission, copied
+forward), `Knomit-Cause` (the commit that fired the script) and
+`Knomit-Trigger`, never `Mission-Task`. A coordinator finds them by path
+(`kb/claims/<task id>/`, and the copies under `kb/inbox/` whose one entity is
+the task id) or by following `Knomit-Cause` from the post's commit. A grep
+on `Mission-Task` that shows no claims does NOT mean nobody claimed the
+task.
 
 Why the task is not `Knomit-Cause`: knomit accepts `Knomit-Cause` only as a
 full commit hash (the one commit that led to this one), and `Knomit-` names
@@ -433,10 +444,13 @@ are knomit's. `Mission-Task` is an entry of the mission's own, which the
 `trace` argument accepts (a key of letters, digits and hyphens, a one-line
 value). The session's trace carries no `Knomit-Cause`.
 
-A task posted with the `post-task` skill's call carries `Knomit-Trace` (the
-mission) and `Mission-Task` on its post. knomit copies the firing commit's
-`Knomit-Trace` forward onto every trigger script's write, so the claims,
-takes and copies the scripts make for it carry the mission too.
+A post MUST carry the trace (the `post-task` skill's call has it, with
+`Knomit-Trace` = the mission and `Mission-Task` = the task id). knomit copies
+the firing commit's `Knomit-Trace` forward onto every trigger script's write,
+so the claims, takes and copies the scripts make for the task carry the
+mission too. A post WITHOUT a trace splits the mission's story: knomit then
+gives that task's script writes the task id as their `Knomit-Trace`, so they
+drop out of the mission's grep.
 
 `knomit_experiment` takes the same `trace` and stamps it on the merge commit
 its `commit` (or `sync`) writes. A `commit` that fast-forwards writes no new

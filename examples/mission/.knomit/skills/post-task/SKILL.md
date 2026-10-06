@@ -27,8 +27,10 @@ Call `knomit_learn` with one fact:
 - `refs`: the mission charter or the facts the task depends on
 
 The exact call (fill the `<...>` values; `binding` is the mission repo's
-handle from `knomit_bind`). `trace` is optional here: `Knomit-Trace` is the
+handle from `knomit_bind`). `trace` is REQUIRED: `Knomit-Trace` is the
 mission repo's name and `Mission-Task` the task id (README "The trace").
+Without it, knomit gives the scripts' writes for this task (claims, copies)
+the task id as their trace, and they drop out of the mission's story.
 
 ```json knomit_learn
 {"binding": "<mission>", "moment_name": "post <task id>", "facts": [{"topic": "tasks", "category": "<lane>", "kind": "pragmatic", "type": "signal", "title": "<one line>", "body": "<what to do and what done means>\nknowledge base: lens <name>", "entities": ["<task id>"], "expires": "2026-10-07T12:00:00Z", "refs": ["<the charter's path>"]}], "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>"}}
@@ -133,7 +135,8 @@ hypotheses. Paste this block into its body, with the cross-check task ids:
 Fold the annotations of the cross-checks <task ids> into what they checked.
 For each id, knomit_query on the MISSION handle with path
 <root>/annotations/<id>/ (<root> is the first segment of your working
-copy's path) and context {"kind": "verdict"}. Group the verdicts by the
+copy's path) and context {"kind": "verdict"}, and repeat with the cursor
+until has_more is false: one page holds at most 5. Group the verdicts by the
 kb:// ref that names the fact they are about. Everything below goes into
 this task's ONE experiment on the knowledge base it names. For each fact:
 knomit_explain it, weigh its verdicts and their evidence, and make ONE

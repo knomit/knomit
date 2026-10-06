@@ -148,10 +148,17 @@ fact deserves, 0 to 1), and the first ref names the checked fact as
 {"binding": "<mission>", "moment_name": "<task id>: verdict on <fact path>", "facts": [{"topic": "annotations", "category": "<task id>", "type": "observation", "title": "<verdict>: <the fact's title>", "body": "<your reasons>", "confidence": 0.8, "entities": ["<task id>"], "context": {"kind": "verdict", "verdict": "contradict", "confidence": 0.4}, "refs": ["kb://<repo id>/<the checked fact's path>", "<your evidence>"]}], "trace": {"Knomit-Trace": "<mission repo name>", "Mission-Task": "<task id>", "Knomit-Run": "<run id>"}}
 ```
 
-A fold's read of one cross-check's verdicts, on the MISSION handle:
+A fold's read of one cross-check's verdicts, on the MISSION handle. One page
+holds at most 5: while the result says `has_more: true`, call again with its
+`cursor` (the second form) until `has_more` is false, or the fold misses
+verdicts:
 
 ```json knomit_query
 {"binding": "<mission>", "path": "<root>/annotations/<cross-check task id>/", "context": {"kind": "verdict"}, "include_body": true, "limit": 5}
+```
+
+```json knomit_query
+{"binding": "<mission>", "cursor": "<from the last result>", "include_body": true, "limit": 5}
 ```
 
 A counter-hypothesis (a fold, if its task asks for one), naming what it

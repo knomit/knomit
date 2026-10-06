@@ -112,7 +112,8 @@ var writeTools = map[string]bool{
 // misspell `facts` as `fact` → red (not an argument); drop `binding` from one
 // skeleton → red; drop `trace` from the ack → red; delete the knomit_update
 // skeleton while the skill still names knomit_update → red; drop `context`
-// from the annotation skeleton, or from the fold's read → red (F26).
+// from the annotation skeleton, or from the fold's read → red (F26); make
+// the post's trace optional again, or drop its Knomit-Trace → red.
 func TestMissionTemplate_SkillCallShapes(t *testing.T) {
 	schemas := servedSchemas(t)
 	for _, skill := range []string{"work-task", "post-task"} {
@@ -180,6 +181,31 @@ func TestMissionTemplate_SkillCallShapes(t *testing.T) {
 			}
 		}
 	}
+	// Review R1 finding 3: a post MUST carry the mission's trace, or the
+	// scripts' writes for the task get the task id as their trace and drop
+	// out of the mission's story.
+	var posted bool
+	for _, s := range skeletons(t, "post-task") {
+		if s.tool != "knomit_learn" {
+			continue
+		}
+		tr, _ := s.args["trace"].(map[string]any)
+		require.Equal(t, "<mission repo name>", tr["Knomit-Trace"], "the post carries the mission as its trace")
+		require.Equal(t, "<task id>", tr["Mission-Task"], "the post carries the task")
+		posted = true
+	}
+	require.True(t, posted, "post-task has the post skeleton")
+	post, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", ".knomit", "skills", "post-task", "SKILL.md"))
+	require.NoError(t, err)
+	require.Contains(t, string(post), "`trace` is REQUIRED")
+	require.NotContains(t, string(post), "optional here")
+	readme, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", "README.md"))
+	require.NoError(t, err)
+	flat := strings.Join(strings.Fields(string(readme)), " ")
+	require.Contains(t, flat, "A post MUST carry the trace")
+	// Review R1 finding 2: a Mission-Task grep misses the scripts' writes.
+	require.Contains(t, flat, "A grep on `Mission-Task` that shows no claims does NOT mean nobody claimed the task.")
+
 	require.True(t, annotate, "the annotation call, with context, has a skeleton")
 	require.True(t, foldRead, "the fold's read (path plus context) has a skeleton")
 	var missing []string
