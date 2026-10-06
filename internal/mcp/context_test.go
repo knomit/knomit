@@ -146,6 +146,10 @@ func TestLearn_ContextShapeRefusedWholeCall(t *testing.T) {
 		{"line separator", map[string]any{"note": "a\u2028b"}, `key "note"`},
 		{"bidi override", map[string]any{"note": "a\u202eb"}, `key "note": a string must not contain bidirectional formatting characters (found U+202E)`},
 		{"bidi isolate", map[string]any{"note": "a\u2066b"}, `key "note": a string must not contain bidirectional formatting characters (found U+2066)`},
+		// The implicit directional marks (user ruling 2026-10-06).
+		{"bidi LRM", map[string]any{"note": "a\u200eb"}, `key "note": a string must not contain bidirectional formatting characters (found U+200E)`},
+		{"bidi RLM", map[string]any{"note": "a\u200fb"}, `key "note": a string must not contain bidirectional formatting characters (found U+200F)`},
+		{"bidi ALM", map[string]any{"note": "a\u061cb"}, `key "note": a string must not contain bidirectional formatting characters (found U+061C)`},
 		// Invalid UTF-8 cannot reach this handler: decodeArg's JSON round trip
 		// turns it into U+FFFD. SerializeFact's own gate refuses it
 		// (fact.TestContext_SerializeShapeGate).
@@ -201,7 +205,7 @@ func TestLearn_ContextTypedRefusals(t *testing.T) {
 	// Private state: no topic, so nothing declares a key.
 	before := branchTip(t, svc)
 	res, err := LearnHandler(emb)(ctx, learnItems(map[string]any{
-		"path": ".knomit/jobs/slot.md", "title": "Slot", "body": "state", "context": map[string]any{"task": "t-1"},
+		"path": "artifacts/jobs/slot.md", "title": "Slot", "body": "state", "context": map[string]any{"task": "t-1"},
 	}))
 	require.NoError(t, err)
 	require.True(t, res.IsError)
@@ -338,6 +342,12 @@ func TestUpdate_ContextKeepReplaceClear(t *testing.T) {
 	r = update(map[string]any{"context": map[string]any{"note": "a⁧b"}})
 	require.True(t, r.IsError)
 	require.Contains(t, resultText(t, r), `updates.context: invalid context: key "note": a string must not contain bidirectional formatting characters`)
+
+	for _, mark := range []string{"\u200e", "\u200f", "\u061c"} {
+		r = update(map[string]any{"context": map[string]any{"note": "a" + mark + "b"}})
+		require.True(t, r.IsError, "%U must be refused", []rune(mark)[0])
+		require.Contains(t, resultText(t, r), fmt.Sprintf("bidirectional formatting characters (found %U)", []rune(mark)[0]))
+	}
 
 	r = update(map[string]any{"context": map[string]any{"nope": "x"}})
 	require.True(t, r.IsError)

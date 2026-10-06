@@ -85,7 +85,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// the binding and the trailers the handlers see
 		"NewBindingOfRepo", "WithBinding", "store.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
 		// the sandbox
-		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath",
+		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath", "fact.IsUnderArtifactsRoot",
 		// an inline js: program, compiled with the ontology (F08 M4): a getter
 		"ct.JSProgram",
 		// the hub (through emit) and the log

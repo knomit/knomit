@@ -378,7 +378,10 @@ func resolveExplainTarget(b *repos.Binding, file string) (explainTarget, error) 
 	}
 	rel = fact.NormalizePath(rt.RI.OntologyRoot(), rel)
 	if !fact.IsFactFilePath(rt.RI.OntologyRoot(), rel) {
-		return explainTarget{}, fmt.Errorf("%s is not a fact path: explain takes a fact under %s/ or a job slot under %s/<area>/", file, rt.RI.OntologyRoot(), fact.PrivateRoot)
+		if msg := closedToFactTools(rel); msg != "" {
+			return explainTarget{}, errors.New(msg)
+		}
+		return explainTarget{}, fmt.Errorf("%s is not a fact path: explain takes a fact under %s/ or an artifact under %s/<area>/", file, rt.RI.OntologyRoot(), fact.ArtifactsRoot)
 	}
 	s, release, err := storeIndices(rt.RI)
 	if err != nil {

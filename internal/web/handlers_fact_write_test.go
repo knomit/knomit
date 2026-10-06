@@ -175,14 +175,14 @@ func TestHandleFactUpdate_RejectsPrivatePath(t *testing.T) {
 	}
 }
 
-// TestFactWrite_AllowsWritablePrivatePath: PUT is the REST twin of
-// knomit_update, taking a fully caller-supplied path, so it carries the same
-// exception as the MCP guard (internal/mcp/update.go) — .knomit/<area>/ is
-// knomit's own job-state namespace, writable though excluded from discovery.
-// The handler upserts (PriorRefs returns nil for a fresh path, treated as "no
-// prior version" rather than an error), so this PUT both creates the fact and
-// proves the write reaches the writer.
-func TestFactWrite_AllowsWritablePrivatePath(t *testing.T) {
+// TestFactWrite_AllowsArtifactPath: PUT is the REST twin of knomit_update,
+// taking a fully caller-supplied path, so it accepts what the MCP guard
+// accepts (internal/mcp/update.go) — artifacts/<area>/ is the agents' working
+// -file root, writable though excluded from discovery (F25). The handler
+// upserts (PriorRefs returns nil for a fresh path, treated as "no prior
+// version" rather than an error), so this PUT both creates the file and proves
+// the write reaches the writer.
+func TestFactWrite_AllowsArtifactPath(t *testing.T) {
 	writer := &stubFactWriter{writeHash: "abc123"}
 	s := &Server{
 		Manager: newTestManagerWithRepos(t, "alpha"),
@@ -195,7 +195,7 @@ func TestFactWrite_AllowsWritablePrivatePath(t *testing.T) {
 	body := `{"content":"` + testFactContent + `"}`
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPut,
-		"/repos/alpha/branches/agent:test/facts/.knomit/jobs/ae/crawl-state.md",
+		"/repos/alpha/branches/agent:test/facts/artifacts/jobs/ae/crawl-state.md",
 		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
@@ -211,10 +211,9 @@ func TestFactWrite_AllowsWritablePrivatePath(t *testing.T) {
 	}
 }
 
-// TestFactWrite_RefusesOtherPrivatePaths: a private path OUTSIDE
-// .knomit/<area>/ must still be refused, with the same status/envelope as
-// TestHandleFactUpdate_RejectsPrivatePath and a message that names
-// .knomit/<area>/ as the exception rather than the removed word "jobs".
+// TestFactWrite_RefusesOtherPrivatePaths: a private path must be refused,
+// with the same status/envelope as TestHandleFactUpdate_RejectsPrivatePath and
+// a message that names artifacts/<area>/ as where working files go instead.
 func TestFactWrite_RefusesOtherPrivatePaths(t *testing.T) {
 	writer := &stubFactWriter{writeHash: "abc123"}
 	s := &Server{
@@ -237,15 +236,15 @@ func TestFactWrite_RefusesOtherPrivatePaths(t *testing.T) {
 		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
 	}
 	// Decode rather than substring-match the raw body: encoding/json HTML-escapes
-	// '<' and '>' by default, so the wire form is ".knomit/<area>/".
+	// '<' and '>' by default, so the wire form is "artifacts/<area>/".
 	var problem struct {
 		Detail string `json:"detail"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
 		t.Fatalf("decoding problem body: %v, body=%s", err, rec.Body.String())
 	}
-	if !strings.Contains(problem.Detail, ".knomit/<area>/") {
-		t.Errorf("problem detail should name .knomit/<area>/ as the exception, got %q", problem.Detail)
+	if !strings.Contains(problem.Detail, "artifacts/<area>/") {
+		t.Errorf("problem detail should name artifacts/<area>/, got %q", problem.Detail)
 	}
 	if writer.writeCalls != 0 {
 		t.Errorf("writer.Write called %d times for a refused private path; it must never reach git", writer.writeCalls)
@@ -278,7 +277,9 @@ func TestHandleFactDelete_Returns204(t *testing.T) {
 // endpoint will happily remove kb/.drafts/x.md or .knomit/ontology.yaml.
 // Same condition, status and problem envelope as handleFactUpdate.
 func TestHandleFactDelete_RejectsPrivatePath(t *testing.T) {
-	for _, path := range []string{"kb/.drafts/x.md", ".knomit/ontology.yaml", ".github/workflows/ci.yml"} {
+	for _, path := range []string{"kb/.drafts/x.md", ".knomit/ontology.yaml", ".github/workflows/ci.yml",
+		// F25: the former agent areas are closed too.
+		".knomit/jobs/ae/crawl-state.md", ".knomit/skills/s/extra.md"} {
 		t.Run(path, func(t *testing.T) {
 			writer := &stubFactWriter{}
 			s := &Server{
@@ -298,15 +299,15 @@ func TestHandleFactDelete_RejectsPrivatePath(t *testing.T) {
 				t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
 			}
 			// Decode rather than substring-match: encoding/json HTML-escapes
-			// '<' and '>', so the wire form is ".knomit/<area>/".
+			// '<' and '>', so the wire form is "artifacts/<area>/".
 			var problem struct {
 				Detail string `json:"detail"`
 			}
 			if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
 				t.Fatalf("decoding problem body: %v, body=%s", err, rec.Body.String())
 			}
-			if !strings.Contains(problem.Detail, ".knomit/<area>/") {
-				t.Errorf("problem detail should name .knomit/<area>/ as the exception, got %q", problem.Detail)
+			if !strings.Contains(problem.Detail, "artifacts/<area>/") {
+				t.Errorf("problem detail should name artifacts/<area>/, got %q", problem.Detail)
 			}
 			if writer.deleteCalls != 0 {
 				t.Errorf("writer.Delete called %d times for a private path; it must never reach git", writer.deleteCalls)
@@ -315,9 +316,9 @@ func TestHandleFactDelete_RejectsPrivatePath(t *testing.T) {
 	}
 }
 
-// The exception the guard must preserve: a job's own state under
-// .knomit/<area>/ is writable, and deleting it is a write like any other.
-func TestHandleFactDelete_AllowsWritablePrivatePath(t *testing.T) {
+// What the guard must preserve: a job's own state under artifacts/<area>/ is
+// writable, and deleting it is a write like any other.
+func TestHandleFactDelete_AllowsArtifactPath(t *testing.T) {
 	writer := &stubFactWriter{}
 	s := &Server{
 		Manager: newTestManagerWithRepos(t, "alpha"),
@@ -329,7 +330,7 @@ func TestHandleFactDelete_AllowsWritablePrivatePath(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodDelete,
-		"/repos/alpha/branches/agent:test/facts/.knomit/jobs/ae/crawl-state.md", nil))
+		"/repos/alpha/branches/agent:test/facts/artifacts/jobs/ae/crawl-state.md", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {

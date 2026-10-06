@@ -124,13 +124,17 @@ func contextStringShape(s string) error {
 
 // isBidiFormat reports the Unicode bidirectional embedding, override and
 // isolate characters: U+202A\u2013U+202E (LRE, RLE, PDF, LRO, RLO) and
-// U+2066\u2013U+2069 (LRI, RLI, FSI, PDI). They are format characters (Cf), not
+// U+2066\u2013U+2069 (LRI, RLI, FSI, PDI) — and the three implicit
+// directional marks U+200E LRM, U+200F RLM and U+061C ALM (user ruling
+// 2026-10-06: "fold the first into 2"), which reorder neutral characters
+// around them just as an isolate does. They are format characters (Cf), not
 // control characters, so unicode.IsControl misses them, yet they reorder how
 // the rest of a line displays \u2014 a label could read differently to a human
 // than to a filter. User ruling 2026-10-03: "yes, context should refuse
 // those characters." Keys cannot hold them: the key grammar is ASCII.
 func isBidiFormat(r rune) bool {
-	return (r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069')
+	return (r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069') ||
+		r == '\u200e' || r == '\u200f' || r == '\u061c'
 }
 
 // NormalizeContextValues returns a copy of ctx with Go integer types widened

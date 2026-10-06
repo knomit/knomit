@@ -63,6 +63,16 @@ func Normalize(
 	}
 	out := make(map[string]store.Resolution, len(in))
 	for file, res := range in {
+		// F25: a dot path is closed to the fact tools, and a resolution is
+		// a fact-tool write whatever its kind — {body} authors content, and
+		// "ours"/"theirs" still decides what lands there. The fact tools
+		// cannot change such a path on either branch, so a conflict on one
+		// is not theirs to settle: it is settled through git.
+		if knomitfact.IsPrivatePath(file) {
+			return nil, fmt.Errorf("resolution for %q: a path with a segment beginning with '.' is closed to the fact tools "+
+				"(%s/ is the system and changes only through git); settle that conflict with git, not a resolution",
+				file, knomitfact.PrivateRoot)
+		}
 		if res.Body == nil {
 			out[file] = res
 			continue
@@ -91,14 +101,15 @@ func normalizeOne(
 	}
 
 	// 2. The ontology's own rules, judged at the topic the PATH places the fact
-	// in — the same derivation knomit_update uses. Private state is skipped
-	// wholesale, as every write path skips it: a .knomit/<area>/ path has no
-	// ontology placement and ValidateFact runs the ROOT rules unconditionally.
+	// in — the same derivation knomit_update uses. An artifact is skipped
+	// wholesale, as every write path skips it: an artifacts/<area>/ path has
+	// no ontology placement and ValidateFact runs the ROOT rules
+	// unconditionally.
 	//
 	// F22 context: ParseFact DROPS a malformed map (lenient read); a write is
 	// strict, and this one lands the caller's body, so the drop is refused
 	// rather than silently written away. Time values are normalised by the
-	// typed layer first. With no ontology, or on a private path, nothing
+	// typed layer first. With no ontology, or on an artifact path, nothing
 	// declares a context key, so a context is refused rather than skipped.
 	if len(f.ContextWarnings) > 0 {
 		return nil, fmt.Errorf("resolution body for %q: %s", file, strings.Join(f.ContextWarnings, "; "))
@@ -106,7 +117,7 @@ func normalizeOne(
 	ontology := ri.Ontology()
 	topicCategory := path.Dir(strings.TrimPrefix(file, ri.OntologyRoot()+"/"))
 	f.Context = knomitfact.NormalizeContext(ontology, topicCategory, f.Context)
-	if ontology != nil && !knomitfact.IsWritablePrivatePath(file) {
+	if ontology != nil && !knomitfact.IsArtifactPath(file) {
 		if err := knomitfact.ValidateFact(ontology, topicCategory, f); err != nil {
 			return nil, fmt.Errorf("resolution body for %q: %w", file, err)
 		}

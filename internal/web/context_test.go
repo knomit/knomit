@@ -171,6 +171,14 @@ func TestREST_PutGatesContext(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "bidirectional formatting characters")
 	require.NotContains(t, stored("kb/verdicts/a1.md"), "context", "nothing written")
 
+	// The implicit directional marks (user ruling 2026-10-06), same door.
+	for _, mark := range []string{"\\u200E", "\\u200F", "\\u061C"} {
+		rec = put("kb/verdicts/a1.md", "context: {task: \"t-17"+mark+"\"}\n")
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+		require.Contains(t, rec.Body.String(), "bidirectional formatting characters")
+		require.NotContains(t, stored("kb/verdicts/a1.md"), "context", "nothing written")
+	}
+
 	rec = put("kb/verdicts/a1.md", "context: {rogue: x}\n")
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), "not declared")

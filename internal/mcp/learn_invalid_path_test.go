@@ -33,7 +33,7 @@ func TestLearn_UnreadablePathSegment_RefusedBeforeCommit(t *testing.T) {
 	}{
 		"category line feed": {map[string]any{"topic": "architecture", "category": "a\nb", "title": "T"}, "a\nb"},
 		"topic line feed":    {map[string]any{"topic": "arch\nitecture", "category": "cat", "title": "T"}, "arch\nitecture"},
-		"path line feed":     {map[string]any{"path": ".knomit/jobs/a\nb/x.md", "title": "T"}, "a\nb"},
+		"path line feed":     {map[string]any{"path": "artifacts/jobs/a\nb/x.md", "title": "T"}, "a\nb"},
 		"category git~1":     {map[string]any{"topic": "architecture", "category": "x/git~1", "title": "T"}, ""},
 		"category a\\.":      {map[string]any{"topic": "architecture", "category": `x/a\.`, "title": "T"}, ""},
 		"category zwj .git":  {map[string]any{"topic": "architecture", "category": "x/‍.git", "title": "T"}, ""},

@@ -152,6 +152,22 @@ var badResolutionBodies = []struct {
 		body: "---\ntype: observation\ncontext: {task: \"t-1\\u202E\"}\n---\n# demo fact\n\nbody\n",
 		want: "bidirectional formatting characters",
 	},
+	// The implicit directional marks (user ruling 2026-10-06).
+	{
+		name: "a context value with an LRM is refused",
+		body: "---\ntype: observation\ncontext: {task: \"t-1\\u200E\"}\n---\n# demo fact\n\nbody\n",
+		want: "bidirectional formatting characters",
+	},
+	{
+		name: "a context value with an RLM is refused",
+		body: "---\ntype: observation\ncontext: {task: \"t-1\\u200F\"}\n---\n# demo fact\n\nbody\n",
+		want: "bidirectional formatting characters",
+	},
+	{
+		name: "a context value with an ALM is refused",
+		body: "---\ntype: observation\ncontext: {task: \"t-1\\u061C\"}\n---\n# demo fact\n\nbody\n",
+		want: "bidirectional formatting characters",
+	},
 	{
 		name: "an undeclared context key is refused by the typed gate",
 		// Well-shaped, so ParseFact keeps it; no topic of this ontology

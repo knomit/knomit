@@ -29,18 +29,18 @@ func callTool(t *testing.T, h func(context.Context, mcpgo.CallToolRequest) (*mcp
 	return result
 }
 
-// knomit_update refuses every private path EXCEPT knomit's own namespace.
+// knomit_update refuses every private path, .knomit/ included (F25).
 func TestUpdate_NonWritablePrivatePathRefused(t *testing.T) {
 	ctx := agentCtx(t)
-	for _, p := range []string{"kb/.drafts/x.md", ".github/x.md", ".knomit/x.md"} {
+	for _, p := range []string{"kb/.drafts/x.md", ".github/x.md", ".knomit/x.md", ".knomit/jobs/x.md", ".knomit/skills/s/a.md"} {
 		result := callTool(t, UpdateHandler(), ctx, map[string]any{
 			"file":        p,
 			"moment_name": "m",
 			"body":        "b",
 		})
 		require.Truef(t, result.IsError, "update must refuse %s", p)
-		require.Containsf(t, resultText(t, result), ".knomit/<area>/",
-			"error for %s must name the writable shape", p)
+		require.Containsf(t, resultText(t, result), "closed to the fact tools",
+			"error for %s must name the rule", p)
 	}
 }
 
@@ -54,5 +54,5 @@ func TestRetract_NonWritablePrivatePathRefused(t *testing.T) {
 		"reason":      "r",
 	})
 	require.True(t, result.IsError, "retract must refuse a non-writable private path")
-	require.Contains(t, resultText(t, result), ".knomit/<area>/")
+	require.Contains(t, resultText(t, result), "closed to the fact tools")
 }

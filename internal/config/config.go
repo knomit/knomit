@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/embeddings/params"
+	"knomit/internal/fact"
 )
 
 // GitConfig holds git-related configuration.
@@ -803,6 +804,13 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.OntologyRoot) == "" {
 		return fmt.Errorf("config: ontology_root must not be empty")
+	}
+	// F25: artifacts/ is the agents' working-file root, kept out of discovery
+	// only by sitting BESIDE the ontology root. An ontology root that is that
+	// folder, or inside it, would make every fact an artifact and every
+	// artifact a fact.
+	if r := strings.ToLower(strings.Trim(strings.TrimSpace(c.OntologyRoot), "/")); r == fact.ArtifactsRoot || strings.HasPrefix(r, fact.ArtifactsRoot+"/") {
+		return fmt.Errorf("config: ontology_root %q is not allowed: %q is the agents' artifacts folder, which must stay outside the ontology root", c.OntologyRoot, fact.ArtifactsRoot)
 	}
 	// Composite methodology score is bounded to [0, 1] (0.6·vec + 0.4·tag,
 	// each in [0,1]). NaN, negatives, or values >1 silently break filtering

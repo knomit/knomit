@@ -134,12 +134,11 @@ func (ri *RepoInstance) WriteReadme(ctx context.Context, content string) (commit
 // discovery entirely (see fact.IsPrivatePath). knomit reads it by name, which
 // the private rule explicitly permits.
 //
-// It is a loose file at the ROOT of the namespace, which is what makes it
-// server-owned: fact.IsWritablePrivatePath requires at least one subdirectory
-// AND a dotless <area>, so no agent can rewrite the ontology through the fact
-// tools — neither by naming it directly (depth) nor by reusing its name as a
-// DIRECTORY, which would replace the blob with a tree and silently drop the
-// repo onto the embedded default taxonomy (dotless area).
+// No agent can rewrite it through the fact tools: every path under .knomit/
+// is a dot path, and the fact tools refuse every dot path (F25) — by name,
+// and as a DIRECTORY (".knomit/ontology.yaml/x.md"), which would replace the
+// blob with a tree and silently drop the repo onto the embedded default
+// taxonomy.
 //
 // Defined in terms of fact.OntologyFile (not redeclared) so every existing
 // caller of repos.OntologyPath keeps working unchanged.
@@ -191,8 +190,8 @@ var serverOwnedPaths = []string{
 // whoever owns the repo, and knomit only reports it. Neither passes the size
 // cap and exact-case WriteRootFile door that WriteReadme goes through.
 //
-// The directory form is refused for the same reason .knomit/<area> must be
-// dotless: git replaces a same-named blob with a tree, so writing
+// The directory form is refused too: git replaces a same-named blob with a
+// tree, so writing
 // "domains/ontology.yaml/x.md" destroys that ontology as surely as overwriting
 // it would.
 func IsServerOwnedPath(path string) bool {

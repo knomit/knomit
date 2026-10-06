@@ -80,7 +80,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithString("path",
-			mcpgo.Description("Filter by path prefix."),
+			mcpgo.Description("Filter by path prefix. Only facts are searched: a path with a segment beginning with a dot (.knomit/, kb/.drafts/) is refused, and artifacts/ returns nothing — read an artifact by its exact path with knomit_explain."),
 		),
 		mcpgo.WithNumber("min_confidence",
 			mcpgo.Description("Minimum confidence threshold (0–1)."),
@@ -467,6 +467,12 @@ func widenMotifsForLens(ctx context.Context, b *repos.Binding, q *store.SearchOp
 // parseQueryFilters reads the shared filter arguments into SearchOptions.
 // Limit is set by the caller per mode.
 func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
+	// A dot path is closed to the fact tools for reads as well as writes
+	// (F25). The index never holds one, so this would answer "nothing"
+	// anyway — refusing says why, instead of reading as an empty folder.
+	if p := req.GetString("path", ""); fact.IsPrivatePath(p) {
+		return store.SearchOptions{}, fmt.Errorf("path %q is private: %s", p, closedSuffix)
+	}
 	tier, err := parseMotifMatch(req.GetString("motif_match", ""))
 	if err != nil {
 		return store.SearchOptions{}, err

@@ -194,6 +194,12 @@ func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvi
 
 		ri := repos.RepoFromContext(r.Context())
 
+		// F25: a dot path is closed to the fact endpoints for reads too —
+		// sub-resources included, so this runs before their dispatch.
+		if refusePrivateRead(w, r, chi.URLParam(r, "*")) {
+			return
+		}
+
 		// Dispatch sub-resource requests before any other processing.
 		if dispatchFactSubResource(b, subProvider, ri, repoName, branch, w, r) {
 			return

@@ -11,15 +11,22 @@ import (
 // and lowercases all path segments after the ontology root to prevent
 // case-sensitive duplicates (e.g. "AI" vs "ai").
 //
-// EXCEPTION: a path whose FIRST segment is dot-prefixed is a repo-ROOT path
-// (PrivateRoot/…, .github/…), not an ontology path, and is returned without
-// the prefix. Without this, a job writing .knomit/jobs/x.md would silently be
-// redirected to kb/.knomit/jobs/x.md — a path IsWritablePrivatePath refuses,
-// so the write fails with an error that does not match what the caller passed.
+// EXCEPTIONS — two kinds of repo-ROOT path are returned without the prefix:
+//
+//   - a path whose FIRST segment is dot-prefixed (PrivateRoot/…, .github/…).
+//     The fact tools refuse it, and they must refuse it under the name the
+//     caller passed, not as kb/.knomit/… — an error naming a path the caller
+//     never wrote does not say what was wrong.
+//   - a path whose first segment is ArtifactsRoot, case-insensitively
+//     (artifacts/<area>/…): agents' working files live BESIDE the ontology
+//     root, never inside it. So "artifacts/runs/x" means the repo-root
+//     folder, never a kb/artifacts/ topic; a fact under such a topic is still
+//     reachable by its full kb/… path.
+//
 // Such a path is lowercased in full: there is no ontology root to lowercase
 // "after", and store.writeFile lowercases the whole path anyway.
 func NormalizePath(ontologyRoot, path string) string {
-	if strings.HasPrefix(path, ".") {
+	if strings.HasPrefix(path, ".") || IsUnderArtifactsRoot(path) {
 		if !strings.HasSuffix(path, ".md") {
 			path = path + ".md"
 		}
@@ -48,21 +55,20 @@ func BuildFactPath(ontologyRoot, topic, category string) string {
 	return fmt.Sprintf("%s/%s/%s/%s.md", ontologyRoot, topic, category, id)
 }
 
-// IsFactFilePath reports whether a normalized path can hold a fact a reader
-// may open: a .md file under the ontology root with no dot-prefixed segment,
-// or a job slot under PrivateRoot (IsWritablePrivatePath). Anything else —
-// .github/notes.md, README.md, kb/.hidden/x.md, a directory — is not a fact
-// file. A dot-prefixed segment ANYWHERE makes the path private
-// (IsPrivatePath), and a private path is a fact file only as a job slot, so
-// kb/.hidden/x.md is refused by the IsPrivatePath branch, not the prefix test.
+// IsFactFilePath reports whether a normalized path is one the fact tools may
+// open: a .md file under the ontology root, or an artifact (IsArtifactPath) —
+// in both cases with no dot-prefixed segment anywhere. Anything else —
+// .knomit/skills/x/SKILL.md, .github/notes.md, README.md, kb/.hidden/x.md, a
+// directory — is not.
+//
+// A private path is never a fact file, whatever root it sits in: PrivateRoot
+// is the system, written through git and read by knomit by name, and the fact
+// tools do not read it either.
 func IsFactFilePath(ontologyRoot, path string) bool {
-	if !IsMarkdownPath(path) {
+	if !IsMarkdownPath(path) || IsPrivatePath(path) {
 		return false
 	}
-	if IsPrivatePath(path) {
-		return IsWritablePrivatePath(path)
-	}
-	return strings.HasPrefix(path, ontologyRoot+"/")
+	return strings.HasPrefix(path, ontologyRoot+"/") || IsArtifactPath(path)
 }
 
 // IsMarkdownPath reports whether a path names a markdown file — the file kind

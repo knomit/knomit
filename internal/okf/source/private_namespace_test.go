@@ -33,13 +33,15 @@ func TestOKFExportSkipsPrivateNamespace(t *testing.T) {
 		"kb/decisions/x/aaaaaaaa.md": factBody("Alpha", 0.9),
 		".knomit/jobs/x.md":          factBody("Job state", 0.9),
 		"kb/.drafts/x.md":            factBody("Draft", 0.9),
+		// F25: the agents' working files, beside the ontology root.
+		"artifacts/runs/x.md": factBody("Run state", 0.9),
 	})
 
 	snap, err := Load(r.Storer, h)
 	require.NoError(t, err)
 	require.Len(t, snap.Facts, 1)
 	require.Equal(t, "kb/decisions/x/aaaaaaaa.md", snap.Facts[0].Fact.Path(),
-		"job state under .knomit/ and a draft under kb/.drafts/ must not be exported")
+		"job state under .knomit/, an artifact and a draft under kb/.drafts/ must not be exported")
 	require.Empty(t, snap.Warnings,
 		"neither must be reported as lost/unparseable knowledge")
 }
@@ -70,4 +72,10 @@ func TestOKFHistorySkipsPrivateNamespace(t *testing.T) {
 	require.False(t, ok, "a changed .knomit/ path must not be treated as a fact revision")
 	_, ok = okfChangeFromFile("kb/.drafts/x.md", true, draftContents)
 	require.False(t, ok, "a changed kb/.drafts/ path must not be treated as a fact revision")
+
+	// F25: an artifact is never a fact, in history either.
+	_, ok = okfDeletionFromFile("artifacts/runs/x.md", jobContents)
+	require.False(t, ok, "a removed artifact must not be treated as fact retirement")
+	_, ok = okfChangeFromFile("artifacts/runs/x.md", true, jobContents)
+	require.False(t, ok, "a changed artifact must not be treated as a fact revision")
 }

@@ -348,10 +348,15 @@ func TestExplain_HistoryCursorBoundToBindingAndFactPaths(t *testing.T) {
 	// A hand-built cursor for a non-fact path is refused before any lookup.
 	c, ok := decodeHistoryCursor(hc)
 	require.True(t, ok)
+	c.Path = "artifacts/x.md"
+	text, isErr = callExplain(t, ctx, map[string]any{"file": "artifacts/x.md", "history_cursor": encodeHistoryCursor(c)})
+	require.True(t, isErr, text)
+	require.Contains(t, text, "not a fact path")
+	// A dot path is closed to the fact tools (F25), named as such.
 	c.Path = ".github/notes.md"
 	text, isErr = callExplain(t, ctx, map[string]any{"file": ".github/notes.md", "history_cursor": encodeHistoryCursor(c)})
 	require.True(t, isErr, text)
-	require.Contains(t, text, "not a fact path")
+	require.Contains(t, text, "closed to the fact tools")
 
 	// A cursor for a fact path that is not readable at the anchor is unknown.
 	c, _ = decodeHistoryCursor(hc)

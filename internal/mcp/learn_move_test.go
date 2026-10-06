@@ -237,7 +237,7 @@ func TestLearn_ConcurrentMovesOneWins(t *testing.T) {
 // explicit slot already exists), or not at all → the message check is red.
 func TestLearn_WriteAndRetractSamePathRefused(t *testing.T) {
 	ri, ctx, emb := newDedupAttrRepo(t)
-	const slot = ".knomit/jobs/state.md"
+	const slot = "artifacts/jobs/state.md"
 	job := map[string]any{"path": slot, "title": "Job state", "body": "v1"}
 	r, err := LearnHandler(emb)(ctx, moveReq("seed", []any{job}))
 	require.NoError(t, err)

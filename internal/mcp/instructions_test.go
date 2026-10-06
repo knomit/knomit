@@ -44,23 +44,24 @@ func TestProfileInstructions_LearnDescriptionKeysOffGrouping(t *testing.T) {
 		"learn description must map bridge → discovered")
 }
 
-// TestProfileInstructions_DescribesThePrivateNamespaceRule verifies the server
-// instructions teach the .knomit/<area>/ private-state rule GENERICALLY: any
-// area name, not a hardcoded folder. Nothing in knomit's own code knows the
-// word "jobs" — that is one caller's choice of area, not part of the rule.
-func TestProfileInstructions_DescribesThePrivateNamespaceRule(t *testing.T) {
+// TestProfileInstructions_DescribesTheThreeRoots verifies the server
+// instructions teach the F25 split: artifacts/<area>/ for an agent's working
+// files, GENERICALLY (any area name, not a hardcoded folder — "jobs" is one
+// caller's choice), and .knomit/ closed to every fact tool.
+func TestProfileInstructions_DescribesTheThreeRoots(t *testing.T) {
 	out := ProfileInstructions("code", "kb", nil)
-	require.Contains(t, out, ".knomit/<area>/")
-	require.NotContains(t, out, ".knomit/jobs")
-	// The DEPTH half of the rule: an agent that reads only "under .knomit/"
-	// tries .knomit/state.md and gets a refusal the instructions never
-	// predicted. IsWritablePrivatePath requires at least one subdirectory.
-	require.Contains(t, out, "at least one subdirectory deep")
-	// The other half of the same refusal: an area name containing a dot is
-	// refused, because a dotted area could shadow a server-owned loose file.
-	// An agent that reads only the depth rule picks ".knomit/v1.2/state.md"
-	// and gets a refusal the instructions never predicted.
-	require.Contains(t, out, "no dot")
+	require.Contains(t, out, "artifacts/<area>/")
+	require.NotContains(t, out, "artifacts/jobs")
+	// The DEPTH half of the rule: an agent that reads only "under artifacts/"
+	// tries artifacts/state.md and gets a refusal the instructions never
+	// predicted. IsArtifactPath requires at least one folder.
+	require.Contains(t, out, "at least one folder deep")
+	require.Contains(t, out, "no segment beginning with a dot")
+	// The closed half: an agent that still believes .knomit/<area>/ is its
+	// state folder would get refusals the instructions never predicted.
+	require.NotContains(t, out, ".knomit/<area>/")
+	require.Contains(t, out, ".knomit/ is the system")
+	require.Contains(t, out, "closed to every fact tool")
 }
 
 // TestLensInstructions_LensOfOneIsEmpty verifies a single-repo binding produces

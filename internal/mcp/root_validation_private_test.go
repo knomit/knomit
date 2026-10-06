@@ -16,7 +16,7 @@ import (
 // than under a topic. fact.ValidateFact runs root rules UNCONDITIONALLY, before
 // it ever looks the topic up, so a root rule is the one kind of rule that fires
 // for a path with no ontology placement at all — which is exactly what a
-// private-state fact under .knomit/<area>/ is.
+// working file under artifacts/<area>/ is.
 //
 // `validations:` at the top level is an authorable ontology field
 // (internal/fact/ontology.go). No shipped preset uses one today, which is the
@@ -83,8 +83,8 @@ func learnedPath(t *testing.T, result *mcpgo.CallToolResult) string {
 //
 // knomit_learn guards its ValidateFact call on "this fact has an ontology
 // placement". knomit_update derives a topic path by stripping the ontology root
-// — a no-op for .knomit/<area>/… — and hands ValidateFact something like
-// ".knomit/jobs/ae". The unknown topic makes the per-topic walk a no-op, but the
+// — a no-op for artifacts/<area>/… — and hands ValidateFact something like
+// "artifacts/jobs/ae". The unknown topic makes the per-topic walk a no-op, but the
 // ROOT rules already ran. A job could therefore allocate its slot on run one and
 // have every subsequent update refused.
 func TestRootValidations_DoNotApplyToPrivateState(t *testing.T) {

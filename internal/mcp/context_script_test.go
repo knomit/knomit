@@ -45,6 +45,14 @@ func TestScriptTools_ContextThroughTheSameGates(t *testing.T) {
 	require.True(t, isErr)
 	require.Contains(t, text, `key "task": a string must not contain bidirectional formatting characters`)
 
+	// The implicit directional marks (user ruling 2026-10-06), same door.
+	for _, mark := range []string{"‎", "‏", "؜"} {
+		_, text, isErr = callScript(t, tools, ctx, "update", map[string]any{"file": file, "moment_name": "trigger:t1",
+			"updates": map[string]any{"context": map[string]any{"task": "t-17" + mark, "verdict": "agree"}}})
+		require.True(t, isErr, "%U", []rune(mark)[0])
+		require.Contains(t, text, `key "task": a string must not contain bidirectional formatting characters`)
+	}
+
 	_, text, isErr = callScript(t, tools, ctx, "learn", map[string]any{
 		"moment_name": "trigger:t1",
 		"facts": []any{map[string]any{"topic": "verdicts", "category": "t-17", "title": "Undeclared",
