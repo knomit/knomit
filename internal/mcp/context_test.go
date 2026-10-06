@@ -51,7 +51,7 @@ func newContextRepo(t *testing.T, ontYAML string) (*repos.RepoInstance, *store.S
 	t.Cleanup(func() { _ = svc.Close() })
 	emb := newLenEmbedder(t)
 	svc.SetEmbedder(emb)
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	var o *fact.Ontology
 	if ontYAML != "" {
 		o, err = fact.ParseNewOntology([]byte(ontYAML))
