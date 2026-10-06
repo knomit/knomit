@@ -111,7 +111,8 @@ var writeTools = map[string]bool{
 // SABOTAGE: drop `moment_name` from the take's skeleton → red (required);
 // misspell `facts` as `fact` → red (not an argument); drop `binding` from one
 // skeleton → red; drop `trace` from the ack → red; delete the knomit_update
-// skeleton while the skill still names knomit_update → red.
+// skeleton while the skill still names knomit_update → red; drop `context`
+// from the annotation skeleton, or from the fold's read → red (F26).
 func TestMissionTemplate_SkillCallShapes(t *testing.T) {
 	schemas := servedSchemas(t)
 	for _, skill := range []string{"work-task", "post-task"} {
@@ -143,7 +144,7 @@ func TestMissionTemplate_SkillCallShapes(t *testing.T) {
 	}
 	covered := map[string]bool{}
 	actions := map[string]bool{}
-	var take, ack bool
+	var take, ack, annotate, foldRead bool
 	for _, s := range skeletons(t, "work-task") {
 		covered[s.tool] = true
 		if s.tool == "knomit_experiment" {
@@ -151,13 +152,36 @@ func TestMissionTemplate_SkillCallShapes(t *testing.T) {
 		}
 		if s.tool == "knomit_learn" {
 			facts := s.args["facts"].([]any)
-			topic := facts[0].(map[string]any)["topic"]
+			f := facts[0].(map[string]any)
+			topic := f["topic"]
 			_, retract := s.args["retract"]
 			_, moment := s.args["moment_name"]
 			take = take || (topic == "inbox" && retract && moment)
 			ack = ack || (topic == "acks" && retract && moment)
+			if topic == "annotations" {
+				// F26: a cross-check's annotation goes to the MISSION repo,
+				// typed by context, and its first ref names the KB fact.
+				require.Equal(t, "<mission>", s.args["binding"], "an annotation is written on the mission handle")
+				require.Equal(t, "<task id>", f["category"], "annotations/<task id>/")
+				ctx, _ := f["context"].(map[string]any)
+				require.Equal(t, "verdict", ctx["kind"], "the annotation carries context.kind")
+				refs, _ := f["refs"].([]any)
+				require.NotEmpty(t, refs)
+				require.True(t, strings.HasPrefix(refs[0].(string), "kb://"), "the first ref names the KB fact as kb://")
+				annotate = true
+			}
+		}
+		if s.tool == "knomit_query" {
+			if ctx, ok := s.args["context"].(map[string]any); ok && ctx["kind"] == "verdict" {
+				require.Equal(t, "<mission>", s.args["binding"])
+				require.True(t, strings.HasSuffix(s.args["path"].(string), "/annotations/<cross-check task id>/"),
+					"the fold reads one task's folder, with the trailing slash")
+				foldRead = true
+			}
 		}
 	}
+	require.True(t, annotate, "the annotation call, with context, has a skeleton")
+	require.True(t, foldRead, "the fold's read (path plus context) has a skeleton")
 	var missing []string
 	for n := range named {
 		if _, isTool := schemas[n]; isTool && !covered[n] {

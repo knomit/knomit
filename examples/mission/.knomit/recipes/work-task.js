@@ -86,14 +86,20 @@ if (live(task_path) || queued) {
     // has work, so the session starts anyway.
   }
 
-  var trace = {"Knomit-Cause": change.commit, "Knomit-Run": run.id};
-  if (/^[A-Za-z0-9._:-]{1,256}$/.test(change.trace)) {
-    trace["Knomit-Trace"] = change.trace;
+  // The trace (README "The trace"): Knomit-Trace is the mission (this repo's
+  // name), Mission-Task the task, Knomit-Run this run, which is one session.
+  // knomit accepts Knomit-Cause only as a commit hash, so the task travels
+  // in an entry of the mission's own; a task id it would refuse is left out.
+  var mission = missionRepo();
+  var task = fact && fact.entities ? fact.entities[0] : "";
+  var trace = {"Knomit-Trace": mission, "Knomit-Run": run.id};
+  if (/^[A-Za-z0-9._:-]{1,128}$/.test(task)) {
+    trace["Mission-Task"] = task;
   }
   var context = {
-    mission_repo: missionRepo(),
+    mission_repo: mission,
     working_copy: task_path,
-    experiment: experimentName(fact && fact.entities ? fact.entities[0] : ""),
+    experiment: experimentName(task),
     lease: lease,
     trace: trace
   };

@@ -1,9 +1,11 @@
 # A mission repo: coordination signals for one mission, separate from any
-# knowledge base. Everything here is a signal (kind pragmatic, type signal):
-# consumed once, never believed. Read README.md before editing.
+# knowledge base, plus one topic of annotations on the target knowledge base's
+# facts. Every coordination topic holds signals (kind pragmatic, type signal):
+# consumed once, never believed. The knowledge itself goes to the target
+# knowledge base the charter names. Read README.md before editing.
 id: mission
 name: Mission
-description: Coordination signals for one mission (tasks, claims, working copies, acknowledgements). Consumed, not believed.
+description: Coordination signals for one mission (tasks, claims, working copies, acknowledgements), and annotations on the target knowledge base's facts. The knowledge itself lives in the target knowledge base.
 
 # Set these ONCE, when the mission repo is created, and do not change them
 # mid-mission (README: "Set it once and forget").
@@ -190,3 +192,22 @@ topics:
         match: "awards/{agent}/**"
         do: script
         script: awards
+
+  # --- Annotations: facts ABOUT the target knowledge base's facts (README
+  # "Annotations") ---
+  # annotations/<task id>/: one folder per task, so parallel tasks never write
+  # one file. An annotation's refs name the KB fact it is about as
+  # kb://<kb repo id>/<path>; its `context` says what kind of annotation it is.
+  # A cross-check writes one per fact it checks (kind: verdict); the fold reads
+  # them and is the only writer of the KB's hypotheses.
+  #
+  # learn_dedup: off. Annotations on one fact look alike by design; with dedup
+  # on, knomit_learn would merge one into another.
+  annotations:
+    description: Facts about facts in the target knowledge base, annotations/<task-id>/. Refs name the KB fact; context.kind says what the annotation is.
+    attributes:
+      learn_dedup: off
+    context:
+      kind:       {type: enum, values: [verdict], required: true}
+      verdict:    {type: enum, values: [corroborate, contradict]}
+      confidence: {type: number, min: 0, max: 1}

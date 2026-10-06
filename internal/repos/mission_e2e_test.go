@@ -627,13 +627,14 @@ func TestMission_OneTaskTwoClaimersOneTakes(t *testing.T) {
 			// The winner's wake started one session, for its working copy.
 			require.Eventually(t, func() bool { return len(claudeRuns(t)) == 1 }, 20*time.Second, 20*time.Millisecond)
 			require.Contains(t, strings.Join(claudeRuns(t)[0], " "), working)
-			// #349: the prompt hands the session the task's trace — the task
-			// id, which the claims script's take carried forward — to pass on
-			// every write, inside its JSON context literal.
+			// #349, as F26 settled it: the prompt hands the session the trace
+			// to pass on every write, inside its JSON context literal — the
+			// mission (this repo's name), the task, the run; no Knomit-Cause.
 			trace := contextOf(t, claudeRuns(t)[0]).Trace
-			require.Equal(t, id, trace["Knomit-Trace"], "the session's trace is the task id")
+			require.Equal(t, "kb", trace["Knomit-Trace"], "the session's trace is the mission")
+			require.Equal(t, id, trace["Mission-Task"], "the task travels as Mission-Task")
 			require.Regexp(t, `^run-[0-9a-f]{32}$`, trace["Knomit-Run"])
-			require.Regexp(t, `^[0-9a-f]{40}$`, trace["Knomit-Cause"])
+			require.NotContains(t, trace, "Knomit-Cause")
 		})
 	}
 }

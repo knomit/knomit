@@ -280,7 +280,7 @@ func TestMissionTemplate_WorkTaskSkill(t *testing.T) {
 		// the trace
 		"Pass a `trace` on EVERY knomit write",
 		"on both handles, the take and the ack included",
-		"`{\"Knomit-Trace\": \"<that copy's task id>\", \"Knomit-Run\": \"<the context trace's Knomit-Run>\"}`",
+		"`{\"Knomit-Trace\": \"<the context trace's Knomit-Trace>\", \"Mission-Task\": \"<that copy's task id>\", \"Knomit-Run\": \"<the context trace's Knomit-Run>\"}`",
 		// the experiment name
 		"`Task_42.b` becomes `task-42-b`",
 	} {
@@ -358,9 +358,11 @@ func TestMission_RecipeStartsUnboundStrictInTempDir(t *testing.T) {
 	require.Equal(t, "crew-ops", c.MissionRepo, "the mission repo is this repo, read from knomit's own MCP entry")
 	require.Equal(t, path, c.WorkingCopy)
 	require.Equal(t, "task-assigned-1", c.Experiment, "the task id in strict kebab-case")
-	require.Equal(t, id, c.Trace["Knomit-Trace"])
+	// The trace is mission, task, session (README "The trace"): the mission
+	// repo's name, the task id, the run; no Knomit-Cause (knomit takes it
+	// only as a commit hash).
+	require.Equal(t, map[string]string{"Knomit-Trace": "crew-ops", "Mission-Task": id, "Knomit-Run": c.Trace["Knomit-Run"]}, c.Trace)
 	require.Regexp(t, `^run-[0-9a-f]{32}$`, c.Trace["Knomit-Run"])
-	require.Regexp(t, `^[0-9a-f]{40}$`, c.Trace["Knomit-Cause"])
 	leaseAt, err := time.Parse(time.RFC3339, c.Lease)
 	require.NoError(t, err)
 	require.Greater(t, leaseAt.Sub(time.Now()), 30*time.Minute, "the session's lease outlasts its timeout")

@@ -3,8 +3,10 @@
 A mission repo is where the agents of one mission coordinate: tasks, claims,
 working copies and acknowledgements. It is a knomit repo of its own, separate
 from any knowledge base. It holds signals (`kind: pragmatic`, `type: signal`),
-facts that are consumed once and never believed. The knowledge an agent
-produces goes to a knowledge base; the mission repo only points at it.
+facts that are consumed once and never believed, plus one topic of
+annotations: facts ABOUT the target knowledge base's facts (README
+"Annotations"). The knowledge an agent produces goes to the target knowledge
+base the charter names; the mission repo only points at it.
 
 Nothing here is compiled into knomit. The template is built from knomit's
 generic primitives only: an ontology with validations and triggers, trigger
@@ -20,7 +22,6 @@ files on two instances, so they do not rot.
 | `.knomit/skills/post-task/SKILL.md` | How a session posts a task. |
 | `.knomit/skills/work-task/SKILL.md` | How a session drains its queue: take each copy, work it in a knowledge-base experiment, acknowledge it. |
 | `.knomit/recipes/work-task.js` | The sample recipe the `wake` and `lease` triggers run: one headless Claude Code session that drains the queue. |
-| `../mission-kb/.knomit/ontology.yaml` | The companion KNOWLEDGE BASE's ontology: lanes, `forecast` (the hypothesis format, enforced), `verdicts`, syntheses, meta. See "The knowledge base". |
 
 ## Copy it
 
@@ -407,17 +408,35 @@ that session's half-done experiment.
 
 ## The trace
 
-The prompt hands the session a `trace`: `Knomit-Cause` (the commit that
-fired), `Knomit-Run` (this run's id) and `Knomit-Trace` (the task id,
-included only when it is a plain id). The `work-task` skill tells the
+The trace is mission, task, session:
+
+| Entry | Is | Set by |
+|---|---|---|
+| `Knomit-Trace` | the mission: the mission repo's name | the recipe (`missionRepo()`), and the poster |
+| `Mission-Task` | the task id (left out when it is not a plain id of at most 128 characters) | the recipe, and the poster |
+| `Knomit-Run` | this run's id; one run starts one session | the recipe |
+
+The prompt hands the session this `trace`. The `work-task` skill tells the
 session to pass it as the `trace` argument on every knomit write for that
 copy (the take, the results, the experiment's `open`, `commit` and
-`rollback`, the ack), so a task's story (the trigger
-scripts' writes, the session's results and the ack) reads back with
-`git log --all --grep='^Knomit-Trace: <task id>'` (or
-`--grep='^Knomit-Run: <run id>'` for one run). For every other copy it takes,
-the session builds the trace itself: `Knomit-Trace` = that copy's task id,
-the same `Knomit-Run`, and no `Knomit-Cause`.
+`rollback`, the ack). For every other copy it takes, the session builds the
+trace itself: the same `Knomit-Trace` and `Knomit-Run`, and `Mission-Task` =
+that copy's task id. So everything one mission wrote, on the mission repo and
+on the target knowledge base, reads back with
+`git log --all --grep='^Knomit-Trace: <mission repo name>'`; one task with
+`--grep='^Mission-Task: <task id>'`; one session with
+`--grep='^Knomit-Run: <run id>'`.
+
+Why the task is not `Knomit-Cause`: knomit accepts `Knomit-Cause` only as a
+full commit hash (the one commit that led to this one), and `Knomit-` names
+are knomit's. `Mission-Task` is an entry of the mission's own, which the
+`trace` argument accepts (a key of letters, digits and hyphens, a one-line
+value). The session's trace carries no `Knomit-Cause`.
+
+A task posted with the `post-task` skill's call carries `Knomit-Trace` (the
+mission) and `Mission-Task` on its post. knomit copies the firing commit's
+`Knomit-Trace` forward onto every trigger script's write, so the claims,
+takes and copies the scripts make for it carry the mission too.
 
 `knomit_experiment` takes the same `trace` and stamps it on the merge commit
 its `commit` (or `sync`) writes. A `commit` that fast-forwards writes no new
@@ -435,132 +454,108 @@ again, the coordinator posts it again under a NEW task id, in one
 `knomit_learn` that also retracts the old task if it is still there. No
 script is needed.
 
-## The knowledge base
+## The target knowledge base
 
-The mission repo holds signals; what the agents learn goes to a knowledge
-base the tasks name (`knowledge base: repo <name>` or `lens <name>`).
+What the agents learn goes to the TARGET knowledge base: any existing
+knowledge base the charter names, made from any template (`general`,
+`coding` or another), and each task's `knowledge base:` line
+(`knowledge base: repo <name>` or `lens <name>`). It exists before the
+mission and stays after it, so the history of every fact the mission wrote
+continues there.
 
-### The hypothesis format
+Findings, syntheses and hypotheses are ORDINARY facts there, under that
+knowledge base's own topics, with no special format: a hypothesis is
+`type: hypothesis`, written the way knomit writes hypotheses. There is no
+mission knowledge-base template. If a mission needs more data about a
+knowledge-base fact, that data is an annotation in the mission repo with a
+ref to the fact (below), never a format in the knowledge base.
 
-Every task that asks for predictions carries the hypothesis format in its
-body (the `post-task` skill has the block to paste, marked `hypothesis-format`).
-A session reads only its task and its skill, so a format kept anywhere else is
-never seen. The format is the same for every mission; the mission's charter
-supplies the subject, the granularities that matter and the instruments that
-settle a prediction.
-
-- `topic: forecast`, `category: <subject>/<granularity>`, the granularity
-  being `year`, `month` or `day`;
-- `type: hypothesis`, `confidence` = the probability;
-- the body starts with three lines, unindented:
-  - `predicted: <period>`: `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, at the granularity;
-  - `settles_true_if: <instrument>` and `settles_false_if: <instrument>`, each
-    naming an instrument that already exists and can be observed;
-  - plus `counters: <path>` for a counter-hypothesis;
-- `expires` = the last second of the predicted period in UTC (31 December, the
-  last day of the month, or the day itself, at `23:59:59Z`);
-- `refs`: the evidence.
-
-Nobody retracts a hypothesis because it settled: people decide that.
-
-### The knowledge-base template
-
-`examples/mission-kb/.knomit/ontology.yaml` is the ontology of a mission's
-knowledge base. It lives beside this directory, not in it, so that copying
-the mission repo never carries it along. Create the knowledge base from it the
-same way as the mission repo (a repo's ontology is read when knomit opens the
-repo, so it must be there when the repo is created):
-
-```sh
-git init my-mission-kb
-cp -R examples/mission-kb/. my-mission-kb/
-```
-
-Rename the `findings` lane topic, and add one topic per lane, BEFORE you
-create the repo. The ontology is never edited afterwards (knomit reads it when
-it opens the repo and offers no sanctioned way to change it), so a knowledge
-base that already exists does not gain `forecast`. Create the mission's
-knowledge base from this template, and mount older knowledge bases in the
-mission's lens to read them.
-
-It sets the same `consensus`, `conflicts` and `sync` as the mission repo, and
-its topics are:
-
-| Topic | Holds | Settings |
+| Written by | What | Where |
 |---|---|---|
-| `findings` (rename; one per lane) | the evidence a lane gathers | |
-| `forecast` | hypotheses only, `forecast/<subject>/<granularity>/` | `learn_dedup: off`; validations below |
-| `verdicts` | cross-check verdicts, `verdicts/<cross-check task id>/` | `learn_dedup: off`; validations below |
-| `syntheses` | syntheses across lanes | |
-| `meta` | definitions, conventions, reasoning (`knomit_hypothesize` writes its methodology to `meta/reasoning`) | |
+| a gather task | findings, with primary-source refs | target knowledge base, its own topics |
+| a synthesize task | syntheses | target knowledge base |
+| a hypothesize task | hypotheses, refs to the syntheses | target knowledge base |
+| a cross-check task | one annotation per checked fact | mission repo, `annotations/<task id>/` |
+| the fold task | hypotheses updated, merged or retracted; counter-hypotheses | target knowledge base |
+| every task | its ack | mission repo, `acks/<task id>/` |
 
-**The validations on `forecast`** refuse, by rule name, on `knomit_learn` and
-on `knomit_update` alike:
+**Dedup is on in the target knowledge base** (as that knowledge base has
+it). Two agents' near-identical facts in one category are merged by
+`knomit_learn`, and the response says what was kept and what was dropped. A
+fact meant to stand beside another, a counter-hypothesis for one, names it
+in `distinct_from`: `knomit_learn` then declines that merge (knomit #412).
+`distinct_from` is not stored, so a later `knomit_review` dedup can still
+merge the two. Parallel gather tasks can still both be merged into one
+existing fact and meet at their experiment commits; since #412 an
+experiment commit follows the knowledge base's `conflicts` setting, so what
+happens then depends on how the target knowledge base is configured.
 
-| Rule | Refuses |
-|---|---|
-| `hypothesis-only` | any type but `hypothesis` (so the format cannot be dodged by writing an `insight`) |
-| `predicted` | no unindented `predicted: <YYYY \| YYYY-MM \| YYYY-MM-DD>` line, or a period that does not exist (`2026-02-30`, `2026-13`) |
-| `settles-true-if`, `settles-false-if` | a missing settlement line |
-| `expires-ends-period` | `expires` absent, or not the last second of the predicted period (compared as instants, so `+02:00` for the same instant passes) |
-| `granularity-in-path` | a hypothesis not filed under `…/<granularity>/` matching its period (a day prediction under `/month/`) |
+## Annotations
 
-A refused session reads the rule's message and writes the line again.
+`annotations/<task id>/` is the mission repo's one topic of facts ABOUT the
+target knowledge base's facts.
 
-**`learn_dedup: off` on `forecast`.** Two agents' hypotheses on one subject
-look alike by design, and a counter-hypothesis looks like what it counters.
-With dedup on, `knomit_learn` merges the second into the first: the second
-writer's experiment then edits the FIRST writer's file. That is a write to a
-shared fact even though no instruction asked for one: two tasks doing it in
-parallel conflict at their experiment commits (the first mission's stop), and
-a counter is swallowed. With it off, every hypothesis lands at its own path.
-`knomit_review` still reads them: `learn_dedup` governs `knomit_learn` only.
-The lane topics keep dedup on; whether a counter written there with
-`distinct_from` can still be merged away is an open question for knomit (the
-first mission's F-R2), not something this template settles. For the same
-reason, two lane tasks running in parallel can still both be merged into ONE
-existing finding and conflict at their experiment commits; no instruction
-causes it, and the fix belongs to knomit (an experiment commit that honours
-the repo's `conflicts` setting), not to this template.
+- **The path carries the task.** Each task writes into its own folder, so
+  parallel tasks never write one file.
+- **The ref carries the target.** The knowledge-base fact is named as
+  `kb://<knowledge base repo id>/<path>` (`knomit_repos` lists the ids).
+  knomit does not check that a ref into another repo exists, so a mistyped
+  target is not refused.
+- **The `context` carries the kind** (knomit's typed `context`, declared in
+  this ontology and checked on every write):
 
-Nothing on this knowledge base acts on `expires`: there is no `on: due`
-trigger. A hypothesis's `expires` is its settlement date, not its end.
+  | Key | Declared | |
+  |---|---|---|
+  | `kind` | enum `[verdict]`, required | what the annotation is |
+  | `verdict` | enum `[corroborate, contradict]` | a verdict's finding |
+  | `confidence` | number, 0 to 1 | the confidence the checked fact deserves |
 
-### Cross-checks write verdicts; one fold writes the hypotheses
+  An annotation without `kind`, with a key the ontology does not declare, or
+  with a value outside its enum or range is refused, and the error names the
+  key. A mission adds a kind (a note, a question) by adding a value to
+  `kind`'s enum before the repo is created, with no new topic.
+- **`learn_dedup: off`.** Annotations on one fact look alike by design; with
+  dedup on, the second would merge into the first.
+- **Finding them.** `knomit_query` with
+  `path: "kb/annotations/<task id>/"` and `context: {"kind": "verdict"}`
+  returns that one task's verdicts; with `path: "kb/annotations/"` every
+  verdict of the mission. Keep the trailing `/`: the path is a prefix, and
+  `task-1` would also match `task-12/`.
+
+Nothing in the target knowledge base refs the mission repo: annotations
+point at the knowledge base, not the other way, and the fold summarises the
+verdicts in the facts it changes.
+
+### Cross-checks write annotations; one fold writes the hypotheses
 
 A hypothesis is a SHARED fact: every agent reads it. Two tasks that
-`knomit_update` one fact in parallel cannot both land. Each works in its own
-experiment; the first commit wins, realtime sync carries its edit into the
-other agents' branches within seconds, and every later experiment commit is
-refused for conflicts. In the first mission, three parallel cross-checks
-updated the same nine hypotheses: one landed and two failed, which stopped
-the run. So the template never has two tasks update one fact:
+`knomit_update` one fact in parallel cannot both land as written. Each works
+in its own experiment; realtime sync carries the first commit's edit into
+the other agents' branches within seconds, and every later experiment
+commit is refused, or (under `conflicts: {facts: merge}`) field-merged with
+one side's change to a field both changed dropped. In the first mission,
+three parallel cross-checks updated the same nine hypotheses: one landed and
+two were refused, which stopped the run. So the template never has two
+tasks update one fact:
 
-- **A cross-check never updates what it checks.** For each fact it checks it
-  writes one NEW fact under `verdicts/<its task id>/` (the `post-task`
-  skill's `verdict-format` block goes in its body). The body starts with
-  `verdict: corroborate|contradict`, `target: <path>` and
-  `suggested_confidence: <0..1>`, and its refs include the target and the
-  evidence. Cross-checks run in parallel; they never touch one file.
+- **A cross-check never updates what it checks, and makes no commit on the
+  target knowledge base.** For each fact it checks it writes one annotation
+  in the MISSION repo, under `annotations/<its task id>/`, with
+  `context.kind: verdict` and a `kb://` ref to the fact (the `post-task`
+  skill's `cross-check-task` block goes in its body; the `work-task` skill
+  has the call). Cross-checks run in parallel; they never touch one file.
 - **One fold task folds them.** It is assigned to one agent and posted after
   every cross-check of the round has acknowledged (the `fold-task` block).
-  It reads `verdicts/<id>/` for each cross-check and makes one `knomit_update`
-  per target: the confidence, and refs = the current refs plus the verdicts.
-  It is the only writer of the hypotheses. If a cross-check failed, it folds
-  what exists and names the missing checker in its ack.
+  It reads each cross-check's annotations (`path` plus `context`), and then,
+  inside its one experiment on the target knowledge base, updates, merges
+  or retracts the hypotheses, and writes any counter-hypothesis with
+  `distinct_from` naming what it counters. It is the only writer of the
+  hypotheses, and every change is a commit on that fact's own history in
+  the knowledge base (`knomit_explain` shows it). If a cross-check failed,
+  it folds what exists and names the missing checker in its ack.
 - "Posted after every ack" is the coordinator's discipline: knomit does not
   enforce it. A fold posted early folds a partial round, which is safe
   (nothing else writes the hypotheses), only incomplete.
-
-`verdicts` is `learn_dedup: off`: verdicts on one target look alike by design,
-and with dedup on the second would merge into the first. Its validations:
-
-| Rule | Refuses |
-|---|---|
-| `verdict` | no unindented `verdict: corroborate` or `verdict: contradict` line |
-| `target` | no `target: <path>.md` line |
-| `suggested-confidence` | no `suggested_confidence:` line with a number from 0 to 1 |
-| `refs-target` | refs that do not include the target |
 
 The work-task skill says the same from the session's side ("Shared facts"): a
 session updates only a fact its task tells it to update, by path.
