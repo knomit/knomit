@@ -99,12 +99,18 @@ const distillResponseSchema = `{
 // cluster be delivered across pages while the merge decision still sees all of
 // it: the delivery splits, the decision does not.
 func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemContent, error) {
+	return renderPruneWorkItem(facts, ontologyRoot, "")
+}
+
+// renderPruneWorkItem is RenderPruneWorkItem with the repository guidance
+// section (F23; "" for none).
+func renderPruneWorkItem(facts []factForLLM, ontologyRoot, guidance string) (*WorkItemContent, error) {
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for prune work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("prune", "user", PromptData{OntologyRoot: ontologyRoot})
+	prompt, err := RenderTemplate("prune", "user", PromptData{OntologyRoot: ontologyRoot, Guidance: guidance})
 	if err != nil {
 		return nil, fmt.Errorf("render prune work item: %w", err)
 	}
@@ -164,11 +170,18 @@ const reflectResponseSchema = `{
 // review. existingMethodology is the pre-formatted methodology section to
 // inject; pass an empty string when none is relevant.
 func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology, motifVocabulary string) (*WorkItemContent, error) {
+	return renderReflectWorkItem(transitionsJSON, ontologyRoot, existingMethodology, motifVocabulary, "")
+}
+
+// renderReflectWorkItem is RenderReflectWorkItem with the repository guidance
+// section (F23; "" for none).
+func renderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology, motifVocabulary, guidance string) (*WorkItemContent, error) {
 	prompt, err := RenderTemplate("reflect", "user", PromptData{
 		Facts:               string(transitionsJSON),
 		OntologyRoot:        ontologyRoot,
 		ExistingMethodology: existingMethodology,
 		MotifVocabulary:     motifVocabulary,
+		Guidance:            guidance,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render reflect work item: %w", err)
@@ -190,6 +203,12 @@ func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodo
 // on the wire. Compact, not indented: it ships as structural JSON now, and the
 // delivering envelope does its own formatting.
 func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string, remainder bool) (*WorkItemContent, error) {
+	return renderDistillWorkItem(facts, ontologyRoot, applicableMethodology, remainder, "")
+}
+
+// renderDistillWorkItem is RenderDistillWorkItem with the repository guidance
+// section (F23; "" for none).
+func renderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string, remainder bool, guidance string) (*WorkItemContent, error) {
 	shared := sharedClusterMotifs(facts)
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
@@ -201,6 +220,7 @@ func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 		ApplicableMethodology: applicableMethodology,
 		SharedMotifs:          shared,
 		Remainder:             remainder,
+		Guidance:              guidance,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render distill work item: %w", err)

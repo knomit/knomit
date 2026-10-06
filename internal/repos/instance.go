@@ -211,6 +211,10 @@ type RepoInstance struct {
 	// Enter/Exit only).
 	upstreamMain string
 	syncOrigin   string
+
+	// guidance caches the F23 guidance read at the consensus branch's tip
+	// (ConsensusGuidance). Zero value ready; never copied.
+	guidance guidanceCache
 }
 
 // Status is the repo's lifecycle status, derived by its machine. A bare test

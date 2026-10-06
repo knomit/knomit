@@ -1114,18 +1114,21 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 			return nil, wrapf(reviewTool, err, "unmarshal facts for prompt")
 		}
-		content, err = RenderPruneWorkItem(facts, ontologyRoot)
+		content, err = renderPruneWorkItem(facts, ontologyRoot,
+			reviewGuidanceSection(consensusGuidance(ctx, d.RI), ontologyRoot, factPathsOf(facts)))
 	case "distill":
 		var facts []factForLLM
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 			return nil, wrapf(reviewTool, err, "unmarshal facts for prompt")
 		}
 		applicableMethodology := distillMethodologySection(ctx, d.RI, branch, facts)
-		content, err = RenderDistillWorkItem(facts, ontologyRoot, applicableMethodology, isRemainderItem(item.ClusterKey))
+		content, err = renderDistillWorkItem(facts, ontologyRoot, applicableMethodology, isRemainderItem(item.ClusterKey),
+			reviewGuidanceSection(consensusGuidance(ctx, d.RI), ontologyRoot, factPathsOf(facts)))
 	case "reflect":
 		existingMethodology := reflectMethodologySection(ctx, d.RI, branch, []byte(item.FactsJSON))
-		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot,
-			existingMethodology, motifVocabularySection(ctx, d, branch))
+		content, err = renderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot,
+			existingMethodology, motifVocabularySection(ctx, d, branch),
+			reviewGuidanceSection(consensusGuidance(ctx, d.RI), ontologyRoot, transitionPathsOf([]byte(item.FactsJSON))))
 	case motifAliasStepType:
 		content, err = RenderMotifAliasWorkItem(item.FactsJSON)
 	case motifDefineStepType:

@@ -32,6 +32,9 @@ var triggersAllowedCalls = map[string][]string{
 		// the shared tree-entry reader; the fire-log reader shared by the recent
 		// log and the lookup by run id
 		"fact.TriggerRecipePath", "rh.privateFileAt", "rh.queryTriggerFires",
+		// F23: GuidanceAt's path re-check and content checks — pure helpers
+		// over the path string and the blob it read, no write
+		"strings.HasPrefix", "path.Clean", "slices.Contains", "strings.Split", "utf8.ValidString", "strings.ContainsRune",
 		// this store's own tables (and the read-only liveness join)
 		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn", "rh.branchID",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",

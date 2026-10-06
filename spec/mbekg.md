@@ -538,10 +538,10 @@ topics:
         description: Teams, organizations, communities
 ```
 
-Schema: the root carries `id`, `name`, `description`, `topics`, and an
-optional `validations` list; each node carries `description`, optional
-`children`, optional `validations`, optional `attributes`, and optional
-`context`; each
+Schema: the root carries `id`, `name`, `description`, `topics`, an
+optional `validations` list and an optional `guidance` block; each node
+carries `description`, optional `children`, optional `validations`, optional
+`attributes`, optional `context` and optional `guidance`; each
 validation carries `name`, `message`, and `rule` (§3.4). Required: `id`,
 `name`, and at least one topic.
 
@@ -607,6 +607,62 @@ unanchored — anchor it yourself); `min`/`max` (number only, inclusive);
 type, bad key name, a pattern that does not compile, a constraint on the wrong
 type) is a warning when an existing repository opens and refuses a new
 ontology; a write of that key is then refused with the reason.
+
+`guidance` is a map on the root or on a topic or child node that names, BY
+PATH, repository guidance files for the synthesis prompts. Two keys are
+defined: `hypothesize` (knomit_hypothesize work items, selected by the seed
+synthesis fact's topic) and `review` (review's prune, distill and reflect
+items, selected by the topics of the item's facts). Each value is a path
+relative to `.knomit/`, written `guidance/<file>.md`, naming a file under
+`.knomit/guidance/`. The ontology holds only the path; the text lives in the
+file.
+
+```yaml
+guidance:                      # root: applies to every topic, shown first
+  review: guidance/all-review.md
+topics:
+  forecast:
+    guidance:
+      hypothesize: guidance/forecast-hypothesize.md
+      review: guidance/forecast-review.md
+```
+
+- **Resolution.** The root's path for a key is always shown first; a node's
+  block then resolves by the same walk as `attributes`, the nearest
+  declaration of a key winning. Two topics naming one file show it once.
+- **Path rule.** One clean relative line, at most 256 bytes: no `..`, no
+  leading `/`, no backslash, no `./` or `//`, starting `guidance/`. Inline
+  text is refused as not a path. A refused value, an unknown key and a block
+  that is not a mapping are each a warning when an existing repository opens
+  and refuse a new ontology. A refused value resolves to NO file for that key
+  at that node, and it shadows the parent's: a typo fails closed rather than
+  handing the topic another topic's policy.
+- **Where it is read.** The ontology and every file it names are read at the
+  tip of the repository's CONSENSUS branch, at one commit — never the agent
+  branch, an experiment, or the ontology the repository opened with. The read
+  is cached by that commit, so a change that reaches the consensus branch takes
+  effect on the next work item. No consensus branch, no ontology there, or one
+  that does not parse: no guidance, with a warning, never a fallback to another
+  branch.
+- **File rule.** A regular UTF-8 file (not a symlink, a directory or a
+  submodule), at most 16 KiB. A missing or unusable file is skipped with one
+  warning per (path, commit) naming where it was declared; the other keys still
+  render, and the work item still goes out. The rendered section is at most
+  16 KiB, cut at a line and marked.
+- **What reaches the prompt.** Only the file text, the `name` and `message` of
+  the validations in force on the topic (from the same ontology), the
+  declared topic path, the path and the branch and commit read at. No fact,
+  task, context value or tool argument is substituted into it; neither tool
+  has an argument that adds instructions. Hypothesize places the section
+  between any methodology section and the fixed WORKFLOW; review places it
+  before every fact-derived string in the prompt. The validations enforce the
+  format on `knomit_learn`; review's own writes are not validated, so review
+  guidance is advice.
+- **Trust.** Guidance is trusted exactly as far as skills and recipes: whoever
+  can change the consensus branch. `.knomit/` is closed to every fact tool
+  (§3.8), so a guidance file reaches the consensus branch only through git.
+- A stored ontology whose only difference from a preset is a `guidance` block
+  is not overwritten by the preset refresh.
 
 Topic and category keys MUST match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase
 kebab-case) at every depth. Writers do not necessarily enforce the grammar
@@ -814,7 +870,7 @@ its own top-level location and its own writers:
 | Root | Holds | Written by | Discovered |
 |---|---|---|---|
 | the ontology root (`kb/`, §3.7) | facts — the knowledge | clients, through the write API | yes |
-| `.knomit/` | the system: the ontology definition (§3.2), trigger scripts, recipes, skills | people, through Git (a commit, a push, a merge), and the implementation's own code | no |
+| `.knomit/` | the system: the ontology definition (§3.2), trigger scripts, recipes, skills, guidance files (§3.2) | people, through Git (a commit, a push, a merge), and the implementation's own code | no |
 | `artifacts/` | clients' untyped working files — a periodic job's bookkeeping | clients, through the write API, by explicit path | no |
 
 **`.knomit/` is the system.** Everything that describes how the knowledge

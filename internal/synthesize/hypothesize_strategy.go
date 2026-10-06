@@ -369,8 +369,9 @@ func (hypothesizeStrategy) Render(ctx context.Context, d Deps, sess *store.Pipel
 				Msg("hypothesize: unmarshal synth fact failed; methodology section will be empty")
 		}
 		return &WorkItemView{
-			Type:   "hypothesize",
-			Prompt: buildHypothesizeInstructions(ctx, d.RI, branch, synthFact.Path()),
+			Type: "hypothesize",
+			Prompt: buildHypothesizeInstructions(ctx, d.RI, branch, synthFact.Path(),
+				hypothesizeGuidanceSection(consensusGuidance(ctx, d.RI), d.RI.OntologyRoot(), synthFact.Path())),
 		}, nil
 
 	case "discover":
@@ -396,12 +397,28 @@ func (hypothesizeStrategy) Render(ctx context.Context, d Deps, sess *store.Pipel
 // branch is required and must be the same branch the synthesis fact lives
 // on; it is not derived from ri.AgentBranch() so the caller cannot
 // silently retrieve from the wrong branch.
-func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, branch, synthPath string) string {
+func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, branch, synthPath, guidance string) string {
 	section := hypothesizeMethodologySection(ctx, ri, branch, synthPath)
 
+	// Order: methodology (if any), repository guidance (if any, F23), then
+	// the fixed WORKFLOW. With no guidance the bytes are exactly what they
+	// were before F23.
+	var out string
+	if section != "" {
+		out = section + "\n\n"
+	}
+	if guidance != "" {
+		out += guidance + "\n\n"
+	}
 	if section == "" {
 		// No methodology on branch — simpler workflow with no fetch step.
-		return `WORKFLOW (do not skip steps):
+		return out + hypothesizeWorkflowPlain
+	}
+	return out + hypothesizeWorkflowMethodology
+}
+
+// hypothesizeWorkflowPlain is the WORKFLOW when no methodology is relevant.
+const hypothesizeWorkflowPlain = `WORKFLOW (do not skip steps):
 
 1. Call knomit_explain on the synthesis fact to trace its provenance.
 2. Gather evidence as needed via knomit_query.
@@ -414,11 +431,9 @@ func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, b
 4. If you decided yes in step 3: call knomit_learn with type: hypothesis. The refs array MUST include the synthesis fact's path AND every source fact you cite as evidence. An empty refs array indicates you did not engage with the inputs — do not submit.
 5. If you wrote a hypothesis in step 4: call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process you used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
 6. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
-	}
 
-	return section + `
-
-WORKFLOW (do not skip steps):
+// hypothesizeWorkflowMethodology is the WORKFLOW after a methodology section.
+const hypothesizeWorkflowMethodology = `WORKFLOW (do not skip steps):
 
 1. Call knomit_explain on the synthesis fact to trace its provenance.
 2. Read the top-ranked candidate above: call knomit_query on its path and read the body. Always — its title is not enough to judge whether it applies. For the remaining candidates, a title is enough to decide whether to OPEN one, never enough to decide whether it APPLIES: open any whose title suggests it bears on your reasoning here, and judge only after reading.
@@ -436,7 +451,6 @@ WORKFLOW (do not skip steps):
    An empty refs array indicates you did not engage with the inputs — do not submit.
 6. If you wrote a hypothesis in step 5: only call knomit_learn with type: methodology if your reasoning is GENUINELY novel. If a methodology you read in step 2 already captures the same lesson, skip the new methodology fact — adding a near-duplicate pollutes the methodology pool and dilutes future params. When you do write one, set domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
 7. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
-}
 
 // hypothesizeMethodologySection queries the branch's methodology for the given
 // synthesis fact and renders it as a prompt-ready section. Returns "" when

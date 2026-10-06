@@ -38,6 +38,13 @@ type PromptData struct {
 	// render site from the work item's ClusterKey via isRemainderItem — there
 	// is no column for it, because the key already carries the fact.
 	Remainder bool
+	// Guidance is the repository guidance section (F23) for prune, distill
+	// and reflect: guidance files and validation messages read at the
+	// consensus branch's tip, nothing else (guidance.go). Its slot sits
+	// BEFORE every fact-derived string in each template, so a fact body
+	// cannot print a forged guidance header ahead of the real one. Empty:
+	// the template is byte-identical to before F23.
+	Guidance string
 }
 
 // RenderTemplate loads and renders a prompt template.
