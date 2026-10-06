@@ -1497,8 +1497,9 @@ paths:
         writes: each is a signed commit on THIS machine's agent branch
         through the same code path as the MCP tools — validations, dedup,
         refs gate, CAS — authored and signed by this machine, never as the
-        author whose change fired it; a script may not write under
-        `.knomit/`), `knomit.emit(payload)`, `knomit.push()` (the `push`
+        author whose change fired it; a script may write `artifacts/<area>/`
+        on the same terms as a session (F25 follow-up) but may not write
+        under `.knomit/`), `knomit.emit(payload)`, `knomit.push()` (the `push`
         action below; it takes no arguments and answers
         `{ok: true, status: "kicked"}`; the fire stays `ran`), and
         `knomit.run(name, payload?)` (the `run` action below, started from a
@@ -3228,6 +3229,12 @@ components:
           changes only through git. Files a repo already holds under
           `.knomit/<area>/` from before this rule stay in git but are not
           reachable here.
+
+        These three roots are ALL that is reserved. A non-dot top-level path
+        that is none of them — an integrator's own root, kept beside `kb/`
+        for its own reasons — is not claimed by knomit: it is not refused as
+        private, not treated as an artifact, and is writable through these
+        same fact routes like any other non-fact, non-private path.
       schema: { type: string }
     LensFactPath:
       name: path

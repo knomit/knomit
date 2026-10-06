@@ -23,6 +23,20 @@ import "strings"
 // by knomit_query, never exported, never seen by a trigger. That only holds
 // while the ontology root is not this folder, which is why config refuses an
 // ontology_root of "artifacts" (or one nested under it).
+//
+// These three are ALL that is reserved (F25 follow-up, user ruling
+// 2026-10-06): a non-dot top-level directory that is none of the three — an
+// integrator's own root, kept beside the ontology root for its own reasons —
+// is not claimed by knomit; it is simply not a fact, not the system, and not
+// an artifact. This is true of the REST write routes, which take a path
+// verbatim: PUT/DELETE reach such a root exactly like any other non-fact,
+// non-private path. It is NOT true of the MCP tools, which never see a bare
+// repo-root path at all — NormalizePath prefixes anything that is not a dot
+// path and not already under ArtifactsRoot with the ontology root, so
+// "notes/x" becomes "kb/notes/x.md", and knomit_learn's `path` argument
+// refuses any path that is not a well-formed artifact path outright. An
+// integrator's own root is therefore reachable only through git or the REST
+// routes, never through the fact tools.
 const ArtifactsRoot = "artifacts"
 
 // IsArtifactPath reports whether path is a writable artifact path:

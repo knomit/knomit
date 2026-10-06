@@ -208,6 +208,8 @@ A repo has three roots. Facts live under %s/ (topic and category). Your working 
 
 %s/ is the system (the ontology, triggers, recipes, skills). It is closed to every fact tool, for reads and writes, together with every other path that has a segment beginning with a dot (kb/.drafts/, .github/): it changes only through git.
 
+These three roots are all that is reserved. A non-dot top-level directory that is none of them is not claimed by knomit — an integrator may keep its own root there for its own reasons through git or the REST API, never through these tools: **path** only ever resolves under %s/, so it cannot reach one.
+
 ## Fact Frontmatter
 
 Each fact has YAML frontmatter with:
@@ -279,7 +281,7 @@ Hypothesis body must contain: hypothesis statement, evidence chain (with confide
 
 Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`,
 		ontologyRoot, ontologyRoot, topicList,
-		ontologyRoot, fact.ArtifactsRoot, fact.PrivateRoot,
+		ontologyRoot, fact.ArtifactsRoot, fact.PrivateRoot, fact.ArtifactsRoot,
 		// The frontmatter vocabulary is rendered from the shared tables in
 		// factschema.go rather than restated here, so the instructions and the
 		// knomit_learn/knomit_update JSON schemas can never drift apart on

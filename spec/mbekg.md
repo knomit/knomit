@@ -911,6 +911,16 @@ Every other dot-prefixed top-level directory is FOREIGN — `.github/`,
 `.vscode/` and the
 like belong to other tools, and an implementation MUST NOT write to them.
 
+**Only these three roots are reserved.** The ontology root, `.knomit/`, and
+`artifacts/` are the whole of what this specification claims at the
+repository root. A non-dot top-level directory that is none of the three —
+`notes/`, a vendored tool's own folder, anything an integrator chooses to
+keep beside the knowledge base — is simply not addressed here: an
+implementation MUST NOT treat it as reserved, and MAY let a client write to
+it through the write API exactly as it would any other non-fact, non-private
+path. Integrators are free to use their own top-level roots for their own
+purposes; this specification does not require — or forbid — it.
+
 ## 4. Git Conventions
 
 §1.1 gave the mapping from learning acts to Git effects. This section

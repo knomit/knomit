@@ -35,12 +35,18 @@
 // holds none); a host call after the swap fails with "unavailable", thrown to
 // the script, and the fire is `script-error`.
 //
-// The one place a script is denied what a session may do: artifacts/<area>/
-// is writable working state for a session's MCP tools and never for a script
-// (ruling R7, kept for the artifacts root by F25), so the host refuses a
-// `path` key on any learn fact, and any private or artifacts/ path on
-// update/retract, BEFORE the handler sees the call. (.knomit/ is closed to
-// the handler as well since F25; the host refuses it first.)
+// .knomit/ (and every dot path) is denied to a script exactly as it is to a
+// session: the host refuses a `path` key naming one on learn, and any such
+// path on update/retract, BEFORE the handler sees the call — belt and
+// braces, since the handler refuses it too (F25). artifacts/<area>/ working
+// state, by contrast, is now open to a script on the SAME terms as a session
+// (F25 follow-up, user ruling 2026-10-06): the host applies fact.IsArtifactPath
+// to a `path`/`file` argument that normalises under artifacts/ and refuses
+// only a MALFORMED one (too shallow, an empty or dot segment, ".."), the same
+// shape check update/retract run themselves. A script writing artifacts/ is
+// still never SEEN by a trigger: the dispatcher's diff (store.DiffFacts) reads
+// only the ontology-root subtree, so an artifacts/ commit matches no `match`
+// pattern — no loop is possible, with no extra filter needed here.
 package repos
 
 import (
@@ -406,10 +412,15 @@ func (h *scriptHost) learn(args []any) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("knomit.learn: fact %d is not an object", i)
 		}
-		// The one divergence from the MCP tool (ruling R7): `path` is how a
-		// session writes artifacts/<area>/ working files; a script may not.
-		if _, has := m["path"]; has {
-			return nil, fmt.Errorf("knomit.learn: fact %d: a script may not write under %s/ (no path; use topic and category)", i, fact.PrivateRoot)
+		// `path` is how a fact tool writes artifacts/<area>/ working files
+		// instead of a topic/category fact (F25 follow-up: a script may now
+		// use it too, on the same terms as a session). The same private- and
+		// artifact-shape check update/retract run on their `file` argument
+		// runs here on `path`, before the handler sees the call.
+		if raw, has := m["path"]; has {
+			if _, err := h.privateRefused("learn", raw); err != nil {
+				return nil, fmt.Errorf("knomit.learn: fact %d: %w", i, err)
+			}
 		}
 	}
 	opts := objectArg(args, 1)
@@ -467,10 +478,11 @@ func (h *scriptHost) retract(args []any) (any, error) {
 }
 
 // factPath reads the path argument of update/retract and refuses a private
-// one — checked on the path AS THE HANDLER WOULD WRITE IT (after
-// NormalizePath, the handler's own order), so `.knomit/x` and `.knomit/x.md`
-// are refused alike. The handler would accept `artifacts/<area>/…` (working
-// files for sessions); a script never writes there, nor under `.knomit/`.
+// or malformed-artifact one — checked on the path AS THE HANDLER WOULD WRITE
+// IT (after NormalizePath, the handler's own order), so `.knomit/x` and
+// `.knomit/x.md` are refused alike. The handler accepts a well-formed
+// `artifacts/<area>/…` path from a script on the same terms as a session
+// (F25 follow-up); `.knomit/` stays closed to a script as to everyone.
 func (h *scriptHost) factPath(tool string, args []any) (string, error) {
 	file, ok := stringArg(args, 0)
 	if !ok || file == "" {
@@ -480,7 +492,15 @@ func (h *scriptHost) factPath(tool string, args []any) (string, error) {
 }
 
 // privateRefused is factPath's rule for one path value: a non-empty string
-// whose normalised form is not under a private segment.
+// whose normalised form is not under a private (dot) segment, and, when it
+// names the artifacts root, is a well-formed artifact path.
+//
+// This is exactly the MCP tools' own two-step check (closedToFactTools, then
+// IsUnderArtifactsRoot && !IsArtifactPath) run on the path the handler will
+// see — so a script meets the same refusal a session would, before the
+// handler is even called. internal/mcp cannot be imported here (internal/mcp
+// imports internal/repos), so the predicates are fact's, not mcp's, and the
+// message text is this package's own.
 func (h *scriptHost) privateRefused(tool string, v any) (string, error) {
 	file, ok := v.(string)
 	if !ok || file == "" {
@@ -494,12 +514,14 @@ func (h *scriptHost) privateRefused(tool string, v any) (string, error) {
 	if fact.IsPrivatePath(norm) {
 		return "", fmt.Errorf("knomit.%s: a script may not write under %s/ (%s)", tool, fact.PrivateRoot, norm)
 	}
-	// F25: a script writes facts only. It never had a place to keep working
-	// files (learn's `path` is refused to scripts), so artifacts/ stays out of
-	// reach too — the conservative reading of an open detail the user has not
-	// ruled on.
-	if fact.IsUnderArtifactsRoot(norm) {
-		return "", fmt.Errorf("knomit.%s: a script may not write under %s/ (%s)", tool, fact.ArtifactsRoot, norm)
+	// F25 follow-up (user ruling 2026-10-06): a script may write artifacts/
+	// on the same terms as a session — only a MALFORMED artifact path (too
+	// shallow, an empty or dot segment, "..") is refused here; a well-formed
+	// one is passed through to the handler, which writes it.
+	if fact.IsUnderArtifactsRoot(norm) && !fact.IsArtifactPath(norm) {
+		return "", fmt.Errorf("knomit.%s: %s is not writable: an explicit path must be under %s/<area>/<name>, "+
+			"at least one folder deep, with no empty segment, no segment beginning with '.', and no \"..\"",
+			tool, norm, fact.ArtifactsRoot)
 	}
 	return file, nil
 }

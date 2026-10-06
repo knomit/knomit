@@ -182,3 +182,130 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 	require.True(t, strings.HasPrefix(info.Message, "retract: trigger:drop\n"), info.Message)
 	require.Equal(t, map[string]string{"kb/tasks/drop/b.md": "deleted"}, diffOf(drop))
 }
+
+// TestScript_ArtifactsLandThroughRealTools (F25 follow-up, user ruling
+// 2026-10-06): a script's knomit.learn(path), update and retract of
+// artifacts/<area>/ now land through the REAL learn/update/retract handlers
+// — no try/catch below, so a refusal anywhere in the sequence would abort the
+// script and show up as a `script-error` outcome instead of `ran` — and the
+// write is never SEEN by a trigger: `watch`'s topic IS "artifacts", so its
+// default match is the sharpest pattern available ("artifacts/**", as in
+// internal/repos.TestDispatch_ArtifactsAreNotTriggerVisible).
+//
+// The script touches TWO artifacts: `runs/x.md` is learned, updated and then
+// retracted (so retract's landing is proven too), but `runs/y.md` is only
+// learned and is left standing — reviewer finding: a file created and
+// retracted within the SAME fire has a net diff of zero over that range, so
+// even a dispatcher that wrongly made artifacts/ trigger-visible would have
+// nothing to see for `runs/x.md` alone, and the test could not have failed
+// under that sabotage. `runs/y.md`'s net "added" closes that gap.
+//
+// A positive control — a literal `kb/artifacts/ctl.md` write, OUTSIDE the
+// script, on the ontology root's own "artifacts" topic — both proves
+// `watch`'s match pattern genuinely fires (so its absence for the script's
+// paths means invisibility, not a dead trigger) and gives a settle point:
+// only after `watch` has fired on the control do we read the fire log and
+// assert it never carries the script's artifacts/ paths, closing the
+// reviewer's second finding (asserting on `watch` with no settle, racing the
+// dispatcher).
+//
+// Sabotage: restore the host's unconditional artifacts refusal in
+// trigger_script.go → the script throws on its first call → script-error.
+// Reviewer's S5 (root the trigger diff at "" instead of the ontology root,
+// and let the fact-path filter admit artifacts/ too) → RED here (`watch`
+// fires on `runs/y.md`), matching internal/repos.
+// TestDispatch_ArtifactsAreNotTriggerVisible going red under the same
+// sabotage.
+func TestScript_ArtifactsLandThroughRealTools(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentBranch: "agent/test",
+		Machine:     repos.Options{Synchronous: true},
+		ScriptTools: mcp.NewScriptTools(nil),
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	ontology := "id: e2e\nname: E2E\ntopics:\n" +
+		"  tasks:\n    description: tasks\n    triggers:\n" +
+		"      - name: t1\n        on: learn\n        do: script\n        script: touch-artifact\n        match: \"tasks/in/**\"\n" +
+		"  artifacts:\n    description: a kb topic that shares the artifacts root's name, " +
+		"so its default match (\"artifacts/**\") is the sharpest trigger available\n    triggers:\n" +
+		"      - name: watch\n        on: [learn, update, retract]\n        do: emit\n"
+	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: "art-e2e", Mode: "custom", OntologyYAML: ontology}, nil)
+	require.NoError(t, err)
+	svc, release, err := ri.Acquire()
+	require.NoError(t, err)
+	defer release()
+	ctx := context.Background()
+	const branch = "agent/test"
+
+	_, err = svc.Facts().WriteFact(ctx, branch, fact.TriggerScriptPath("touch-artifact"),
+		`knomit.learn({path: "artifacts/runs/x.md", title: "run state", body: "b"});`+
+			`knomit.update("artifacts/runs/x.md", {updates: {title: "run state v2"}});`+
+			`knomit.retract("artifacts/runs/x.md");`+
+			`knomit.learn({path: "artifacts/runs/y.md", title: "run state y", body: "b"});`,
+		"script: touch-artifact", "updated")
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond) // let the dispatcher see the script before the fire
+
+	body := "---\ntype: observation\nconfidence: 0.8\nsources: 1\n---\n# a\n\nbody\n"
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/tasks/in/a.md", body, "learn: a", "learn")
+	require.NoError(t, err)
+
+	var t1 store.TriggerFire
+	require.Eventually(t, func() bool {
+		rows, err := svc.Triggers().RecentTriggerFires(ctx, branch, 100)
+		require.NoError(t, err)
+		for _, r := range rows {
+			if r.Trigger == "t1" && r.Path == "kb/tasks/in/a.md" && r.Outcome != "" {
+				t1 = r
+				return true
+			}
+		}
+		return false
+	}, 20*time.Second, 25*time.Millisecond, "t1 never recorded an outcome")
+	require.Equal(t, store.TriggerOutcomeRan, t1.Outcome, "the whole sequence ran without a refusal: %s", t1.Error)
+
+	// Positive control + settle point: written AFTER the script's commits, on
+	// the ontology root's own "artifacts" topic, where `watch` really can see
+	// it. Waiting for watch's fire on THIS path proves the pattern works and
+	// guarantees the dispatcher has advanced past every commit the script
+	// made before we read the fire log below.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/artifacts/ctl.md", body, "learn: ctl", "learn")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		rows, err := svc.Triggers().RecentTriggerFires(ctx, branch, 100)
+		require.NoError(t, err)
+		for _, r := range rows {
+			if r.Trigger == "watch" && r.Path == "kb/artifacts/ctl.md" && r.Outcome != "" {
+				return true
+			}
+		}
+		return false
+	}, 20*time.Second, 25*time.Millisecond, "watch never fired on the positive control kb/artifacts/ctl.md — the match pattern itself may be broken")
+
+	rows, err := svc.Triggers().RecentTriggerFires(ctx, branch, 100)
+	require.NoError(t, err)
+	var t1Count, watchCount int
+	for _, r := range rows {
+		if r.Trigger == "watch" {
+			watchCount++
+			require.NotEqual(t, "artifacts/runs/x.md", r.Path, "an artifacts/ write is never trigger-visible, even from a script: %+v", r)
+			require.NotEqual(t, "artifacts/runs/y.md", r.Path, "an artifacts/ write is never trigger-visible, even from a script: %+v", r)
+		}
+		if r.Trigger == "t1" {
+			t1Count++
+		}
+	}
+	require.Equal(t, 1, watchCount, "watch fired exactly once: on the positive control, never on the script's artifacts/ paths")
+	require.Equal(t, 1, t1Count, "t1 fired exactly once — a sanity check only: t1 matches tasks/in/**, so this alone says nothing about artifacts/ visibility")
+
+	existsY, err := svc.Facts().FactExists(ctx, branch, "artifacts/runs/y.md")
+	require.NoError(t, err)
+	require.True(t, existsY, "the script's second artifact was only learned, never retracted, and must still be there")
+
+	existsX, err := svc.Facts().FactExists(ctx, branch, "artifacts/runs/x.md")
+	require.NoError(t, err)
+	require.False(t, existsX, "the script's first artifact was retracted last, and that landed too")
+}

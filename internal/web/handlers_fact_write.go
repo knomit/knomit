@@ -131,6 +131,15 @@ func (defaultFactWriter) Delete(ctx context.Context, ri *repos.RepoInstance, bra
 		}
 		h, derr := svc.Facts().DeleteFact(ctx, branch, path, message)
 		if derr != nil {
+			// DeleteFact wraps store.ErrPathNotFound for a path that is not
+			// there to delete (deleteFile's own existence check, inside the
+			// branch lock). Mapped to the same sentinel the read path uses,
+			// so handleFactDelete answers 404 exactly as a GET of the same
+			// missing path does — any other error still propagates to 500.
+			if errors.Is(derr, store.ErrPathNotFound) {
+				err = errFactNotFound
+				return
+			}
 			err = derr
 			return
 		}
@@ -378,6 +387,11 @@ func handleFactDelete(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 
 		msg := "manual-review: retract " + path
 		if _, err := writer.Delete(r.Context(), ri, branch, path, msg); err != nil {
+			if errors.Is(err, errFactNotFound) {
+				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
+					`no fact at path "`+path+`" on branch "`+branch+`"`, r.URL.Path)
+				return
+			}
 			writeStoreError(w, r, err, "Failed to delete fact", branch)
 			return
 		}

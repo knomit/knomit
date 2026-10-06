@@ -90,10 +90,12 @@ func TestScriptTools_HostFunctionsReachTheHandlers(t *testing.T) {
 
 // SameCodePathAsMCP: a validation failure, a bad src:// ref and a stale
 // if_commit are refused exactly as the MCP tool refuses them, and nothing is
-// committed; an `artifacts/<area>/` path is ACCEPTED here — the host's
-// refusal is the host's, not the handler's (T19's second half) — and a
-// `.knomit/` path is refused here as everywhere (F25). Sabotage: bypass
-// ValidateFact in the tool set.
+// committed; an `artifacts/<area>/` path is ACCEPTED here at the handler
+// level — this was always true (T19's second half), and since the F25
+// follow-up (user ruling 2026-10-06) the script host accepts a well-formed
+// one too, so this is no longer the only door — and a `.knomit/` path is
+// refused here as everywhere (F25). Sabotage: bypass ValidateFact in the
+// tool set.
 func TestScriptTools_SameCodePathAsMCP(t *testing.T) {
 	ontology, err := fact.ParseOntology([]byte(principlesOntologyYAML))
 	require.NoError(t, err)
@@ -132,8 +134,9 @@ func TestScriptTools_SameCodePathAsMCP(t *testing.T) {
 	require.True(t, isErr, "a stale if_commit is refused")
 	require.Contains(t, text, "current_commit")
 
-	// The handler allows the artifacts root: the script host is what says no
-	// to a script.
+	// The handler has always allowed the artifacts root (the script host now
+	// does too, for a well-formed path — TestScript_ArtifactsHostAccepts,
+	// internal/repos).
 	priv, _, isErr := callScript(t, tools, ctx, "learn", map[string]any{
 		"moment_name": "trigger:t1",
 		"facts":       []any{map[string]any{"path": "artifacts/jobs/x.md", "title": "job state", "body": "b"}},
