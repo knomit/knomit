@@ -45,6 +45,7 @@ import (
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/testsupport/playbooks"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -82,8 +83,7 @@ func templateDir(t testing.TB) string {
 }
 
 // templateFiles is every file of the shipped template, keyed by its repo
-// path (forward slashes). The manifest (TEMPLATE.md) describes the template
-// and is not part of a repo created from it, so it is left out.
+// path (forward slashes): the path it lands at in a repo created from it.
 func templateFiles(t *testing.T) map[string]string {
 	t.Helper()
 	dir := templateDir(t)
@@ -95,9 +95,6 @@ func templateFiles(t *testing.T) map[string]string {
 		rel, err := filepath.Rel(dir, p)
 		if err != nil {
 			return err
-		}
-		if filepath.ToSlash(rel) == playbooks.ManifestFile {
-			return nil
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -262,20 +259,41 @@ type mutate func(files map[string]string)
 
 // newMissionHost boots H with the shipped template on its agent branch and
 // its consensus branch, and serves it.
+//
+// H's repo is CREATED FROM THE TEMPLATE (F24), exactly as an operator does:
+// the pinned knomit-playbooks checkout is a git repo H clones (mounted as
+// "playbooks"), and "kb" is created with mode "template" from its `mission`
+// template — one signed commit holding every template file at its exact
+// path, SKILL.md included. edit, when non-nil, changes the template in the
+// SOURCE before its commit.
 func newMissionHost(t *testing.T, edit mutate) (*missionNode, string) {
 	t.Helper()
-	m, tools := newMissionManager(t, mHostAgent, "mission-host", nil)
-	files := templateFiles(t)
-	if edit != nil {
-		edit(files)
-	}
-	// A repo's ontology is fixed when it is created (RepoInstance.Ontology):
-	// the create carries the template's, and the rest of the template is
-	// committed on top of it.
-	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: "kb", Mode: "custom", OntologyYAML: files[".knomit/ontology.yaml"]}, nil)
+	originRoot := t.TempDir()
+	m, tools := newMissionManager(t, mHostAgent, "mission-host", func(c *config.Config) { c.LocalOriginRoot = originRoot })
+	bare := playbooks.SourceRepo(t, filepath.Join(originRoot, "playbooks.git"), "main", func(work string) {
+		if edit != nil {
+			editTemplate(t, filepath.Join(work, filepath.FromSlash(playbooks.MissionTemplatePath)), edit)
+		}
+	})
+	_, err := m.Create(context.Background(), repos.CreateSpec{Name: "playbooks", Mode: "clone",
+		Origin: &repos.OriginSpec{URL: fileuri.New(bare)}}, nil)
+	require.NoError(t, err)
+	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: "kb", Mode: "template",
+		Template: &repos.TemplateRef{Repo: "playbooks", Name: "mission"}}, nil)
 	require.NoError(t, err)
 	h := &missionNode{name: "H", m: m, ri: ri, branch: mHostAgent, tools: tools}
-	h.install(t, files)
+	// The template's exact paths, not the lowercased ones a fact write makes.
+	for p, want := range templateFiles(t) {
+		if edit != nil {
+			break
+		}
+		head, err := h.svc(t).Branches().HeadCommit(context.Background(), h.branch)
+		require.NoError(t, err)
+		got, ok, err := h.svc(t).Triggers().BlobAt(context.Background(), plumbing.NewHash(head), p)
+		require.NoError(t, err)
+		require.True(t, ok, "%s must land at its exact path", p)
+		require.Equal(t, want, got, p)
+	}
 	h.advance(t)
 	h.ri.QuiesceTriggersForTest(t)
 
@@ -294,21 +312,37 @@ func newMissionHost(t *testing.T, edit mutate) (*missionNode, string) {
 	return h, srv.URL
 }
 
-// install commits every other template file on the agent branch. The
-// scripts land after the ontology; a script trigger is invalid until its file
-// exists and catches up once it does (its bookmark freezes meanwhile).
-func (n *missionNode) install(t *testing.T, files map[string]string) {
+// editTemplate applies edit to the template folder dir on disk: changed and
+// added files are written, removed ones deleted.
+func editTemplate(t *testing.T, dir string, edit mutate) {
 	t.Helper()
-	paths := make([]string, 0, len(files))
+	files := map[string]string{}
+	require.NoError(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		files[filepath.ToSlash(rel)] = string(b)
+		return err
+	}))
+	before := map[string]bool{}
 	for p := range files {
-		if p != ".knomit/ontology.yaml" {
-			paths = append(paths, p)
+		before[p] = true
+	}
+	edit(files)
+	for p := range before {
+		if _, ok := files[p]; !ok {
+			require.NoError(t, os.Remove(filepath.Join(dir, filepath.FromSlash(p))))
 		}
 	}
-	sort.Strings(paths)
-	for _, p := range paths {
-		_, err := n.svc(t).Facts().WriteFact(context.Background(), n.branch, p, files[p], "template: "+p, "updated")
-		require.NoError(t, err, p)
+	for p, c := range files {
+		dst := filepath.Join(dir, filepath.FromSlash(p))
+		require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+		require.NoError(t, os.WriteFile(dst, []byte(c), 0o644))
 	}
 }
 

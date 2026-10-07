@@ -5,9 +5,10 @@ package cmd
 //
 //  1. git init <branch> my-mission; copy the mission template into it
 //     (knomit-playbooks .knomit/templates/mission/, read from the pinned
-//     third_party/knomit-playbooks checkout) and remove its TEMPLATE.md
-//     manifest: the README's `cp -R` and `rm`, done in Go so it runs the
-//     same on every OS; git add -A; git commit.
+//     third_party/knomit-playbooks checkout): the README's copy, done in Go so
+//     it runs the same on every OS; git add -A; git commit. (Creating the repo
+//     FROM the template in one step, F24, is what the two-instance tests in
+//     internal/repos do; this test keeps the README's clone route.)
 //  2. The host clones that repository, then removes its origin
 //     (DELETE /api/v1/repos/<repo>/origin).
 //  3. A peer clones the repo FROM THE HOST over cert HTTPS.
@@ -162,9 +163,6 @@ func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
 			repoDir := filepath.Join(originRoot, "my-mission")
 			missionGit(t, originRoot, "init", "-b", br, "my-mission")
 			copyTree(t, template, repoDir)
-			if err := os.Remove(filepath.Join(repoDir, playbooks.ManifestFile)); err != nil {
-				t.Fatalf("the template carries its manifest, which the README removes: %v", err)
-			}
 			missionGit(t, repoDir, "add", "-A")
 			missionGit(t, repoDir, "commit", "-q", "-m", "mission template")
 
