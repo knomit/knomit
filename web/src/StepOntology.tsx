@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type OntologyDiagnostic, type OntologyPreset, type OntologyValidation } from './api';
+import { api, type OntologyDiagnostic, type OntologyPreset, type OntologyValidation, type TemplateSummary } from './api';
 import type { WizardAction, WizardState } from './wizardState';
 import { OntologyEditor } from './OntologyEditor';
 
@@ -43,7 +43,113 @@ const BLANK = '__blank__';
 // round-tripped through the browser. `doc` (what the editor shows) therefore
 // differs from state.yaml until the reader edits, uploads, or starts blank.
 // That split is what lets a preset be valid with no validate round trip.
+//
+// ── or a template (F24) ──────────────────────────────────────────────────
+//
+// A template is a different KIND of answer: not a document but a set of
+// files (ontology, skills, triggers, recipes) held by a mounted repo. So it is
+// a second source at the top of the step, not another entry in the document's
+// select: picking one replaces the editor with the template list, and the
+// wire body then carries the template instead of a preset or a document.
 export function StepOntology({ state, onDispatch, onValidityChange }: {
+  state: WizardState;
+  onDispatch: (a: WizardAction) => void;
+  onValidityChange: (valid: boolean) => void;
+}) {
+  return (
+    <div data-testid="step-ontology">
+      <div role="radiogroup" aria-label="Where the repository starts from" style={sourceRow}>
+        <label style={choiceLabel}>
+          <input type="radio" name="ontology-kind" data-testid="ontology-kind-ontology"
+            checked={!state.useTemplate}
+            onChange={() => onDispatch({ type: 'SET_USE_TEMPLATE', on: false })} />
+          {' '}An ontology
+        </label>
+        <label style={choiceLabel}>
+          <input type="radio" name="ontology-kind" data-testid="ontology-kind-template"
+            checked={state.useTemplate}
+            onChange={() => onDispatch({ type: 'SET_USE_TEMPLATE', on: true })} />
+          {' '}From a template
+        </label>
+      </div>
+      {state.useTemplate
+        ? <TemplatePicker state={state} onDispatch={onDispatch} onValidityChange={onValidityChange} />
+        : <OntologyDocument state={state} onDispatch={onDispatch} onValidityChange={onValidityChange} />}
+    </div>
+  );
+}
+
+// TemplatePicker lists every template of every mounted repo as ONE list
+// grouped by repo, the repo name always shown: `(repo, name)` is the key, and
+// two repos may both carry a `mission`. Each row shows the commit it was read
+// at, so a reader can see that a subscription has not synced a template just
+// pushed. With no templates it says where they come from.
+function TemplatePicker({ state, onDispatch, onValidityChange }: {
+  state: WizardState;
+  onDispatch: (a: WizardAction) => void;
+  onValidityChange: (valid: boolean) => void;
+}) {
+  const [templates, setTemplates] = useState<TemplateSummary[] | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listTemplates()
+      .then(t => { if (!cancelled) setTemplates(t); })
+      .catch(e => { if (!cancelled) { setTemplates([]); setError(e instanceof Error ? e.message : String(e)); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Valid only with a pick that is still offered: a remembered pick from a
+  // repo that has since gone would otherwise sail through to a 404.
+  const picked = state.template;
+  const offered = !!picked && !!templates?.some(t => t.repo === picked.repo && t.name === picked.name);
+  useEffect(() => { onValidityChange(offered); }, [offered, onValidityChange]);
+
+  if (templates === null) return <div style={hint}>Loading templates…</div>;
+
+  const groups = new Map<string, TemplateSummary[]>();
+  for (const t of templates) {
+    const g = groups.get(t.repo) ?? [];
+    g.push(t);
+    groups.set(t.repo, g);
+  }
+
+  return (
+    <div data-testid="template-picker" style={panel}>
+      {error && <div style={warnText}>{error}</div>}
+      {templates.length === 0 ? (
+        <div data-testid="template-empty" style={hint}>
+          No templates yet. Templates come from a playbooks repository: subscribe to one (for example
+          {' '}<code>https://github.com/knomit/knomit-playbooks</code>) with “Add repository”, and its
+          templates appear here.
+        </div>
+      ) : (
+        [...groups.entries()].map(([repo, rows]) => (
+          <div key={repo} data-testid={`template-group-${repo}`} style={{ marginBottom: 10 }}>
+            <div style={groupHead}>{repo}</div>
+            {rows.map(t => {
+              const checked = picked?.repo === t.repo && picked?.name === t.name;
+              return (
+                <label key={t.name} data-testid={`template-row-${t.repo}-${t.name}`} style={templateRow}>
+                  <input type="radio" name="template" checked={checked}
+                    onChange={() => onDispatch({ type: 'SET_TEMPLATE', template: { repo: t.repo, name: t.name } })} />
+                  <span>
+                    <b style={{ color: '#ddd' }}>{t.name}</b>
+                    <span style={summaryDetail}> · {t.commit.slice(0, 8)}</span>
+                    <div style={{ ...prov, marginTop: 2 }}>{t.description}</div>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+function OntologyDocument({ state, onDispatch, onValidityChange }: {
   state: WizardState;
   onDispatch: (a: WizardAction) => void;
   onValidityChange: (valid: boolean) => void;
@@ -227,7 +333,7 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
   const presetRecord = source.kind === 'preset' ? presets.find(p => p.name === source.name) : undefined;
 
   return (
-    <div data-testid="step-ontology">
+    <div data-testid="ontology-document">
       <label style={label}>Ontology</label>
       <p style={hint}>
         The ontology is the topic tree and validation rules new facts are checked
@@ -363,4 +469,7 @@ const summary: React.CSSProperties = { marginTop: 8, fontSize: 12, color: '#ccc'
 const summaryDetail: React.CSSProperties = { color: '#999', fontSize: 12, marginTop: 8 };
 const sourceRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10 };
 const prov: React.CSSProperties = { fontSize: 11.5, color: '#999', lineHeight: 1.5 };
+const choiceLabel: React.CSSProperties = { fontSize: 13, color: '#ccc', cursor: 'pointer' };
+const groupHead: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, textTransform: 'none' };
+const templateRow: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '4px 0', fontSize: 13, color: '#ccc', cursor: 'pointer' };
 const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#6ea8fe', cursor: 'pointer', fontSize: 11.5, padding: 0, textDecoration: 'underline' };

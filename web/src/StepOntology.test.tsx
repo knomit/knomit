@@ -26,6 +26,7 @@ vi.mock('./api', () => ({
     ontologyPresetYAML: vi.fn(),
     validateOntology: vi.fn(),
     ontologySchema: vi.fn(async () => []),
+    listTemplates: vi.fn(async () => []),
   },
 }));
 
@@ -307,5 +308,47 @@ describe('StepOntology', () => {
     const link = screen.getByRole('link', { name: /what is an ontology/i });
     expect(link).toHaveAttribute('href', expect.stringContaining('knomit.io/docs'));
     expect(link).toHaveAttribute('target', '_blank');
+  });
+});
+
+// F24: "From a template" replaces the editor with ONE list grouped by repo,
+// the repo name on every group and the short commit on every row; picking a
+// row is what makes the step valid; with no templates the step says where
+// they come from.
+// SABOTAGE: drop the empty-state text, or report valid with no pick → red.
+describe('StepOntology — from a template', () => {
+  const rows = [
+    { repo: 'knomit-playbooks', name: 'general', description: 'The general template', commit: 'a'.repeat(40), fact: 'kb/templates/general/x.md' },
+    { repo: 'knomit-playbooks', name: 'mission', description: 'The mission template', commit: 'a'.repeat(40), fact: 'kb/templates/mission/y.md' },
+    { repo: 'team', name: 'mission', description: 'Team mission', commit: 'b'.repeat(40), fact: 'kb/templates/mission/z.md' },
+  ];
+  beforeEach(() => {
+    vi.mocked(api.ontologyPresets).mockResolvedValue([]);
+    vi.mocked(api.ontologyPresetYAML).mockResolvedValue(DEFAULT_SEED);
+  });
+
+  it('groups by repo, shows commits, and is valid only once a row is picked', async () => {
+    vi.mocked(api.listTemplates).mockResolvedValue(rows);
+    const valid: boolean[] = [];
+    const spy = vi.fn();
+    render(<Harness onValidityChange={v => valid.push(v)} spy={spy} />);
+    fireEvent.click(screen.getByTestId('ontology-kind-template'));
+    await screen.findByTestId('template-group-team');
+    expect(screen.getByTestId('template-group-knomit-playbooks').textContent).toContain('knomit-playbooks');
+    expect(screen.getByTestId('template-row-team-mission').textContent).toContain('bbbbbbbb');
+    expect(screen.getByTestId('template-row-team-mission').textContent).toContain('Team mission');
+    expect(valid[valid.length - 1]).toBe(false);
+    fireEvent.click(screen.getByTestId('template-row-team-mission').querySelector('input')!);
+    expect(spy).toHaveBeenCalledWith({ type: 'SET_TEMPLATE', template: { repo: 'team', name: 'mission' } });
+    await waitFor(() => expect(valid[valid.length - 1]).toBe(true));
+  });
+
+  it('with no templates, points to subscribing to a playbooks repository', async () => {
+    vi.mocked(api.listTemplates).mockResolvedValue([]);
+    render(<Harness />);
+    fireEvent.click(screen.getByTestId('ontology-kind-template'));
+    const empty = await screen.findByTestId('template-empty');
+    expect(empty.textContent).toContain('subscribe');
+    expect(empty.textContent).toContain('knomit-playbooks');
   });
 });
