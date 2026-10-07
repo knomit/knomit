@@ -16,7 +16,13 @@ type createRepoRequest struct {
 	Mode           string `json:"mode"`
 	OntologyPreset string `json:"ontology_preset"`
 	OntologyYAML   string `json:"ontology_yaml"`
-	Origin         *struct {
+	// Template (F24): {repo, name}, repo by NAME and required. The third
+	// ontology source, for modes "template" and "initialize".
+	Template *struct {
+		Repo string `json:"repo"`
+		Name string `json:"name"`
+	} `json:"template"`
+	Origin *struct {
 		URL        string `json:"url"`
 		Branch     string `json:"branch"`
 		AuthMethod string `json:"auth_method"`
@@ -81,6 +87,9 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			Mode:           req.Mode,
 			OntologyPreset: req.OntologyPreset,
 			OntologyYAML:   req.OntologyYAML,
+		}
+		if req.Template != nil {
+			spec.Template = &repos.TemplateRef{Repo: req.Template.Repo, Name: req.Template.Name}
 		}
 		if req.Origin != nil {
 			spec.Origin = &repos.OriginSpec{
@@ -349,6 +358,28 @@ func createErrStatus(err error) (int, string) {
 	// server understood perfectly and declined on policy.
 	case errors.Is(err, repos.ErrLocalOriginDenied):
 		return http.StatusBadRequest, "Origin not allowed"
+	// F24 template refusals. The source or template is not there: 404. The
+	// source is mounted but not open: 503, worth retrying. The template is
+	// there and wrong: 422 — the request is well-formed, the content is not
+	// usable — and the detail names which rule it broke.
+	case errors.Is(err, repos.ErrTemplateName):
+		return http.StatusBadRequest, "Invalid template name"
+	case errors.Is(err, repos.ErrTemplateSourceNotFound):
+		return http.StatusNotFound, "Template source not found"
+	case errors.Is(err, repos.ErrTemplateNotFound):
+		return http.StatusNotFound, "Template not found"
+	case errors.Is(err, repos.ErrTemplateSourceUnavailable):
+		return http.StatusServiceUnavailable, "Template source unavailable"
+	case errors.Is(err, repos.ErrTemplateFleetLocal):
+		return http.StatusConflict, "Fleet template needs initialize"
+	case errors.Is(err, repos.ErrTemplateNotRegular),
+		errors.Is(err, repos.ErrTemplateTooLarge),
+		errors.Is(err, repos.ErrTemplateLayout),
+		errors.Is(err, repos.ErrTemplateDescribedTwice),
+		errors.Is(err, repos.ErrTemplateNoOntology),
+		errors.Is(err, repos.ErrTemplateOntology),
+		errors.Is(err, repos.ErrTemplatePresetID):
+		return http.StatusUnprocessableEntity, "Template invalid"
 	default:
 		return http.StatusInternalServerError, "Create failed"
 	}

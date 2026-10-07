@@ -1171,9 +1171,14 @@ export interface CreateRepoBody {
    * remote other than its own agent branch, so a remote with no branches is a
    * blocked state the wizard reports rather than a case it handles.
    */
-  mode: 'preset' | 'custom' | 'clone' | 'initialize' | 'subscribe';
+  mode: 'preset' | 'custom' | 'template' | 'clone' | 'initialize' | 'subscribe';
   ontology_preset?: string;
   ontology_yaml?: string;
+  /**
+   * F24: create from a template held by a MOUNTED repo — mode 'template'
+   * (local) or 'initialize'. `repo` is the source repo's name and is required.
+   */
+  template?: TemplateRef;
   origin?: { url: string; branch?: string; auth_method?: string; auth_token?: string };
 }
 
@@ -1271,6 +1276,18 @@ export interface OntologyDiagnostic { line: number; column: number; message: str
 export type OntologyValidation =
   | { ok: true; id: string; name: string; topics: string[]; rule_count: number }
   | { ok: false; diagnostics: OntologyDiagnostic[] };
+
+// TemplateRef names a template: the mounted repo that holds it, and its name.
+export interface TemplateRef { repo: string; name: string }
+
+// TemplateSummary is one row of GET /api/v1/templates (F24): `description` is
+// the title of the template's `part: template` fact, `fact` its path, and
+// `commit` the repo's consensus tip it was read at.
+export interface TemplateSummary extends TemplateRef {
+  description: string;
+  commit: string;
+  fact: string;
+}
 
 // OntologyPreset is one row of GET /api/v1/ontologies/presets.
 export interface OntologyPreset {
@@ -2078,6 +2095,10 @@ export const api = {
       headers: { 'Content-Type': 'text/yaml' },
       body: yamlText,
     }),
+
+  listTemplates: (): Promise<TemplateSummary[]> =>
+    fetchJSON<{ templates: TemplateSummary[] }>(apiUrl('/api/v1/templates'))
+      .then(d => d.templates ?? []),
 
   ontologyPresets: (): Promise<OntologyPreset[]> =>
     fetchJSON<{ presets: OntologyPreset[] }>(apiUrl('/api/v1/ontologies/presets'))

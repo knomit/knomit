@@ -81,8 +81,10 @@ func TestDir_MissingOrEmptyFails(t *testing.T) {
 func TestDir_ThisRepo(t *testing.T) {
 	dir := Dir(t)
 	require.Equal(t, filepath.FromSlash(SubmodulePath), lastTwo(dir))
-	_, err := os.Stat(filepath.Join(MissionTemplate(t), ManifestFile))
-	require.NoError(t, err, "the mission template carries its manifest")
+	// Since knomit-playbooks #4 a template has no TEMPLATE.md manifest: its
+	// description is its `part: template` fact (F24).
+	_, err := os.Stat(filepath.Join(MissionTemplate(t), "TEMPLATE.md"))
+	require.True(t, os.IsNotExist(err), "the pinned checkout must be past the TEMPLATE.md removal: %v", err)
 }
 
 func lastTwo(p string) string {

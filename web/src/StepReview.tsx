@@ -22,6 +22,11 @@ export function StepReview({ state, dispatch }: { state: WizardState; dispatch: 
   // cleared state.preset here would make the review page confidently wrong
   // about the one choice that cannot be changed after creation.
   const presetLabel = state.yaml ? 'a custom' : `the "${state.preset || state.seedPreset}"`;
+  // What the create writes first: a template's files (F24) when the reader
+  // chose one, else the ontology. Same rule as createBodyFor.
+  const seed = state.useTemplate && state.template
+    ? `the "${state.template.name}" template from "${state.template.repo}"`
+    : `${presetLabel} ontology`;
   // The branch the create will use, or '(unknown)' when neither the user nor
   // the probe named one. Never a name made up for it.
   const branch = state.branch || state.probe?.upstream_branch || '(unknown)';
@@ -70,7 +75,7 @@ export function StepReview({ state, dispatch }: { state: WizardState; dispatch: 
         <div style={cardLabel}>What will happen</div>
         {state.choice === 'local' && (
           <ol style={list}>
-            <li>A new local-only repository named "{state.name}" is created on this machine, seeded with {presetLabel} ontology.</li>
+            <li>A new local-only repository named "{state.name}" is created on this machine, seeded with {seed}.</li>
             {/* Verbatim, agreed copy — do not paraphrase. */}
             <li>You can connect a remote whenever you like, and all your facts come across. The only thing that doesn't follow is each fact's earlier revisions — starting from a remote keeps that full timeline.</li>
           </ol>
@@ -88,7 +93,7 @@ export function StepReview({ state, dispatch }: { state: WizardState; dispatch: 
         {state.choice === 'remote' && state.initialized === 'no' && (
           <ol style={list}>
             <li>A new repository named "{state.name}" is created and connected to {state.url}.</li>
-            <li>knomit takes its own branch from {branch}, and writes {presetLabel} ontology there as its first commit.</li>
+            <li>knomit takes its own branch from {branch}, and writes {seed} there as its first commit.</li>
             <li>
               That branch — and only that branch — is pushed. <b style={{ color: '#ddd' }}>{branch} is not changed</b>,
               so you don't need push access to it.

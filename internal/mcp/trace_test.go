@@ -303,3 +303,14 @@ func TestTrace_HypothesizeAnswerStampsItsWrite(t *testing.T) {
 	require.NotEqual(t, h, h2, "fixture: the second answer writes too")
 	require.NotContains(t, msg, "\n\n", "no trace passed: no paragraph of any kind (D-mint): %q", msg)
 }
+
+// F24: the template provenance keys are knomit's own. An agent's trace may
+// not carry them, in any case spelling: a forged Knomit-Template-Source
+// would claim a repo was created from a template it never came from.
+// SABOTAGE: allow either key in knomitTraceEntry → red.
+func TestTrace_RefusesTemplateTrailerKeys(t *testing.T) {
+	for _, key := range []string{store.TrailerTemplate, store.TrailerTemplateSource, "knomit-template", "KNOMIT-TEMPLATE-SOURCE"} {
+		_, err := parseTrace(map[string]any{key: "kb://abc@def"})
+		require.Error(t, err, key)
+	}
+}

@@ -156,6 +156,18 @@ paths:
 
         413 is returned when the request body exceeds the ontology size cap
         (the same cap `/ontologies:validate` enforces).
+
+        Template refusals (mode=template, or mode=initialize with
+        `template`), all before the 202: 400 for a bad template name or a
+        request without `template.repo`; 404 when `template.repo` is not a
+        mounted repo or holds no such template at its consensus tip; 503 when
+        that repo is mounted but not open; 422 "Template invalid" when the
+        template is there and unusable (a path other than README.md and
+        `.knomit/**`, a symlink, submodule or executable, over 256 files or
+        4 MiB, no or an invalid `.knomit/ontology.yaml`, a built-in preset's
+        id on an ontology that is not that preset, two template facts for
+        one name); 409 for a fleet template outside mode=initialize, or on
+        an instance that already has a fleet.
       operationId: createRepo
       requestBody:
         required: true
@@ -177,7 +189,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/RepoCreateStatus"
         "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
 
   /repo-creates/{id}:
@@ -372,6 +386,50 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OntologyValidateResponse" }
         "413": { $ref: "#/components/responses/Problem" }
+
+  /templates:
+    get:
+      tags: [repos]
+      summary: List the templates of every mounted repo
+      description: |
+        Every template of every mounted, open repo, read at each repo's
+        consensus tip: one entry per `part: template` fact under
+        `kb/templates/<name>/` whose folder `.knomit/templates/<name>/` exists
+        at the same commit. `description` is the fact's title; `fact` is its
+        path; `commit` is the tip it was read at. A folder with no fact is not
+        listed (it can still be created by name), and a name with two template
+        facts is not listed. `(repo, name)` is the key. A repo that is not
+        open is left out.
+      operationId: listTemplates
+      responses:
+        "200":
+          description: Templates
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplatesResponse" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/templates:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    get:
+      tags: [repos]
+      summary: List the templates one repo holds
+      description: |
+        The `/templates` listing for one repo. 404 for an unknown name (a lens
+        name included); 409 for a registered repo with no store; 503 while
+        the repo is still populating.
+      operationId: listRepoTemplates
+      responses:
+        "200":
+          description: Templates
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplatesResponse" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
 
   /ontologies/presets:
     get:
@@ -4332,11 +4390,19 @@ components:
           description: Unique repo name (slug).
         mode:
           type: string
-          enum: [preset, custom, clone, initialize, subscribe]
+          enum: [preset, custom, template, clone, initialize, subscribe]
           description: |
-            preset — use a built-in ontology preset (e.g. default, code).
-                     Local only, no remote.
-            custom — supply ontology_yaml directly. Local only, no remote.
+            preset   — use a built-in ontology preset (e.g. default, code).
+                       Local only, no remote.
+            custom   — supply ontology_yaml directly. Local only, no remote.
+            template — create from `template` {repo, name}: a template held
+                       by a MOUNTED repo, read at that repo's consensus tip.
+                       The template's README.md and `.knomit/**` land in ONE
+                       commit on the agent branch, signed by this instance,
+                       with trailers `Knomit-Template: <name>` and
+                       `Knomit-Template-Source: kb://<source repo id>@<commit>`.
+                       Local only, no remote. List templates with
+                       `/templates`.
 
             The two remote modes are the two halves of ONE question about the
             chosen branch — does it already carry `.knomit/ontology.yaml`? —
@@ -4349,8 +4415,10 @@ components:
                          dropped. 409 if the branch has none.
             initialize — turn a branch that has NO ontology into a knowledge
                          base: clone it, cut agent/<host> from its tip, commit
-                         the chosen ontology (ontology_preset or
-                         ontology_yaml) there, and push THAT BRANCH ALONE. The
+                         the chosen ontology (ontology_preset,
+                         ontology_yaml or template — exactly one; a template
+                         writes its whole tree, replacing same-path files on
+                         the agent branch) there, and push THAT BRANCH ALONE. The
                          consensus branch is never written, so no push access
                          to a protected `main` is needed; open a merge request
                          from agent/<host> when the knowledge base should
@@ -4368,6 +4436,17 @@ components:
         ontology_yaml:
           type: string
           description: Raw ontology YAML. Used when mode=custom or mode=initialize.
+        template:
+          type: object
+          required: [repo, name]
+          description: |
+            The template to create from (mode=template or mode=initialize).
+            `repo` is the NAME of a mounted repo on this instance and is
+            required: there is no default source. `name` is the template's
+            folder under `.knomit/templates/` in that repo.
+          properties:
+            repo: { type: string }
+            name: { type: string }
         origin:
           $ref: "#/components/schemas/CreateRepoOrigin"
 
@@ -5222,6 +5301,24 @@ components:
         topics:
           type: array
           items: { type: string }
+
+    TemplatesResponse:
+      type: object
+      required: [templates]
+      properties:
+        templates:
+          type: array
+          items: { $ref: "#/components/schemas/TemplateSummary" }
+
+    TemplateSummary:
+      type: object
+      required: [repo, name, description, commit, fact]
+      properties:
+        repo:        { type: string, description: The mounted repo that holds the template. }
+        name:        { type: string, description: The template's name (its folder). }
+        description: { type: string, description: "The title of the template's `part: template` fact." }
+        commit:      { type: string, description: The repo's consensus tip the template was read at. }
+        fact:        { type: string, description: The repo path of the template's fact. }
 
     OntologyPresetsResponse:
       type: object

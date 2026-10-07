@@ -264,6 +264,10 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	r.Get("/ontologies/presets/{name}", handleOntologyPresetYAML())
 	r.Get("/ontologies/schema", handleOntologySchema())
 
+	// Templates (F24): the create wizard lists them BEFORE any repo exists,
+	// so the all-repos listing is collection-level like the ontology block.
+	r.Get("/templates", handleTemplates(s.Manager))
+
 	r.Route("/repos/{repo}", func(r chi.Router) {
 		// Archive deliberately sits OUTSIDE the middleware group: it resolves
 		// through m.Archive, not m.Get, and archiveErrStatus attributes its
@@ -286,6 +290,10 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			// every error this handler raises is about the NEW name, which the
 			// middleware never sees.
 			r.Post("/rename", handleHALRepoRename(b, s.Manager))
+
+			// The templates this repo holds (F24), for a script that knows
+			// the source.
+			r.Get("/templates", handleRepoTemplates(s.Manager))
 
 			r.Get("/origin", handleHALGetOrigin(b, p.origin))
 			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))

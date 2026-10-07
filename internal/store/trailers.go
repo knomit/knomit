@@ -15,6 +15,14 @@ const (
 	TrailerCause   = "Knomit-Cause"   // the one commit that directly led to this one
 	TrailerTrigger = "Knomit-Trigger" // the trigger rule that made the hop
 	TrailerRun     = "Knomit-Run"     // the recipe run (run-<32 hex>) the write belongs to (#349)
+
+	// F24 provenance of a repo created from a template: the template's name,
+	// and kb://<source repo id>@<commit> — the source repo's ID (its root
+	// commit), never its name, so the link survives a rename or an unmount.
+	// Stamped only by knomit's own create; an agent's trace may not carry
+	// any Knomit- key but Trace, Cause and Run (internal/mcp/trace.go).
+	TrailerTemplate       = "Knomit-Template"
+	TrailerTemplateSource = "Knomit-Template-Source"
 )
 
 // TrailerValue returns the value of the `Key: value` trailer line in a commit
@@ -60,11 +68,15 @@ func TrailerValue(message, key string) string {
 // through the MCP `trace` argument (WithAgentTrace): Trace, Cause and Run in
 // knomit's own forms — never Trigger — plus Extra, its own short keys.
 type Trailers struct {
-	Trace   string         // Knomit-Trace
-	Cause   string         // Knomit-Cause: the firing commit
-	Trigger string         // Knomit-Trigger: the trigger name
-	Run     string         // Knomit-Run: the recipe run id
-	Extra   []TrailerEntry // an agent's own keys (never Knomit-*); written after Run, sorted by key
+	Trace   string // Knomit-Trace
+	Cause   string // Knomit-Cause: the firing commit
+	Trigger string // Knomit-Trigger: the trigger name
+	Run     string // Knomit-Run: the recipe run id
+	// Template and TemplateSource are set only by a create from a template
+	// (F24), on the one commit that writes the template's files.
+	Template       string         // Knomit-Template
+	TemplateSource string         // Knomit-Template-Source
+	Extra          []TrailerEntry // an agent's own keys (never Knomit-*); written after Run, sorted by key
 }
 
 // TrailerEntry is one agent-supplied `Key: value` line. internal/mcp
@@ -76,7 +88,8 @@ type TrailerEntry struct {
 
 // IsZero reports whether no trailer is set.
 func (t Trailers) IsZero() bool {
-	return t.Trace == "" && t.Cause == "" && t.Trigger == "" && t.Run == "" && len(t.Extra) == 0
+	return t.Trace == "" && t.Cause == "" && t.Trigger == "" && t.Run == "" &&
+		t.Template == "" && t.TemplateSource == "" && len(t.Extra) == 0
 }
 
 type trailersCtxKey struct{}
@@ -140,7 +153,8 @@ func trailersFromContext(ctx context.Context) Trailers {
 // LAST paragraph (git's trailer convention, and what TrailerValue reads: the
 // last paragraph, last occurrence wins — so a body that happened to end with
 // a `Knomit-Trace:` line is overridden by the stamped value, never the other
-// way round). The order is fixed: Trace, Cause, Trigger, Run, then the Extra
+// way round). The order is fixed: Trace, Cause, Trigger, Run, Template,
+// TemplateSource, then the Extra
 // entries sorted by key. A zero set returns message unchanged; a key with an
 // empty value is omitted.
 func appendTrailers(message string, t Trailers) string {
@@ -165,6 +179,12 @@ func (t Trailers) lines() string {
 	}
 	if t.Run != "" {
 		out += TrailerRun + ": " + t.Run + "\n"
+	}
+	if t.Template != "" {
+		out += TrailerTemplate + ": " + t.Template + "\n"
+	}
+	if t.TemplateSource != "" {
+		out += TrailerTemplateSource + ": " + t.TemplateSource + "\n"
 	}
 	extra := append([]TrailerEntry(nil), t.Extra...)
 	sort.SliceStable(extra, func(i, j int) bool { return extra[i].Key < extra[j].Key })

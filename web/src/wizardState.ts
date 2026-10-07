@@ -1,4 +1,4 @@
-import type { CreateRepoBody, InitializedResult, ProbeResult } from './api';
+import type { CreateRepoBody, InitializedResult, ProbeResult, TemplateRef } from './api';
 
 export type StepId = 'source' | 'access' | 'branch' | 'ontology' | 'review';
 // There is no "not chosen yet": the source step is a segmented control, and a
@@ -31,6 +31,16 @@ export interface WizardState {
    */
   seedPreset: string;
   yaml: string;
+  /**
+   * F24: the ontology comes FROM A TEMPLATE held by a mounted repo, rather
+   * than from a preset or a document. `useTemplate` is the reader's choice of
+   * source; `template` the row they picked (null until they pick one). Kept
+   * apart so switching back to the ontology editor and forth again keeps the
+   * pick, and so preset/yaml survive a look at the templates: the wire body
+   * reads ONLY the side `useTemplate` names (createBodyFor).
+   */
+  useTemplate: boolean;
+  template: TemplateRef | null;
   /**
    * The per-branch answer to "is `branch` on this remote already a knomit
    * knowledge base?", from api.probeInitialized.
@@ -109,6 +119,7 @@ export const initialWizardState: WizardState = {
   choice: 'remote', url: '', probe: null, name: '', branch: '',
   authMethod: '', authUser: '', authToken: '',
   preset: 'default', seedPreset: 'default', yaml: '',
+  useTemplate: false, template: null,
   initialized: '', initializedDetail: '', initializedBranch: '', alreadyLocal: '',
   probeKey: '', initializedKey: '', stepIndex: 0,
   access: 'join',
@@ -127,6 +138,8 @@ export type WizardAction =
   | { type: 'SET_TOKEN'; token: string }
   | { type: 'SET_PRESET'; preset: string }
   | { type: 'SET_YAML'; yaml: string }
+  | { type: 'SET_USE_TEMPLATE'; on: boolean }
+  | { type: 'SET_TEMPLATE'; template: TemplateRef }
   | { type: 'INITIALIZED_DONE'; result: InitializedResult }
   | { type: 'NEXT' }
   | { type: 'BACK' }
@@ -277,6 +290,8 @@ function applyAction(s: WizardState, a: WizardAction): WizardState {
     // survives SET_YAML (see its doc on WizardState).
     case 'SET_PRESET':    return { ...s, preset: a.preset, seedPreset: a.preset, yaml: '' };
     case 'SET_YAML':      return { ...s, yaml: a.yaml, preset: '' };
+    case 'SET_USE_TEMPLATE': return { ...s, useTemplate: a.on };
+    case 'SET_TEMPLATE':  return { ...s, useTemplate: true, template: a.template };
     case 'NEXT':          return { ...s, stepIndex: Math.min(s.stepIndex + 1, stepsFor(s).length - 1) };
     case 'BACK':          return { ...s, stepIndex: Math.max(s.stepIndex - 1, 0) };
     case 'GOTO': {
@@ -432,13 +447,19 @@ export function createBodyFor(s: WizardState): CreateRepoBody {
   // hands a user who chose "code" an ontology they did not pick — permanently,
   // since it is immutable after creation. seedPreset is the same question
   // asked of state that SET_YAML does not clear.
+  // F24: a template is the third ontology source, and the only one sent when
+  // the reader chose it — never alongside a preset or a document (the backend
+  // refuses two sources).
+  const template = s.useTemplate && s.template ? { repo: s.template.repo, name: s.template.name } : null;
   if (s.choice === 'local') {
+    if (template) return { name: s.name, mode: 'template', template };
     return s.yaml
       ? { name: s.name, mode: 'custom', ontology_yaml: s.yaml }
       : { name: s.name, mode: 'preset', ontology_preset: s.preset || s.seedPreset };
   }
   const origin = originFor(s);
   if (establishedAnswer(s) === 'no') {
+    if (template) return { name: s.name, mode: 'initialize', template, origin };
     return s.yaml
       ? { name: s.name, mode: 'initialize', ontology_yaml: s.yaml, origin }
       : { name: s.name, mode: 'initialize', ontology_preset: s.preset || s.seedPreset, origin };

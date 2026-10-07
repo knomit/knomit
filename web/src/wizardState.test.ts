@@ -741,3 +741,31 @@ describe('answers are bound to the request that produced them', () => {
     expect(createBodyFor({ ...restaled, name: 'kb' }).mode).toBe('clone');
   });
 });
+
+// F24: a template is the third ontology source. It is sent ONLY when the
+// reader chose "From a template" and picked one, and then alone — never with a
+// preset or a document, which the backend would refuse as two sources.
+// SABOTAGE: drop `template` from either arm of createBodyFor → red.
+describe('createBodyFor — from a template', () => {
+  const tmpl = { repo: 'knomit-playbooks', name: 'mission' };
+  it('local: mode template carrying {repo, name} and nothing else', () => {
+    let s = wizardReducer({ ...initialWizardState, choice: 'local', name: 'm' }, { type: 'SET_TEMPLATE', template: tmpl });
+    expect(createBodyFor(s)).toEqual({ name: 'm', mode: 'template', template: tmpl });
+    // Back to the ontology: the pick is kept but not sent.
+    s = wizardReducer(s, { type: 'SET_USE_TEMPLATE', on: false });
+    expect(createBodyFor(s)).toEqual({ name: 'm', mode: 'preset', ontology_preset: 'default' });
+    expect(s.template).toEqual(tmpl);
+  });
+  it('remote, not yet a knowledge base: initialize with the template', () => {
+    const s = wizardReducer(checked('no'), { type: 'SET_TEMPLATE', template: tmpl });
+    const body = createBodyFor(s);
+    expect(body.mode).toBe('initialize');
+    expect(body.template).toEqual(tmpl);
+    expect(body.ontology_preset).toBeUndefined();
+    expect(body.ontology_yaml).toBeUndefined();
+  });
+  it('choosing "From a template" with nothing picked sends no template', () => {
+    const s = wizardReducer({ ...initialWizardState, choice: 'local', name: 'm' }, { type: 'SET_USE_TEMPLATE', on: true });
+    expect(createBodyFor(s).template).toBeUndefined();
+  });
+});

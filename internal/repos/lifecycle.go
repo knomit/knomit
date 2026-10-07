@@ -134,10 +134,52 @@ type OriginSpec struct {
 // user's choice, not derived from the remote's shape.
 type CreateSpec struct {
 	Name           string
-	Mode           string // "preset" | "custom" | "clone" | "initialize" | "subscribe"
+	Mode           string // "preset" | "custom" | "template" | "clone" | "initialize" | "subscribe"
 	OntologyPreset string
 	OntologyYAML   string
-	Origin         *OriginSpec
+	// Template is the third ontology source (F24): a template held by a
+	// mounted repo. Mode "template" (local) requires it; "initialize" takes
+	// exactly one of OntologyPreset, OntologyYAML and Template; every other
+	// mode refuses it.
+	Template *TemplateRef
+	Origin   *OriginSpec
+}
+
+// validateOntologySources is the request-shape rule for the three ontology
+// sources, per mode. It refuses with ErrInvalidName (a 400) and touches
+// nothing; CreatePreflight and Create both run it.
+func validateOntologySources(spec CreateSpec) error {
+	hasTemplate := spec.Template != nil
+	if hasTemplate && spec.Template.Repo == "" {
+		return fmt.Errorf("%w: template.repo is required (the mounted repo that holds the template)", ErrInvalidName)
+	}
+	if hasTemplate && spec.Template.Name == "" {
+		return fmt.Errorf("%w: template.name is required", ErrInvalidName)
+	}
+	n := 0
+	for _, set := range []bool{spec.OntologyPreset != "", spec.OntologyYAML != "", hasTemplate} {
+		if set {
+			n++
+		}
+	}
+	switch spec.Mode {
+	case "template":
+		if !hasTemplate {
+			return fmt.Errorf("%w: template mode requires template {repo, name}", ErrInvalidName)
+		}
+		if n > 1 {
+			return fmt.Errorf("%w: template mode takes its ontology from the template; ontology_preset/ontology_yaml are not accepted", ErrInvalidName)
+		}
+	case "initialize":
+		if n > 1 {
+			return fmt.Errorf("%w: initialize mode takes exactly one of ontology_preset, ontology_yaml and template", ErrInvalidName)
+		}
+	case "preset", "custom":
+		if hasTemplate {
+			return fmt.Errorf("%w: %s mode does not take a template; use mode \"template\"", ErrInvalidName, spec.Mode)
+		}
+	}
+	return nil
 }
 
 // hasRemote reports whether spec's mode attaches a remote origin. "clone",
@@ -247,6 +289,27 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	if !isValidRepoName(spec.Name) {
 		return ErrInvalidName
 	}
+	if err := validateOntologySources(spec); err != nil {
+		return err
+	}
+	if spec.joinsRemoteOntology() {
+		if err := rejectOntologySpecForClone(spec); err != nil {
+			return err
+		}
+	}
+	// The template is read here too — a local read of a mounted repo, no
+	// network — so every template refusal is a status before the 202. The
+	// create re-reads it (authoritative): the source can move in between, and
+	// the commit the create records is the one IT read.
+	if spec.Template != nil && (spec.Mode == "template" || spec.Mode == "initialize") {
+		rt, err := m.ResolveTemplate(ctx, *spec.Template)
+		if err != nil {
+			return err
+		}
+		if err := m.checkTemplateMode(rt, spec.Mode); err != nil {
+			return err
+		}
+	}
 	origin := ""
 	if spec.hasRemote() {
 		if spec.Origin == nil || spec.Origin.URL == "" {
@@ -257,11 +320,11 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 			if err := rejectOntologySpecForClone(spec); err != nil {
 				return err
 			}
-		} else if spec.OntologyPreset == "" && spec.OntologyYAML == "" {
+		} else if spec.OntologyPreset == "" && spec.OntologyYAML == "" && spec.Template == nil {
 			// Initializing without an ontology has no meaning: writing
 			// .knomit/ontology.yaml IS the act that turns the branch into a
 			// knowledge base, and there would be nothing to write.
-			return fmt.Errorf("%w: initialize mode requires ontology_preset or ontology_yaml", ErrInvalidName)
+			return fmt.Errorf("%w: initialize mode requires ontology_preset, ontology_yaml or template", ErrInvalidName)
 		}
 		if active := m.ActiveRepoWithOrigin(origin); active != "" {
 			return fmt.Errorf("%w: %q", ErrOriginInUse, active)
@@ -458,6 +521,9 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	if !isValidRepoName(spec.Name) {
 		return nil, ErrInvalidName
 	}
+	if err := validateOntologySources(spec); err != nil {
+		return nil, err
+	}
 	reg, _, err := m.controlHandles()
 	if err != nil {
 		return nil, err
@@ -605,6 +671,8 @@ func (m *Manager) populate(ctx context.Context, r *RepoInstance, spec MountSpec)
 	switch cs.Mode {
 	case "preset", "custom":
 		err = m.initLocal(ctx, cs, r.dbPath, emit)
+	case "template":
+		err = m.initTemplate(ctx, cs, r.dbPath, emit)
 	case "clone":
 		upstream, err = m.initClone(ctx, cs, r.uid, r.dbPath, emit)
 	case "initialize":
@@ -842,6 +910,60 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	return nil
 }
 
+// initTemplate handles mode "template": a LOCAL repo created from a template
+// in a mounted repo (F24). The repo is created as every local repo is — the
+// unsigned root commit with README.md and the nonce (init commits stay
+// unsigned by design, kb/invariants/store/signing/fail-closed) — and then the
+// template's whole tree lands as ONE authored commit on the agent branch,
+// signed by this instance and stamped with the provenance trailers. The
+// consensus branch follows through the local reconcile, as for any new
+// origin-less repo.
+func (m *Manager) initTemplate(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
+	emit(Event{Step: "template", Phase: PhaseValidate, Message: "reading template " + spec.Template.Repo + "/" + spec.Template.Name, Pct: 20})
+	rt, err := m.ResolveTemplate(ctx, *spec.Template)
+	if err != nil {
+		return err
+	}
+	if err := m.checkTemplateMode(rt, spec.Mode); err != nil {
+		return err
+	}
+	emit(Event{Step: "init-git", Phase: PhaseTransfer, Indeterminate: true, Message: "initialising git store", Pct: 50})
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return err
+	}
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer svc.Close()
+	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
+	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
+	// The template commit is an AUTHORED write: signed by this instance, so it
+	// records who instantiated a template that brings recipes which run exec.
+	svc.SetSigner(m.deps.Signer)
+	if err := svc.InitRepo(ctx, nil, m.deps.AgentBranch); err != nil {
+		return fmt.Errorf("init git: %w", err)
+	}
+	emit(Event{Step: "template-write", Phase: PhaseRegister, Message: "writing template " + rt.Ref.Name, Pct: 60})
+	return writeTemplate(ctx, svc, m.deps.AgentBranch, rt)
+}
+
+// writeTemplate writes rt's files as ONE commit on branch through the
+// case-preserving door, stamped with rt's provenance trailers. The trailer
+// ctx is built here and never returned, so no later write on any path
+// inherits it (WithAgentTrace refuses a ctx that already carries a set).
+func writeTemplate(ctx context.Context, svc *store.Service, branch string, rt *ResolvedTemplate) error {
+	tctx := store.WithTrailers(ctx, rt.Trailers())
+	if _, _, err := svc.WriteSystemTree(tctx, branch, rt.Files,
+		"init: create knowledge base from template "+rt.Ref.Name, "created"); err != nil {
+		return fmt.Errorf("write template %s/%s: %w", rt.Ref.Repo, rt.Ref.Name, err)
+	}
+	return nil
+}
+
 // resolveOntology turns a spec's ontology fields into an Ontology. Shared by
 // initLocal and initInitialize so the two modes cannot drift in how they read
 // the same two fields.
@@ -890,8 +1012,8 @@ func resolveOntology(spec CreateSpec) (*fact.Ontology, error) {
 // the caller learns immediately instead of discovering the default ontology
 // later.
 func rejectOntologySpecForClone(spec CreateSpec) error {
-	if spec.OntologyPreset != "" || spec.OntologyYAML != "" {
-		return fmt.Errorf("%w: %s mode takes its ontology from the remote; ontology_preset/ontology_yaml are not accepted", ErrInvalidName, spec.Mode)
+	if spec.OntologyPreset != "" || spec.OntologyYAML != "" || spec.Template != nil {
+		return fmt.Errorf("%w: %s mode takes its ontology from the remote; ontology_preset/ontology_yaml/template are not accepted", ErrInvalidName, spec.Mode)
 	}
 	return nil
 }
@@ -1055,8 +1177,21 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// would otherwise quietly default rather than refuse — the exact
 	// silent-default this mode exists to prevent. Mirrors initClone's own
 	// authoritative re-assertion of rejectOntologySpecForClone, just above.
-	if spec.OntologyPreset == "" && spec.OntologyYAML == "" {
-		return "", fmt.Errorf("%w: initialize mode requires ontology_preset or ontology_yaml", ErrInvalidName)
+	if spec.OntologyPreset == "" && spec.OntologyYAML == "" && spec.Template == nil {
+		return "", fmt.Errorf("%w: initialize mode requires ontology_preset, ontology_yaml or template", ErrInvalidName)
+	}
+	// A template is read and checked BEFORE the remote is touched, so a bad
+	// one costs no network and leaves nothing on the remote.
+	var tmpl *ResolvedTemplate
+	if spec.Template != nil {
+		rt, err := m.ResolveTemplate(ctx, *spec.Template)
+		if err != nil {
+			return "", err
+		}
+		if err := m.checkTemplateMode(rt, spec.Mode); err != nil {
+			return "", err
+		}
+		tmpl = rt
 	}
 	emit(Event{Step: "probe", Phase: PhaseValidate, Message: "checking " + spec.Origin.URL, Pct: 10})
 	// Refs only, for the same reason as CreatePreflight: this reads Empty and
@@ -1070,13 +1205,15 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	}
 
 	emit(Event{Step: "ontology", Phase: PhaseValidate, Message: "resolving ontology", Pct: 20})
-	ont, err := resolveOntology(spec)
-	if err != nil {
-		return "", err
-	}
-	y, err := ont.Serialize()
-	if err != nil {
-		return "", fmt.Errorf("serialize ontology: %w", err)
+	var y []byte
+	if tmpl == nil {
+		ont, err := resolveOntology(spec)
+		if err != nil {
+			return "", err
+		}
+		if y, err = ont.Serialize(); err != nil {
+			return "", fmt.Errorf("serialize ontology: %w", err)
+		}
 	}
 
 	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
@@ -1160,10 +1297,24 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// THE ACT that makes this a knowledge base. One ordinary commit on the agent
 	// branch, through the same fact machinery every later write uses — not a
 	// special-cased root commit, which is what let seed's identity diverge.
-	emit(Event{Step: "ontology-write", Phase: PhaseRegister, Message: "writing " + OntologyPath, Pct: 55})
-	if _, werr := svc.Facts().WriteFact(ctx, m.deps.AgentBranch, OntologyPath, string(y),
-		"init: create knowledge base", "created"); werr != nil {
-		return "", fmt.Errorf("initialize: write %s: %w", OntologyPath, werr)
+	//
+	// With a template, the act is the template's whole tree in that one commit
+	// (writeTemplate): the same rules as any other initialize — refused above
+	// when the branch already has an ontology; otherwise written onto the
+	// agent branch only, replacing same-path files there (e.g. the remote's
+	// README.md), visible in the agent-branch merge; nothing is written to the
+	// remote's consensus branch.
+	if tmpl != nil {
+		emit(Event{Step: "template-write", Phase: PhaseRegister, Message: "writing template " + tmpl.Ref.Name, Pct: 55})
+		if werr := writeTemplate(ctx, svc, m.deps.AgentBranch, tmpl); werr != nil {
+			return "", fmt.Errorf("initialize: %w", werr)
+		}
+	} else {
+		emit(Event{Step: "ontology-write", Phase: PhaseRegister, Message: "writing " + OntologyPath, Pct: 55})
+		if _, werr := svc.Facts().WriteFact(ctx, m.deps.AgentBranch, OntologyPath, string(y),
+			"init: create knowledge base", "created"); werr != nil {
+			return "", fmt.Errorf("initialize: write %s: %w", OntologyPath, werr)
+		}
 	}
 
 	// THE AGENT BRANCH ONLY. Steady-state sync pushes exactly this ref and no

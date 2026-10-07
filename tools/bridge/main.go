@@ -190,6 +190,16 @@ func main() {
 		}
 		return
 	}
+	// `kb repo ...` is dispatched on the FIRST argument, before flag.Parse,
+	// like claude: `-repo` is also a FLAG of the proxy mode (`kb -repo work
+	// http://h`), which never has "repo" as its first argument.
+	if isRepoCommand(args) {
+		if err := runRepo(args[1:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(args) >= 1 && (args[0] == "antigravity" || args[0] == "agy") {
 		if err := antigravity.Run(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "knomit-bridge antigravity: %v\n", err)
@@ -223,6 +233,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  login <base-url>        Authorize kb at a knomit OAuth listener (browser + operator approval)\n")
 		fmt.Fprintf(os.Stderr, "                          kb login [--no-browser] https://knomit.example.com\n\n")
 		fmt.Fprintf(os.Stderr, "  logout <base-url>       Revoke and forget the credentials kb login saved for that host\n\n")
+		fmt.Fprintf(os.Stderr, "  repo create <new>       Create a repo from a template held by a mounted repo\n")
+		fmt.Fprintf(os.Stderr, "                          kb repo create <new> --template <repo>/<name> [server]\n\n")
 		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "the server (every call: proxy, discovery and hooks), first match wins:\n")
