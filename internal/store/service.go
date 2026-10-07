@@ -364,7 +364,10 @@ func (s *Service) SetOntologyRoot(root string) { s.rh.factRoot = strings.Trim(ro
 // Wired by the repos builder for subscriptions. The gate sits at the shared
 // write seam (writeFileExact / deleteFile / batchWrite) so every door —
 // facts, root files, batches — inherits it; the sync merges are deliberately
-// outside it, since a subscription must keep following its upstream.
+// outside it, since a subscription must keep following its upstream. One door
+// goes below that seam: WriteSystemTree calls batchWriteLocked directly, so it
+// carries its own copy of the gate (TestReadOnlyStore_RefusesAuthoredWrites…
+// pins both).
 //
 // Like SetOntologyRoot, the flag does not survive store.Open and must be
 // re-applied on SwapStore reopen: rewireStore rebuilds the Service from disk,

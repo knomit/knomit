@@ -30,6 +30,11 @@ func TestReadOnlyStore_RefusesAuthoredWritesOnEveryBranch(t *testing.T) {
 		require.ErrorIs(t, err, ErrRepoReadOnly, "DeleteFact on %s", branch)
 		_, _, err = svc.Facts().BatchWriteFacts(ctx, branch, map[string]string{"kb/y.md": "y"}, nil, "m", "created")
 		require.ErrorIs(t, err, ErrRepoReadOnly, "BatchWriteFacts on %s", branch)
+		// WriteSystemTree calls batchWriteLocked directly, below the seam,
+		// so its own gate is the only thing between a subscription and a
+		// commit through this door (N3, #433 review).
+		_, _, err = svc.WriteSystemTree(ctx, branch, map[string]string{".knomit/ontology.yaml": "id: x\n"}, "m", "created")
+		require.ErrorIs(t, err, ErrRepoReadOnly, "WriteSystemTree on %s", branch)
 	}
 
 	// Nothing was committed: main's tip is unchanged.

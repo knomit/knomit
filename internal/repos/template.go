@@ -2,11 +2,13 @@ package repos
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -62,10 +64,26 @@ var (
 	// ErrTemplateFleetLocal: a fleet-id template may not become a LOCAL repo
 	// (it would become this instance's fleet, and `knomit fleet register`
 	// would then answer already_registered); use mode "initialize" on the
-	// fleet's git URL. Also returned when this instance already has a fleet
-	// repo, or a fleet registration is in flight.
+	// fleet's git URL. Every fleet-template refusal matches it, including
+	// ErrTemplateFleetPresent.
 	ErrTemplateFleetLocal = errors.New("a fleet template creates the fleet repository only with mode \"initialize\" on the fleet's git URL, and only when this instance has no fleet")
+	// ErrTemplateFleetPresent: the request IS an initialize, but this
+	// instance already has a fleet repository, or a fleet registration or
+	// unregistration is in flight. It wraps ErrTemplateFleetLocal (so
+	// errors.Is(err, ErrTemplateFleetLocal) still holds) and exists so the
+	// answer does not tell an initialize to use initialize.
+	ErrTemplateFleetPresent = fmt.Errorf("%w: this instance already has a fleet", ErrTemplateFleetLocal)
+	// ErrTemplateFleetStateUnavailable: the fleet state could not be READ,
+	// so whether a registration is in flight is unknown. The create is
+	// refused (fail closed); it is not a verdict on the template.
+	ErrTemplateFleetStateUnavailable = errors.New("fleet state unavailable: cannot tell whether a fleet registration is in flight")
 )
+
+// templatePresetByID is fact.EmbeddedPresetByID, as a variable only so a test
+// can stand in a preset WITH root attributes: no embedded preset declares one
+// today, and without one refreshDivergence and SubsetDivergence give the same
+// answer for every template, so nothing else could pin which one is called.
+var templatePresetByID = fact.EmbeddedPresetByID
 
 // ResolvedTemplate is a template read and checked, ready to write.
 type ResolvedTemplate struct {
@@ -157,7 +175,7 @@ func (m *Manager) ResolveTemplate(ctx context.Context, ref TemplateRef) (*Resolv
 	// refreshDivergence): a template this accepts with a preset's id is one
 	// the refresh upgrades in place, never one it would rewrite into a
 	// different taxonomy.
-	if preset := fact.EmbeddedPresetByID(o.ID); preset != nil {
+	if preset := templatePresetByID(o.ID); preset != nil {
 		if d := refreshDivergence(o, preset); d != "" {
 			return nil, fmt.Errorf("%w: id %q (%s)", ErrTemplatePresetID, o.ID, d)
 		}
@@ -167,8 +185,10 @@ func (m *Manager) ResolveTemplate(ctx context.Context, ref TemplateRef) (*Resolv
 }
 
 // checkTemplateMode applies the rules that depend on the create mode: a
-// fleet-id template only with "initialize", and only while this instance has
-// no fleet repository and no fleet registration in flight.
+// fleet-id template only with "initialize" (ErrTemplateFleetLocal), and only
+// while this instance has no fleet repository and no fleet registration in
+// flight (ErrTemplateFleetPresent). A fleet state that cannot be read
+// refuses too (ErrTemplateFleetStateUnavailable): fail closed.
 func (m *Manager) checkTemplateMode(rt *ResolvedTemplate, mode string) error {
 	if !fact.IsFleetOntology(rt.Ontology) {
 		return nil
@@ -177,12 +197,32 @@ func (m *Manager) checkTemplateMode(rt *ResolvedTemplate, mode string) error {
 		return ErrTemplateFleetLocal
 	}
 	if ri := m.fleetRepo(); ri != nil {
-		return fmt.Errorf("%w: this instance's fleet repository is %q", ErrTemplateFleetLocal, ri.Name())
+		return fmt.Errorf("%w: its fleet repository is %q", ErrTemplateFleetPresent, ri.Name())
 	}
-	if row, err := m.fleetDB(); err == nil && row != nil && (row.State == FleetRegistering || row.State == FleetUnregistering) {
-		return fmt.Errorf("%w: a fleet registration is %s", ErrTemplateFleetLocal, row.State)
+	row, err := m.fleetDB()
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// No identity row: this instance never resolved an identity, and a
+		// registration writes its state INTO that row (setFleetState
+		// refuses without it), so none can be in flight.
+		return nil
+	case err != nil:
+		return fmt.Errorf("%w: %v", ErrTemplateFleetStateUnavailable, err)
+	case row.State == FleetRegistering || row.State == FleetUnregistering:
+		return fmt.Errorf("%w: a fleet registration is %s", ErrTemplateFleetPresent, row.State)
 	}
 	return nil
+}
+
+// listingSkipLevel is the level the all-repos listing logs a skipped repo at.
+// A repo that is not open (populating, closing) or was renamed away since
+// Names() is an ordinary state, not a fault, and the listing runs on every
+// GET /templates: Debug. Anything else failed on an open repo: Warn.
+func listingSkipLevel(err error) zerolog.Level {
+	if errors.Is(err, ErrTemplateSourceUnavailable) || errors.Is(err, ErrTemplateSourceNotFound) {
+		return zerolog.DebugLevel
+	}
+	return zerolog.WarnLevel
 }
 
 // TemplateInfo is one listed template.
@@ -232,8 +272,9 @@ func (m *Manager) templateFactsAt(ctx context.Context, svc *store.Service, tip p
 // consensus tip whose folder exists at that same commit. A folder without a
 // fact is not listed (it is still creatable by name); a fact without a folder
 // is not listed; a name with two facts is not listed (and is refused at
-// create). A repo that is not open is skipped in the all-repos listing and
-// is an error (ErrTemplateSourceUnavailable) for the one-repo listing.
+// create). A repo that is not open is skipped in the all-repos listing (at
+// Debug: it is a state, not a fault) and is an error
+// (ErrTemplateSourceUnavailable) for the one-repo listing.
 func (m *Manager) ListTemplates(ctx context.Context, repo string) ([]TemplateInfo, error) {
 	names := m.Names()
 	if repo != "" {
@@ -270,7 +311,7 @@ func (m *Manager) ListTemplates(ctx context.Context, repo string) ([]TemplateInf
 			if repo != "" {
 				return nil, err
 			}
-			log.Warn().Err(err).Str("repo", name).Msg("templates: repo skipped in the listing")
+			log.WithLevel(listingSkipLevel(err)).Err(err).Str("repo", name).Msg("templates: repo skipped in the listing")
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

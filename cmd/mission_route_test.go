@@ -1,17 +1,24 @@
 package cmd
 
-// F08 PR D: the mission template's knomit-hosted route, run exactly as its
-// README writes it, over the real web server and the fleet's cert HTTPS /git.
+// F08 PR D: the mission template's README route "Knomit-hosted", step 1's
+// "with your edits" branch (README "Create it" → "With your edits"), run as
+// the README writes it, over the real web server and the fleet's cert HTTPS
+// /git:
 //
-//  1. git init <branch> my-mission; copy the mission template into it
-//     (knomit-playbooks .knomit/templates/mission/, read from the pinned
-//     third_party/knomit-playbooks checkout): the README's copy, done in Go so
-//     it runs the same on every OS; git add -A; git commit. (Creating the repo
-//     FROM the template in one step, F24, is what the two-instance tests in
-//     internal/repos do; this test keeps the README's clone route.)
-//  2. The host clones that repository, then removes its origin
-//     (DELETE /api/v1/repos/<repo>/origin).
+//  1. Write each file of the template (knomit-playbooks
+//     .knomit/templates/mission/, read from the pinned
+//     third_party/knomit-playbooks checkout; here unedited) to its path in a
+//     new git repository: git init <branch> my-mission, the copy done in Go
+//     so it runs the same on every OS, git add -A, git commit.
+//  2. The host creates the repo by cloning it, then removes its origin
+//     (DELETE /api/v1/repos/<repo>/origin): with no origin it owns the
+//     consensus branch.
 //  3. A peer clones the repo FROM THE HOST over cert HTTPS.
+//
+// The README's default "Create it" (mode template, no origin from birth) is
+// what the two-instance tests in internal/repos run (newMissionHost) and
+// POST /repos is TestPostRepos_Template; this test keeps the clone route
+// because it is the one that can carry a consensus branch other than main.
 //
 // Run on branches named trunk and master (stock `git init` makes master):
 // neither may turn into a hardcoded "main" when the origin goes. The host

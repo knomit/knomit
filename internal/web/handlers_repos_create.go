@@ -370,8 +370,18 @@ func createErrStatus(err error) (int, string) {
 		return http.StatusNotFound, "Template not found"
 	case errors.Is(err, repos.ErrTemplateSourceUnavailable):
 		return http.StatusServiceUnavailable, "Template source unavailable"
+	// Both fleet refusals are ErrTemplateFleetLocal; the one where the
+	// request already IS an initialize (this instance has a fleet, or a
+	// registration is in flight) must not tell it to use initialize, so its
+	// arm comes first. The title follows the ERROR, never the request mode.
+	case errors.Is(err, repos.ErrTemplateFleetPresent):
+		return http.StatusConflict, "Fleet already present"
 	case errors.Is(err, repos.ErrTemplateFleetLocal):
 		return http.StatusConflict, "Fleet template needs initialize"
+	// The fleet state could not be read, so the in-flight check could not
+	// run: unavailable, like the registry, never a verdict on the template.
+	case errors.Is(err, repos.ErrTemplateFleetStateUnavailable):
+		return http.StatusServiceUnavailable, "Fleet state unavailable"
 	case errors.Is(err, repos.ErrTemplateNotRegular),
 		errors.Is(err, repos.ErrTemplateTooLarge),
 		errors.Is(err, repos.ErrTemplateLayout),

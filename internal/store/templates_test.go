@@ -144,16 +144,44 @@ func TestTemplateFilesAt_ReadsAndRefuses(t *testing.T) {
 	require.Equal(t, "kb/templates/ok/aaaa1111.md", facts[0].Path)
 }
 
-// More than TemplateMaxFiles files is refused, never truncated.
-func TestTemplateFilesAt_TooManyFiles(t *testing.T) {
+// The limits are inclusive: exactly TemplateMaxFiles files and exactly
+// TemplateMaxBytes bytes (summed over files) are accepted, one more of either
+// is refused, never truncated (N4, #433 review).
+// SABOTAGE: `>=` in either limit check → the "at" row of that limit red;
+// allow one more → the "over" row red.
+func TestTemplateFilesAt_LimitBoundaries(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 	files := map[string]string{}
-	for i := 0; i <= fact.TemplateMaxFiles; i++ {
-		files[fmt.Sprintf(".knomit/templates/many/.knomit/f%03d.md", i)] = "x"
+	for i := 0; i < fact.TemplateMaxFiles; i++ {
+		files[fmt.Sprintf(".knomit/templates/files-at/.knomit/f%03d.md", i)] = "x"
+		files[fmt.Sprintf(".knomit/templates/files-over/.knomit/f%03d.md", i)] = "x"
 	}
-	h, _, err := svc.Facts().BatchWriteFacts(ctx, "main", files, nil, "many", "created")
+	files[".knomit/templates/files-over/.knomit/one-more.md"] = "x"
+	half := fact.TemplateMaxBytes / 2
+	files[".knomit/templates/bytes-at/.knomit/a.bin"] = strings.Repeat("a", half)
+	files[".knomit/templates/bytes-at/.knomit/b.bin"] = strings.Repeat("b", fact.TemplateMaxBytes-half)
+	files[".knomit/templates/bytes-over/.knomit/a.bin"] = strings.Repeat("a", half)
+	files[".knomit/templates/bytes-over/.knomit/b.bin"] = strings.Repeat("b", fact.TemplateMaxBytes-half+1)
+	h, _, err := svc.Facts().BatchWriteFacts(ctx, "main", files, nil, "limits", "created")
 	require.NoError(t, err)
-	_, err = svc.Templates().TemplateFilesAt(ctx, plumbing.NewHash(h), "many")
+	tip := plumbing.NewHash(h)
+
+	got, err := svc.Templates().TemplateFilesAt(ctx, tip, "files-at")
+	require.NoError(t, err, "exactly %d files is accepted", fact.TemplateMaxFiles)
+	require.Len(t, got, fact.TemplateMaxFiles)
+	_, err = svc.Templates().TemplateFilesAt(ctx, tip, "files-over")
 	require.ErrorIs(t, err, ErrTemplateTooLarge)
+	require.ErrorContains(t, err, "files")
+
+	got, err = svc.Templates().TemplateFilesAt(ctx, tip, "bytes-at")
+	require.NoError(t, err, "exactly %d bytes is accepted", fact.TemplateMaxBytes)
+	total := 0
+	for _, f := range got {
+		total += len(f.Data)
+	}
+	require.Equal(t, fact.TemplateMaxBytes, total, "fixture: the files sum to the limit")
+	_, err = svc.Templates().TemplateFilesAt(ctx, tip, "bytes-over")
+	require.ErrorIs(t, err, ErrTemplateTooLarge)
+	require.ErrorContains(t, err, "bytes")
 }
