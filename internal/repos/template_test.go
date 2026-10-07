@@ -3,6 +3,8 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
@@ -346,7 +349,9 @@ func TestCreateFromTemplate_Refusals(t *testing.T) {
 		files: map[string]string{
 			".knomit/templates/no-ontology/README.md":              "R",
 			".knomit/templates/bad-ontology/.knomit/ontology.yaml": "id: [\n",
+			".knomit/templates/not-new/.knomit/ontology.yaml":      notNewOntology(t),
 			".knomit/templates/preset-id/.knomit/ontology.yaml":    "id: general\nname: G\ntopics:\n  mine:\n    description: not the preset\n",
+			".knomit/templates/preset-attrs/.knomit/ontology.yaml": presetPlusRootAttr(t),
 			".knomit/templates/kb-path/.knomit/ontology.yaml":      onto,
 			".knomit/templates/kb-path/kb/notes/x.md":              "seed fact",
 			".knomit/templates/license/.knomit/ontology.yaml":      onto,
@@ -384,7 +389,9 @@ func TestCreateFromTemplate_Refusals(t *testing.T) {
 		{TemplateRef{Repo: "src", Name: "fact-only"}, ErrTemplateNotFound},
 		{TemplateRef{Repo: "src", Name: "no-ontology"}, ErrTemplateNoOntology},
 		{TemplateRef{Repo: "src", Name: "bad-ontology"}, ErrTemplateOntology},
+		{TemplateRef{Repo: "src", Name: "not-new"}, ErrTemplateOntology},
 		{TemplateRef{Repo: "src", Name: "preset-id"}, ErrTemplatePresetID},
+		{TemplateRef{Repo: "src", Name: "preset-attrs"}, ErrTemplatePresetID},
 		{TemplateRef{Repo: "src", Name: "kb-path"}, ErrTemplateLayout},
 		{TemplateRef{Repo: "src", Name: "license"}, ErrTemplateLayout},
 		{TemplateRef{Repo: "src", Name: "symlink"}, ErrTemplateNotRegular},
@@ -401,6 +408,41 @@ func TestCreateFromTemplate_Refusals(t *testing.T) {
 			noTraceOf(t, m, "new-repo", before)
 		})
 	}
+}
+
+// notNewOntology is an ontology the OPEN path accepts and the CREATE path
+// refuses: a repository-level attribute declared on a topic is only a warning
+// for an existing repo, and fatal for a new one. The fixture checks that it
+// separates the two parsers, so the row that uses it pins ParseNewOntology
+// (with ParseOntology in ResolveTemplate the template would be accepted).
+func notNewOntology(t *testing.T) string {
+	t.Helper()
+	y := "id: t\nname: T\ntopics:\n  notes:\n    description: N\n    attributes:\n      verify_signatures: log\n"
+	_, err := fact.ParseOntology([]byte(y))
+	require.NoError(t, err, "fixture: the open path must accept it")
+	_, err = fact.ParseNewOntology([]byte(y))
+	require.Error(t, err, "fixture: the create path must refuse it")
+	return y
+}
+
+// presetPlusRootAttr is the general preset, topics and all, plus a root
+// attribute the preset does not declare: the boot refresh would erase it, so
+// a template carrying the preset's id with it is not that preset.
+func presetPlusRootAttr(t *testing.T) string {
+	t.Helper()
+	y := withRootAttr(t, mustPresetYAML(t, "default"), "enforce")
+	parsed, err := fact.ParseNewOntology([]byte(y))
+	require.NoError(t, err, "fixture: a valid new ontology")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(parsed, fact.DefaultOntology()), "fixture: diverges only in its root attributes")
+	return y
+}
+
+// withRootAttr appends a root `attributes: {verify_signatures: mode}` block
+// to an ontology document that has none.
+func withRootAttr(t *testing.T, y, mode string) string {
+	t.Helper()
+	require.NotContains(t, y, "\nattributes:", "fixture: no root attributes yet")
+	return strings.TrimRight(y, "\n") + "\nattributes:\n  verify_signatures: " + mode + "\n"
 }
 
 func mustPresetYAML(t *testing.T, preset string) string {
@@ -421,6 +463,88 @@ func TestCreateFromTemplate_PresetTemplateIsAccepted(t *testing.T) {
 	ri, err := m.Create(context.Background(), CreateSpec{Name: "kb", Mode: "template", Template: &TemplateRef{Repo: "playbooks", Name: "coding"}}, nil)
 	require.NoError(t, err)
 	require.Equal(t, "source-code", ri.Ontology().ID)
+}
+
+// N1 (#433 review, user ruling): "is that preset" is the boot refresh's own
+// test, refreshDivergence, not SubsetDivergence. The two differ only when the
+// PRESET declares a root attribute the template lacks (the refresh would ADD
+// it), and no embedded preset declares one today, so a preset with one is
+// stood in through templatePresetByID. The fixture asserts it separates the
+// two functions, and the byte-identical template must be refused.
+// SABOTAGE: call SubsetDivergence in ResolveTemplate → accepted → red.
+func TestCreateFromTemplate_PresetIdentityIsTheRefreshRule(t *testing.T) {
+	withRoot, err := fact.ParseOntology([]byte(withRootAttr(t, mustPresetYAML(t, "default"), "log")))
+	require.NoError(t, err)
+	orig := templatePresetByID
+	templatePresetByID = func(id string) *fact.Ontology {
+		if id == "general" {
+			return withRoot
+		}
+		return orig(id)
+	}
+	t.Cleanup(func() { templatePresetByID = orig })
+
+	plain := mustPresetYAML(t, "default")
+	parsed, err := fact.ParseNewOntology([]byte(plain))
+	require.NoError(t, err)
+	require.Equal(t, "", parsed.SubsetDivergence(withRoot), "fixture: SubsetDivergence sees no divergence")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(parsed, withRoot), "fixture: refreshDivergence does")
+
+	root := t.TempDir()
+	m := tmplManager(t, root, "tmpl-host")
+	mount(t, m, "src", "clone", sourceRepo(t, root, "src", sourceSpec{files: map[string]string{
+		".knomit/templates/general/.knomit/ontology.yaml": plain,
+	}}))
+	_, err = m.Create(context.Background(), CreateSpec{Name: "kb", Mode: "template", Template: &TemplateRef{Repo: "src", Name: "general"}}, nil)
+	require.ErrorIs(t, err, ErrTemplatePresetID)
+	require.ErrorContains(t, err, fact.DivergenceAttributes)
+}
+
+// N6 (#433 review): the all-repos listing skips a repo that is not open at
+// Debug, so a populating repo does not log a Warn on every GET /templates;
+// a genuine failure on an OPEN repo still warns, and the one-repo listing
+// still returns the error.
+// SABOTAGE: log every skip at Warn → the not-open assertion red; log every
+// skip at Debug → the genuine-error control red.
+func TestListTemplates_NotOpenRepoIsNotAWarning(t *testing.T) {
+	root := t.TempDir()
+	m := tmplManager(t, root, "tmpl-host")
+	playbooksSource(t, m, root, "clone")
+	half := m.newInstance("half-open", "uid-half-open", false)
+	m.mu.Lock()
+	m.repos["half-open"] = half
+	m.mu.Unlock()
+	t.Cleanup(func() {
+		m.mu.Lock()
+		delete(m.repos, "half-open")
+		m.mu.Unlock()
+	})
+	_, _, err := half.Acquire()
+	require.Error(t, err, "fixture: the repo is not open")
+
+	logs := captureLogs(t, zerolog.DebugLevel)
+	for range 2 {
+		got, err := m.ListTemplates(context.Background(), "")
+		require.NoError(t, err)
+		require.Len(t, got, 4, "the open repo is still listed")
+	}
+	skips := 0
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Contains(line, "repo skipped in the listing") && strings.Contains(line, `"repo":"half-open"`) {
+			skips++
+			require.Contains(t, line, `"level":"debug"`, line)
+		}
+	}
+	require.Equal(t, 2, skips, "reached: the repo was skipped once per call")
+
+	_, err = m.ListTemplates(context.Background(), "half-open")
+	require.ErrorIs(t, err, ErrTemplateSourceUnavailable, "the one-repo listing still answers the error")
+
+	// The level, by error: only the two "not there right now" sentinels are
+	// Debug; a failure reading an open repo stays a Warn.
+	require.Equal(t, zerolog.DebugLevel, listingSkipLevel(fmt.Errorf("%w: x", ErrTemplateSourceNotFound)))
+	require.Equal(t, zerolog.WarnLevel, listingSkipLevel(fmt.Errorf("template source %q: read main: %w", "x", io.ErrUnexpectedEOF)))
+	require.Equal(t, zerolog.WarnLevel, listingSkipLevel(fmt.Errorf("templates: blob: %w", plumbing.ErrObjectNotFound)))
 }
 
 // ── Modes ─────────────────────────────────────────────────────────────────
@@ -509,8 +633,51 @@ func TestCreateFromTemplate_Fleet(t *testing.T) {
 
 	_, err := m.Create(context.Background(), CreateSpec{Name: "fleet", Mode: "template", Template: ref}, nil)
 	require.ErrorIs(t, err, ErrTemplateFleetLocal)
+	require.NotErrorIs(t, err, ErrTemplateFleetPresent, "a local fleet template is told to use initialize")
 
 	fleetURL := sourceRepo(t, root, "fleet", sourceSpec{noOntol: true, files: map[string]string{"x.txt": "x"}})
+	spec := CreateSpec{Name: "fleet", Mode: "initialize", Template: ref, Origin: &OriginSpec{URL: fleetURL}}
+
+	// N2 (#433 review): a fleet registration or unregistration in flight
+	// refuses the initialize, from preflight and from Create, and names the
+	// state: a fleet repo is not mounted yet, so only the in-flight check can
+	// refuse it.
+	// SABOTAGE: drop the in-flight case → both rows red; keep only
+	// registering → the unregistering row red.
+	db := m.ControlDB()
+	_, err = resolveIdentity(db, tmplAgent, fixedNow())
+	require.NoError(t, err)
+	for _, state := range []string{FleetRegistering, FleetUnregistering} {
+		require.NoError(t, setFleetState(db, state, fixedNow()))
+		row, err := m.fleetDB()
+		require.NoError(t, err)
+		require.Equal(t, state, row.State, "reached: the row the check reads is %s", state)
+		require.Nil(t, m.fleetRepo())
+		for _, err := range []error{m.CreatePreflight(context.Background(), spec), func() error {
+			_, err := m.Create(context.Background(), spec, nil)
+			return err
+		}()} {
+			require.ErrorIs(t, err, ErrTemplateFleetPresent, state)
+			require.ErrorIs(t, err, ErrTemplateFleetLocal, "every fleet refusal still matches ErrTemplateFleetLocal")
+			require.ErrorContains(t, err, "a fleet registration is "+state)
+		}
+		require.Nil(t, m.Get("fleet"))
+	}
+
+	// Added in review: a fleet state that cannot be READ refuses (fail
+	// closed) with its own sentinel, never as a fleet that is present.
+	// SABOTAGE: restore `err == nil &&` (fail open) → this row creates the
+	// fleet → red.
+	_, err = db.Exec(`ALTER TABLE instance_identity RENAME TO instance_identity_away`)
+	require.NoError(t, err)
+	_, err = m.Create(context.Background(), spec, nil)
+	require.ErrorIs(t, err, ErrTemplateFleetStateUnavailable)
+	require.NotErrorIs(t, err, ErrTemplateFleetLocal)
+	require.Nil(t, m.Get("fleet"))
+	_, err = db.Exec(`ALTER TABLE instance_identity_away RENAME TO instance_identity`)
+	require.NoError(t, err)
+
+	require.NoError(t, setFleetState(db, FleetStandalone, fixedNow()))
 	ri, err := m.Create(context.Background(), CreateSpec{Name: "fleet", Mode: "initialize", Template: ref, Origin: &OriginSpec{URL: fleetURL}}, nil)
 	require.NoError(t, err)
 	require.True(t, fact.IsFleetOntology(ri.Ontology()))
@@ -519,6 +686,8 @@ func TestCreateFromTemplate_Fleet(t *testing.T) {
 	other := sourceRepo(t, root, "fleet2", sourceSpec{noOntol: true, files: map[string]string{"x.txt": "x"}})
 	_, err = m.Create(context.Background(), CreateSpec{Name: "fleet2", Mode: "initialize", Template: ref, Origin: &OriginSpec{URL: other}}, nil)
 	require.ErrorIs(t, err, ErrTemplateFleetLocal, "a second fleet repository is refused")
+	require.ErrorIs(t, err, ErrTemplateFleetPresent, "and as a fleet that is present, not as a mode error")
+	require.ErrorContains(t, err, `its fleet repository is "fleet"`)
 }
 
 // ── Listing ───────────────────────────────────────────────────────────────

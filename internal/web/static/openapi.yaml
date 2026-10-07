@@ -166,8 +166,11 @@ paths:
         `.knomit/**`, a symlink, submodule or executable, over 256 files or
         4 MiB, no or an invalid `.knomit/ontology.yaml`, a built-in preset's
         id on an ontology that is not that preset, two template facts for
-        one name); 409 for a fleet template outside mode=initialize, or on
-        an instance that already has a fleet.
+        one name); 409 "Fleet template needs initialize" for a fleet
+        template outside mode=initialize, and 409 "Fleet already present"
+        for one on an instance that already has a fleet or a fleet
+        registration in flight; 503 "Fleet state unavailable" when that
+        state cannot be read.
       operationId: createRepo
       requestBody:
         required: true
