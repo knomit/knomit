@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,6 +22,9 @@ func TestReadOnlyStore_RefusesAuthoredWritesOnEveryBranch(t *testing.T) {
 	svc.SetReadOnly(true)
 
 	ctx := context.Background()
+	// The tips BEFORE the refused writes, so "nothing was committed" below
+	// compares against the state the refusals started from.
+	tips := map[string]plumbing.Hash{"main": mustHeadHash(t, svc, "main"), "agent/test": mustHeadHash(t, svc, "agent/test")}
 	for _, branch := range []string{"main", "agent/test"} {
 		_, err := svc.Facts().WriteFact(ctx, branch, "kb/x.md", "---\ntype: observation\n---\n# x\n", "m", "created")
 		require.ErrorIs(t, err, ErrRepoReadOnly, "WriteFact on %s", branch)
@@ -37,8 +41,11 @@ func TestReadOnlyStore_RefusesAuthoredWritesOnEveryBranch(t *testing.T) {
 		require.ErrorIs(t, err, ErrRepoReadOnly, "WriteSystemTree on %s", branch)
 	}
 
-	// Nothing was committed: main's tip is unchanged.
-	before := mustHeadHash(t, svc, "main")
+	// Nothing was committed: neither tip moved.
+	for branch, tip := range tips {
+		require.Equal(t, tip, mustHeadHash(t, svc, branch), "a refused write moved %s", branch)
+	}
+	before := tips["main"]
 	svc.SetReadOnly(false)
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/x.md", "---\ntype: observation\n---\n# x\n", "m", "created")
 	require.NoError(t, err, "clearing the flag re-enables writes")

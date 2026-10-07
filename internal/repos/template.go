@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -199,13 +198,11 @@ func (m *Manager) checkTemplateMode(rt *ResolvedTemplate, mode string) error {
 	if ri := m.fleetRepo(); ri != nil {
 		return fmt.Errorf("%w: its fleet repository is %q", ErrTemplateFleetPresent, ri.Name())
 	}
+	// Any read failure refuses, a missing identity row included: app.New and
+	// Manager.Start both write that row before a create can run, so a row
+	// that is not there was lost, and "nothing in flight" cannot be known.
 	row, err := m.fleetDB()
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		// No identity row: this instance never resolved an identity, and a
-		// registration writes its state INTO that row (setFleetState
-		// refuses without it), so none can be in flight.
-		return nil
 	case err != nil:
 		return fmt.Errorf("%w: %v", ErrTemplateFleetStateUnavailable, err)
 	case row.State == FleetRegistering || row.State == FleetUnregistering:
