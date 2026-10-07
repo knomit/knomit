@@ -24,7 +24,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/serverkey"
 	"knomit/internal/store"
-	"knomit/internal/testsupport/recipes"
+	"knomit/internal/testsupport/playbooks"
 )
 
 // ---- Fixture (F07 PR 5, `do: run`)
@@ -575,15 +575,15 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 // ---- T12: the sample recipe
 
 // SampleRecipe_ArgvHasPathNotBody [F3]: the shipped claude-session.js
-// (knomit-recipes .knomit/artifacts/recipes/, read from the pinned
-// third_party/knomit-recipes checkout), with a fake `claude` (the helper) on
+// (knomit-playbooks .knomit/artifacts/recipes/, read from the pinned
+// third_party/knomit-playbooks checkout), with a fake `claude` (the helper) on
 // PATH: argv is exactly [claude, --model, sonnet, --mcp-config, <this repo's
 // MCP config>, --allowedTools, mcp__knomit-repo-<repo>, -p, <prompt>]; the
 // prompt names task_path; a sentinel in the task BODY is absent from argv,
 // stdin and env. Sabotage: interpolate fact.body into the prompt (red).
 func TestSampleRecipe_ArgvHasPathNotBody(t *testing.T) {
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "claude-session"))
-	src, err := os.ReadFile(recipes.Path(t, ".knomit/artifacts/recipes/claude-session.js"))
+	src, err := os.ReadFile(playbooks.Path(t, ".knomit/artifacts/recipes/claude-session.js"))
 	require.NoError(t, err)
 	putLocalRecipe(t, home, "claude-session", string(src))
 

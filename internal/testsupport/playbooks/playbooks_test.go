@@ -1,4 +1,4 @@
-package recipes
+package playbooks
 
 import (
 	"fmt"
@@ -89,12 +89,13 @@ func lastTwo(p string) string {
 	return filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p))
 }
 
-// TestRecipesKB_OntologyLoads: knomit-recipes' own ontology loads in knomit
-// as a NEW ontology, with no diagnostics at all, and has F24's five topics.
+// TestPlaybooksKB_OntologyLoads: knomit-playbooks' own ontology loads in
+// knomit as a NEW ontology, with no diagnostics at all, and has F24's five
+// topics.
 //
 // SABOTAGE: add an unknown key or a bad repository attribute to the
 // checkout's .knomit/ontology.yaml → red.
-func TestRecipesKB_OntologyLoads(t *testing.T) {
+func TestPlaybooksKB_OntologyLoads(t *testing.T) {
 	raw, err := os.ReadFile(Path(t, ".knomit/ontology.yaml"))
 	require.NoError(t, err)
 	o, diags := fact.ValidateOntologyYAML(raw)
@@ -109,10 +110,10 @@ func TestRecipesKB_OntologyLoads(t *testing.T) {
 	require.NoError(t, err, "the mission template's ontology loads as a new one")
 }
 
-// TestCheckoutIsLF: every file of the knomit-recipes checkout has LF line
+// TestCheckoutIsLF: every file of the knomit-playbooks checkout has LF line
 // endings. The mission tests read the template byte for byte; a CRLF checkout
 // (Git for Windows' default core.autocrlf=true) fails them in ways that do not
-// name the cause. knomit-recipes' .gitattributes pins eol=lf.
+// name the cause. knomit-playbooks' .gitattributes pins eol=lf.
 //
 // SABOTAGE: write a CRLF into any file of the checkout → red.
 func TestCheckoutIsLF(t *testing.T) {
@@ -144,12 +145,12 @@ func TestCheckoutIsLF(t *testing.T) {
 		return nil
 	}))
 	require.Greater(t, seen, 8, "the walk read the checkout")
-	require.Empty(t, crlf, "these files were checked out with CR line endings; knomit-recipes' .gitattributes must pin eol=lf")
+	require.Empty(t, crlf, "these files were checked out with CR line endings; knomit-playbooks' .gitattributes must pin eol=lf")
 }
 
 // TestCIChecksOutSubmodules: every actions/checkout step in the workflows and
 // local actions sets `submodules: true`, so every CI job (every OS, the
-// desktop jobs included) has the knomit-recipes checkout the tests read.
+// desktop jobs included) has the knomit-playbooks checkout the tests read.
 //
 // SABOTAGE: drop `submodules: true` from one checkout → red.
 func TestCIChecksOutSubmodules(t *testing.T) {
@@ -197,8 +198,8 @@ func TestCIChecksOutSubmodules(t *testing.T) {
 }
 
 // TestNoExamplesPaths: the mission template and the claude-session recipe
-// moved to knomit-recipes. No tracked file outside third_party/ and .claude/
-// names their old folders.
+// moved to knomit-playbooks. No tracked file outside third_party/ and
+// .claude/ names their old folders.
 //
 // SABOTAGE: write the old mission folder's path into any doc → red.
 func TestNoExamplesPaths(t *testing.T) {
@@ -230,5 +231,5 @@ func TestNoExamplesPaths(t *testing.T) {
 	}
 	require.Greater(t, seen, 100, "the walk read the repository's files")
 	sort.Strings(hits)
-	require.Empty(t, hits, "these files still name the old template folders; point them at knomit-recipes")
+	require.Empty(t, hits, "these files still name the old template folders; point them at knomit-playbooks")
 }
