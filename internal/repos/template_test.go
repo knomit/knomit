@@ -653,14 +653,16 @@ func TestCreateFromTemplate_Fleet(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, state, row.State, "reached: the row the check reads is %s", state)
 		require.Nil(t, m.fleetRepo())
-		for _, err := range []error{m.CreatePreflight(context.Background(), spec), func() error {
-			_, err := m.Create(context.Background(), spec, nil)
-			return err
-		}()} {
-			require.ErrorIs(t, err, ErrTemplateFleetPresent, state)
-			require.ErrorIs(t, err, ErrTemplateFleetLocal, "every fleet refusal still matches ErrTemplateFleetLocal")
-			require.ErrorContains(t, err, "a fleet registration is "+state)
-		}
+		// Preflight first, and Create only once it refused: a Create that
+		// got past a missing check would mount a fleet repo mid-
+		// unregistration and block, so the sabotage must fail here, fast.
+		err = m.CreatePreflight(context.Background(), spec)
+		require.ErrorIs(t, err, ErrTemplateFleetPresent, "preflight, %s", state)
+		require.ErrorContains(t, err, "a fleet registration is "+state)
+		_, err = m.Create(context.Background(), spec, nil)
+		require.ErrorIs(t, err, ErrTemplateFleetPresent, "create, %s", state)
+		require.ErrorIs(t, err, ErrTemplateFleetLocal, "every fleet refusal still matches ErrTemplateFleetLocal")
+		require.ErrorContains(t, err, "a fleet registration is "+state)
 		require.Nil(t, m.Get("fleet"))
 	}
 
