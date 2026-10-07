@@ -15,6 +15,7 @@ import (
 //
 //   - local fact:   path
 //   - foreign fact: repo id + path
+//   - system file:  path (exact case), plus repo id when foreign
 //   - src://:       repo + path + blob. Commit and #L range are ignored — the
 //     same blob is the same content. A ref with no blob (legacy) falls back to
 //     repo + path + commit.
@@ -29,6 +30,10 @@ func RefIdentity(raw, localRepoID string) string {
 		return "kb|" + c.Path
 	case RefForeignFact:
 		return "kb|" + c.RepoID + "|" + c.Path
+	case RefLocalSystemFile:
+		return "file|" + c.Path
+	case RefForeignSystemFile:
+		return "file|" + c.RepoID + "|" + c.Path
 	case RefSourceCode:
 		if c.Blob != "" {
 			return "src|" + c.RepoID + "|" + c.Path + "|" + c.Blob

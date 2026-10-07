@@ -17,6 +17,25 @@ type stubRefResolver struct {
 
 func (s *stubRefResolver) Exists(path string) bool { return s.existing[path] }
 
+// A ref to a .knomit/ file is a system_file: not a fact (so never "broken" for
+// want of a fact at that path), no link, Path the exact file path, case kept.
+func TestBuildRefViews_SystemFileKind(t *testing.T) {
+	b := hal.URLBuilder{Base: "/api/v1"}
+	a := hal.Anchor{Branch: "agent/test"}
+	refs := []string{
+		".knomit/skills/x/SKILL.md",
+		"kb://" + testLocalRepoID + "/.knomit/ontology.yaml",
+		"kb://7b4887ce51d9/.knomit/recipes/r.js",
+	}
+	got := BuildRefViews(b, "alpha", a, refs, &stubRefResolver{}, testLocalRepoID)
+	want := []string{".knomit/skills/x/SKILL.md", ".knomit/ontology.yaml", ".knomit/recipes/r.js"}
+	for i, v := range got {
+		if v.Kind != "system_file" || v.Path != want[i] || v.Links != nil {
+			t.Errorf("ref %q: got %+v, want kind system_file, path %q, no links", refs[i], v, want[i])
+		}
+	}
+}
+
 func TestBuildRefViews_URLKind_ExternalHttp(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}

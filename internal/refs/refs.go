@@ -88,11 +88,35 @@ func FromFactQuery(fq store.FactQuery, branch string) ResolveFunc {
 type Gate struct {
 	localRepoID string
 	resolves    ResolveFunc
+	// fileExists resolves a ref to a file under .knomit/ in THIS repo
+	// (fact.RefLocalSystemFile) at the tip of the branch the write lands on.
+	// nil means this writer cannot check one, and a newly added one is
+	// refused rather than let through unchecked.
+	fileExists ResolveFunc
 }
 
 // New builds a Gate.
 func New(localRepoID string, resolves ResolveFunc) Gate {
 	return Gate{localRepoID: localRepoID, resolves: resolves}
+}
+
+// WithFiles returns a copy of g that checks refs to .knomit/ files in this
+// repo with fileExists. Build it with FromSystemFiles at the same branch the
+// fact resolver uses.
+func (g Gate) WithFiles(fileExists ResolveFunc) Gate {
+	g.fileExists = fileExists
+	return g
+}
+
+// FromSystemFiles is the file resolver for a caller holding the store's
+// SystemFileIndex: the path must name a FILE (not a directory) under .knomit/
+// at the tip of branch — the commit this write is about to become the child
+// of, i.e. the referrer's own commit, exactly as FromFactQuery.
+func FromSystemFiles(sf store.SystemFileIndex, branch string) ResolveFunc {
+	return func(ctx context.Context, path string) (bool, error) {
+		_, found, err := sf.SystemFileAt(ctx, branch, "", path, 0)
+		return found, err
+	}
 }
 
 // LocalRepoID exposes the id the gate was built with, for callers that must
@@ -126,7 +150,11 @@ func (g Gate) LocalRepoID() string { return g.localRepoID }
 // walk-back afterwards. A parameter that can never change an outcome is worse
 // than no parameter, because it reads like it is load-bearing.
 //
-// Only fact.RefLocalFact is RESOLVED. A foreign kb:// ref may name an unmounted
+// fact.RefLocalSystemFile (.knomit/<path> in this repo) is resolved too, by
+// the file resolver (WithFiles): the FILE must be in the tree at the branch
+// tip, exact case. A gate without one refuses a newly added system-file ref.
+//
+// Only those two local kinds are RESOLVED. A foreign kb:// ref may name an unmounted
 // repo; a src:// ref names source objects knomit never holds; an external URL
 // is opaque. None is resolvable here, so none is checked for existence.
 //
@@ -157,7 +185,8 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 	}
 	sort.Strings(sources)
 
-	var selfRefs, srcForm []problem
+	var selfRefs, srcForm, missingFiles []problem
+	checkedFiles := make(map[string]bool)
 	for _, from := range sources {
 		carried := g.pathSet(prior[from])
 		carriedSrc := srcSet(prior[from])
@@ -180,6 +209,32 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 			if fact.HasSrcScheme(raw) {
 				if !carriedSrc[raw] && !r.IsFullSource() {
 					srcForm = append(srcForm, problem{from, raw})
+				}
+				continue
+			}
+
+			// SYSTEM FILE (.knomit/<path> in THIS repo). Not a fact: it is
+			// never in the batch (no fact tool writes .knomit/), and it
+			// resolves only if the FILE is in the tree at the branch tip.
+			// Carried ones are not re-judged, like every other carried ref.
+			// Foreign system files fall through to the kind skip below.
+			if r.Kind == fact.RefLocalSystemFile {
+				if carried[systemKey(r.Path)] {
+					continue
+				}
+				ok, seen := checkedFiles[r.Path]
+				if !seen {
+					if g.fileExists == nil {
+						return fmt.Errorf("ref gate: this writer cannot check refs to %s/ files, cannot verify %q", fact.PrivateRoot, r.Path)
+					}
+					var err error
+					if ok, err = g.fileExists(ctx, r.Path); err != nil {
+						return fmt.Errorf("ref gate: resolve(%s): %w", r.Path, err)
+					}
+					checkedFiles[r.Path] = ok
+				}
+				if !ok {
+					missingFiles = append(missingFiles, problem{from, raw})
 				}
 				continue
 			}
@@ -240,7 +295,7 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 		}
 	}
 
-	if len(selfRefs) == 0 && len(srcForm) == 0 && len(problems) == 0 {
+	if len(selfRefs) == 0 && len(srcForm) == 0 && len(problems) == 0 && len(missingFiles) == 0 {
 		return nil
 	}
 
@@ -295,7 +350,19 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 			"it is a typo.")
 		sections = append(sections, b.String())
 	}
-	if len(srcForm) > 0 || len(problems) > 0 {
+	if len(missingFiles) > 0 {
+		var b strings.Builder
+		b.WriteString("system-file references that do not resolve — nothing was written:\n")
+		for _, p := range missingFiles {
+			fmt.Fprintf(&b, "  %s cites %s, which does not exist\n", p.from, p.ref)
+		}
+		b.WriteString("\nThe file does not exist under " + fact.PrivateRoot + "/ at the tip of the branch this " +
+			"write lands on. A " + fact.PrivateRoot + "/ ref names a FILE by its exact path, case included " +
+			"(SKILL.md is not skill.md), never a directory; " + fact.PrivateRoot + "/ changes only through git, " +
+			"so the file must already be there. Fix the path, or drop the ref.")
+		sections = append(sections, b.String())
+	}
+	if len(srcForm) > 0 || len(problems) > 0 || len(missingFiles) > 0 {
 		sections = append(sections, "Only refs this write ADDS are checked; refs the fact already "+
 			"carried resolve at their own commit and are never re-judged.\nWhether a "+
 			"source ref's object exists, references to other repos (kb://<other-id>/…), "+
@@ -327,12 +394,20 @@ func (g Gate) pathSet(refs []string) map[string]bool {
 	}
 	set := make(map[string]bool, len(refs))
 	for _, raw := range refs {
-		if r := fact.ClassifyRef(raw, g.localRepoID); r.Kind == fact.RefLocalFact {
+		switch r := fact.ClassifyRef(raw, g.localRepoID); r.Kind {
+		case fact.RefLocalFact:
 			set[r.Path] = true
+		case fact.RefLocalSystemFile:
+			set[systemKey(r.Path)] = true
 		}
 	}
 	return set
 }
+
+// systemKey keys a carried system-file ref apart from fact paths: a fact
+// path is lowercased, a system-file path is exact, and the two must never
+// satisfy each other.
+func systemKey(path string) string { return "file|" + path }
 
 // Canonicalize rewrites every ref naming a fact in THIS repo into the canonical
 // kb://<own-id>/<path> form, leaving all other kinds untouched. changed reports
@@ -364,7 +439,9 @@ func (g Gate) Canonicalize(refs []string) (out []string, changed bool) {
 	seen := make(map[string]bool, len(refs))
 	for _, raw := range refs {
 		canon := raw
-		if r := fact.ClassifyRef(raw, g.localRepoID); r.Kind == fact.RefLocalFact {
+		if r := fact.ClassifyRef(raw, g.localRepoID); r.Kind == fact.RefLocalFact || r.Kind == fact.RefLocalSystemFile {
+			// A system file keeps its exact case (ClassifyRef does not
+			// lowercase it), so kb://<own-id>/.knomit/<path> names the same file.
 			canon = fact.QualifyKBPath(g.localRepoID, r.Path)
 		}
 		if seen[canon] {

@@ -27,8 +27,13 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider f
 		sha := chi.URLParam(r, "sha")
 		path := chi.URLParam(r, "*")
 
-		// F25: a dot path is closed to the fact endpoints for reads too,
-		// sub-resources included.
+		// A file under .knomit/ is readable by its exact path at this commit,
+		// raw (user ruling 2026-10-06).
+		if serveSystemFileRead(w, r, repos.RepoFromContext(r.Context()), branch, sha, path) {
+			return
+		}
+		// F25: every OTHER dot path is closed to the fact endpoints for reads
+		// too, sub-resources included.
 		if refusePrivateRead(w, r, path) {
 			return
 		}

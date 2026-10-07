@@ -787,10 +787,15 @@ paths:
         specific version (source for `/incoming`, target for `/outgoing`)
         and `_links.self` is anchored to that commit.
 
-        A path with a segment beginning with `.` (`.knomit/…`, `kb/.drafts/…`)
-        is 400 "Private path" here and on every sub-resource, whether or not
-        the file exists: those paths are closed to the fact routes. See the
-        `path` parameter for the three roots.
+        A file under `.knomit/` named by its exact path (case kept; no empty,
+        `.` or `..` segment) is returned RAW, read-only: 200 with the file's
+        bytes as `text/plain; charset=utf-8` (or `application/octet-stream`
+        when not UTF-8), headers `X-Knomit-Commit` and `X-Knomit-Blob`; 404
+        when no such file is at the branch tip; 413 over 4 MiB. No
+        sub-resource applies to it. Every OTHER path with a segment beginning
+        with `.` (`kb/.drafts/…`, `.github/…`, a malformed `.knomit/…`) is 400
+        "Private path" here and on every sub-resource, whether or not the
+        file exists. See the `path` parameter for the three roots.
       operationId: getFact
       responses:
         "200":
@@ -909,8 +914,10 @@ paths:
           points to the target fact at that commit. `deleted=true` items
           omit `_links.self`.
 
-        A path with a segment beginning with `.` is 400 "Private path", here
-        and on both sub-resources.
+        A file under `.knomit/` by its exact path is returned raw as of this
+        commit, as on the branch-anchored route. Every other path with a
+        segment beginning with `.` is 400 "Private path", here and on both
+        sub-resources.
       operationId: getFactAtCommit
       parameters:
         - name: fallback
@@ -3222,13 +3229,11 @@ components:
           no `..`. Judged case-insensitively: the store lowercases the whole
           path, so `Artifacts/Runs/x.md` is `artifacts/runs/x.md`. A
           `context` is refused on an artifact (422).
-        - `.knomit/…`: the system (ontology, triggers, recipes, skills). It
-          is closed to every fact route — GET, PUT and DELETE, sub-resources
-          included — exactly like every other path with a segment beginning
-          with `.` (`kb/.drafts/…`, `.github/…`): 400 "Private path". It
-          changes only through git. Files a repo already holds under
-          `.knomit/<area>/` from before this rule stay in git but are not
-          reachable here.
+        - `.knomit/…`: the system (ontology, triggers, recipes, skills). GET
+          of a file by its exact path returns it raw (read-only); PUT and
+          DELETE are 400 "Private path", exactly like every path with a
+          segment beginning with `.` (`kb/.drafts/…`, `.github/…`), which is
+          also refused on GET. It changes only through git.
 
         These three roots are ALL that is reserved. A non-dot top-level path
         that is none of them — an integrator's own root, kept beside `kb/`
@@ -3699,7 +3704,7 @@ components:
             rather than parsing `raw`.
         kind:
           type: string
-          enum: [fact, broken, foreign, source_code, url]
+          enum: [fact, broken, foreign, source_code, system_file, url]
           description: >
             fact — a fact in this repo, present at the anchor; the only kind
             carrying _links.target.
@@ -3708,6 +3713,9 @@ components:
             broken, merely not resolvable from here.
             source_code — a src:// citation; never resolves here, since knomit
             stores fact blobs and not source.
+            system_file — a file under .knomit/ (this repo or another), not a
+            fact; `path` is its exact path. No link: read it raw with GET
+            …/facts/.knomit/<path> on its repo.
             url — http(s)://, file://, or any other scheme.
         _links: { $ref: "#/components/schemas/LinkMap" }
 

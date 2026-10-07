@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"knomit/internal/fact"
 	"knomit/internal/federate"
@@ -31,11 +32,11 @@ const explainHistoryPageSize = 20
 // explainTool returns the Tool definition for knomit_explain.
 func explainTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explain",
-		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its `history`: the commits that changed its content, merge-delivered writes included, newest first. Each revision carries its `action` (added/modified) and its confidence/content diff against the content it was edited from. The first call returns the newest few. To read more, call again with the same `file` and `history_cursor` set to `history.history_cursor`; repeat while a `history_cursor` is returned. Those calls return history only. Do NOT page history by passing an older revision as `commit`. A revision marked `content_unavailable: true` has no diff: do not read that commit for its content. On a \"history changed\" error, call again without `history_cursor`. Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
+		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. `file` is a fact under kb/, an artifact under artifacts/<area>/, or a system file under .knomit/ (read-only, by its exact path, case kept: ontology, triggers, recipes, skills, templates). A system file explained directly comes back as ONE node with kind `system_file`, its `blob`, `size` and raw `content` (`encoding: base64` when it is not UTF-8; over 256 KiB it has `content_truncated: true` and no content), and no history or children. A fact's refs to `.knomit/` files appear in its walk as `system_file` summary nodes pinned at the fact's commit (the file as it stood when the fact was written) — explain one with its `path` AND `commit` to read its content. The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its `history`: the commits that changed its content, merge-delivered writes included, newest first. Each revision carries its `action` (added/modified) and its confidence/content diff against the content it was edited from. The first call returns the newest few. To read more, call again with the same `file` and `history_cursor` set to `history.history_cursor`; repeat while a `history_cursor` is returned. Those calls return history only. Do NOT page history by passing an older revision as `commit`. A revision marked `content_unavailable: true` has no diff: do not read that commit for its content. On a \"history changed\" error, call again without `history_cursor`. Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
 		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
-			mcpgo.Description("Path to the fact file (e.g. kb/technology/go/abc123.md)."),
+			mcpgo.Description("Path to the fact file (e.g. kb/technology/go/abc123.md), or a system file by its exact path (e.g. .knomit/ontology.yaml)."),
 		),
 		mcpgo.WithString("commit",
 			mcpgo.Description("Anchor commit: explain the fact (and its graph) as of this version. Omit for HEAD. Use a `commit` value returned by a previous explain to drill into a summary node."),
@@ -124,6 +125,69 @@ type explainMotif struct {
 type classifiedRefs struct {
 	Local    []string `json:"local"`
 	External []string `json:"external"`
+	// Files are the fact's refs to .knomit/ files in its own mount, by exact
+	// path. Each also appears in the walk as a system_file node.
+	Files []string `json:"files,omitempty"`
+}
+
+// explainFileContentMax bounds the raw content of a system file explained
+// directly. A larger file is described (blob, size) without its content.
+const explainFileContentMax = 256 << 10
+
+// explainFileEntry is a system file (.knomit/<path>) in an explain result. It
+// is a FILE, not a fact: no title, type, confidence, refs, history or motifs.
+// Depth 0 (the file was named directly) carries the raw content; deeper in a
+// walk it is a summary, like every non-root fact (user ruling 2026-10-06,
+// decision 1) — explain it with its path AND commit to read it.
+//
+// Superseded and Deleted compare the pinned version with the branch tip: the
+// file's blob differs there, or the file is gone. Not omitempty — false is a
+// claim about the tip.
+type explainFileEntry struct {
+	Path             string  `json:"path"`
+	Commit           string  `json:"commit"`
+	Depth            int     `json:"depth"`
+	Kind             string  `json:"kind"`
+	Blob             string  `json:"blob"`
+	Size             int64   `json:"size"`
+	Content          *string `json:"content,omitempty"`
+	Encoding         string  `json:"encoding,omitempty"`
+	ContentTruncated bool    `json:"content_truncated,omitempty"`
+	Superseded       bool    `json:"superseded"`
+	Deleted          bool    `json:"deleted"`
+	Summary          bool    `json:"summary,omitempty"`
+}
+
+// explainKindSystemFile is explainFileEntry's kind.
+const explainKindSystemFile = "system_file"
+
+// readFileNode reads a system file at commit and relates it to the branch
+// tip. ok is false when the file is not in commit's tree.
+func readFileNode(ctx context.Context, s mcpStore, branch, path, commit string, maxContent int64) (sf store.SystemFile, superseded, deleted, ok bool, err error) {
+	sf, ok, err = s.files.SystemFileAt(ctx, branch, commit, path, maxContent)
+	if err != nil || !ok {
+		return sf, false, false, false, err
+	}
+	tip, present, err := s.files.SystemFileAt(ctx, branch, "", path, 0)
+	if err != nil {
+		return sf, false, false, false, err
+	}
+	return sf, present && tip.Blob != sf.Blob, !present, true, nil
+}
+
+// systemFileChildren returns the walk items for a fact's refs to .knomit/
+// files in its own mount: each pinned at the fact's own commit — the file as
+// it stood when the fact was written (decision 3). Derived from the fact's
+// refs at that version, so no graph edge carries them: the pin is a function
+// of (fact version, ref) and .knomit/ never enters the index.
+func systemFileChildren(refs []string, localRepoID, commit string, depth int, wire func(string) string) []store.QueueItem {
+	var out []store.QueueItem
+	for _, raw := range refs {
+		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalSystemFile {
+			out = append(out, store.QueueItem{Path: wire(r.Path), CommitHash: commit, SortKey: depth})
+		}
+	}
+	return out
 }
 
 // explainHistory is one page of the root fact's change list (store.PathHistory).
@@ -210,11 +274,14 @@ type revisionDiff = store.RevisionDiff
 func classifyRefs(refs []string, localRepoID string) *classifiedRefs {
 	cr := &classifiedRefs{Local: []string{}, External: []string{}}
 	for _, raw := range refs {
-		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalFact {
+		switch r := fact.ClassifyRef(raw, localRepoID); r.Kind {
+		case fact.RefLocalFact:
 			cr.Local = append(cr.Local, r.Path)
-			continue
+		case fact.RefLocalSystemFile:
+			cr.Files = append(cr.Files, r.Path)
+		default:
+			cr.External = append(cr.External, raw)
 		}
-		cr.External = append(cr.External, raw)
 	}
 	return cr
 }
@@ -353,8 +420,11 @@ type explainTarget struct {
 	rt      repos.ReadTarget
 	s       mcpStore
 	release func()
-	rel     string // repo-relative, normalized
+	rel     string // repo-relative, normalized (verbatim for a system file)
 	mount   string // "" for the write repo, else the mount's 12-hex id
+	// systemFile: rel is a file under .knomit/ (fact.IsSystemFilePath), read
+	// raw by its exact path rather than as a fact.
+	systemFile bool
 }
 
 // resolveExplainTarget routes the input fact to its mount: a kb://-qualified
@@ -376,8 +446,15 @@ func resolveExplainTarget(b *repos.Binding, file string) (explainTarget, error) 
 			return explainTarget{}, fmt.Errorf("repo %s is not mounted in this binding", id)
 		}
 	}
-	rel = fact.NormalizePath(rt.RI.OntologyRoot(), rel)
-	if !fact.IsFactFilePath(rt.RI.OntologyRoot(), rel) {
+	// A system file is judged BEFORE NormalizePath, which would lowercase it
+	// and append .md: .knomit/ is open to reads by its EXACT path (user
+	// ruling 2026-10-06). Every other dot path still falls through to the
+	// refusal below.
+	systemFile := fact.IsSystemFilePath(rel)
+	if !systemFile {
+		rel = fact.NormalizePath(rt.RI.OntologyRoot(), rel)
+	}
+	if !systemFile && !fact.IsFactFilePath(rt.RI.OntologyRoot(), rel) {
 		if msg := closedToFactTools(rel); msg != "" {
 			return explainTarget{}, errors.New(msg)
 		}
@@ -387,7 +464,7 @@ func resolveExplainTarget(b *repos.Binding, file string) (explainTarget, error) 
 	if err != nil {
 		return explainTarget{}, err
 	}
-	t := explainTarget{rt: rt, s: s, release: release, rel: rel}
+	t := explainTarget{rt: rt, s: s, release: release, rel: rel, systemFile: systemFile}
 	if rt.RI != b.Write() {
 		t.mount = federate.ID12(rt.RI.ID())
 	}
@@ -408,6 +485,9 @@ func explainHistoryPage(ctx context.Context, b *repos.Binding, file, token strin
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
 	defer t.release()
+	if t.systemFile {
+		return mcpgo.NewToolResultError(fmt.Sprintf("%s is a system file: it has no history_cursor — explain it with `file` and optionally `commit`", file)), nil
+	}
 	if hc.Mount != t.mount || hc.Path != t.rel {
 		return mcpgo.NewToolResultError(fmt.Sprintf("history_cursor belongs to another fact — pass it with the file it came from (%s)", hc.Path)), nil
 	}
@@ -441,6 +521,9 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
 	defer t.release()
+	if t.systemFile {
+		return explainSystemFile(ctx, b, t, commit)
+	}
 	rt, s, rel := t.rt, t.s, t.rel
 	branch := rt.Branch
 
@@ -545,6 +628,16 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		seenSeed = append(seenSeed, k)
 		queueItems = append(queueItems, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: 1})
 	}
+	for _, item := range systemFileChildren(parsed.Refs, fact.ID12(rt.RI.ID()), rootCommit, 1, wire) {
+		_, frel, _, _ := federate.ParseQualifiedPath(item.Path)
+		k := seenKey(frel, item.CommitHash)
+		if enqueued[k] {
+			continue
+		}
+		enqueued[k] = true
+		seenSeed = append(seenSeed, k)
+		queueItems = append(queueItems, item)
+	}
 
 	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.PinID(), federate.ReadSetFingerprint(b))
 	if err != nil {
@@ -621,7 +714,8 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 		return mcpgo.NewToolResultError(fmt.Sprintf("seen paths error: %v", err)), nil
 	}
 
-	var facts []explainFactEntry
+	// facts holds explainFactEntry and explainFileEntry nodes, in walk order.
+	var facts []any
 	var newSeen []string
 	var newQueue []store.QueueItem
 
@@ -685,6 +779,21 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 				return p
 			}
 
+			// A system file is a leaf: no refs, no children. Deeper than the
+			// root it is a summary — no content (decision 1).
+			if fact.IsSystemFilePath(rel) {
+				sf, fsup, fdel, okFile, ferr := readFileNode(ctx, sm, rt.Branch, rel, item.CommitHash, 0)
+				if ferr != nil || !okFile {
+					continue
+				}
+				facts = append(facts, explainFileEntry{
+					Path: item.Path, Commit: item.CommitHash, Depth: item.SortKey,
+					Kind: explainKindSystemFile, Blob: sf.Blob, Size: sf.Size,
+					Superseded: fsup, Deleted: fdel, Summary: true,
+				})
+				continue
+			}
+
 			parsed, deleted, superseded, okRead := readNode(ctx, sm, rt.Branch, rel, item.CommitHash)
 			if !okRead {
 				continue
@@ -704,6 +813,17 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 						newSeen = append(newSeen, k)
 						newQueue = append(newQueue, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: item.SortKey + 1})
 					}
+				}
+				localID := fact.ID12(rt.RI.ID())
+				for _, child := range systemFileChildren(parsed.Refs, localID, item.CommitHash, item.SortKey+1, wire) {
+					_, frel, _, _ := federate.ParseQualifiedPath(child.Path)
+					k := seenKey(frel, child.CommitHash)
+					if seen[k] {
+						continue
+					}
+					seen[k] = true
+					newSeen = append(newSeen, k)
+					newQueue = append(newQueue, child)
 				}
 			}
 
@@ -842,4 +962,47 @@ func explainMotifs(ctx context.Context, rt repos.ReadTarget, s mcpStore, parsed 
 		out = append(out, entry)
 	}
 	return out
+}
+
+// explainSystemFile serves a system file named directly: one depth-0 node
+// with its raw content, read at commit (or the branch tip), and nothing else
+// — no history, no children, no session.
+func explainSystemFile(ctx context.Context, b *repos.Binding, t explainTarget, commit string) (*mcpgo.CallToolResult, error) {
+	wired := t.rel
+	if t.rt.RI != b.Write() {
+		wired = federate.KBScheme + federate.ID12(t.rt.RI.ID()) + "/" + t.rel
+	}
+	sf, superseded, deleted, ok, err := readFileNode(ctx, t.s, t.rt.Branch, t.rel, commit, explainFileContentMax)
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("could not read %s: %v", wired, err)), nil
+	}
+	if !ok {
+		at := "at the tip of branch " + t.rt.Branch
+		if commit != "" {
+			at = "at commit " + commit + " on branch " + t.rt.Branch
+		}
+		return mcpgo.NewToolResultError(fmt.Sprintf("%s not found %s: no such file (a system file is named by its exact path, case included; a directory is not a file)", wired, at)), nil
+	}
+	entry := explainFileEntry{
+		Path: wired, Commit: sf.Commit, Depth: 0, Kind: explainKindSystemFile,
+		Blob: sf.Blob, Size: sf.Size, ContentTruncated: sf.Truncated,
+		Superseded: superseded, Deleted: deleted,
+	}
+	if !sf.Truncated {
+		content := string(sf.Content)
+		if !utf8.Valid(sf.Content) {
+			content = base64.StdEncoding.EncodeToString(sf.Content)
+			entry.Encoding = "base64"
+		}
+		entry.Content = &content
+	}
+	out, err := json.Marshal(map[string]any{
+		"facts":    []any{entry},
+		"cursor":   nil,
+		"has_more": false,
+	})
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
+	}
+	return mcpgo.NewToolResultText(string(out)), nil
 }

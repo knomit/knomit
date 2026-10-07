@@ -322,7 +322,7 @@ export interface LensBrowseResponse { path: string; children: LensDirChild[] }
 // can know. Never re-derive any of this from `raw` in the client.
 export interface FactRef {
   raw: string;
-  kind: 'fact' | 'broken' | 'foreign' | 'source_code' | 'url';
+  kind: 'fact' | 'broken' | 'foreign' | 'source_code' | 'system_file' | 'url';
   // Repo-relative fact path, sent for kind 'fact' and 'broken' only. This is
   // what a hop addresses: a canonical kb://<own-id>/<path> ref and its bare
   // equivalent name the same fact and arrive with the same `path`.

@@ -44,7 +44,26 @@ type FactWriter interface {
 func writerGate(writer FactWriter, ri *repos.RepoInstance, branch string) refs.Gate {
 	return refs.New(knomitfact.ID12(ri.ID()), func(ctx context.Context, path string) (bool, error) {
 		return writer.FactResolves(ctx, ri, branch, path)
-	})
+	}).WithFiles(systemFileResolver(ri, branch))
+}
+
+// systemFileResolver resolves a ref to a .knomit/ file in ri at the tip of
+// branch — the same branch and moment the fact resolver uses.
+func systemFileResolver(ri *repos.RepoInstance, branch string) refs.ResolveFunc {
+	return func(ctx context.Context, path string) (bool, error) {
+		var (
+			ok  bool
+			err error
+		)
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				err = errFactNotFound
+				return
+			}
+			ok, err = refs.FromSystemFiles(svc.SystemFiles(), branch)(ctx, path)
+		})
+		return ok, err
+	}
 }
 
 // defaultFactWriter is the production FactWriter backed by the store.

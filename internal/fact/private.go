@@ -27,20 +27,43 @@ func IsPrivatePath(path string) bool {
 	return false
 }
 
+// IsSystemFilePath reports whether p names a file under PrivateRoot that the
+// fact tools may READ by its exact path: ".knomit/" followed by at least one
+// segment, with no empty segment (so no "//" and no trailing "/") and no "."
+// or ".." segment. Dot-prefixed segments below the root are allowed —
+// ".knomit/templates/mission/.knomit/ontology.yaml" is a real template file.
+//
+// This is a READ rule only. Every write to PrivateRoot stays refused; a path
+// that passes here is not thereby writable. Case is significant: ".KNOMIT/x"
+// is not a system path.
+func IsSystemFilePath(p string) bool {
+	rest, ok := strings.CutPrefix(p, PrivateRoot+"/")
+	if !ok || rest == "" {
+		return false
+	}
+	for _, seg := range strings.Split(rest, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 // PrivateRoot is the SYSTEM root of a KB repo: the ontology, trigger scripts,
 // recipes, skills — what describes how the knowledge base operates, the way
 // the system tables describe a database.
 //
 // Its writers are people, through git (a commit, a push, a merge), and
 // knomit's own code (creating a repo, the boot-time preset refresh, creating
-// from a template). It is CLOSED to the fact tools — knomit_learn (path and
-// retract), knomit_update, knomit_retract, knomit_explain, the REST fact
-// GET/PUT/DELETE and experiment {body} resolutions — exactly like every other
-// dot path (F25, user ruling 2026-10-05). Agents' own working files live
-// under ArtifactsRoot instead.
+// from a template). It is CLOSED to every fact-tool WRITE — knomit_learn
+// (path and retract), knomit_update, knomit_retract, the REST fact PUT/DELETE
+// and experiment resolutions — exactly like every other dot path (F25, user
+// ruling 2026-10-05). Agents' own working files live under ArtifactsRoot.
 //
-// knomit still READS it by exact name at the tip of the consensus branch;
-// reads by knomit itself are not fact-tool reads.
+// It is OPEN to READS by exact path (user ruling 2026-10-06): knomit_explain
+// and the REST fact GET return a file under it raw (IsSystemFilePath), and a
+// fact may ref one. It is still never indexed, queried or listed, and every
+// OTHER dot path stays closed to reads as well as writes.
 //
 // Anything a git provider resolves by exact name (README.md, LICENSE,
 // .github/) stays at the tree root; every other dot-root is FOREIGN and
