@@ -645,8 +645,6 @@ func TestCreateFromTemplate_Fleet(t *testing.T) {
 	// SABOTAGE: drop the in-flight case → both rows red; keep only
 	// registering → the unregistering row red.
 	db := m.ControlDB()
-	_, err = resolveIdentity(db, tmplAgent, fixedNow())
-	require.NoError(t, err)
 	for _, state := range []string{FleetRegistering, FleetUnregistering} {
 		require.NoError(t, setFleetState(db, state, fixedNow()))
 		row, err := m.fleetDB()
@@ -677,6 +675,18 @@ func TestCreateFromTemplate_Fleet(t *testing.T) {
 	require.NotErrorIs(t, err, ErrTemplateFleetLocal)
 	require.Nil(t, m.Get("fleet"))
 	_, err = db.Exec(`ALTER TABLE instance_identity_away RENAME TO instance_identity`)
+	require.NoError(t, err)
+
+	// A MISSING identity row is unreadable too, not "nothing in flight":
+	// Manager.Start (and app.New) write it, so a row that is not there was
+	// lost. SABOTAGE: treat sql.ErrNoRows as nothing in flight → red.
+	_, err = db.Exec(`DELETE FROM instance_identity WHERE id = 1`)
+	require.NoError(t, err)
+	_, err = m.Create(context.Background(), spec, nil)
+	require.ErrorIs(t, err, ErrTemplateFleetStateUnavailable, "no identity row")
+	require.ErrorContains(t, err, "no rows")
+	require.Nil(t, m.Get("fleet"))
+	_, err = resolveIdentity(db, tmplAgent, fixedNow())
 	require.NoError(t, err)
 
 	require.NoError(t, setFleetState(db, FleetStandalone, fixedNow()))
