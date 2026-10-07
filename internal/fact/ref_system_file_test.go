@@ -74,7 +74,7 @@ func TestValidateRefs_SystemFileForm(t *testing.T) {
 	if err == nil {
 		t.Fatal("a .. segment must be refused")
 	}
-	for _, want := range []string{`".knomit/a/../b"`, ".knomit/<path>", "kb://<12-hex-repo-id>/.knomit/<path>"} {
+	for _, want := range []string{`".knomit/a/../b"`, "a system file in this repo (exact case; must exist)", "a system file in this or another repo"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal must mention %q\n--- got ---\n%v", want, err)
 		}
