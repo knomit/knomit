@@ -36,6 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Compare
         run: |
           set -euo pipefail
@@ -69,6 +71,8 @@ jobs:
     runs-on: macos-latest # Apple Silicon
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
@@ -178,6 +182,8 @@ jobs:
     runs-on: ubuntu-latest # x86_64
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
@@ -235,6 +241,7 @@ jobs:
       # tag with `git describe`, which a shallow clone cannot reach.
       - uses: actions/checkout@v4
         with:
+          submodules: true
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:

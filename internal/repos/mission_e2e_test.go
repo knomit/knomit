@@ -1,8 +1,9 @@
 package repos_test
 
-// F08 PR D: the mission template (examples/mission/) end to end, on two real
-// instances. The template is copied from the SHIPPED directory (a walk of
-// examples/mission/, never a duplicate), and every trigger script runs
+// F08 PR D: the mission template end to end, on two real instances. The
+// template lives in knomit-recipes (.knomit/templates/mission/), checked out
+// at the pinned submodule third_party/knomit-recipes. It is copied from that
+// SHIPPED directory (a walk of it, never a duplicate), and every trigger script runs
 // through the REAL MCP handlers (mcp.NewScriptTools), which is why this file
 // is in package repos_test: internal/mcp imports internal/repos.
 //
@@ -44,6 +45,7 @@ import (
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/recipes"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -72,21 +74,30 @@ const (
 	lease = 300 * time.Second
 )
 
-// templateDir is the shipped template, relative to this package.
-var templateDir = filepath.Join("..", "..", "examples", "mission")
+// templateDir is the shipped template: the mission template in the pinned
+// knomit-recipes checkout. A missing checkout fails the test.
+func templateDir(t testing.TB) string {
+	t.Helper()
+	return recipes.MissionTemplate(t)
+}
 
 // templateFiles is every file of the shipped template, keyed by its repo
-// path (forward slashes).
+// path (forward slashes). The manifest (TEMPLATE.md) describes the template
+// and is not part of a repo created from it, so it is left out.
 func templateFiles(t *testing.T) map[string]string {
 	t.Helper()
+	dir := templateDir(t)
 	out := map[string]string{}
-	require.NoError(t, filepath.WalkDir(templateDir, func(p string, d fs.DirEntry, err error) error {
+	require.NoError(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		rel, err := filepath.Rel(templateDir, p)
+		rel, err := filepath.Rel(dir, p)
 		if err != nil {
 			return err
+		}
+		if filepath.ToSlash(rel) == recipes.ManifestFile {
+			return nil
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {

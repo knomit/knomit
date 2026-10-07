@@ -14,6 +14,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/recipes"
 )
 
 // F08 PR D, T-D4: the mission template's signal topics need learn_dedup: off.
@@ -40,7 +41,7 @@ import (
 
 func missionOntology(t *testing.T, topic string, dedupOff bool) *fact.Ontology {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "mission", ".knomit", "ontology.yaml"))
+	raw, err := os.ReadFile(filepath.Join(recipes.MissionTemplate(t), ".knomit", "ontology.yaml"))
 	require.NoError(t, err)
 	src := string(raw)
 	if !dedupOff {

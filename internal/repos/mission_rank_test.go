@@ -16,7 +16,7 @@ import (
 
 func shippedClaims(t *testing.T) *goja.Runtime {
 	t.Helper()
-	src, err := os.ReadFile(filepath.Join(templateDir, ".knomit", "triggers", "claims.js"))
+	src, err := os.ReadFile(filepath.Join(templateDir(t), ".knomit", "triggers", "claims.js"))
 	require.NoError(t, err)
 	vm := goja.New()
 	_, err = vm.RunString(string(src))

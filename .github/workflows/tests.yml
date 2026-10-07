@@ -206,6 +206,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       # setup-go, the Windows CGo toolchain checks, the native-lib cache and
       # `make setup`. Shared with slow-tests; see the action for the Windows
@@ -465,6 +467,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: ./.github/actions/native-toolchain
       # The exports are inert on Windows and harmless there; see the note on
       # the same line in build-test.
@@ -490,6 +494,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
@@ -528,6 +534,8 @@ jobs:
         working-directory: tools/desktop/ui
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -564,6 +572,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -591,6 +601,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
