@@ -194,8 +194,13 @@ func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvi
 
 		ri := repos.RepoFromContext(r.Context())
 
-		// F25: a dot path is closed to the fact endpoints for reads too —
-		// sub-resources included, so this runs before their dispatch.
+		// A file under .knomit/ is readable by its exact path, raw (user
+		// ruling 2026-10-06); PUT/DELETE of it stay refused.
+		if serveSystemFileRead(w, r, ri, branch, "", chi.URLParam(r, "*")) {
+			return
+		}
+		// F25: every OTHER dot path is closed to the fact endpoints for reads
+		// too — sub-resources included, so this runs before their dispatch.
 		if refusePrivateRead(w, r, chi.URLParam(r, "*")) {
 			return
 		}

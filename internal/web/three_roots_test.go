@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -110,14 +112,16 @@ func TestThreeRoots_REST_WritesRefuseDotPaths(t *testing.T) {
 	}
 }
 
-// T4 (reads, REST): GET on the branch, at a commit, through a lens, and every
-// sub-resource refuses a dot path with 400 — the files exist, so a 404 would
-// mean the guard was skipped. The kb fact reads fine on every route.
+// T4 (reads, REST; amended 2026-10-06): GET on the branch, at a commit,
+// through a lens, and every sub-resource refuses every dot path with 400 —
+// the files exist, so a 404 would mean the guard was skipped — EXCEPT a file
+// under .knomit/ by its exact path on the branch, commit and lens routes,
+// which TestFactGET_SystemFileRaw and TestLensGET_SystemFileRaw cover. The kb
+// fact reads fine on every route.
 func TestThreeRoots_REST_ReadsRefuseDotPaths(t *testing.T) {
 	h := newThreeRootsREST(t)
 	head := h.tip(t)
-	closed := []string{"kb/.drafts/x.md", ".knomit/skills/x.md", ".knomit/guidance/x.md"}
-	for _, p := range closed {
+	for _, p := range []string{"kb/.drafts/x.md", "kb/.drafts/sub/../x.md"} {
 		for _, url := range []string{
 			"/repos/alpha/branches/" + h.b + "/facts/" + p,
 			"/repos/alpha/branches/" + h.b + "/facts/" + p + "/commits",
@@ -128,12 +132,24 @@ func TestThreeRoots_REST_ReadsRefuseDotPaths(t *testing.T) {
 			"/lenses/eng/facts/" + p,
 			"/lenses/eng/facts/" + p + "/commits",
 			// Percent-encoded dot: not a way around the guard.
-			"/repos/alpha/branches/" + h.b + "/facts/" + strings.Replace(p, ".", "%2E", 1),
+			"/repos/alpha/branches/" + h.b + "/facts/" + strings.Replace(p, "/.", "/%2E", 1),
 		} {
 			rec := h.do(t, http.MethodGet, url, "")
 			require.Equalf(t, http.StatusBadRequest, rec.Code, "GET %s: %s", url, rec.Body.String())
 			require.Containsf(t, rec.Body.String(), "closed to the fact endpoints", "GET %s", url)
 		}
+	}
+	// .knomit/: closed when malformed, on every route.
+	for _, url := range []string{
+		"/lenses/eng/facts/.knomit/skills/../skills/x.md",
+		"/lenses/eng/facts/.knomit//skills/x.md",
+		"/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/../skills/x.md",
+		"/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/%2E%2E/skills/x.md",
+		"/repos/alpha/branches/" + h.b + "/facts/.knomit//skills/x.md",
+	} {
+		rec := h.do(t, http.MethodGet, url, "")
+		require.Equalf(t, http.StatusBadRequest, rec.Code, "GET %s: %s", url, rec.Body.String())
+		require.Containsf(t, rec.Body.String(), "closed to the fact endpoints", "GET %s", url)
 	}
 	for _, url := range []string{
 		"/repos/alpha/branches/" + h.b + "/facts/kb/verdicts/real.md",
@@ -143,6 +159,110 @@ func TestThreeRoots_REST_ReadsRefuseDotPaths(t *testing.T) {
 		rec := h.do(t, http.MethodGet, url, "")
 		require.Equalf(t, http.StatusOK, rec.Code, "GET %s: %s", url, rec.Body.String())
 	}
+}
+
+// TestFactGET_SystemFileRaw (decision 2, user ruling 2026-10-06): GET of a
+// file under .knomit/ by its exact path returns the RAW file — not a HAL fact
+// view — on the branch route and at a commit, with the version in headers;
+// percent-encoding the leading dot reads the same file; a missing file, or a
+// directory, is 404.
+// Sabotage: drop the serveSystemFileRead call in handleHALFact → 400 → red.
+func TestFactGET_SystemFileRaw(t *testing.T) {
+	h := newThreeRootsREST(t)
+	head := h.tip(t)
+	want, ok := h.content(t, ".knomit/skills/x.md")
+	require.True(t, ok)
+	for _, url := range []string{
+		"/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/x.md",
+		"/repos/alpha/branches/" + h.b + "/facts/%2Eknomit/skills/x.md",
+		"/repos/alpha/branches/" + h.b + "/commits/" + head + "/facts/.knomit/skills/x.md",
+	} {
+		rec := h.do(t, http.MethodGet, url, "")
+		require.Equalf(t, http.StatusOK, rec.Code, "GET %s: %s", url, rec.Body.String())
+		require.Equalf(t, want, rec.Body.String(), "GET %s returns the file byte for byte", url)
+		require.Equal(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"))
+		require.Equal(t, head, rec.Header().Get("X-Knomit-Commit"))
+		require.Len(t, rec.Header().Get("X-Knomit-Blob"), 40)
+		require.NotContains(t, rec.Body.String(), "_links", "a system file is not a HAL fact view")
+	}
+	for _, url := range []string{
+		"/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/X.md", // case is significant
+		"/repos/alpha/branches/" + h.b + "/facts/.knomit/skills",      // a directory is not a file
+		"/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/x.md/commits",
+		"/repos/alpha/branches/" + h.b + "/commits/" + strings.Repeat("0", 40) + "/facts/.knomit/skills/x.md",
+	} {
+		rec := h.do(t, http.MethodGet, url, "")
+		require.Equalf(t, http.StatusNotFound, rec.Code, "GET %s: %s", url, rec.Body.String())
+	}
+}
+
+// TestFactPUT_SystemFileStillRefused: reopening GET did not open a write. PUT
+// and DELETE of the very file GET just served are 400 and the tip stays put.
+// Sabotage: make refuseNonFactPath admit IsSystemFilePath → PUT lands → red.
+// TestLensGET_SystemFileRaw (decision 2: one read rule across REST): the lens
+// route serves a .knomit/ file raw like the branch route — bare is the write
+// mount, kb://<id12>/.knomit/… names a mount — and an unmounted id, a mount
+// without the file, and a missing file all get the lens's ONE 404 shape (no
+// mount-topology oracle). No sub-resources. The lens has no write route, and
+// a PUT/DELETE there moves nothing.
+// Sabotage: drop the serveLensSystemFileRead call in handleHALLensFact → 400
+// "closed to the fact endpoints" → red.
+func TestLensGET_SystemFileRaw(t *testing.T) {
+	h := newThreeRootsREST(t)
+	want, ok := h.content(t, ".knomit/skills/x.md")
+	require.True(t, ok)
+	alphaID := knomitfact.ID12(h.ri.ID())
+	betaID := knomitfact.ID12(h.m.Get("beta").ID())
+	for _, path := range []string{
+		".knomit/skills/x.md",
+		"%2Eknomit/skills/x.md",
+		url.PathEscape("kb://" + alphaID + "/.knomit/skills/x.md"),
+	} {
+		rec := h.do(t, http.MethodGet, "/lenses/eng/facts/"+path, "")
+		require.Equalf(t, http.StatusOK, rec.Code, "GET lens %s: %s", path, rec.Body.String())
+		require.Equalf(t, want, rec.Body.String(), "GET lens %s returns the file byte for byte", path)
+		require.Equal(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"))
+		require.Equal(t, h.tip(t), rec.Header().Get("X-Knomit-Commit"))
+		require.NotContains(t, rec.Body.String(), "_links")
+	}
+	var bodies []string
+	for _, path := range []string{
+		url.PathEscape("kb://" + betaID + "/.knomit/skills/x.md"), // mounted, no such file
+		url.PathEscape("kb://ffffffffffff/.knomit/skills/x.md"),   // not mounted
+		".knomit/skills/X.md",         // case is significant
+		".knomit/skills/x.md/commits", // no sub-resource
+	} {
+		rec := h.do(t, http.MethodGet, "/lenses/eng/facts/"+path, "")
+		require.Equalf(t, http.StatusNotFound, rec.Code, "GET lens %s: %s", path, rec.Body.String())
+		require.Containsf(t, rec.Body.String(), `"title":"Fact not found"`, "GET lens %s", path)
+		require.NotContainsf(t, rec.Body.String(), "branch", "the lens 404 must not name a mount branch: %s", path)
+		bodies = append(bodies, rec.Body.String())
+	}
+	require.Len(t, bodies, 4)
+
+	before := h.tip(t)
+	for _, m := range []string{http.MethodPut, http.MethodDelete} {
+		rec := h.do(t, m, "/lenses/eng/facts/.knomit/skills/x.md", putBody(t, ""))
+		require.GreaterOrEqualf(t, rec.Code, 400, "%s lens .knomit/: %d %s", m, rec.Code, rec.Body.String())
+	}
+	require.Equal(t, before, h.tip(t))
+	c, _ := h.content(t, ".knomit/skills/x.md")
+	require.NotContains(t, c, "INJECTED")
+}
+
+func TestFactPUT_SystemFileStillRefused(t *testing.T) {
+	h := newThreeRootsREST(t)
+	url := "/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/x.md"
+	require.Equal(t, http.StatusOK, h.do(t, http.MethodGet, url, "").Code)
+	before := h.tip(t)
+	rec := h.do(t, http.MethodPut, url, putBody(t, ""))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "closed to the fact endpoints")
+	rec = h.do(t, http.MethodDelete, url, "")
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Equal(t, before, h.tip(t))
+	c, _ := h.content(t, ".knomit/skills/x.md")
+	require.NotContains(t, c, "INJECTED")
 }
 
 // T5 (open, REST): an artifact round-trips through PUT, GET and DELETE — at

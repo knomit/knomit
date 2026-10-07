@@ -43,6 +43,15 @@ const (
 	RefSourceCode RefKind = "source_code"
 	// RefExternalURL is http://, https://, file://, or any other scheme.
 	RefExternalURL RefKind = "external_url"
+	// RefLocalSystemFile is a file under PrivateRoot (.knomit/) in the
+	// caller's own repo — bare `.knomit/<path>` or kb://<own-id>/.knomit/<path>.
+	// Not a fact: any file type, read by its exact path (case kept), never
+	// indexed. The write gate checks it exists at the branch tip; knomit_explain
+	// reads it at the referrer's commit.
+	RefLocalSystemFile RefKind = "local_system_file"
+	// RefForeignSystemFile is a .knomit/ file in a different knomit repo:
+	// kb://<other>/.knomit/<path>. Never checked, like a foreign fact.
+	RefForeignSystemFile RefKind = "foreign_system_file"
 	// RefMalformed matched a knomit scheme but failed to parse; Err says why.
 	RefMalformed RefKind = "malformed"
 )
@@ -52,7 +61,8 @@ const (
 //
 // Raw is always byte-identical to the input: it is what the author wrote, and
 // what error messages and the UI must echo back. Path is the canonical form for
-// lookups, which for fact kinds means lowercased.
+// lookups, which for fact kinds means lowercased; a system-file path is kept
+// exactly as written (SKILL.md and skill.md are different files in git).
 type Ref struct {
 	Raw    string
 	Kind   RefKind
@@ -110,10 +120,14 @@ func ClassifyRef(raw, localRepoID string) Ref {
 			r.Kind, r.Err = RefMalformed, err.Error()
 			return r
 		}
+		local := localRepoID != "" && id == localRepoID
+		if isUnderPrivateRoot(rel) {
+			return classifySystemFile(r, id, rel, local)
+		}
 		// Fact paths are lowercase-canonical in storage (NewFact lowercases
 		// unconditionally) and every lookup consuming Path is case-sensitive.
 		r.RepoID, r.Path = id, strings.ToLower(rel)
-		if localRepoID != "" && id == localRepoID {
+		if local {
 			r.Kind = RefLocalFact
 		} else {
 			r.Kind = RefForeignFact
@@ -125,9 +139,40 @@ func ClassifyRef(raw, localRepoID string) Ref {
 	case hasScheme(raw):
 		r.Kind = RefExternalURL
 
+	case isUnderPrivateRoot(raw):
+		// Schemeless system file in the caller's own repo.
+		return classifySystemFile(r, localRepoID, raw, true)
+
 	default:
 		// Schemeless: a repo-relative fact path in the caller's own repo.
 		r.Kind, r.RepoID, r.Path = RefLocalFact, localRepoID, strings.ToLower(raw)
+	}
+	return r
+}
+
+// isUnderPrivateRoot reports whether rel names something under PrivateRoot —
+// the exact, lowercase ".knomit/" prefix, or the bare root itself. Only this
+// root opens to refs; every other dot path stays a fact-kind ref (which the
+// gate then refuses, as before).
+func isUnderPrivateRoot(rel string) bool {
+	return rel == PrivateRoot || strings.HasPrefix(rel, PrivateRoot+"/")
+}
+
+// classifySystemFile finishes a ref whose repo-relative path is under
+// PrivateRoot: a system file when the path is well-formed (IsSystemFilePath),
+// malformed otherwise. The path is kept verbatim — it names a real file in a
+// case-sensitive tree.
+func classifySystemFile(r Ref, repoID, rel string, local bool) Ref {
+	if !IsSystemFilePath(rel) {
+		return Ref{Raw: r.Raw, Kind: RefMalformed, Err: fmt.Sprintf(
+			"malformed system-file ref %q — want %s/<path> naming a file: at least one segment, no empty segment, no \".\" or \"..\" segment, no trailing /",
+			r.Raw, PrivateRoot)}
+	}
+	r.RepoID, r.Path = repoID, rel
+	if local {
+		r.Kind = RefLocalSystemFile
+	} else {
+		r.Kind = RefForeignSystemFile
 	}
 	return r
 }
@@ -334,6 +379,8 @@ func ValidateRefs(refs []string) error {
 	return fmt.Errorf("invalid refs:\n  %s\n\nAccepted forms:\n"+
 		"  kb/<topic>/…/<id>.md                      a fact in this repo\n"+
 		"  kb://<12-hex-repo-id>/<path>              a fact in this or another repo\n"+
+		"  .knomit/<path>                            a system file in this repo (exact case; must exist)\n"+
+		"  kb://<12-hex-repo-id>/.knomit/<path>      a system file in this or another repo\n"+
 		"  src://<12-hex-repo-id>/<path>@<40-hex-commit>:<40-hex-blob>[#L1-L9]\n"+
 		"  src://<repo-name>/<path>[@<commit>]       short form: leave it where a fact has it; never add one\n"+
 		"  https://… or file:///…                    external",

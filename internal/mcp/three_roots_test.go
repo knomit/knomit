@@ -87,8 +87,14 @@ func TestThreeRoots_WriteDoorsRefuseDotPaths(t *testing.T) {
 	}
 }
 
-// T4 (reads): explain — plain, at a commit, and with a history_cursor — and
-// query by path refuse every dot path; the same reads on kb/ still work.
+// T4 (reads, amended 2026-10-06): explain — plain, at a commit, and with a
+// history_cursor — and query by path refuse every dot path EXCEPT a file
+// under .knomit/ named by its exact path, which explain returns raw
+// (read-only, user ruling "reopen reads by path"). query by path refuses
+// .knomit/ too: it is never listed. The same reads on kb/ still work.
+// Sabotage: drop the IsSystemFilePath branch in resolveExplainTarget → the
+// .knomit/ reads are refused → red; route every dot path to it → the
+// kb/.drafts and .github reads succeed → red.
 func TestThreeRoots_ReadDoorsRefuseDotPaths(t *testing.T) {
 	ctx, ri := threeRootsRepo(t)
 	head := headOf(t, ri, "agent/test")
@@ -100,20 +106,37 @@ func TestThreeRoots_ReadDoorsRefuseDotPaths(t *testing.T) {
 	hc, ok := decodeHistoryCursorFromExplain(t, ctx, "kb/architecture/real.md")
 
 	for _, p := range closedPaths() {
+		system := strings.HasPrefix(p, fact.PrivateRoot+"/")
+
 		text, isErr := callExplain(t, ctx, map[string]any{"file": p})
-		require.Truef(t, isErr, "explain %s: %s", p, text)
-		require.Containsf(t, text, "closed to the fact tools", "explain %s", p)
+		if system {
+			require.Falsef(t, isErr, "explain %s: %s", p, text)
+			require.Containsf(t, text, `"kind":"system_file"`, "explain %s", p)
+			require.Containsf(t, text, "system file in ", "explain %s returns the raw content", p)
+		} else {
+			require.Truef(t, isErr, "explain %s: %s", p, text)
+			require.Containsf(t, text, "closed to the fact tools", "explain %s", p)
+		}
 
 		text, isErr = callExplain(t, ctx, map[string]any{"file": p, "commit": head})
-		require.Truef(t, isErr, "explain@commit %s: %s", p, text)
-		require.Containsf(t, text, "closed to the fact tools", "explain@commit %s", p)
+		if system {
+			require.Falsef(t, isErr, "explain@commit %s: %s", p, text)
+			require.Containsf(t, text, `"commit":"`+head+`"`, "explain@commit %s", p)
+		} else {
+			require.Truef(t, isErr, "explain@commit %s: %s", p, text)
+			require.Containsf(t, text, "closed to the fact tools", "explain@commit %s", p)
+		}
 
 		if ok {
 			c := hc
 			c.Path = p
 			text, isErr = callExplain(t, ctx, map[string]any{"file": p, "history_cursor": encodeHistoryCursor(c)})
 			require.Truef(t, isErr, "explain history_cursor %s: %s", p, text)
-			require.Containsf(t, text, "closed to the fact tools", "explain history_cursor %s", p)
+			if system {
+				require.Containsf(t, text, "has no history_cursor", "explain history_cursor %s", p)
+			} else {
+				require.Containsf(t, text, "closed to the fact tools", "explain history_cursor %s", p)
+			}
 		}
 
 		dir := p[:strings.LastIndex(p, "/")+1]
@@ -122,6 +145,13 @@ func TestThreeRoots_ReadDoorsRefuseDotPaths(t *testing.T) {
 		require.Containsf(t, resultText(t, r), "is private", "query path %s", dir)
 	}
 	require.True(t, ok, "the kb fact must yield a history cursor, or the cursor half proved nothing")
+
+	// A malformed .knomit/ path is not a system file: refused as before.
+	for _, p := range []string{".knomit/runs/../runs/x.md", ".knomit//runs/x.md", ".knomit/runs/"} {
+		text, isErr := callExplain(t, ctx, map[string]any{"file": p})
+		require.Truef(t, isErr, "explain %s: %s", p, text)
+		require.Containsf(t, text, "closed to the fact tools", "explain %s", p)
+	}
 
 	r := callTool(t, QueryHandler(), ctx, map[string]any{"path": "kb/architecture"})
 	require.False(t, r.IsError, resultText(t, r))

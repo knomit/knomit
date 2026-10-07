@@ -268,5 +268,31 @@ func resolveGate(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 			}
 		})
 		return found, err
+	}).WithFiles(func(ctx context.Context, p string) (bool, error) {
+		// A .knomit/ file resolves if it is in the tree on either side.
+		var (
+			found bool
+			err   error
+		)
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				return
+			}
+			for _, branch := range slices.Compact([]string{experiment, parent}) {
+				if branch == "" {
+					continue
+				}
+				ok, qerr := refs.FromSystemFiles(svc.SystemFiles(), branch)(ctx, p)
+				if qerr != nil {
+					err = qerr
+					return
+				}
+				if ok {
+					found = true
+					return
+				}
+			}
+		})
+		return found, err
 	}), nil
 }

@@ -432,7 +432,8 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// writing a fact clean and then updating its refs to garbage.
 		//
 		// The batch is this one fact, so its own path satisfies a self-reference.
-		gate := refs.New(factpkg.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, writeBranch))
+		gate := refs.New(factpkg.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, writeBranch)).
+			WithFiles(refs.FromSystemFiles(s.files, writeBranch))
 		canon, _, err := gate.Apply(ctx, file, fact.Refs, priorRefs)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil

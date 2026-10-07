@@ -31,6 +31,9 @@ type mcpStore struct {
 	// The §6 explain surface resolves a fact's motifs to their cluster,
 	// definition and siblings; nothing on this path writes derived state.
 	motifs store.MotifIndex
+	// files reads one file under .knomit/ by exact path (explain, the refs gate).
+	// Read-only: nothing lists or indexes the system root.
+	files store.SystemFileIndex
 }
 
 // storeIndices acquires the mount's store and returns its indices plus the
@@ -55,6 +58,7 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 		pipeline:    svc.Pipeline(),
 		branches:    svc.Branches(),
 		motifs:      svc.Motifs(),
+		files:       svc.SystemFiles(),
 	}, release, nil
 }
 

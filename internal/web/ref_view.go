@@ -19,10 +19,12 @@ import (
 //     holds fact blobs only, never source, so this never
 //     resolves here. Named "source_code" and not "source"
 //     because facts already carry a `sources` field.
+//   - "system_file" a file under .knomit/ (this repo or another), not a fact.
+//     No link; Path is its exact repo-relative path.
 //   - "url"         http(s)://, file://, or any other scheme.
 //
 // Path is the repo-relative fact path, set for the "fact" and "broken" kinds
-// only — the two the client acts on. It exists so the client never has to
+// (and the exact file path for "system_file") — the two the client acts on. It exists so the client never has to
 // recover a path from Raw: a canonical kb://<own-id>/<path> ref and its bare
 // equivalent name the same fact, and deciding that is ClassifyRef's job, not a
 // regex in the browser. Omitted for foreign, source_code and url, where no path
@@ -97,6 +99,12 @@ func BuildRefViews(
 
 		case fact.RefForeignFact:
 			out = append(out, RefView{Raw: r, Kind: "foreign"})
+
+		case fact.RefLocalSystemFile, fact.RefForeignSystemFile:
+			// A file under .knomit/, not a fact: no fact link. Path is the
+			// exact repo-relative file path (case kept); the raw file is
+			// GET …/facts/<path> on its own repo.
+			out = append(out, RefView{Raw: r, Kind: "system_file", Path: c.Path})
 
 		case fact.RefSourceCode:
 			out = append(out, RefView{Raw: r, Kind: "source_code"})

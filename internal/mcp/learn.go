@@ -128,11 +128,12 @@ func learnToolSchemaProperties() map[string]any {
 		"motifs":        motifsProperty(),
 		"expires":       expiresProperty(),
 		"context":       contextProperty(" Not allowed with path (private state has no topic to declare keys)."),
-		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
+		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in five forms. " +
 			"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
 			"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
 			"(3) Source code: `src://<source-repo-id>/<path>@<commit>:<blob>`, with FULL 40-hex commit and blob, optionally `#L<start>-L<end>`. This id is the SOURCE repo's, not a knomit repo id — get all three components by running git in the checkout you are citing: `git rev-list --max-parents=0 HEAD | cut -c1-12` (repo id), `git rev-parse HEAD` (commit), `git rev-parse <commit>:<path>` (blob). That last command failing IS the check — the server holds no source objects and cannot verify src refs for you, so never cite source that does not exist in the repo's history. A src ref short of this full form is refused when added. Leave src refs already on a fact as they are. " +
-			"(4) An external URL: `https://…` or `file:///…`."},
+			"(4) An external URL: `https://…` or `file:///…`. " +
+			"(5) A system file in THIS repo: `.knomit/<path>` — any file type, its EXACT path with case kept (`SKILL.md`), never a directory. It MUST exist at the branch tip or the whole call is refused; the server rewrites it to `kb://<repo-id>/.knomit/<path>`. knomit_explain then shows the file as it stood when this fact was written. `.knomit/` stays read-only: a ref reads it, nothing writes it."},
 	}
 }
 
@@ -999,7 +1000,8 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// what the stored form is. Built once and threaded, because the repo id
 		// it carries is also what tells a kb://<own-id>/… ref (a local edge)
 		// from a foreign one everywhere below — evidence weight included.
-		gate := refs.New(fact.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, writeBranch))
+		gate := refs.New(fact.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, writeBranch)).
+			WithFiles(refs.FromSystemFiles(s.files, writeBranch))
 
 		// 1. Parse arguments.
 		momentName := req.GetString("moment_name", "")

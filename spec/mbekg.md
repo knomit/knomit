@@ -659,8 +659,8 @@ topics:
   format on `knomit_learn`; review's own writes are not validated, so review
   guidance is advice.
 - **Trust.** Guidance is trusted exactly as far as skills and recipes: whoever
-  can change the consensus branch. `.knomit/` is closed to every fact tool
-  (§3.8), so a guidance file reaches the consensus branch only through git.
+  can change the consensus branch. `.knomit/` is closed to every fact-tool
+  write (§3.8), so a guidance file reaches the consensus branch only through git.
 - A stored ontology whose only difference from a preset is a `guidance` block
   is not overwritten by the preset refresh.
 
@@ -882,8 +882,16 @@ The implementation still reads its own files there by exact name.
 
 An implementation that exposes a write API MUST refuse every path under
 `.knomit/` — together with every other path that has a segment beginning with
-`.` — on every write (create, update, delete, merge resolution) and every
-read by path. The system changes only through Git, so whatever is on the
+`.` — on every write (create, update, delete, merge resolution). Reads by
+exact path are the one opening: a file under `.knomit/` (`.knomit/` followed
+by at least one segment, no empty, `.` or `..` segment, case kept) MAY be
+returned raw, read-only, by its exact path, and a fact MAY reference one as
+`.knomit/<path>` (own repository) or `kb://<repo-id>/.knomit/<path>`. Such a
+reference names a file, not a fact; a writer that checks local references
+MUST refuse one whose file is not in the tree at the branch tip, and a reader
+resolves it to the file as it stood at the referring fact's own commit. Every
+OTHER dot-prefixed path stays closed to reads by path too, and `.knomit/` is
+still never discovered, indexed, listed or searched. The system changes only through Git, so whatever is on the
 consensus branch under `.knomit/` was put there by someone who can change
 that branch, never by a client of the write API. Reusing a system file's name
 as a directory is covered by the same rule: in Git, writing
@@ -902,8 +910,8 @@ which would make the two roots one folder.
 
 *Migration.* Before this rule, implementations let clients write under
 `.knomit/<area>/`. Files a repository already holds there stay in Git and in
-its history, but become unreachable through the write API: they can no
-longer be read, updated or deleted by path. A repository that still needs
+its history, but can no longer be updated or deleted through the write
+API (they remain readable by exact path, read-only). A repository that still needs
 them moves them by hand with Git (`git mv .knomit/<area> artifacts/<area>`),
 and a client that wrote `.knomit/<area>/` writes `artifacts/<area>/` instead.
 
