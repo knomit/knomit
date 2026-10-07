@@ -43,9 +43,9 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/mcp"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
-	"knomit/internal/platform/fileuri"
 	"knomit/internal/testsupport/playbooks"
 	"knomit/internal/testsupport/testsigner"
 )
