@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -113,9 +115,9 @@ func TestThreeRoots_REST_WritesRefuseDotPaths(t *testing.T) {
 // T4 (reads, REST; amended 2026-10-06): GET on the branch, at a commit,
 // through a lens, and every sub-resource refuses every dot path with 400 —
 // the files exist, so a 404 would mean the guard was skipped — EXCEPT a file
-// under .knomit/ by its exact path on the branch and commit routes, which
-// TestFactGET_SystemFileRaw covers. The lens route stays closed to .knomit/
-// too. The kb fact reads fine on every route.
+// under .knomit/ by its exact path on the branch, commit and lens routes,
+// which TestFactGET_SystemFileRaw and TestLensGET_SystemFileRaw cover. The kb
+// fact reads fine on every route.
 func TestThreeRoots_REST_ReadsRefuseDotPaths(t *testing.T) {
 	h := newThreeRootsREST(t)
 	head := h.tip(t)
@@ -137,10 +139,10 @@ func TestThreeRoots_REST_ReadsRefuseDotPaths(t *testing.T) {
 			require.Containsf(t, rec.Body.String(), "closed to the fact endpoints", "GET %s", url)
 		}
 	}
-	// .knomit/: closed on the lens route and when malformed.
+	// .knomit/: closed when malformed, on every route.
 	for _, url := range []string{
-		"/lenses/eng/facts/.knomit/skills/x.md",
-		"/lenses/eng/facts/.knomit/skills/x.md/commits",
+		"/lenses/eng/facts/.knomit/skills/../skills/x.md",
+		"/lenses/eng/facts/.knomit//skills/x.md",
 		"/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/../skills/x.md",
 		"/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/%2E%2E/skills/x.md",
 		"/repos/alpha/branches/" + h.b + "/facts/.knomit//skills/x.md",
@@ -197,6 +199,57 @@ func TestFactGET_SystemFileRaw(t *testing.T) {
 // TestFactPUT_SystemFileStillRefused: reopening GET did not open a write. PUT
 // and DELETE of the very file GET just served are 400 and the tip stays put.
 // Sabotage: make refuseNonFactPath admit IsSystemFilePath → PUT lands → red.
+// TestLensGET_SystemFileRaw (decision 2: one read rule across REST): the lens
+// route serves a .knomit/ file raw like the branch route — bare is the write
+// mount, kb://<id12>/.knomit/… names a mount — and an unmounted id, a mount
+// without the file, and a missing file all get the lens's ONE 404 shape (no
+// mount-topology oracle). No sub-resources. The lens has no write route, and
+// a PUT/DELETE there moves nothing.
+// Sabotage: drop the serveLensSystemFileRead call in handleHALLensFact → 400
+// "closed to the fact endpoints" → red.
+func TestLensGET_SystemFileRaw(t *testing.T) {
+	h := newThreeRootsREST(t)
+	want, ok := h.content(t, ".knomit/skills/x.md")
+	require.True(t, ok)
+	alphaID := knomitfact.ID12(h.ri.ID())
+	betaID := knomitfact.ID12(h.m.Get("beta").ID())
+	for _, path := range []string{
+		".knomit/skills/x.md",
+		"%2Eknomit/skills/x.md",
+		url.PathEscape("kb://" + alphaID + "/.knomit/skills/x.md"),
+	} {
+		rec := h.do(t, http.MethodGet, "/lenses/eng/facts/"+path, "")
+		require.Equalf(t, http.StatusOK, rec.Code, "GET lens %s: %s", path, rec.Body.String())
+		require.Equalf(t, want, rec.Body.String(), "GET lens %s returns the file byte for byte", path)
+		require.Equal(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"))
+		require.Equal(t, h.tip(t), rec.Header().Get("X-Knomit-Commit"))
+		require.NotContains(t, rec.Body.String(), "_links")
+	}
+	var bodies []string
+	for _, path := range []string{
+		url.PathEscape("kb://" + betaID + "/.knomit/skills/x.md"), // mounted, no such file
+		url.PathEscape("kb://ffffffffffff/.knomit/skills/x.md"),   // not mounted
+		".knomit/skills/X.md",         // case is significant
+		".knomit/skills/x.md/commits", // no sub-resource
+	} {
+		rec := h.do(t, http.MethodGet, "/lenses/eng/facts/"+path, "")
+		require.Equalf(t, http.StatusNotFound, rec.Code, "GET lens %s: %s", path, rec.Body.String())
+		require.Containsf(t, rec.Body.String(), `"title":"Fact not found"`, "GET lens %s", path)
+		require.NotContainsf(t, rec.Body.String(), "branch", "the lens 404 must not name a mount branch: %s", path)
+		bodies = append(bodies, rec.Body.String())
+	}
+	require.Len(t, bodies, 4)
+
+	before := h.tip(t)
+	for _, m := range []string{http.MethodPut, http.MethodDelete} {
+		rec := h.do(t, m, "/lenses/eng/facts/.knomit/skills/x.md", putBody(t, ""))
+		require.GreaterOrEqualf(t, rec.Code, 400, "%s lens .knomit/: %d %s", m, rec.Code, rec.Body.String())
+	}
+	require.Equal(t, before, h.tip(t))
+	c, _ := h.content(t, ".knomit/skills/x.md")
+	require.NotContains(t, c, "INJECTED")
+}
+
 func TestFactPUT_SystemFileStillRefused(t *testing.T) {
 	h := newThreeRootsREST(t)
 	url := "/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/x.md"

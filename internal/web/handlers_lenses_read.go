@@ -567,8 +567,13 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader, subProvider factSubP
 				"fact path is required", r.URL.Path)
 			return
 		}
-		// F25: a dot path is closed to the fact endpoints for reads too, on
-		// every mount and for every sub-resource.
+		// A file under .knomit/ is readable by its exact path on any mount,
+		// raw (user ruling 2026-10-06: one read rule across REST).
+		if serveLensSystemFileRead(w, r, bind, requested) {
+			return
+		}
+		// F25: every OTHER dot path is closed to the fact endpoints for reads
+		// too, on every mount and for every sub-resource.
 		if refusePrivateRead(w, r, raw) {
 			return
 		}

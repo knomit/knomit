@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -39,6 +40,45 @@ func serveSystemFileRead(w http.ResponseWriter, r *http.Request, ri *repos.RepoI
 	if !fact.IsSystemFilePath(path) {
 		return false
 	}
+	writeSystemFile(w, r, ri, branch, commit, path, func() {
+		at := `on branch "` + branch + `"`
+		if commit != "" {
+			at = `at commit ` + commit + ` on branch "` + branch + `"`
+		}
+		hal.WriteProblem(w, http.StatusNotFound, "System file not found",
+			`no file at path "`+path+`" `+at+` (a system file is named by its exact path, case included)`, r.URL.Path)
+	})
+	return true
+}
+
+// serveLensSystemFileRead is serveSystemFileRead for the lens route (one read
+// rule across REST, decision 2): the decoded path, bare (the write mount at
+// its read branch) or kb://<id12>/.knomit/<path> (that mount), names a system
+// file. Reports false when it does not, so refusePrivateRead still decides
+// every other dot path. An unmounted id and a missing file both get the
+// lens's one "Fact not found" 404 — no mount-topology oracle.
+func serveLensSystemFileRead(w http.ResponseWriter, r *http.Request, bind *repos.Binding, requested string) bool {
+	id, rel, qualified, err := federate.ParseQualifiedPath(requested)
+	if err != nil || !fact.IsSystemFilePath(rel) {
+		return false
+	}
+	ri, branch := bind.Write(), bind.WriteMountBranch()
+	if qualified {
+		rt, ok := bind.ByID(id)
+		if !ok {
+			lensFactNotFound(w, r, requested)
+			return true
+		}
+		ri, branch = rt.RI, rt.Branch
+	}
+	writeSystemFile(w, r, ri, branch, "", rel, func() { lensFactNotFound(w, r, requested) })
+	return true
+}
+
+// writeSystemFile reads path (a fact.IsSystemFilePath) in ri at commit (or the
+// tip of branch) and writes the raw response; notFound writes the 404, so each
+// route answers an absent file in its own shape.
+func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch, commit, path string, notFound func()) {
 	var (
 		sf    store.SystemFile
 		found bool
@@ -55,22 +95,17 @@ func serveSystemFileRead(w http.ResponseWriter, r *http.Request, ri *repos.RepoI
 	}
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to read system file", branch)
-		return true
+		return
 	}
 	if !found {
-		at := `on branch "` + branch + `"`
-		if commit != "" {
-			at = `at commit ` + commit + ` on branch "` + branch + `"`
-		}
-		hal.WriteProblem(w, http.StatusNotFound, "System file not found",
-			`no file at path "`+path+`" `+at+` (a system file is named by its exact path, case included)`, r.URL.Path)
-		return true
+		notFound()
+		return
 	}
 	if sf.Truncated {
 		hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "System file too large",
 			path+" is "+strconv.FormatInt(sf.Size, 10)+" bytes; the REST read serves at most "+
 				strconv.Itoa(systemFileReadMax)+" bytes", r.URL.Path)
-		return true
+		return
 	}
 	ct := "application/octet-stream"
 	if utf8.Valid(sf.Content) {
@@ -84,5 +119,4 @@ func serveSystemFileRead(w http.ResponseWriter, r *http.Request, ri *repos.RepoI
 	h.Set("Content-Length", strconv.Itoa(len(sf.Content)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(sf.Content)
-	return true
 }

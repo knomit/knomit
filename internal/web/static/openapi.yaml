@@ -3248,9 +3248,13 @@ components:
       description: |
         Either a bare `kb/…` path (reads from the lens's write repo) or a
         mount-qualified `kb://<id12>/kb/…` path. Qualified paths must be
-        percent-encoded by the client. A path with a segment beginning with
-        `.` (`.knomit/…`, `kb/.drafts/…`), percent-encoded or not, is 400
-        "Private path" on every mount, sub-resources included.
+        percent-encoded by the client. A file under `.knomit/` by its exact
+        path (bare, or `kb://<id12>/.knomit/…` for a mount) is returned RAW,
+        read-only, as on the repo routes; an unmounted id or a missing file
+        is the same 404 "Fact not found". Every other path with a segment
+        beginning with `.` (`kb/.drafts/…`, a malformed `.knomit/…`),
+        percent-encoded or not, is 400 "Private path" on every mount,
+        sub-resources included.
       schema: { type: string }
     MotifFilter:
       name: motifs
