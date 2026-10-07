@@ -36,7 +36,8 @@ import (
 // would fold a second claim into the first and drop its expires, so its
 // timer would never arm). The claim window the e2e assumes is the shipped
 // one. No template file names a branch: the consensus branch is whatever the
-// repo's is.
+// repo's is (the README may name a GIT HOST's branch, in a create request's
+// origin and in its GitHub-hosted section: readmeWithoutForgeBranches).
 //
 // The `sync` object is written out with both keys realtime (F21 S2), and no
 // trigger is `do: push`: realtime push already sends every commit.
@@ -112,8 +113,30 @@ func TestMissionTemplate_Settings(t *testing.T) {
 
 	branchWord := regexp.MustCompile(`\b(main|master|trunk|develop)\b`)
 	for p, content := range files {
+		if p == "README.md" {
+			content = readmeWithoutForgeBranches(t, content)
+		}
 		require.Empty(t, branchWord.FindAllString(content, -1), "%s names a branch; say \"the consensus branch\"", p)
 	}
+}
+
+// readmeWithoutForgeBranches is the README minus the two places it may name
+// a branch, because there the branch is the operator's GIT HOST's, never the
+// mission repo's consensus branch: the origin branch in a create request
+// (`"branch": "main"`), and the "GitHub-hosted" section, which describes the
+// forge repository the operator creates. Each cut must find what it cuts, so
+// a README that stops having it fails here rather than silently widening the
+// check's blind spot.
+func readmeWithoutForgeBranches(t *testing.T, readme string) string {
+	t.Helper()
+	originBranch := regexp.MustCompile(`"branch": "[^"]*"`)
+	require.NotEmpty(t, originBranch.FindAllString(readme, -1), "the README's create requests name an origin branch")
+	readme = originBranch.ReplaceAllString(readme, "")
+	start := strings.Index(readme, "\n### GitHub-hosted")
+	require.GreaterOrEqual(t, start, 0, "the README has a GitHub-hosted section")
+	end := strings.Index(readme[start+1:], "\n## ")
+	require.GreaterOrEqual(t, end, 0, "the GitHub-hosted section ends at the next top-level heading")
+	return readme[:start] + readme[start+1+end:]
 }
 
 // TestMissionTemplate_TimingRule enforces README "The timing rule" on the
@@ -622,6 +645,10 @@ func newGitPeer(t *testing.T, root string, o *gitOrigin, name, agent, signer str
 // branch is "trunk". Exactly one of two claimers takes, in one move, and
 // only one working copy is ever created. Nothing in the template or the
 // protocol names a branch, so a copy that assumed one would go red here.
+// The README creates that forge repo with mode initialize + template, then
+// the forge's merge lands it on the consensus branch; this test seeds the
+// origin with the merged result directly (the initialize + template path is
+// TestCreateFromTemplate_InitializeWritesTreeOnAgentBranchOnly).
 func TestMission_GitHubVariantOnTrunk(t *testing.T) {
 	clock := newMissionClock(t)
 	root := t.TempDir()
