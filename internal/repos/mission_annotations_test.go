@@ -15,7 +15,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
-	"knomit/internal/testsupport/recipes"
+	"knomit/internal/testsupport/playbooks"
 )
 
 // F26: knowledge goes to the TARGET knowledge base the charter names, as
@@ -47,14 +47,14 @@ var missionLeak = regexp.MustCompile(`(?i)\b(ipo|edgar|anthropic|first-trade|roa
 
 // TestMissionTemplate_NoMissionFormat: #410's mission-specific shape is gone
 // — no companion knowledge-base template, no hypothesis format, no forecast
-// topic — and nothing in knomit-recipes' templates or artifacts names one
+// topic — and nothing in knomit-playbooks' templates or artifacts names one
 // mission's subject.
 //
-// SABOTAGE: add a mission-kb template to the knomit-recipes checkout → red;
+// SABOTAGE: add a mission-kb template to the knomit-playbooks checkout → red;
 // paste a `hypothesis-format` block back into post-task → red; write "IPO"
 // into a skill → red.
 func TestMissionTemplate_NoMissionFormat(t *testing.T) {
-	templates := recipes.Path(t, ".knomit/templates")
+	templates := playbooks.Path(t, ".knomit/templates")
 	_, err := os.Stat(filepath.Join(templates, "mission-kb"))
 	require.True(t, os.IsNotExist(err), "the mission-kb template is gone (F26): %v", err)
 	gone := regexp.MustCompile(`hypothesis-format|forecast|mission-kb`)
@@ -72,7 +72,7 @@ func TestMissionTemplate_NoMissionFormat(t *testing.T) {
 		return nil
 	}
 	require.NoError(t, filepath.WalkDir(templates, walk))
-	require.NoError(t, filepath.WalkDir(recipes.Path(t, ".knomit/artifacts"), walk))
+	require.NoError(t, filepath.WalkDir(playbooks.Path(t, ".knomit/artifacts"), walk))
 	require.Greater(t, seen, 8, "fixture: the walk read the template and the artifacts")
 	for p, content := range templateFiles(t) {
 		require.Empty(t, missionLeak.FindAllString(content, -1), "%s names one mission's subject; the charter supplies it", p)

@@ -1,14 +1,15 @@
-// Package recipes locates the pinned knomit-recipes checkout that tests read
-// templates and artifacts from.
+// Package playbooks locates the pinned knomit-playbooks checkout that tests
+// read templates and artifacts from.
 //
 // The mission template and the claude-session recipe live in the
-// knomit-recipes repository (https://github.com/knomit/knomit-recipes), not in
-// this one. They are checked out as the git submodule third_party/knomit-recipes,
-// pinned to one commit, so a test always runs the exact files of that commit.
+// knomit-playbooks repository (https://github.com/knomit/knomit-playbooks), not
+// in this one. They are checked out as the git submodule
+// third_party/knomit-playbooks, pinned to one commit, so a test always runs
+// the exact files of that commit.
 //
 // A missing or empty checkout FAILS the test, with the command that fixes it.
 // It never skips: a skipped mission test would read as a pass.
-package recipes
+package playbooks
 
 import (
 	"fmt"
@@ -18,7 +19,7 @@ import (
 )
 
 // SubmodulePath is the checkout's path from the repository root.
-const SubmodulePath = "third_party/knomit-recipes"
+const SubmodulePath = "third_party/knomit-playbooks"
 
 // MissionTemplatePath is the mission template's folder inside the checkout.
 const MissionTemplatePath = ".knomit/templates/mission"
@@ -33,13 +34,13 @@ const FixHint = "run `git submodule update --init` at the repository root"
 // sentinel is a file every usable checkout has: the mission template's ontology.
 var sentinel = filepath.Join(MissionTemplatePath, ".knomit", "ontology.yaml")
 
-// Dir returns the knomit-recipes checkout, failing the test if it is missing
-// or empty.
+// Dir returns the knomit-playbooks checkout, failing the test if it is
+// missing or empty.
 func Dir(t testing.TB) string {
 	t.Helper()
 	root, err := moduleRoot()
 	if err != nil {
-		t.Fatalf("knomit-recipes: %v", err)
+		t.Fatalf("knomit-playbooks: %v", err)
 	}
 	return dirAt(t, root)
 }
@@ -54,10 +55,10 @@ func dirAt(t testing.TB, root string) string {
 	return dir
 }
 
-// Check reports why dir is not a usable knomit-recipes checkout, or nil.
+// Check reports why dir is not a usable knomit-playbooks checkout, or nil.
 func Check(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, sentinel)); err != nil {
-		return fmt.Errorf("knomit-recipes checkout at %s is missing or empty (no %s): %s",
+		return fmt.Errorf("knomit-playbooks checkout at %s is missing or empty (no %s): %s",
 			dir, filepath.ToSlash(sentinel), FixHint)
 	}
 	return nil
