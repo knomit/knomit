@@ -13,7 +13,7 @@ import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, TreeIcon, BroadcastIcon, ScrollIcon, GlobeIcon, BotIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, TreeIcon, BroadcastIcon, ScrollIcon, GlobeIcon, BotIcon, EyeIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { ManageSessions } from './ManageSessions';
 import { ManageFleet } from './ManageFleet';
@@ -508,9 +508,16 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                     which left the lenses below looking like the only things
                     with an identity. Lenses share one accent because their
                     identity is "lens"; a repo's is its own. */}
-                <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {/* THE NAME YIELDS LAST. It grows into the row and is the only
+                    element allowed to shrink (min-width 0, ellipsis); the
+                    badges beside it never shrink, so they are kept compact
+                    instead — a percentage, a word, an icon, with the full
+                    wording in each tooltip. The rail is a fixed 236px column,
+                    and "indexing 1259/1259" plus "viewing" at full length left
+                    a repository's name as "k…". */}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexGrow: 1 }}>
                   <RepoDot repo={r.name} />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                  <span data-testid={`repomgr-item-name-${r.name}`} style={railName}>{r.name}</span>
                 </span>
                 {/* A repo with no live store keeps its rail row: this is the one
                     surface that can still act on it, so hiding it here would
@@ -523,14 +530,24 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                     beside them would be reporting a detail of work whose
                     outcome is not settled — at worst "indexing" on a repo that
                     is being deleted. One row, one flag. */}
+                <span data-testid={`repomgr-badges-${r.name}`} style={railBadges}>
                 {jobFlag
                   ? <span data-testid={`repomgr-create-chip-${r.name}`} style={createChip}>{jobFlag}</span>
                   : !repoAvailable(r)
                     ? <RepoStateChip repo={r} />
                     : <>
-                        <RepoIndexChip repo={r} />
-                        {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
+                        <RepoIndexChip repo={r} compact />
+                        {r.name === currentRepo && (
+                          <span
+                            data-testid={`repomgr-viewing-${r.name}`}
+                            role="img"
+                            aria-label="viewing"
+                            title="viewing — the web UI is currently browsing this repo"
+                            style={viewingTag}
+                          ><EyeIcon color="currentColor" size={12} /></span>
+                        )}
                       </>}
+                </span>
               </button>
               );
             })}
@@ -585,9 +602,9 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                 disabled={connectBusy}
                 onClick={() => setSel({ kind: 'lens', name: l.name })}
               >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
                   <span style={{ width: 7, height: 7, borderRadius: '50%', background: LENS.accent, flexShrink: 0 }} />
-                  {l.name}
+                  <span style={railName}>{l.name}</span>
                 </span>
               </button>
             ))}
@@ -2509,7 +2526,15 @@ const detailCol: React.CSSProperties = { flex: 1, padding: 20, overflowY: 'auto'
 const detailHead: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' };
 const sectionHeader: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, padding: '6px 8px 5px', marginTop: 6, borderBottom: '1px solid #242424' };
 const sectionTitle: React.CSSProperties = { flex: 1, fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9a9a9a' };
-const viewingTag: React.CSSProperties = { fontSize: 10, color: '#7c9', letterSpacing: '0.04em' };
+const viewingTag: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', color: '#7c9', flexShrink: 0 };
+// A rail row's name and its badges. The name is the one element that shrinks;
+// the badges never do, which is why every badge in the rail is compact.
+const railName: React.CSSProperties = {
+  flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+};
+const railBadges: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 6,
+};
 
 // tabStrip spans rail AND detail: the server pages are not a column, they are
 // the frame both columns sit inside.
@@ -2532,7 +2557,7 @@ const tabBadge: React.CSSProperties = {
   background: '#1d2a22', color: '#4ade80', fontVariantNumeric: 'tabular-nums',
 };
 const listItem = (active: boolean): React.CSSProperties => ({
-  width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6,
   background: active ? '#22303a' : 'transparent', color: active ? '#eee' : '#bbb',
   border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 13, cursor: 'pointer', textAlign: 'left',
 });

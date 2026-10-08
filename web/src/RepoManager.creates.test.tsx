@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
 import { api } from './api';
 import { __resetRepoCreatesForTest, refreshRepoCreates } from './useRepoCreates';
@@ -320,6 +320,54 @@ describe('creates in the repo manager', () => {
     await screen.findByTestId('manage-overview');
     await waitFor(() => expect(api.listRepoCreates).toHaveBeenCalled());
     expect(screen.queryByTestId('pending-creates')).not.toBeInTheDocument();
+  });
+});
+
+// THE NAME IS THE LAST THING ON A RAIL ROW TO GIVE WAY. The rail is a fixed
+// 236px column; "indexing 1259/1259" plus "viewing" took all of it and left
+// the repository's name as "k…" (user screenshot, 2026-10-08). jsdom has no
+// layout, so this pins the two things that decide the outcome in a browser:
+// the badges' own width budget (a few characters, the full wording in the
+// tooltip) and that the name, not the badges, is the element that shrinks.
+describe('a rail row with badges', () => {
+  const long = 'agentic-engineering-knowledge';
+  const indexing = { name: long, uid: 'uid-long', index_state: 'indexing', index_done: 1259, index_total: 1259 };
+
+  it('keeps the badges compact and the full wording in the tooltip', async () => {
+    render(<RepoManager {...baseProps} repos={[indexing]} currentRepo={long} />);
+    const row = await screen.findByTestId(`repomgr-item-${long}`);
+
+    const chip = within(row).getByTestId('repo-index-indexing');
+    expect(chip).toHaveTextContent(/^100%$/);
+    expect(chip.getAttribute('title')).toContain('indexing 1259/1259');
+
+    // "viewing" is an icon with its word in the tooltip and accessible name.
+    const viewing = screen.getByTestId(`repomgr-viewing-${long}`);
+    expect(viewing).toHaveAttribute('aria-label', 'viewing');
+    expect(viewing.textContent).toBe('');
+
+    // Every badge together is at most a handful of characters — the budget
+    // that leaves the name most of a 236px row.
+    const badges = screen.getByTestId(`repomgr-badges-${long}`);
+    expect((badges.textContent ?? '').length).toBeLessThanOrEqual(4);
+
+    // The name is its own element, the one that yields (min-width 0 + ellipsis
+    // + grow), and the badges are the ones that never shrink.
+    const name = screen.getByTestId(`repomgr-item-name-${long}`);
+    expect(name).toHaveTextContent(long);
+    expect(name.style.minWidth).toBe('0px');
+    expect(name.style.textOverflow).toBe('ellipsis');
+    expect(name.style.flexGrow).toBe('1');
+    expect(badges.style.flexShrink).toBe('0');
+    expect(row).toContainElement(name);
+  });
+
+  it('renders an index error as a one-word chip', async () => {
+    render(<RepoManager {...baseProps} repos={[{ ...indexing, index_state: 'error', index_reason: 'indexing cancelled' }]} currentRepo="core" />);
+    const row = await screen.findByTestId(`repomgr-item-${long}`);
+    const chip = within(row).getByTestId('repo-index-error');
+    expect(chip).toHaveTextContent(/^error$/);
+    expect(chip.getAttribute('title')).toContain('indexing cancelled');
   });
 });
 
