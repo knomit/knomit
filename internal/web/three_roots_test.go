@@ -196,9 +196,6 @@ func TestFactGET_SystemFileRaw(t *testing.T) {
 	}
 }
 
-// TestFactPUT_SystemFileStillRefused: reopening GET did not open a write. PUT
-// and DELETE of the very file GET just served are 400 and the tip stays put.
-// Sabotage: make refuseNonFactPath admit IsSystemFilePath → PUT lands → red.
 // TestLensGET_SystemFileRaw (decision 2: one read rule across REST): the lens
 // route serves a .knomit/ file raw like the branch route — bare is the write
 // mount, kb://<id12>/.knomit/… names a mount — and an unmounted id, a mount
@@ -250,6 +247,9 @@ func TestLensGET_SystemFileRaw(t *testing.T) {
 	require.NotContains(t, c, "INJECTED")
 }
 
+// TestFactPUT_SystemFileStillRefused: reopening GET did not open a write. PUT
+// and DELETE of the very file GET just served are 400 and the tip stays put.
+// Sabotage: make refuseNonFactPath admit IsSystemFilePath → PUT lands → red.
 func TestFactPUT_SystemFileStillRefused(t *testing.T) {
 	h := newThreeRootsREST(t)
 	url := "/repos/alpha/branches/" + h.b + "/facts/.knomit/skills/x.md"

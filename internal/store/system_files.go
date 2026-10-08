@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/fact"
@@ -20,7 +21,8 @@ import (
 type SystemFileIndex interface {
 	// SystemFileAt reads path at commit, or at the tip of branch when commit
 	// is "". found is false when the path is absent there OR names a
-	// directory — only a file is a system file. Content is read only when the
+	// directory or a symlink — only a file is a system file, and a symlink is
+	// never followed. Content is read only when the
 	// blob is at most maxContent bytes (pass 0 for none); a larger file comes
 	// back with Truncated set and no Content.
 	//
@@ -42,6 +44,12 @@ type SystemFile struct {
 
 // SystemFiles returns the system-file reader of this store.
 func (s *Service) SystemFiles() SystemFileIndex { return s.rh }
+
+// SystemFileAt implements SystemFileIndex for FactIndex: the same reader as
+// Service.SystemFiles, over the same repo handle.
+func (fi *factIndex) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {
+	return fi.rh.SystemFileAt(ctx, branch, commit, path, maxContent)
+}
 
 // SystemFileAt implements SystemFileIndex.
 func (rh *repoHandler) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {
@@ -82,7 +90,14 @@ func (rh *repoHandler) SystemFileAt(ctx context.Context, branch, commit, path st
 	if err != nil {
 		return SystemFile{}, false, fmt.Errorf("system file: %q at %s: %w", path, commit, err)
 	}
-	if !entry.Mode.IsFile() {
+	// Only a file is a system file. go-git's IsFile is true for a symlink
+	// too, whose blob is just its target's name; a symlink is never followed
+	// and never served, so it reads as absent exactly like a directory (user
+	// ruling 2026-10-08: "we do NOT want to follow symlinks, so 404"). Every
+	// caller already handles not-found: the refs gate says "does not exist",
+	// REST GET answers 404, explain shows a cited one `deleted: true`. An
+	// executable file (+x, e.g. a trigger script) is a file and is served.
+	if !entry.Mode.IsFile() || entry.Mode == filemode.Symlink {
 		return SystemFile{Commit: commit}, false, nil
 	}
 	f, err := tree.TreeEntryFile(entry)

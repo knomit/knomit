@@ -57,3 +57,35 @@ func TestSystemFileAt(t *testing.T) {
 		t.Fatalf("stat only: %+v ok=%v err=%v", stat, ok, err)
 	}
 }
+
+// TestSystemFileAt_SymlinkIsNotAFile (N4, user ruling 2026-10-08: "we do NOT
+// want to follow symlinks, so 404"): a symlink under .knomit/ — here one
+// pointing at a regular file beside it — is not found, through Service and
+// through FactIndex alike, at the tip and at its own commit, and is not an
+// error; the file it points at is still a file.
+// Sabotage: drop the symlink clause → found with the link text as content → red.
+func TestSystemFileAt_SymlinkIsNotAFile(t *testing.T) {
+	ctx := context.Background()
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	if err := svc.InitRepo(ctx, map[string]string{".knomit/skills/x/SKILL.md": "skill body\n"}, "agent/test"); err != nil {
+		t.Fatal(err)
+	}
+	link, err := svc.RawSymlinkForTest(ctx, "agent/test", ".knomit/skills/link.md", "x/SKILL.md", "symlink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, sf := range map[string]SystemFileIndex{"Service": svc.SystemFiles(), "FactIndex": svc.Facts()} {
+		for _, commit := range []string{"", link} {
+			if got, ok, err := sf.SystemFileAt(ctx, "agent/test", commit, ".knomit/skills/link.md", 1<<10); ok || err != nil {
+				t.Errorf("%s at %q: symlink want not found, got %+v ok=%v err=%v", name, commit, got, ok, err)
+			}
+		}
+		if _, ok, err := sf.SystemFileAt(ctx, "agent/test", "", ".knomit/skills/x/SKILL.md", 0); !ok || err != nil {
+			t.Errorf("%s: the target is still a file: ok=%v err=%v", name, ok, err)
+		}
+	}
+}

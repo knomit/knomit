@@ -11,6 +11,11 @@ import (
 
 // FactIndex is the interface for fact storage. Implemented by *factIndex.
 type FactIndex interface {
+	// SystemFileIndex is here so a holder of the fact store can resolve a
+	// ref to a .knomit/ file against the SAME Service (and so the same branch
+	// tip) it resolves facts with — the synthesize pipelines' ref gates take
+	// both from one FactIndex resolved under one read lock.
+	SystemFileIndex
 	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
 	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
 	// WriteFactIfUnchanged is WriteFact that commits only if path's blob on
