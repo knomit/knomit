@@ -120,13 +120,14 @@ func TestMissionTemplate_Settings(t *testing.T) {
 	}
 }
 
-// readmeWithoutForgeBranches is the README minus the two places it may name
-// a branch, because there the branch is the operator's GIT HOST's, never the
+// readmeWithoutForgeBranches is the README minus the places it may name a
+// branch, because there the branch is the operator's GIT HOST's, never the
 // mission repo's consensus branch: the origin branch in a create request
-// (`"branch": "main"`), and the "GitHub-hosted" section, which describes the
-// forge repository the operator creates. Each cut must find what it cuts, so
-// a README that stops having it fails here rather than silently widening the
-// check's blind spot.
+// (`"branch": "main"`), and the backticked `main` inside the "GitHub-hosted"
+// section, which names the forge repository's branch. Only those tokens are
+// cut; the rest of that section (its ontology snippet included) is still
+// scanned. Each cut must find what it cuts, so a README that stops having it
+// fails here rather than silently widening the check's blind spot.
 func readmeWithoutForgeBranches(t *testing.T, readme string) string {
 	t.Helper()
 	originBranch := regexp.MustCompile(`"branch": "[^"]*"`)
@@ -136,7 +137,10 @@ func readmeWithoutForgeBranches(t *testing.T, readme string) string {
 	require.GreaterOrEqual(t, start, 0, "the README has a GitHub-hosted section")
 	end := strings.Index(readme[start+1:], "\n## ")
 	require.GreaterOrEqual(t, end, 0, "the GitHub-hosted section ends at the next top-level heading")
-	return readme[:start] + readme[start+1+end:]
+	end += start + 1
+	section := readme[start:end]
+	require.Contains(t, section, "`main`", "the GitHub-hosted section names the forge's branch")
+	return readme[:start] + strings.ReplaceAll(section, "`main`", "") + readme[end:]
 }
 
 // TestMissionTemplate_TimingRule enforces README "The timing rule" on the
