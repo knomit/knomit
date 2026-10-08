@@ -26,34 +26,96 @@ func requireSymlinkNamed(t *testing.T, err error, path string) {
 	require.Contains(t, err.Error(), "does not follow symlinks")
 }
 
-// The OPEN path (identify stage, loadOntology): the repo opens readable but
-// unwritable, and OntologyError names the symlink. The create-time check
+// The OPEN path (identify stage, loadOntology): a symlinked ontology on ANY
+// rung REFUSES the repo (user ruling 2026-10-08, "refuse the repo"). It is not
+// mounted; it stays listed as Unavailable "unopenable" with the named error as
+// its detail, the way an identity conflict is. The create-time check
 // (branchHasOntology) gives the same error rather than "has one".
-// Sabotage: loadOntology back on ReadFact, or treeOntologyFile back on
-// IsFile → the crafted link text loads as the ontology → red.
-func TestLoadOntology_SymlinkedOntologyFailsTheOpenNamingThePath(t *testing.T) {
+// Sabotage: drop identify's symlink refusal → the repo mounts → red; or
+// loadOntology back on ReadFact / treeOntologyFile back on IsFile → the
+// crafted link text loads as the ontology and the repo mounts → red.
+func TestLoadOntology_SymlinkedOntologyRefusesTheRepoNamingThePath(t *testing.T) {
+	for _, rung := range []string{OntologyPath, LegacyOntologyPath} {
+		t.Run(rung, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			agentBranch := "agent/test-link"
+			m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+			ri := bootRepo(t, m)
+			uid := ri.UID()
+			svc := testService(t, ri)
+			if rung != OntologyPath {
+				// A legacy rung is only read with the canonical file gone.
+				_, err := svc.Facts().DeleteFact(ctx, agentBranch, OntologyPath, "test: remove the canonical ontology")
+				require.NoError(t, err)
+			}
+			_, err := svc.RawSymlinkForTest(ctx, agentBranch, rung, craftedLinkOntology, "symlink the ontology")
+			require.NoError(t, err)
+
+			has, err := branchHasOntology(ctx, svc, agentBranch)
+			requireSymlinkNamed(t, err, rung)
+			require.False(t, has)
+			require.NoError(t, m.Close())
+
+			m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+			require.NoError(t, m2.Start(), "one refused repo does not fail the boot")
+			t.Cleanup(func() { _ = m2.Close() })
+			require.Nil(t, m2.Get(testRepoName), "a symlinked ontology refuses the repo: it is not mounted")
+			un := m2.Unavailable()
+			require.Len(t, un, 1)
+			require.Equal(t, uid, un[0].Record.UID)
+			require.Equal(t, "unopenable", un[0].Reason)
+			require.Contains(t, un[0].Detail, rung+" is a symlink, and knomit does not follow symlinks")
+		})
+	}
+}
+
+// A regular ontology mounts and reports no ontology error; the refusal above
+// is about the symlink, not about the open. Pairs with the refusal test so a
+// sabotage that refuses EVERY open goes red here.
+func TestLoadOntology_RegularOntologyMounts(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	agentBranch := "agent/test-link"
+	agentBranch := "agent/test-regular"
 	m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
-	ri := bootRepo(t, m)
-	svc := testService(t, ri)
-	_, err := svc.RawSymlinkForTest(ctx, agentBranch, OntologyPath, craftedLinkOntology, "symlink the ontology")
-	require.NoError(t, err)
-
-	has, err := branchHasOntology(ctx, svc, agentBranch)
-	requireSymlinkNamed(t, err, OntologyPath)
-	require.False(t, has)
+	bootRepo(t, m)
 	require.NoError(t, m.Close())
 
 	m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
 	require.NoError(t, m2.Start())
 	t.Cleanup(func() { _ = m2.Close() })
-	ri = m2.Get(testRepoName)
-	require.NotNil(t, ri, "the repo still opens: its data stays reachable")
-	requireSymlinkNamed(t, ri.OntologyError(), OntologyPath)
-	require.Nil(t, ri.Ontology())
-	require.False(t, ri.WritableBranch(agentBranch))
+	ri := m2.Get(testRepoName)
+	require.NotNil(t, ri)
+	require.Empty(t, m2.Unavailable())
+	require.NoError(t, ri.OntologyError())
+	require.NoError(t, ri.IdentifiedOntologyError())
+}
+
+// A disjoint-history connect (SwapStore) whose INCOMING store has a symlinked
+// ontology is refused by the swap's guard, before anything is exited: the
+// repo stays mounted on its old store. Without the guard the swap installs
+// the store and Identify then refuses the repo, leaving a working repo
+// Unavailable. Sabotage: drop the guard's symlink clause → the walk ends
+// Unavailable (stage not "ready", ID changed or gone) → red.
+func TestSwapStore_SymlinkedIncomingOntologyIsRefusedBeforeTheSwap(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t)
+	require.NoError(t, m.Start())
+	ri := createRepo(t, m, "core")
+	other := createRepo(t, m, "other")
+	_, err := testService(t, other).RawSymlinkForTest(ctx, "agent/test", OntologyPath, craftedLinkOntology, "symlink the ontology")
+	require.NoError(t, err)
+	otherPath := m.RepoPath(other.UID())
+	_, err = m.Archive("other")
+	require.NoError(t, err)
+	idBefore := ri.ID()
+
+	err = swapStore(m, ri, otherPath)
+	requireSymlinkNamed(t, err, OntologyPath)
+	require.Contains(t, err.Error(), "connect aborted before any change was made")
+	require.Equal(t, "ready", ri.Status().Stage, "the guard refused before any stage was exited")
+	require.Equal(t, idBefore, ri.ID(), "the previous store is still the repo's")
+	require.NoError(t, ri.OntologyError())
 }
 
 // An EMPTY .knomit/ontology.yaml is the ontology (the first rung present):

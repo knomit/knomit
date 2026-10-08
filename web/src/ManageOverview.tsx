@@ -5,6 +5,7 @@ import { RepoStateChip } from './RepoStateChip';
 import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, pendingCreates } from './useRepoCreates';
 import { RepoIndexChip } from './RepoIndexChip';
+import { RepoOntologyChip } from './RepoOntologyChip';
 import { LENS, repoHue } from './utils';
 import { btn, cardLabel } from './manageStyles';
 import { PlusIcon, LayersIcon, RefreshIcon } from './icons';
@@ -332,7 +333,10 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
                       {r.repo}
                       {r.unavailable
                         ? <span style={{ marginLeft: 8 }}><RepoStateChip repo={r.unavailable} /></span>
-                        : <span style={{ marginLeft: 8 }}><RepoIndexChip repo={r.info ?? {}} /></span>}
+                        : <span style={{ marginLeft: 8, display: 'inline-flex', gap: 6 }}>
+                            <RepoOntologyChip repo={{ name: r.repo, ontology_error: r.info?.ontology_error }} />
+                            <RepoIndexChip repo={r.info ?? {}} />
+                          </span>}
                     </button>
                   </td>
                   {/* Branch, remote and licence all live INSIDE the store this

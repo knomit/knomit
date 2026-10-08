@@ -7,6 +7,7 @@ import { api, repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens, ExperimentRow } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
+import { RepoOntologyChip } from './RepoOntologyChip';
 import { useRepoCreates, activeCreateByRepo, createFlag } from './useRepoCreates';
 import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, FlaskIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
@@ -577,6 +578,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                     </span>
                   : <>
                       {!available && <RepoStateChip repo={r} />}
+                      {available && <RepoOntologyChip repo={r} />}
                       {available && <RepoIndexChip repo={r} />}
                     </>}
               </div>

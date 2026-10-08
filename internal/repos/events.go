@@ -23,6 +23,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -259,16 +260,22 @@ func guardAttach(ctx context.Context, r *RepoInstance, o OriginSpec) error {
 // guardSwap holds the checks that must come before the swap's point of no
 // return: the one-local-copy check on the INCOMING root commit — the Swap
 // guard is the one site (kb/invariants/repos/one-local-copy-per-knowledge-base)
-// — and the ontology gate.
+// — the incoming store's symlinked-ontology refusal, and the ontology gate.
 func guardSwap(ctx context.Context, r *RepoInstance, s SwapSpec) error {
 	m := r.env.m
 	branch := s.IdentityBranch
 	if branch == "" {
 		branch = r.ReadBranch()
 	}
-	root, err := rootCommitOfDB(ctx, s.TempDB, branch)
+	root, ontErr, err := inspectIncomingStore(ctx, s.TempDB, branch, r.ReadBranch())
 	if err != nil {
 		return fmt.Errorf("read the incoming store's identity: %w", err)
+	}
+	// A symlinked ontology refuses the repo at Identify (stages.go), so
+	// installing this store would turn a working repo Unavailable. Refused
+	// here instead, while refusing is still free.
+	if ontErr != nil {
+		return fmt.Errorf("the incoming store's ontology: %w; connect aborted before any change was made", ontErr)
 	}
 	if root != "" {
 		holder, herr := HeldByAnotherActiveRepo(m, r.uid, root)
@@ -288,18 +295,35 @@ func guardSwap(ctx context.Context, r *RepoInstance, s SwapSpec) error {
 	return nil
 }
 
-// rootCommitOfDB opens the database at dbPath, resolves the root commit
-// reachable from branch, and closes it again on every path.
-func rootCommitOfDB(ctx context.Context, dbPath, branch string) (string, error) {
+// inspectIncomingStore opens the database at dbPath, resolves the root commit
+// reachable from branch, and closes it again on every path. symlinkErr is
+// non-nil (wrapping fact.ErrSymlinkNotFollowed) when the ontology on branch
+// or on readBranch — the branch Identify reads once the store is installed —
+// is a symlink. Any other ontology read error (a branch the store does not
+// have, no ontology at all) is not this guard's business: Identify reports
+// those as OntologyError on a mounted repo.
+func inspectIncomingStore(ctx context.Context, dbPath, branch, readBranch string) (root string, symlinkErr, err error) {
 	svc, err := store.Open(dbPath)
 	if err != nil {
-		return "", fmt.Errorf("open: %w", err)
+		return "", nil, fmt.Errorf("open: %w", err)
 	}
 	defer svc.Close()
 	if err := svc.OpenRepo(); err != nil {
-		return "", fmt.Errorf("open git: %w", err)
+		return "", nil, fmt.Errorf("open git: %w", err)
 	}
-	return svc.RootCommit(ctx, branch)
+	root, err = svc.RootCommit(ctx, branch)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, b := range []string{branch, readBranch} {
+		if b == "" {
+			continue
+		}
+		if _, _, oerr := svc.OntologyFileAt(ctx, b); errors.Is(oerr, fact.ErrSymlinkNotFollowed) {
+			return root, fmt.Errorf("on %s: %w", b, oerr), nil
+		}
+	}
+	return root, nil, nil
 }
 
 // apply runs after the exits and before the walk, on the driver goroutine.

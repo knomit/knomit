@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
@@ -138,6 +139,11 @@ func archiveErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Knowledge base already registered"
 	case errors.Is(err, repos.ErrCreateInFlight):
 		return http.StatusConflict, "Operation in flight"
+	case errors.Is(err, fact.ErrSymlinkNotFollowed):
+		// Restoring a repo whose ontology is a symlink: Identify refuses it,
+		// the restore is undone, and the message names the file. The content
+		// is the problem, not the server.
+		return http.StatusUnprocessableEntity, "Ontology is a symlink"
 	case errors.Is(err, repos.ErrInvalidName):
 		return http.StatusBadRequest, "Invalid name"
 	default:

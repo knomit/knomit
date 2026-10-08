@@ -30,6 +30,10 @@ func TestOntology_NotIdentifiedEstablishesNothing(t *testing.T) {
 	require.Nil(t, ri.Ontology(), "a stand-in ontology is not this repo's ontology")
 	require.ErrorIs(t, ri.OntologyError(), errNotIdentified)
 	require.False(t, ri.WritableBranch(ri.AgentBranch()), "nothing is writable before Identify")
+	// GET /repos shows IdentifiedOntologyError: a repo mid-walk (one being
+	// created sits at populate) has nothing wrong with its ontology to report.
+	// Sabotage: return OntologyError() unfiltered → red.
+	require.NoError(t, ri.IdentifiedOntologyError())
 }
 
 // staleCodeOntologyYAML is a minimal source-code ontology: same id as
