@@ -76,3 +76,45 @@ func TestSkillsAt_ReadsTheCommitsOwnTree(t *testing.T) {
 	require.Len(t, onAgent, 1)
 	require.Equal(t, "agent-only", onAgent[0].Dir)
 }
+
+// TestSkillsAt_SymlinkIsNotAFile (user ruling 2026-10-08: "we do NOT want to
+// follow symlinks, so 404"; "small PR for SKILL.md symlink"): a SKILL.md that
+// is a symlink (here to a regular file beside it) makes no skill, and a
+// regular skill.md beside such a symlink is still the skill. A symlinked
+// bundled file is not listed, while the regular file it points at is.
+// Sabotage: skillFileEntry or SkillFilesAt back on Mode.IsFile → the linked
+// skill is listed, or link.md is bundled → red.
+func TestSkillsAt_SymlinkIsNotAFile(t *testing.T) {
+	svc := newChangesService(t)
+	ctx := context.Background()
+	putRaw(t, svc, "main", ".knomit/skills/linked/body.md", "---\nname: linked\n---\nB")
+	putRaw(t, svc, "main", ".knomit/skills/shadow/skill.md", "REGULAR")
+	putRaw(t, svc, "main", ".knomit/skills/real/SKILL.md", "R")
+	putRaw(t, svc, "main", ".knomit/skills/real/ref.md", "REF")
+	link := func(path, target string) plumbing.Hash {
+		h, err := svc.RawSymlinkForTest(ctx, "main", path, target, "symlink "+path)
+		require.NoError(t, err)
+		return plumbing.NewHash(h)
+	}
+	link(".knomit/skills/linked/SKILL.md", "body.md")
+	link(".knomit/skills/shadow/SKILL.md", "skill.md")
+	tip := link(".knomit/skills/real/link.md", "ref.md")
+
+	got, err := svc.Skills().SkillsAt(ctx, tip)
+	require.NoError(t, err)
+	dirs := make([]string, len(got))
+	for i, e := range got {
+		dirs[i] = e.Dir
+	}
+	require.Equal(t, []string{"real", "shadow"}, dirs, "a symlinked SKILL.md is no skill")
+	require.Equal(t, "REGULAR", string(got[1].Data), "the regular skill.md, not the symlink's target name")
+
+	files, err := svc.Skills().SkillFilesAt(ctx, tip, "real")
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "ref.md", files[0].Path, "the symlinked link.md is not a bundled file")
+
+	shadow, err := svc.Skills().SkillFilesAt(ctx, tip, "shadow")
+	require.NoError(t, err)
+	require.Empty(t, shadow, "the skill.md is the skill file, and the SKILL.md symlink is not a file")
+}

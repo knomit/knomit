@@ -31,6 +31,17 @@ type SystemFileIndex interface {
 	SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (sf SystemFile, found bool, err error)
 }
 
+// isSystemFileMode is THE test for "this tree entry under .knomit/ is a file
+// knomit reads": SystemFileAt and the skill loader (skills.go) both use it.
+// go-git's IsFile is true for a symlink too, whose blob is just its target's
+// name; a symlink is never followed and never served, so it reads as absent
+// exactly like a directory (user ruling 2026-10-08: "we do NOT want to follow
+// symlinks, so 404"). An executable file (+x, e.g. a trigger script) is a
+// file. A submodule and a directory are not.
+func isSystemFileMode(m filemode.FileMode) bool {
+	return m.IsFile() && m != filemode.Symlink
+}
+
 // SystemFile is one file under fact.PrivateRoot at a commit.
 type SystemFile struct {
 	// Commit is the commit the file was read at (the branch tip when the
@@ -90,14 +101,11 @@ func (rh *repoHandler) SystemFileAt(ctx context.Context, branch, commit, path st
 	if err != nil {
 		return SystemFile{}, false, fmt.Errorf("system file: %q at %s: %w", path, commit, err)
 	}
-	// Only a file is a system file. go-git's IsFile is true for a symlink
-	// too, whose blob is just its target's name; a symlink is never followed
-	// and never served, so it reads as absent exactly like a directory (user
-	// ruling 2026-10-08: "we do NOT want to follow symlinks, so 404"). Every
-	// caller already handles not-found: the refs gate says "does not exist",
-	// REST GET answers 404, explain shows a cited one `deleted: true`. An
-	// executable file (+x, e.g. a trigger script) is a file and is served.
-	if !entry.Mode.IsFile() || entry.Mode == filemode.Symlink {
+	// Only a file is a system file (isSystemFileMode): a directory or a
+	// symlink reads as absent. Every caller already handles not-found: the
+	// refs gate says "does not exist", REST GET answers 404, explain shows a
+	// cited one `deleted: true`.
+	if !isSystemFileMode(entry.Mode) {
 		return SystemFile{Commit: commit}, false, nil
 	}
 	f, err := tree.TreeEntryFile(entry)
