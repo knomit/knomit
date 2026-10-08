@@ -22,11 +22,13 @@ import (
 type SkillIndex interface {
 	// SkillsAt lists every folder under fact.SkillsDir that holds a
 	// SKILL.md file, sorted by folder name, with that file's blob hash and
-	// content. A folder without one is not a skill and is not listed. No
+	// content. A folder without one is not a skill and is not listed; a
+	// symlinked SKILL.md is not one (never followed, isSystemFileMode). No
 	// skills folder at all is an empty list.
 	SkillsAt(ctx context.Context, commit plumbing.Hash) ([]SkillEntry, error)
 	// SkillFilesAt lists skill name's bundled files — every file under its
-	// folder, recursively, except the top-level SKILL.md — sorted by path.
+	// folder, recursively, except the top-level SKILL.md and any symlink —
+	// sorted by path.
 	// Contents are read only when asked for.
 	SkillFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]SkillBundledFile, error)
 }
@@ -93,7 +95,9 @@ func skillFileEntry(sub *object.Tree) *object.TreeEntry {
 	var folded *object.TreeEntry
 	for i := range sub.Entries {
 		e := &sub.Entries[i]
-		if !e.Mode.IsFile() || !strings.EqualFold(e.Name, fact.SkillFileName) {
+		// A symlinked SKILL.md is no SKILL.md (isSystemFileMode): the folder
+		// is not a skill unless a regular skill.md sits beside it.
+		if !isSystemFileMode(e.Mode) || !strings.EqualFold(e.Name, fact.SkillFileName) {
 			continue
 		}
 		if e.Name == fact.SkillFileName {
@@ -161,7 +165,9 @@ func (rh *repoHandler) SkillFilesAt(ctx context.Context, commit plumbing.Hash, n
 	}
 	var out []SkillBundledFile
 	err = sub.Files().ForEach(func(f *object.File) error {
-		if f.Name == skip || !f.Mode.IsFile() {
+		// A symlinked bundled file is neither inlined nor listed: it is
+		// never followed (isSystemFileMode).
+		if f.Name == skip || !isSystemFileMode(f.Mode) {
 			return nil
 		}
 		out = append(out, SkillBundledFile{Path: strings.TrimPrefix(f.Name, "/"), Blob: f.Hash.String(), Size: f.Size, file: f})
