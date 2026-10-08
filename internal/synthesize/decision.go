@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
-	"knomit/internal/refs"
 	"knomit/internal/store"
 
 	"github.com/google/uuid"
@@ -135,7 +134,7 @@ func ApplyPruneDecisions(ctx context.Context,
 	rewrittenPaths := make(map[string]bool)
 	// mergeGate is the one gate the merge outputs below go through, built once
 	// for the whole call.
-	mergeGate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
+	mergeGate := writeGate(localRepoID, idx, gs, agentBranch)
 	// Each merge's prior: its members' refs, SNAPSHOTTED NOW, before the
 	// decision loop's retracts and the earlier merges below delete members on
 	// this branch. Read at the tip later, a member retracted or consumed
@@ -445,7 +444,7 @@ func ApplyDistillDecisions(ctx context.Context,
 ) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
 	var written []distillFact
-	gate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
+	gate := writeGate(localRepoID, idx, gs, agentBranch)
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -591,7 +590,7 @@ func ApplyReflectDecisions(
 	// ref. Everything it already cited resolved at its own commit and is not
 	// re-judged here.
 	priorRefsByPath := make(map[string][]string)
-	reflectGate := refs.New(localRepoID, refs.FromFactQuery(idx, branch))
+	reflectGate := writeGate(localRepoID, idx, gs, branch)
 
 	// Phase 1 — validate reinforce targets resolve to methodology facts and
 	// stage transition-fact updates appending the methodology path to refs.

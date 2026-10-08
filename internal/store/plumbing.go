@@ -108,6 +108,11 @@ func writeFileToStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash pl
 // empty tree. The function recurses through path segments, creating or updating
 // subtrees as needed.
 func buildTree(s *storegit.Storer, existing *object.Tree, path string, blobHash plumbing.Hash) (plumbing.Hash, error) {
+	return buildTreeMode(s, existing, path, filemode.Regular, blobHash)
+}
+
+// buildTreeMode is buildTree with the leaf entry's mode chosen by the caller.
+func buildTreeMode(s *storegit.Storer, existing *object.Tree, path string, mode filemode.FileMode, blobHash plumbing.Hash) (plumbing.Hash, error) {
 	parts := strings.SplitN(path, "/", 2)
 	name := parts[0]
 
@@ -115,7 +120,7 @@ func buildTree(s *storegit.Storer, existing *object.Tree, path string, blobHash 
 		// Leaf: insert/replace the file entry in this tree.
 		return upsertEntry(s, existing, object.TreeEntry{
 			Name: name,
-			Mode: filemode.Regular,
+			Mode: mode,
 			Hash: blobHash,
 		})
 	}
@@ -136,7 +141,7 @@ func buildTree(s *storegit.Storer, existing *object.Tree, path string, blobHash 
 		}
 	}
 
-	subHash, err := buildTree(s, subtree, rest, blobHash)
+	subHash, err := buildTreeMode(s, subtree, rest, mode, blobHash)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}

@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
-	"knomit/internal/refs"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -333,7 +332,7 @@ func applyDiscoveredProposals(
 		seedPaths[m.File] = struct{}{}
 	}
 
-	gate := refs.New(localRepoID, refs.FromFactQuery(idx, branch))
+	gate := writeGate(localRepoID, idx, gs, branch)
 
 	var written []string
 	for _, p := range proposals {

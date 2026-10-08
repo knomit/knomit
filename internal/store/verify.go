@@ -630,6 +630,50 @@ func (s *Service) RawWriteForTest(ctx context.Context, branch, path, content, me
 	return commitHash, nil
 }
 
+// RawSymlinkForTest commits a SYMLINK entry (mode 120000) at path, case
+// kept, whose blob is target — what `git add` of a symlink records. EXISTS
+// ONLY for tests of how readers treat a symlink under .knomit/ (never
+// followed, read as absent); no writer in knomit can create one.
+func (s *Service) RawSymlinkForTest(ctx context.Context, branch, path, target, message string) (string, error) {
+	rh := s.rh
+	unlock := rh.lockBranch(branch)
+	defer unlock()
+	head, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return "", err
+	}
+	tip, err := rh.repo.CommitObject(head)
+	if err != nil {
+		return "", err
+	}
+	root, err := tip.Tree()
+	if err != nil {
+		return "", err
+	}
+	blob, err := writeBlobToStore(rh.gits, []byte(target))
+	if err != nil {
+		return "", err
+	}
+	rootHash, err := buildTreeMode(rh.gits, root, path, filemode.Symlink, blob)
+	if err != nil {
+		return "", err
+	}
+	c := &object.Commit{Author: tip.Author, Committer: tip.Committer, Message: message,
+		TreeHash: rootHash, ParentHashes: []plumbing.Hash{head}}
+	obj := rh.gits.NewEncodedObject()
+	if err := c.Encode(obj); err != nil {
+		return "", err
+	}
+	h, err := rh.gits.SetEncodedObject(obj)
+	if err != nil {
+		return "", err
+	}
+	if err := rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)); err != nil {
+		return "", err
+	}
+	return h.String(), nil
+}
+
 // checkGitReachability walks the commit chain from the branch ref to the root.
 // For every commit it verifies the tree object exists and recursively that
 // every tree entry resolves to an existing blob or subtree. Reports any

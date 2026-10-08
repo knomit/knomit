@@ -15,6 +15,7 @@ import (
 	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 )
 
 const explainPageSize = 25
@@ -32,7 +33,7 @@ const explainHistoryPageSize = 20
 // explainTool returns the Tool definition for knomit_explain.
 func explainTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explain",
-		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. `file` is a fact under kb/, an artifact under artifacts/<area>/, or a system file under .knomit/ (read-only, by its exact path, case kept: ontology, triggers, recipes, skills, templates). A system file explained directly comes back as ONE node with kind `system_file`, its `blob`, `size` and raw `content` (`encoding: base64` when it is not UTF-8; over 256 KiB it has `content_truncated: true` and no content), and no history or children. A fact's refs to `.knomit/` files appear in its walk as `system_file` summary nodes pinned at the fact's commit (the file as it stood when the fact was written) — explain one with its `path` AND `commit` to read its content. The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its `history`: the commits that changed its content, merge-delivered writes included, newest first. Each revision carries its `action` (added/modified) and its confidence/content diff against the content it was edited from. The first call returns the newest few. To read more, call again with the same `file` and `history_cursor` set to `history.history_cursor`; repeat while a `history_cursor` is returned. Those calls return history only. Do NOT page history by passing an older revision as `commit`. A revision marked `content_unavailable: true` has no diff: do not read that commit for its content. On a \"history changed\" error, call again without `history_cursor`. Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
+		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. `file` is a fact under kb/, an artifact under artifacts/<area>/, or a system file under .knomit/ (read-only, by its exact path, case kept: ontology, triggers, recipes, skills, templates). A system file explained directly comes back as ONE node with kind `system_file`, its `blob`, `size` and raw `content` (`encoding: base64` when it is not UTF-8; over 256 KiB it has `content_truncated: true` and no content), and no history or children. A fact's refs to `.knomit/` files appear in its walk as `system_file` summary nodes pinned at the fact's commit (the file as it stood when the fact was written) — explain one with its `path` AND `commit` to read its content. A file node is `deleted: true` when the file is gone at the tip, or when there was no file at that path at the fact's commit (then it has no blob and no content to read; a symlink is never followed and counts as no file). The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its `history`: the commits that changed its content, merge-delivered writes included, newest first. Each revision carries its `action` (added/modified) and its confidence/content diff against the content it was edited from. The first call returns the newest few. To read more, call again with the same `file` and `history_cursor` set to `history.history_cursor`; repeat while a `history_cursor` is returned. Those calls return history only. Do NOT page history by passing an older revision as `commit`. A revision marked `content_unavailable: true` has no diff: do not read that commit for its content. On a \"history changed\" error, call again without `history_cursor`. Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
 		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
@@ -783,8 +784,23 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 			// root it is a summary — no content (decision 1).
 			if fact.IsSystemFilePath(rel) {
 				sf, fsup, fdel, okFile, ferr := readFileNode(ctx, sm, rt.Branch, rel, item.CommitHash, 0)
-				if ferr != nil || !okFile {
+				if ferr != nil {
+					// A store failure is not an absence: drop the node, as
+					// an unreadable fact child is dropped, rather than
+					// report a file deleted that may not be.
+					log.Debug().Err(ferr).Str("path", rel).Str("commit", item.CommitHash).
+						Msg("explain: system file child unreadable")
 					continue
+				}
+				if !okFile {
+					// The fact cites a file that is not in the tree at the
+					// fact's own commit (absent, a directory, or a symlink —
+					// never followed): the gate accepted it against another
+					// tree, e.g. an experiment resolution's other side. Show
+					// the citation rather than drop it: deleted, no blob,
+					// whatever the tip holds — there is no pinned version to
+					// compare with the tip.
+					sf, fsup, fdel = store.SystemFile{}, false, true
 				}
 				facts = append(facts, explainFileEntry{
 					Path: item.Path, Commit: item.CommitHash, Depth: item.SortKey,

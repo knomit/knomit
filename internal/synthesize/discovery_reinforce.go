@@ -25,7 +25,6 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
-	"knomit/internal/refs"
 	"knomit/internal/store"
 )
 
@@ -62,7 +61,7 @@ func applyReinforcements(
 	for _, m := range payload.Bridge.Members {
 		seedPaths[m.File] = struct{}{}
 	}
-	gate := refs.New(localRepoID, refs.FromFactQuery(idx, branch))
+	gate := writeGate(localRepoID, idx, gs, branch)
 
 	var written []string
 	for _, r := range rs {
