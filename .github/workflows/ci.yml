@@ -8,11 +8,42 @@ name: CI
 # NOT triggered on tags. release-stable.yml calls tests.yml itself, so a tag
 # push already runs this suite against the tagged tree; adding `tags:` here
 # would run the whole matrix a second time on the same commit for no signal.
+#
+# TWO SHAPES, ONE DEFINITION. A pull_request runs the FAST shape: the whole
+# Linux suite (build-test + slow-tests), web-ui and desktop-ui, and a build +
+# vet — no tests — on Windows and macOS. Every other event here runs the FULL
+# matrix, every test on every platform:
+#   - push to dev or master (so each merge is still tested everywhere),
+#   - the nightly schedule (catches image drift and flakes on quiet days),
+#   - workflow_dispatch (run the full matrix on demand, e.g. on a PR branch
+#     whose change is platform-sensitive).
+# The decision is made HERE, by the caller, and passed as `full`; tests.yml
+# defaults it to true, so release-stable's gate — which passes nothing — always
+# gets the full matrix. The reason is wall time: the Windows legs (synthesize
+# alone 20-30 min) and the macOS runner queue made every PR wait ~30 minutes for
+# platform coverage that the post-merge run on dev still provides.
+#
+# SCHEDULE RUNS ON THE DEFAULT BRANCH. GitHub fires `schedule` from the default
+# branch's copy of this file and checks out that branch, so the nightly takes
+# effect once this file reaches master and tests master's tip.
 on:
   push:
     branches: [dev, master]
   pull_request:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+# A new push to a PR cancels that PR's run in flight: only the newest commit's
+# answer matters to the reviewer. Every non-PR run gets a group of its own
+# (run_id), so pushes to dev/master, the nightly and dispatches are never
+# cancelled or queued behind each other — each merge keeps its own full run.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: true
 
 jobs:
   tests:
     uses: ./.github/workflows/tests.yml
+    with:
+      full: ${{ github.event_name != 'pull_request' }}
