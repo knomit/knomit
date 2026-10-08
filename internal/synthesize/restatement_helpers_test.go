@@ -181,6 +181,31 @@ func (e *restatementEnv) writeFact(path, title, body string) {
 	require.NoError(e.t, err)
 }
 
+// writeFiller writes the standard filler corpus — n facts with a common year
+// token and a unique widget number each, the same paths, titles and bodies the
+// TestStructural_* fixtures always wrote — in ONE BatchWriteFacts commit rather
+// than one WriteFact commit per fact. Over 404 facts that is the difference
+// between 404 commits and index syncs and one, which was most of
+// internal/synthesize's run time.
+//
+// Every filler fact is minted before anything the caller writes next, exactly
+// as before, so a fixture that writes its pair or twins AFTER the filler (as
+// every caller does) keeps their fact ids above the filler and in their own
+// write order. Within the filler the ids follow the batch's indexing order
+// rather than i; nothing a test reads depends on that (the filler is
+// interchangeable by construction), and the fixtures' standing shortlist,
+// selection and health were compared before and after this change and matched.
+func (e *restatementEnv) writeFiller(n int) {
+	e.t.Helper()
+	files := make(map[string]string, n)
+	for i := range n {
+		files[fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1)] =
+			"---\ntype: observation\n---\n# " + fmt.Sprintf("Filler note 2026 about widget %d", 1000+i) + "\n\nan unrelated body"
+	}
+	_, _, err := e.svc.Facts().BatchWriteFacts(context.Background(), e.branch, files, nil, "write filler", "test")
+	require.NoError(e.t, err)
+}
+
 // deps mirrors Pipeline.deps for a test that drives the phase-0 functions
 // directly rather than through a session.
 func (e *restatementEnv) deps() Deps {

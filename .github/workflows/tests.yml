@@ -406,6 +406,19 @@ jobs:
       - name: No hardware faults inside the Windows test process (knomit#279)
         if: matrix.os == 'windows-2025' && !cancelled()
         run: bash .github/scripts/go-test-fault-guard.sh 5
+      # The full -json stream of every go test step on this leg, kept so
+      # per-test Windows timings can be read after the fact (the console
+      # prints only the 25 slowest per step; see go-test-capture.sh).
+      # Windows only: it is the platform whose cost nobody can reproduce
+      # locally. `!cancelled()` so a red leg still leaves its stream.
+      - name: Upload go test -json streams (Windows)
+        if: matrix.os == 'windows-2025' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotest-json build-test (${{ matrix.os }})
+          path: ${{ runner.temp }}/gotest-*.jsonl
+          if-no-files-found: warn
+          retention-days: 14
 
   # The three packages that are slow ON WINDOWS ONLY, in their own job so the
   # build-test leg stays a fast answer to "did this break the build". The cost
@@ -428,6 +441,8 @@ jobs:
   # at a time, so it is bound by per-operation latency that a faster machine
   # does not help. synthesize is therefore the number this job's shape depends
   # on, and the one to re-measure first if any of this stops making sense.
+  # (Those numbers predate the fast-durability TestMains and the one-commit
+  # TestStructural filler; re-measure from the uploaded -json streams.)
   #
   # THE MATRIX IS DELIBERATELY ASYMMETRIC, and the runner's numbers are why.
   # unix runs all three in one leg (7m25s for the lot) because splitting three
@@ -495,6 +510,15 @@ jobs:
       - name: No hardware faults inside the Windows test process (knomit#279)
         if: matrix.os == 'windows-2025' && !cancelled()
         run: bash .github/scripts/go-test-fault-guard.sh 1
+      # Same as build-test: the full -json stream, Windows legs only.
+      - name: Upload go test -json stream (Windows)
+        if: matrix.os == 'windows-2025' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotest-json slow-tests (${{ matrix.leg }})
+          path: ${{ runner.temp }}/gotest-*.jsonl
+          if-no-files-found: warn
+          retention-days: 14
 
   # Build + test the Wails v3 desktop app. It lives behind `//go:build desktop`
   # and links the OS-native webview toolkit (Cocoa/WebKit on macOS), so the

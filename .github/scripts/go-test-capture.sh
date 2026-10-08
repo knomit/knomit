@@ -46,6 +46,18 @@ rc=${PIPESTATUS[0]}
 # line each: they are what a platform-only suite quietly did not run.
 jq -r 'select(.Action == "skip" and .Test != null) | "skip\t\(.Package)\t\(.Test)"' "$log"
 
+# The 25 slowest top-level tests of this step, pass or fail, in a log group.
+# Without it a CI log carries only per-package times, and the one platform
+# whose cost cannot be reproduced locally (Windows) gives no clue which tests
+# it is paying for. Subtests are left out: their time is inside the parent's.
+# Informational only — it never changes the exit status below.
+echo "::group::25 slowest tests ($name)"
+jq -rs '[.[] | select(.Test != null and (.Test | contains("/") | not)
+		and (.Action == "pass" or .Action == "fail"))]
+	| sort_by(-.Elapsed) | .[:25][]
+	| "\(.Elapsed)s\t\(.Action)\t\(.Package)\t\(.Test)"' "$log" || true
+echo "::endgroup::"
+
 if [ "$rc" -ne 0 ]; then
 	# tr: jq built for Windows ends its lines in CRLF, and a CR inside $pkg
 	# would make the --arg match nothing. Seen on this exact loop.
