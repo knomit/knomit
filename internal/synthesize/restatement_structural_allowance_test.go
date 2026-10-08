@@ -387,12 +387,7 @@ func manyTwinsEnvWithFiller(t *testing.T, n, filler int) *restatementEnv {
 	require.LessOrEqual(t, n, len(subjects), "manyTwinsEnv has only %d subjects", len(subjects))
 
 	env := newRestatementEnv(t, 0)
-	for i := range filler {
-		env.writeFact(
-			fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1),
-			fmt.Sprintf("Filler note 2026 about widget %d", 1000+i),
-			"an unrelated body")
-	}
+	env.writeFiller(filler)
 	for i, s := range subjects[:n] {
 		env.writeFact(
 			fmt.Sprintf("kb/technology/security/vulnerabilities/%s/%08x.md", s, 0xAA0000+i*2),
@@ -467,12 +462,7 @@ func sweepOrderEnv(t *testing.T) *restatementEnv {
 	// The filler first, and it is not decoration: both rarity cuts are read off
 	// the corpus's own token distribution, so a corpus with no distribution has
 	// nothing rare in it and no pair is ever classified.
-	for i := range structuralFiller {
-		env.writeFact(
-			fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1),
-			fmt.Sprintf("Filler note 2026 about widget %d", 1000+i),
-			"an unrelated body")
-	}
+	env.writeFiller(structuralFiller)
 	// Then the twins, IN ORDER. This sequence is the mint order under test.
 	for _, tw := range twins {
 		env.writeFact(tw.aPath, tw.aTitle, "a body about the event")
