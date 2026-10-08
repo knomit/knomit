@@ -151,16 +151,27 @@ func (rh *repoHandler) onlyMergeCommits(src, dst plumbing.Hash) (bool, error) {
 // path newest first: (nil, nil) when that tree has none. The consensus merger
 // reads the repo's settings where the repo's owner decides them, the tip of
 // the consensus branch.
+//
+// A symlink at the first rung present is an error wrapping
+// fact.ErrSymlinkNotFollowed and naming the path, never (nil, nil).
 func (s *Service) OntologyAt(ctx context.Context, branch string) ([]byte, error) {
+	_, data, err := s.OntologyFileAt(ctx, branch)
+	return data, err
+}
+
+// OntologyFileAt is OntologyAt also returning the rung it read ("" when the
+// tip has none). The repo's open (repos.loadOntology) and its create-time
+// check (branchHasOntology) read the ontology through it.
+func (s *Service) OntologyFileAt(ctx context.Context, branch string) (string, []byte, error) {
 	h, err := s.rh.resolveRef(ctx, branch)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	c, err := object.GetCommit(s.rh.gits, h)
 	if err != nil {
-		return nil, fmt.Errorf("OntologyAt %s: %w", branch, err)
+		return "", nil, fmt.Errorf("OntologyAt %s: %w", branch, err)
 	}
-	return treeOntology(c)
+	return treeOntologyFile(c)
 }
 
 // PushedBranchInfo is what the pushed-branches list shows for one branch.

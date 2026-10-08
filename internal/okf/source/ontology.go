@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 
@@ -45,7 +46,12 @@ func okfOntologyDoc(st storer.EncodedObjectStorer, sourceSHA plumbing.Hash) (okf
 				break
 			}
 		}
-		if ferr == nil && f != nil {
+		if ferr == nil && f != nil && f.Mode == filemode.Symlink {
+			// Never followed and its link text never parsed (user ruling
+			// 2026-10-08): the bundle degrades as for any unusable ontology,
+			// with a warning that names the path.
+			warnings = append(warnings, "ontology: "+fact.SymlinkNotFollowed(f.Name).Error())
+		} else if ferr == nil && f != nil {
 			if content, err := f.Contents(); err == nil {
 				parsed, perr := fact.ParseOntology([]byte(content))
 				if perr != nil {

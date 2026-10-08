@@ -32,7 +32,10 @@ type SystemFileIndex interface {
 }
 
 // isSystemFileMode is THE test for "this tree entry under .knomit/ is a file
-// knomit reads": SystemFileAt and the skill loader (skills.go) both use it.
+// knomit reads": SystemFileAt, the skill loader (skills.go), and in
+// triggers.go OntologyAtCommit, privateFileAt (ScriptAt, RecipeAt) and
+// GuidanceAt all use it. The optional files read a symlink as absent; the
+// ontology readers fail on one instead (fact.ErrSymlinkNotFollowed).
 // go-git's IsFile is true for a symlink too, whose blob is just its target's
 // name; a symlink is never followed and never served, so it reads as absent
 // exactly like a directory (user ruling 2026-10-08: "we do NOT want to follow
