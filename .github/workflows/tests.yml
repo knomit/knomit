@@ -108,9 +108,11 @@ name: Tests
 #     again, internal/web is still where to look first — and the fix is
 #     still to make it faster, not to raise the ceiling.
 #
-# WHAT THIS COSTS SOMEONE WAITING ON A PR. JOB durations — what the checks list
-# shows, including checkout and the bootstrap — from the green legs of
-# 2026-09-17:
+# WHAT THIS COSTS. Since the PR/full split (see `full` below) a PR no longer
+# waits on the Windows legs at all — they run on the push to dev and nightly —
+# so the figures below are what the post-merge run costs, and what a PR paid
+# before the split. JOB durations — what the checks list shows, including
+# checkout and the bootstrap — from the green legs of 2026-09-17:
 #   build-test (windows-2025)            9m15s-12m12s  (runs 35250857183,
 #                                                       35253289005)
 #   slow-tests (windows-2025 synthesize) 20-30 minutes — the longest check on
@@ -155,8 +157,29 @@ name: Tests
 # ./internal/repos/ is worth running on this leg at all), and the UNPRIVILEGED
 # branch — the skip path an ordinary Windows user actually takes — is exercised
 # by no CI leg on any platform and remains local-verification-only.
+#
+# TWO SHAPES: `full` (the input below). ci.yml passes full=false on a
+# pull_request and true on everything else; release-stable passes nothing and
+# so gets the default, true. With full=false:
+#   - build-test and slow-tests run their ubuntu leg only, exactly as in the
+#     full matrix (same steps, same packages, same timeouts);
+#   - build-vet runs on windows-2025 and macos-latest instead: compile + vet,
+#     no tests, so a PR still learns in minutes that it builds there;
+#   - desktop (macOS tests) and embed-smoke do not run;
+#   - web-ui and desktop-ui run as always.
+# Nothing is deleted, skipped or -short-ed: every test still runs on every
+# platform on the push to dev that merging the PR causes, and nightly. The
+# per-platform comments below describe the FULL shape.
 on:
   workflow_call:
+    inputs:
+      full:
+        description: >
+          Run the full cross-platform test matrix. false = the fast PR shape
+          (Linux tests, Windows/macOS build + vet only).
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   build-test:
@@ -175,21 +198,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # contract-timeout is the ceiling on the origin-sync cells at the end
+        # The legs, as JSON so the PR shape can select a subset (a YAML
+        # `exclude:` cannot do it — `include:` is applied after `exclude:` and
+        # would re-add an excluded leg). Full: ubuntu-latest 300s, macos-latest
+        # 300s, windows-2025 1200s. PR (full=false): the ubuntu leg alone.
+        #
+        # contract-timeout is the ceiling on the origin-sync cells at the end
           # of this job, and it is per-platform for the same reason slow-tests
           # is: those cells drive clone/sync/push over a git server, which is
           # filesystem cost, and Windows runs that class 5-10x slower here
           # (internal/store 816s against seconds elsewhere). A unix-tuned 300s
           # applied to Windows would be a red build reporting a ceiling, not a
           # fault. unix KEEPS 300s deliberately — it is a hang guard there and
-          # the cells take a fraction of it.
-          - os: ubuntu-latest
-            contract-timeout: 300s
-          - os: macos-latest
-            contract-timeout: 300s
-          - os: windows-2025
-            contract-timeout: 1200s
+        # the cells take a fraction of it.
+        include: >-
+          ${{ fromJSON(inputs.full
+          && '[{"os":"ubuntu-latest","contract-timeout":"300s"},{"os":"macos-latest","contract-timeout":"300s"},{"os":"windows-2025","contract-timeout":"1200s"}]'
+          || '[{"os":"ubuntu-latest","contract-timeout":"300s"}]') }}
     runs-on: ${{ matrix.os }}
     # A wedged runner should not burn the 6-hour default. Same reasoning as the
     # ceiling on slow-tests, at a third of it: every step in this job is
@@ -434,27 +459,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - leg: ubuntu-latest
-            os: ubuntu-latest
-            packages: ./internal/synthesize/ ./internal/store/... ./internal/repos/
-            timeout: 10m
-          - leg: macos-latest
-            os: macos-latest
-            packages: ./internal/synthesize/ ./internal/store/... ./internal/repos/
-            timeout: 10m
-          - leg: windows-2025 synthesize
-            os: windows-2025
-            packages: ./internal/synthesize/
-            timeout: 40m
-          - leg: windows-2025 store
-            os: windows-2025
-            packages: ./internal/store/...
-            timeout: 40m
-          - leg: windows-2025 repos
-            os: windows-2025
-            packages: ./internal/repos/
-            timeout: 40m
+        # JSON for the same reason as build-test. Full: ubuntu-latest and
+        # macos-latest run all three packages at 10m; windows-2025 runs one
+        # package per leg (synthesize, store, repos) at 40m. PR (full=false):
+        # the ubuntu leg alone.
+        include: >-
+          ${{ fromJSON(inputs.full
+          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/ ./internal/store/... ./internal/repos/","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/synthesize/ ./internal/store/... ./internal/repos/","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/synthesize/","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/store/...","timeout":"40m"},{"leg":"windows-2025 repos","os":"windows-2025","packages":"./internal/repos/","timeout":"40m"}]'
+          || '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/ ./internal/store/... ./internal/repos/","timeout":"10m"}]') }}
     runs-on: ${{ matrix.os }}
     # Deliberately looser than the -timeout below, for the reason race.yml
     # spells out: the go test timeout prints a goroutine dump naming the stuck
@@ -490,7 +502,10 @@ jobs:
   # (system frameworks), so it is the cheapest runner to prove the desktop path
   # still compiles and its tagged tests (app/boot/native) pass — without this
   # job the Wails code and its tests rot silently against the alpha Wails API.
+  #
+  # Full shape only; on a PR, build-vet's macOS leg compiles it instead.
   desktop:
+    if: inputs.full
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -510,6 +525,42 @@ jobs:
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
           CGO_ENABLED=1 go test -tags desktop ./tools/desktop/...
+
+  # The PR shape's stand-in for the Windows and macOS legs above: compile and
+  # vet, no tests. It answers "does this PR still build there" in minutes, where
+  # the test legs take 15-30 (Windows) or queue for a macOS runner. The tests
+  # themselves run on the push to dev the merge causes, and nightly.
+  #
+  # Same build line as build-test (test-only packages excluded), then `go vet
+  # ./...`, which type-checks test files too, so a test that no longer compiles
+  # on the platform is still caught here. The desktop app is built with its
+  # tag on both: on macOS it replaces the `desktop` job's compile, on Windows
+  # it is the only compile of the `desktop && windows` files (see build-test).
+  build-vet:
+    if: ${{ !inputs.full }}
+    name: build-vet (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: ./.github/actions/native-toolchain
+      - name: Build (CGo)
+        run: CGO_ENABLED=1 go build $(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./...)
+      - name: Vet
+        run: CGO_ENABLED=1 go vet ./...
+      - name: Build + vet desktop app (-tags desktop)
+        run: |
+          CGO_ENABLED=1 go build -tags desktop -o "$RUNNER_TEMP/knomit-desktop-build" ./tools/desktop
+          CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
 
   # Build + test the desktop-only UI bundle (the Settings dialog), which lives
   # in tools/desktop/ui as its own npm project.
@@ -592,8 +643,13 @@ jobs:
   # still skips on pull_request and still runs on a dev/master push — and a
   # release tag is a push, so a release is gated on real inference too. That is
   # the right call for the one build users install without re-reading it.
+  #
+  # Gated on `full` rather than on the event name since the PR/full split: full
+  # is true exactly on the events that should pay for the download — pushes
+  # (dev, master, release tags via release-stable) plus the nightly and
+  # workflow_dispatch — and false on pull_request, so PRs still skip it.
   embed-smoke:
-    if: github.event_name == 'push'
+    if: inputs.full
     strategy:
       fail-fast: false
       matrix:
