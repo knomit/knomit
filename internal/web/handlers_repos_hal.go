@@ -63,23 +63,36 @@ type repoSummary struct {
 	// cancelled", or the index job's error. Absent otherwise.
 	IndexReason string `json:"index_reason,omitempty"`
 
+	// OntologyError says why an ACTIVE repo has no usable ontology — none,
+	// empty, or unparseable — so it is readable but refuses every write.
+	// Absent when it has one, before Identify has run (a repo being created),
+	// and on an unavailable row. A symlinked ontology never appears here: it
+	// refuses the repo, which is then listed "unopenable" with the message
+	// as its detail.
+	OntologyError string `json:"ontology_error,omitempty"`
+
 	Links hal.LinkMap `json:"_links"`
 }
 
 // summaryFor is an ACTIVE repo's row, read from its machine's status.
 func summaryFor(b hal.URLBuilder, name string, ri *repos.RepoInstance) repoSummary {
 	st := ri.Status()
+	ontErr := ""
+	if err := ri.IdentifiedOntologyError(); err != nil {
+		ontErr = err.Error()
+	}
 	return repoSummary{
-		Name:        name,
-		UID:         ri.UID(),
-		ID:          ri.ShortID(),
-		State:       repoStateActive,
-		Stage:       st.Stage,
-		IndexState:  st.Index.State,
-		IndexDone:   st.Index.Done,
-		IndexTotal:  st.Index.Total,
-		IndexReason: st.Index.Reason,
-		Links:       hal.LinkMap{"self": {Href: b.Repo(name)}},
+		Name:          name,
+		UID:           ri.UID(),
+		ID:            ri.ShortID(),
+		State:         repoStateActive,
+		Stage:         st.Stage,
+		IndexState:    st.Index.State,
+		IndexDone:     st.Index.Done,
+		IndexTotal:    st.Index.Total,
+		IndexReason:   st.Index.Reason,
+		OntologyError: ontErr,
+		Links:         hal.LinkMap{"self": {Href: b.Repo(name)}},
 	}
 }
 
@@ -200,6 +213,11 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 	}
 	if ri.Subscribed() {
 		body["mode"] = "subscribe"
+	}
+	// ontology_error: the same value as the list row's, omitted when the repo
+	// has an ontology — an empty string would read as an error with no words.
+	if err := ri.IdentifiedOntologyError(); err != nil {
+		body["ontology_error"] = err.Error()
 	}
 	// description is the verbatim README.md root manifest read at the repo's
 	// READ branch tip — the agent branch, or the followed upstream for a

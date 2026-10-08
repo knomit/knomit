@@ -305,6 +305,15 @@ func (identifyStage) Enter(ctx context.Context, _ *Life, r *RepoInstance) error 
 	defer release()
 	r.ensureBranch(ctx, svc)
 	ont, ontErr := r.loadOntology(ctx, svc)
+	// A symlinked ontology REFUSES the repo (user ruling 2026-10-08): the walk
+	// fails here, the machine is Unavailable, and the boot path lists the repo
+	// as "unopenable" with this error as its detail — the way an identity
+	// conflict does. A missing, empty or unparseable ontology is not refused:
+	// that repo mounts readable but unwritable, with the reason in
+	// OntologyError.
+	if errors.Is(ontErr, fact.ErrSymlinkNotFollowed) {
+		return ontErr
+	}
 	r.ident.Store(&identity{ontology: ont, ontologyErr: ontErr})
 	r.seedWatermarks(ctx, svc)
 
@@ -416,7 +425,8 @@ func (r *RepoInstance) recordAgentBranchOwner(ctx context.Context, svc *store.Se
 // IT NEVER SUBSTITUTES. A repository is a knomit knowledge base if and only if
 // it has an ontology, fixed at create time; when it cannot be established the
 // error is returned instead and the repo opens readable but unwritable
-// (RepoInstance.WritableBranch).
+// (RepoInstance.WritableBranch) — except a symlinked ontology, whose error
+// (fact.ErrSymlinkNotFollowed) makes Identify refuse the repo outright.
 //
 // A preset-derived ontology that is a strict subset of its embedded preset is
 // refreshed in place (refreshDivergence); a diverged one is left alone with a
@@ -425,12 +435,12 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 	read := r.ReadBranch()
 	paths := fact.OntologyPathsNewestFirst()
 	// The first rung PRESENT is the ontology. A symlink there is never
-	// followed nor read as "no ontology": the repo fails with an error naming
-	// the path (user ruling 2026-10-08), and opens readable but unwritable.
+	// followed nor read as "no ontology": the error names the path (user
+	// ruling 2026-10-08), and Identify refuses the repo on it.
 	srcPath, data, rerr := svc.OntologyFileAt(ctx, read)
 	if errors.Is(rerr, fact.ErrSymlinkNotFollowed) {
 		log.Error().Err(rerr).Str("repo", r.Name()).Str("branch", read).
-			Msg("ontology is a symlink: this repository will not accept writes until the ontology is a file")
+			Msg("ontology is a symlink: this repository is refused until the ontology is a file")
 		return nil, fmt.Errorf("ontology on %s: %w", read, rerr)
 	}
 	content := ""

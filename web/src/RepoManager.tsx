@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import { api, repoAvailable, brokenLensMember, isTerminalCreateState, RepoIndexingError, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef, type RepoCreateStatus } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
+import { RepoOntologyChip } from './RepoOntologyChip';
 import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, refreshRepoCreates, pendingCreates, createFlag, activeCreateByRepo, createRepoIsRegistered } from './useRepoCreates';
 import { CreateRepoWizard } from './CreateRepoWizard';
@@ -536,6 +537,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                   : !repoAvailable(r)
                     ? <RepoStateChip repo={r} />
                     : <>
+                        <RepoOntologyChip repo={r} compact />
                         <RepoIndexChip repo={r} compact />
                         {r.name === currentRepo && (
                           <span
@@ -795,10 +797,16 @@ function RepoUnavailable({ repo }: { repo: RepoInfo }) {
     missing:
       'Its database file is not where the registry says it is. Put the file back — from a backup, or wherever it '
       + 'was moved to — and restart knomit; the registration is intact and will pick it up.',
+    // A symlinked ontology lands here too (the detail names the file): knomit
+    // refuses such a repo rather than open it without its taxonomy. The
+    // advice must not promise a sync will fix it — a refused repo is not
+    // opened, so it does not sync.
     unopenable:
-      'The file is there but could not be opened — a corrupt database, or one written by a newer build. '
-      + 'The server log for this startup carries the underlying error. Repairing or replacing the file and '
-      + 'restarting knomit is what clears this.',
+      'The file is there but could not be opened — a corrupt database, one written by a newer build, or an '
+      + 'ontology that is a symlink, which knomit refuses rather than follow. The detail above names the cause, '
+      + 'and the server log for this startup carries it in full. Repairing or replacing the file and restarting '
+      + 'knomit is what clears this; a refused repository does not sync, so a fix pushed to its remote does not '
+      + 'reach this copy on its own.',
     conflict:
       'Another registered repository already holds this knowledge base. Two local copies would both write the same '
       + 'agent branch and overwrite each other on push, so this one is left closed. Archiving the OTHER copy — the '
@@ -894,6 +902,9 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
   // read-only and has no agent branch of its own. null until this repo's
   // details answer — NOT '', which would claim "ordinary" before we know.
   const [repoMode, setRepoMode] = useState<'subscribe' | '' | null>(null);
+  // Why this repo has no usable ontology ('' when it has one): from the
+  // single GET, so the page states it even when the list row is stale.
+  const [ontologyError, setOntologyError] = useState('');
   const [description, setDescription] = useState('');
   // Owned here, not in DescriptionBody: the controls that set it live in the
   // block heading and the editor they open lives in the block body.
@@ -962,9 +973,11 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
     setLicenseOversize(false);
     setRenameTo(''); setRenameConfirm('');
     setRepoMode(null);
+    setOntologyError('');
     api.getRepo(name).then(r => {
       if (cancelled) return;
       setRepoMode(r.mode ?? '');
+      setOntologyError(r.ontology_error ?? '');
       setDescription(r.description ?? '');
       setLicense(r.license ?? '');
       setLicenseOversize(!!r.license_oversize);
@@ -1196,6 +1209,19 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
             ? <span data-testid="repo-readonly-badge" style={{ color: '#c9a', fontSize: 12 }}>read-only</span>
             : <span style={{ color: '#777', fontSize: 12 }}>— server-authoritative</span>}
         </div>
+        {/* A repo with no usable ontology mounts and reads normally, so this
+            is the one place that says why every write to it is refused. The
+            server's message is quoted: it names the file and the fault. */}
+        {ontologyError && (
+          <div data-testid="repo-ontology-error" style={{ marginTop: 10, fontSize: 12.5, color: '#e2c07a', lineHeight: 1.6 }}>
+            Read-only: this repository has no usable ontology, so every write to it is refused until one is
+            committed on this branch.
+            <div style={{
+              marginTop: 6, fontSize: 12, color: '#c9c9c9', fontFamily: 'var(--k-font-mono)',
+              background: '#131313', border: '1px solid #262626', borderRadius: 5, padding: '7px 10px',
+            }}>{ontologyError}</div>
+          </div>
+        )}
       </div>
     ),
   });

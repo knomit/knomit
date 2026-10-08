@@ -507,6 +507,19 @@ func (ri *RepoInstance) OntologyError() error {
 	return id.ontologyErr
 }
 
+// IdentifiedOntologyError is OntologyError for display: the reason an
+// IDENTIFIED repo has no usable ontology (missing, empty, unparseable), or
+// nil when it has one or when Identify has not run yet. The not-identified
+// placeholder is a moment in the walk — a repo being created sits there — not
+// something wrong with the repository, so GET /repos never reports it.
+func (ri *RepoInstance) IdentifiedOntologyError() error {
+	err := ri.OntologyError()
+	if errors.Is(err, errNotIdentified) {
+		return nil
+	}
+	return err
+}
+
 // Embedder returns the batch embedder for this repo, or nil if unavailable.
 func (ri *RepoInstance) Embedder() store.BatchEmbedder { return ri.embedder }
 

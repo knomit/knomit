@@ -98,6 +98,14 @@ export interface RepoInfo {
    */
   index_reason?: string;
   /**
+   * Why an ACTIVE repo has no usable ontology — none, an empty file, or one
+   * that does not parse. The repo is readable but refuses every write. Absent
+   * when it has one, while it is being created, and on a row with no live
+   * store. A symlinked ontology is never reported here: it refuses the repo,
+   * whose row is then 'unopenable' with the message as `detail`.
+   */
+  ontology_error?: string;
+  /**
    * Where the repo's lifecycle has got to: populate | open | identify | index
    * | serve | sync | ready. Informational; gate on `state` and `index_state`.
    */
@@ -174,6 +182,10 @@ export interface RepoDetails {
   description?: string;
   license?: string;
   license_oversize?: boolean;
+  // Why the repo has no usable ontology (none, empty, does not parse): it is
+  // readable but refuses every write. Absent when it has one. Same value as
+  // RepoInfo.ontology_error.
+  ontology_error?: string;
   // branch is the READ branch's root, from _embedded.branch. Present only
   // when the server embedded it: an older server, or a repo whose store is
   // still opening, omits it and the caller falls back to a branch fetch.

@@ -343,6 +343,27 @@ describe('RepoManager', () => {
       expect(api.getOrigin).not.toHaveBeenCalledWith('ghost');
     });
 
+    // A symlinked ontology refuses the repo: the server lists it 'unopenable'
+    // with the named message as its detail. The rail chips it, and its page
+    // quotes the message and does not promise a sync will fix it.
+    it('shows a repo refused for a symlinked ontology, quoting the server', async () => {
+      const msg = 'ontology on agent/test: .knomit/ontology.yaml is a symlink, and knomit does not follow symlinks: commit the file itself in its place';
+      const repos = [
+        { name: 'core', uid: 'uid-core' },
+        { name: 'linked', uid: 'uid-linked', state: 'unopenable', detail: msg },
+      ];
+      render(<RepoManager {...baseProps} repos={repos} />);
+      const row = await screen.findByTestId('repomgr-item-linked');
+      const chip = within(row).getByTestId('repo-state-unopenable');
+      expect(chip).toHaveAttribute('title', msg);
+      fireEvent.click(row);
+      const pane = await screen.findByTestId('repo-unavailable-linked');
+      expect(within(pane).getByTestId('repo-unavailable-detail')).toHaveTextContent(msg);
+      expect(pane.textContent).toContain('an ontology that is a symlink');
+      expect(pane.textContent).toContain('does not sync');
+      expect(api.getRepo).not.toHaveBeenCalledWith('linked');
+    });
+
     it('reports its state in the Overview table without fetching it', async () => {
       render(<RepoManager {...baseProps} repos={withBroken} />);
       const row = await screen.findByTestId('fleet-row-ghost');
@@ -353,6 +374,62 @@ describe('RepoManager', () => {
       expect(screen.queryByTestId('attention-ghost')).not.toBeInTheDocument();
       await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
       expect(api.getRepo).not.toHaveBeenCalledWith('ghost');
+    });
+  });
+
+  // A repo with no usable ontology (missing, empty, does not parse) is OPEN and
+  // readable, but refuses every write. The rail row and the repo page both say
+  // so, quoting the server; a repo with an ontology says nothing.
+  describe('a repo with no usable ontology', () => {
+    const msgs: Record<string, string> = {
+      missing: 'no ontology at .knomit/ontology.yaml, .domains/ontology.yaml, domains/ontology.yaml on agent/test',
+      empty: 'ontology at .knomit/ontology.yaml on agent/test is empty',
+      garbled: 'ontology at .knomit/ontology.yaml does not parse: ontology id is required',
+    };
+    const repos = [
+      { name: 'core', uid: 'uid-core' },
+      ...Object.entries(msgs).map(([name, ontology_error]) => ({ name, uid: `uid-${name}`, state: 'active', ontology_error })),
+    ];
+
+    it('chips its rail row with the server message, and leaves a healthy row bare', async () => {
+      render(<RepoManager {...baseProps} repos={repos} />);
+      for (const [name, msg] of Object.entries(msgs)) {
+        const row = await screen.findByTestId(`repomgr-item-${name}`);
+        // The rail is compact (#443): a lock, with "read-only" and the server's
+        // message in the tooltip, so the chip adds no words beside the name.
+        const chip = within(row).getByTestId(`repo-ontology-error-${name}`);
+        expect(chip).toHaveAttribute('aria-label', 'read-only');
+        expect(chip).toHaveTextContent('');
+        expect(chip.getAttribute('title')).toContain('Read-only');
+        expect(chip.getAttribute('title')).toContain(msg);
+        // The Overview table is the other list of repos on this screen.
+        const fleet = await screen.findByTestId(`fleet-row-${name}`);
+        expect(within(fleet).getByTestId(`repo-ontology-error-${name}`).getAttribute('title')).toContain(msg);
+      }
+      expect(within(screen.getByTestId('repomgr-item-core')).queryByTestId('repo-ontology-error-core')).toBeNull();
+      expect(within(await screen.findByTestId('fleet-row-core')).queryByTestId('repo-ontology-error-core')).toBeNull();
+    });
+
+    it('states it on the repo page from the single GET', async () => {
+      vi.mocked(api.getRepo).mockImplementation(async (name: string) =>
+        (name in msgs ? { name, ontology_error: msgs[name] } : { name }));
+      try {
+        render(<RepoManager {...baseProps} repos={repos} />);
+        fireEvent.click(await screen.findByTestId('repomgr-item-garbled'));
+        const banner = await screen.findByTestId('repo-ontology-error');
+        expect(banner).toHaveTextContent('every write to it is refused');
+        expect(banner).toHaveTextContent(msgs.garbled);
+      } finally {
+        vi.mocked(api.getRepo).mockResolvedValue({ name: 'core' });
+      }
+    });
+
+    it('says nothing on the page of a repo that has an ontology', async () => {
+      render(<RepoManager {...baseProps} />);
+      await selectRepo('core');
+      await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
+      await screen.findByTestId('repo-detail-branch');
+      expect(screen.queryByTestId('repo-ontology-error')).toBeNull();
     });
   });
 

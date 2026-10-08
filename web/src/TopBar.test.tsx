@@ -173,6 +173,24 @@ describe('TopBar repo selector', () => {
   // A registered repo whose store failed to open stays in the switcher — it
   // used to vanish from the API entirely, which is the failure this whole
   // surface exists to end — but it is not somewhere you can go.
+  // A repo with no usable ontology is open and readable — it stays a normal,
+  // selectable option — but its row says it is read-only, with the server's
+  // reason on hover.
+  it('chips a repo with no usable ontology read-only, and leaves it selectable', () => {
+    const msg = 'ontology at .knomit/ontology.yaml does not parse: ontology id is required';
+    const dispatch = vi.fn();
+    render(<TopBar state={baseState} repos={[...repos, { name: 'garbled', uid: 'uid-garbled', state: 'active', ontology_error: msg }]}
+      dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
+    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+    const option = screen.getByTestId('toknomitr-repo-option-garbled');
+    const chip = within(option).getByTestId('repo-ontology-error-garbled');
+    expect(chip).toHaveTextContent('read-only');
+    expect(chip.getAttribute('title')).toContain(msg);
+    expect(within(screen.getByTestId('toknomitr-repo-option-beta')).queryByTestId('repo-ontology-error-beta')).toBeNull();
+    fireEvent.click(option);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_REPO', repo: 'garbled' });
+  });
+
   describe('a repo with no live store', () => {
     const withBroken: RepoInfo[] = [
       ...repos,
