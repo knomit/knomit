@@ -40,8 +40,14 @@ const (
 )
 
 // walkHistory visits every commit reachable from start and not from stop,
-// parents before children (a depth-first post-order), once each.
+// parents before children (a depth-first post-order), once each. A start in
+// stop is reachable from stop, so nothing is visited: E4 must not judge an
+// agent tip that is already on origin's main (a forge merge it fast-forwarded
+// onto).
 func walkHistory(st storer.EncodedObjectStorer, start plumbing.Hash, stop map[plumbing.Hash]bool, visit func(*object.Commit)) error {
+	if stop[start] {
+		return nil
+	}
 	seen := map[plumbing.Hash]bool{}
 	type frame struct {
 		c    *object.Commit
