@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
 import { api } from './api';
-import { __resetRepoCreatesForTest } from './useRepoCreates';
+import { __resetRepoCreatesForTest, refreshRepoCreates } from './useRepoCreates';
 import type { RepoCreateStatus } from './api';
 
 // A create in flight produces NOTHING to list until it finishes, so every
@@ -320,5 +320,102 @@ describe('creates in the repo manager', () => {
     await screen.findByTestId('manage-overview');
     await waitFor(() => expect(api.listRepoCreates).toHaveBeenCalled());
     expect(screen.queryByTestId('pending-creates')).not.toBeInTheDocument();
+  });
+});
+
+// THE NAME IS THE LAST THING ON A RAIL ROW TO GIVE WAY. The rail is a fixed
+// 236px column; "indexing 1259/1259" plus "viewing" took all of it and left
+// the repository's name as "k…" (user screenshot, 2026-10-08). jsdom has no
+// layout, so this pins the two things that decide the outcome in a browser:
+// the badges' own width budget (a few characters, the full wording in the
+// tooltip) and that the name, not the badges, is the element that shrinks.
+describe('a rail row with badges', () => {
+  const long = 'agentic-engineering-knowledge';
+  const indexing = { name: long, uid: 'uid-long', index_state: 'indexing', index_done: 1259, index_total: 1259 };
+
+  it('keeps the badges compact and the full wording in the tooltip', async () => {
+    render(<RepoManager {...baseProps} repos={[indexing]} currentRepo={long} />);
+    const row = await screen.findByTestId(`repomgr-item-${long}`);
+
+    const chip = within(row).getByTestId('repo-index-indexing');
+    expect(chip).toHaveTextContent(/^100%$/);
+    expect(chip.getAttribute('title')).toContain('indexing 1259/1259');
+
+    // "viewing" is an icon with its word in the tooltip and accessible name.
+    const viewing = screen.getByTestId(`repomgr-viewing-${long}`);
+    expect(viewing).toHaveAttribute('aria-label', 'viewing');
+    expect(viewing.textContent).toBe('');
+
+    // Every badge together is at most a handful of characters — the budget
+    // that leaves the name most of a 236px row.
+    const badges = screen.getByTestId(`repomgr-badges-${long}`);
+    expect((badges.textContent ?? '').length).toBeLessThanOrEqual(4);
+
+    // The name is its own element, the one that yields (min-width 0 + ellipsis
+    // + grow), and the badges are the ones that never shrink.
+    const name = screen.getByTestId(`repomgr-item-name-${long}`);
+    expect(name).toHaveTextContent(long);
+    expect(name.style.minWidth).toBe('0px');
+    expect(name.style.textOverflow).toBe('ellipsis');
+    expect(name.style.flexGrow).toBe('1');
+    expect(badges.style.flexShrink).toBe('0');
+    expect(row).toContainElement(name);
+  });
+
+  it('renders an index error as a one-word chip', async () => {
+    render(<RepoManager {...baseProps} repos={[{ ...indexing, index_state: 'error', index_reason: 'indexing cancelled' }]} currentRepo="core" />);
+    const row = await screen.findByTestId(`repomgr-item-${long}`);
+    const chip = within(row).getByTestId('repo-index-error');
+    expect(chip).toHaveTextContent(/^error$/);
+    expect(chip.getAttribute('title')).toContain('indexing cancelled');
+  });
+});
+
+// THE USER'S REPORT: create "agentic-engineering-kb", rename it to
+// "agentic-engineering", and the rail showed BOTH — the real repo, and a
+// "created" row under the old name that never went away, reload included. The
+// finished job still named the repo by the name it was created under, and the
+// rail matched finished creates to repos by name alone.
+describe('a finished create in the rail', () => {
+  it('leaves the rail once the create completes and its repo is listed', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([job({ name: 'newkb', state: 'running', step: 'index', phase: 'index' })]);
+    const { rerender } = render(<RepoManager {...baseProps} />);
+    expect(await screen.findByTestId('pending-create-rail-newkb')).toHaveAttribute('data-create-state', 'creating');
+
+    // The create finishes and the app's repo list now carries the repo.
+    vi.mocked(api.listRepoCreates).mockResolvedValue([
+      job({ name: 'newkb', state: 'done', repo: { name: 'newkb', uid: 'uid-new' } }),
+    ]);
+    rerender(<RepoManager {...baseProps} repos={[...baseProps.repos, { name: 'newkb', uid: 'uid-new' }]} />);
+    await act(async () => { await refreshRepoCreates(); });
+
+    expect(screen.queryByTestId('pending-create-rail-newkb')).not.toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-item-newkb')).toBeInTheDocument();
+    expect(screen.queryByTestId('repomgr-create-chip-newkb')).not.toBeInTheDocument();
+  });
+
+  it('follows the repo through a rename: one row, under the new name', async () => {
+    const created = job({
+      name: 'agentic-engineering-kb', state: 'done',
+      repo: { name: 'agentic-engineering-kb', uid: 'uid-ae' },
+    });
+    vi.mocked(api.listRepoCreates).mockResolvedValue([created]);
+    const before = [...baseProps.repos, { name: 'agentic-engineering-kb', uid: 'uid-ae' }];
+    const { rerender } = render(<RepoManager {...baseProps} repos={before} />);
+    await screen.findByTestId('repomgr-item-agentic-engineering-kb');
+    await waitFor(() => expect(api.listRepoCreates).toHaveBeenCalled());
+
+    // Renamed. The job record is the one the server held before the rename
+    // (the worst case: a server that still reports the old name). The repo's
+    // uid is unchanged, and that is what the rail must match on.
+    const after = [...baseProps.repos, { name: 'agentic-engineering', uid: 'uid-ae' }];
+    rerender(<RepoManager {...baseProps} repos={after} />);
+    await act(async () => { await refreshRepoCreates(); });
+
+    expect(screen.getByTestId('repomgr-item-agentic-engineering')).toBeInTheDocument();
+    expect(screen.queryByTestId('repomgr-item-agentic-engineering-kb')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-create-rail-agentic-engineering-kb')).not.toBeInTheDocument();
+    // Nothing anywhere in the rail says "created".
+    expect(document.querySelectorAll('[data-create-state]')).toHaveLength(0);
   });
 });

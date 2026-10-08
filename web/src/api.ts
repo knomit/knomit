@@ -1125,8 +1125,13 @@ export interface RepoCreateStatus {
   step?: string;
   message?: string;
   pct?: number;
-  /** Present only when state is 'done'. */
-  repo?: { name: string };
+  /**
+   * Present only when state is 'done'. `name` is the repo's CURRENT name (a
+   * rename after the create finished is followed); `uid` is its registry
+   * identity, which no rename changes — match a finished create to its repo
+   * by that. Absent from servers that predate it.
+   */
+  repo?: { name: string; uid?: string };
   /** Present only when state is 'failed'. */
   error?: string;
   /** Present only when state is 'failed': the create's own deadline expired. */

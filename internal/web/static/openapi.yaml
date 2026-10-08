@@ -4471,7 +4471,10 @@ components:
           description: Job identity. Stable for the job's whole life.
         name:
           type: string
-          description: Requested repo name.
+          description: |
+            The repo this create is for: the requested name while it runs, and
+            the repo's CURRENT name once it is `done` — a rename after the
+            create finished is followed, not left behind.
         mode:
           type: string
           description: Requested create mode.
@@ -4514,6 +4517,15 @@ components:
             Present only when state is `done`. Absent while running (the repo
             does not exist yet) and after a failure (it was rolled back), so
             the link is never offered pointing at nothing.
+          properties:
+            name:
+              type: string
+              description: The repo's current name.
+            uid:
+              type: string
+              description: |
+                The repo's registry identity. Stable across renames, so it is
+                what a client matches a finished create against its repo list by.
         error:
           type: string
           description: Failure description. Present only when state is `failed`.

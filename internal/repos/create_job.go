@@ -153,10 +153,21 @@ var ErrCreateFinished = errors.New("create already finished")
 // goroutine at any time, running or finished. It is what a polling client
 // sees.
 type CreateStatus struct {
-	ID    string
+	ID string
+	// Name is the repository this create is for. For a DONE job it is the
+	// repo's CURRENT name, read off the instance the create produced, not the
+	// name the create was asked for: a repo renamed after its create finished
+	// is the same repository, and a job that went on naming it by its old name
+	// was drawn by every client as a second, phantom "created" row — one no
+	// list could ever match, for the rest of CreateJobTTL.
 	Name  string
 	Mode  string
 	State CreateState
+
+	// RepoUID is the registry identity of the repo a DONE job produced, empty
+	// otherwise. It is the key a client matches a finished create against its
+	// repo list by: unlike Name, a rename cannot change it.
+	RepoUID string
 
 	// Step/Message/Pct are the most recent progress report. They are a
 	// LATEST-VALUE snapshot, not a stream: a poll arriving between two steps
@@ -269,9 +280,20 @@ func (j *CreateJob) Status() CreateStatus {
 
 // statusLocked is Status's body for callers that already hold j.mu.
 func (j *CreateJob) statusLocked() CreateStatus {
+	name, repoUID := j.name, ""
+	// Only a DONE job's instance is the repo: a failed job may also hold one
+	// (a cancel that could not delete what it made), and that is reported by
+	// its error, not as a repo the create produced.
+	if j.state == CreateDone && j.ri != nil {
+		if n := j.ri.Name(); n != "" {
+			name = n
+		}
+		repoUID = j.ri.UID()
+	}
 	return CreateStatus{
 		ID:            j.id,
-		Name:          j.name,
+		Name:          name,
+		RepoUID:       repoUID,
 		Mode:          j.mode,
 		State:         j.state,
 		Step:          j.step,
@@ -492,6 +514,20 @@ func (m *Manager) CreateJobs() []CreateStatus {
 		out = append(out, st)
 	}
 	m.createJobsMu.Unlock()
+	// A DONE job whose repo is no longer registered is not listed either, for
+	// the cancelled job's reason: the repo was archived or deleted after the
+	// create finished, so the row would read "created" for a repository that
+	// is not there and open onto nothing. Checked AFTER createJobsMu is
+	// released — GetByUID takes m.mu, and this lock must never be held across
+	// it. Like the cancelled omission, the job stays readable by id.
+	kept := out[:0]
+	for _, st := range out {
+		if st.State == CreateDone && st.RepoUID != "" && m.GetByUID(st.RepoUID) == nil {
+			continue
+		}
+		kept = append(kept, st)
+	}
+	out = kept
 	// Newest first, then id ascending — a TOTAL order, not merely a primary
 	// key, for the same reason ListArchived sorts the way it does (see
 	// lifecycle.go): with sort.Slice, which is NOT stable, two jobs whose

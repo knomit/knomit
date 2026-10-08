@@ -67,7 +67,8 @@ describe('Manage Overview', () => {
     expect(await screen.findByTestId('manage-overview')).toBeInTheDocument();
     expect(screen.queryByTestId('repo-detail-branch')).not.toBeInTheDocument();
     // …and the rail still marks it, so getting there is one click.
-    expect(screen.getByTestId('repomgr-item-core').textContent).toContain('viewing');
+    // (An icon, named "viewing", so the repo's name keeps the row's width.)
+    expect(within(screen.getByTestId('repomgr-item-core')).getByRole('img', { name: 'viewing' })).toBeInTheDocument();
   });
 
   it('carries no statistics — those belong to the browse summary', async () => {

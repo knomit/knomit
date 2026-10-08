@@ -302,10 +302,17 @@ func createStatusBody(b hal.URLBuilder, st repos.CreateStatus) map[string]any {
 		// The repo link appears only once the repo actually exists — a link
 		// offered while the create is still running would 404, and one offered
 		// after a failure would point at something that was rolled back.
-		body["repo"] = map[string]any{
+		repo := map[string]any{
 			"name":   st.Name,
 			"_links": hal.LinkMap{"self": {Href: b.Repo(st.Name)}},
 		}
+		// uid is what a client matches this create against its repo list by.
+		// The name follows a rename too (see CreateStatus.Name), but the uid is
+		// the identity a rename cannot touch.
+		if st.RepoUID != "" {
+			repo["uid"] = st.RepoUID
+		}
+		body["repo"] = repo
 	case repos.CreateFailed:
 		body["error"] = st.Err.Error()
 		// Named separately from the message because a deadline and a genuine

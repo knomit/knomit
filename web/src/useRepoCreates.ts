@@ -124,13 +124,26 @@ export function useRepoCreates(): RepoCreateStatus[] {
 //
 // A finished job outlives its create by design — a client that lost the id
 // from the 202 must still be able to find the outcome — so a repo list cannot
-// wait for the server to forget one. Two rows for the same name would read as
+// wait for the server to forget one. Two rows for the same repo would read as
 // two repositories, and the row that is a real repo is strictly the better of
 // the two: it can be opened.
 //
+// MATCHED BY UID AS WELL AS NAME. Matching by name alone is how a renamed repo
+// grew a phantom: create "x-kb", rename it to "x", and the finished job still
+// said "x-kb" — a name no listed repo had — so its "created" row stayed beside
+// the real one until the server forgot the job an hour later, surviving every
+// reload. The uid is the repo's identity and no rename touches it. The name
+// match stays for a running job (no repo yet, so no uid) and for a server that
+// predates the uid.
+//
 // Applied by every repo-list surface, from here rather than per surface, so
 // the rail and the overview cannot disagree about which rows exist.
-export function pendingCreates(list: RepoCreateStatus[], repoNames: readonly string[]): RepoCreateStatus[] {
+export function pendingCreates(
+  list: RepoCreateStatus[],
+  repos: readonly { name: string; uid?: string }[],
+): RepoCreateStatus[] {
+  const names = new Set(repos.map(r => r.name));
+  const uids = new Set(repos.map(r => r.uid).filter((u): u is string => !!u));
   // CANCELLED JOBS ARE DROPPED HERE TOO, not only by the server.
   //
   // The server omits them from the collection, so this is belt and braces —
@@ -139,7 +152,10 @@ export function pendingCreates(list: RepoCreateStatus[], repoNames: readonly str
   // would draw showed an empty "Being created" block with a heading and
   // nothing under it. Filtering where both surfaces already filter keeps the
   // count and the rows the same fact.
-  return list.filter(c => c.state !== 'cancelled' && !repoNames.includes(c.name));
+  return list.filter(c =>
+    c.state !== 'cancelled'
+    && !names.has(c.name)
+    && !(c.repo?.uid && uids.has(c.repo.uid)));
 }
 
 // runningCreates is the count the top-bar indicator shows — every create with
