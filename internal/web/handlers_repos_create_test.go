@@ -96,8 +96,14 @@ func TestPostRepos_AcceptsAndCreates(t *testing.T) {
 	if repo == nil || repo["name"] != "work" {
 		t.Fatalf("terminal poll carries no repo: %v", final)
 	}
-	if s.Manager.Get("work") == nil {
+	ri := s.Manager.Get("work")
+	if ri == nil {
 		t.Fatal("repo not registered")
+	}
+	// The repo's uid rides on the terminal status: it is what a client matches
+	// a finished create against its repo list by, and a rename cannot change it.
+	if repo["uid"] != ri.UID() {
+		t.Fatalf("repo.uid = %v, want %q", repo["uid"], ri.UID())
 	}
 }
 

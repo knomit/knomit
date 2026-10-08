@@ -59,7 +59,7 @@ function PendingCreates({ repos, onOpenCreate, surface }: {
   onOpenCreate?: (createId: string) => void;
   surface?: string;
 }) {
-  const creates = pendingCreates(useRepoCreates(), repos.map(r => r.name));
+  const creates = pendingCreates(useRepoCreates(), repos);
   if (creates.length === 0) return null;
   return (
     <div data-testid="pending-creates" style={{ marginTop: 18 }}>

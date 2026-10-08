@@ -135,7 +135,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
   // still be able to find the outcome), so this list has to end each entry's
   // rail life itself rather than wait for the server to forget it.
   const creates = useRepoCreates();
-  const railCreates = pendingCreates(creates, repos.map(r => r.name));
+  const railCreates = pendingCreates(creates, repos);
   // The jobs whose repo ALREADY EXISTS and is still being worked on. These are
   // exactly the ones pendingCreates drops, and dropping them was right for the
   // row (two rows for one name read as two repositories) but wrong for the

@@ -126,3 +126,51 @@ func TestDismissCreateJob(t *testing.T) {
 	// the id as unknown, which is what a client racing itself should see.
 	require.ErrorIs(t, m.DismissCreateJob("finished"), ErrCreateUnknown)
 }
+
+// seedDoneJobFor installs a FINISHED job whose outcome is ri, as a real create
+// leaves it: state done, the instance recorded, the job's own name the one the
+// create was asked for.
+func seedDoneJobFor(m *Manager, id, askedName string, ri *RepoInstance) {
+	j := seedJob(m, id, askedName, time.Now().UTC().Add(-time.Minute), time.Now().UTC())
+	j.mu.Lock()
+	j.ri = ri
+	j.mu.Unlock()
+}
+
+// A finished create FOLLOWS ITS REPO through a rename. The job used to report
+// the name the create was asked for, forever: rename the repo and the listing
+// went on naming a repository that no longer existed under that name, so every
+// client that hid a finished create once "its" repo was listed drew it as a
+// second, phantom "created" row for the rest of CreateJobTTL — reload included.
+func TestCreateJobs_DoneJobFollowsRename(t *testing.T) {
+	m := newTestManager(t)
+	ri := bootNamedRepo(t, m, "alpha-kb")
+	seedDoneJobFor(m, "made-alpha", "alpha-kb", ri)
+
+	require.NoError(t, m.RenameRepo("alpha-kb", "alpha"))
+
+	got := m.CreateJobs()
+	require.Len(t, got, 1)
+	require.Equal(t, "alpha", got[0].Name, "the job names the repo as it is called NOW")
+	require.Equal(t, ri.UID(), got[0].RepoUID, "and carries the identity that survives a rename")
+
+	st, ok := m.CreateJobByID("made-alpha")
+	require.True(t, ok)
+	require.Equal(t, "alpha", st.Status().Name, "the single-job poll agrees with the list")
+}
+
+// A finished create whose repo has since GONE (archived, deleted) is not
+// listed: it would otherwise be a "created" row for a repository that is not
+// there, with nothing to open. It stays readable by id, like a cancelled one.
+func TestCreateJobs_OmitsDoneJobWhoseRepoIsGone(t *testing.T) {
+	m := newTestManager(t)
+	ri := bootNamedRepo(t, m, "gone")
+	seedDoneJobFor(m, "made-gone", "gone", ri)
+	require.Len(t, m.CreateJobs(), 1, "listed while its repo exists")
+
+	require.NoError(t, m.DeleteRepo("gone"))
+
+	require.Empty(t, m.CreateJobs(), "a create whose repo is gone has nothing left to list")
+	_, ok := m.CreateJobByID("made-gone")
+	require.True(t, ok, "a list-level omission, not a deletion")
+}
