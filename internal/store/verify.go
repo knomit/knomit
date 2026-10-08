@@ -635,6 +635,19 @@ func (s *Service) RawWriteForTest(ctx context.Context, branch, path, content, me
 // ONLY for tests of how readers treat a symlink under .knomit/ (never
 // followed, read as absent); no writer in knomit can create one.
 func (s *Service) RawSymlinkForTest(ctx context.Context, branch, path, target, message string) (string, error) {
+	return s.rawEntryForTest(ctx, branch, path, target, message, filemode.Symlink)
+}
+
+// RawExecutableForTest commits an EXECUTABLE file (mode 100755) at path,
+// case kept — what `git add` of a +x file records. EXISTS ONLY for tests that
+// an executable file under .knomit/ is still a file; knomit's writers only
+// write mode 100644.
+func (s *Service) RawExecutableForTest(ctx context.Context, branch, path, content, message string) (string, error) {
+	return s.rawEntryForTest(ctx, branch, path, content, message, filemode.Executable)
+}
+
+func (s *Service) rawEntryForTest(ctx context.Context, branch, path, content, message string, mode filemode.FileMode) (string, error) {
+	target := content
 	rh := s.rh
 	unlock := rh.lockBranch(branch)
 	defer unlock()
@@ -654,7 +667,7 @@ func (s *Service) RawSymlinkForTest(ctx context.Context, branch, path, target, m
 	if err != nil {
 		return "", err
 	}
-	rootHash, err := buildTreeMode(rh.gits, root, path, filemode.Symlink, blob)
+	rootHash, err := buildTreeMode(rh.gits, root, path, mode, blob)
 	if err != nil {
 		return "", err
 	}

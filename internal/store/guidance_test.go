@@ -66,6 +66,7 @@ func TestGuidanceAt_ReadsOnlyUsableFilesAtTheCommit(t *testing.T) {
 	putRaw(t, svc, "main", ".knomit/guidance/dir/inner.md", "inner")
 	putRaw(t, svc, "main", ".knomit/ontology-copy.md", "outside")
 	commitGuidanceEntry(t, svc, "main", "link.md", filemode.Symlink, "ok.md")
+	commitGuidanceEntry(t, svc, "main", "exec.md", filemode.Executable, "EXEC")
 	tip := commitGuidanceEntry(t, svc, "main", "sub.md", filemode.Submodule, "")
 	agent := putRaw(t, svc, "agent/a", ".knomit/guidance/agent-only.md", "AGENT")
 
@@ -80,6 +81,15 @@ func TestGuidanceAt_ReadsOnlyUsableFilesAtTheCommit(t *testing.T) {
 
 	_, _, err = tr.GuidanceAt(ctx, tip, ".knomit/guidance/missing.md")
 	require.ErrorIs(t, err, ErrNoGuidanceAtCommit)
+	// A symlink is never followed and reads as ABSENT, not unusable (user
+	// ruling 2026-10-08), even though the file it names is a usable one.
+	_, data, err = tr.GuidanceAt(ctx, tip, ".knomit/guidance/link.md")
+	require.ErrorIs(t, err, ErrNoGuidanceAtCommit)
+	require.Nil(t, data)
+	// An executable (+x) guidance file is a file.
+	_, data, err = tr.GuidanceAt(ctx, tip, ".knomit/guidance/exec.md")
+	require.NoError(t, err)
+	require.Equal(t, "EXEC", string(data))
 	_, _, err = tr.GuidanceAt(ctx, tip, ".knomit/guidance/agent-only.md")
 	require.ErrorIs(t, err, ErrNoGuidanceAtCommit, "the agent branch's file is not in main's commit")
 	_, data, err = tr.GuidanceAt(ctx, agent, ".knomit/guidance/agent-only.md")
@@ -91,7 +101,6 @@ func TestGuidanceAt_ReadsOnlyUsableFilesAtTheCommit(t *testing.T) {
 		".knomit/guidance/nul.md":              "not UTF-8 text",
 		".knomit/guidance/latin1.md":           "not UTF-8 text",
 		".knomit/guidance/dir":                 "not a regular file",
-		".knomit/guidance/link.md":             "not a regular file",
 		".knomit/guidance/sub.md":              "not a regular file",
 		".knomit/ontology-copy.md":             "not under",
 		".knomit/guidance/../ontology-copy.md": "not under",

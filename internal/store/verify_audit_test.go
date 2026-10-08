@@ -2,7 +2,11 @@ package store
 
 import (
 	"testing"
+	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -62,6 +66,42 @@ func TestAudit_FlagsRevokedAndOtherAgent(t *testing.T) {
 		rules[r.Commit] = r.Rule
 	}
 	require.Equal(t, map[string]string{c1.Hash.String(): AuditRevoked, c2.Hash.String(): AuditOtherAgent}, rules)
+}
+
+// A symlinked fleet ontology is the named error (fact.ErrSymlinkNotFollowed),
+// as at LoadFleet and FleetMembersAt, never "not a fleet": the symlink's link
+// TEXT is the real fleet preset, so a reader that parsed it would audit
+// cleanly, and one that folded the error into ErrNotFleet would lie about the
+// data. Sabotage: fold the read error back into ErrNotFleet → red.
+func TestAudit_SymlinkedFleetOntologyIsNamedNotNotAFleet(t *testing.T) {
+	f := newRangeFixture(t)
+	x := namedSigner(t, "x")
+	r := repoOn(t, f.fleet.Storer)
+	encode := func(entries []object.TreeEntry) plumbing.Hash {
+		o := f.fleet.Storer.NewEncodedObject()
+		require.NoError(t, (&object.Tree{Entries: entries}).Encode(o))
+		h, err := f.fleet.Storer.SetEncodedObject(o)
+		require.NoError(t, err)
+		return h
+	}
+	knomit := encode([]object.TreeEntry{{Name: "ontology.yaml", Mode: filemode.Symlink, Hash: r.blob(fleetOntologyYAML(t))}})
+	kb := r.tree(map[string]string{"members/agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())})
+	root := encode([]object.TreeEntry{{Name: ".knomit", Mode: filemode.Dir, Hash: knomit}, {Name: "kb", Mode: filemode.Dir, Hash: kb}})
+	when := time.Unix(1790000000, 0).UTC()
+	c := &object.Commit{Author: object.Signature{Name: "t", Email: "t@t", When: when},
+		Committer: object.Signature{Name: "t", Email: "t@t", When: when}, Message: "symlinked ontology", TreeHash: root}
+	o := f.fleet.Storer.NewEncodedObject()
+	require.NoError(t, c.Encode(o))
+	h, err := f.fleet.Storer.SetEncodedObject(o)
+	require.NoError(t, err)
+	require.NoError(t, f.fleet.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), h)))
+
+	kc := f.commit(f.kb, map[string]string{fact.OntologyFile: kbOntology("")}, "agent-x", x)
+	f.ref(f.kb, "main", kc)
+	_, err = Audit(AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main"})
+	require.ErrorIs(t, err, fact.ErrSymlinkNotFollowed)
+	require.NotErrorIs(t, err, ErrNotFleet)
+	require.Contains(t, err.Error(), fact.OntologyFile+" is a symlink")
 }
 
 // A0: a branch whose every commit is signed by a member key is clean (exit 0).

@@ -424,13 +424,25 @@ func (r *RepoInstance) recordAgentBranchOwner(ctx context.Context, svc *store.Se
 func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*fact.Ontology, error) {
 	read := r.ReadBranch()
 	paths := fact.OntologyPathsNewestFirst()
-	var srcPath, content string
-	for _, p := range paths {
-		result, rerr := svc.Facts().ReadFact(ctx, read, p, nil)
-		if rerr == nil && result.Content != "" {
-			srcPath, content = p, result.Content
-			break
-		}
+	// The first rung PRESENT is the ontology. A symlink there is never
+	// followed nor read as "no ontology": the repo fails with an error naming
+	// the path (user ruling 2026-10-08), and opens readable but unwritable.
+	srcPath, data, rerr := svc.OntologyFileAt(ctx, read)
+	if errors.Is(rerr, fact.ErrSymlinkNotFollowed) {
+		log.Error().Err(rerr).Str("repo", r.Name()).Str("branch", read).
+			Msg("ontology is a symlink: this repository will not accept writes until the ontology is a file")
+		return nil, fmt.Errorf("ontology on %s: %w", read, rerr)
+	}
+	content := ""
+	if rerr == nil {
+		content = string(data)
+	}
+	if rerr == nil && srcPath != "" && content == "" {
+		// The first rung present is empty: that IS the ontology, and a later
+		// rung does not stand in for it. Name the file, not every rung.
+		log.Error().Str("repo", r.Name()).Str("branch", read).Str("path", srcPath).
+			Msg("ontology file is empty: this repository will not accept writes until it holds an ontology")
+		return nil, fmt.Errorf("ontology at %s on %s is empty", srcPath, read)
 	}
 	if content == "" {
 		log.Error().Str("repo", r.Name()).Str("branch", read).

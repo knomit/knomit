@@ -24,7 +24,10 @@ var triggersAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// git reads
 		"?.CommitObject", "c.Tree", "cur.NumParents", "tree.FindEntry", "tree.TreeEntryFile", "tree.File",
-		"f.Contents", "walkHistory", "?.Reference", "?.IsFile", "ref.Hash", "?.String",
+		"f.Contents", "walkHistory", "?.Reference", "ref.Hash", "?.String",
+		// the tree-entry mode test every .knomit/ reader shares (a symlink is
+		// never a file), and the named error for a symlinked ontology: pure
+		"isSystemFileMode", "fact.SymlinkNotFollowed",
 		"tt.commit", "tt.tree", "tt.blobHashAt", "rh.TreeReader", "?.Toucher", "?.BlobAt",
 		"object.GetCommit", "ac.IsAncestor", "plumbing.NewBranchReferenceName", "verifyCommitSignature",
 		"fact.OntologyPathsNewestFirst", "fact.TriggerScriptPath",

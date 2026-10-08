@@ -8,6 +8,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -417,6 +418,11 @@ func (m *Manager) probeInitializedBranch(parent, netCtx context.Context, o Origi
 
 	for _, p := range fact.OntologyPathsNewestFirst() {
 		entry, ferr := tree.FindEntry(p)
+		if ferr == nil && entry.Mode == filemode.Symlink {
+			// Never followed, never "no ontology": unknown, saying why
+			// (user ruling 2026-10-08).
+			return InitializedResult{Branch: branch, Detail: fact.SymlinkNotFollowed(p).Error()}, nil
+		}
 		if ferr == nil {
 			return InitializedResult{
 				Initialized: InitializedYes,
@@ -576,15 +582,13 @@ func (b *budgetedStorage) SetEncodedObject(obj plumbing.EncodedObject) (plumbing
 // A read that FAILS is returned as an error, never as false: the caller refuses
 // on false, and refusing on a failed read would turn a transient fault into a
 // verdict about the user's data.
+//
+// A symlinked ontology is an error naming its path (fact.ErrSymlinkNotFollowed),
+// never "has one" and never "has none": the same answer loadOntology gives.
 func branchHasOntology(ctx context.Context, svc *store.Service, branch string) (bool, error) {
-	for _, p := range fact.OntologyPathsNewestFirst() {
-		ok, err := svc.Facts().FactExists(ctx, branch, p)
-		if err != nil {
-			return false, fmt.Errorf("read %s on %s: %w", p, branch, err)
-		}
-		if ok {
-			return true, nil
-		}
+	p, _, err := svc.OntologyFileAt(ctx, branch)
+	if err != nil {
+		return false, fmt.Errorf("read the ontology on %s: %w", branch, err)
 	}
-	return false, nil
+	return p != "", nil
 }

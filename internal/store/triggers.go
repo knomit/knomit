@@ -373,7 +373,12 @@ func (rh *repoHandler) OntologyAtCommit(ctx context.Context, commit plumbing.Has
 		if err != nil {
 			return "", "", nil, fmt.Errorf("triggers: ontology entry %q at %s: %w", p, commit, err)
 		}
-		if !entry.Mode.IsFile() {
+		// A symlinked ontology is an ERROR naming the path, never "no
+		// ontology" and never its link text parsed (user ruling 2026-10-08).
+		if entry.Mode == filemode.Symlink {
+			return "", "", nil, fmt.Errorf("triggers: ontology at %s: %w", commit, fact.SymlinkNotFollowed(p))
+		}
+		if !isSystemFileMode(entry.Mode) {
 			return "", "", nil, fmt.Errorf("triggers: ontology path %q at %s is not a file", p, commit)
 		}
 		f, err := tree.TreeEntryFile(entry)
@@ -402,8 +407,9 @@ func (rh *repoHandler) RecipeAt(ctx context.Context, commit plumbing.Hash, name 
 	return rh.privateFileAt(commit, "recipe", fact.TriggerRecipePath(name), ErrNoRecipeAtCommit)
 }
 
-// GuidanceAt implements TriggerIndex. Unlike privateFileAt it refuses a
-// symlink (whose blob is only its target's name) and checks the size BEFORE
+// GuidanceAt implements TriggerIndex. A symlink (whose blob is only its
+// target's name) is never followed: it reads as absent,
+// ErrNoGuidanceAtCommit, like privateFileAt's. The size is checked BEFORE
 // reading the blob, so an oversized file is never loaded.
 func (rh *repoHandler) GuidanceAt(ctx context.Context, commit plumbing.Hash, file string) (string, []byte, error) {
 	if !strings.HasPrefix(file, fact.GuidanceDir+"/") || path.Clean(file) != file || slices.Contains(strings.Split(file, "/"), "..") {
@@ -424,7 +430,10 @@ func (rh *repoHandler) GuidanceAt(ctx context.Context, commit plumbing.Hash, fil
 	if err != nil {
 		return "", nil, fmt.Errorf("guidance: entry %q at %s: %w", file, commit, err)
 	}
-	if entry.Mode != filemode.Regular && entry.Mode != filemode.Executable && entry.Mode != filemode.Deprecated {
+	if entry.Mode == filemode.Symlink {
+		return "", nil, ErrNoGuidanceAtCommit
+	}
+	if !isSystemFileMode(entry.Mode) {
 		return "", nil, fmt.Errorf("%w: %q is not a regular file (mode %s)", ErrGuidanceUnusable, file, entry.Mode)
 	}
 	f, err := tree.TreeEntryFile(entry)
@@ -444,8 +453,10 @@ func (rh *repoHandler) GuidanceAt(ctx context.Context, commit plumbing.Hash, fil
 	return entry.Hash.String(), []byte(body), nil
 }
 
-// privateFileAt reads one file of a commit's own tree: absent is notFound; a
-// directory or an unreadable blob is an error, never "absent".
+// privateFileAt reads one file of a commit's own tree: absent is notFound,
+// and so is a symlink, which is never followed (its blob is only the target's
+// name; user ruling 2026-10-08). A directory, a submodule or an unreadable
+// blob is an error, never "absent". An executable (+x) file is a file.
 func (rh *repoHandler) privateFileAt(commit plumbing.Hash, what, p string, notFound error) (string, []byte, error) {
 	c, err := rh.repo.CommitObject(commit)
 	if err != nil {
@@ -462,7 +473,10 @@ func (rh *repoHandler) privateFileAt(commit plumbing.Hash, what, p string, notFo
 	if err != nil {
 		return "", nil, fmt.Errorf("triggers: %s entry %q at %s: %w", what, p, commit, err)
 	}
-	if !entry.Mode.IsFile() {
+	if entry.Mode == filemode.Symlink {
+		return "", nil, notFound
+	}
+	if !isSystemFileMode(entry.Mode) {
 		return "", nil, fmt.Errorf("triggers: %s path %q at %s is not a file", what, p, commit)
 	}
 	f, err := tree.TreeEntryFile(entry)

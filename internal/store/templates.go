@@ -144,6 +144,10 @@ func (w *templateWalk) walk(ctx context.Context, t *object.Tree, prefix string) 
 			}
 			continue
 		case filemode.Regular, filemode.Deprecated:
+		case filemode.Symlink:
+			// Named as a symlink, so a symlinked .knomit/ontology.yaml in a
+			// template fails with the same words as one in a repo.
+			return fmt.Errorf("%w: %w", ErrTemplateNotRegular, fact.SymlinkNotFollowed(rel))
 		default:
 			return fmt.Errorf("%w: %s (mode %s)", ErrTemplateNotRegular, rel, e.Mode)
 		}

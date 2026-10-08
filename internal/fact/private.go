@@ -1,6 +1,28 @@
 package fact
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// ErrSymlinkNotFollowed marks a file knomit must read that is a SYMLINK in
+// git: an ontology rung, or a template file. A symlink's blob is only its
+// target's path text, and knomit never follows a symlink nor reads that text
+// as content (user ruling 2026-10-08: "we do NOT want to follow symlinks").
+//
+// Only the readers that FAIL on a symlink use it: the ontology readers (a
+// symlinked ontology fails the repo, never reads as "no ontology") and the
+// template walk. The readers of optional files (trigger scripts, recipes,
+// guidance, skills, system files by path) read a symlink as ABSENT instead,
+// through their own not-found errors.
+var ErrSymlinkNotFollowed = errors.New("is a symlink, and knomit does not follow symlinks: commit the file itself in its place")
+
+// SymlinkNotFollowed is ErrSymlinkNotFollowed naming the path:
+// ".knomit/ontology.yaml is a symlink, and knomit does not follow symlinks: …".
+func SymlinkNotFollowed(path string) error {
+	return fmt.Errorf("%s %w", path, ErrSymlinkNotFollowed)
+}
 
 // IsPrivatePath reports whether any segment of path begins with ".".
 //
