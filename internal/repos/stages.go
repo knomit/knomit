@@ -437,6 +437,13 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 	if rerr == nil {
 		content = string(data)
 	}
+	if rerr == nil && srcPath != "" && content == "" {
+		// The first rung present is empty: that IS the ontology, and a later
+		// rung does not stand in for it. Name the file, not every rung.
+		log.Error().Str("repo", r.Name()).Str("branch", read).Str("path", srcPath).
+			Msg("ontology file is empty: this repository will not accept writes until it holds an ontology")
+		return nil, fmt.Errorf("ontology at %s on %s is empty", srcPath, read)
+	}
 	if content == "" {
 		log.Error().Str("repo", r.Name()).Str("branch", read).
 			Msgf("no ontology at %s: this repository is not a knowledge base and will not accept writes", strings.Join(paths, ", "))

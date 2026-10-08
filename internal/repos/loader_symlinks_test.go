@@ -56,6 +56,41 @@ func TestLoadOntology_SymlinkedOntologyFailsTheOpenNamingThePath(t *testing.T) {
 	require.False(t, ri.WritableBranch(agentBranch))
 }
 
+// An EMPTY .knomit/ontology.yaml is the ontology (the first rung present):
+// a regular legacy rung does not stand in for it, and the error names the
+// empty file rather than listing every rung. Sabotage: drop the empty-file
+// branch → "no ontology at <all rungs>" → red; fall through to the legacy
+// rung (the pre-#439 ReadFact walk) → the repo opens writable → red.
+func TestLoadOntology_EmptyCanonicalDoesNotFallBackToLegacy(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	agentBranch := "agent/test-empty"
+	m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+	ri := bootRepo(t, m)
+	svc := testService(t, ri)
+	legacy, err := fact.DefaultOntology().Serialize()
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, agentBranch, LegacyOntologyPath, string(legacy), "seed legacy", "updated")
+	require.NoError(t, err)
+	_, err = svc.RawWriteForTest(ctx, agentBranch, OntologyPath, "", "empty the canonical ontology")
+	require.NoError(t, err)
+	p, data, err := svc.OntologyFileAt(ctx, agentBranch)
+	require.NoError(t, err)
+	require.Equal(t, OntologyPath, p, "the fixture holds an empty canonical file")
+	require.Empty(t, data)
+	require.NoError(t, m.Close())
+
+	m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+	require.NoError(t, m2.Start())
+	t.Cleanup(func() { _ = m2.Close() })
+	ri = m2.Get(testRepoName)
+	require.NotNil(t, ri)
+	require.Error(t, ri.OntologyError())
+	require.Contains(t, ri.OntologyError().Error(), OntologyPath+" on "+agentBranch+" is empty")
+	require.Nil(t, ri.Ontology(), "the legacy rung does not stand in for the empty canonical file")
+	require.False(t, ri.WritableBranch(agentBranch))
+}
+
 // The remote probe (the create wizard's "is this a knowledge base?") answers
 // UNKNOWN with the named error as its detail, and a clone of that remote is
 // refused with the same error. Sabotage: drop the probe's symlink clause →

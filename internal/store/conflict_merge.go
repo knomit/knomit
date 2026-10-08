@@ -449,7 +449,15 @@ func (rh *repoHandler) conflictsStrategy(ctx context.Context, branch string) (Co
 		return "", false
 	}
 	data, err := treeOntology(c)
-	if err != nil || data == nil {
+	if err != nil {
+		// A symlinked (fact.ErrSymlinkNotFollowed) or unreadable ontology:
+		// off, like its neighbours, but never without a log line.
+		if _, seen := conflictsLogged.LoadOrStore("read:"+c.Hash.String(), true); !seen {
+			log.Warn().Err(err).Str("branch", branch).Msg("conflicts: cannot read the ontology at the consensus tip; read as off")
+		}
+		return "", false
+	}
+	if data == nil {
 		return "", false
 	}
 	cs, err := fact.ReadConflicts(data)

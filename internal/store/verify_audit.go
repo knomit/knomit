@@ -73,7 +73,11 @@ func Audit(in AuditInput) (AuditReport, error) {
 	if err != nil {
 		return AuditReport{}, fmt.Errorf("audit: fleet: %w", err)
 	}
-	if raw, err := treeOntology(tip); err != nil || raw == nil {
+	if raw, err := treeOntology(tip); err != nil {
+		// A symlinked (fact.ErrSymlinkNotFollowed) or unreadable ontology
+		// says so, like LoadFleet: it is not "not a fleet".
+		return AuditReport{}, fmt.Errorf("audit: fleet: ontology: %w", err)
+	} else if raw == nil {
 		return AuditReport{}, fmt.Errorf("audit: %w", ErrNotFleet)
 	} else if ont, err := fact.ParseOntology(raw); err != nil || !fact.IsFleetOntology(ont) {
 		return AuditReport{}, fmt.Errorf("audit: %w", ErrNotFleet)
