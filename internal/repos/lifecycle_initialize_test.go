@@ -83,6 +83,7 @@ func bareOf(u string) string {
 // every host that protects the default branch of a new project, which is all
 // of them by default.
 func TestCreate_InitializeWritesOntologyOnTheAgentBranchOnly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	bare := bareOf(url)
@@ -138,6 +139,7 @@ func gitCount(t *testing.T, bare, branch, path string) string {
 // at store/repo.go's initFromEmptyRemote — two machines, one remote, two
 // identities, and no push-time signal that they had diverged.
 func TestCreate_InitializeTakesIdentityFromTheRemoteRootCommit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	rootCommit := strings.TrimSpace(gitOut(t, bareOf(url), "rev-list", "--max-parents=0", "main"))
@@ -172,6 +174,7 @@ func gitOut(t *testing.T, bare string, args ...string) string {
 // it is: it serves repos that already exist, and hard-failing there would
 // strand exactly the users this bug already hurt.
 func TestCreate_CloneRefusesARemoteThatIsNotAKnowledgeBase(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -190,6 +193,7 @@ func TestCreate_CloneRefusesARemoteThatIsNotAKnowledgeBase(t *testing.T) {
 // already governs the branch. Same stake — the ontology is immutable, so a
 // wrong one here is not correctable later.
 func TestCreate_InitializeRefusesARemoteThatIsAlreadyAKnowledgeBase(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git")) // WITH an ontology
 	m := newRemoteModeManager(t, dir)
@@ -246,6 +250,7 @@ func TestCreate_CloneRefusesAnEmptyRemote(t *testing.T) {
 // simply retryable — which is the improvement over seed, whose consensus push
 // landed first and left a half-seeded remote that refused every later attempt.
 func TestCreate_InitializeFailedPushLeavesTheRemoteUntouched(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	bare := bareOf(url)
@@ -277,6 +282,7 @@ func TestCreate_InitializeFailedPushLeavesTheRemoteUntouched(t *testing.T) {
 // rejectOntologySpecForClone. Without it, Create(initialize, no ontology
 // fields) would silently write fact.DefaultOntology().
 func TestCreate_InitializeRequiresOntology_AuthoritativeInCreate(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -304,6 +310,7 @@ func TestCreate_InitializeFailsOnUnreachableRemote(t *testing.T) {
 }
 
 func TestCreate_InitializeInvalidOntologyYAMLRollsBack(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -354,6 +361,7 @@ func TestCreatePreflight_InitializeRefusesAnEmptyRemote(t *testing.T) {
 // that refused both would be a wall in front of the mode's whole reason to
 // exist.
 func TestCreatePreflight_InitializeAcceptsARemoteWithABranch(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -426,6 +434,7 @@ func TestInitializeProbeErr_ReachableWithBranchesIsOK(t *testing.T) {
 //
 // Without this, fixing the probe would only move the dead end one step later.
 func TestCreate_CloneMode_AdoptsThisMachinesExistingAgentBranch(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 	url := seedRemoteInitializedByThisMachine(t, filepath.Join(root, "remote.git"), m.deps.AgentBranch)
@@ -452,6 +461,7 @@ func TestCreate_CloneMode_AdoptsThisMachinesExistingAgentBranch(t *testing.T) {
 // at a remote goes through, re-asserts it itself. This test goes around the
 // handlers entirely.
 func TestAttachOrigin_RefusesARemoteGovernedByADifferentOntology(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 
@@ -479,6 +489,7 @@ func TestAttachOrigin_RefusesARemoteGovernedByADifferentOntology(t *testing.T) {
 // repo to its own remote is the ordinary path after a machine is rebuilt, and
 // a gate that refused it would be worse than the hole it closes.
 func TestAttachOrigin_AllowsTheSameKnowledgeBase(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git")) // the DEFAULT ontology
@@ -500,6 +511,7 @@ func TestAttachOrigin_AllowsTheSameKnowledgeBase(t *testing.T) {
 // signer, so the commit went out unsigned (F09 PR 2). It must be signed by the
 // instance's key — Deps.Signer — not by the test binary's fallback key.
 func TestCreate_InitializeSignsTheOntologyCommitWithTheInstanceKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	bare := bareOf(url)

@@ -289,6 +289,7 @@ func outcomesOf(rows []store.TriggerFire) []string {
 // Sabotage: route a function to the wrong tool; drop the moment_name default;
 // keep push's stub.
 func TestScript_HostFunctions(t *testing.T) {
+	t.Parallel()
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "host"))
 	putScript(t, ri, "host", `
 var q = knomit.query({text: "hello", limit: 3});
@@ -376,6 +377,7 @@ knomit.emit({
 // the script; the script's commit is authored by THIS agent branch and signed
 // by THIS store's key, never the peer's. Sabotage: author from change.author.id.
 func TestScript_WritesAsThisMachine(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "learn"))
 	putScript(t, ri, "learn", `knomit.learn({topic: "tasks", category: "out", title: "from " + change.author.id + " " + change.source});`)
 	svc := testService(t, ri)
@@ -413,6 +415,7 @@ func TestScript_WritesAsThisMachine(t *testing.T) {
 // TrailerValue reads it, the signature verifies over it. Sabotage: omit
 // Knomit-Cause; set the trailers per call instead of once per fire.
 func TestScript_TrailersStamped(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "learn"))
 	putScript(t, ri, "learn", `knomit.learn({topic: "tasks", category: "out", title: "one"}); knomit.learn({topic: "tasks", category: "out", title: "two"});`)
 	before := settle(t, ri)
@@ -438,6 +441,7 @@ func TestScript_TrailersStamped(t *testing.T) {
 // (a signal with one entity) makes its id the trace; else the firing commit.
 // Sabotage: derive from the head instead of the toucher; ignore the entity.
 func TestScript_TraceDerivation(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "learn"))
 	putScript(t, ri, "learn", `knomit.learn({topic: "tasks", category: "out", title: "for " + change.path});`)
 	svc := testService(t, ri)
@@ -473,6 +477,7 @@ func TestScript_TraceDerivation(t *testing.T) {
 // ordinary write carry no paragraph. Sabotage: copy cause forward; stamp in
 // storeCommit.
 func TestScript_ChainAcrossTriggers(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0,
 		scriptTrig("t1", "learn", "tasks/a/**", "to-b"),
 		scriptTrig("t2", "learn", "tasks/b/**", "to-c"))
@@ -508,6 +513,7 @@ func TestScript_ChainAcrossTriggers(t *testing.T) {
 // `git log --all --grep='^Knomit-Trace: <id>$'` lists exactly the script
 // commits of the story, and git's own trailer parser reads Knomit-Cause.
 func TestScript_TraceReadableWithGitLog(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -546,6 +552,7 @@ func TestScript_TraceReadableWithGitLog(t *testing.T) {
 // Sabotage: compare against the `if` result; skip by path only; drop the
 // trailer read.
 func TestScript_LoopGuard(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0,
 		scriptTrig("t", "[learn, update]", "tasks/loop/**", "self"),
 		trig("watcher", "[learn, update]", "tasks/loop/**", ""))
@@ -613,6 +620,7 @@ func TestScript_LoopGuardNeverOnDue(t *testing.T) {
 // trailer, so the guard cannot see who deleted it and the retract fires
 // (at-least-once; stated in the proposal).
 func TestScript_LoopGuardOnRetract(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t", "[learn, retract]", "tasks/rt/**", "zap"))
 	putScript(t, ri, "zap", `if (change.episode === 'learn' && fact.title === 'zap') { knomit.retract(change.path); }`)
 	svc := testService(t, ri)
@@ -829,6 +837,7 @@ func TestScript_TimeoutIsOutcome(t *testing.T) {
 // same blob is not recompiled, and the script change itself fires nothing.
 // Sabotage: key the cache by name only.
 func TestScript_ReloadOnHeadBlob(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "ver"))
 	sink := subscribePayloads(t, ri, "t")
 	putScript(t, ri, "ver", `knomit.emit({v: 1});`)
@@ -920,6 +929,7 @@ func TestScript_CompileErrorAndMissingAreInvalid(t *testing.T) {
 // range is exactly (the firing commit → the script's commit) and fires a
 // sibling trigger; never a run inside a run.
 func TestScript_WriteIsNextAdvance(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0,
 		scriptTrig("t1", "learn", "tasks/in/**", "to-out"),
 		trig("sibling", "learn", "tasks/out/**", ""))
@@ -973,6 +983,7 @@ func TestScript_NoStoreHeldDuringScript(t *testing.T) {
 // host's own refusal comes first.)
 // Sabotage: drop the host check.
 func TestScript_PrivatePathRefused(t *testing.T) {
+	t.Parallel()
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "priv"))
 	putScript(t, ri, "priv", `
 var out = {};
@@ -1007,6 +1018,7 @@ knomit.emit(out);`)
 // Sabotage: restore the host's unconditional artifacts refusal → every
 // well-formed call below throws before the stub tool runs → red.
 func TestScript_ArtifactsHostAccepts(t *testing.T) {
+	t.Parallel()
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "art"))
 	// Seeded directly (an artifacts/ write is trigger-invisible on its own),
 	// so the script's update/retract/learn-retract each have a real file to
@@ -1044,6 +1056,7 @@ knomit.emit(out);`)
 // TestScript_MoveThroughRealTools (internal/web). Sabotage: forward only
 // moment_name → no `retract` argument → red.
 func TestScript_LearnRetractForwarded(t *testing.T) {
+	t.Parallel()
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "take"))
 	tools.hook = func(ctx context.Context, tool string, args map[string]any) (string, bool, error, bool) {
 		return `{"commits":[]}`, false, nil, true
@@ -1070,6 +1083,7 @@ knomit.learn([], {retract: [change.path, "kb/tasks/in/other.md"], moment_name: "
 // retract that is not a list of strings. Sabotage: skip the private check on
 // opts.retract → the tool is called → red.
 func TestScript_LearnRetractPrivateRefused(t *testing.T) {
+	t.Parallel()
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "priv"))
 	putScript(t, ri, "priv", `
 var out = {};
@@ -1099,6 +1113,7 @@ knomit.emit(out);`)
 // update/retract pass it through to a handler that refuses it. Sabotage:
 // remove the host's opts.trace check (red: the tool is called, a commit lands).
 func TestScript_LearnTraceRefused(t *testing.T) {
+	t.Parallel()
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "traced"))
 	putScript(t, ri, "traced", `
 var out = {};
@@ -1125,6 +1140,7 @@ knomit.emit(out);`)
 // keys merged in. Sabotage: deriveTrace ignores the toucher's Knomit-Trace
 // (red: the trace is the commit hash).
 func TestScript_AgentTraceJoinsTheStory(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "learn"))
 	putScript(t, ri, "learn", `knomit.learn({topic: "tasks", category: "out", title: "for " + change.path + " in " + change.trace});`)
 	before := settle(t, ri)

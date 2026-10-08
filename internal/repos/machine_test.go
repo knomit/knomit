@@ -158,6 +158,7 @@ func send(m *Manager, ri *RepoInstance, e MachineEvent) (Reply, error) {
 // TestMachine_TransitionTable walks the spec's transition table: every state
 // a repo can be in, every event it can be sent, the refusal or the actions.
 func TestMachine_TransitionTable(t *testing.T) {
+	t.Parallel()
 	t.Run("store absent (Populate in flight) refuses every change with ErrNotOpen", func(t *testing.T) {
 		f := newMFix(t, StagePopulate, "enter", true)
 		f.m.Remove("kb") // unmount; the database stays on disk
@@ -322,6 +323,7 @@ func TestMachine_TransitionTable(t *testing.T) {
 // Ready within the walk, while its index job still runs; the job's success
 // publishes ready.
 func TestWalkthrough_Boot(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	g := newGate(StageIndex, "index-job")
 	var armed atomic.Bool
@@ -365,6 +367,7 @@ func TestWalkthrough_Boot(t *testing.T) {
 // Attach ok: the guard probes the remote, Sync alone restarts on the origin
 // loop, the reply comes after the re-entry.
 func TestWalkthrough_AttachOK(t *testing.T) {
+	t.Parallel()
 	f := newMFix(t, StageIndex, "index-job", false)
 	url := f.remote(t, "r")
 	rep, err := send(f.m, f.ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))
@@ -400,6 +403,7 @@ func TestWalkthrough_AttachDuringIndexing(t *testing.T) {
 
 // Detach: Sync restarts with the local loop; a subscription is refused.
 func TestWalkthrough_Detach(t *testing.T) {
+	t.Parallel()
 	f := newMFix(t, StageIndex, "index-job", false)
 	url := f.remote(t, "r")
 	_, err := send(f.m, f.ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))
@@ -420,6 +424,7 @@ func TestWalkthrough_Detach(t *testing.T) {
 // Swap ok: cancel all, drain newest-first, install + origin, walk up again;
 // the heal of the new store is the post-swap index.
 func TestWalkthrough_SwapOK(t *testing.T) {
+	t.Parallel()
 	f := newMFix(t, StageIndex, "index-job", true)
 	url := f.remote(t, "r")
 	tmp := f.copyOfOwnDB(t)
@@ -495,6 +500,7 @@ func TestSwap_CopyFailureRestoresStoreAndOrigin(t *testing.T) {
 // Swap during indexing is refused; cancel-and-continue (CancelIndex, then
 // SwapStore) reaches ready with all three workers running on the new store.
 func TestWalkthrough_SwapDuringIndexingAndCancelAndContinue(t *testing.T) {
+	t.Parallel()
 	f := newMFix(t, StageIndex, "index-job", false)
 	tmp := f.copyOfOwnDB(t)
 	f.holdIndex(t)
@@ -537,6 +543,7 @@ func TestWalkthrough_RebuildReadyAndDuplicate(t *testing.T) {
 
 // Rebuild while the heal runs: the heal is replaced (after its batch).
 func TestWalkthrough_RebuildWhileIndexing(t *testing.T) {
+	t.Parallel()
 	f := newMFix(t, StageIndex, "index-job", true)
 	writeOn(t, f.ri, trigAgent, "kb/tasks/a.md") // something to re-embed
 	clearVectors(t, f.m, f.ri)
@@ -767,6 +774,7 @@ func TestWalkthrough_ArchiveMidIndexWithAParkedSyncRound(t *testing.T) {
 // running that very Enter, so it can only end on its own ctx — which is why
 // the rule is absolute rather than a convention.
 func TestMachine_NoStageSends(t *testing.T) {
+	t.Parallel()
 	fset := token.NewFileSet()
 	for _, file := range []string{"stages.go", "sync.go", "triggers.go", "consensus.go", "experiment_sweep.go",
 		"trigger_script.go", "trigger_recipe.go", "sync_mode.go"} {

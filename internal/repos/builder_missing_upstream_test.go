@@ -33,6 +33,7 @@ import (
 //     and every boot after it — re-indexed the whole repo from scratch while the
 //     UI reported a healthy index.
 func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	cfg := config.Config{Home: home}

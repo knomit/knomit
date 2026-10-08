@@ -448,6 +448,7 @@ func TestLoadOntology_MalformedOntologyRefusesWritesRatherThanSubstituting(t *te
 // The same rule for a repo carrying no ontology file at all. Being an ordinary
 // git repository is not being a knowledge base.
 func TestLoadOntology_NoOntologyFileRefusesWrites(t *testing.T) {
+	t.Parallel()
 	dir, agentBranch := bootKnomitWithNoOntology(t)
 
 	m := New(context.Background(), Deps{

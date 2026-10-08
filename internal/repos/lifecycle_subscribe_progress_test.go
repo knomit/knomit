@@ -66,6 +66,7 @@ Body for fact %d, long enough to be worth indexing.
 // starts during the mount walk, BEFORE the index has finished, and the create
 // still reports done only once the index has.
 func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
+	t.Parallel()
 	url := servedKnomitOrigin(t, 40)
 
 	// The index job is held at its hook until the create has narrated an index

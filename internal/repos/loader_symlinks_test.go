@@ -124,6 +124,7 @@ func TestSwapStore_SymlinkedIncomingOntologyIsRefusedBeforeTheSwap(t *testing.T)
 // branch → "no ontology at <all rungs>" → red; fall through to the legacy
 // rung (the pre-#439 ReadFact walk) → the repo opens writable → red.
 func TestLoadOntology_EmptyCanonicalDoesNotFallBackToLegacy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	agentBranch := "agent/test-empty"
@@ -158,6 +159,7 @@ func TestLoadOntology_EmptyCanonicalDoesNotFallBackToLegacy(t *testing.T) {
 // refused with the same error. Sabotage: drop the probe's symlink clause →
 // "yes" → red.
 func TestProbeInitialized_SymlinkedOntologyIsUnknownNamingThePath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	url := sourceRepo(t, dir, "remote", sourceSpec{
@@ -181,6 +183,7 @@ func TestProbeInitialized_SymlinkedOntologyIsUnknownNamingThePath(t *testing.T) 
 // A template whose .knomit/ontology.yaml is a symlink is refused with
 // ErrTemplateNotRegular AND the same named symlink error.
 func TestCreateFromTemplate_SymlinkedOntologyNamesThePath(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	url := sourceRepo(t, root, "src", sourceSpec{

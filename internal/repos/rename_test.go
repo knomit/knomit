@@ -16,6 +16,7 @@ import (
 // its store still open, because a rename changes a display string and must not
 // cost a store close, an SSE drop and an index re-warm.
 func TestRenameRepo_RekeysWithoutClosingTheStore(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	before := bootNamedRepo(t, m, "alpha")
 	uid := before.UID()
@@ -39,6 +40,7 @@ func TestRenameRepo_RekeysWithoutClosingTheStore(t *testing.T) {
 }
 
 func TestRenameRepo_RejectsInvalidName(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	bootNamedRepo(t, m, "alpha")
 	require.ErrorIs(t, m.RenameRepo("alpha", "Has Capitals"), ErrInvalidName)
@@ -47,6 +49,7 @@ func TestRenameRepo_RejectsInvalidName(t *testing.T) {
 }
 
 func TestRenameRepo_RejectsNameHeldByAnotherActiveRepo(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	bootNamedRepo(t, m, "alpha")
 	createRepo(t, m, "beta")
@@ -57,6 +60,7 @@ func TestRenameRepo_RejectsNameHeldByAnotherActiveRepo(t *testing.T) {
 }
 
 func TestRenameRepo_UnknownRepo(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	bootNamedRepo(t, m, "alpha")
 	require.ErrorIs(t, m.RenameRepo("ghost", "beta"), ErrRepoNotFound)
@@ -64,6 +68,7 @@ func TestRenameRepo_UnknownRepo(t *testing.T) {
 
 // Renaming to the current name is a successful no-op, not a self-collision.
 func TestRenameRepo_SameNameIsNoOp(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	before := bootNamedRepo(t, m, "alpha")
 
@@ -75,6 +80,7 @@ func TestRenameRepo_SameNameIsNoOp(t *testing.T) {
 // one namespace (gotcha M-1). Same guard Create and Restore run; RenameRepo
 // must run it too, and until this test existed nothing pinned that it did.
 func TestRenameRepo_RejectsNameHeldByLens(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	bootNamedRepo(t, m, "alpha")
 	writer := createRepo(t, m, "writer")
@@ -142,6 +148,7 @@ func TestRenameRepo_PersistsAcrossRestart(t *testing.T) {
 // catches that: exactly one of the two names may resolve afterwards, because
 // the map holds one instance under one name, not two.
 func TestRenameRepo_ConcurrentDifferentTargets_ExactlyOneWins(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	ri := bootNamedRepo(t, m, "alpha")
 

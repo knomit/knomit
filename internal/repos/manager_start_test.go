@@ -11,6 +11,7 @@ import (
 // Start opens what the registry says exists, keyed by uid — not what the
 // directory happens to contain.
 func TestStart_OpensRegisteredRepos(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -29,6 +30,7 @@ func TestStart_OpensRegisteredRepos(t *testing.T) {
 // than vanishing from the API — the whole point of a registry that outlives
 // the file.
 func TestStart_MissingFileReportsUnavailable(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")

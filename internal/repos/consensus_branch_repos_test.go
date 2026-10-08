@@ -20,6 +20,7 @@ import (
 // SABOTAGE: restore the "prefer main" loop in probe.go resolveUpstream → the
 // probe answers main → red.
 func TestProbeOrigin_HeadNotMainByName(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newProbeTestManager(t, root)
 	bare := filepath.Join(root, "remote.git")
@@ -94,6 +95,7 @@ func seedFleetRemoteOn(t *testing.T, bare, branch string) string {
 // SABOTAGE: restore `upstream := "main"` in fleetMembersAtMain → FleetMembers
 // errors/reads nothing → red. In ownFleetKeys → no keys → red.
 func TestFleet_TrunkWithoutOriginReadsTheRecordedBranch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")

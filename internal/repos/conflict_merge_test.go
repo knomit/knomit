@@ -77,6 +77,7 @@ func parseShared(t *testing.T, content string) fact.Fact {
 // SABOTAGE: keep StrategyLocalWins at the peer's reconcile call site (S12a) →
 // the peer keeps its own F, no Knomit-Merge → red.
 func TestConflictMerge_PeerSyncsFirst(t *testing.T) {
+	t.Parallel()
 	h := newConsensusHost(t, triggerOntology("attributes:\n  conflicts:\n    facts: merge\n"), hostOpts{})
 	cmWrite(t, h.ri, cHostAgent, cmBody(t, "base", 0.7))
 	h.advance(t)
@@ -120,6 +121,7 @@ func peerContent(t *testing.T, p *cPeer) string {
 // Refused=1 → red; an asymmetric winner rule (S5) → the peer computes other
 // bytes or keeps ping-ponging → red.
 func TestConflictMerge_HostMergesFirst_Converges(t *testing.T) {
+	t.Parallel()
 	h := newConsensusHost(t, triggerOntology("attributes:\n  consensus: auto\n  conflicts:\n    facts: merge\n"), hostOpts{})
 	cmWrite(t, h.ri, cHostAgent, cmBody(t, "base", 0.7))
 	h.advance(t)
@@ -166,6 +168,7 @@ func TestConflictMerge_HostMergesFirst_Converges(t *testing.T) {
 // SABOTAGE: edit-wins (resurrect) in factMergeResolutions → the fact is back
 // → red.
 func TestConflictMerge_RetractionWins(t *testing.T) {
+	t.Parallel()
 	for _, shape := range []string{"host retracts", "peer retracts"} {
 		t.Run(shape, func(t *testing.T) {
 			h := newConsensusHost(t, triggerOntology("attributes:\n  consensus: auto\n  conflicts:\n    facts: merge\n"), hostOpts{})
@@ -223,6 +226,7 @@ func TestConflictMerge_RetractionWins(t *testing.T) {
 // instead of refusing → red; the walk's Knomit-Conflict line dropped (S10b)
 // → red.
 func TestConflictMerge_ExplicitOff_IsToday_Recorded(t *testing.T) {
+	t.Parallel()
 	h := newConsensusHost(t, triggerOntology(autoOffAttrs), hostOpts{})
 	cmWrite(t, h.ri, cHostAgent, cmBody(t, "base", 0.7))
 	h.advance(t)

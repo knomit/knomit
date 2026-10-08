@@ -438,6 +438,7 @@ func TestPush_ScriptKnomitPushKicks(t *testing.T) {
 // Sabotage: route push through `default:` (emitted + an SSE event); drop the
 // stats case (fires 0); count kicked in phase B's sum only.
 func TestPush_StatisticsAndLog(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t, pushTrig("fast", "learn", "", "change.path !== 'kb/tasks/skip.md'"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

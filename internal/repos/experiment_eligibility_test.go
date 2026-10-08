@@ -177,6 +177,7 @@ func TestWriteBranch_ForeignExperimentIsReadOnly(t *testing.T) {
 // branch and this test would pass for the wrong reason. The
 // WriteMountBranch assertion below is what proves the pin actually took.
 func TestNewBindingOfLens_PinnedAtMainStaysWritable(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	core := createRepo(t, m, "core")
 	work := createRepo(t, m, "work")
@@ -206,6 +207,7 @@ func TestNewBindingOfLens_PinnedAtMainStaysWritable(t *testing.T) {
 // the writes go. (PR 2 installs the re-pin from an active experiment; PR 1
 // only has to be able to express it.)
 func TestNewBindingOfLens_PinnedAtExperimentWritesThere(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	core := createRepo(t, m, "core")
 	work := createRepo(t, m, "work")

@@ -15,6 +15,7 @@ import (
 // event for that). So this writes the origin, then re-mounts exactly as a
 // reboot would via Start/openRegistered, and checks the freshly-opened store.
 func TestOpenStage_InjectedOriginDrivesUpstream(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")

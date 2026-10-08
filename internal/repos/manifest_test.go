@@ -14,6 +14,7 @@ import (
 // The file must land at README.md with its case intact — a git provider looks
 // for that exact name, and case-preservation is the whole point of the rename.
 func TestWriteReadme_LandsAtExactPath(t *testing.T) {
+	t.Parallel()
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
@@ -92,6 +93,7 @@ func TestWriteReadme_EnforcesCap(t *testing.T) {
 
 // An unlicensed KB is an ordinary state, not an error.
 func TestReadLicense_AbsentIsNotAnError(t *testing.T) {
+	t.Parallel()
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
@@ -297,6 +299,7 @@ func TestWriteLicense_EmptyContentClearsExistingFile_Commits(t *testing.T) {
 // check, this call would fall through to WriteRootFile and silently commit
 // an empty LICENSE over the original. It must refuse instead.
 func TestWriteLicense_RefusesToReplaceOversizeExisting_EmptyContent(t *testing.T) {
+	t.Parallel()
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
@@ -329,6 +332,7 @@ func TestWriteLicense_RefusesToReplaceOversizeExisting_EmptyContent(t *testing.T
 // with new terms — WriteLicense cannot safely diff against content it never
 // read, so it must not write over it at all.
 func TestWriteLicense_RefusesToReplaceOversizeExisting_NonEmptyContent(t *testing.T) {
+	t.Parallel()
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
@@ -385,6 +389,7 @@ func TestWriteLicense_RejectsOverCap(t *testing.T) {
 // that never happened. This is the same regression TestWriteReadme_ClosedInstance_ReportsError
 // guards against, for the acquireErr/writeErr separation in WriteLicense.
 func TestWriteLicense_ClosedInstance_ReportsError(t *testing.T) {
+	t.Parallel()
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)

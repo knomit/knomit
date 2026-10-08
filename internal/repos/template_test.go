@@ -207,6 +207,7 @@ func repoFiles(t *testing.T, m *Manager) []string {
 // SetSigner in initTemplate (named key); write the source NAME in the
 // trailer (ID assertion).
 func TestCreateFromTemplate_CopiesTreeSignedWithTrailers(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	src := playbooksSource(t, m, root, "clone")
@@ -260,6 +261,7 @@ func TestCreateFromTemplate_CopiesTreeSignedWithTrailers(t *testing.T) {
 // SABOTAGE: read the source's ReadBranch/agent branch instead of
 // UpstreamTip(UpstreamBranch()).
 func TestCreateFromTemplate_ReadsConsensusNotAgent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	url := sourceRepo(t, root, "src", sourceSpec{files: map[string]string{
@@ -283,6 +285,7 @@ func TestCreateFromTemplate_ReadsConsensusNotAgent(t *testing.T) {
 // subscribed source has no agent branch and refuses writes, and a create
 // from it gets the followed branch's version.
 func TestCreateFromTemplate_FromSubscription(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	src := playbooksSource(t, m, root, "subscribe")
@@ -301,6 +304,7 @@ func TestCreateFromTemplate_FromSubscription(t *testing.T) {
 // own skill (not the template's), indexes no file under .knomit/templates/,
 // and resolves no template recipe as its own.
 func TestTemplateSource_Inert(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	src := playbooksSource(t, m, root, "clone")
@@ -342,6 +346,7 @@ func TestTemplateSource_Inert(t *testing.T) {
 // authoritative path), and nothing left behind.
 // SABOTAGE: remove any one check → its row goes red.
 func TestCreateFromTemplate_Refusals(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	onto := "id: t\nname: T\ntopics:\n  notes:\n    description: N\n"
@@ -457,6 +462,7 @@ func mustPresetYAML(t *testing.T, preset string) string {
 // F24: a template that IS a preset (the playbooks `general`, byte-identical
 // to the embedded preset) keeps the preset's id and is accepted.
 func TestCreateFromTemplate_PresetTemplateIsAccepted(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	playbooksSource(t, m, root, "clone")
@@ -551,6 +557,7 @@ func TestListTemplates_NotOpenRepoIsNotAWarning(t *testing.T) {
 
 // F24 Verification "Modes" and "Source required": the request shape per mode.
 func TestCreateFromTemplate_RequestShape(t *testing.T) {
+	t.Parallel()
 	ref := &TemplateRef{Repo: "src", Name: "x"}
 	for _, spec := range []CreateSpec{
 		{Name: "a", Mode: "template"},
@@ -584,6 +591,7 @@ func TestCreateFromTemplate_RequestShape(t *testing.T) {
 // SABOTAGE: fall back to the single ontology WriteFact → the tree and
 // trailer assertions go red.
 func TestCreateFromTemplate_InitializeWritesTreeOnAgentBranchOnly(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	playbooksSource(t, m, root, "clone")
@@ -626,6 +634,7 @@ func TestCreateFromTemplate_InitializeWritesTreeOnAgentBranchOnly(t *testing.T) 
 // refused while this instance already has a fleet. A repo created from it is
 // the instance's fleet (IsFleetOntology).
 func TestCreateFromTemplate_Fleet(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	playbooksSource(t, m, root, "clone")
@@ -712,6 +721,7 @@ func TestCreateFromTemplate_Fleet(t *testing.T) {
 // listed. SABOTAGE: list a fact without checking its folder; read the agent
 // branch (an agent-only template would appear).
 func TestListTemplates(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	playbooksSource(t, m, root, "clone")
@@ -760,6 +770,7 @@ func TestListTemplates(t *testing.T) {
 // N10: a create racing a rename and an archive of its source ends in a
 // success or a named error, never a hang or a panic (run under -race).
 func TestCreateFromTemplate_SourceRenamedDuringCreate(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	playbooksSource(t, m, root, "clone")

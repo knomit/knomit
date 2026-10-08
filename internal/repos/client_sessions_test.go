@@ -14,6 +14,7 @@ import (
 // repo registry owns, wired to the [session] client_* thresholds, and the
 // existing reaper tick purges through it.
 func TestManagerStart_OpensClientSessionsStore(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	m.deps.Cfg.Session.ClientRetention = "1h"
 	require.Nil(t, m.ClientSessions(), "store must be nil before Start")
@@ -38,6 +39,7 @@ func TestManagerStart_OpensClientSessionsStore(t *testing.T) {
 
 // Close releases the store with the handle it borrows.
 func TestManagerClose_DropsClientSessionsStore(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	require.NotNil(t, m.ClientSessions())
@@ -47,6 +49,7 @@ func TestManagerClose_DropsClientSessionsStore(t *testing.T) {
 
 // A malformed threshold surfaces at boot, like the reaper's.
 func TestManagerStart_RejectsMalformedClientThreshold(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	m.deps.Cfg.Session.ClientDeadAfter = "nope"
 	require.Error(t, m.Start())

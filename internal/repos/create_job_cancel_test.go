@@ -63,6 +63,7 @@ func awaitCancelled(t *testing.T, job *CreateJob) CreateStatus {
 // cancel must undo it — not archive it, DELETE it. The job then reports
 // cancelled, and the name is free to be created again.
 func TestCancelCreate_DoneJobDeletesTheRepoWithoutATrace(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home},
@@ -145,6 +146,7 @@ func TestCancelCreate_RunningJobEndsCancelledAndLeavesNoTrace(t *testing.T) {
 // an unknown id has nothing behind it, and a done job whose repo has since
 // been replaced by another of the same name is not this job's to delete.
 func TestCancelCreate_RefusesWhatItCannotUndo(t *testing.T) {
+	t.Parallel()
 	t.Run("failed job", func(t *testing.T) {
 		m := New(context.Background(), Deps{
 			Cfg:           config.Config{Home: t.TempDir()},
@@ -234,6 +236,7 @@ func countSubscriptions(t *testing.T, m *Manager, uid string) int {
 // one of them changing breaks this silently. SUBSCRIBE mode is used because it
 // is the only mode that populates BOTH tables.
 func TestCancelCreate_LeavesNoOriginOrSubscriptionRow(t *testing.T) {
+	t.Parallel()
 	url := servedKnomitOrigin(t, 3)
 
 	home := t.TempDir()
@@ -405,6 +408,7 @@ func TestCreateJobs_OmitsCancelledButKeepsFailed(t *testing.T) {
 // so it was both a source of flakes and blind to the bug. The 120s bound is
 // only a hang detector.
 func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
+	t.Parallel()
 	url := servedKnomitOrigin(t, 200)
 
 	home := t.TempDir()

@@ -60,6 +60,7 @@ func TestProbeOrigin_EmptyLocalRepo(t *testing.T) {
 }
 
 func TestProbeOrigin_PopulatedLocalRepo(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newProbeTestManager(t, root)
 	// seedBareRemote (lifecycle_test.go) builds a bare repo with one commit on

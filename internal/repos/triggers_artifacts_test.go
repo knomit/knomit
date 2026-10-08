@@ -23,6 +23,7 @@ import (
 // Sabotage: diff the whole tree in DiffFacts (base "" instead of the ontology
 // root, isFactPath bypassed) → the artifact fires → red.
 func TestDispatch_ArtifactsAreNotTriggerVisible(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
 	setOntology(t, ri, "id: trig\nname: Triggers\ntopics:\n  artifacts:\n    description: a kb topic that shares the name\n"+

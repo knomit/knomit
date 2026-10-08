@@ -147,6 +147,7 @@ func seedLens(t *testing.T, m *Manager) (alpha, beta *RepoInstance) {
 }
 
 func TestManager_UpdateLens_PersistsAfterValidation(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha, _ := seedLens(t, m)
 	gamma := makeLensRepo(t, m, "gamma")
@@ -165,6 +166,7 @@ func TestManager_UpdateLens_PersistsAfterValidation(t *testing.T) {
 }
 
 func TestManager_UpdateLens_UnknownMember(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha, beta := seedLens(t, m)
 
@@ -180,6 +182,7 @@ func TestManager_UpdateLens_UnknownMember(t *testing.T) {
 }
 
 func TestManager_UpdateLens_Replica(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha, beta := seedLens(t, m)
 	clone := cloneLensRepo(t, m, "alpha", "alpha_clone")
@@ -195,6 +198,7 @@ func TestManager_UpdateLens_Replica(t *testing.T) {
 }
 
 func TestManager_UpdateLens_BranchUnknown(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha, beta := seedLens(t, m)
 
@@ -205,6 +209,7 @@ func TestManager_UpdateLens_BranchUnknown(t *testing.T) {
 }
 
 func TestManager_UpdateLens_EmptyWrite(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	seedLens(t, m)
 
@@ -213,6 +218,7 @@ func TestManager_UpdateLens_EmptyWrite(t *testing.T) {
 }
 
 func TestManager_UpdateLens_DescriptionCap(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha, beta := seedLens(t, m)
 

@@ -23,6 +23,7 @@ import (
 // any repo whose origin tracks something else, while setupIndex aimed the
 // startup index sync at a "main" branch that does not exist.
 func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// A bare remote whose default branch is master, seeded with a real commit
