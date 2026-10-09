@@ -165,6 +165,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	r.Delete("/fleet", handleDeleteFleet(b, s.Manager))
 	r.Get("/fleet/members", handleFleetMembers(b, s.Manager))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
+	r.Get("/archived/{id}", handleHALArchivedItem(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
 	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
 

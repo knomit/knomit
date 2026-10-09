@@ -28,8 +28,8 @@ func requireSymlinkNamed(t *testing.T, err error, path string) {
 
 // The OPEN path (identify stage, loadOntology): a symlinked ontology on ANY
 // rung REFUSES the repo (user ruling 2026-10-08, "refuse the repo"). It is not
-// mounted; it stays listed as Unavailable "unopenable" with the named error as
-// its detail, the way an identity conflict is. The create-time check
+// mounted; boot classifies it "unopenable" (CauseOntologySymlink) and then
+// archives it, with the named error as the system reason. The create-time check
 // (branchHasOntology) gives the same error rather than "has one".
 // Sabotage: drop identify's symlink refusal → the repo mounts → red; or
 // loadOntology back on ReadFact / treeOntologyFile back on IsFile → the
@@ -61,11 +61,17 @@ func TestLoadOntology_SymlinkedOntologyRefusesTheRepoNamingThePath(t *testing.T)
 			require.NoError(t, m2.Start(), "one refused repo does not fail the boot")
 			t.Cleanup(func() { _ = m2.Close() })
 			require.Nil(t, m2.Get(testRepoName), "a symlinked ontology refuses the repo: it is not mounted")
-			un := m2.Unavailable()
-			require.Len(t, un, 1)
-			require.Equal(t, uid, un[0].Record.UID)
-			require.Equal(t, "unopenable", un[0].Reason)
-			require.Contains(t, un[0].Detail, rung+" is a symlink, and knomit does not follow symlinks")
+			// Refused at Identify, then archived by the boot (option B, user
+			// ruling 2026-10-09) with the named error as its system reason.
+			require.Empty(t, m2.Unavailable())
+			archived, err := m2.ListArchived()
+			require.NoError(t, err)
+			require.Len(t, archived, 1)
+			require.Equal(t, uid, archived[0].ID)
+			require.NotNil(t, archived[0].Reason)
+			require.Equal(t, ArchiveBySystem, archived[0].Reason.Source)
+			require.Equal(t, "unopenable", archived[0].Reason.Condition)
+			require.Contains(t, archived[0].Reason.Reason, rung+" is a symlink, and knomit does not follow symlinks")
 		})
 	}
 }

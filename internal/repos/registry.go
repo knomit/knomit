@@ -324,6 +324,101 @@ func (r *Registry) SetState(uid string, state RepoState, at int64) error {
 	return requireOneRow(res, uid)
 }
 
+// ArchiveSource says who archived a repo.
+type ArchiveSource string
+
+const (
+	// ArchiveByUser is an archive the user asked for (DELETE /repos/{repo}).
+	ArchiveByUser ArchiveSource = "user"
+	// ArchiveBySystem is one knomit did on its own: a cancelled create, a
+	// fleet removal, or the boot auto-archive of a refused repo.
+	ArchiveBySystem ArchiveSource = "system"
+)
+
+// ArchiveReason is why a repo was archived, kept in repo_archive_reasons.
+//
+// Reason is the system's concrete why (empty for a user archive), Note the
+// user's free text, Condition the repo's observed state at the time — for one
+// archived while unavailable, "<reason>: <detail>".
+type ArchiveReason struct {
+	Source    ArchiveSource `json:"source"`
+	Reason    string        `json:"reason"`
+	Note      string        `json:"note"`
+	Condition string        `json:"condition"`
+}
+
+// Archive flips uid to archived at `at` and records why, in ONE transaction:
+// a row that is archived without its reason (or a reason for a row that is
+// still active) cannot be observed. INSERT OR REPLACE because an archive
+// always states the CURRENT reason — a leftover row from an earlier archive is
+// not possible (a successful restore deletes it) but would be wrong to keep.
+func (r *Registry) Archive(uid string, at int64, why ArchiveReason) error {
+	if why.Source != ArchiveByUser && why.Source != ArchiveBySystem {
+		return fmt.Errorf("registry archive: invalid source %q", why.Source)
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("registry archive: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	res, err := tx.Exec(`UPDATE repos SET state = ?, archived_at = ? WHERE uid = ?`,
+		string(StateArchived), at, uid)
+	if err != nil {
+		return classifyRegistryErr(err, r.nameOfTx(tx, uid))
+	}
+	if err := requireOneRow(res, uid); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT OR REPLACE INTO repo_archive_reasons (uid, source, reason, note, condition)
+		 VALUES (?, ?, ?, ?, ?)`,
+		uid, string(why.Source), why.Reason, why.Note, why.Condition); err != nil {
+		return fmt.Errorf("registry archive reason: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("registry archive: %w", err)
+	}
+	return nil
+}
+
+// nameOfTx is nameOf inside a transaction: the registry handle has ONE
+// connection, so a query on r.db while tx is open would wait on itself.
+func (r *Registry) nameOfTx(tx *sql.Tx, uid string) string {
+	var name string
+	if err := tx.QueryRow(`SELECT name FROM repos WHERE uid = ?`, uid).Scan(&name); err != nil {
+		return ""
+	}
+	return name
+}
+
+// ArchiveReasonOf returns why uid was archived; ok is false when no reason was
+// recorded (an archive from before reasons existed, or an active repo).
+func (r *Registry) ArchiveReasonOf(uid string) (ArchiveReason, bool, error) {
+	var why ArchiveReason
+	var src string
+	err := r.db.QueryRow(
+		`SELECT source, reason, note, condition FROM repo_archive_reasons WHERE uid = ?`, uid).
+		Scan(&src, &why.Reason, &why.Note, &why.Condition)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ArchiveReason{}, false, nil
+	}
+	if err != nil {
+		return ArchiveReason{}, false, fmt.Errorf("registry archive reason: %w", err)
+	}
+	why.Source = ArchiveSource(src)
+	return why, true, nil
+}
+
+// ClearArchiveReason drops uid's archive reason. Restore calls it only after
+// the repo mounted: a refused restore leaves the repo archived, and its reason
+// must still be there.
+func (r *Registry) ClearArchiveReason(uid string) error {
+	if _, err := r.db.Exec(`DELETE FROM repo_archive_reasons WHERE uid = ?`, uid); err != nil {
+		return fmt.Errorf("registry clear archive reason: %w", err)
+	}
+	return nil
+}
+
 // nameOf is a best-effort display name for uid, used only to fill in an error
 // message. An empty result means the message says less, never that it lies.
 func (r *Registry) nameOf(uid string) string {

@@ -43,8 +43,16 @@ func RepoMiddleware(m *repos.Manager) func(http.Handler) http.Handler {
 						r.URL.Path)
 					return
 				}
-				hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
-					`no repo named "`+name+`"`, r.URL.Path)
+				detail := `no repo named "` + name + `"`
+				// A name that was archived says so, and why: an agent still
+				// bound to a repo knomit archived on its own (a symlinked
+				// ontology at boot) learns the reason instead of a bare 404.
+				// Only when a reason was recorded — a legacy archive keeps
+				// the plain body.
+				if a, ok := m.LatestArchivedNamed(name); ok && a.Reason != nil {
+					detail += ". " + archiveSummary(a.Reason)
+				}
+				hal.WriteProblem(w, http.StatusNotFound, "Repo not found", detail, r.URL.Path)
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(repos.WithRepoInstance(r.Context(), ri)))

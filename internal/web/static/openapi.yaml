@@ -563,20 +563,34 @@ paths:
         or an operation on it is already in flight), not that this repo is
         privileged.
 
-        Archiving needs a live store to shut down, so it resolves the name
-        through the live repo map: a registered repo with no store (see
-        `RepoSummary.state`) answers 404 here, the same as a name that was never
-        registered. There is currently no way to remove such a registration.
+        A registered repo with no store (`RepoSummary.state` missing,
+        unopenable or conflict) is archived too, without being opened: that is
+        the way out of that state. Archived, it can be purged, and its name and
+        knowledge base no longer block adding the same one again. Its state at
+        the time is recorded as `reason.condition`.
+
+        The optional body `{"note": "..."}` records the user's reason (at most
+        500 bytes after trimming; longer is 400 and archives nothing). The
+        archive is recorded as `reason.source: user`.
 
         `archivedAt` is a whole-second RFC 3339 timestamp — the same value
         `GET /archived` reports for this record afterwards.
       operationId: archiveRepo
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string, maxLength: 500, description: "Why the user archived it. Optional." }
       responses:
         "200":
           description: Repository archived
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/ArchivedRepo" }
+        "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
@@ -2475,6 +2489,20 @@ paths:
   /archived/{id}:
     parameters:
       - $ref: "#/components/parameters/ArchivedID"
+    get:
+      tags: [archive]
+      summary: Get one archived repository
+      description: |
+        The archived repo with its reason — the target of every archived
+        item's `self` link. 404 when the id is unknown or the repo is active.
+      operationId: getArchivedRepo
+      responses:
+        "200":
+          description: The archived repository
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/ArchivedRepo" }
+        "404": { $ref: "#/components/responses/Problem" }
     delete:
       tags: [archive]
       summary: Permanently purge an archived repository
@@ -4705,7 +4733,41 @@ components:
             On-disk size of the archived database. An archived repo's file never
             moves and is named for its uid, so this is the only place the disk a
             purge would reclaim is visible. 0 when the file could not be stat'd.
+        reason:
+          description: |
+            Why it was archived. null for a repo archived before reasons were
+            recorded — show "no reason recorded".
+          nullable: true
+          allOf: [{ $ref: "#/components/schemas/ArchiveReason" }]
         _links: { $ref: "#/components/schemas/LinkMap" }
+
+    ArchiveReason:
+      type: object
+      required: [source, reason, note, condition, summary]
+      properties:
+        source:
+          type: string
+          enum: [user, system]
+          description: |
+            user — DELETE /repos/{repo}. system — knomit archived it on its own:
+            at boot, a repo whose ontology is a symlink (the only cause archived
+            automatically); a cancelled create or a fleet removal, whose purge
+            then failed.
+        reason:
+          type: string
+          description: |
+            The system's concrete why (empty for a user archive). For a symlinked ontology, the same text a restore refuses with.
+        note:
+          type: string
+          description: The user's free-text note, empty when none.
+        condition:
+          type: string
+          description: |
+            The repo's state when archived, e.g. "unopenable" or "missing: database file not found"; empty for a repo that was mounted.
+        summary:
+          type: string
+          description: |
+            One line for display — "Archived by the user", "Archived by the user: <note>" or "Archived automatically: <reason>".
 
     ClientSession:
       type: object

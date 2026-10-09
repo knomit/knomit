@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, repoAvailable, brokenLensMember, isTerminalCreateState, RepoIndexingError, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef, type RepoCreateStatus } from './api';
+import { api, repoAvailable, brokenLensMember, isTerminalCreateState, RepoIndexingError, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, MAX_ARCHIVE_NOTE_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef, type RepoCreateStatus } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { RepoOntologyChip } from './RepoOntologyChip';
@@ -620,6 +620,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                 repos={repos}
                 lenses={lenses}
                 archivedCount={archived.length}
+                autoArchivedCount={archived.filter(a => a.reason?.source === 'system').length}
                 hideRemoteConfig={hideRemoteConfig}
                 serverReadOnly={serverReadOnly}
                 onSelectRepo={(name, focus) => setSel({ kind: 'repo', name, focus })}
@@ -642,7 +643,12 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                 this repo — so the settings page would render as a wall of
                 failures that never says the one thing worth knowing. */}
             {view.kind === 'repo' && !repoAvailable(repos.find(r => r.name === view.name) ?? {}) && (
-              <RepoUnavailable repo={repos.find(r => r.name === view.name)!} />
+              <RepoUnavailable
+                key={view.name}
+                repo={repos.find(r => r.name === view.name)!}
+                readOnly={serverReadOnly}
+                onArchived={() => { onChanged(); refresh(); setSel(null); }}
+              />
             )}
             {view.kind === 'repo' && repoAvailable(repos.find(r => r.name === view.name) ?? {}) && (
               <RepoDetail
@@ -776,41 +782,52 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
 /**
  * RepoUnavailable is the settings page for a repository that has no live store.
  *
- * It offers no controls. Archive resolves through the live repo map and purge
- * only takes an already-archived repo, so every button this page could carry
- * would 4xx — and a dead control is a worse answer than an honest sentence. The
- * page's whole job is to convert "this repo is here but does nothing" into a
- * specific fact and the one move that fixes it.
+ * Its one control is Archive. Archiving does not need the store — the server
+ * flips the registration and records why — and it is the way out of this
+ * state: archived, the repo can be purged, and its name and knowledge base no
+ * longer block adding the same one again. Every OTHER button a settings page
+ * carries would resolve through the store this repo does not have, so none is
+ * offered.
  *
  * The three states want different moves, which is exactly why the server sends
  * the reason rather than a bare failure, and why this branches on it instead of
  * printing one apology for all three.
  */
-function RepoUnavailable({ repo }: { repo: RepoInfo }) {
+function RepoUnavailable({ repo, readOnly, onArchived }: {
+  repo: RepoInfo; readOnly: boolean; onArchived: () => void;
+}) {
   const state = repo.state ?? 'unavailable';
-  // Every sentence here has to name something the product can actually do
-  // TODAY. Archive resolves through the live repo map and purge only accepts an
-  // already-archived repo, so there is no supported way to remove this
-  // registration — advice that implied otherwise would send the reader to a
-  // 404 from a page that offers no such button anyway.
+  const [confirming, setConfirming] = useState(false);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  // Every sentence here names something the product can actually do TODAY.
   const advice: Record<string, string> = {
     missing:
       'Its database file is not where the registry says it is. Put the file back — from a backup, or wherever it '
-      + 'was moved to — and restart knomit; the registration is intact and will pick it up.',
-    // A symlinked ontology lands here too (the detail names the file): knomit
-    // refuses such a repo rather than open it without its taxonomy. The
-    // advice must not promise a sync will fix it — a refused repo is not
-    // opened, so it does not sync.
+      + 'was moved to — and restart knomit; the registration is intact and will pick it up. If the file is gone '
+      + 'for good, archive the registration below.',
+    // A symlinked ontology does not normally land here: knomit archives such a
+    // repo at startup, with the reason. It can still show here when a lens
+    // reads or writes the repo (archiving a lens member is refused).
     unopenable:
       'The file is there but could not be opened — a corrupt database, one written by a newer build, or an '
       + 'ontology that is a symlink, which knomit refuses rather than follow. The detail above names the cause, '
       + 'and the server log for this startup carries it in full. Repairing or replacing the file and restarting '
-      + 'knomit is what clears this; a refused repository does not sync, so a fix pushed to its remote does not '
-      + 'reach this copy on its own.',
+      + 'knomit clears this; a refused repository does not sync, so a fix pushed to its remote does not reach '
+      + 'this copy on its own. To start over, archive it below, purge it, and add the repository again.',
     conflict:
       'Another registered repository already holds this knowledge base. Two local copies would both write the same '
-      + 'agent branch and overwrite each other on push, so this one is left closed. Archiving the OTHER copy — the '
-      + 'one that did open — and restarting knomit hands this registration its knowledge base back.',
+      + 'agent branch and overwrite each other on push, so this one is left closed. Archive this copy below to '
+      + 'keep the other — or archive the OTHER copy and restart knomit to hand this registration its knowledge '
+      + 'base back.',
+  };
+  const noteBytes = new TextEncoder().encode(note.trim()).length;
+  const archive = async () => {
+    setErr(''); setBusy(true);
+    try { await api.archiveRepo(repo.name, note); onArchived(); }
+    catch (e) { setErr(`archive failed: ${String(e)}`); }
+    finally { setBusy(false); }
   };
   return (
     <div data-testid={`repo-unavailable-${repo.name}`} style={{ maxWidth: 560, paddingTop: 30 }}>
@@ -837,14 +854,41 @@ function RepoUnavailable({ repo }: { repo: RepoInfo }) {
       {advice[state] && (
         <p style={{ fontSize: 12.5, color: '#888', lineHeight: 1.6, marginTop: 12 }}>{advice[state]}</p>
       )}
-      {/* Said plainly rather than left to be discovered. Archiving needs a live
-          store and purging needs an already-archived repo, so neither route is
-          open to this repo — and a reader who is not told that will go hunting
-          for a button that is not there. */}
-      <p data-testid="repo-unavailable-no-removal" style={{ fontSize: 12, color: '#6a6a6a', lineHeight: 1.6, marginTop: 12 }}>
-        Removing the registration itself is not supported yet: archiving needs a store to close, and purging only
-        accepts an already-archived repository. Until the file comes back, this row stays.
-      </p>
+      <div style={{ ...dangerBox, marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 13, color: '#ddd' }}>Archive this registration</span>
+          <div style={{ flex: 1 }} />
+          {!confirming && (
+            <button type="button" data-testid="repo-unavailable-archive" style={btn(readOnly || busy, 'danger')}
+              disabled={readOnly || busy} onClick={() => { setNote(''); setConfirming(true); }}>
+              Archive…
+            </button>
+          )}
+        </div>
+        <div style={{ fontSize: 11.5, color: '#777', marginTop: 6 }}>
+          Nothing is deleted and the store is not opened: the registration moves into Archived with this state
+          recorded as its reason. From there it can be purged, and the same repository added again.
+        </div>
+        {confirming && (
+          <div style={confirmBox}>
+            <div style={{ fontSize: 13, marginBottom: 8 }}>Why are you archiving it? (optional)</div>
+            <input autoFocus data-testid="repo-unavailable-archive-note" style={confirmInput} value={note}
+              placeholder="e.g. replaced by a fresh clone" onChange={e => setNote(e.target.value)} />
+            {noteBytes > MAX_ARCHIVE_NOTE_BYTES && (
+              <div style={{ fontSize: 11.5, color: '#f88', marginTop: 6 }}>
+                At most {MAX_ARCHIVE_NOTE_BYTES} bytes are kept.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button type="button" data-testid="repo-unavailable-archive-confirm"
+                style={btn(busy || noteBytes > MAX_ARCHIVE_NOTE_BYTES, 'danger')}
+                disabled={busy || noteBytes > MAX_ARCHIVE_NOTE_BYTES} onClick={archive}>Archive</button>
+              <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {err && <div data-testid="repo-unavailable-archive-error" style={{ fontSize: 12, color: '#f88', marginTop: 8 }}>{err}</div>}
+      </div>
     </div>
   );
 }
@@ -1013,9 +1057,15 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
       setRebuilding(false);
     }
   };
+  // Archive asks first, for an optional note: the reason is kept with the
+  // archive and shown on the Archived page, where a list of names alone does
+  // not say why any of them is there.
+  const [archiving, setArchiving] = useState(false);
+  const [archiveNote, setArchiveNote] = useState('');
+  const archiveNoteBytes = new TextEncoder().encode(archiveNote.trim()).length;
   const archive = async () => {
     onError(''); setBusy(true);
-    try { await api.archiveRepo(name); onArchived(); }
+    try { await api.archiveRepo(name, archiveNote); onArchived(); }
     catch (e) { onError(`archive failed: ${String(e)}`); }
     finally { setBusy(false); }
   };
@@ -1420,13 +1470,32 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ fontSize: 13, color: '#ddd' }}>Archive this repository</span>
           <div style={{ flex: 1 }} />
-          <button type="button" data-testid="repo-archive" style={btn(!canArchive || busy, 'danger')} disabled={!canArchive || busy} onClick={archive}>
-            Archive
-          </button>
+          {!archiving && (
+            <button type="button" data-testid="repo-archive" style={btn(!canArchive || busy, 'danger')} disabled={!canArchive || busy}
+              onClick={() => { setArchiveNote(''); setArchiving(true); }}>
+              Archive…
+            </button>
+          )}
         </div>
         <div style={{ fontSize: 11.5, color: '#777', marginTop: 6 }}>
           Recoverable — it moves into Archived under Repositories, and nothing is deleted.
         </div>
+        {archiving && (
+          <div style={confirmBox}>
+            <div style={{ fontSize: 13, marginBottom: 8 }}>Why are you archiving it? (optional, shown in Archived)</div>
+            <input autoFocus data-testid="repo-archive-note" style={confirmInput} value={archiveNote}
+              placeholder="e.g. moved to the team knowledge base" onChange={e => setArchiveNote(e.target.value)} />
+            {archiveNoteBytes > MAX_ARCHIVE_NOTE_BYTES && (
+              <div style={{ fontSize: 11.5, color: '#f88', marginTop: 6 }}>At most {MAX_ARCHIVE_NOTE_BYTES} bytes are kept.</div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button type="button" data-testid="repo-archive-confirm"
+                style={btn(busy || archiveNoteBytes > MAX_ARCHIVE_NOTE_BYTES, 'danger')}
+                disabled={busy || archiveNoteBytes > MAX_ARCHIVE_NOTE_BYTES} onClick={archive}>Archive</button>
+              <button type="button" style={btn(busy)} disabled={busy} onClick={() => setArchiving(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
         <div style={{ borderTop: '1px solid #3a2020', marginTop: 14, paddingTop: 14 }}>
           <div style={{ fontSize: 13, color: '#ddd', marginBottom: 4 }}>Rename this repository</div>
           {/* Name the actual consequence rather than saying "this is
@@ -1700,7 +1769,7 @@ function ArchivedPage({ archived, readOnly, activeNames, onRestored, onPurged, o
   const sections: Section[] = archived.map(info => ({
     id: `archived-${info.id}`,
     title: info.name,
-    hint: `archived ${new Date(info.archivedAt).toLocaleString()}`,
+    hint: `archived ${info.reason?.source === 'system' ? 'automatically ' : ''}${new Date(info.archivedAt).toLocaleString()}`,
     body: (
       <ArchivedDetail
         key={info.id}
@@ -1789,6 +1858,8 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
         )}
       </div>
 
+      <ArchiveReasonLine info={info} />
+
       {confirming === 'restore' && (
         <div style={confirmBox}>
           <div style={{ fontSize: 13, marginBottom: 8 }}>“{info.name}” is already active. Restore under a new name:</div>
@@ -1812,6 +1883,33 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
             <button type="button" data-testid={`purge-confirm-${info.id}`} style={btn(busy || purgeText !== info.name, 'danger')} disabled={busy || purgeText !== info.name} onClick={doPurge}>Confirm purge</button>
             <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ArchiveReasonLine says why an archived repo is in the archive: by the user
+// (with their note), by knomit itself (with the concrete why — for a
+// symlinked ontology the same text a restore will refuse with), or, for one
+// archived before reasons were recorded, a neutral "No reason recorded".
+// The server composes the wording (reason.summary); this only lays it out.
+function ArchiveReasonLine({ info }: { info: ArchivedRepo }) {
+  const why = info.reason;
+  if (why === undefined) return null; // an older server: say nothing rather than guess
+  const text = why === null ? 'No reason recorded' : why.summary;
+  return (
+    <div data-testid={`archived-reason-${info.id}`} style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.6 }}>
+      <span style={{ color: why === null ? '#6a6a6a' : '#b8b8b8' }}>{text}</span>
+      {why && why.condition && why.condition !== why.reason && (
+        <div data-testid={`archived-condition-${info.id}`} style={{ fontSize: 11.5, color: '#777', fontFamily: 'var(--k-font-mono)' }}>
+          state when archived: {why.condition}
+        </div>
+      )}
+      {why?.source === 'system' && why.condition && (
+        <div style={{ fontSize: 11.5, color: '#777' }}>
+          Restoring re-runs the check that refused it, so it is refused again until the cause is fixed;
+          purge it and add the repository again to start over.
         </div>
       )}
     </div>

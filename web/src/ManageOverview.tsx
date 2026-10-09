@@ -135,10 +135,14 @@ function attentionFor(rows: FleetRow[]): Attention[] {
   return out.sort((a, b) => Number(a.kind === 'no-remote') - Number(b.kind === 'no-remote'));
 }
 
-export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, serverReadOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions, liveSessions, onOpenCreate, createSurface }: {
+export function ManageOverview({ repos, lenses, archivedCount, autoArchivedCount = 0, hideRemoteConfig, serverReadOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions, liveSessions, onOpenCreate, createSurface }: {
   repos: RepoInfo[];
   lenses: Lens[];
   archivedCount: number;
+  /** How many of the archived were archived by knomit itself (at startup, a
+   *  repo refused for a symlinked ontology) — said here because nothing else
+   *  tells the user a repo left their list on its own. */
+  autoArchivedCount?: number;
   hideRemoteConfig: boolean;
   /** Same gate as the rail's `+` buttons: the INSTANCE accepts no mutations.
    *  These must be dead whenever those are, or Overview becomes the one way to
@@ -231,6 +235,9 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
           <div style={{ fontSize: 11.5, color: '#777', marginTop: 2 }}>
             {count(repos.length, 'repository', 'repositories')} · {count(lenses.length, 'lens', 'lenses')}
             {archivedCount > 0 && ` · ${archivedCount} archived`}
+            {autoArchivedCount > 0 && (
+              <span data-testid="overview-auto-archived"> ({autoArchivedCount} automatically)</span>
+            )}
           </div>
         </div>
         {/* No Browse: Overview is not an entity, so there is nothing to browse.

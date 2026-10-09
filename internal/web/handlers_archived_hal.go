@@ -2,7 +2,9 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -19,19 +21,63 @@ import (
 // purge would reclaim is visible. It is reported even when 0 (a stat that
 // failed, or a genuinely empty file): omitting it would make "we could not tell"
 // indistinguishable from "this repo is not in the response shape you expect".
+//
+// reason is why it was archived, or null for a repo archived before reasons
+// were recorded (clients show "no reason recorded"). Its summary is composed
+// here so that every client — the web UI, a script, an agent — words it alike.
 type archivedView struct {
-	ID         string      `json:"id"`
-	Name       string      `json:"name"`
-	Origin     string      `json:"origin"`
-	ArchivedAt string      `json:"archivedAt"`
-	SizeBytes  int64       `json:"sizeBytes"`
-	Links      hal.LinkMap `json:"_links"`
+	ID         string             `json:"id"`
+	Name       string             `json:"name"`
+	Origin     string             `json:"origin"`
+	ArchivedAt string             `json:"archivedAt"`
+	SizeBytes  int64              `json:"sizeBytes"`
+	Reason     *archiveReasonView `json:"reason"`
+	Links      hal.LinkMap        `json:"_links"`
+}
+
+// archiveReasonView is repos.ArchiveReason on the wire, plus its summary.
+type archiveReasonView struct {
+	Source    string `json:"source"`
+	Reason    string `json:"reason"`
+	Note      string `json:"note"`
+	Condition string `json:"condition"`
+	Summary   string `json:"summary"`
+}
+
+// maxArchiveNoteBytes caps the user's note: a sentence, not a document.
+const maxArchiveNoteBytes = 500
+
+// archiveSummary is the one-line wording of an archive reason.
+func archiveSummary(why *repos.ArchiveReason) string {
+	if why == nil {
+		return "No reason recorded"
+	}
+	if why.Source == repos.ArchiveBySystem {
+		if why.Reason == "" {
+			return "Archived automatically"
+		}
+		return "Archived automatically: " + why.Reason
+	}
+	if why.Note != "" {
+		return "Archived by the user: " + why.Note
+	}
+	return "Archived by the user"
+}
+
+func archiveReasonViewOf(why *repos.ArchiveReason) *archiveReasonView {
+	if why == nil {
+		return nil
+	}
+	return &archiveReasonView{
+		Source: string(why.Source), Reason: why.Reason, Note: why.Note,
+		Condition: why.Condition, Summary: archiveSummary(why),
+	}
 }
 
 func archivedViewOf(b hal.URLBuilder, a repos.ArchiveInfo) archivedView {
 	return archivedView{
 		ID: a.ID, Name: a.Name, Origin: a.Origin, ArchivedAt: a.ArchivedAt,
-		SizeBytes: a.SizeBytes,
+		SizeBytes: a.SizeBytes, Reason: archiveReasonViewOf(a.Reason),
 		Links: hal.LinkMap{
 			"self":    {Href: b.ArchivedItem(a.ID)},
 			"restore": {Href: b.ArchivedItem(a.ID) + "/restore"},
@@ -39,11 +85,29 @@ func archivedViewOf(b hal.URLBuilder, a repos.ArchiveInfo) archivedView {
 	}
 }
 
+type archiveRequest struct {
+	Note string `json:"note"`
+}
+
 // handleHALRepoArchive serves DELETE /api/v1/repos/{repo} (archive).
+//
+// The body is optional: {"note": "..."} records the user's reason with the
+// archive. It archives a mounted repo AND an unavailable one (missing,
+// unopenable, conflict) — the second is the only way out of that state.
 func handleHALRepoArchive(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
-		info, err := m.Archive(name)
+		var req archiveRequest
+		if !decodeOptionalJSON(w, r, &req, 4096) {
+			return
+		}
+		note := strings.TrimSpace(req.Note)
+		if len(note) > maxArchiveNoteBytes {
+			hal.WriteProblem(w, http.StatusBadRequest, "Note too long",
+				fmt.Sprintf("the archive note is %d bytes; at most %d are kept", len(note), maxArchiveNoteBytes), r.URL.Path)
+			return
+		}
+		info, err := m.ArchiveWith(name, repos.ArchiveReason{Source: repos.ArchiveByUser, Note: note})
 		var fe *repos.FleetError
 		if errors.As(err, &fe) {
 			writeFleetError(w, r, err) // use_unregister: 409 with the hint
@@ -75,6 +139,20 @@ func handleHALArchived(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			Links:    hal.LinkMap{"self": {Href: b.Archived()}},
 			Embedded: map[string][]archivedView{"archived": items},
 		})
+	}
+}
+
+// handleHALArchivedItem serves GET /api/v1/archived/{id}: one archived repo,
+// the target of every archived item's self link.
+func handleHALArchivedItem(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		info, err := m.GetArchived(chi.URLParam(r, "id"))
+		if err != nil {
+			status, title := archiveErrStatus(err)
+			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
+			return
+		}
+		hal.WriteHAL(w, http.StatusOK, archivedViewOf(b, info))
 	}
 }
 
