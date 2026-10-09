@@ -22,6 +22,16 @@ func restartIn(t *testing.T, home string, deps Deps) *Manager {
 	return m
 }
 
+// requireSameBytes asserts the store file at path still holds exactly want:
+// archiving never deletes or rewrites a repo's database (the data-safety
+// rule) — only purge removes it.
+func requireSameBytes(t *testing.T, path string, want []byte, msgAndArgs ...any) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	require.NoError(t, err, msgAndArgs...)
+	require.Equal(t, want, got, msgAndArgs...)
+}
+
 // archivedByUID returns the archived row for uid, failing when there is none.
 func archivedByUID(t *testing.T, m *Manager, uid string) ArchiveInfo {
 	t.Helper()
@@ -65,6 +75,8 @@ func TestArchive_UnopenableRepoArchivesAndUnblocksReAdd(t *testing.T) {
 	require.NoError(t, os.WriteFile(m.RepoPath(uid), []byte("not a sqlite db"), 0o644))
 
 	m2 := restartIn(t, home, deps)
+	before, err := os.ReadFile(m2.RepoPath(uid))
+	require.NoError(t, err)
 	un := m2.Unavailable()
 	require.Len(t, un, 1, "a corrupt store is NOT archived at boot: it can heal by itself")
 	require.Equal(t, "unopenable", un[0].Reason)
@@ -83,11 +95,14 @@ func TestArchive_UnopenableRepoArchivesAndUnblocksReAdd(t *testing.T) {
 	require.Contains(t, info.Reason.Condition, "unopenable: ")
 	require.Empty(t, m2.Unavailable(), "archived: no longer listed as unavailable")
 
+	requireSameBytes(t, m2.RepoPath(uid), before, "a user archive leaves the store file untouched")
+
 	listed := archivedByUID(t, m2, uid)
 	require.Equal(t, *info.Reason, *listed.Reason, "the archive response and the listing agree")
 
 	_, err = m2.Create(ctx, CreateSpec{Name: "kb2", Mode: "clone", Origin: &OriginSpec{URL: url}}, nil)
 	require.NoError(t, err, "archived, it no longer blocks the same knowledge base")
+	requireSameBytes(t, m2.RepoPath(uid), before, "still untouched just before the purge")
 
 	require.NoError(t, m2.Purge(uid))
 	_, err = os.Stat(m2.RepoPath(uid))
@@ -120,6 +135,10 @@ func TestArchive_ConflictRepoArchivesAndPurges(t *testing.T) {
 
 	m2 := restartIn(t, home, m.deps)
 	require.NotNil(t, m2.Get("a"))
+	// Read after boot: the failed mount opened (and closed) the file, so this —
+	// not the copied bytes — is what the archive must leave alone.
+	before, err := os.ReadFile(m2.RepoPath(bUID))
+	require.NoError(t, err)
 	un := m2.Unavailable()
 	require.Len(t, un, 1, "a conflict is NOT archived at boot")
 	require.Equal(t, "conflict", un[0].Reason)
@@ -131,6 +150,7 @@ func TestArchive_ConflictRepoArchivesAndPurges(t *testing.T) {
 	require.Empty(t, info.Reason.Note)
 	require.Contains(t, info.Reason.Condition, "conflict: ")
 	require.Empty(t, m2.Unavailable())
+	requireSameBytes(t, m2.RepoPath(bUID), before, "a user archive leaves the conflict copy's store untouched")
 	require.NoError(t, m2.Purge(bUID))
 	require.NotNil(t, m2.Get("a"), "the holder is untouched")
 	createRepo(t, m2, "b") // the name is free again
@@ -194,6 +214,11 @@ func TestStart_SymlinkedOntologyIsArchivedBySystem(t *testing.T) {
 	require.Equal(t, "member", un[0].Record.Name)
 	require.Equal(t, CauseOntologySymlink, un[0].Cause)
 
+	// The system archive at boot left the store in place.
+	before, err := os.ReadFile(m2.RepoPath(uid))
+	require.NoError(t, err, "a system archive leaves the store file in place")
+	require.NotEmpty(t, before)
+
 	a := archivedByUID(t, m2, uid)
 	require.NotNil(t, a.Reason)
 	require.Equal(t, ArchiveBySystem, a.Reason.Source)
@@ -206,6 +231,8 @@ func TestStart_SymlinkedOntologyIsArchivedBySystem(t *testing.T) {
 	require.Nil(t, m2.Get("linked"))
 	again := archivedByUID(t, m2, uid)
 	require.Equal(t, *a.Reason, *again.Reason, "a refused restore keeps the reason")
+	_, err = os.Stat(m2.RepoPath(uid))
+	require.NoError(t, err, "a refused restore leaves the store file in place")
 
 	require.NoError(t, m2.Purge(uid))
 	createRepo(t, m2, "linked") // name free again

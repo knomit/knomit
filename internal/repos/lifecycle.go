@@ -1563,6 +1563,16 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 // has none loaded. Archiving it is therefore not refused, and the fleet state
 // is left as it was — accepted, because a fleet repository that will not open
 // serves no fleet either.
+//
+// KNOWN DEAD END (not made worse here): a fleet row in state "unregistering"
+// whose fleet repository is unavailable. Archiving that repository does not
+// call fleetRemoved (wasFleet is false: it cannot be recognised), so the row
+// stays "unregistering" and RegisterFleet keeps refusing with "an
+// unregistration is still being pushed; it must finish (or the fleet
+// repository be archived)" — whose advertised remedy, archiving, no longer
+// clears it. It was already a dead end before unavailable repos could be
+// archived; clearing it needs a way to identify the fleet repository without
+// mounting it.
 func (m *Manager) ArchiveWith(name string, why ArchiveReason) (ArchiveInfo, error) {
 	if err := m.guardFleetRemoval(name); err != nil {
 		return ArchiveInfo{}, err
@@ -1873,12 +1883,15 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 		}
 		return nil, fmt.Errorf("restore register: %w", merr)
 	}
-	m.Set(target, ri)
-	// Only now: a restore refused above left the repo archived, and its
-	// reason — the one the refusal just repeated — must still be shown.
+	// Cleared only after the mount succeeded — a restore refused above left
+	// the repo archived, and its reason (the one the refusal just repeated)
+	// must still be shown — and BEFORE m.Set: once the repo is in m.repos a
+	// concurrent DELETE can archive it again, writing a NEW reason row that a
+	// later clear would delete, leaving that archive with "no reason recorded".
 	if cerr := reg.ClearArchiveReason(uid); cerr != nil {
 		log.Warn().Err(cerr).Str("uid", uid).Msg("restore: archive reason not cleared")
 	}
+	m.Set(target, ri)
 	log.Info().Str("uid", uid).Str("repo", target).Msg("restored repo")
 	return ri, nil
 }
