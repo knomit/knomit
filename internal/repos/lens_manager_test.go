@@ -475,7 +475,6 @@ func TestLens_SurvivesMemberRename(t *testing.T) {
 }
 
 func TestManager_ValidateLens_SubscriptionCannotBeWriteRepo(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	m := newSubscribeTestManager(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git"))

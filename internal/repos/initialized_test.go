@@ -22,7 +22,6 @@ import (
 // either of the other two.
 
 func TestProbeInitialized_YesWhenTheBranchCarriesAnOntology(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git")) // WITH an ontology
 	m := newRemoteModeManager(t, dir)
@@ -35,7 +34,6 @@ func TestProbeInitialized_YesWhenTheBranchCarriesAnOntology(t *testing.T) {
 }
 
 func TestProbeInitialized_NoWhenTheBranchHasNone(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -65,7 +63,6 @@ func TestProbeInitialized_UnknownWhenTheRemoteCannotBeRead(t *testing.T) {
 // Naming a branch the remote does not have is also an unknown: nothing was
 // looked at. It is emphatically not "that branch has no ontology".
 func TestProbeInitialized_UnknownWhenTheBranchDoesNotExist(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -95,7 +92,6 @@ func TestProbeInitialized_EmptyRemoteIsUnknownAndSaysWhy(t *testing.T) {
 // can carry the ontology on main and not on develop, and a check that ignored
 // the branch would route the develop case to the wrong mode.
 func TestProbeInitialized_AnswersPerBranchNotPerRemote(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git")) // main HAS an ontology
 	bare := bareOf(url)
@@ -124,7 +120,6 @@ func TestProbeInitialized_AnswersPerBranchNotPerRemote(t *testing.T) {
 // With no branch named, the remote's own default is inspected and REPORTED, so
 // the caller learns which branch the answer is about rather than assuming.
 func TestProbeInitialized_DefaultsToTheRemoteHeadAndNamesIt(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -147,7 +142,6 @@ func TestProbeInitialized_RejectsUngatedLocalPath(t *testing.T) {
 // domains/ontology.yaml IS a knowledge base — reporting it as uninitialized
 // would offer to write a second ontology over the one that already governs it.
 func TestProbeInitialized_YesForALegacyOntologyPath(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "remote.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
@@ -215,7 +209,6 @@ func seedRemoteInitializedByThisMachine(t *testing.T, bare, agentBranch string) 
 //
 // The probe must answer the question the create will actually ask.
 func TestProbeInitialized_YesWhenThisMachineAlreadyInitializedTheRemote(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedRemoteInitializedByThisMachine(t, filepath.Join(dir, "remote.git"), "agent/test-abc")
 	m := newRemoteModeManager(t, dir)
@@ -231,7 +224,6 @@ func TestProbeInitialized_YesWhenThisMachineAlreadyInitializedTheRemote(t *testi
 // The mirror, and the reason this cannot simply always prefer the agent branch:
 // a remote NOBODY has initialized still answers about the consensus branch.
 func TestProbeInitialized_NoWhenNoAgentBranchExistsOnTheRemote(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -247,7 +239,6 @@ func TestProbeInitialized_NoWhenNoAgentBranchExistsOnTheRemote(t *testing.T) {
 // initialized by someone else is still "no" for us — we cut our own agent
 // branch from the consensus branch, and the ontology question is about that.
 func TestProbeInitialized_IgnoresAnotherMachinesAgentBranch(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedRemoteInitializedByThisMachine(t, filepath.Join(dir, "remote.git"), "agent/some-other-box")
 	m := newRemoteModeManager(t, dir)
@@ -273,7 +264,6 @@ func TestProbeInitialized_IgnoresAnotherMachinesAgentBranch(t *testing.T) {
 // whose answer routes to a mode the create refuses is the bug, whatever the
 // two implementations happen to look like.
 func TestProbeInitialized_PredictsWhatTheCreateWillDo(t *testing.T) {
-	t.Parallel()
 	cases := []struct {
 		name       string
 		seed       func(t *testing.T, bare, agentBranch string) string
@@ -365,7 +355,6 @@ func TestProbeInitialized_PredictsWhatTheCreateWillDo(t *testing.T) {
 // was established, and the caller is told why rather than being handed an
 // answer that would route a create.
 func TestProbeInitialized_RefusesToPullMoreThanItsBudget(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)
@@ -380,7 +369,6 @@ func TestProbeInitialized_RefusesToPullMoreThanItsBudget(t *testing.T) {
 
 // And the ordinary case still answers, with the budget at its default.
 func TestProbeInitialized_DefaultBudgetAnswersNormalRemotes(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)

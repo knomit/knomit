@@ -158,7 +158,6 @@ func send(m *Manager, ri *RepoInstance, e MachineEvent) (Reply, error) {
 // TestMachine_TransitionTable walks the spec's transition table: every state
 // a repo can be in, every event it can be sent, the refusal or the actions.
 func TestMachine_TransitionTable(t *testing.T) {
-	t.Parallel()
 	t.Run("store absent (Populate in flight) refuses every change with ErrNotOpen", func(t *testing.T) {
 		f := newMFix(t, StagePopulate, "enter", true)
 		f.m.Remove("kb") // unmount; the database stays on disk
@@ -403,7 +402,6 @@ func TestWalkthrough_AttachDuringIndexing(t *testing.T) {
 
 // Detach: Sync restarts with the local loop; a subscription is refused.
 func TestWalkthrough_Detach(t *testing.T) {
-	t.Parallel()
 	f := newMFix(t, StageIndex, "index-job", false)
 	url := f.remote(t, "r")
 	_, err := send(f.m, f.ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))
@@ -424,7 +422,6 @@ func TestWalkthrough_Detach(t *testing.T) {
 // Swap ok: cancel all, drain newest-first, install + origin, walk up again;
 // the heal of the new store is the post-swap index.
 func TestWalkthrough_SwapOK(t *testing.T) {
-	t.Parallel()
 	f := newMFix(t, StageIndex, "index-job", true)
 	url := f.remote(t, "r")
 	tmp := f.copyOfOwnDB(t)

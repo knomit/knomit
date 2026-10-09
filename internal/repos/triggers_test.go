@@ -665,7 +665,6 @@ func TestDispatch_ReloadOnHeadOntology(t *testing.T) {
 // do not even RUN the dispatcher (the kick is filtered on the agent branch);
 // CommitExperiment fires. Sabotage: drop the branch filter.
 func TestDispatch_NoFireOnMainOrExp(t *testing.T) {
-	t.Parallel()
 	_, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	ctx := context.Background()
 	svc := testService(t, ri)
@@ -911,7 +910,6 @@ func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
 // NotStartedReadOnlyOrSubscribed: no dispatcher on a read-only server and none
 // for a subscription; the report says why. Sabotage: drop the guard.
 func TestDispatch_NotStartedReadOnlyOrSubscribed(t *testing.T) {
-	t.Parallel()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},

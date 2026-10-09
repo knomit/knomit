@@ -53,7 +53,6 @@ func TestClassifyWriteProbeError(t *testing.T) {
 // the SSH session eagerly), so it can block for the OS TCP timeout on a
 // filtered port, uncancellable, in the middle of a create.
 func TestProbeOrigin_WriteProbeIsOptional(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
 	m := newRemoteModeManager(t, dir)

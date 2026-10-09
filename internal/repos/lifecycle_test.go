@@ -203,7 +203,6 @@ func seedBareRemoteWithOntology(t *testing.T, bare string, withOntology bool) st
 // end against a real (file://) git remote: Create must fetch, register the repo,
 // and persist the origin so ActiveRepoWithOrigin can find it by URL.
 func TestCreate_CloneMode_FetchesAndPersistsOrigin(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
@@ -228,7 +227,6 @@ func TestCreate_CloneMode_FetchesAndPersistsOrigin(t *testing.T) {
 // clone, a second clone of the same origin URL is refused with ErrOriginInUse —
 // the real-clone counterpart to the preflight check.
 func TestCreate_CloneMode_RejectsDuplicateOrigin(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
@@ -252,7 +250,6 @@ func TestCreate_CloneMode_RejectsDuplicateOrigin(t *testing.T) {
 // dropped otherwise. Both the preflight (HTTP 400) and Create itself (the
 // authoritative guard) must refuse.
 func TestCreate_CloneMode_RejectsOntologySpec(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
@@ -285,7 +282,6 @@ func TestCreate_CloneMode_RejectsOntologySpec(t *testing.T) {
 // Create whose context is already cancelled aborts before fetching and leaves
 // no registered repo or partial .db behind.
 func TestCreate_CloneMode_CancelledContext(t *testing.T) {
-	t.Parallel()
 	m := newLifecycleManager(t)
 	url := seedBareRemote(t, t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -864,7 +860,6 @@ func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 // can't catch this — the names differ — so origin uniqueness is enforced by the
 // origin reservation in reserveNameAndOrigin. Run under -race.
 func TestCreate_ConcurrentSameOrigin_OnlyOneWins(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
@@ -967,7 +962,6 @@ func seedBareRemoteWithFact(t *testing.T, bare string) string {
 // is running while the index still reads "indexing"; releasing the job takes
 // it to "ready".
 func TestCreate_CloneMode_SyncRunsWhileTheIndexJobIsHeld(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	g := newGate(StageIndex, "index-job")
 	m := New(context.Background(), Deps{

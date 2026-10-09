@@ -120,7 +120,6 @@ func registerAt(t *testing.T, m *Manager, url string) string {
 // loopback_hosts, the bind host or the listen port — and an empty list is
 // no line in the record, [] and a notice in the status; it still succeeds.
 func TestFleetRecord_RegisterCopiesAddressesVerbatim(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
 	url := seedFleetRemote(t, bare)
@@ -212,7 +211,6 @@ func TestFleetRecord_BootReconcile(t *testing.T) {
 // F10-3: the reconcile keeps state as the record has it, whatever it is.
 // Only registering and unregistering change state.
 func TestFleetRecord_RefreshKeepsStateAndNotes(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
 	url := seedFleetRemote(t, bare)
@@ -371,7 +369,6 @@ func TestFleetRecord_UnopenableFleetRepoWarns(t *testing.T) {
 // F10-10: re-registering with the same fleet runs the same comparison: no
 // commit when current, ONE when a field changed.
 func TestFleetRecord_ReRegisterCompares(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
@@ -394,7 +391,6 @@ func TestFleetRecord_ReRegisterCompares(t *testing.T) {
 // F10-11: the record stays ONE policy fact at one path; earlier addresses
 // are earlier versions of it, never a list kept inside the fact.
 func TestFleetRecord_HistoryIsVersions(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
 	url := seedFleetRemote(t, bare)

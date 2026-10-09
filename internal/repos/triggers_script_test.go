@@ -513,7 +513,6 @@ func TestScript_ChainAcrossTriggers(t *testing.T) {
 // `git log --all --grep='^Knomit-Trace: <id>$'` lists exactly the script
 // commits of the story, and git's own trailer parser reads Knomit-Cause.
 func TestScript_TraceReadableWithGitLog(t *testing.T) {
-	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}

@@ -67,7 +67,6 @@ func buildSubscription(t *testing.T) (*Manager, *RepoInstance, string) {
 // instance: the read branch is the upstream, the store is read-only, and the
 // index heal covers the upstream alone.
 func TestMount_SubscriptionBuildsAgentlessReadOnlyInstance(t *testing.T) {
-	t.Parallel()
 	_, ri, upstream := buildSubscription(t)
 
 	// The THREE representations of "this is a subscription" asserted together,
@@ -100,7 +99,6 @@ func TestMount_SubscriptionBuildsAgentlessReadOnlyInstance(t *testing.T) {
 // subscription silently becomes writable: no error, no log, and every other
 // assertion in the test above still passes.
 func TestSwapStore_SubscriptionStaysReadOnly(t *testing.T) {
-	t.Parallel()
 	m, ri, upstream := buildSubscription(t)
 	waitIndexSettled(t, ri)
 
@@ -122,7 +120,6 @@ func TestSwapStore_SubscriptionStaysReadOnly(t *testing.T) {
 // means a corrupted or hand-edited origin row; the stage's message is what an
 // operator will see.
 func TestMount_SubscriptionWithoutUpstreamIsRefused(t *testing.T) {
-	t.Parallel()
 	m, url, _, upstream := subscriptionStore(t, "uid-sub2")
 
 	// Origins.Set refuses an empty branch, so the corruption is written

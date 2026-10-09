@@ -103,7 +103,6 @@ func mergeOnRemote(t *testing.T, bare, agentBranch string) {
 // registered, record pending; the human merges; after a sync the record is
 // active. last_error stays empty on success.
 func TestFleet_RegisterPendingThenActive(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
@@ -140,7 +139,6 @@ func TestFleet_RegisterPendingThenActive(t *testing.T) {
 // R2: unregister writes left, pushes, THEN unmounts; the remote's agent
 // branch carries the departure.
 func TestFleet_UnregisterPushesThenUnmounts(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
@@ -161,7 +159,6 @@ func TestFleet_UnregisterPushesThenUnmounts(t *testing.T) {
 // still mounted, last_error set, and PUT is refused for ANY fleet; once the
 // remote is back, the retry unmounts and returns to standalone.
 func TestFleet_UnregisterIsDurable(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
@@ -200,7 +197,6 @@ func TestFleet_UnregisterIsDurable(t *testing.T) {
 // R3b: while unregistering, archiving the fleet repository by hand is the
 // escape hatch: it ends the retries and returns to standalone.
 func TestFleet_ArchiveByHandEndsUnregistering(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
@@ -229,7 +225,6 @@ func TestFleet_ArchiveByHandEndsUnregistering(t *testing.T) {
 // R4: every other refusal, with its code; a failed clone leaves nothing
 // mounted, stays standalone and reports last_error.
 func TestFleet_Refusals(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	url := seedFleetRemote(t, filepath.Join(dir, "fleet.git"))
@@ -285,7 +280,6 @@ func fixedNow() time.Time { return time.Unix(1790000000, 0) }
 // next successful push (the sync loop's retry) completes it to registered and
 // clears the error. Pushes of other repositories change nothing.
 func TestFleet_RegisteringRetriedOnPush(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	url := seedFleetRemote(t, filepath.Join(dir, "fleet.git"))

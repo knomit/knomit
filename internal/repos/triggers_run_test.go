@@ -702,7 +702,6 @@ func TestRun_RecipeNameValidatedAtCall(t *testing.T) {
 // dispatcher, so nothing can resolve or start a recipe there, even with a
 // local recipe present. Sabotage: build the dispatcher unconditionally (red).
 func TestRun_NotOnReadOnlyOrSubscribed(t *testing.T) {
-	t.Parallel()
 	home := t.TempDir()
 	putLocalRecipe(t, home, "worker", `({status: "done"});`)
 	m := New(context.Background(), Deps{

@@ -208,7 +208,6 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 // OUTCOME instead is 30/30 red without the drain and 0/20 with it, on the
 // CHEAPEST fixture. The 200-fact remote was built, measured, and thrown away.
 func TestManagerClose_DrainsInFlightCreate(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},

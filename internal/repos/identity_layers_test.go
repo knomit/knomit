@@ -187,7 +187,6 @@ func requireNoRepoNamed(t *testing.T, m *Manager, name string, wantDBs int) {
 // is refused from the advertisement alone: named holder, no upload-pack
 // request, nothing transferred.
 func TestPreflight_Layer1_KnomitOriginAdvertisesItsIdentity(t *testing.T) {
-	t.Parallel()
 	f := newIdentityFixture(t)
 	ctx := context.Background()
 
@@ -222,7 +221,6 @@ func TestPreflight_Layer1_KnomitOriginAdvertisesItsIdentity(t *testing.T) {
 // holds one of its advertised tips. A commit is unique to a history, so a tip
 // is proof, and it needs no cooperation from the server.
 func TestPreflight_Layer2_AdvertisedTipIsAlreadyLocal(t *testing.T) {
-	t.Parallel()
 	f := newIdentityFixture(t)
 	mirror := mirrorOfOrigin(t, f, "mirror.git", false)
 
@@ -251,7 +249,6 @@ func TestPreflight_Layer2_AdvertisedTipIsAlreadyLocal(t *testing.T) {
 // index phase — because reaching m.Add is what opens the store, backfills the
 // commit graph and starts the heal that the old refusal then cancelled.
 func TestCreate_Layer3_RefusesBeforeRegistrationWhenLocalCopyIsBehind(t *testing.T) {
-	t.Parallel()
 	f := newIdentityFixture(t)
 	ctx := context.Background()
 	ahead := mirrorOfOrigin(t, f, "ahead.git", true)
@@ -302,7 +299,6 @@ func TestCreate_Layer3_RefusesBeforeRegistrationWhenLocalCopyIsBehind(t *testing
 // discriminating counterpart to the three above: without it they would be
 // satisfied by a check that refuses everything.
 func TestCreate_UnrelatedRemoteIsNotRefused(t *testing.T) {
-	t.Parallel()
 	f := newIdentityFixture(t)
 	ctx := context.Background()
 
@@ -360,7 +356,6 @@ func mirrorOfOrigin(t *testing.T, f *identityFixture, name string, ahead bool) s
 // (initialized=yes) AND is already here, and collapsing the second answer into
 // the first would make every client that switches on `initialized` wrong.
 func TestProbeInitialized_ReportsAlreadyLocal(t *testing.T) {
-	t.Parallel()
 	f := newIdentityFixture(t)
 	ctx := context.Background()
 
@@ -374,7 +369,6 @@ func TestProbeInitialized_ReportsAlreadyLocal(t *testing.T) {
 // discriminating counterpart, without which the assertion above is satisfied
 // by a field that is always set.
 func TestProbeInitialized_UnrelatedRemoteIsNotAlreadyLocal(t *testing.T) {
-	t.Parallel()
 	f := newIdentityFixture(t)
 	ctx := context.Background()
 

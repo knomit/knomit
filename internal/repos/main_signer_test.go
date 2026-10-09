@@ -32,7 +32,13 @@ import (
 // trigger globals. It also excludes a test whose assertion is a latency or a
 // short positive deadline (the write-latency gates,
 // EmitReachesStreamWithoutDebounce, a 2 s Eventually): those keep the machine
-// to themselves by staying sequential. The parallel tests are the slow,
+// to themselves by staying sequential. And it excludes every test that moves
+// objects over a git transport (clone, subscribe, fetch, push, probe of a
+// remote, a served smart-HTTP clone): under -race, concurrent go-git
+// transfers in one process corrupt packs ("object not found", "checksum
+// mismatch", "final sha1 did not match"), reproduced with go-git's own memory
+// storage and no knomit store, so those tests stay sequential until that is
+// understood. The parallel tests are the slow,
 // self-contained ones from the Windows per-test data (#365 follow-up); a
 // quick test gains nothing from it.
 func TestMain(m *testing.M) {

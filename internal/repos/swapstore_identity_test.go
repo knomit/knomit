@@ -52,7 +52,6 @@ func TestSwapStore_RecordsNewRepoID(t *testing.T) {
 // came back with origin == nil would look healthy and have quietly stopped
 // syncing.
 func TestSwapStore_FailedSwapKeepsTheInjectedOrigin(t *testing.T) {
-	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")

@@ -297,7 +297,6 @@ func (g *ghInstance) round(t *testing.T) {
 // defaulting to fact.MergeDst) → B keeps its own notes.txt → trunk and A end
 // on B's → red.
 func TestConflictsMatrix_T2_GitHubLikeOrigin(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	base, aF, bF := matrixVersions(t)
 	o := newGHOrigin(t, root, "trunk",

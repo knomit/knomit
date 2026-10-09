@@ -52,7 +52,6 @@ func TestVerifyAccepts_Scope(t *testing.T) {
 // refused at create; after `knomit verify accept` (Add, no repo: the repo does
 // not exist yet), the same create adopts it.
 func TestVerifyAccepts_UnblockAnE4Refusal(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	m := newLifecycleManagerWithRoot(t, root)
 	bare := filepath.Join(root, "remote.git")

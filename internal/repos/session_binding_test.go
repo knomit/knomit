@@ -82,7 +82,6 @@ func TestResolveSessionBinding_RepoBindsAtAgentBranch(t *testing.T) {
 // gating logic of its own: NewBindingOfRepo(ri, "") takes the read branch and
 // writeOK straight off the instance.
 func TestResolveSessionBinding_SubscriptionIsReadOnlyAtUpstream(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	m := newSubscribeTestManager(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git"))

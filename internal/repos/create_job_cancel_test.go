@@ -236,7 +236,6 @@ func countSubscriptions(t *testing.T, m *Manager, uid string) int {
 // one of them changing breaks this silently. SUBSCRIBE mode is used because it
 // is the only mode that populates BOTH tables.
 func TestCancelCreate_LeavesNoOriginOrSubscriptionRow(t *testing.T) {
-	t.Parallel()
 	url := servedKnomitOrigin(t, 3)
 
 	home := t.TempDir()
@@ -408,7 +407,6 @@ func TestCreateJobs_OmitsCancelledButKeepsFailed(t *testing.T) {
 // so it was both a source of flakes and blind to the bug. The 120s bound is
 // only a hang detector.
 func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
-	t.Parallel()
 	url := servedKnomitOrigin(t, 200)
 
 	home := t.TempDir()

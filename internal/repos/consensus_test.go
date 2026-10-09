@@ -348,7 +348,6 @@ func TestConsensus_OffDoesNothing(t *testing.T) {
 // SABOTAGE: dropping the origin check → the push is merged → red. (A reader
 // that looked at a hardcoded "main" would find no auto and never warn → red.)
 func TestConsensus_OriginRepoUnaffected(t *testing.T) {
-	t.Parallel()
 	h := newConsensusHost(t, triggerOntology(""), hostOpts{})
 	svc := h.svc(t)
 	const originURL = "https://example.invalid/consensus/kb.git"
@@ -384,7 +383,6 @@ func TestConsensus_OriginRepoUnaffected(t *testing.T) {
 // `if isSrcAncestor && !o.record {` → round 1 records the peer's
 // already-merged tip again → red.
 func TestConsensus_Quiescent(t *testing.T) {
-	t.Parallel()
 	const K = 5
 	h := newConsensusHost(t, triggerOntology(autoAttrs), hostOpts{})
 	p := newConsensusPeer(t, h.url)
@@ -419,7 +417,6 @@ func TestConsensus_Quiescent(t *testing.T) {
 //
 // SABOTAGE: X7b as in T-B4a → red.
 func TestConsensus_QuiescentAfterPeerMergeCommit(t *testing.T) {
-	t.Parallel()
 	const K = 5
 	h := newConsensusHost(t, triggerOntology(autoAttrs), hostOpts{})
 	p := newConsensusPeer(t, h.url)
@@ -570,7 +567,6 @@ func (n *noffPeer) push(t *testing.T) {
 // SABOTAGE: dropping `skipMergeOnly: true` from MergeConsensus → a host
 // merge commit every round → red.
 func TestConsensus_QuiescentWithNoFFPeer(t *testing.T) {
-	t.Parallel()
 	const K = 5
 	h := newConsensusHost(t, triggerOntology(autoAttrs), hostOpts{})
 	n := newNoffPeer(t, h.url, h.upstream(t))
@@ -605,7 +601,6 @@ func TestConsensus_QuiescentWithNoFFPeer(t *testing.T) {
 // SABOTAGE: StrategyLocalWins in MergeConsensus → the first merge goes
 // through with the host's version kept silently → "nothing merged" red.
 func TestConsensus_ConflictLeftForHuman(t *testing.T) {
-	t.Parallel()
 	h := newConsensusHost(t, triggerOntology(autoOffAttrs), hostOpts{})
 	writeOn(t, h.ri, cHostAgent, "kb/tasks/shared.md")
 	h.advance(t)
@@ -659,7 +654,6 @@ func TestConsensus_ConflictLeftForHuman(t *testing.T) {
 // SABOTAGE: consensusKicks returning false for pushed branches (kick only on
 // the host's own commits) → nothing merges, no fire → red.
 func TestConsensus_HostTriggersFireOnMergedFacts(t *testing.T) {
-	t.Parallel()
 	h := newConsensusHost(t, triggerOntology(autoAttrs, trig("seen", "[learn, update]", "", "")), hostOpts{})
 	p := newConsensusPeer(t, h.url)
 	p.write(t, "kb/tasks/peer.md", "peer")

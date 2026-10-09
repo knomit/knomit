@@ -188,7 +188,6 @@ func TestSyncEnter_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
 // first round, so an unreachable origin does not leave the endpoint headless
 // for the length of the outage.
 func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
 
