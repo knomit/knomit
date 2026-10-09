@@ -161,6 +161,7 @@ func TestLoadOntology_FallsBackToLegacyPath(t *testing.T) {
 // tying the bad facts to the cause. That is precisely the failure the fallback
 // exists to prevent.
 func TestLoadOntology_FallsBackToPreDotPath(t *testing.T) {
+	t.Parallel()
 	dir, agentBranch := bootKnomitWithPreDotOnlyOntology(t, staleCodeOntologyYAML)
 
 	m := New(context.Background(), Deps{
@@ -181,6 +182,7 @@ func TestLoadOntology_FallsBackToPreDotPath(t *testing.T) {
 // copies from the live one. Same guarantee as
 // TestLoadOntology_PresetRefreshWritesBackToThePathItRead, one rung older.
 func TestLoadOntology_PresetRefreshWritesBackToThePreDotPath(t *testing.T) {
+	t.Parallel()
 	dir, agentBranch := bootKnomitWithPreDotOnlyOntology(t, staleCodeOntologyYAML)
 
 	m := New(context.Background(), Deps{
@@ -213,6 +215,7 @@ func TestLoadOntology_PresetRefreshWritesBackToThePreDotPath(t *testing.T) {
 // path instead of srcPath, a legacy repo would end up holding TWO ontology
 // files, with nothing distinguishing the stale one from the live one.
 func TestLoadOntology_PresetRefreshWritesBackToThePathItRead(t *testing.T) {
+	t.Parallel()
 	dir, agentBranch := bootKnomitWithLegacyOnlyOntology(t, staleCodeOntologyYAML)
 
 	m := New(context.Background(), Deps{

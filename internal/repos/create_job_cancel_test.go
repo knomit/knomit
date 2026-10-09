@@ -63,6 +63,7 @@ func awaitCancelled(t *testing.T, job *CreateJob) CreateStatus {
 // cancel must undo it — not archive it, DELETE it. The job then reports
 // cancelled, and the name is free to be created again.
 func TestCancelCreate_DoneJobDeletesTheRepoWithoutATrace(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home},
@@ -145,6 +146,7 @@ func TestCancelCreate_RunningJobEndsCancelledAndLeavesNoTrace(t *testing.T) {
 // an unknown id has nothing behind it, and a done job whose repo has since
 // been replaced by another of the same name is not this job's to delete.
 func TestCancelCreate_RefusesWhatItCannotUndo(t *testing.T) {
+	t.Parallel()
 	t.Run("failed job", func(t *testing.T) {
 		m := New(context.Background(), Deps{
 			Cfg:           config.Config{Home: t.TempDir()},

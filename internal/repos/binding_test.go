@@ -107,6 +107,7 @@ func TestBinding_WriteMountBranch(t *testing.T) {
 }
 
 func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	core := createRepo(t, m, testRepoName)
 	work, err := m.Create(context.Background(), CreateSpec{

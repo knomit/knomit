@@ -267,6 +267,7 @@ func countLines(buf *bytes.Buffer, needle string) int {
 // and not for another's. The agent id is the branch minus "agent/".
 // Sabotage: substitute {agent} with `*`.
 func TestDispatch_InboxPlaceholder(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t, trig("my-inbox", "[learn, update]", "tasks/*/inbox/{agent}/*.md", ""))
 	write(t, ri, "kb/tasks/p1/inbox/test/a.md")
 	write(t, ri, "kb/tasks/p1/inbox/other-host-12345678/b.md")
@@ -281,6 +282,7 @@ func TestDispatch_InboxPlaceholder(t *testing.T) {
 // the ORIGINAL commit; re-running the merge (a no-op) fires nothing.
 // Sabotage: replay per commit (B fires twice), or use the merge as commit.
 func TestDispatch_MergeAddModifyDeleteOncePerPath(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t, trig("all", "[learn, update, retract]", "", ""))
 	ctx := context.Background()
 	svc := testService(t, ri)
@@ -345,6 +347,7 @@ func TestDispatch_PrefixChangeNotInTip(t *testing.T) {
 // instance's key signed it, whatever the author text says). Sabotage:
 // classify by author text — the experiment reads `merged`.
 func TestDispatch_SourceLocalVsMerged(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t, trig("all", "[learn, update]", "", ""))
 	ctx := context.Background()
 	svc := testService(t, ri)
@@ -382,6 +385,7 @@ func TestDispatch_SourceLocalVsMerged(t *testing.T) {
 // TraceFromTrailer: a firing commit whose message carries `Knomit-Trace: t-1`
 // gives change.trace = "t-1"; one without gives "".
 func TestDispatch_TraceFromTrailer(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t,
 		trig("traced", "learn", "", "change.trace === 't-1'"),
 		trig("all", "learn", "", ""))
@@ -476,6 +480,7 @@ func TestDispatch_VerifiedAfterRestart(t *testing.T) {
 // matching fact fires nothing for it; the next matching write fires.
 // Sabotage: W = the root commit.
 func TestDispatch_FirstAppearanceNoBackfill(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
 	svc := testService(t, ri)
@@ -498,6 +503,7 @@ func TestDispatch_FirstAppearanceNoBackfill(t *testing.T) {
 // RemovedTriggerForgets: a trigger whose NAME is removed then re-added does
 // not fire for the facts written in between. Sabotage: keep orphan rows.
 func TestDispatch_RemovedTriggerForgets(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	write(t, ri, "kb/tasks/one.md")
 	setOntology(t, ri, triggerOntology(""))
@@ -513,6 +519,7 @@ func TestDispatch_RemovedTriggerForgets(t *testing.T) {
 // bookmark froze; it was not deleted. Sabotage: delete the watermark when the
 // trigger is invalid.
 func TestDispatch_InvalidTriggerFreezesNotForgets(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t, trig("all", "learn", "tasks/**", ""))
 	write(t, ri, "kb/tasks/one.md")
 	frozenAt := head(t, ri)
@@ -801,6 +808,7 @@ func TestDispatch_CrashBetweenFireAndWatermark(t *testing.T) {
 // use ChangesUnder (refuses, nothing fires), or walk for the retract (returns
 // the root commit).
 func TestDispatch_NonlinearRewindDiffs(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t,
 		trig("all", "[learn, retract]", "", ""),
 		trig("unknown-author", "[learn, retract]", "", "change.author.kind === 'unknown'"))
@@ -844,6 +852,7 @@ func TestDispatch_NonlinearRewindDiffs(t *testing.T) {
 // Sync's. An origin detach restarts Sync (and only Sync); a write afterwards
 // still fires. Sabotage: run the dispatcher under the Sync life.
 func TestDispatch_SurvivesSyncRestart(t *testing.T) {
+	t.Parallel()
 	m, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	write(t, ri, "kb/tasks/before.md")
 	serveGen, syncGen := ri.Status().gens[StageServe], ri.Status().gens[StageSync]
@@ -860,6 +869,7 @@ func TestDispatch_SurvivesSyncRestart(t *testing.T) {
 // per phase, so it follows the swap. Sabotage: register the kick on
 // *store.Service (stranded by the swap).
 func TestDispatch_SurvivesSwapStore(t *testing.T) {
+	t.Parallel()
 	m, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	write(t, ri, "kb/tasks/before.md")
 	// Swap in a copy of this repo's own database (the same history).
@@ -929,6 +939,7 @@ func TestDispatch_NotStartedReadOnlyOrSubscribed(t *testing.T) {
 // false, is recorded (if-error / if-timeout), and the run continues: the
 // watermark advances and a sibling still fires. Sabotage: propagate the error.
 func TestDispatch_IfThrowsOrTimesOutIsFalse(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t,
 		trig("throws", "learn", "", "fact.nope.deeper === 1"),
 		trig("loops", "learn", "", "(function(){ while (true) {} })()"),
@@ -953,6 +964,7 @@ func TestDispatch_IfThrowsOrTimesOutIsFalse(t *testing.T) {
 // An unparseable fact fires with fact = null (the outcome says so) and a
 // condition that reads it throws → false.
 func TestDispatch_UnparseableFact(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t,
 		trig("all", "learn", "", ""),
 		trig("reads-fact", "learn", "", "fact.type === 'observation'"))

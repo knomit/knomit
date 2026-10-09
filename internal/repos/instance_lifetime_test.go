@@ -54,6 +54,7 @@ func TestAcquire_AfterClose_ReturnsErrRepoClosed(t *testing.T) {
 // Acquire before closing the store — the in-flight user finishes its store
 // call on an open service, never observing "database is closed".
 func TestClose_WaitsForInFlightAcquire(t *testing.T) {
+	t.Parallel()
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
@@ -132,6 +133,7 @@ func TestWithRead_ConcurrentWithClose_NeverSeesClosedStore(t *testing.T) {
 // outstanding acquisitions of the old generation before closing it, and new
 // acquisitions after the swap must see the new service.
 func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
+	t.Parallel()
 	m := newLifetimeTestManager(t)
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)

@@ -105,6 +105,7 @@ func waitRows(t *testing.T, ri *RepoInstance, trigger string, n int) []store.Tri
 // `do: run` fire is counted `unbound`, writes NO row and starts nothing; the
 // bookmark still moves. Sabotage: write a row for unbound (red: a row).
 func TestRun_UnboundIsCountedNoOp(t *testing.T) {
+	t.Parallel()
 	ri, _ := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	h := write(t, ri, "kb/tasks/in/a.md")
 	require.Empty(t, firesOf(t, ri, "w"), "unbound writes no row")
@@ -124,6 +125,7 @@ func TestRun_UnboundIsCountedNoOp(t *testing.T) {
 // file; the result row is `done`. Sabotage: run through `sh -c` with the argv
 // joined (red: argv split, ppid differs).
 func TestRun_LocalArgvVerbatimNoShell(t *testing.T) {
+	t.Parallel()
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	dir := t.TempDir()
 	argv := []string{helperExe(t), "a b", "$(x);|&", "*", `"q"`}
@@ -152,6 +154,7 @@ func TestRun_LocalArgvVerbatimNoShell(t *testing.T) {
 // the MAIN one runs (recipe_source=repo, recipe_rev = its blob at main's tip).
 // Sabotage: local first (red: the local one runs).
 func TestRun_MainWinsOverLocal(t *testing.T) {
+	t.Parallel()
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	putLocalRecipe(t, home, "worker", `({status: "done", message: "local"});`)
 	blob := putMainRecipe(t, ri, "worker", `({status: "done", message: "main"});`)
@@ -171,6 +174,7 @@ func TestRun_MainWinsOverLocal(t *testing.T) {
 // recipe at the agent-branch head (red: the agent-branch recipe runs);
 // treat a missing main as an error (red: recipe-error instead of local).
 func TestRun_AgentBranchRecipeNeverRuns(t *testing.T) {
+	t.Parallel()
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	_, err := testService(t, ri).Facts().WriteFact(context.Background(), trigAgent, fact.TriggerRecipePath("worker"),
 		`({status: "done", message: "agent-branch"});`, "recipe on the agent branch", "updated")
@@ -227,6 +231,7 @@ func TestRun_BrokenMainRecipeIsErrorNoFallback(t *testing.T) {
 // knomit, not as a global — while a recipe (the positive control) does.
 // Sabotage: add exec to scriptHost.functions() (red).
 func TestScript_NoExecInSandbox(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("s", "learn", "tasks/in/**", "probe"),
 		runTrig("r", "learn", "tasks/rec/**", "probe"))
 	putScript(t, ri, "probe", `knomit.emit({t: [typeof knomit.exec, typeof exec, typeof globalThis.exec]});`)
@@ -332,6 +337,7 @@ func TestRun_CleanExitLeavesDetachedGrandchild(t *testing.T) {
 // helper alive); once the first ends, a third fire starts again. Sabotage: no
 // slot (red: two helpers); a blocking wait for the slot (red: no busy row).
 func TestRun_ConcurrencyCap(t *testing.T) {
+	t.Parallel()
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	dir := t.TempDir()
 	block := filepath.Join(t.TempDir(), "release")
@@ -389,6 +395,7 @@ func TestRun_DispatcherNotBlockedByLongProcess(t *testing.T) {
 // leave `late` out of pendingFlush.empty() (red: the row never reaches the
 // table).
 func TestRun_ScriptGetsStartedAndResultIsLogged(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("s", "learn", "tasks/in/**", "caller"))
 	dir := t.TempDir()
 	block := filepath.Join(t.TempDir(), "release")
@@ -427,6 +434,7 @@ func TestRun_ScriptGetsStartedAndResultIsLogged(t *testing.T) {
 // result row (red: one row per id); use the trace as the id (red: the ids
 // collide); drop run_id from the insert (red: the lookup finds nothing).
 func TestRun_RunIDCorrelates(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0,
 		scriptTrig("ta", "learn", "tasks/in/**", "caller"), scriptTrig("tb", "learn", "tasks/in/**", "caller"),
 		runTrig("direct", "learn", "tasks/in/**", "worker"))
@@ -485,6 +493,7 @@ var r = knomit.exec([%s, run.id], {env: %s});
 // hangs / the helper lives); hold the bookmark until the result (red: a
 // re-run after restart).
 func TestRun_StopKillsAndRecords(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}, ScriptTools: &stubTools{}}
@@ -676,6 +685,7 @@ func promptTrace(t *testing.T, prompt string) map[string]string {
 // (The ontology half — `recipe: ../x` is invalid — is in internal/fact.)
 // Sabotage: remove the check (red: the fire is `ran`).
 func TestRun_RecipeNameValidatedAtCall(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("s", "learn", "tasks/in/**", "caller"))
 	putLocalRecipe(t, ri.triggers.home, "x", `({status: "done"});`)
 	require.NoError(t, os.WriteFile(filepath.Join(ri.triggers.home, "x.js"), []byte(`({status: "done"});`), 0o600))
@@ -715,6 +725,7 @@ func TestRun_NotOnReadOnlyOrSubscribed(t *testing.T) {
 // code on the next fire; a new blob on main does too, with the new blob as
 // recipe_rev. Sabotage: cache by name only (red: v1 again).
 func TestRun_ReloadLocalAndMain(t *testing.T) {
+	t.Parallel()
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	p := putLocalRecipe(t, home, "worker", `({status: "done", message: "v1"});`)
 	write(t, ri, "kb/tasks/in/a.md")
@@ -799,6 +810,7 @@ func TestRun_EnvCarriesTheServersOwnAddress(t *testing.T) {
 // A recipe's `exec` env names a different server and wins. Sabotage: merge
 // the recipe env UNDER the base (red: the server's own address).
 func TestRun_EnvRecipeOverridesKnomitServer(t *testing.T) {
+	t.Parallel()
 	env := runEnvChild(t, "unix:///srv/knomit/knomit.sock", "KNOMIT_SERVER", "http://127.0.0.1:19310")
 	got, ok := envOf(env, "KNOMIT_SERVER")
 	require.True(t, ok)
@@ -838,6 +850,7 @@ func TestRun_ExecBeforeTheAddressIsSetStartsNothing(t *testing.T) {
 // The other half: an exec that fires in the boot window WAITS, and once the
 // server records its address the program starts with it.
 func TestRun_ExecWaitsForTheAddress(t *testing.T) {
+	t.Parallel()
 	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
 	m.SetServerAddress("")
 	dir := t.TempDir()
@@ -864,6 +877,7 @@ func TestRun_ExecWaitsForTheAddress(t *testing.T) {
 // (`self-caused`). Sabotage: build the recipe host without WithTrailers (red:
 // no trailers, a second start); drop `Run: j.id` (red: no Knomit-Run).
 func TestRun_RecipeWritesStampedAndGuarded(t *testing.T) {
+	t.Parallel()
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	putLocalRecipe(t, home, "worker", `knomit.learn({topic: "tasks", category: "in", title: "From recipe"}); ({status: "done"});`)
 	fired := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
@@ -887,6 +901,7 @@ func TestRun_RecipeWritesStampedAndGuarded(t *testing.T) {
 // Sabotage: remove the host's opts.trace check (red: a commit lands, the
 // message is empty).
 func TestRun_RecipeLearnTraceRefused(t *testing.T) {
+	t.Parallel()
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	putLocalRecipe(t, home, "worker", `var m = "";
 try { knomit.learn({topic: "tasks", category: "out", title: "From recipe"}, {trace: {"Knomit-Trace": "mine"}}); } catch (e) { m = e.message; }
@@ -906,6 +921,7 @@ try { knomit.learn({topic: "tasks", category: "out", title: "From recipe"}, {tra
 // Sabotage: stop reading at the cap (red: the program blocks until the
 // timeout).
 func TestRun_OutputCap(t *testing.T) {
+	t.Parallel()
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	dir := t.TempDir()
 	putLocalRecipe(t, home, "worker", fmt.Sprintf(`try {
@@ -927,6 +943,7 @@ func TestRun_OutputCap(t *testing.T) {
 // a throw is recipe-error, and running past the header's timeout_ms is
 // recipe-timeout. Sabotage: accept any status (red).
 func TestRun_ResultShapes(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, outcome, msg string }{
 		{`({status: "unreachable", message: "no session", id: "s-1"});`, store.TriggerOutcomeUnreachable, "no session id=s-1"},
 		{`({status: "error", message: "boom"});`, store.TriggerOutcomeRecipeError, "boom"},

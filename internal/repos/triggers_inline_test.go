@@ -27,6 +27,7 @@ func jsTrig(name, on, match, js string) string {
 // never fires — no per-fire script-error. Sabotage: compile lazily per fire →
 // the bad one is active and logs script-error rows → red.
 func TestTriggers_InlineJS(t *testing.T) {
+	t.Parallel()
 	_, ri, tools := newScriptRepo(t, 0,
 		jsTrig("inline", "learn", "tasks/in/**", `knomit.learn({topic: "tasks", category: "out", title: "Inline"});`),
 		jsTrig("broken", "learn", "tasks/in/**", `if (`))

@@ -306,6 +306,7 @@ func TestCreate_CloneMode_CancelledContext(t *testing.T) {
 
 // Archiving flips a state and shuts the instance down. The file never moves.
 func TestArchive_IsAStateFlip(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -336,6 +337,7 @@ func TestArchive_IsAStateFlip(t *testing.T) {
 // been handed — same record, two archivedAt values, differing in the fractional
 // second. Anything keyed or diffed on archivedAt sees two events.
 func TestArchive_ArchivedAtMatchesTheListing(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
@@ -353,12 +355,14 @@ func TestArchive_ArchivedAtMatchesTheListing(t *testing.T) {
 }
 
 func TestArchive_NotFound(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	_, err := m.Archive("nope")
 	require.ErrorIs(t, err, ErrRepoNotFound)
 }
 
 func TestRestore_BringsBackAndUnarchives(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
@@ -375,6 +379,7 @@ func TestRestore_BringsBackAndUnarchives(t *testing.T) {
 }
 
 func TestRestore_RenameOnCollision(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	_, _ = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	info, _ := m.Archive("work")
@@ -389,6 +394,7 @@ func TestRestore_RenameOnCollision(t *testing.T) {
 }
 
 func TestPurge_RemovesArchive(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	_, _ = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	info, _ := m.Archive("work")
@@ -401,6 +407,7 @@ func TestPurge_RemovesArchive(t *testing.T) {
 // The archived name is free immediately, and restoring under a new name is
 // just a rename.
 func TestRestore_UnderNewName(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -420,6 +427,7 @@ func TestRestore_UnderNewName(t *testing.T) {
 
 // Restoring into a taken name is refused by the partial unique index.
 func TestRestore_NameCollisionRejected(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -438,6 +446,7 @@ func TestRestore_NameCollisionRejected(t *testing.T) {
 
 // Purge destroys the row, the file, and the stored credential with them.
 func TestPurge_RemovesRowFileAndCredential(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -466,6 +475,7 @@ func TestPurge_RemovesRowFileAndCredential(t *testing.T) {
 // unavailable repos were invisible; now that GET /repos lists them, the stale
 // entry would resurrect an archived repo as a row the user cannot act on.
 func TestArchive_ClearsUnavailableEntry(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -540,6 +550,7 @@ func TestListArchived_TotalOrderWithinOneSecond(t *testing.T) {
 
 // Purging an ACTIVE repo is refused — archive it first.
 func TestPurge_RefusesActiveRepo(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -554,6 +565,7 @@ func TestPurge_RefusesActiveRepo(t *testing.T) {
 // never archived: the second archive must succeed, the file must still be
 // exactly where the registry says it is, and the row must end up archived.
 func TestArchiveRestoreArchive_RepeatsClean(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -588,6 +600,7 @@ func TestArchiveRestoreArchive_RepeatsClean(t *testing.T) {
 // state — it is how knomit starts — so there is nothing here to protect. The
 // archive is restorable, so emptying the manager loses no data.
 func TestArchive_LastRepoLeavesZero(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	createRepo(t, m, "work")
 	require.Equal(t, []string{"work"}, m.Names())
@@ -612,6 +625,7 @@ func TestArchive_LastRepoLeavesZero(t *testing.T) {
 // TestArchive_EveryRepoInTurn pins that repos can be emptied out one by one,
 // with no name treated specially along the way.
 func TestArchive_EveryRepoInTurn(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	createRepo(t, m, testRepoName)
 	createRepo(t, m, "work")
@@ -651,6 +665,7 @@ func TestArchive_PersistsOrigin(t *testing.T) {
 // active repo, archives a second repo carrying the same origin, then asserts
 // Restore returns ErrOriginInUse.
 func TestRestore_OriginInUse(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	const originURL = "https://example.com/shared.git"
 
@@ -708,6 +723,7 @@ func TestRestore_HonorsInFlightReservation(t *testing.T) {
 // unregistered or its db clobbered. Run under -race to catch any unsynchronised
 // access in the registration path.
 func TestCreateRestore_ConcurrentSameName_NoDoubleRegister(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
@@ -758,6 +774,7 @@ func isNameCollision(err error) bool {
 // name reservation both ops share (m.creating) makes at least one observe the
 // other. Run under -race.
 func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
+	t.Parallel()
 	for round := 0; round < 50; round++ {
 		m := newLifecycleManager(t)
 		writer := makeLensRepo(t, m, "writer") // a valid write member for the lens
@@ -798,6 +815,7 @@ func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 // the lens persisted, R must still be registered; if Archive won, CreateLens must
 // have failed. Run under -race.
 func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
+	t.Parallel()
 	for round := 0; round < 50; round++ {
 		m := newLifecycleManager(t)
 		member := makeLensRepo(t, m, "member")

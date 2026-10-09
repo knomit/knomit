@@ -82,6 +82,7 @@ func TestRegistry_RepoIDUniqueAmongActive(t *testing.T) {
 // the root commit. Re-recording the SAME id must also be a no-op, since every
 // boot records it.
 func TestRegistry_RecordRepoIDIsIdempotentAndUpdatable(t *testing.T) {
+	t.Parallel()
 	r := openTestRepoRegistry(t)
 	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
 	require.NoError(t, r.RecordRepoID("u1", "root-abc"))

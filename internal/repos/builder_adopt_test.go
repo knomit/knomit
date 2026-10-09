@@ -178,6 +178,7 @@ topics:
 // intervening machine wrote — no error, no warning, the repo just comes up
 // missing knowledge.
 func TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	const (
@@ -266,6 +267,7 @@ func TestEnsureBranch_DoesNotTakeOverAnotherAgentsBranch(t *testing.T) {
 // is the source of truth, so re-cloning rebuilds the database. What must NOT
 // happen is the repo becoming unopenable.
 func TestEnsureBranch_NoRecordedOwnerFailsLoudly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	const agentA = "agent/hosta-0badf00d"

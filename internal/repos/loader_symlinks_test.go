@@ -124,6 +124,7 @@ func TestSwapStore_SymlinkedIncomingOntologyIsRefusedBeforeTheSwap(t *testing.T)
 // branch → "no ontology at <all rungs>" → red; fall through to the legacy
 // rung (the pre-#439 ReadFact walk) → the repo opens writable → red.
 func TestLoadOntology_EmptyCanonicalDoesNotFallBackToLegacy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	agentBranch := "agent/test-empty"

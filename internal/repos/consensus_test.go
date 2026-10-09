@@ -313,6 +313,7 @@ func (h *cHost) commitsOf(t *testing.T) map[plumbing.Hash]*object.Commit {
 // SABOTAGE: reading an invalid value as on (`return cs.Mode ==
 // fact.ConsensusAuto || !cs.Valid` in autoAt) → "bogus" merges → red.
 func TestConsensus_OffDoesNothing(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, attrs string }{
 		{"absent", ""},
 		{"off", "attributes:\n  consensus: off\n"},

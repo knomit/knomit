@@ -107,6 +107,7 @@ func TestWatchIndex_ReportsErrorWithoutFailing(t *testing.T) {
 // narrated and nothing else: watchIndex returns promptly, reporting the state
 // it last saw. The index job runs under the machine and keeps going.
 func TestWatchIndex_ContextEndsTheNarrationNotTheCreate(t *testing.T) {
+	t.Parallel()
 	_, ri, _ := heldIndexRepo(t)
 	ctx, cancel := context.WithCancel(context.Background())
 

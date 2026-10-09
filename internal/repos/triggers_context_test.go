@@ -18,6 +18,7 @@ import (
 // SABOTAGE: drop "context" from factToJS → every condition throws → three
 // if-error rows, no emitted one → red.
 func TestDispatch_IfSeesFactContext(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t, trig("disagree", "learn", "", "fact.context.verdict === 'disagree'"))
 	writeCtx := func(path, ctxLine string) {
 		r, err := testService(t, ri).Facts().WriteFact(context.Background(), trigAgent, path,

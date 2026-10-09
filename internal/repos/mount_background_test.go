@@ -104,6 +104,7 @@ func seedReembedRepo(t *testing.T) (home, dbPath string) {
 // up), and the rebuild runs under the Index life, with the repo reporting
 // "indexing" until it is "ready".
 func TestMount_BackgroundsHeavyIndex(t *testing.T) {
+	t.Parallel()
 	home, dbPath := seedReembedRepo(t)
 
 	emb := &blockingEmbedder{started: make(chan struct{}), release: make(chan struct{})}
@@ -157,6 +158,7 @@ func TestMount_BackgroundsHeavyIndex(t *testing.T) {
 // before the Open stage closes the store, so Close must block until the
 // in-flight job returns (this embedder ignores its ctx, the worst case).
 func TestManagerClose_WaitsForBackgroundIndex(t *testing.T) {
+	t.Parallel()
 	home, dbPath := seedReembedRepo(t)
 
 	emb := &blockingEmbedder{started: make(chan struct{}), release: make(chan struct{})}
@@ -212,6 +214,7 @@ func (failingEmbedder) EmbedDocuments(context.Context, []string, []string) ([][]
 // #1: an index job that genuinely FAILS must report "error" — with a reason —
 // not falsely report "ready".
 func TestMount_FailedBackgroundIndexReportsError(t *testing.T) {
+	t.Parallel()
 	home, dbPath := seedReembedRepo(t)
 
 	m := New(context.Background(), Deps{

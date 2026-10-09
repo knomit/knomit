@@ -15,6 +15,7 @@ import (
 // base this repo no longer holds. Identify, re-entered by the swap's walk, is
 // the one site that records it.
 func TestSwapStore_RecordsNewRepoID(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")

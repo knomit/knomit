@@ -93,6 +93,7 @@ func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 }
 
 func TestManager_ValidateLens_OK(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -136,6 +137,7 @@ func TestManager_ValidateLens_ReplicaRejected(t *testing.T) {
 }
 
 func TestManager_ValidateLens_UnknownBranch(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -155,6 +157,7 @@ func TestManager_ValidateLens_UnknownBranch(t *testing.T) {
 // only possible cause of failure — making the distinction load-bearing rather
 // than incidental.
 func TestManager_ValidateLens_LookupFailureNotUnknownBranch(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -171,6 +174,7 @@ func TestManager_ValidateLens_LookupFailureNotUnknownBranch(t *testing.T) {
 }
 
 func TestManager_ValidateLens_EmptyBranchOK(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -182,6 +186,7 @@ func TestManager_ValidateLens_EmptyBranchOK(t *testing.T) {
 }
 
 func TestManager_CreateLens_PersistsAfterValidation(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -281,6 +286,7 @@ func TestManager_ValidateLens_RejectsEmptyName(t *testing.T) {
 }
 
 func TestManager_ValidateLens_RejectsRepoNameCollision(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -293,6 +299,7 @@ func TestManager_ValidateLens_RejectsRepoNameCollision(t *testing.T) {
 }
 
 func TestManager_ValidateLens_AcceptsDistinctName(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -304,6 +311,7 @@ func TestManager_ValidateLens_AcceptsDistinctName(t *testing.T) {
 }
 
 func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -348,6 +356,7 @@ func TestCreate_RejectsLensNameCollision(t *testing.T) {
 }
 
 func TestCreate_AcceptsNameMatchingNoLens(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
@@ -363,6 +372,7 @@ func TestCreate_AcceptsNameMatchingNoLens(t *testing.T) {
 }
 
 func TestRestore_RejectsNameTakenByLens(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	makeLensRepo(t, m, "work")

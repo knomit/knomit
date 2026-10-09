@@ -551,6 +551,7 @@ func TestListTemplates_NotOpenRepoIsNotAWarning(t *testing.T) {
 
 // F24 Verification "Modes" and "Source required": the request shape per mode.
 func TestCreateFromTemplate_RequestShape(t *testing.T) {
+	t.Parallel()
 	ref := &TemplateRef{Repo: "src", Name: "x"}
 	for _, spec := range []CreateSpec{
 		{Name: "a", Mode: "template"},

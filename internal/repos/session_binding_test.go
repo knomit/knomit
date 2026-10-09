@@ -102,6 +102,7 @@ func TestResolveSessionBinding_SubscriptionIsReadOnlyAtUpstream(t *testing.T) {
 }
 
 func TestResolveSessionBinding_Lens(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	write := createRepo(t, m, "writer")

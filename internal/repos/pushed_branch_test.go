@@ -11,6 +11,7 @@ import (
 )
 
 func TestIsPushedBranch(t *testing.T) {
+	t.Parallel()
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })

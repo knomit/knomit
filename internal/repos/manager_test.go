@@ -57,6 +57,7 @@ func TestManager_Set_EvictsStaleUID(t *testing.T) {
 // TestStart_reopensExistingReposOnly pins the other half: Start opens every
 // registered repo and still creates none of its own.
 func TestStart_reopensExistingReposOnly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	boot := func() *Manager {
 		m := New(context.Background(), Deps{

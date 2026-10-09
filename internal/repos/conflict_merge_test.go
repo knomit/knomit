@@ -166,6 +166,7 @@ func TestConflictMerge_HostMergesFirst_Converges(t *testing.T) {
 // SABOTAGE: edit-wins (resurrect) in factMergeResolutions → the fact is back
 // → red.
 func TestConflictMerge_RetractionWins(t *testing.T) {
+	t.Parallel()
 	for _, shape := range []string{"host retracts", "peer retracts"} {
 		t.Run(shape, func(t *testing.T) {
 			h := newConsensusHost(t, triggerOntology("attributes:\n  consensus: auto\n  conflicts:\n    facts: merge\n"), hostOpts{})

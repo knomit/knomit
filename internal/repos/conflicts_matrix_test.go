@@ -104,6 +104,7 @@ func conflictsAttrs(facts, state string) string {
 // consensus rows take A's; the auto default dropped → the "absent" row
 // refuses and ends with A's versions.
 func TestConflictsMatrix_T1_HostedAuto(t *testing.T) {
+	t.Parallel()
 	type side struct {
 		fact  matrixFact
 		state string // who owns statePath's content: "A" or "B"

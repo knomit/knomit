@@ -161,6 +161,7 @@ func requireNoShallowAdvertised(t *testing.T, url string) {
 
 // The probe asks for one commit when the server says it can serve one.
 func TestProbeInitialized_UsesDepth1WhenShallowAdvertised(t *testing.T) {
+	t.Parallel()
 	srv, sent := knomitServed(t)
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
@@ -176,6 +177,7 @@ func TestProbeInitialized_UsesDepth1WhenShallowAdvertised(t *testing.T) {
 // single-branch clone. Asking it for a depth is what produced the HTTP 500
 // this whole change started from.
 func TestProbeInitialized_FullCloneWhenShallowNotAdvertised(t *testing.T) {
+	t.Parallel()
 	srv, sent := nonShallowServed(t)
 	requireNoShallowAdvertised(t, srv.URL)
 

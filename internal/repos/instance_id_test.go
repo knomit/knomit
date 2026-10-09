@@ -12,6 +12,7 @@ import (
 )
 
 func TestRepoInstanceID_StableAndDistinct(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	core := createRepo(t, m, testRepoName)
 

@@ -137,6 +137,7 @@ func TestDispatch_SlowTriggerThresholdFromConfig(t *testing.T) {
 // 10,000 fire rows plus a run row with fires_not_logged = 2000, and the
 // statistics count all 12,000. Sabotage: insert every row.
 func TestDispatch_Tx1Bounded(t *testing.T) {
+	t.Parallel()
 	_, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	files := make(map[string]string, 12000)
 	for i := 0; i < 12000; i++ {
@@ -146,6 +147,14 @@ func TestDispatch_Tx1Bounded(t *testing.T) {
 	// this test measures is the dispatcher, and indexing 12,000 facts is the
 	// store's own cost (minutes). The next ordinary write kicks the run that
 	// covers both commits.
+	//
+	// The ontology write above armed the commit observer, whose debounced
+	// callback syncs the index to whatever the head is WHEN it fires (1 s
+	// later). Fire it first: if the advance lands before it, the callback, or
+	// the flush in its Stop at teardown, indexes all 12,000 facts, and the
+	// test then spends the 30 s unmount drain bound on that. The per-path tree
+	// build used to take longer than the debounce, which hid this.
+	waitObserverIdle(t, ri)
 	started := time.Now()
 	h, err := testService(t, ri).TestingCommitFiles(trigAgent, files, "a merge bringing 12,000 facts")
 	require.NoError(t, err)
@@ -167,6 +176,20 @@ func TestDispatch_Tx1Bounded(t *testing.T) {
 	st := ri.triggers.stats.view("all")
 	require.Equal(t, int64(12000), st.Fires, "every fire is counted, logged or not")
 	require.Equal(t, int64(12000), st.Evaluations)
+}
+
+// waitObserverIdle waits until ri's commit observer holds no pending
+// notification and is not running its callback: the index has caught up with
+// every commit that was notified.
+func waitObserverIdle(t *testing.T, ri *RepoInstance) {
+	t.Helper()
+	o := ri.observer.Load()
+	require.NotNil(t, o, "the repo is open, so it has a commit observer")
+	require.Eventually(t, func() bool {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return o.pending == "" && !o.running
+	}, 30*time.Second, 5*time.Millisecond, "the commit observer never went idle")
 }
 
 // ---- Write latency
@@ -302,6 +325,13 @@ func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 // blocks until the run it kicked completes). Running the dispatcher directly
 // inside triggerKick is not: onCommit runs under the writer's branch lock
 // (builder.go), and the test then stalls instead of measuring latency.
+//
+// Five writes per block, not twenty: the test's cost is the backlog that
+// abba drains between blocks, 10 interrupts of 100 ms per loaded path, and at
+// 20 writes per block that was 21 s of the package on every platform. The
+// gap the bound relies on is PER WRITE (about a second of synchronous
+// dispatch against a few ms), so fewer writes leave it as wide as it was; 10
+// samples per arm still give a median that one slow write cannot move.
 func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
@@ -309,7 +339,8 @@ func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		entries = append(entries, trig(fmt.Sprintf("b%02d", i), "learn", "tasks/**", "(function(){ while (true) {} })()"))
 	}
-	base, loaded := abba(t, ri, entries, 2, 20)
+	base, loaded := abba(t, ri, entries, 2, 5)
+	require.Len(t, loaded, 10, "reached: both loaded blocks were measured")
 
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
 	t.Logf("median: 0 triggers %s, 10 busy triggers %s (%.2f×)", bm, lm, float64(lm)/float64(bm))

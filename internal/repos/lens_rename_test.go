@@ -17,6 +17,7 @@ import (
 // proves that — a rename that silently deleted and recreated the row would
 // pass every other assertion in this file but fail this one.
 func TestRenameLens_RekeysWithoutDeleteAndRecreate(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
@@ -80,6 +81,7 @@ func TestRenameLens_RejectsNameHeldByAnotherLens(t *testing.T) {
 // one namespace (gotcha M-1). Same guard CreateLens/UpdateLens run via
 // validateLensLocked; RenameLens must run it too.
 func TestRenameLens_RejectsNameHeldByRepo(t *testing.T) {
+	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 	makeLensRepo(t, m, "gamma") // an active repo named "gamma"
