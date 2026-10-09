@@ -106,3 +106,23 @@ describe('index_reason', () => {
       .toBe('indexing cancelled');
   });
 });
+
+// Archive: no note → a bare DELETE (what every server before reasons
+// accepts); a note → a JSON body {note}, trimmed. Whitespace alone is no note.
+describe('api.archiveRepo', () => {
+  const row = { id: 'u1', name: 'kb', origin: '', archivedAt: '2026-10-09T00:00:00Z', reason: null };
+  it('sends a bare DELETE without a note', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(respond(200, row));
+    await api.archiveRepo('kb', '   ');
+    expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/v1\/repos\/kb$/), { method: 'DELETE' });
+  });
+  it('sends the trimmed note as JSON', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(respond(200, row));
+    await api.archiveRepo('kb', '  gone for good ');
+    expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/v1\/repos\/kb$/), {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: 'gone for good' }),
+    });
+  });
+});

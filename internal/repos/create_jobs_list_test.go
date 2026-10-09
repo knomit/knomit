@@ -168,7 +168,7 @@ func TestCreateJobs_OmitsDoneJobWhoseRepoIsGone(t *testing.T) {
 	seedDoneJobFor(m, "made-gone", "gone", ri)
 	require.Len(t, m.CreateJobs(), 1, "listed while its repo exists")
 
-	require.NoError(t, m.DeleteRepo("gone"))
+	require.NoError(t, m.DeleteRepo("gone", "test"))
 
 	require.Empty(t, m.CreateJobs(), "a create whose repo is gone has nothing left to list")
 	_, ok := m.CreateJobByID("made-gone")

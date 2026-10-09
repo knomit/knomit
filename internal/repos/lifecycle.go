@@ -720,18 +720,22 @@ func (m *Manager) populate(ctx context.Context, r *RepoInstance, spec MountSpec)
 // between them: if Purge fails after Archive succeeded the repo is archived,
 // not deleted, and the error says so, because a caller told "deleted" would
 // otherwise never look in the archive for the row that remains.
-func (m *Manager) DeleteRepo(name string) error {
+//
+// reason is recorded as a SYSTEM archive reason. It is read only when the
+// purge fails and the row stays in the archive — exactly when the user needs
+// to know why a repo they never archived is sitting there.
+func (m *Manager) DeleteRepo(name, reason string) error {
 	if err := m.guardFleetRemoval(name); err != nil {
 		return err
 	}
-	return m.deleteRepo(name)
+	return m.deleteRepo(name, reason)
 }
 
 // deleteRepo is DeleteRepo without the fleet guard: the unregister path uses
 // it once the departure has been pushed.
-func (m *Manager) deleteRepo(name string) error {
+func (m *Manager) deleteRepo(name, reason string) error {
 	wasFleet := m.IsFleetRepo(name)
-	info, err := m.archive(name)
+	info, err := m.archive(name, ArchiveReason{Source: ArchiveBySystem, Reason: reason})
 	if err != nil {
 		return err
 	}
@@ -1518,6 +1522,9 @@ type ArchiveInfo struct {
 	Name       string `json:"name"`
 	Origin     string `json:"origin"`
 	ArchivedAt string `json:"archivedAt"`
+	// Reason is why it was archived; nil for a repo archived before reasons
+	// were recorded (shown as "no reason recorded").
+	Reason *ArchiveReason `json:"reason"`
 	// SizeBytes is the archived database's on-disk size. Archived databases are
 	// no longer visible under an obvious filename (there is no repos/archive/
 	// directory to `ls`), so this is how reclaimable disk stays visible.
@@ -1535,20 +1542,54 @@ type ArchiveInfo struct {
 //
 // ANY repo may be archived, including the last one: no repo is privileged, and
 // zero repos is a valid state.
+//
+// Archive is a USER archive with no note; ArchiveWith records any reason.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
+	return m.ArchiveWith(name, ArchiveReason{Source: ArchiveByUser})
+}
+
+// ArchiveWith is Archive recording why.
+//
+// It also archives an UNAVAILABLE repo — registered but not mounted (missing,
+// unopenable, conflict) — which has no instance to shut down: the state flip,
+// the reason and dropping the unavailable flag are the whole operation, and
+// the reason's Condition records the state it was in. That is the way out of
+// an unavailable repo: archived, it can be purged, and its name and knowledge
+// base no longer block adding the same one again (both uniqueness rules count
+// ACTIVE rows only).
+//
+// The fleet guard cannot see an unavailable fleet repository: the fleet is
+// recognised by a MOUNTED repo's ontology (fleetRepo), and an unavailable one
+// has none loaded. Archiving it is therefore not refused, and the fleet state
+// is left as it was — accepted, because a fleet repository that will not open
+// serves no fleet either.
+//
+// KNOWN DEAD END (not made worse here): a fleet row in state "unregistering"
+// whose fleet repository is unavailable. Archiving that repository does not
+// call fleetRemoved (wasFleet is false: it cannot be recognised), so the row
+// stays "unregistering" and RegisterFleet keeps refusing with "an
+// unregistration is still being pushed; it must finish (or the fleet
+// repository be archived)" — whose advertised remedy, archiving, no longer
+// clears it. It was already a dead end before unavailable repos could be
+// archived; clearing it needs a way to identify the fleet repository without
+// mounting it.
+func (m *Manager) ArchiveWith(name string, why ArchiveReason) (ArchiveInfo, error) {
 	if err := m.guardFleetRemoval(name); err != nil {
 		return ArchiveInfo{}, err
 	}
 	wasFleet := m.IsFleetRepo(name)
-	info, err := m.archive(name)
+	info, err := m.archive(name, why)
 	if err == nil {
 		m.fleetRemoved(wasFleet)
 	}
 	return info, err
 }
 
-// archive is Archive without the fleet guard (see deleteRepo).
-func (m *Manager) archive(name string) (ArchiveInfo, error) {
+// archive is ArchiveWith without the fleet guard (see deleteRepo).
+func (m *Manager) archive(name string, why ArchiveReason) (ArchiveInfo, error) {
+	if why.Source == "" {
+		why.Source = ArchiveByUser
+	}
 	// Truncated to the second because that is the resolution the registry
 	// stores (SetState takes a Unix second) and therefore the resolution
 	// ListArchived renders back. Formatting the untruncated value here would
@@ -1569,11 +1610,34 @@ func (m *Manager) archive(name string) (ArchiveInfo, error) {
 
 	m.mu.Lock()
 	ri := m.repos[name]
-	if ri == nil {
-		m.mu.Unlock()
-		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrRepoNotFound, name)
+	var uid string
+	if ri != nil {
+		uid = ri.uid
+	} else {
+		// Not mounted: an unavailable repo of that name is archived the same
+		// way, minus the unmount. Scanned inline — m.mu is already held, so
+		// Unavailable() (which RLocks) would deadlock.
+		var u *Unavailable
+		for _, cand := range m.unavailable {
+			if cand.Record.Name == name {
+				c := cand
+				u = &c
+				break
+			}
+		}
+		if u == nil {
+			m.mu.Unlock()
+			return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrRepoNotFound, name)
+		}
+		uid = u.Record.UID
+		if why.Condition == "" {
+			why.Condition = u.Reason
+			if u.Detail != "" {
+				why.Condition += ": " + u.Detail
+			}
+		}
 	}
-	uid := ri.uid
+	why.Reason = m.redactHome(why.Reason)
 	// Direct field read: we already hold the write lock, so the accessor's
 	// RLock would deadlock. RefsRepo is keyed by registry UID (lenses store
 	// lenses.write_uid / lens_reads.repo_uid, never names — see lens.go), so
@@ -1590,7 +1654,7 @@ func (m *Manager) archive(name string) (ArchiveInfo, error) {
 			return ArchiveInfo{}, fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, name, strings.Join(refs, ", "))
 		}
 	}
-	if serr := reg.SetState(uid, StateArchived, now.Unix()); serr != nil {
+	if serr := reg.Archive(uid, now.Unix(), why); serr != nil {
 		m.mu.Unlock()
 		return ArchiveInfo{}, fmt.Errorf("archive: %w", serr)
 	}
@@ -1611,7 +1675,9 @@ func (m *Manager) archive(name string) (ArchiveInfo, error) {
 		origin = org.URL
 	}
 
-	unmount(ri, "archived") // drains every stage and releases the SQLite file handle
+	if ri != nil {
+		unmount(ri, "archived") // drains every stage and releases the SQLite file handle
+	}
 
 	// The session sidecar is ephemeral — drop it so a restore starts clean.
 	sess := store.SessionDBPathFor(m.RepoPath(uid))
@@ -1619,12 +1685,16 @@ func (m *Manager) archive(name string) (ArchiveInfo, error) {
 	os.Remove(sess + "-wal")
 	os.Remove(sess + "-shm")
 
-	log.Info().Str("repo", name).Str("uid", uid).Msg("archived repo")
+	log.Info().Str("repo", name).Str("uid", uid).
+		Str("source", string(why.Source)).Str("reason", why.Reason).Str("condition", why.Condition).
+		Msg("archived repo")
+	recorded := why
 	info := ArchiveInfo{
 		ID:         uid,
 		Name:       name,
 		Origin:     origin,
 		ArchivedAt: now.Format(time.RFC3339Nano),
+		Reason:     &recorded,
 	}
 	// Stat AFTER shutdown, so the WAL has been folded back into the file and the
 	// size is the one ListArchived will report for the same repo a moment later.
@@ -1635,6 +1705,67 @@ func (m *Manager) archive(name string) (ArchiveInfo, error) {
 		info.SizeBytes = st.Size()
 	}
 	return info, nil
+}
+
+// archiveInfoOf renders one archived registry row: origin, timestamp, reason
+// (nil when none was recorded) and on-disk size.
+func (m *Manager) archiveInfoOf(reg *Registry, origins *Origins, rec RepoRecord) (ArchiveInfo, error) {
+	var origin string
+	if org, oerr := origins.Get(rec.UID); oerr == nil && org != nil {
+		origin = org.URL
+	}
+	info := ArchiveInfo{
+		ID:     rec.UID,
+		Name:   rec.Name,
+		Origin: origin,
+	}
+	if rec.ArchivedAt != 0 {
+		info.ArchivedAt = time.Unix(rec.ArchivedAt, 0).UTC().Format(time.RFC3339Nano)
+	}
+	why, ok, err := reg.ArchiveReasonOf(rec.UID)
+	if err != nil {
+		return ArchiveInfo{}, err
+	}
+	if ok {
+		info.Reason = &why
+	}
+	// Archived databases are no longer visible under an obvious filename, so
+	// report their size: otherwise reclaimable disk is invisible.
+	if st, serr := os.Stat(m.RepoPath(rec.UID)); serr == nil {
+		info.SizeBytes = st.Size()
+	}
+	return info, nil
+}
+
+// GetArchived returns one archived repo by uid, or ErrArchiveNotFound.
+func (m *Manager) GetArchived(uid string) (ArchiveInfo, error) {
+	reg, origins, err := m.controlHandles()
+	if err != nil {
+		return ArchiveInfo{}, err
+	}
+	rec, ok, err := reg.Get(uid)
+	if err != nil {
+		return ArchiveInfo{}, err
+	}
+	if !ok || rec.State != StateArchived {
+		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrArchiveNotFound, uid)
+	}
+	return m.archiveInfoOf(reg, origins, rec)
+}
+
+// LatestArchivedNamed returns the most recently archived repo called name, if
+// any. Used to explain a 404 for a name that is no longer active.
+func (m *Manager) LatestArchivedNamed(name string) (ArchiveInfo, bool) {
+	list, err := m.ListArchived()
+	if err != nil {
+		return ArchiveInfo{}, false
+	}
+	for _, a := range list { // newest first
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return ArchiveInfo{}, false
 }
 
 // ListArchived returns every archived repo, newest first.
@@ -1649,22 +1780,9 @@ func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
 	}
 	out := make([]ArchiveInfo, 0, len(recs))
 	for _, rec := range recs {
-		var origin string
-		if org, oerr := origins.Get(rec.UID); oerr == nil && org != nil {
-			origin = org.URL
-		}
-		info := ArchiveInfo{
-			ID:     rec.UID,
-			Name:   rec.Name,
-			Origin: origin,
-		}
-		if rec.ArchivedAt != 0 {
-			info.ArchivedAt = time.Unix(rec.ArchivedAt, 0).UTC().Format(time.RFC3339Nano)
-		}
-		// Archived databases are no longer visible under an obvious filename, so
-		// report their size: otherwise reclaimable disk is invisible.
-		if st, serr := os.Stat(m.RepoPath(rec.UID)); serr == nil {
-			info.SizeBytes = st.Size()
+		info, ierr := m.archiveInfoOf(reg, origins, rec)
+		if ierr != nil {
+			return nil, ierr
 		}
 		out = append(out, info)
 	}
@@ -1764,6 +1882,14 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 			return nil, se.Err
 		}
 		return nil, fmt.Errorf("restore register: %w", merr)
+	}
+	// Cleared only after the mount succeeded — a restore refused above left
+	// the repo archived, and its reason (the one the refusal just repeated)
+	// must still be shown — and BEFORE m.Set: once the repo is in m.repos a
+	// concurrent DELETE can archive it again, writing a NEW reason row that a
+	// later clear would delete, leaving that archive with "no reason recorded".
+	if cerr := reg.ClearArchiveReason(uid); cerr != nil {
+		log.Warn().Err(cerr).Str("uid", uid).Msg("restore: archive reason not cleared")
 	}
 	m.Set(target, ri)
 	log.Info().Str("uid", uid).Str("repo", target).Msg("restored repo")

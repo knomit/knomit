@@ -17,8 +17,9 @@ import (
 // What GET /repos says about a repo's ontology, for each way it can be wrong
 // (user ruling 2026-10-08):
 //
-//   - a SYMLINKED ontology refuses the repo: its row is "unopenable", the
-//     detail is the named symlink message, and its own endpoints answer 409;
+//   - a SYMLINKED ontology refuses the repo, and boot archives it (source
+//     system, the named symlink message as reason): it leaves GET /repos, is
+//     listed in GET /archived, and its URL answers 404 with that reason;
 //   - a MISSING, EMPTY or UNPARSEABLE ontology leaves the repo mounted and
 //     readable, and both the list row and the single GET carry ontology_error;
 //   - a regular ontology carries no ontology_error at all.
@@ -90,22 +91,42 @@ func TestGetRepos_OntologyErrorOnTheWire(t *testing.T) {
 	}
 	list := rec.Body.Bytes()
 
-	// Symlink: refused, listed unopenable with the named message.
-	linked := repoRow(t, list, "linked")
-	if linked["state"] != "unopenable" {
-		t.Fatalf("linked: state = %v, want unopenable: %v", linked["state"], linked)
+	// Symlink: refused at Identify, then archived automatically at boot
+	// (option B, user ruling 2026-10-09) — so it is NOT a GET /repos row; it is
+	// in GET /archived with a system reason naming the symlink, and its old
+	// URL answers 404 with that reason.
+	if repoRowOK(list, "linked") {
+		t.Fatalf("linked: a symlinked ontology is archived at boot, but GET /repos still lists it: %s", list)
 	}
-	detail, _ := linked["detail"].(string)
-	if !strings.Contains(detail, fact.OntologyFile+" is a symlink, and knomit does not follow symlinks") {
-		t.Fatalf("linked: detail does not name the symlink: %q", detail)
+	arch := httptest.NewRecorder()
+	r.ServeHTTP(arch, httptest.NewRequest(http.MethodGet, "/archived", nil))
+	var archived struct {
+		Embedded struct {
+			Archived []struct {
+				Name   string `json:"name"`
+				Reason *struct {
+					Source, Reason, Condition, Summary string
+				} `json:"reason"`
+			} `json:"archived"`
+		} `json:"_embedded"`
 	}
-	if _, ok := linked["ontology_error"]; ok {
-		t.Fatalf("linked: a refused repo carries detail, not ontology_error: %v", linked)
+	if err := json.Unmarshal(arch.Body.Bytes(), &archived); err != nil {
+		t.Fatalf("GET /archived: %v: %s", err, arch.Body.String())
+	}
+	if len(archived.Embedded.Archived) != 1 || archived.Embedded.Archived[0].Name != "linked" {
+		t.Fatalf("GET /archived: want exactly [linked], got %s", arch.Body.String())
+	}
+	why := archived.Embedded.Archived[0].Reason
+	if why == nil || why.Source != "system" ||
+		!strings.Contains(why.Reason, fact.OntologyFile+" is a symlink, and knomit does not follow symlinks") ||
+		why.Condition != "unopenable" {
+		t.Fatalf("linked: archive reason = %+v, want system / the named symlink / unopenable", why)
 	}
 	one := httptest.NewRecorder()
 	r.ServeHTTP(one, httptest.NewRequest(http.MethodGet, "/repos/linked", nil))
-	if one.Code != http.StatusConflict || !strings.Contains(one.Body.String(), "is a symlink") {
-		t.Fatalf("GET /repos/linked: status %d body %s, want 409 naming the symlink", one.Code, one.Body.String())
+	if one.Code != http.StatusNotFound || !strings.Contains(one.Body.String(), "Archived automatically") ||
+		!strings.Contains(one.Body.String(), "is a symlink") {
+		t.Fatalf("GET /repos/linked: status %d body %s, want 404 carrying the archive reason", one.Code, one.Body.String())
 	}
 
 	// Missing, garbled, empty: mounted, and the reason is on the row and on
@@ -202,4 +223,22 @@ func getRepoBody(t *testing.T, r http.Handler, name string) map[string]any {
 		t.Fatalf("GET /repos/%s: bad body %q: %v", name, rec.Body.String(), err)
 	}
 	return body
+}
+
+// repoRowOK reports whether the GET /repos body has a row named name.
+func repoRowOK(raw []byte, name string) bool {
+	var body struct {
+		Embedded struct {
+			Repos []map[string]any `json:"repos"`
+		} `json:"_embedded"`
+	}
+	if json.Unmarshal(raw, &body) != nil {
+		return false
+	}
+	for _, row := range body.Embedded.Repos {
+		if row["name"] == name {
+			return true
+		}
+	}
+	return false
 }

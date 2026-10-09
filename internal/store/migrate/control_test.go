@@ -112,6 +112,9 @@ var controlObjects = []string{
 	"oauth_families",
 	"oauth_codes", "oauth_codes_family",
 	"oauth_tokens", "oauth_tokens_family",
+	// repo_archive_reasons has no index: it is read by its uid primary key,
+	// and listed through a LEFT JOIN from repos.
+	"repo_archive_reasons",
 }
 
 // newestControlVersion is the highest numbered up-migration in the EMBEDDED

@@ -419,7 +419,7 @@ func (m *Manager) CancelCreate(id string) error {
 		m.createWg.Add(1)
 		go func() {
 			defer m.createWg.Done()
-			if derr := m.DeleteRepo(j.name); derr != nil {
+			if derr := m.DeleteRepo(j.name, "create cancelled after it completed"); derr != nil {
 				// The one outcome cancel cannot make good on: the repo exists
 				// and would not go. Reported as a FAILURE with the reason,
 				// never as cancelled — "cancelled" promises the repo is gone.
@@ -712,7 +712,7 @@ func (m *Manager) StartCreate(spec CreateSpec) *CreateJob {
 		// and registered — delete it, the whole of it. An error from Create
 		// means its own cleanup() already ran and there is nothing to remove.
 		if err == nil && ri != nil {
-			if derr := m.DeleteRepo(spec.Name); derr != nil {
+			if derr := m.DeleteRepo(spec.Name, "create cancelled after it completed"); derr != nil {
 				// The one outcome cancel cannot make good on: the repo exists
 				// and would not go. Report it as a FAILURE with the reason,
 				// never as cancelled — "cancelled" promises the repo is gone.

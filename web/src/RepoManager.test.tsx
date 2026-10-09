@@ -146,6 +146,44 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('archived-size-older.2')).toBeNull();
   });
 
+  // Each archived repo says why it is there: by the user (with the note), by
+  // knomit (with the why, and that restoring will be refused again), or — for
+  // one archived before reasons were recorded — a neutral "No reason
+  // recorded". An older server sends no reason at all: nothing is rendered.
+  // Sabotage: drop ArchiveReasonLine from ArchivedDetail → red.
+  it('shows why each archived repo was archived', async () => {
+    vi.mocked(api.listArchived).mockResolvedValue([
+      { id: 'u.1', name: 'mine', origin: '', archivedAt: '2026-10-01T00:00:00Z',
+        reason: { source: 'user', reason: '', note: 'moved', condition: '', summary: 'Archived by the user: moved' } },
+      { id: 's.2', name: 'linked', origin: '', archivedAt: '2026-10-02T00:00:00Z',
+        reason: { source: 'system', reason: '.knomit/ontology.yaml is a symlink', note: '', condition: 'unopenable',
+          summary: 'Archived automatically: .knomit/ontology.yaml is a symlink' } },
+      { id: 'l.3', name: 'legacy', origin: '', archivedAt: '2026-01-01T00:00:00Z', reason: null },
+      { id: 'o.4', name: 'olderserver', origin: '', archivedAt: '2026-01-01T00:00:00Z' },
+    ]);
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-archived'));
+    expect(await screen.findByTestId('archived-reason-u.1')).toHaveTextContent('Archived by the user: moved');
+    expect(screen.queryByTestId('archived-condition-u.1')).toBeNull();
+    const sys = screen.getByTestId('archived-reason-s.2');
+    expect(sys).toHaveTextContent('Archived automatically: .knomit/ontology.yaml is a symlink');
+    expect(sys).toHaveTextContent('Restoring re-runs the check');
+    expect(screen.getByTestId('archived-condition-s.2')).toHaveTextContent('unopenable');
+    expect(screen.getByTestId('archived-reason-l.3')).toHaveTextContent('No reason recorded');
+    expect(screen.queryByTestId('archived-reason-o.4')).toBeNull();
+    expect(screen.getByTestId('toc-archived-s.2').textContent).toContain('linked');
+  });
+
+  it('counts the automatically archived on the Overview', async () => {
+    vi.mocked(api.listArchived).mockResolvedValue([
+      { id: 's.2', name: 'linked', origin: '', archivedAt: '2026-10-02T00:00:00Z',
+        reason: { source: 'system', reason: 'x', note: '', condition: 'unopenable', summary: 'Archived automatically: x' } },
+      { id: 'l.3', name: 'legacy', origin: '', archivedAt: '2026-01-01T00:00:00Z', reason: null },
+    ]);
+    render(<RepoManager {...baseProps} />);
+    expect(await screen.findByTestId('overview-auto-archived')).toHaveTextContent('(1 automatically)');
+  });
+
   it('leaves the archive page when the last archived repo is purged', async () => {
     render(<RepoManager {...baseProps} />);
     fireEvent.click(await screen.findByTestId('repomgr-archived'));
@@ -327,16 +365,13 @@ describe('RepoManager', () => {
 
       const pane = await screen.findByTestId('repo-unavailable-ghost');
       expect(within(pane).getByTestId('repo-unavailable-detail')).toHaveTextContent('database file not found');
-      // Advice must name something the product can actually do. Putting the
-      // file back and restarting is the whole of it — there is no supported
-      // route to remove the registration, and the pane says so rather than
-      // sending the reader hunting for a button that does not exist.
+      // Advice must name something the product can actually do: put the file
+      // back, or archive the registration from here.
       expect(pane.textContent).toContain('Put the file back');
-      expect(pane.textContent).not.toContain('purge the registration');
-      expect(within(pane).getByTestId('repo-unavailable-no-removal').textContent)
-        .toContain('not supported yet');
-      // No settings page, and above all no Archive/Rebuild buttons: every one
-      // of them resolves through the store this repo does not have.
+      expect(pane.textContent).not.toContain('not supported yet');
+      expect(within(pane).getByTestId('repo-unavailable-archive')).toBeEnabled();
+      // No settings page, and no store-backed buttons: every one of them
+      // resolves through the store this repo does not have.
       expect(screen.queryByTestId('repo-detail-branch')).not.toBeInTheDocument();
       expect(screen.queryByTestId('repo-archive')).not.toBeInTheDocument();
       expect(api.getAgentBranch).not.toHaveBeenCalledWith('ghost');
@@ -362,6 +397,27 @@ describe('RepoManager', () => {
       expect(pane.textContent).toContain('an ontology that is a symlink');
       expect(pane.textContent).toContain('does not sync');
       expect(api.getRepo).not.toHaveBeenCalledWith('linked');
+    });
+
+    // The way out: Archive works without the store, with an optional note.
+    // Sabotage: drop the note from the archiveRepo call → red.
+    it('archives it, with the note, and leaves the pane', async () => {
+      vi.mocked(api.archiveRepo).mockResolvedValue({ id: 'uid-ghost', name: 'ghost', origin: '', archivedAt: '2026-10-09T00:00:00Z' });
+      const onChanged = vi.fn();
+      render(<RepoManager {...baseProps} onChanged={onChanged} repos={withBroken} />);
+      fireEvent.click(await screen.findByTestId('repomgr-item-ghost'));
+      const pane = await screen.findByTestId('repo-unavailable-ghost');
+      fireEvent.click(within(pane).getByTestId('repo-unavailable-archive'));
+      fireEvent.change(within(pane).getByTestId('repo-unavailable-archive-note'), { target: { value: 'disk is gone' } });
+      fireEvent.click(within(pane).getByTestId('repo-unavailable-archive-confirm'));
+      await waitFor(() => expect(api.archiveRepo).toHaveBeenCalledWith('ghost', 'disk is gone'));
+      await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    });
+
+    it('disables Archive on a read-only instance', async () => {
+      render(<RepoManager {...baseProps} serverReadOnly repos={withBroken} />);
+      fireEvent.click(await screen.findByTestId('repomgr-item-ghost'));
+      expect(await screen.findByTestId('repo-unavailable-archive')).toBeDisabled();
     });
 
     it('reports its state in the Overview table without fetching it', async () => {
@@ -680,6 +736,19 @@ describe('RepoManager', () => {
     const block = screen.getByTestId('block-remote');
     expect(block.textContent).not.toContain('Not connected');
     expect(within(block).queryByTestId('remote-connect')).not.toBeInTheDocument();
+  });
+
+  // Archive asks for an optional note before it archives, and sends it.
+  // Sabotage: archive on the first click (no confirm) → no note input → red.
+  it('archives a repo with the note from the confirm', async () => {
+    vi.mocked(api.archiveRepo).mockResolvedValue({ id: 'uid-core', name: 'core', origin: '', archivedAt: '2026-10-09T00:00:00Z' });
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+    fireEvent.click(await screen.findByTestId('repo-archive'));
+    expect(api.archiveRepo).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId('repo-archive-note'), { target: { value: 'superseded' } });
+    fireEvent.click(screen.getByTestId('repo-archive-confirm'));
+    await waitFor(() => expect(api.archiveRepo).toHaveBeenCalledWith('core', 'superseded'));
   });
 
   it('retries a failed remote load', async () => {

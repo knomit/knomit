@@ -236,7 +236,7 @@ func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken 
 		}
 		if !fact.IsFleetOntology(created.Ontology()) {
 			msg := "the repository's ontology is not the fleet preset"
-			if derr := m.deleteRepo(created.Name()); derr != nil {
+			if derr := m.deleteRepo(created.Name(), "fleet registration: the repository's ontology is not the fleet preset"); derr != nil {
 				log.Warn().Err(derr).Str("repo", created.Name()).Msg("fleet: removing a non-fleet mount failed")
 				msg += fmt.Sprintf("; removing the mount %q failed (%v): archive it by hand", created.Name(), derr)
 				_ = recordFleetAttempt(db, errors.New(msg), time.Now())
@@ -342,7 +342,7 @@ func (m *Manager) fleetPushed(repo string, pushErr error) {
 			log.Warn().Err(err).Msg("fleet: entering registered failed")
 		}
 	case FleetUnregistering:
-		if err := m.deleteRepo(repo); err != nil {
+		if err := m.deleteRepo(repo, "fleet unregistered: the departure was pushed"); err != nil {
 			_ = recordFleetAttempt(db, fmt.Errorf("unmount after the departure was pushed: %w", err), now)
 			return
 		}

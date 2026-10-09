@@ -20,6 +20,7 @@ import (
 
 	"knomit/internal/client/sessions"
 	"knomit/internal/config"
+	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -914,6 +915,7 @@ func (m *Manager) Start() error {
 		}(rec)
 	}
 	boot.Wait()
+	m.autoArchiveRefused()
 	// Archived repos are registered too — their database stays at
 	// RepoPath(uid) and Restore reopens it in place. Counting only the active
 	// ones would report every archived repo's file as an orphan, inviting an
@@ -1000,7 +1002,23 @@ type Unavailable struct {
 	Record RepoRecord
 	Reason string
 	Detail string
+	// Cause is the typed refusal behind Reason, when there is one the code acts
+	// on: CauseOntologySymlink makes Start archive the repo (autoArchiveRefused).
+	// Empty for every other failure. Keyed on by code — never match Detail text.
+	Cause UnavailableCause
 }
+
+// UnavailableCause names a refusal precisely enough to act on.
+type UnavailableCause string
+
+const (
+	// CauseOntologySymlink: the ontology on the read branch is a symlink, which
+	// Identify refuses (fact.ErrSymlinkNotFollowed). Reason "unopenable".
+	CauseOntologySymlink UnavailableCause = "ontology_symlink"
+	// CauseIdentityConflict: another active repo holds this knowledge base
+	// (ErrRepoAlreadyRegistered). Reason "conflict".
+	CauseIdentityConflict UnavailableCause = "identity_conflict"
+)
 
 // Unavailable returns the registered repos with no live instance, sorted by
 // name. They stay visible in the API — a repo that fails to open used to
@@ -1024,16 +1042,67 @@ func (m *Manager) Unavailable() []Unavailable {
 // the home prefix here, at the single place both read from, and keep the
 // unredacted text for the log line, which is where an operator debugs from.
 func (m *Manager) markUnavailable(rec RepoRecord, reason string, detail string) {
-	public := detail
-	if home := m.deps.Cfg.Home; home != "" {
-		public = strings.ReplaceAll(public, home, "<home>")
-	}
+	m.markUnavailableCause(rec, reason, "", detail)
+}
+
+// markUnavailableCause is markUnavailable with a typed cause.
+func (m *Manager) markUnavailableCause(rec RepoRecord, reason string, cause UnavailableCause, detail string) {
+	public := m.redactHome(detail)
 	m.mu.Lock()
-	m.unavailable[rec.UID] = Unavailable{Record: rec, Reason: reason, Detail: public}
+	m.unavailable[rec.UID] = Unavailable{Record: rec, Reason: reason, Detail: public, Cause: cause}
 	m.mu.Unlock()
 	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).
 		Str("reason", reason).Str("detail", detail).
 		Msg("registered repo is unavailable; it stays listed in the API")
+}
+
+// autoArchiveRefused archives, at boot, every repo the mount refused for a
+// reason that is (1) a property of the repo's own content, (2) unable to heal
+// in place, and (3) independent of which repo opened first. Today that is ONE
+// cause: a symlinked ontology (CauseOntologySymlink). A refused repo does not
+// sync, so no fix can reach it; archived, its name and knowledge base stop
+// blocking a re-add, and it can be purged. Nothing is deleted: the database
+// stays at RepoPath(uid), and a restore re-runs Identify, refusing with the
+// same text until the store changes.
+//
+// What it deliberately leaves UNAVAILABLE (the user archives those):
+//   - missing / other unopenable: they can heal by themselves (file put back,
+//     binary upgraded) and archiving would turn that into a manual restore;
+//   - conflict: choosing which of two copies of one knowledge base to keep is
+//     the user's call, and the loser here is decided by mount order;
+//   - a repo a lens reads or writes: archive refuses it (ErrRepoInUseByLens),
+//     so it stays unavailable with a WARN naming the lenses.
+//
+// Runs once, in Start after every mount replied — never at runtime, where an
+// archive would pull a repo out from under live sessions.
+func (m *Manager) autoArchiveRefused() {
+	for _, u := range m.Unavailable() {
+		if u.Cause != CauseOntologySymlink {
+			continue
+		}
+		_, err := m.archive(u.Record.Name, ArchiveReason{
+			Source: ArchiveBySystem,
+			Reason: u.Detail,
+			// The state alone: the detail IS the reason, said once.
+			Condition: u.Reason,
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("repo", u.Record.Name).Str("uid", u.Record.UID).
+				Msg("refused repo not archived automatically; it stays listed as unavailable")
+			continue
+		}
+		log.Warn().Str("repo", u.Record.Name).Str("uid", u.Record.UID).Str("reason", u.Detail).
+			Msg("refused repo archived automatically; restore, or purge and add it again once its ontology is a file")
+	}
+}
+
+// redactHome replaces the server's home directory in text bound for a user
+// (an API body, a stored archive reason) with "<home>".
+func (m *Manager) redactHome(text string) string {
+	if home := m.deps.Cfg.Home; home != "" {
+		return strings.ReplaceAll(text, home, "<home>")
+	}
+	return text
 }
 
 // clearUnavailable drops any unavailable record for uid — called when the repo
@@ -1066,8 +1135,8 @@ func (m *Manager) openRegistered(rec RepoRecord) {
 	}
 	ri, err := m.mountExisting(rec.Name, rec.UID, origin)
 	if err != nil {
-		reason, detail := unavailableReason(err)
-		m.markUnavailable(rec, reason, detail)
+		reason, cause, detail := unavailableReason(err)
+		m.markUnavailableCause(rec, reason, cause, detail)
 		return
 	}
 	m.clearUnavailable(rec.UID)
@@ -1075,16 +1144,20 @@ func (m *Manager) openRegistered(rec RepoRecord) {
 }
 
 // unavailableReason maps a failed mount onto the Unavailable vocabulary: an
-// identity conflict is "conflict", every other failure "unopenable".
-func unavailableReason(err error) (reason, detail string) {
+// identity conflict is "conflict", every other failure "unopenable". The cause
+// is set for the refusals code acts on (see UnavailableCause).
+func unavailableReason(err error) (reason string, cause UnavailableCause, detail string) {
 	var se *StageError
 	if errors.As(err, &se) {
 		if errors.Is(se.Err, ErrRepoAlreadyRegistered) {
-			return "conflict", se.Err.Error()
+			return "conflict", CauseIdentityConflict, se.Err.Error()
 		}
-		return "unopenable", se.Err.Error()
+		if errors.Is(se.Err, fact.ErrSymlinkNotFollowed) {
+			return "unopenable", CauseOntologySymlink, se.Err.Error()
+		}
+		return "unopenable", "", se.Err.Error()
 	}
-	return "unopenable", err.Error()
+	return "unopenable", "", err.Error()
 }
 
 // warnOrphanFiles reports .db files under reposDir with no registry row. They

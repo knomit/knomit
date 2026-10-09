@@ -1325,7 +1325,27 @@ export interface ArchivedRepo {
    *  for its uid and never moves, so this is the only place the disk a purge
    *  would reclaim is visible. Optional: an older server omits it. */
   sizeBytes?: number;
+  /** Why it was archived. null for a repo archived before reasons were
+   *  recorded ("no reason recorded"); absent from an older server. */
+  reason?: ArchiveReason | null;
 }
+
+/** ArchiveReason is why a repo was archived — by the user, with an optional
+ *  note, or by knomit itself (source "system"), with the concrete why. */
+export interface ArchiveReason {
+  source: 'user' | 'system';
+  /** The system's why; empty for a user archive. */
+  reason: string;
+  /** The user's free-text note; empty when none. */
+  note: string;
+  /** The repo's state when archived (e.g. "unopenable"); empty when it was mounted. */
+  condition: string;
+  /** One line for display, composed by the server. */
+  summary: string;
+}
+
+/** The longest archive note the server keeps (bytes, after trimming). */
+export const MAX_ARCHIVE_NOTE_BYTES = 500;
 
 // createRepoPollMs is how often createRepo asks how a create is going.
 //
@@ -1455,8 +1475,16 @@ async function cancelRepoCreate(id: string): Promise<RepoCreateStatus> {
   return await r.json() as RepoCreateStatus;
 }
 
-async function archiveRepo(repo: string): Promise<ArchivedRepo> {
-  return fetchJSON<ArchivedRepo>(repoBase(repo), { method: 'DELETE' });
+// archiveRepo archives a repo — a mounted one or one with no live store —
+// recording the user's optional note as its reason.
+async function archiveRepo(repo: string, note?: string): Promise<ArchivedRepo> {
+  const trimmed = note?.trim();
+  if (!trimmed) return fetchJSON<ArchivedRepo>(repoBase(repo), { method: 'DELETE' });
+  return fetchJSON<ArchivedRepo>(repoBase(repo), {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: trimmed }),
+  });
 }
 
 async function listArchived(): Promise<ArchivedRepo[]> {
