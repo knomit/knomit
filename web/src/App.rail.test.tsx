@@ -136,6 +136,85 @@ describe('the target rail in the app', () => {
     expect(screen.getByTestId('target-rail')).toBeInTheDocument();
   });
 
+  it('a ⌘K that has been served does not steal focus again when the rail later reopens', async () => {
+    await primeApi();
+    await mountApp();
+
+    // Control: ⌘K does focus the search.
+    pressMod('k');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('rail-search')));
+
+    // Close it, put focus back on the page, then reopen with the toggle.
+    pressMod('b');
+    expect(screen.queryByTestId('target-rail')).toBeNull();
+    act(() => { (document.activeElement as HTMLElement | null)?.blur?.(); });
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.click(screen.getByTestId('rail-toggle'));
+    const search = await screen.findByTestId('rail-search');
+    // One more frame for any effect that would focus.
+    await act(async () => { await Promise.resolve(); });
+    expect(document.activeElement).not.toBe(search);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('nor when the rail remounts on the way out of Manage', async () => {
+    await primeApi();
+    await mountApp();
+    pressMod('k');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('rail-search')));
+    act(() => { (document.activeElement as HTMLElement).blur(); });
+
+    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
+    await screen.findByTestId('manage-surface');
+    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
+    const search = await screen.findByTestId('rail-search');
+    await act(async () => { await Promise.resolve(); });
+    expect(document.activeElement).not.toBe(search);
+  });
+
+  it('after ⌘K, typing and picking a repo row, the page shortcuts work again', async () => {
+    await primeApi();
+    await mountApp();
+    pressMod('k');
+    const search = await screen.findByTestId('rail-search');
+    await waitFor(() => expect(document.activeElement).toBe(search));
+    fireEvent.change(search, { target: { value: 'bet' } });
+
+    await act(async () => { fireEvent.click(screen.getByTestId('rail-repo-beta')); });
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('beta'));
+    // The pick hands the keyboard back to the page. By id, not identity: a
+    // repo switch still remounts the shell in this PR (BootScreen), and a
+    // remounted search that grabbed focus would be a different element.
+    expect(document.activeElement?.id).not.toBe('rail-search');
+    await screen.findByTestId('browse-toolbar');
+    act(() => { fireEvent.keyDown(window, { key: '/' }); });
+    expect(document.activeElement?.id).toBe('filter-input');
+  });
+
+  it('after ⌘K, typing and picking a lens row (no remount), the page shortcuts work again', async () => {
+    const api = await primeApi();
+    const dev = {
+      name: 'dev', uid: 'u-dev',
+      write: { uid: 'u-a', name: 'alpha' },
+      reads: [{ uid: 'u-a', name: 'alpha' }, { uid: 'u-b', name: 'beta' }],
+    };
+    api.listLenses.mockResolvedValue([dev]);
+    api.getLens.mockResolvedValue(dev);
+    await mountApp();
+    pressMod('k');
+    const search = await screen.findByTestId('rail-search');
+    await waitFor(() => expect(document.activeElement).toBe(search));
+    fireEvent.change(search, { target: { value: 'de' } });
+
+    await act(async () => { fireEvent.click(await screen.findByTestId('rail-lens-dev')); });
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('dev'));
+    // The same input element is still mounted, so identity is the right check.
+    expect(screen.getByTestId('rail-search')).toBe(search);
+    expect(document.activeElement).not.toBe(search);
+    act(() => { fireEvent.keyDown(window, { key: '/' }); });
+    expect(document.activeElement?.id).toBe('filter-input');
+  });
+
   it('Escape leaves an open rail open, from the page and from its own search', async () => {
     localStorage.setItem('knomit.rail', '1');
     await primeApi();

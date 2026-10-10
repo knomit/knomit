@@ -24,26 +24,34 @@ Single repo test fact.`,
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
 
-    // With only one repo, should show plain text repo name
-    const repoName = page.getByTestId('toknomitr-repo-name');
-    await expect(repoName).toBeVisible();
-    await expect(repoName).toHaveText('knomit');
+    // The top bar names the target with a static label: picking a repository
+    // moved to the target rail, so there is no dropdown at any repo count.
+    const label = page.getByTestId('target-label');
+    await expect(label).toBeVisible();
+    await expect(label).toHaveText('knomit');
+    await expect(label.locator('button')).toHaveCount(0);
+  });
 
-    // Dropdown should NOT exist
-    const repoSelect = page.getByTestId('toknomitr-repo-select');
-    await expect(repoSelect).not.toBeVisible();
+  test('the rail lists the repo and is collapsed until opened', async ({ freshKnomit, page }) => {
+    await page.goto(freshKnomit.baseURL);
+    await expect(page.getByTestId('target-label')).toHaveText('knomit');
+    await expect(page.getByTestId('target-rail')).toHaveCount(0);
+
+    await page.getByTestId('rail-toggle').click();
+    await expect(page.getByTestId('target-rail')).toBeVisible();
+    await expect(page.getByTestId('rail-repo-knomit')).toBeVisible();
   });
 
   // Multi-repo tests are skipped: the server discovers repos from *.db files at
   // startup and the API does not support creating repos on the fly. Writing to a
   // non-existent repo name returns 404 from the repo middleware.
 
-  test.skip('with two repos, shows dropdown selector', async () => {
+  test.skip('with two repos, the rail lists both', async () => {
     // Requires a second repo to be initialised before the server starts.
     // Not currently possible with the freshKnomit fixture.
   });
 
-  test.skip('switching repos via dropdown changes displayed content', async () => {
+  test.skip('switching repos via the rail changes displayed content', async () => {
     // Requires a second repo to be initialised before the server starts.
     // Not currently possible with the freshKnomit fixture.
   });

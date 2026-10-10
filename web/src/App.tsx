@@ -281,10 +281,12 @@ export default function App() {
   // NOT AppState, because none of it is a way of looking at facts (see
   // facets.ts) — today it is only whether the target rail is open.
   const [view, dispatchView] = useReducer(viewReducer, undefined, initView);
-  // Bumped by ⌘K to ask the rail's search for focus. A counter rather than a
-  // flag so a second ⌘K focuses again, and so a rail that mounts BECAUSE of
-  // the ⌘K focuses on arrival.
+  // Raised by ⌘K to ask the rail's search for focus, and cleared by the rail
+  // once it has focused — so a rail that mounts BECAUSE of the ⌘K focuses on
+  // arrival, and one that mounts later (toggle, ⌘B, leaving Manage) does not
+  // re-serve a request that was already handled.
   const [railFocusRequest, setRailFocusRequest] = useState(0);
+  const clearRailFocusRequest = useCallback(() => setRailFocusRequest(0), []);
   useEffect(() => { saveRailOpen(view.railOpen); }, [view.railOpen]);
   const toggleRail = useCallback(() => dispatchView({ type: 'TOGGLE_RAIL' }), []);
   // Latest-state ref for async callbacks that resolve after the context may have
@@ -1263,6 +1265,7 @@ export default function App() {
               serverReadOnly={state.serverReadOnly}
               onSelect={onSelectTarget}
               focusRequest={railFocusRequest}
+              onFocusHandled={clearRailFocusRequest}
             />
           </ErrorBoundary>
         )}

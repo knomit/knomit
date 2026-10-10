@@ -4,7 +4,7 @@ test.describe.serial('Multi-Repo', () => {
   // Skip: repos are discovered from *.db files at startup; you can't create a new repo
   // just by writing to it via the API — the server returns 404 for unknown repo names.
   // There is no public API to create repos dynamically.
-  test.skip('create facts in two repos → repo selector appears → switch repos → different content', async ({ freshKnomit, page }) => {
+  test.skip('create facts in two repos → rail lists both → switch repos → different content', async ({ freshKnomit, page }) => {
     // Create a fact in the default "knomit" repo
     const res1 = await freshKnomit.api.put(
       `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/primary-fact.md`,
@@ -51,9 +51,9 @@ Content in the second repo.`,
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
 
-    // Verify repo selector dropdown appears (multiple repos)
-    const repoSelect = page.getByTestId('toknomitr-repo-select');
-    await expect(repoSelect).toBeVisible({ timeout: 10_000 });
+    // Open the target rail, where repositories are picked.
+    await page.getByTestId('rail-toggle').click();
+    await expect(page.getByTestId('rail-repo-second')).toBeVisible({ timeout: 10_000 });
 
     // Verify default repo shows primary-fact
     const entries = page.getByTestId('dir-entry');
@@ -64,9 +64,8 @@ Content in the second repo.`,
     }
     expect(initialNames).toContain('primary-fact.md');
 
-    // Switch to the "second" repo via the custom dropdown.
-    await repoSelect.click();
-    await page.getByTestId('toknomitr-repo-option-second').click();
+    // Switch to the "second" repo via the rail.
+    await page.getByTestId('rail-repo-second').click();
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
 
