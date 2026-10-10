@@ -20,7 +20,8 @@ const REST = '#8af';
 const NARROWED = '#e5a23c';
 
 // MountsPicker lets a lens reader narrow the union to a subset of its read
-// mounts. It lives in the TOP BAR and renders only in lens context.
+// mounts. It lives in the Browse toolbar (it used to sit in the top bar) and
+// renders only in lens context.
 //
 // It replaces two things that disagreed: a labelled dropdown in the left panel
 // that knew the selection, and a top-bar chip rendering `lens.reads.length` —

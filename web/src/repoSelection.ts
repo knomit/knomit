@@ -89,3 +89,26 @@ export function saveLastContext(ctx: BrowseContext): void {
     /* quota exceeded / storage disabled — last-context memory is best-effort */
   }
 }
+
+// The target rail's open state: '1' open, '0' collapsed. Anything else —
+// missing, garbage, storage disabled — reads as collapsed, which is the
+// default. It is kept beside the browse context it is chrome for, and NOT in
+// AppState: the rail is not a way of looking at facts, so it has no place in
+// a NavEntry or on the back stack.
+export const RAIL_STORAGE_KEY = 'knomit.rail';
+
+export function loadRailOpen(): boolean {
+  try {
+    return localStorage.getItem(RAIL_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveRailOpen(open: boolean): void {
+  try {
+    localStorage.setItem(RAIL_STORAGE_KEY, open ? '1' : '0');
+  } catch {
+    /* storage disabled — the rail is simply not remembered */
+  }
+}

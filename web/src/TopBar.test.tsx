@@ -5,93 +5,6 @@ import { init } from './state';
 import type { AppState } from './state';
 import type { RepoInfo, Lens } from './api';
 
-// The top bar holds controls: everything on it opens something. The commit is
-// the one element you can never act on, so it moved to the footer — see
-// StatusFooter.test.tsx, where it is now shown unconditionally rather than only
-// when a fact happened to be open.
-describe('TopBar — the commit is not here any more', () => {
-  it('renders no commit chip when anchored', () => {
-    const state: AppState = {
-      ...init,
-      repo: 'alpha',
-      branch: 'agent/test',
-      headCommit: 'head0001234',
-      asOf: { mode: 'history', commit: 'sc123456abcd' },
-    };
-    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
-    expect(screen.getByTestId('toknomitr-bar').textContent).not.toContain('sc12345');
-  });
-
-  it('renders no commit chip when live', () => {
-    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test', headCommit: 'head0001234' };
-    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
-    expect(screen.getByTestId('toknomitr-bar').textContent).not.toContain('head000');
-  });
-});
-
-describe('TopBar — the branch', () => {
-  const withBranch = (branch: string) => {
-    const state: AppState = { ...init, repo: 'alpha', branch, context: { kind: 'repo', repo: 'alpha' } };
-    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    return screen.getByTestId('toknomitr-branch');
-  };
-
-  it('shows the machine, not the whole agent branch', () => {
-    // Exact, not substring: the whole point is that `agent/` and the key
-    // fingerprint are gone, and both are substrings of the untrimmed name.
-    expect(withBranch('agent/mindev.local-8ef0cd32').textContent).toBe('mindev.local');
-  });
-
-  it('keeps hostname hyphens, cutting only the fingerprint', () => {
-    expect(withBranch('agent/build-box-01-a1b2c3d4').textContent).toBe('build-box-01');
-  });
-
-  it('keeps the full name reachable rather than merely hiding it', () => {
-    expect(withBranch('agent/mindev.local-8ef0cd32').title).toContain('agent/mindev.local-8ef0cd32');
-  });
-
-  it('leaves an ordinary branch alone', () => {
-    expect(withBranch('main').textContent).toBe('main');
-  });
-
-  it('leaves a slashed non-agent branch alone', () => {
-    expect(withBranch('feat/facet-panel-density').textContent).toBe('feat/facet-panel-density');
-  });
-
-  it('carries a caret before the picker exists, so the row does not reflow later', () => {
-    // Switching branches is coming. Adding the affordance with the layout means
-    // the day it lands is a behaviour change, not a visual one.
-    expect(withBranch('main').querySelector('svg')).toBeTruthy();
-  });
-});
-
-describe('TopBar — the search slot', () => {
-  it('renders whatever search the app hands it', () => {
-    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
-    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300}
-      search={<div data-testid="the-search">search</div>} />);
-    expect(screen.getByTestId('the-search')).toBeTruthy();
-  });
-
-  it('gives it the remaining width, so it is the element that absorbs a squeeze', () => {
-    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
-    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300}
-      search={<div data-testid="the-search">search</div>} />);
-    const slot = screen.getByTestId('toknomitr-search');
-    expect(slot.style.flex).toBe('1 1 0%');
-    expect(slot.style.minWidth).toBe('0px');
-  });
-
-  it('leaves no gap in the row when the app passes nothing', () => {
-    // History mode has no filter input — the trail breadcrumb takes over below.
-    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test' };
-    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
-    expect(screen.queryByTestId('toknomitr-search')).toBeNull();
-  });
-});
-
 // A realistic repo context: SET_CONTEXT sets repo and context.repo atomically,
 // so the fixture pins both (production state can never diverge here).
 const baseState: AppState = { ...init, repo: 'alpha', branch: 'agent/test', context: { kind: 'repo', repo: 'alpha' } };
@@ -107,12 +20,6 @@ const engLens: Lens = {
   write: { uid: 'uid-core', name: 'core' },
   reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }, { uid: 'uid-infra', name: 'infra' }],
 };
-const researchLens: Lens = {
-  name: 'research',
-  write: { uid: 'uid-scratch', name: 'scratch' },
-  reads: [{ uid: 'uid-papers', name: 'papers' }, { uid: 'uid-notes', name: 'notes' }],
-};
-const lenses: Lens[] = [engLens, researchLens];
 
 // A lens-context state: browsing the "eng" lens (write mount core / agent/main).
 const lensState: AppState = {
@@ -123,119 +30,153 @@ const lensState: AppState = {
   lens: engLens,
 };
 
-describe('TopBar repo selector', () => {
-  it('renders a button trigger (not a native select) when multiple repos exist', () => {
-    render(<TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    const trigger = screen.getByTestId('toknomitr-repo-select');
-    expect(trigger.tagName.toLowerCase()).toBe('button');
-    expect(trigger).toHaveTextContent('alpha');
+type BarProps = React.ComponentProps<typeof TopBar>;
+const bar = (over: Partial<BarProps> = {}) => (
+  <TopBar state={baseState} repos={repos} railOpen={false} onToggleRail={vi.fn()} onManageRepos={vi.fn()} {...over} />
+);
+
+// The top bar holds controls: everything on it opens something. The commit is
+// the one element you can never act on, so it moved to the footer — see
+// StatusFooter.test.tsx, where it is now shown unconditionally rather than only
+// when a fact happened to be open.
+describe('TopBar — the commit is not here any more', () => {
+  it('renders no commit chip when anchored', () => {
+    const state: AppState = {
+      ...baseState,
+      headCommit: 'head0001234',
+      asOf: { mode: 'history', commit: 'sc123456abcd' },
+    };
+    render(bar({ state }));
+    expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
+    expect(screen.getByTestId('toknomitr-bar').textContent).not.toContain('sc12345');
   });
 
-  it('opens a portal-based dropdown listing all repos when the trigger is clicked', () => {
-    render(<TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.queryByTestId('toknomitr-repo-menu')).toBeNull();
-
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-
-    const menu = screen.getByTestId('toknomitr-repo-menu');
-    expect(menu).toBeInTheDocument();
-    // Menu lives in document.body (portal), not as a descendant of the trigger.
-    const trigger = screen.getByTestId('toknomitr-repo-select');
-    expect(trigger.contains(menu)).toBe(false);
-
-    expect(screen.getByTestId('toknomitr-repo-option-alpha')).toBeInTheDocument();
-    expect(screen.getByTestId('toknomitr-repo-option-beta')).toBeInTheDocument();
-    expect(screen.getByTestId('toknomitr-repo-option-gamma')).toBeInTheDocument();
+  it('renders no commit chip when live', () => {
+    const state: AppState = { ...baseState, headCommit: 'head0001234' };
+    render(bar({ state }));
+    expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
+    expect(screen.getByTestId('toknomitr-bar').textContent).not.toContain('head000');
   });
 
-  it('clicking an option dispatches SET_REPO and closes the dropdown', () => {
-    const dispatch = vi.fn();
-    render(<TopBar state={baseState} repos={repos} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-    fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
-
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_REPO', repo: 'beta' });
-    expect(screen.queryByTestId('toknomitr-repo-menu')).toBeNull();
+  it('shows no commit in any lens state — anchored, with a fact open, either way', () => {
+    for (const state of [
+      { ...lensState, factPath: 'kb/a/b.md', asOf: { mode: 'live' } } as AppState,
+      { ...lensState, factPath: 'kb/a/b.md', asOf: { mode: 'history', commit: 'abc1234def5' } } as AppState,
+      { ...lensState, factPath: null, asOf: { mode: 'history', commit: 'abc1234def5' } } as AppState,
+    ]) {
+      const { unmount } = render(bar({ state }));
+      expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
+      unmount();
+    }
   });
+});
 
-  it('clicking the active repo does not dispatch (no-op) but still closes', () => {
-    const dispatch = vi.fn();
-    render(<TopBar state={baseState} repos={repos} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-    fireEvent.click(screen.getByTestId('toknomitr-repo-option-alpha'));
-
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('toknomitr-repo-menu')).toBeNull();
-  });
-
-  // A registered repo whose store failed to open stays in the switcher — it
-  // used to vanish from the API entirely, which is the failure this whole
-  // surface exists to end — but it is not somewhere you can go.
-  // A repo with no usable ontology is open and readable — it stays a normal,
-  // selectable option — but its row says it is read-only, with the server's
-  // reason on hover.
-  it('chips a repo with no usable ontology read-only, and leaves it selectable', () => {
-    const msg = 'ontology at .knomit/ontology.yaml does not parse: ontology id is required';
-    const dispatch = vi.fn();
-    render(<TopBar state={baseState} repos={[...repos, { name: 'garbled', uid: 'uid-garbled', state: 'active', ontology_error: msg }]}
-      dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-    const option = screen.getByTestId('toknomitr-repo-option-garbled');
-    const chip = within(option).getByTestId('repo-ontology-error-garbled');
-    expect(chip).toHaveTextContent('read-only');
-    expect(chip.getAttribute('title')).toContain(msg);
-    expect(within(screen.getByTestId('toknomitr-repo-option-beta')).queryByTestId('repo-ontology-error-beta')).toBeNull();
-    fireEvent.click(option);
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_REPO', repo: 'garbled' });
-  });
-
-  describe('a repo with no live store', () => {
-    const withBroken: RepoInfo[] = [
-      ...repos,
-      { name: 'ghost', uid: 'uid-ghost', state: 'missing', detail: 'database file not found' },
-    ];
-
-    it('lists it, chipped with the reason and explained on hover', () => {
-      render(<TopBar state={baseState} repos={withBroken} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-
-      const option = screen.getByTestId('toknomitr-repo-option-ghost');
-      expect(option).toBeInTheDocument();
-      expect(within(option).getByTestId('repo-state-missing')).toHaveTextContent('missing');
-      // The chip is the class of failure; the server's sentence is the hover.
-      expect(option).toHaveAttribute('title', 'database file not found');
-      expect(option).toHaveAttribute('aria-disabled', 'true');
-    });
-
-    it('does not navigate when it is clicked', () => {
-      const dispatch = vi.fn();
-      render(<TopBar state={baseState} repos={withBroken} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-      fireEvent.click(screen.getByTestId('toknomitr-repo-option-ghost'));
-
-      // No SET_REPO, and the menu stays open: nothing happened, so closing it
-      // would read as though something had.
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(screen.getByTestId('toknomitr-repo-menu')).toBeInTheDocument();
-    });
-
-    it('leaves readable repos alone', () => {
-      const dispatch = vi.fn();
-      render(<TopBar state={baseState} repos={withBroken} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-      fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
-
-      expect(dispatch).toHaveBeenCalledWith({ type: 'SET_REPO', repo: 'beta' });
-      expect(screen.queryByTestId('repo-state-missing')).toBeNull();
-    });
-  });
-
-  it('with a single repo, renders the plain repo name (no dropdown)', () => {
-    render(<TopBar state={baseState} repos={[repos[0]]} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.getByTestId('toknomitr-repo-name')).toHaveTextContent('alpha');
+// The target label is a static label: picking a repo or lens moved to the
+// rail, so the dropdown that used to hang off it is gone, not hidden.
+describe('TopBar — the target label', () => {
+  it('names the repo in green, as a label and not a menu trigger', () => {
+    render(bar());
+    const label = screen.getByTestId('target-label');
+    expect(label.textContent).toBe('alpha');
+    expect(label).toHaveStyle({ color: '#7c9' });
+    expect(label.tagName).not.toBe('BUTTON');
+    expect(label.querySelector('button')).toBeNull();
+    // No popup anywhere on the bar: the switcher menu is deleted.
+    expect(screen.getByTestId('toknomitr-bar').querySelector('[aria-haspopup]')).toBeNull();
     expect(screen.queryByTestId('toknomitr-repo-select')).toBeNull();
+  });
+
+  it('names the lens in the lens accent', () => {
+    render(bar({ state: lensState }));
+    const label = screen.getByTestId('target-label');
+    expect(label.textContent).toBe('eng');
+    expect(label).toHaveStyle({ color: '#b9a6f0' });
+    expect(screen.queryByTestId('toknomitr-lens-select')).toBeNull();
+  });
+
+  it('is ruled off from the logo: 1px #1e1e1e left border, padding 0 14px, 13px/500', () => {
+    render(bar());
+    expect(screen.getByTestId('target-label')).toHaveStyle({
+      borderLeft: '1px solid #1e1e1e',
+      padding: '0px 14px',
+      fontSize: '13px',
+      fontWeight: '500',
+    });
+  });
+
+  it('holds neither the branch picker nor the filter: both moved to the Browse toolbar', () => {
+    render(bar());
+    // The label is the positive control: the zone they used to sit in renders.
+    expect(screen.getByTestId('target-label')).toBeInTheDocument();
+    expect(screen.queryByTestId('toknomitr-branch')).toBeNull();
+    expect(screen.queryByTestId('mounts-picker')).toBeNull();
+    expect(screen.queryByTestId('toknomitr-search')).toBeNull();
+  });
+
+  it('is withheld while Manage owns the window, like every browse-context control', () => {
+    const { unmount } = render(bar());
+    expect(screen.getByTestId('target-label')).toBeInTheDocument();
+    unmount();
+    render(bar({ manageOpen: true }));
+    expect(screen.queryByTestId('target-label')).toBeNull();
+  });
+});
+
+describe('TopBar — the rail toggle', () => {
+  it('reports the rail state through aria-pressed', () => {
+    const { unmount } = render(bar({ railOpen: false }));
+    expect(screen.getByTestId('rail-toggle')).toHaveAttribute('aria-pressed', 'false');
+    unmount();
+    render(bar({ railOpen: true }));
+    expect(screen.getByTestId('rail-toggle')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('is lit while the rail is open, and plain while it is not', () => {
+    const { unmount } = render(bar({ railOpen: true }));
+    expect(screen.getByTestId('rail-toggle')).toHaveStyle({ color: '#dfe9e2', background: '#1a231d' });
+    unmount();
+    render(bar({ railOpen: false }));
+    expect(screen.getByTestId('rail-toggle')).not.toHaveStyle({ background: '#1a231d' });
+  });
+
+  it('is a 26x26 control', () => {
+    render(bar());
+    expect(screen.getByTestId('rail-toggle')).toHaveStyle({ width: '26px', height: '26px' });
+  });
+
+  it('clicking it asks the app to toggle the rail, once', () => {
+    const onToggleRail = vi.fn();
+    render(bar({ onToggleRail }));
+    fireEvent.click(screen.getByTestId('rail-toggle'));
+    expect(onToggleRail).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not rendered while Manage is open: Manage has its own rail until it goes', () => {
+    const { unmount } = render(bar());
+    expect(screen.getByTestId('rail-toggle')).toBeInTheDocument();
+    unmount();
+    render(bar({ manageOpen: true }));
+    expect(screen.queryByTestId('rail-toggle')).toBeNull();
+    // The gear is still there: it is the way back out.
+    expect(screen.getByTestId('toknomitr-manage-btn')).toBeInTheDocument();
+  });
+});
+
+describe('TopBar — the gear (unchanged until the server pages land)', () => {
+  it('keeps the red dot for the CURRENT repo\'s remote failure', () => {
+    const { unmount } = render(bar());
+    const gear = screen.getByTestId('toknomitr-manage-btn');
+    expect(gear.querySelector('span')).toBeNull();
+    unmount();
+    render(bar({ state: { ...baseState, remoteSyncError: 'unreachable' } }));
+    expect(screen.getByTestId('toknomitr-manage-btn').querySelector('span')).not.toBeNull();
+  });
+
+  it('still toggles Manage', () => {
+    const onManageRepos = vi.fn();
+    render(bar({ onManageRepos }));
+    fireEvent.click(screen.getByTestId('toknomitr-manage-btn'));
+    expect(onManageRepos).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -262,11 +203,9 @@ describe('TopBar desktop window drag', () => {
   });
 
   it('starts a native drag on mousedown over a non-interactive bar region', () => {
-    const { container } = render(
-      <TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />,
-    );
-    // The branch label is inline text — the classic dead zone — yet must drag.
-    fireEvent.mouseDown(screen.getByTestId('toknomitr-branch'));
+    const { container } = render(bar());
+    // The target label is inline text — the classic dead zone — yet must drag.
+    fireEvent.mouseDown(within(screen.getByTestId('target-label')).getByText('alpha'));
     expect(post).toHaveBeenCalledWith('wails:drag');
 
     post.mockClear();
@@ -275,194 +214,18 @@ describe('TopBar desktop window drag', () => {
     expect(post).toHaveBeenCalledWith('wails:drag');
   });
 
-  it('does NOT start a drag from interactive controls (repo select, gear)', () => {
-    render(<TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    fireEvent.mouseDown(screen.getByTestId('toknomitr-repo-select'));
+  it('does NOT start a drag from interactive controls (rail toggle, gear)', () => {
+    render(bar());
+    fireEvent.mouseDown(screen.getByTestId('rail-toggle'));
     fireEvent.mouseDown(screen.getByTestId('toknomitr-manage-btn'));
     expect(post).not.toHaveBeenCalled();
   });
 
-  it('the branch chip joins the no-drag set ONLY once it opens the picker', () => {
-    // The chip used to be inline text and had to drag (the test above still
-    // pins that for the label form). Given onEnterBranch it becomes a real
-    // control, and an interactive element inside the title bar must be
-    // excluded from the drag region or its click is swallowed by the drag.
-    // Asserting BOTH directions is the point: a chip that always dragged
-    // would have an unclickable picker, and one that never dragged would
-    // punch a dead hole in the title bar for everyone without a picker.
-    const { unmount } = render(
-      <TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300}
-        onEnterBranch={vi.fn()} />,
-    );
-    const chip = screen.getByTestId('toknomitr-branch');
-    expect(chip.tagName).toBe('BUTTON');
-    fireEvent.mouseDown(chip);
-    expect(post).not.toHaveBeenCalled();
-    unmount();
-
-    render(<TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    const label = screen.getByTestId('toknomitr-branch');
-    expect(label.tagName).toBe('SPAN');
-    fireEvent.mouseDown(label);
-    expect(post).toHaveBeenCalledWith('wails:drag');
-  });
-
   it('does nothing outside desktop mode', () => {
     delete w.__KNOMIT_DESKTOP__;
-    render(<TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    fireEvent.mouseDown(screen.getByTestId('toknomitr-branch'));
+    render(bar());
+    fireEvent.mouseDown(screen.getByTestId('target-label'));
     expect(post).not.toHaveBeenCalled();
-  });
-});
-
-describe('TopBar two-group context switcher', () => {
-  it('opens a dropdown with Repositories and Lenses groups listing both', () => {
-    render(<TopBar state={baseState} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-
-    // Group headers.
-    expect(screen.getByTestId('toknomitr-group-repos')).toHaveTextContent('Repositories');
-    expect(screen.getByTestId('toknomitr-group-lenses')).toHaveTextContent('Lenses');
-
-    // Repo rows (unchanged testids) still present.
-    expect(screen.getByTestId('toknomitr-repo-option-alpha')).toBeInTheDocument();
-    expect(screen.getByTestId('toknomitr-repo-option-gamma')).toBeInTheDocument();
-
-    // Lens rows with two-line label (name + `N mounts · → <write>`).
-    expect(screen.getByTestId('toknomitr-lens-option-eng')).toBeInTheDocument();
-    expect(screen.getByTestId('toknomitr-lens-option-research')).toBeInTheDocument();
-    expect(screen.getByTestId('toknomitr-lens-option-eng')).toHaveTextContent('3 mounts · → core');
-    expect(screen.getByTestId('toknomitr-lens-option-research')).toHaveTextContent('2 mounts · → scratch');
-  });
-
-  it('omits the Lenses group when there are no lenses', () => {
-    render(<TopBar state={baseState} repos={repos} lenses={[]} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-    expect(screen.getByTestId('toknomitr-group-repos')).toBeInTheDocument();
-    expect(screen.queryByTestId('toknomitr-group-lenses')).toBeNull();
-  });
-
-  it('offers the switcher with a single repo when lenses exist', () => {
-    render(<TopBar state={baseState} repos={[repos[0]]} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.getByTestId('toknomitr-repo-select')).toBeInTheDocument();
-    expect(screen.queryByTestId('toknomitr-repo-name')).toBeNull();
-  });
-
-  it('selecting a lens dispatches SET_CONTEXT {kind:lens,name} and closes', () => {
-    const dispatch = vi.fn();
-    render(<TopBar state={baseState} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-    fireEvent.click(screen.getByTestId('toknomitr-lens-option-eng'));
-
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_CONTEXT', context: { kind: 'lens', name: 'eng' } });
-    expect(screen.queryByTestId('toknomitr-repo-menu')).toBeNull();
-  });
-
-  it('selecting a repo still dispatches SET_REPO (repo rows unchanged)', () => {
-    const dispatch = vi.fn();
-    render(<TopBar state={baseState} repos={repos} lenses={lenses} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-    fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_REPO', repo: 'beta' });
-  });
-
-  // A lens binds ALL of its members or none (internal/repos/binding.go), so one
-  // mount without a live store makes every read endpoint under the lens answer
-  // 503. GET /lenses/{lens} sits outside the lens middleware and still answers
-  // 200, so App's resolve-and-rescue never fires — the fetch succeeded. This
-  // row is where the refusal has to happen, exactly as it does for repos.
-  describe('a lens with a mount that has no live store', () => {
-    const listing: RepoInfo[] = [
-      { name: 'core', uid: 'uid-core' },
-      { name: 'docs', uid: 'uid-docs' },
-      { name: 'infra', uid: 'uid-infra', state: 'unopenable', detail: 'not a knomit repo database' },
-    ];
-
-    it('lists it, says which mount is broken, and marks it disabled', () => {
-      render(<TopBar state={baseState} repos={listing} lenses={[engLens]} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-
-      const option = screen.getByTestId('toknomitr-lens-option-eng');
-      expect(option).toHaveAttribute('aria-disabled', 'true');
-      expect(option).toHaveTextContent('infra has no store');
-      expect(option).toHaveAttribute('title', expect.stringContaining('infra') as unknown as string);
-    });
-
-    it('does not navigate when it is clicked', () => {
-      const dispatch = vi.fn();
-      render(<TopBar state={baseState} repos={listing} lenses={[engLens]} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-      fireEvent.click(screen.getByTestId('toknomitr-lens-option-eng'));
-
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(screen.getByTestId('toknomitr-repo-menu')).toBeInTheDocument();
-    });
-
-    it('leaves a lens whose mounts are all readable alone', () => {
-      const dispatch = vi.fn();
-      const healthy: RepoInfo[] = listing.map(r => (r.name === 'infra' ? { name: 'infra', uid: 'uid-infra' } : r));
-      render(<TopBar state={baseState} repos={healthy} lenses={[engLens]} dispatch={dispatch} onManageRepos={() => {}} leftWidth={300} />);
-      fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
-      fireEvent.click(screen.getByTestId('toknomitr-lens-option-eng'));
-      expect(dispatch).toHaveBeenCalledWith({ type: 'SET_CONTEXT', context: { kind: 'lens', name: 'eng' } });
-    });
-  });
-});
-
-describe('TopBar lens-context chips', () => {
-  it('shows a lens chip (name) instead of the repo book chip', () => {
-    render(<TopBar state={lensState} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    const trigger = screen.getByTestId('toknomitr-lens-select');
-    expect(trigger.tagName.toLowerCase()).toBe('button');
-    expect(trigger).toHaveTextContent('eng');
-    // The repo book chip / branch chip are not rendered in a lens context.
-    expect(screen.queryByTestId('toknomitr-repo-select')).toBeNull();
-    expect(screen.queryByTestId('toknomitr-branch')).toBeNull();
-  });
-
-  it('replaces the branch chip with the mounts PICKER, not a mounts readout', () => {
-    // It used to render lens.reads.length — the total, always, whatever was
-    // selected — while the real control sat in the left panel. The prominent
-    // one was the untrue one, so the readout became the control and the left
-    // panel's SOURCES block went away.
-    render(<TopBar state={lensState} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.getByTestId('mounts-picker')).toBeTruthy();
-    expect(screen.getByTestId('mounts-label')).toHaveTextContent('3');
-  });
-
-  it('the mounts picker reflects the SELECTION, which the old chip could not', () => {
-    const narrowed: AppState = { ...lensState, lensSources: ['core'] };
-    render(<TopBar state={narrowed} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.getByTestId('mounts-label')).toHaveTextContent('1/3');
-  });
-
-  it('does not name the write target — that is a readout, and it is in the footer', () => {
-    // You cannot change it here: the lens sets it. See StatusFooter.test.tsx.
-    render(<TopBar state={lensState} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    expect(screen.queryByTestId('toknomitr-writes')).toBeNull();
-  });
-
-  it('clicking the lens chip opens the two-group switcher with eng active', () => {
-    render(<TopBar state={lensState} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-    fireEvent.click(screen.getByTestId('toknomitr-lens-select'));
-    const active = screen.getByTestId('toknomitr-lens-option-eng');
-    expect(active).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('shows no commit in any lens state — anchored, with a fact open, either way', () => {
-    // The old rule was "only when a fact is open AND the view is anchored",
-    // which meant no commit on screen at all during ordinary reading. The
-    // footer now shows one unconditionally.
-    for (const state of [
-      { ...lensState, factPath: 'kb/a/b.md', asOf: { mode: 'live' } } as AppState,
-      { ...lensState, factPath: 'kb/a/b.md', asOf: { mode: 'history', commit: 'abc1234def5' } } as AppState,
-      { ...lensState, factPath: null, asOf: { mode: 'history', commit: 'abc1234def5' } } as AppState,
-    ]) {
-      const { unmount } = render(
-        <TopBar state={state} repos={repos} lenses={lenses} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
-      expect(screen.queryByTestId('toknomitr-commit')).toBeNull();
-      unmount();
-    }
   });
 });
 
@@ -476,8 +239,7 @@ describe('TopBar lens-context chips', () => {
 // there.
 describe('TopBar — no create indicator', () => {
   it('renders no create count, however many creates are running', () => {
-    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test', headCommit: 'head0001234' };
-    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
+    render(bar({ state: { ...baseState, headCommit: 'head0001234' } }));
     expect(screen.queryByTestId('create-indicator')).toBeNull();
     expect(screen.getByTestId('toknomitr-bar').textContent).not.toMatch(/create/i);
   });

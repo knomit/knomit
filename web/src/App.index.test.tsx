@@ -63,18 +63,21 @@ async function primeApi(repos: unknown[]) {
 const repoEventStream = () => latestStream('/api/v1/repo-events');
 
 /**
- * Open the repo picker, which is where the per-repo index chip lives.
+ * Open the target rail, which is where the per-repo index chip lives.
  *
- * The chip is not on the bar itself — it annotates each row of the repo menu —
- * so a test that never opens the menu can only assert its ABSENCE, which is the
- * vacuous assertion these tests exist to avoid.
+ * The chip is not on the bar itself — it annotates each repository row of the
+ * rail, which is absent while collapsed — so a test that never opens the rail
+ * can only assert its ABSENCE, which is the vacuous assertion these tests exist
+ * to avoid.
  */
 async function openRepoMenu() {
-  fireEvent.click(await screen.findByTestId('toknomitr-repo-select'));
-  await screen.findByTestId('toknomitr-repo-menu');
+  fireEvent.click(await screen.findByTestId('rail-toggle'));
+  await screen.findByTestId('target-rail');
 }
 
-beforeEach(() => { installFakeEventSource(); });
+// The rail's open state persists in localStorage; start every test collapsed
+// so the toggle above always opens it.
+beforeEach(() => { localStorage.clear(); installFakeEventSource(); });
 afterEach(() => { uninstallFakeEventSource(); vi.clearAllMocks(); });
 
 describe('index events clear a stale chip', () => {
