@@ -45,6 +45,7 @@ export function PendingCreateRow({ status, surface, onOpen, style, active, disab
       type="button"
       data-testid={`pending-create-${key}`}
       data-create-state={flag}
+      aria-current={active || undefined}
       style={style ?? defaultRow(!!active)}
       disabled={disabled}
       onClick={() => onOpen?.(status.create_id)}
@@ -98,9 +99,8 @@ export function CreateBar({ status, surface }: { status: RepoCreateStatus; surfa
   );
 }
 
-// defaultRow mirrors RepoManager's listItem. Used only when a host list does
-// not pass its own style — the rail and the overview both do, so their rows
-// and these are drawn by one rule.
+// defaultRow is a plain list row. Used only when a host list does not pass its
+// own style — the rail does, so its rows and these are drawn by one rule.
 const defaultRow = (active: boolean): CSSProperties => ({
   width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
   background: active ? '#22303a' : 'transparent', color: active ? '#eee' : '#bbb',

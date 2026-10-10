@@ -8,9 +8,8 @@
 // in what order. Putting it in AppState would make NAV_BACK decide what to do
 // with it.
 //
-// This PR holds the rail, the facet and the connect lock. The server pages,
-// the draft targets and the pinned settings-only targets join it in the PRs
-// that build them.
+// It holds the rail, the facet, the connect lock, the pinned settings-only
+// targets and the draft. The server pages join it when they leave Manage.
 
 import { useEffect, useReducer } from 'react';
 import type { Dispatch } from 'react';
@@ -36,6 +35,26 @@ export function otherRepoFailing(repos: RepoInfo[], current: string): boolean {
 /** A page of a target. Code joins this only if the terminal ships. */
 export type Facet = 'browse' | 'activity' | 'settings';
 
+/**
+ * A target that can NOT be the browse context, because it has no store to read:
+ * an archived repo, a create that is not registered yet, a registered repo whose
+ * store did not open. It is pinned OVER the context, which stays where it was,
+ * so leaving it lands back on the context with nothing to restore.
+ */
+export type PinnedTarget =
+  | { kind: 'archived'; id: string }
+  | { kind: 'pending'; createId: string }
+  | { kind: 'unavailable'; repo: string };
+
+export type DraftKind = 'repo' | 'lens';
+
+/** Anything the rail can select: a normal target (the browse context), a
+ *  pinned one, or a draft. */
+export type Target = BrowseContext | PinnedTarget | { kind: 'draft'; draft: DraftKind };
+
+/** Where Cancel on a draft goes back to. */
+export interface ReturnTo { context: BrowseContext; pinned: PinnedTarget | null; facet: Facet }
+
 /** The order the tabs are drawn in, which is also the order facetsFor returns. */
 const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
 
@@ -53,15 +72,19 @@ const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
  * - A lens with a mount that has no store: Activity and Settings. Every read
  *   under such a lens answers 503, so there is nothing to Browse; its sessions
  *   and its settings (where the broken mount is repaired) still exist.
+ * - A pinned target (archived, a create not yet registered, a registered repo
+ *   with no store): Settings only. There is no store to browse and nobody
+ *   bound to it.
+ * - A draft: nothing. It is a form, not a thing with pages.
  *
- * A repo that is listed but has no store, an archived repo and a create not yet
- * registered are not browse contexts at all; they arrive as pinned targets in
- * the next PR. Until then a listed repo with no store as the context (which
- * only a stale persisted value could produce) gets Settings alone, the safe
+ * A listed repo with no store as the CONTEXT (which only a stale persisted
+ * value could produce; the rail pins one instead) gets Settings alone, the safe
  * answer. A repo the list does not carry yet gets all three: the list lags a
  * create or a rename by one refresh.
  */
-export function facetsFor(target: BrowseContext, repos: RepoInfo[], lenses: Lens[], creates: RepoCreateStatus[]): Facet[] {
+export function facetsFor(target: Target, repos: RepoInfo[], lenses: Lens[], creates: RepoCreateStatus[]): Facet[] {
+  if (target.kind === 'draft') return [];
+  if (target.kind === 'archived' || target.kind === 'pending' || target.kind === 'unavailable') return ['settings'];
   if (target.kind === 'repo') {
     const repo = repos.find(r => r.name === target.repo);
     // Not listed (yet): the list can lag a create or a rename by a refresh,
@@ -90,6 +113,16 @@ export interface ViewState {
    *  unmounting its page orphans it, so every way off the page refuses while
    *  this is set: rail rows and `+`, facet tabs, the gear. */
   locked: boolean;
+  /** A settings-only target shown over the context. Never persisted: a reload
+   *  lands on the remembered context. */
+  pinned: PinnedTarget | null;
+  /** The draft in the rail, if any. It stays mounted while another target is
+   *  shown, so a half-filled form and a probe in flight survive a detour. */
+  draft: DraftKind | null;
+  /** The draft is the displayed target. */
+  draftShown: boolean;
+  /** Where Cancel on the draft goes back to: what was shown before it. */
+  returnTo: ReturnTo | null;
 }
 
 export type ViewAction =
@@ -101,11 +134,47 @@ export type ViewAction =
   | { type: 'SELECT_CONTEXT_TARGET'; available: Facet[] }
   | { type: 'SET_FOCUS'; focus: string }
   | { type: 'CLEAR_FOCUS' }
-  | { type: 'SET_LOCKED'; locked: boolean };
+  | { type: 'SET_LOCKED'; locked: boolean }
+  /** A settings-only target was picked. Its only facet is Settings. */
+  | { type: 'SELECT_PINNED'; target: PinnedTarget }
+  /** A rail `+`: insert the draft (or show the one already there). `from` is
+   *  the browse context, recorded for Cancel. */
+  | { type: 'OPEN_DRAFT'; kind: DraftKind; from: BrowseContext }
+  /** The draft row was picked again. */
+  | { type: 'SHOW_DRAFT'; from: BrowseContext }
+  /** Cancel: the draft goes and the target and facet before it come back. The
+   *  context half is App's to restore (it is AppState). */
+  | { type: 'CANCEL_DRAFT' }
+  /** The draft's target now exists: the draft row gives way to the real row.
+   *  If the draft was on screen the reader lands on `facet` of the new target
+   *  (Settings for a repo, which is still being created; Browse for a lens);
+   *  if it was hidden, they are left where they are. */
+  | { type: 'DRAFT_REGISTERED'; facet: Facet };
 
 /** initView reads the persisted parts of the view. Used as useReducer's init. */
 export function initView(): ViewState {
-  return { railOpen: loadRailOpen(), facet: loadLastFacet(), lastFacet: null, focus: null, locked: false };
+  return {
+    railOpen: loadRailOpen(), facet: loadLastFacet(), lastFacet: null, focus: null, locked: false,
+    pinned: null, draft: null, draftShown: false, returnTo: null,
+  };
+}
+
+/** The facet rule, shared by every way of selecting a target: restore the
+ *  remembered facet if the target has it, else keep the facet if it has it,
+ *  else Settings — which every target with facets has — remembering what the
+ *  reader was on so the next normal target can restore it. */
+function applyFacetRule(s: ViewState, available: Facet[]): ViewState {
+  if (s.lastFacet && available.includes(s.lastFacet)) {
+    return { ...s, facet: s.lastFacet, lastFacet: null, focus: null };
+  }
+  if (available.includes(s.facet)) return s.focus === null ? s : { ...s, focus: null };
+  return { ...s, lastFacet: s.lastFacet ?? s.facet, facet: 'settings', focus: null };
+}
+
+/** What Cancel on the draft returns to: the target on screen before it. Left
+ *  as it was when the draft is already the one on screen. */
+function returnToFrom(s: ViewState, from: BrowseContext): ReturnTo | null {
+  return s.draftShown ? s.returnTo : { context: from, pinned: s.pinned, facet: s.facet };
 }
 
 export function viewReducer(s: ViewState, a: ViewAction): ViewState {
@@ -119,15 +188,40 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       // target keeps what the reader just picked, not what they had before.
       return { ...s, facet: a.facet, lastFacet: null, focus: a.focus ?? null };
     case 'SELECT_CONTEXT_TARGET': {
-      // The facet rule. A target that has the remembered facet gets it back.
-      // Otherwise the current facet is kept if the target has it, and a target
-      // that lacks it lands on Settings — which every target has — remembering
-      // what the reader was on so the next normal target can restore it.
-      if (s.lastFacet && a.available.includes(s.lastFacet)) {
-        return { ...s, facet: s.lastFacet, lastFacet: null, focus: null };
-      }
-      if (a.available.includes(s.facet)) return s.focus === null ? s : { ...s, focus: null };
-      return { ...s, lastFacet: s.lastFacet ?? s.facet, facet: 'settings', focus: null };
+      // A normal target IS the context: whatever was pinned over it goes, and
+      // a shown draft is hidden (kept, so its row can be picked again).
+      const base = s.pinned === null && !s.draftShown ? s : { ...s, pinned: null, draftShown: false };
+      return applyFacetRule(base, a.available);
+    }
+    case 'SELECT_PINNED':
+      return applyFacetRule({ ...s, pinned: a.target, draftShown: false }, ['settings']);
+    case 'OPEN_DRAFT':
+      if (s.draft === a.kind && s.draftShown) return s;
+      return { ...s, draft: a.kind, draftShown: true, returnTo: returnToFrom(s, a.from) };
+    case 'SHOW_DRAFT':
+      if (!s.draft || s.draftShown) return s;
+      return { ...s, draftShown: true, returnTo: returnToFrom(s, a.from) };
+    case 'CANCEL_DRAFT': {
+      if (!s.draft) return s;
+      const r = s.returnTo;
+      return {
+        ...s, draft: null, draftShown: false, returnTo: null,
+        pinned: r ? r.pinned : s.pinned, facet: r ? r.facet : s.facet, focus: null,
+      };
+    }
+    case 'DRAFT_REGISTERED': {
+      if (!s.draft) return s;
+      const cleared = { ...s, draft: null, draftShown: false, returnTo: null };
+      // Registered while the reader was elsewhere: the draft row gives way to
+      // the real one, and nobody is yanked off the page they chose.
+      if (!s.draftShown) return cleared;
+      const landed = { ...cleared, pinned: null, focus: null };
+      if (a.facet !== 'settings') return { ...landed, facet: a.facet, lastFacet: null };
+      // Settings is where a repository being created lands (E3). The facet the
+      // reader had is remembered, so the next normal target restores it; the
+      // job reaching done changes nothing here.
+      if (s.facet === 'settings') return landed;
+      return { ...landed, facet: 'settings', lastFacet: s.lastFacet ?? s.facet };
     }
     case 'SET_FOCUS':
       return { ...s, focus: a.focus };
@@ -138,6 +232,26 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
     default:
       return s;
   }
+}
+
+/** draftCancellable: whether the draft offers Cancel. A repository draft with
+ *  no repositories is the only thing there is to show, so Cancel would be a
+ *  button that visibly does nothing (the `repos.length === 0` rule). */
+export function draftCancellable(kind: DraftKind, repos: RepoInfo[]): boolean {
+  return kind === 'lens' || repos.length > 0;
+}
+
+/**
+ * displayedTarget: what the body shows, in precedence order — a shown draft,
+ * then a pinned target, then the browse context. With no repositories there is
+ * no context to show, so the repository draft is the fallback (and the rail's
+ * only Repositories row).
+ */
+export function displayedTarget(view: ViewState, context: BrowseContext, noRepos: boolean): Target {
+  if (view.draftShown && view.draft) return { kind: 'draft', draft: view.draft };
+  if (view.pinned) return view.pinned;
+  if (noRepos) return { kind: 'draft', draft: 'repo' };
+  return context;
 }
 
 /** useViewState is App's view reducer plus its persistence: knomit.rail and
