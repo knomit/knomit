@@ -178,7 +178,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// treats only "{...}" and "*" as special, so such a route diverges from
 	// "/repos/..." at the ':' and never enters the {repo} param edge either
 	// way.
-	r.Get("/repos", handleHALRepos(b, s.Manager))
+	r.Get("/repos", handleHALRepos(b, s.Manager, p.origin))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 
 	// The poll target for the 202 that POST /repos answers with. A SIBLING

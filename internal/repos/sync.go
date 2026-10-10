@@ -256,9 +256,13 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // loop because the repo had an origin, and the origin's comings and goings
 // are the stage's to act on (a Detach restarts Sync), never the loop's.
 //
+// events (nil-safe) is the server-wide repo-event hub. A round that changes a
+// persisted status column publishes one RemoteEvent there (publishRemoteEdge);
+// a round that changes nothing publishes nothing.
+//
 // once runs the immediate first round and returns: the Synchronous mode the
 // test harness uses, where no loop may race its assertions.
-func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, once bool) {
+func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, events *RepoEventHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, once bool) {
 	defer mode.clear()
 
 	// Initial config read for logging context; a failed one only loses the
@@ -367,6 +371,13 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, rep
 		if !fetchDue && !pushDue {
 			return
 		}
+		// The repo-level health edge (RemoteEvent on the server-wide stream):
+		// on every way out of a round that ran a step, compare the persisted
+		// row with the snapshot above and publish only if it changed. Deferred
+		// here, after the both-skipped return, because a round that attempts
+		// nothing writes nothing and needs no re-read.
+		prevSync, prevPush := RemoteStatusValue(fresh.LastStatus), RemoteStatusValue(fresh.LastPushStatus)
+		defer publishRemoteEdge(events, svc, repo, prevSync, prevPush, &lg)
 		attempt := func(step string) {
 			if h := currentSyncHooks().attempt; h != nil {
 				h(repo, step)

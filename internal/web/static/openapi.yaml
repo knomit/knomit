@@ -2353,10 +2353,14 @@ paths:
             branch, so "the head moved" says nothing without naming which. Head
             changes, task progress and sync/push results stay on the per-branch
             stream at `/repos/{repo}/branches/{branch}/events`.
+          * `remote` BELONGS — the list shows a health mark per repo, for repos
+            the user is not looking at; the persisted status of a repo's
+            origin is a whole-repo state. (The per-branch `sync_*`/`push_*`
+            events, with their error text, stay where they are.)
 
         Future kinds follow from that test rather than from an enumeration, but
-        as illustration: a repo becoming unavailable, archived, restored,
-        appearing, or its origin failing at the repo level.
+        as illustration: a repo becoming unavailable, archived, restored or
+        appearing.
 
         The `created` case, decided so it does not have two homes: the PROGRESS
         of a creation belongs to the job stream at `/repo-creates/{id}/events`,
@@ -2380,6 +2384,17 @@ paths:
             only: "indexing cancelled", or the index job's error. `state` uses the same vocabulary as the `index_state`
             field of `/repos`, so a consumer can patch a list row from the
             event without translating anything.
+          * `remote` — one repo's origin health:
+            `{"repo": "...", "sync": "ok|error|", "push": "ok|error|"}`, the
+            same pair as the `remote` field of `/repos` (`""` = that half has
+            never run). The payload is the row's whole new value, not a delta:
+            replace the row's `remote` with it. It is an EDGE: sent only when a
+            persisted status column (`last_status` / `last_push_status`)
+            CHANGES value, including the error→ok recovery after a server
+            restart. A steady-state round, healthy or failing, sends nothing,
+            so silence means "unchanged", never "healthy". Missed edges are
+            recovered the same way as missed `index` events: re-read `/repos`
+            on a later `ready`.
 
         PROGRESS events of the `index` kind are throttled to at most one per
         repo per second. Entry and terminal events (`indexing`, `ready`,
@@ -3611,6 +3626,20 @@ components:
             an ontology, while it has not been identified yet (a repo being
             created), and on a non-active row. A symlinked ontology is not
             reported here: it refuses the repo, which is then `unopenable`.
+        remote:
+          type: object
+          required: [sync, push]
+          description: |
+            Persisted health of the repo's origin: the last sync (fetch and
+            reconcile) and the last push. Each is `ok`, `error`, or `""` when
+            that half has never run. ABSENT — no key at all — when the repo has
+            no origin, and also when its store cannot be read (a non-active
+            row, a repo still being created). Read absence as "nothing to
+            show", never as healthy. Kept current by the `remote` kind on
+            `GET /repo-events`; the error text is on `GET /repos/{repo}/origin`.
+          properties:
+            sync: { type: string, enum: [ok, error, ""] }
+            push: { type: string, enum: [ok, error, ""] }
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ReposCollection:
@@ -5099,8 +5128,15 @@ components:
 
     Lens:
       type: object
-      required: [name, write, reads, created_at, updated_at, _links]
+      required: [uid, name, write, reads, created_at, updated_at, _links]
       properties:
+        uid:
+          type: string
+          description: |
+            The lens's own registry uid, minted at create and never reused. It
+            survives a rename, and it is how a client-session binding names a
+            lens (`lens:<uid>`, the `binding` filter on `/client-sessions`).
+            Not the same as `write.uid`, which is a member repo's uid.
         name:        { type: string, description: Immutable once created. }
         write:       { $ref: "#/components/schemas/LensMember" }
         description: { type: string }

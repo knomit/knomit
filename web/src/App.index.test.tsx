@@ -30,6 +30,23 @@ vi.mock('./api', async (importOriginal) => {
   };
 });
 
+// No UI renders RepoInfo.remote yet, so the repos list App holds is observed
+// where App hands it on: the TopBar's `repos` prop. The real TopBar still
+// renders (the chip tests above open its menu); this only records each render's
+// list.
+const topBarRepos = vi.hoisted(() => [] as Array<Array<{ name: string; remote?: unknown }>>);
+vi.mock('./TopBar', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./TopBar')>();
+  const Real = actual.TopBar;
+  const Spy = (props: React.ComponentProps<typeof Real>) => {
+    topBarRepos.push(props.repos);
+    return <Real {...props} />;
+  };
+  return { ...actual, TopBar: Spy };
+});
+const latestRepos = () => topBarRepos[topBarRepos.length - 1] ?? [];
+const remoteOf = (name: string) => latestRepos().find(r => r.name === name)?.remote;
+
 async function apiMock() {
   const { api } = await import('./api');
   return api as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -198,6 +215,65 @@ describe('index stream reconnect', () => {
 
     // The chip must STAY gone. This is the assertion the guard buys.
     expect(screen.queryByTestId('repo-index-indexing')).toBeNull();
+  });
+});
+
+// The `remote` kind: a repo's origin health, an EDGE published when a
+// persisted status column changes. App patches the named row's `remote` and
+// nothing else: it carries no error text, and the remote banner stays the
+// per-branch stream's (sync_*/push_*) for the active repo.
+describe('remote events patch a listed row', () => {
+  it('patches the named non-active row, leaves the others, and raises no banner', async () => {
+    const api = await primeApi([
+      repoRow('alpha', { remote: { sync: 'ok', push: 'ok' } }),
+      repoRow('beta', { remote: { sync: 'ok', push: 'ok' } }),
+      repoRow('gamma'),
+    ]);
+    render(<App />);
+    // Precondition, read from the same place the assertions read: the list
+    // came through with alpha active and beta healthy.
+    await waitFor(() => expect(remoteOf('beta')).toEqual({ sync: 'ok', push: 'ok' }));
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
+    const before = api.repos.mock.calls.length;
+
+    act(() => {
+      repoEventStream()!.emit('remote', { repo: 'beta', sync: 'ok', push: 'error' });
+    });
+
+    await waitFor(() => expect(remoteOf('beta')).toEqual({ sync: 'ok', push: 'error' }));
+    expect(remoteOf('alpha')).toEqual({ sync: 'ok', push: 'ok' });
+    expect(remoteOf('gamma')).toBeUndefined();
+    // The payload IS the update: no refetch.
+    expect(api.repos.mock.calls.length).toBe(before);
+    // Nothing for the banner: beta is not the active repo, and this kind
+    // dispatches nothing at all.
+    expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+
+    // Positive control on the same element: the banner IS observable in this
+    // harness, raised by the per-branch stream that owns it.
+    const branchStream = latestStream('/repos/alpha/branches/');
+    expect(branchStream).toBeDefined();
+    act(() => { branchStream!.emit('sync_error', { error: 'auth failed' }); });
+    await waitFor(() => expect(screen.getByTestId('remote-error-banner')).toHaveTextContent('auth failed'));
+  });
+
+  it('drops a frame outside the vocabulary rather than half-applying it', async () => {
+    await primeApi([
+      repoRow('alpha'),
+      repoRow('beta', { remote: { sync: 'ok', push: 'ok' } }),
+    ]);
+    render(<App />);
+    await waitFor(() => expect(remoteOf('beta')).toEqual({ sync: 'ok', push: 'ok' }));
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
+
+    act(() => {
+      repoEventStream()!.emit('remote', { repo: 'beta', sync: 'broken', push: 'error' });
+      // A later frame of the other kind, as a marker: once it has landed, the
+      // malformed frame before it has been handled too.
+      repoEventStream()!.emit('index', { repo: 'beta', state: 'indexing', done: 1, total: 10 });
+    });
+    await waitFor(() => expect(latestRepos().find(r => r.name === 'beta')).toMatchObject({ index_state: 'indexing' }));
+    expect(remoteOf('beta')).toEqual({ sync: 'ok', push: 'ok' });
   });
 });
 
