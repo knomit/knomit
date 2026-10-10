@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { initView, viewReducer, facetsFor, useViewState, draftCancellable, displayedTarget } from './facets';
+import { initView, viewReducer, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor } from './facets';
 import type { ViewState } from './facets';
 import { RAIL_STORAGE_KEY, loadRailOpen, saveRailOpen } from './repoSelection';
 import type { RepoInfo, Lens, RepoCreateStatus } from './api';
@@ -247,5 +247,42 @@ describe('drafts', () => {
     expect(displayedTarget(pinned, ops, true)).toEqual({ kind: 'archived', id: 'id-q3' });
     const draft = { ...pinned, draft: 'lens' as const, draftShown: true };
     expect(displayedTarget(draft, ops, false)).toEqual({ kind: 'draft', draft: 'lens' });
+  });
+});
+
+// The top bar's label: a target with only Settings says why with a chip.
+describe('targetLabelFor', () => {
+  const repos = [{ name: 'ops-kb', uid: 'u-ops' }, { name: 'vendor-docs', uid: 'u-v', state: 'missing' }, { name: 'odd', uid: 'u-o', state: 'conflict' }] as RepoInfo[];
+  const archived = [{ id: 'id-q3', name: 'q3-planning', origin: '', archivedAt: '2026-08-12T10:00:00Z' }];
+  const creates = [
+    { create_id: 'c1', name: 'b-kb', state: 'running' },
+    { create_id: 'c2', name: 'x-kb', state: 'failed' },
+    { create_id: 'c3', name: 'ops-kb', state: 'cancelling' },
+  ] as RepoCreateStatus[];
+
+  it('chips an archived target "archived" in the archive tone', () => {
+    expect(targetLabelFor({ kind: 'archived', id: 'id-q3' }, repos, archived, [])).toEqual(
+      { kind: 'repo', name: 'q3-planning', chip: { text: 'archived', tone: 'archived' } });
+  });
+
+  it('chips a repo with no store by its state, "store missing" for missing', () => {
+    expect(targetLabelFor({ kind: 'unavailable', repo: 'vendor-docs' }, repos, [], []).chip).toEqual({ text: 'store missing', tone: 'bad' });
+    expect(targetLabelFor({ kind: 'unavailable', repo: 'odd' }, repos, [], []).chip).toEqual({ text: 'conflict', tone: 'bad' });
+  });
+
+  it('chips a create by its flag: creating, or failed in the bad tone', () => {
+    expect(targetLabelFor({ kind: 'pending', createId: 'c1' }, repos, [], creates)).toEqual(
+      { kind: 'repo', name: 'b-kb', chip: { text: 'creating', tone: 'creating' } });
+    expect(targetLabelFor({ kind: 'pending', createId: 'c2' }, repos, [], creates).chip).toEqual({ text: 'failed', tone: 'bad' });
+  });
+
+  it('chips a registered repo whose create is still working, and leaves a plain repo bare', () => {
+    expect(targetLabelFor({ kind: 'repo', repo: 'ops-kb' }, repos, [], creates).chip).toEqual({ text: 'cancelling', tone: 'creating' });
+    expect(targetLabelFor({ kind: 'repo', repo: 'ops-kb' }, repos, [], [])).toEqual({ kind: 'repo', name: 'ops-kb' });
+  });
+
+  it('labels a draft by what it will create', () => {
+    expect(targetLabelFor({ kind: 'draft', draft: 'repo' }, repos, [], [])).toEqual({ kind: 'repo', name: 'New repository', draft: true });
+    expect(targetLabelFor({ kind: 'draft', draft: 'lens' }, repos, [], [])).toEqual({ kind: 'lens', name: 'New lens', draft: true });
   });
 });

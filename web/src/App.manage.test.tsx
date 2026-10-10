@@ -45,6 +45,7 @@ vi.mock('./api', async (importOriginal) => {
       listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
     // null = this server has no OAuth issuer (404), so no Authorizations tab.
     listOAuthPending: vi.fn().mockResolvedValue(null),
+    getFleet: vi.fn().mockRejectedValue(new Error('not in a fleet')), listFleetMembers: vi.fn().mockResolvedValue([]),
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
@@ -192,150 +193,17 @@ describe('Manage as a mode', () => {
     await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
   });
 
-  // ...with one exception of its own. Closing Manage unmounts the connect
-  // sub-page, and its commit stream has no abort and no undo: the store swap
-  // and index rebuild run on with nothing listening. The manager withholds its
-  // rail and the wizard withholds its crumb, but BOTH of the app's exits went
-  // straight past them — and Escape is precisely the reflex of a reader who has
-  // just found every visible control disabled.
-  it('holds Escape and the step-out while a connect commit is writing', async () => {
-    const mod = await import('./api');
-    const m = mod as unknown as Record<string, ReturnType<typeof vi.fn>>;
-    m.createSession.mockResolvedValue({ session_id: 'sess-lock' });
-    m.streamTest.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
-      queueMicrotask(() => onEvent({ phase: 'done', result: { branches: ['main'], agent_branches: [], default_branch: 'main', matched_agent: '', history: 'shared', remote_fact_count: 1, local_fact_count: 1 } }));
-      return () => {};
-    });
-    m.streamPreview.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
-      queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 1, remote_only: 0, shared_path: 0, dead_refs_found: 0 } }));
-      return () => {};
-    });
-    m.streamApply.mockImplementation(async (_r: string, _s: string, _st: string, _b: string | undefined, onEvent: (e: unknown) => void) => {
-      onEvent({ phase: 'done', result: { total_facts: 0, from_local: 0, from_remote: 0, overwrites: 0 } });
-    });
-    // Never resolves — the commit is in flight for the rest of the test.
-    m.streamCommit.mockImplementation(() => new Promise(() => {}));
-
-    await mountApp();
-    await enterManage();
-    await act(async () => { fireEvent.click(screen.getByTestId('repomgr-item-alpha')); });
-    await act(async () => { fireEvent.click(await screen.findByTestId('remote-connect')); });
-    await act(async () => { fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://example.com/repo.git' } }); });
-    await act(async () => { fireEvent.click(screen.getByTestId('wizard-test')); });
-    await act(async () => { fireEvent.click(await screen.findByTestId('wizard-connect')); });
-    await waitFor(() => expect((screen.getByTestId('wizard-crumb-back') as HTMLButtonElement).disabled).toBe(true));
-
-    await act(async () => { fireEvent.keyDown(window, { key: 'Escape' }); });
-    expect(screen.getByTestId('manage-surface')).toBeInTheDocument();
-
-    // The step-out says so rather than silently swallowing the click: it stays
-    // where it was — a control that vanished would read as the window losing
-    // its way out rather than holding it — and carries the reason.
-    const gear = screen.getByTestId('toknomitr-manage-btn') as HTMLButtonElement;
-    expect(gear.disabled).toBe(true);
-    expect(gear.getAttribute('title')).toContain('leave it running');
-    await act(async () => { fireEvent.click(gear); });
-    expect(screen.getByTestId('manage-surface')).toBeInTheDocument();
-    expect(screen.getByTestId('remote-connect-wizard')).toBeInTheDocument();
-  });
-
-  // ...and it must hold from the moment the lock is VISIBLE, which is a
-  // separate claim and was broken.
-  //
-  // The busy flag is relayed upward by effects — wizard → RepoManager → App —
-  // and those were passive. React runs the DOM commit and the passive-effect
-  // flush in separate tasks for any update that did not come from a discrete
-  // event, and the commit that PAINTS the lock is the wizard's own, while the
-  // step reaches 'committing' in a promise continuation. So there was a window
-  // in which the reader could see that they were not allowed to leave, press
-  // Escape, and leave anyway — mid-write.
-  //
-  // The test above cannot see that window: `act()` drives React's scheduler
-  // itself and collapses the two tasks into one. So this one uses NATIVE events
-  // for both the click that starts the commit and the Escape, and fires the
-  // Escape from a MutationObserver the instant the lock paints.
-  it('refuses Escape pressed in the same task the commit lock paints in, and accepts it once the lock lifts', async () => {
-    const mod = await import('./api');
-    const m = mod as unknown as Record<string, ReturnType<typeof vi.fn>>;
-    m.createSession.mockResolvedValue({ session_id: 'sess-paint' });
-    m.streamTest.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
-      queueMicrotask(() => onEvent({ phase: 'done', result: { branches: ['main'], agent_branches: [], default_branch: 'main', matched_agent: '', history: 'shared', remote_fact_count: 1, local_fact_count: 1 } }));
-      return () => {};
-    });
-    m.streamPreview.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
-      queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 1, remote_only: 0, shared_path: 0, dead_refs_found: 0 } }));
-      return () => {};
-    });
-    m.streamApply.mockImplementation(async (_r: string, _s: string, _st: string, _b: string | undefined, onEvent: (e: unknown) => void) => {
-      onEvent({ phase: 'done', result: { total_facts: 0, from_local: 0, from_remote: 0, overwrites: 0 } });
-    });
-    // Held open, and the event sink kept, so the control arm below can end the
-    // commit and watch the lock lift.
-    let endCommit: ((e: unknown) => void) | undefined;
-    m.streamCommit.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) =>
-      new Promise(() => { endCommit = onEvent; }));
-
-    await mountApp();
-    await enterManage();
-    await act(async () => { fireEvent.click(screen.getByTestId('repomgr-item-alpha')); });
-    await act(async () => { fireEvent.click(await screen.findByTestId('remote-connect')); });
-    await act(async () => { fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://example.com/repo.git' } }); });
-    await act(async () => { fireEvent.click(screen.getByTestId('wizard-test')); });
-
-    const surfaces = () => document.querySelectorAll('[data-testid=manage-surface]').length;
-    const crumb = () => document.querySelector('[data-testid=wizard-crumb-back]') as HTMLButtonElement | null;
-    const locked = () => !!crumb()?.disabled;
-    let surfaceWhenLockPainted = -1;
-
-    let observer: MutationObserver | undefined;
-    const fired = new Promise<void>((done, fail) => {
-      // Without this the failure mode of "the lock never paints" is a bare 5s
-      // timeout on an await, which says nothing about why.
-      const timer = setTimeout(() => fail(new Error(
-        'the commit lock never painted: wizard-crumb-back was never disabled')), 4000);
-      observer = new MutationObserver(() => {
-        if (!locked()) return;
-        clearTimeout(timer);
-        surfaceWhenLockPainted = surfaces();
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-        done();
-      });
-      observer.observe(document.body, { childList: true, subtree: true, attributes: true });
-    });
-
-    try {
-      // NATIVE click, not fireEvent: the commit must start outside act().
-      (await screen.findByTestId('wizard-connect')).dispatchEvent(
-        new MouseEvent('click', { bubbles: true, cancelable: true }));
-      await fired;
-    } finally {
-      observer?.disconnect();
-    }
-    await act(async () => { await Promise.resolve(); });
-
-    // Guards the guard: if the lock never painted, the Escape above would be
-    // testing nothing and the assertion below would pass for the wrong reason.
-    expect(surfaceWhenLockPainted).toBe(1);
-    expect(locked()).toBe(true);
-    expect(screen.getByTestId('manage-surface')).toBeInTheDocument();
-
-    // THE CONTROL ARM, and it is what stops this test passing merely because
-    // nothing was listening: end the commit so the lock lifts, then press the
-    // same key the same way. If App's keydown listener were gone, Manage would
-    // survive here too and the refusal above would have proved nothing.
-    await act(async () => { endCommit?.({ phase: 'error', message: 'remote hung up' }); });
-    await waitFor(() => expect(locked()).toBe(false));
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
-  });
+  // The connect commit's lock is the Settings facet's now (Manage hosts no
+  // connect flow); App.facets.test.tsx pins that the rail, the tabs and the
+  // gear hold while it writes.
 });
 
-// #324: the Manage panel's instance actions (+ repo, + lens, the Logs tab) were
-// gated on the BROWSED repo's read-only state. A fresh origin has no remembered
+// #324: the instance actions (+ repo, + lens — the rail's now — and the Logs
+// tab) were gated on the BROWSED repo's read-only state. A fresh origin has no remembered
 // context, so pickRepo lands on the first sorted repo — here a subscription —
 // and the instance looked read-only although the server accepts every write.
 describe('Manage on a writable instance while browsing a subscription', () => {
-  beforeEach(() => { localStorage.clear(); });
+  beforeEach(() => { localStorage.clear(); localStorage.setItem('knomit.rail', '1'); });
 
   it('keeps the instance actions available and fact authoring blocked', async () => {
     const m = await primeApi();
@@ -360,9 +228,9 @@ describe('Manage on a writable instance while browsing a subscription', () => {
       expect(retract).toHaveAttribute('title', SUBSCRIPTION_TITLE);
     });
 
+    expect(screen.getByTestId('rail-new-repo')).toBeEnabled();
+    expect(screen.getByTestId('rail-new-lens')).toBeEnabled();
     await enterManage();
     expect(await screen.findByTestId('repomgr-logs')).toBeInTheDocument();
-    expect(screen.getByTestId('repomgr-new')).toBeEnabled();
-    expect(screen.getByTestId('repomgr-new-lens')).toBeEnabled();
   });
 });

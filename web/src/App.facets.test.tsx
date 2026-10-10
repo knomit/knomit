@@ -31,11 +31,16 @@ vi.mock('./api', async (importOriginal) => {
     api: {
       listClientSessions: vi.fn(),
       listOAuthPending: vi.fn().mockResolvedValue(null),
+      getFleet: vi.fn().mockRejectedValue(new Error('not in a fleet')), listFleetMembers: vi.fn().mockResolvedValue([]),
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
+      // The drafts and the pinned targets.
+      createRepo: vi.fn(), createLens: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
+      getRepoCreate: vi.fn(), cancelRepoCreate: vi.fn(), dismissRepoCreate: vi.fn(),
+      ontologyPresets: vi.fn(), ontologyPresetYAML: vi.fn(), validateOntology: vi.fn(), ontologySchema: vi.fn(), listTemplates: vi.fn(),
     },
   };
 });
@@ -62,6 +67,12 @@ async function primeApi({ readOnly = false } = {}) {
   m.listExperiments.mockResolvedValue({ experiments: [] });
   m.listPushedBranches?.mockResolvedValue?.([]);
   m.listClientSessions.mockResolvedValue({ truncated: false, policy: POLICY, sessions: [] });
+  m.getRepoCreate.mockRejectedValue(new Error('not found'));
+  m.ontologyPresets.mockResolvedValue([{ name: 'default', id: 'general', title: 'General', description: 'd', topics: ['people'] }]);
+  m.ontologyPresetYAML.mockResolvedValue('id: general\nname: General\ntopics:\n  people:\n');
+  m.validateOntology.mockResolvedValue({ ok: true, id: 'general', name: 'General', topics: ['people'], rule_count: 0 });
+  m.ontologySchema.mockResolvedValue([]);
+  m.listTemplates.mockResolvedValue([]);
   return { m, mod };
 }
 
@@ -261,15 +272,17 @@ describe('Activity', () => {
     expect(openStreams('/sessions/events')).toBe(0);
   });
 
-  it('never has two sessions streams open when Manage opens over it', async () => {
+  // Activity is the only sessions reader left (Manage's Sessions tab and its
+  // badge went with the global view), so opening Manage over it closes the
+  // one stream and opens none.
+  it('closes its sessions stream when Manage opens over it, and nothing else opens one', async () => {
     await primeApi();
     await mountApp();
     fireEvent.click(screen.getByTestId('facet-tab-activity'));
     await waitFor(() => expect(openStreams('/sessions/events')).toBe(1));
     await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
     await screen.findByTestId('manage-surface');
-    // Manage's badge reader owns the one stream now; Activity's is closed.
-    await waitFor(() => expect(openStreams('/sessions/events')).toBe(1));
+    await waitFor(() => expect(openStreams('/sessions/events')).toBe(0));
     expect(screen.queryByTestId('activity-facet')).toBeNull();
   });
 });
@@ -377,5 +390,210 @@ describe('a connect commit holds every way off its page', () => {
     expect(m.status).not.toHaveBeenCalledWith('core-kb', expect.anything());
     expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
     expect(screen.getByTestId('remote-connect-wizard')).toBeInTheDocument();
+  });
+});
+
+// ── Edge targets and drafts (PR E) ───────────────────────────────────────────
+// A target with no store to read is PINNED over the context and has Settings
+// alone; leaving it for a normal target restores the facet the reader had. A
+// `+` is a draft: the create form as a target, kept while the reader detours.
+const Q3 = { id: 'id-q3', name: 'q3-planning', origin: '', archivedAt: '2026-08-12T10:00:00Z' };
+const VENDOR = { name: 'vendor-docs', uid: 'u-v', state: 'missing', detail: 'Nothing at /Volumes/ext/vendor-docs.' };
+
+describe('edge targets', () => {
+  beforeEach(() => { localStorage.setItem('knomit.rail', '1'); });
+
+  it('E1: from Activity, an archived repo shows only Settings and the archived chip; the next repo restores Activity', async () => {
+    const { m } = await primeApi();
+    m.listArchived.mockResolvedValue([Q3]);
+    await mountApp();
+    fireEvent.click(screen.getByTestId('facet-tab-activity'));
+    await screen.findByTestId('activity-toolbar');
+
+    fireEvent.click(await screen.findByTestId('rail-archived'));
+    fireEvent.click(screen.getByTestId('rail-archived-id-q3'));
+    await waitFor(() => expect(tabNames()).toEqual(['Settings']));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('q3-planning');
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^archived$/);
+    expect(screen.getByTestId('archived-settings')).toBeInTheDocument();
+    // The context did not move: an archived repo is not something to browse.
+    expect(m.status).not.toHaveBeenCalledWith('q3-planning', expect.anything());
+
+    fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+    expect(await screen.findByTestId('activity-toolbar')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-tab-activity')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('target-label-chip')).toBeNull();
+  });
+
+  it('E2: a repo with no store shows only Settings, the store missing chip and the callout; the next repo restores Activity', async () => {
+    const { m } = await primeApi();
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, VENDOR]);
+    await mountApp();
+    fireEvent.click(screen.getByTestId('facet-tab-activity'));
+    await screen.findByTestId('activity-toolbar');
+
+    fireEvent.click(screen.getByTestId('rail-repo-vendor-docs'));
+    await waitFor(() => expect(tabNames()).toEqual(['Settings']));
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^store missing$/);
+    expect(screen.getByTestId('repo-unavailable-detail')).toHaveTextContent('Nothing at /Volumes/ext/vendor-docs.');
+    // Nothing reads through the store it does not have.
+    expect(m.getRepo).not.toHaveBeenCalledWith('vendor-docs');
+
+    fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+    expect(await screen.findByTestId('activity-toolbar')).toBeInTheDocument();
+  });
+
+  it('archiving a repo with no store pins its archived row, by the id the server returned', async () => {
+    const { m } = await primeApi();
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, VENDOR]);
+    await mountApp();
+    fireEvent.click(screen.getByTestId('rail-repo-vendor-docs'));
+    await screen.findByTestId('repo-unavailable-archive');
+
+    const row = { id: 'u-v', name: 'vendor-docs', origin: '', archivedAt: '2026-10-10T00:00:00Z' };
+    m.archiveRepo.mockResolvedValue(row);
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }]);
+    // A second archived repo of the same name: the pin must be by id.
+    m.listArchived.mockResolvedValue([{ ...row, id: 'older', archivedAt: '2026-01-01T00:00:00Z' }, row]);
+    fireEvent.click(screen.getByTestId('repo-unavailable-archive'));
+    fireEvent.click(screen.getByTestId('repo-unavailable-archive-confirm'));
+
+    expect(await screen.findByTestId('archived-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^archived$/);
+    expect(screen.getByTestId('rail-archived-u-v')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('rail-archived-older').getAttribute('aria-current')).toBeNull();
+  });
+
+  it('restoring an archived repo lands on it as the context', async () => {
+    const { m } = await primeApi();
+    m.listArchived.mockResolvedValue([Q3]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-archived'));
+    fireEvent.click(screen.getByTestId('rail-archived-id-q3'));
+    await screen.findByTestId('archived-settings');
+
+    m.restoreRepo.mockResolvedValue({ name: 'q3-planning' });
+    m.listArchived.mockResolvedValue([]);
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, { name: 'q3-planning', uid: 'u-q3' }]);
+    fireEvent.click(screen.getByTestId('archived-restore-id-q3'));
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('q3-planning'));
+    expect(screen.queryByTestId('target-label-chip')).toBeNull();
+    expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+    expect(screen.getByTestId('rail-repo-q3-planning')).toHaveAttribute('aria-current', 'true');
+  });
+});
+
+describe('drafts', () => {
+  beforeEach(() => { localStorage.setItem('knomit.rail', '1'); });
+
+  const job = (over: Record<string, unknown> = {}) => ({
+    create_id: 'c-new', name: 'ops-new', mode: 'initialize', state: 'running', step: 'index', phase: 'index',
+    index_state: 'indexing', repo: { name: 'ops-new', uid: 'u-new' }, ...over,
+  });
+
+  it('E3: the wizard lands on the new repo\'s Settings in creating mode, and stays there when the job is done', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    await mountApp();
+    fireEvent.click(screen.getByTestId('rail-new-repo'));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New repository');
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId('choose-local'));
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'ops-new' } });
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByTestId('step-ontology');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^next$/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByTestId('step-review');
+
+    // The create reports the index phase with the repo registered, and runs on.
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, { name: 'ops-new', uid: 'u-new' }]);
+    m.listRepoCreates.mockResolvedValue([job()]);
+    m.createRepo.mockImplementation(async (_b: unknown, onStatus: (s: unknown) => void) => {
+      onStatus(job());
+      return new Promise(() => {});
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create repository/i }));
+
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toContain('ops-new'));
+    await waitFor(() => expect(tabNames()).toEqual(['Settings']));
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^creating$/);
+    expect(await screen.findByTestId('create-progress')).toBeInTheDocument();
+    const ids = Array.from(document.querySelectorAll('section[id]')).map(s => s.id);
+    expect(ids[0]).toBe('create');
+    // The draft row gave way to the real row.
+    expect(screen.queryByTestId('rail-draft-repo')).toBeNull();
+    expect(screen.getByTestId('rail-repo-ops-new')).toHaveAttribute('aria-current', 'true');
+
+    // The job is done: Browse and Activity appear, and the reader stays on Settings.
+    m.listRepoCreates.mockResolvedValue([job({ state: 'done', step: 'done', index_state: 'ready' })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+    expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('N2: creating a lens lands on its Browse, labelled in the lens accent', async () => {
+    const { m } = await primeApi();
+    await mountApp();
+    fireEvent.click(screen.getByTestId('rail-new-lens'));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New lens');
+    fireEvent.change(await screen.findByTestId('lens-name'), { target: { value: 'platform' } });
+
+    const platform = { name: 'platform', uid: 'l-platform', write: { uid: 'u-core', name: 'core-kb' }, reads: [{ uid: 'u-core', name: 'core-kb' }], write_branch: STATUS };
+    m.createLens.mockResolvedValue(platform);
+    m.listLenses.mockResolvedValue([platform]);
+    m.getLens.mockResolvedValue(platform);
+    fireEvent.click(screen.getByTestId('lens-create'));
+
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('platform'));
+    expect(screen.getByTestId('target-label')).toHaveStyle({ color: 'rgb(185, 166, 240)' });
+    await waitFor(() => expect(screen.getByTestId('facet-tab-browse')).toHaveAttribute('aria-selected', 'true'));
+    expect(screen.queryByTestId('rail-draft-lens')).toBeNull();
+    expect(screen.getByTestId('rail-lens-platform')).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('survives a detour: what was typed is still there when the draft row is picked again', async () => {
+    await primeApi();
+    await mountApp();
+    fireEvent.click(screen.getByTestId('rail-new-repo'));
+    fireEvent.change(screen.getByTestId('create-url'), { target: { value: 'my-repo' } });
+
+    fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('core-kb'));
+    // Hidden, not unmounted, and its row kept.
+    expect(screen.getByTestId('draft-repo')).not.toBeVisible();
+    expect(screen.getByTestId('rail-draft-repo')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('rail-draft-repo'));
+    expect(screen.getByTestId('draft-repo')).toBeVisible();
+    expect((screen.getByTestId('create-url') as HTMLInputElement).value).toBe('my-repo');
+  });
+
+  it('Cancel removes the draft and restores the target and facet before it', async () => {
+    await primeApi();
+    await mountApp();
+    fireEvent.click(screen.getByTestId('facet-tab-activity'));
+    await screen.findByTestId('activity-toolbar');
+    fireEvent.click(screen.getByTestId('rail-new-repo'));
+    await screen.findByTestId('step-source');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByTestId('activity-toolbar')).toBeInTheDocument();
+    expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    expect(screen.queryByTestId('rail-draft-repo')).toBeNull();
+    expect(screen.queryByTestId('draft-repo')).toBeNull();
+  });
+});
+
+describe('the status footer\'s creates count', () => {
+  it('opens the rail, where each create is a row with its chip', async () => {
+    const { m } = await primeApi();
+    m.listRepoCreates.mockResolvedValue([{ create_id: 'c9', name: 'b-kb', mode: 'subscribe', state: 'running' }]);
+    await mountApp();
+    expect(screen.queryByTestId('target-rail')).toBeNull();
+    fireEvent.click(await screen.findByTestId('footer-creates'));
+    expect(await screen.findByTestId('target-rail')).toBeInTheDocument();
+    expect(await screen.findByTestId('pending-create-chip-rail-b-kb')).toHaveTextContent('creating');
   });
 });

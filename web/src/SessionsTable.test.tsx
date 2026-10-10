@@ -1,8 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
-import { ManageSessions } from './ManageSessions';
+import { ActivityFacet } from './ActivityFacet';
+import type { SessionTarget } from './useTargetSessions';
 import { api } from './api';
 import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+
+// The sessions table and its reader, as the Activity facet mounts them: the
+// sessions bound to ONE target (here repo `core`, uid u1), filtered by the
+// server, with only that target's binding groups drawn. These were Manage's
+// Sessions tab tests; the global view went with the tab.
+const CORE: SessionTarget = { kind: 'repo', uid: 'u1' };
 
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
@@ -47,9 +54,9 @@ async function stream(): Promise<FakeEventSource> {
   return FakeEventSource.instances[0];
 }
 
-describe('ManageSessions', () => {
+describe('Activity sessions', () => {
   it('renders one row per session with state, client, parent app, binding and relative last-seen', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(3));
     const rows = screen.getAllByTestId('session-row');
     expect(rows[0]).toHaveTextContent('claude-code');
@@ -59,18 +66,17 @@ describe('ManageSessions', () => {
     expect(rows[0]).toHaveTextContent('12');
     expect(rows[1]).toHaveTextContent('resumed');     // initialized=false
     expect(rows[2]).toHaveTextContent('ended');       // ended_at set
-    expect(rows[2]).toHaveTextContent('l9');          // unresolvable binding shows the uid
   });
 
   it('show hidden re-fetches with include=hidden', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByLabelText('Show hidden'));
-    await waitFor(() => expect(api.listClientSessions).toHaveBeenLastCalledWith({ binding: undefined, includeHidden: true }));
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenLastCalledWith({ binding: 'repo:u1', includeHidden: true }));
   });
 
   it('polls every 30 seconds while mounted and on window focus', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
     await act(async () => { vi.advanceTimersByTime(30_000); });
     expect(api.listClientSessions).toHaveBeenCalledTimes(2);
@@ -84,7 +90,7 @@ describe('ManageSessions', () => {
       policy: { ...POLICY, retention_s: 0 },
       sessions: [sess({})],
     });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     expect(screen.getByTestId('session-policy')).toHaveTextContent('never purged');
     expect(screen.getByTestId('session-policy')).not.toHaveTextContent('kept 0 d');
@@ -95,7 +101,7 @@ describe('ManageSessions', () => {
   // that as a change made every mount pay for two identical GETs, and no test
   // saw it because the fake never announced a connection.
   it('does not re-read for the ready the server sends on connect', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     const es = await stream();
     expect(es.url).toContain('/api/v1/sessions/events');
     await act(async () => { vi.advanceTimersByTime(6_000); });
@@ -105,7 +111,7 @@ describe('ManageSessions', () => {
   // A session appearing or going away is what the reader is watching for, so
   // it is not worth throttling behind a window.
   it('re-reads immediately when a session initializes or ends', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     const es = await stream();
     await act(async () => { vi.advanceTimersByTime(2_000); });
     expect(api.listClientSessions).toHaveBeenCalledTimes(1);
@@ -123,7 +129,7 @@ describe('ManageSessions', () => {
   // count and idle→live. A Manage tab left open must not turn a busy agent's
   // traffic into a list read per request.
   it('collapses a storm of touches into one read per 5s window', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     const es = await stream();
     await act(async () => { vi.advanceTimersByTime(2_000); });
     expect(api.listClientSessions).toHaveBeenCalledTimes(1);
@@ -141,7 +147,7 @@ describe('ManageSessions', () => {
   // A LATER ready is a reconnect, and the gap may have dropped events, so it
   // is the one ready that does cost a read.
   it('re-reads on a reconnect, which is any ready after the first', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     const es = await stream();
     await act(async () => { vi.advanceTimersByTime(2_000); });
     expect(api.listClientSessions).toHaveBeenCalledTimes(1);
@@ -151,7 +157,7 @@ describe('ManageSessions', () => {
   });
 
   it('closes the stream on unmount', async () => {
-    const { unmount } = render(<ManageSessions />);
+    const { unmount } = render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
     const es = await stream();
     unmount();
@@ -159,7 +165,7 @@ describe('ManageSessions', () => {
   });
 
   it('keeps ages moving while an error banner is up', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(3));
     expect(screen.getAllByTestId('session-row')[0]).toHaveTextContent('2 min ago');
 
@@ -173,72 +179,13 @@ describe('ManageSessions', () => {
     expect(screen.getAllByTestId('session-row')[0]).toHaveTextContent('12 min ago');
   });
 
-  // The tab strip already says "Sessions"; the heading that used to sit here
-  // said it a second time. Scoped to the page's own subtree.
-  it('renders no heading of its own — the tab strip already names the page', async () => {
-    render(<ManageSessions />);
-    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
-    expect(screen.getByTestId('manage-sessions').querySelector('h1, h2, h3')).toBeNull();
-  });
-
-  // Both payloads of the deleted heading row have to survive it.
-  it('keeps the live count and Show hidden in the card label row', async () => {
-    render(<ManageSessions />);
-    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
-    const labelRow = screen.getByLabelText('Show hidden').closest('div');
-    expect(labelRow).toHaveTextContent('MCP clients');
-    expect(labelRow).toHaveTextContent(/\d+ live · \d+ shown/);
-  });
-
-  // The policy line moved into the card as its pinned footer. It must still be
-  // rendered, and still inside the card rather than orphaned above it.
-  it('pins the policy line inside the card', async () => {
-    render(<ManageSessions />);
-    await waitFor(() => expect(screen.getByTestId('session-policy')).toBeInTheDocument());
-    const card = screen.getByTestId('manage-sessions').firstElementChild as HTMLDivElement;
-    expect(card.contains(screen.getByTestId('session-policy'))).toBe(true);
-  });
-
-  // Same mechanism as the Logs card. At the flex default (min-height:auto) the
-  // card floors at its MIN-CONTENT height, which propagates the table's full
-  // height up through the wrapper — the card grows to fit every row and the
-  // pane scrolls instead of the table. The floor lives on the root instead.
-  it('pins the card to the pane instead of to the table it contains', async () => {
-    render(<ManageSessions />);
-    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
-    const root = screen.getByTestId('manage-sessions');
-    const card = root.firstElementChild as HTMLDivElement;
-    expect(card.style.flex).toBe('1 1 0%');
-    expect(card.style.minHeight).toBe('0px');
-    expect(root.style.height).toBe('100%');
-    expect(parseInt(root.style.minHeight, 10)).toBeGreaterThan(200);
-  });
-
-  // An overflow on the card would absorb the overflow that is supposed to push
-  // the root past the pane, disabling the floor's degradation entirely, and
-  // nest a second scrollbar inside the table wrapper's. The card carried
-  // overflowX:'auto' before this change, so this is a regression guard.
-  it('leaves the card with no overflow of its own', async () => {
-    render(<ManageSessions />);
-    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
-    const card = screen.getByTestId('manage-sessions').firstElementChild as HTMLDivElement;
-    // Assert we are looking at the CARD and not whatever else happens to be
-    // first: without this the test passes vacuously against any structure
-    // whose first child is not the card, which is exactly the structure this
-    // change replaced.
-    expect(card.querySelector('table')).not.toBeNull();
-    expect(card.style.overflow).toBe('');
-    expect(card.style.overflowX).toBe('');
-    expect(card.style.overflowY).toBe('');
-  });
-
   // Under borderCollapse:'separate' a border on a <tr> is not painted at all,
   // which would silently delete every row separator. The header rule is an
   // inset shadow precisely so 'collapse' can stay.
   it('keeps collapsed borders so the row separators survive the sticky header', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
-    const table = screen.getByTestId('manage-sessions').querySelector('table') as HTMLTableElement;
+    const table = screen.getByTestId('activity-facet').querySelector('table') as HTMLTableElement;
     expect(table.style.borderCollapse).toBe('collapse');
     const th = table.querySelector('thead th') as HTMLElement;
     expect(th.style.position).toBe('sticky');
@@ -254,7 +201,7 @@ describe('ManageSessions', () => {
   // into a flex container silently dropped that space, leaving the checkbox
   // flush against the "S" of "Show hidden" (overlapping it in WebKit).
   it('spaces the Show hidden checkbox from its words with a gap, not whitespace', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
     const input = screen.getByLabelText('Show hidden') as HTMLInputElement;
     const label = input.closest('label') as HTMLLabelElement;
@@ -273,13 +220,13 @@ describe('ManageSessions', () => {
 
 // The server bounds the page. A cut list renders identically to a complete one,
 // so the note is the only thing that stops "12 shown" being read as "12 exist".
-describe('ManageSessions truncation', () => {
+describe('Activity sessions truncation', () => {
   it('shows a visible note naming the count when the page was cut', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
       truncated: true, policy: POLICY,
       sessions: [sess({ id: 'a' }), sess({ id: 'b' })],
     });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(2));
 
     const note = screen.getByTestId('session-truncated');
@@ -294,7 +241,7 @@ describe('ManageSessions truncation', () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
       truncated: false, policy: POLICY, sessions: [sess({ id: 'a' })],
     });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     expect(screen.queryByTestId('session-truncated')).toBeNull();
   });
@@ -305,7 +252,7 @@ describe('ManageSessions truncation', () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
       truncated: true, policy: POLICY, sessions: [sess({ id: 'a' })],
     });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getByTestId('session-truncated')).toBeInTheDocument());
 
     vi.mocked(api.listClientSessions).mockResolvedValue({
@@ -323,7 +270,7 @@ describe('ManageSessions truncation', () => {
 // count does not. The handles themselves move into an expandable detail row,
 // which is also the only place the per-handle ages and request counts the
 // server already returns have ever been shown.
-describe('ManageSessions binding groups', () => {
+describe('Activity sessions binding groups', () => {
   const bindingRow = (over: Partial<import('./api').ClientSessionBindingRow> = {}) => ({
     handle: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', kind: 'repo', uid: 'u1', name: 'core', branch: '',
     first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:58:00Z', request_count: 1,
@@ -339,7 +286,7 @@ describe('ManageSessions binding groups', () => {
       bindingRow({ handle: 'HHHHHHbbbbbbbbbbbbbbbbbbbbbbbbbb' }),
       bindingRow({ handle: 'GGGGGGaaaaaaaaaaaaaaaaaaaaaaaaaa' }),
     ]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     // Two callers, one target: ONE line. The count is what carries the fact
@@ -352,23 +299,21 @@ describe('ManageSessions binding groups', () => {
     expect(groups[0]).not.toHaveTextContent('HHHHHH');
   });
 
-  it('keeps one line per distinct target, in the order the server sent them', async () => {
+  it('draws only this target\'s line for a session bound here and elsewhere, with its own count', async () => {
     withBindings([
       bindingRow({ handle: 'B1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', uid: 'u2', name: 'docs' }),
       bindingRow({ handle: 'B2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', uid: 'u1', name: 'core' }),
       bindingRow({ handle: 'B3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', uid: 'u2', name: 'docs' }),
     ]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     const groups = screen.getAllByTestId('session-binding-group');
-    expect(groups).toHaveLength(2);
-    // Bindings arrive most-recently-used first, so the order of first
-    // appearance puts the most recently used target on top.
-    expect(groups[0]).toHaveTextContent('docs');
-    expect(groups[0]).toHaveTextContent('×2');
-    expect(groups[1]).toHaveTextContent('core');
-    expect(groups[1]).not.toHaveTextContent('×');
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toHaveTextContent('core');
+    expect(groups[0]).not.toHaveTextContent('docs');
+    // One handle on THIS target, so no count, whatever the session holds elsewhere.
+    expect(groups[0]).not.toHaveTextContent('×');
   });
 
   it('opens a row per handle on click, with the full handle on hover, and closes again', async () => {
@@ -376,7 +321,7 @@ describe('ManageSessions binding groups', () => {
       bindingRow({ handle: 'HHHHHHbbbbbbbbbbbbbbbbbbbbbbbbbb', request_count: 31 }),
       bindingRow({ handle: 'GGGGGGaaaaaaaaaaaaaaaaaaaaaaaaaa', request_count: 7, last_seen_at: '2026-09-14T11:00:00Z' }),
     ]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     expect(screen.queryByTestId('session-detail')).toBeNull();
@@ -410,7 +355,7 @@ describe('ManageSessions binding groups', () => {
   // toggle; the label goes singular.
   it('offers the detail row for a single handle too, so the handle stays reachable', async () => {
     withBindings([bindingRow({ handle: 'ONLYONEaaaaaaaaaaaaaaaaaaaaaaaaa' })]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     expect(screen.getAllByTestId('session-binding-group')).toHaveLength(1);
@@ -440,7 +385,7 @@ describe('ManageSessions binding groups', () => {
         }],
       },
     );
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     // The two handles genuinely disagree, so the line shows both chips.
@@ -469,7 +414,7 @@ describe('ManageSessions binding groups', () => {
         }],
       },
     );
-    render(<ManageSessions />);
+    render(<ActivityFacet target={{ kind: 'lens', uid: 'u1' }} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     const groups = screen.getAllByTestId('session-binding-group');
@@ -490,29 +435,16 @@ describe('ManageSessions binding groups', () => {
         }],
       },
     );
-    render(<ManageSessions />);
+    render(<ActivityFacet target={{ kind: 'repo', uid: 'zz9' }} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     const groups = screen.getAllByTestId('session-binding-group');
-    expect(groups).toHaveLength(2);
+    // The session's own binding is to another target, so only the mount's line is drawn.
+    expect(groups).toHaveLength(1);
     const orphan = groups.find(g => g.textContent?.includes('other-repo')) as HTMLElement;
     expect(orphan).toHaveTextContent('orphan-exp');
     // No handles stand behind it, so there is no count to show.
     expect(orphan).not.toHaveTextContent('×');
-  });
-
-  // An unscoped session that has not yet called knomit_bind has no pin at all:
-  // the server's bindingNames.lookup returns empty strings for a value that is
-  // not a PinID, so kind, uid and name all come back empty. Printing
-  // `kind:uid` there renders a bare ":".
-  it('renders an em dash for a session with no binding at all', async () => {
-    withBindings([], { binding: { kind: '', uid: '', name: null } });
-    render(<ManageSessions />);
-    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
-
-    const cell = screen.getByTestId('session-bindings');
-    expect(cell).toHaveTextContent('—');
-    expect(cell.textContent).not.toContain(':');
   });
 
   // The experiment attribution used to live in its own Branch column, one per
@@ -529,7 +461,7 @@ describe('ManageSessions binding groups', () => {
         }],
       },
     );
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     const group = screen.getAllByTestId('session-binding-group')[0];
@@ -542,7 +474,7 @@ describe('ManageSessions binding groups', () => {
 
   it('shows the ordinary branch chip when the handle names one and no mount claims the target', async () => {
     withBindings([bindingRow({ handle: 'ONBRANCHaaaaaaaaaaaaaaaaaaaaaaaa', branch: 'main' })]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     expect(screen.getAllByTestId('session-binding-group')[0]).toHaveTextContent('main');
   });
@@ -551,7 +483,7 @@ describe('ManageSessions binding groups', () => {
   // saying nothing is worse than no chip.
   it('shows no chip for a handle with no mount and no branch', async () => {
     withBindings([bindingRow({ handle: 'PLAINaaaaaaaaaaaaaaaaaaaaaaaaaaa', branch: '' })]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     expect(screen.getByTestId('session-bindings').querySelector('[data-testid="session-branch-chip"]')).toBeNull();
   });
@@ -561,7 +493,7 @@ describe('ManageSessions binding groups', () => {
       bindingRow({ handle: 'D1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', branch: 'main' }),
       bindingRow({ handle: 'D2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', branch: 'agent/other' }),
     ]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     const group = screen.getAllByTestId('session-binding-group')[0];
     expect(within(group).getAllByTestId('session-branch-chip')).toHaveLength(2);
@@ -571,7 +503,7 @@ describe('ManageSessions binding groups', () => {
 
   it('falls back to the singular binding when the session presented no handle', async () => {
     withBindings([], { binding: { kind: 'repo', uid: 'u1', name: 'core' } });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     // A URL-scoped caller presents no handle, so the cell shows what the row
     // itself says rather than going blank — with no count and no toggle.
@@ -588,14 +520,14 @@ describe('ManageSessions binding groups', () => {
         experiment: 'url-scoped', branch: 'exp/url-scoped', set_at: '2026-09-14T11:30:00Z',
       }],
     });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     expect(screen.getByTestId('session-bindings')).toHaveTextContent('url-scoped');
   });
 
   it('renders an unresolvable target as kind:uid', async () => {
     withBindings([bindingRow({ handle: 'UNRESOLVEDaaaaaaaaaaaaaaaaaaaaaa', kind: 'lens', uid: 'l9', name: null })]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={{ kind: 'lens', uid: 'l9' }} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     expect(screen.getAllByTestId('session-binding-group')[0]).toHaveTextContent('lens:l9');
   });
@@ -608,7 +540,7 @@ describe('ManageSessions binding groups', () => {
       bindingRow({ handle: '', branch: '' }),
       bindingRow({ handle: '', branch: '', uid: 'u1', name: 'core', request_count: 4 }),
     ]);
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     const group = screen.getAllByTestId('session-binding-group')[0];
@@ -627,11 +559,11 @@ describe('ManageSessions binding groups', () => {
 // agent branch the binding already names when it is set. The only live content
 // it carried was the experiment attribution, which now sits beside the target
 // it applies to.
-describe('ManageSessions — no Branch column', () => {
+describe('Activity sessions — no Branch column', () => {
   it('has no Branch header', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(3));
-    const head = screen.getByTestId('manage-sessions').querySelector('thead') as HTMLElement;
+    const head = screen.getByTestId('activity-facet').querySelector('thead') as HTMLElement;
     expect(head).not.toHaveTextContent('Branch');
     expect(head).toHaveTextContent('Binding');
     expect(head.querySelectorAll('th')).toHaveLength(7);
@@ -639,7 +571,7 @@ describe('ManageSessions — no Branch column', () => {
 
   it('spans the empty state across the seven remaining columns', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [] });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
     const cell = screen.getByText(/No client sessions/) as HTMLTableCellElement;
     expect(cell.colSpan).toBe(7);
@@ -650,21 +582,21 @@ describe('ManageSessions — no Branch column', () => {
 // owns, so it lives in localStorage — and, like every other key this app
 // stores, behind try/catch: a blocked or throwing store must cost the page
 // nothing more than the preference.
-describe('ManageSessions Show hidden persistence', () => {
+describe('Activity sessions Show hidden persistence', () => {
   const KEY = 'knomit.sessions.showHidden';
 
   it('starts checked and asks for hidden rows on the FIRST fetch when remembered', async () => {
     localStorage.setItem(KEY, '1');
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
     // The first fetch, not a second one after a state settle: a page that
     // rendered unchecked and corrected itself would flash the wrong list.
-    expect(api.listClientSessions).toHaveBeenNthCalledWith(1, { binding: undefined, includeHidden: true });
+    expect(api.listClientSessions).toHaveBeenNthCalledWith(1, { binding: 'repo:u1', includeHidden: true });
     expect(screen.getByLabelText('Show hidden')).toBeChecked();
   });
 
   it('writes the preference on toggle, both ways', async () => {
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByLabelText('Show hidden'));
     expect(localStorage.getItem(KEY)).toBe('1');
@@ -678,13 +610,13 @@ describe('ManageSessions Show hidden persistence', () => {
     const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
     const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
     try {
-      render(<ManageSessions />);
+      render(<ActivityFacet target={CORE} />);
       await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
       expect(screen.getByLabelText('Show hidden')).not.toBeChecked();
       // The write throws too; the checkbox must still move and the list must
       // still re-fetch.
       fireEvent.click(screen.getByLabelText('Show hidden'));
-      await waitFor(() => expect(api.listClientSessions).toHaveBeenLastCalledWith({ binding: undefined, includeHidden: true }));
+      await waitFor(() => expect(api.listClientSessions).toHaveBeenLastCalledWith({ binding: 'repo:u1', includeHidden: true }));
       expect(screen.getByLabelText('Show hidden')).toBeChecked();
     } finally {
       get.mockRestore();
@@ -696,7 +628,7 @@ describe('ManageSessions Show hidden persistence', () => {
 // Expanded state is keyed by session id and lives for the page load. Keying by
 // id is what lets it survive a poll, but it also means a stale id can outlive
 // the row it named, so `load` reconciles the set against the ids it just read.
-describe('ManageSessions expanded state', () => {
+describe('Activity sessions expanded state', () => {
   const bindingRow = (over: Partial<import('./api').ClientSessionBindingRow> = {}) => ({
     handle: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', kind: 'repo', uid: 'u1', name: 'core', branch: '',
     first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:58:00Z', request_count: 1,
@@ -711,7 +643,7 @@ describe('ManageSessions expanded state', () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
       truncated: false, policy: POLICY, sessions: [sess({ id: 'keep-me', bindings: two })],
     });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     fireEvent.click(screen.getByRole('button', { name: /2 handles/ }));
     expect(screen.getByTestId('session-detail')).toBeInTheDocument();
@@ -724,7 +656,7 @@ describe('ManageSessions expanded state', () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
       truncated: false, policy: POLICY, sessions: [sess({ id: 'comes-and-goes', bindings: two })],
     });
-    render(<ManageSessions />);
+    render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     fireEvent.click(screen.getByRole('button', { name: /2 handles/ }));
     expect(screen.getByTestId('session-detail')).toBeInTheDocument();

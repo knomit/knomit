@@ -1,114 +1,124 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { uninstallFakeEventSource } from './testEventSource';
+import { render, screen, waitFor, within, act, fireEvent, cleanup } from '@testing-library/react';
+import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { __resetRepoCreatesForTest } from './useRepoCreates';
 
 // Zero repos is an ordinary state, not an error: a fresh install creates none,
 // and the last repo can be archived. The empty screen must therefore be a
-// STARTING POINT — the top bar that normally opens the repo manager is below
-// App's early return, so without a way out from here the app is unreachable
-// except through the REST API.
-
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSED = 2;
-
-  url: string;
-  readyState = FakeEventSource.OPEN;
-  private listeners = new Map<string, Set<(e: unknown) => void>>();
-
-  constructor(url: string) {
-    this.url = url;
-    FakeEventSource.instances.push(this);
-  }
-  addEventListener(type: string, fn: (e: unknown) => void) {
-    let set = this.listeners.get(type);
-    if (!set) { set = new Set(); this.listeners.set(type, set); }
-    set.add(fn);
-  }
-  removeEventListener(type: string, fn: (e: unknown) => void) { this.listeners.get(type)?.delete(fn); }
-  close() { this.readyState = FakeEventSource.CLOSED; }
-}
+// STARTING POINT. It is the ordinary shell with the repository DRAFT as its
+// target: the rail is forced open with the draft as its only Repositories row,
+// the body is the create wizard, there is no Cancel (there is nothing to go
+// back to), and the gear still reaches the server pages.
 
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>();
   return {
     ...actual,
-    fetchVersion: vi.fn().mockResolvedValue({ version: '0.0.0', commit: 'abc', full: '0.0.0.abc', readOnly: false }),
+    fetchVersion: vi.fn(),
     api: {
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
-      fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(),
+      fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), listRepoCreates: vi.fn(),
+      listOAuthPending: vi.fn(), getFleet: vi.fn(), listFleetMembers: vi.fn(),
     },
   };
 });
 
-async function primeEmptyApi() {
-  const { api } = await import('./api');
-  const m = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+async function primeEmptyApi({ readOnly = false } = {}) {
+  const mod = await import('./api');
+  const m = mod.api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+  vi.mocked(mod.fetchVersion).mockResolvedValue({ version: '0.0.0', commit: 'abc', full: '0.0.0.abc', readOnly } as Awaited<ReturnType<typeof mod.fetchVersion>>);
   m.repos.mockResolvedValue([]);
   m.listLenses.mockResolvedValue([]);
   m.listArchived.mockResolvedValue([]);
+  m.listRepoCreates.mockResolvedValue([]);
+  m.listOAuthPending.mockResolvedValue(null);
+  m.getFleet.mockRejectedValue(new Error('not in a fleet'));
+  m.listFleetMembers.mockResolvedValue([]);
   m.getAgentBranch.mockResolvedValue('machine/test');
   m.status.mockResolvedValue(null);
   m.getOrigin.mockResolvedValue(null);
-  m.browse.mockResolvedValue({ path: 'kb', children: [] });
-  m.recent.mockResolvedValue({ facts: [], total: 0 });
-  m.search.mockResolvedValue({ results: [] });
-  m.stats.mockResolvedValue(null);
-  m.activity.mockResolvedValue(null);
-  m.completions.mockResolvedValue([]);
+  return m;
 }
 
-beforeEach(async () => {
-  FakeEventSource.instances = [];
-  vi.clearAllMocks();
-  (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
-  await primeEmptyApi();
+beforeEach(() => {
+  localStorage.clear();
+  __resetRepoCreatesForTest();
+  installFakeEventSource();
+  vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
-  // Restore the shared baseline, never delete it: this afterEach runs before
-  // test-setup.ts's cleanup() (vitest "stack" hook order), see
-  // uninstallFakeEventSource.
+  // cleanup FIRST: afterEach runs in stack order (see uninstallFakeEventSource).
+  cleanup();
+  vi.restoreAllMocks();
   uninstallFakeEventSource();
+  vi.clearAllMocks();
 });
 
-describe('the zero-repo screen', () => {
-  it('is Manage, landed on the create form', async () => {
-    const App = (await import('./App')).default;
-    render(<App />);
+async function mountApp() {
+  const App = (await import('./App')).default;
+  render(<App />);
+  await screen.findByTestId('no-repos');
+}
 
-    await screen.findByTestId('no-repos');
+describe('the zero-repo shell', () => {
+  it('is the repository draft: the wizard is the body, labelled "New repository", with no tabs', async () => {
+    await primeEmptyApi();
+    await mountApp();
+    // `step-source` is the wizard's first screen: the create surface rendered.
+    expect(await screen.findByTestId('step-source')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-repo')).toBeVisible();
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New repository');
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    // Not the boot screen: there is nothing to open, and that is the answer.
+    expect(screen.queryByTestId('boot-screen')).toBeNull();
     // The old copy pointed at `knomit init`, a subcommand that does not exist.
     expect(screen.queryByText(/knomit init/)).not.toBeInTheDocument();
+  });
 
-    // No intermediate "Create a repository" button any more. With nothing to
-    // browse, the app IS Manage, and Manage falls back to the create surface
-    // because there is no detail pane to land on. `step-source` is a proxy
-    // for "the create surface rendered" — it is the wizard's first screen,
-    // not an assertion about what that screen contains; it used to check
-    // `create-name` (the old flat form's first field), but the wizard's first
-    // screen is the source-choice step and the name field arrives on the
-    // step after, so the proxy now points at the step that's actually there.
-    await waitFor(() => expect(screen.getByTestId('manage-surface')).toBeInTheDocument());
+  it('forces the rail open with the draft as the only Repositories row', async () => {
+    await primeEmptyApi();
+    await mountApp();
+    // Nothing persisted said open: the rail is forced.
+    expect(localStorage.getItem('knomit.rail')).not.toBe('1');
+    const section = await screen.findByTestId('rail-repos');
+    const rows = within(section).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-repo');
+    expect(rows.map(r => r.dataset.testid)).toEqual(['rail-draft-repo']);
+    expect(rows[0]).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('offers no Cancel, because there is nothing to go back to', async () => {
+    await primeEmptyApi();
+    await mountApp();
+    await screen.findByTestId('step-source');
+    // Control: the wizard's own footer is there (its Next lives beside where
+    // Cancel would be once a local source is chosen).
+    fireEvent.click(screen.getByTestId('choose-local'));
+    expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  it('still reaches the server pages through the gear, and comes back to the draft', async () => {
+    await primeEmptyApi();
+    await mountApp();
+    await screen.findByTestId('step-source');
+    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
+    expect(await screen.findByTestId('manage-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-fleet')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
+    await waitFor(() => expect(screen.queryByTestId('manage-surface')).toBeNull());
     expect(screen.getByTestId('step-source')).toBeInTheDocument();
   });
 
-  it('offers no way out of Manage, because there is nowhere to go', async () => {
-    const App = (await import('./App')).default;
-    render(<App />);
-
-    await screen.findByTestId('no-repos');
-    // Proxy for "the create surface rendered" — see the comment above.
-    await waitFor(() => expect(screen.getByTestId('step-source')).toBeInTheDocument());
-
-    // The mode is locked: leaving would land on a browse surface that does not
-    // exist. Both a step-out control and a Cancel on the form would be buttons
-    // that visibly do nothing, so neither is rendered.
-    expect(screen.queryByTestId('toknomitr-manage-btn')).not.toBeInTheDocument();
-    expect(screen.queryByText('Cancel')).not.toBeInTheDocument();
+  // A read-only instance cannot create, so the draft says so instead of
+  // offering a form whose submit would be refused.
+  it('explains itself on a read-only instance instead of offering a form it cannot submit', async () => {
+    await primeEmptyApi({ readOnly: true });
+    await mountApp();
+    expect(await screen.findByTestId('create-blocked-repository')).toBeInTheDocument();
+    expect(screen.queryByTestId('step-source')).toBeNull();
+    expect(screen.getByTestId('rail-new-repo')).toBeDisabled();
   });
 });

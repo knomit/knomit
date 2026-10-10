@@ -15,9 +15,9 @@ import { useEffect, useReducer } from 'react';
 import type { Dispatch } from 'react';
 import { loadRailOpen, saveRailOpen, loadLastFacet, saveLastFacet } from './repoSelection';
 import { repoAvailable, brokenLensMember } from './api';
-import type { RepoInfo, Lens, RepoCreateStatus } from './api';
+import type { RepoInfo, Lens, RepoCreateStatus, ArchivedRepo } from './api';
 import type { BrowseContext } from './state';
-import { activeCreateByRepo } from './useRepoCreates';
+import { activeCreateByRepo, createFlag } from './useRepoCreates';
 
 /** remoteFailing: the listing says this repo's last sync or last push failed.
  *  An absent `remote` (no origin, no store, older server) is nothing to show. */
@@ -252,6 +252,50 @@ export function displayedTarget(view: ViewState, context: BrowseContext, noRepos
   if (view.pinned) return view.pinned;
   if (noRepos) return { kind: 'draft', draft: 'repo' };
   return context;
+}
+
+/** What the top bar's label says about the displayed target: its kind (the
+ *  icon and colour), its name, and for a target with only Settings the state
+ *  chip that explains why. A draft is labelled by what it will create. */
+export interface TargetLabel {
+  kind: 'repo' | 'lens';
+  name: string;
+  chip?: { text: string; tone: 'archived' | 'bad' | 'creating' };
+  draft?: boolean;
+}
+
+/** The chip word for a repo with no store: "store missing" for the common
+ *  case, the state's own word otherwise (RepoStateChip's wording). */
+function unavailableWord(state: string | undefined): string {
+  return state === 'missing' ? 'store missing' : (state || 'unavailable');
+}
+
+export function targetLabelFor(
+  target: Target, repos: RepoInfo[], archived: ArchivedRepo[], creates: RepoCreateStatus[],
+): TargetLabel {
+  switch (target.kind) {
+    case 'draft':
+      return { kind: target.draft, name: target.draft === 'repo' ? 'New repository' : 'New lens', draft: true };
+    case 'archived':
+      return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };
+    case 'unavailable':
+      return { kind: 'repo', name: target.repo, chip: { text: unavailableWord(repos.find(r => r.name === target.repo)?.state), tone: 'bad' } };
+    case 'pending': {
+      const job = creates.find(c => c.create_id === target.createId);
+      const flag = job ? createFlag(job.state) : null;
+      return {
+        kind: 'repo', name: job?.name ?? '',
+        ...(flag ? { chip: { text: flag, tone: flag === 'failed' ? 'bad' as const : 'creating' as const } } : {}),
+      };
+    }
+    case 'repo': {
+      const job = activeCreateByRepo(creates).get(target.repo);
+      const flag = job ? createFlag(job.state) : null;
+      return { kind: 'repo', name: target.repo, ...(flag ? { chip: { text: flag, tone: 'creating' as const } } : {}) };
+    }
+    case 'lens':
+      return { kind: 'lens', name: target.name };
+  }
 }
 
 /** useViewState is App's view reducer plus its persistence: knomit.rail and

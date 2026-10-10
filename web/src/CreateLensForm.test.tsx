@@ -209,6 +209,37 @@ describe('CreateLensForm', () => {
     });
   });
 
+  // The lens draft's layout: an index column headed "New lens" listing the
+  // form's sections, with the Preview pinned under them (it is in the left
+  // column, which does not scroll with the form), and the form on the right.
+  it('indexes its sections in the left column, with the Preview under them, and the form on the right', () => {
+    render(<CreateLensForm repos={repos} lenses={[]} onDone={() => {}} onError={() => {}} />);
+    const left = screen.getByTestId('facet-index-column');
+    expect(screen.getByTestId('settings-index-heading')).toHaveTextContent(/^New lens$/);
+    const items = Array.from(left.querySelectorAll('[data-testid^="toc-"]')).map(el => el.getAttribute('data-testid'));
+    expect(items).toEqual(['toc-lens-name', 'toc-lens-description', 'toc-lens-write', 'toc-lens-mounts']);
+    expect(left).toContainElement(screen.getByTestId('lens-preview'));
+    const right = screen.getByTestId('settings-scroll');
+    expect(right).toContainElement(screen.getByTestId('lens-name'));
+    expect(right).not.toContainElement(screen.getByTestId('lens-preview'));
+  });
+
+  it('clicking an index item scrolls its section into view and marks it current', () => {
+    const spy = vi.fn();
+    const orig = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = spy;
+    try {
+      render(<CreateLensForm repos={repos} lenses={[]} onDone={() => {}} onError={() => {}} />);
+      fireEvent.click(screen.getByTestId('toc-lens-mounts'));
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.contexts[0]).toBe(document.getElementById('lens-mounts'));
+      expect(screen.getByTestId('toc-lens-mounts')).toHaveAttribute('aria-current', 'true');
+      expect(screen.getByTestId('toc-lens-name').getAttribute('aria-current')).toBeNull();
+    } finally {
+      Element.prototype.scrollIntoView = orig;
+    }
+  });
+
   it('calls onCancel from the Cancel button', () => {
     const onCancel = vi.fn();
     render(<CreateLensForm repos={repos} lenses={[]} onDone={() => {}} onError={() => {}} onCancel={onCancel} />);

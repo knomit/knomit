@@ -3,8 +3,9 @@ import { api } from './api';
 import type { ClientSession, ClientSessionPolicy } from './api';
 import { useClientSessionChanges } from './useClientSessionChanges';
 
-// The MCP client sessions of ONE target (a repo or a lens), or of the whole
-// server when the target is null (Manage's Sessions tab, until it goes).
+// The MCP client sessions of ONE target (a repo or a lens). There is no
+// unfiltered reader: the global sessions view went with Manage's Sessions tab,
+// and sessions bound to nothing are listed nowhere (accepted by the spec).
 //
 // Presence is LAST-SEEN derived — the server records each request's time and
 // computes live/idle/dead at read time. No MCP client holds a connection open
@@ -55,34 +56,31 @@ export interface TargetSessions {
  * side by `?binding=` — re-reading on the 30s poll, on window focus and on the
  * change stream. Exactly one sessions stream is open per mounted reader.
  *
- * `onLoaded` reports the live count after every read, with `truncated`
- * travelling WITH it: the count is computed from a bounded page, so when the
- * server cut the list it is a lower bound, not a total
- * (kb/decisions/web/sessions/badge-lower-bound). A failed read reports null.
+ * `truncated` travels with the rows: they are a bounded page, so when the
+ * server cut the list any count of them is a lower bound, not a total
+ * (kb/decisions/web/sessions/badge-lower-bound).
  *
  * A target whose uid is unknown (an older server that does not send a lens's
  * uid) reads nothing: an empty binding would ask for every session.
  */
 export function useTargetSessions(
-  target: SessionTarget | null,
+  target: SessionTarget,
   showHidden: boolean,
-  onLoaded?: (live: number | null, truncated: boolean) => void,
 ): TargetSessions {
   const [rows, setRows] = useState<ClientSession[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [policy, setPolicy] = useState<ClientSessionPolicy | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
-  const binding = target ? (target.uid ? `${target.kind}:${target.uid}` : null) : undefined;
+  const binding = target.uid ? `${target.kind}:${target.uid}` : null;
 
   const load = useCallback(() => {
     if (binding === null) return;
     api.listClientSessions({ binding, includeHidden: showHidden })
       .then(r => {
         setRows(r.sessions); setPolicy(r.policy); setTruncated(r.truncated); setError(null);
-        onLoaded?.(r.sessions.filter(s => s.state === 'live').length, r.truncated);
       })
-      .catch(e => { setError(String(e)); onLoaded?.(null, false); })
+      .catch(e => { setError(String(e)); })
       // finally, so the clock advances on EVERY attempt, success or failure.
       // The rows on screen are the last good data either way, so their ages
       // must keep moving while the error line is up — a frozen "2 min ago"
@@ -90,7 +88,7 @@ export function useTargetSessions(
       // this off the synchronous path: a setState in the effect body would
       // cascade a render on every mount.
       .finally(() => setNow(new Date()));
-  }, [binding, showHidden, onLoaded]);
+  }, [binding, showHidden]);
 
   // Live: the server pings when a row changes, and the hook throttles the
   // resulting re-reads.

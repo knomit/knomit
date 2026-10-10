@@ -44,8 +44,9 @@ const URGENT_WINDOW_MS = 1_000;
  * identity changes with its own deps, and putting it in the effect's
  * dependencies would tear down and re-open the stream each time it did.
  *
- * Lives outside ManageSessions.tsx because RepoManager subscribes with it too
- * (and because that file exports components only, for react-refresh).
+ * A hook of its own, beside useTargetSessions (its one caller), so a component
+ * file never has to export it (react-refresh wants component files to export
+ * components only).
  */
 export function useClientSessionChanges(enabled: boolean, onChange: () => void) {
   const latest = useRef(onChange);

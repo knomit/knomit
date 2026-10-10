@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { useState } from 'react';
-import { RepoManager } from './RepoManager';
+import { LensSettings } from './LensSettings';
 import { RepoSettings } from './RepoSettings';
 import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, RepoIndexingError, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
+import type { Lens, RepoCreateStatus } from './api';
 
 // `api` and the origin-session streams are stubbed; the module's other exports
 // — the description byte caps — pass through from the real module, so a test
@@ -95,7 +96,16 @@ function Page({ name: initial = 'core', serverReadOnly = false, hideRemoteConfig
   );
 }
 
-describe('RepoManager', () => {
+// renderLens mounts LensSettings DIRECTLY, the way the Settings facet does,
+// for the editor tests that a lens shares with a repo.
+function renderLens() {
+  return render(
+    <LensSettings lens={LENSES[0]} name="dev" repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }]}
+      readOnly={false} onDeleted={() => {}} onSaved={() => {}} onRenamed={() => {}} onError={() => {}} />,
+  );
+}
+
+describe('RepoSettings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // clearAllMocks clears CALLS, not implementations, so a test that narrows
@@ -104,17 +114,7 @@ describe('RepoManager', () => {
     vi.mocked(api.listArchived).mockResolvedValue(ARCHIVED_FIXTURE);
   });
 
-  const baseProps = {
-    open: true as const,
-    repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
-    currentRepo: 'core',
-    serverReadOnly: false,
-    hideRemoteConfig: false,
-    onChanged: () => {},
-    onBrowse: () => {},
-  };
-
-  it('shows a repo detail pane when one is picked from the rail', async () => {
+  it('shows the repo settings page with its agent branch and remote', async () => {
     render(<Page />);
     // RepoDetail for core loads its agent branch and its origin.
     await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('core'));
@@ -127,142 +127,20 @@ describe('RepoManager', () => {
     expect(screen.getByTestId('repo-archive')).toBeInTheDocument();
   });
 
-  // A registered repo with no live store. Manage is the ONLY surface that still
-  // shows it — the browse side refuses to open it — so the rail must keep it,
-  // and its page must explain rather than fail.
-  describe('a repo with no live store', () => {
-    const withBroken = [
-      { name: 'core', uid: 'uid-core' },
-      { name: 'ghost', uid: 'uid-ghost', state: 'missing', detail: 'database file not found' },
-    ];
-
-    it('keeps it in the rail, chipped with the reason', async () => {
-      render(<RepoManager {...baseProps} repos={withBroken} />);
-      const row = await screen.findByTestId('repomgr-item-ghost');
-      const chip = within(row).getByTestId('repo-state-missing');
-      expect(chip).toHaveTextContent('missing');
-      expect(chip).toHaveAttribute('title', 'database file not found');
-      // A healthy repo carries no chip — a badge on every row saying "fine"
-      // would drown the one row where the answer matters.
-      expect(within(screen.getByTestId('repomgr-item-core')).queryByTestId('repo-state-missing')).toBeNull();
-    });
-
-    it('explains itself instead of loading a settings page that would 409', async () => {
-      render(<RepoManager {...baseProps} repos={withBroken} />);
-      fireEvent.click(await screen.findByTestId('repomgr-item-ghost'));
-
-      const pane = await screen.findByTestId('repo-unavailable-ghost');
-      expect(within(pane).getByTestId('repo-unavailable-detail')).toHaveTextContent('database file not found');
-      // Advice must name something the product can actually do: put the file
-      // back, or archive the registration from here.
-      expect(pane.textContent).toContain('Put the file back');
-      expect(pane.textContent).not.toContain('not supported yet');
-      expect(within(pane).getByTestId('repo-unavailable-archive')).toBeEnabled();
-      // No settings page, and no store-backed buttons: every one of them
-      // resolves through the store this repo does not have.
-      expect(screen.queryByTestId('repo-detail-branch')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('repo-archive')).not.toBeInTheDocument();
-      expect(api.getAgentBranch).not.toHaveBeenCalledWith('ghost');
-      expect(api.getOrigin).not.toHaveBeenCalledWith('ghost');
-    });
-
-    // A symlinked ontology refuses the repo: the server lists it 'unopenable'
-    // with the named message as its detail. The rail chips it, and its page
-    // quotes the message and does not promise a sync will fix it.
-    it('shows a repo refused for a symlinked ontology, quoting the server', async () => {
-      const msg = 'ontology on agent/test: .knomit/ontology.yaml is a symlink, and knomit does not follow symlinks: commit the file itself in its place';
-      const repos = [
-        { name: 'core', uid: 'uid-core' },
-        { name: 'linked', uid: 'uid-linked', state: 'unopenable', detail: msg },
-      ];
-      render(<RepoManager {...baseProps} repos={repos} />);
-      const row = await screen.findByTestId('repomgr-item-linked');
-      const chip = within(row).getByTestId('repo-state-unopenable');
-      expect(chip).toHaveAttribute('title', msg);
-      fireEvent.click(row);
-      const pane = await screen.findByTestId('repo-unavailable-linked');
-      expect(within(pane).getByTestId('repo-unavailable-detail')).toHaveTextContent(msg);
-      expect(pane.textContent).toContain('an ontology that is a symlink');
-      expect(pane.textContent).toContain('does not sync');
-      expect(api.getRepo).not.toHaveBeenCalledWith('linked');
-    });
-
-    // The way out: Archive works without the store, with an optional note.
-    // Sabotage: drop the note from the archiveRepo call → red.
-    it('archives it, with the note, and leaves the pane', async () => {
-      vi.mocked(api.archiveRepo).mockResolvedValue({ id: 'uid-ghost', name: 'ghost', origin: '', archivedAt: '2026-10-09T00:00:00Z' });
-      const onChanged = vi.fn();
-      render(<RepoManager {...baseProps} onChanged={onChanged} repos={withBroken} />);
-      fireEvent.click(await screen.findByTestId('repomgr-item-ghost'));
-      const pane = await screen.findByTestId('repo-unavailable-ghost');
-      fireEvent.click(within(pane).getByTestId('repo-unavailable-archive'));
-      fireEvent.change(within(pane).getByTestId('repo-unavailable-archive-note'), { target: { value: 'disk is gone' } });
-      fireEvent.click(within(pane).getByTestId('repo-unavailable-archive-confirm'));
-      await waitFor(() => expect(api.archiveRepo).toHaveBeenCalledWith('ghost', 'disk is gone'));
-      await waitFor(() => expect(onChanged).toHaveBeenCalled());
-    });
-
-    it('disables Archive on a read-only instance', async () => {
-      render(<RepoManager {...baseProps} serverReadOnly repos={withBroken} />);
-      fireEvent.click(await screen.findByTestId('repomgr-item-ghost'));
-      expect(await screen.findByTestId('repo-unavailable-archive')).toBeDisabled();
-    });
-
-    it('reports its state in the Overview table without fetching it', async () => {
-      render(<RepoManager {...baseProps} repos={withBroken} />);
-      const row = await screen.findByTestId('fleet-row-ghost');
-      expect(within(row).getByTestId('repo-state-missing')).toBeInTheDocument();
-      expect(row.textContent).toContain('no store open');
-      // "no remote configured" would be a claim about a repo we never opened,
-      // and its Connect button would send the reader somewhere useless.
-      expect(screen.queryByTestId('attention-ghost')).not.toBeInTheDocument();
-      await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
-      expect(api.getRepo).not.toHaveBeenCalledWith('ghost');
-    });
-  });
-
   // A repo with no usable ontology (missing, empty, does not parse) is OPEN and
-  // readable, but refuses every write. The rail row and the repo page both say
-  // so, quoting the server; a repo with an ontology says nothing.
+  // readable, but refuses every write. Its page says so, quoting the server; a
+  // repo with an ontology says nothing. (The rail row's chip is TargetRail's.)
   describe('a repo with no usable ontology', () => {
-    const msgs: Record<string, string> = {
-      missing: 'no ontology at .knomit/ontology.yaml, .domains/ontology.yaml, domains/ontology.yaml on agent/test',
-      empty: 'ontology at .knomit/ontology.yaml on agent/test is empty',
-      garbled: 'ontology at .knomit/ontology.yaml does not parse: ontology id is required',
-    };
-    const repos = [
-      { name: 'core', uid: 'uid-core' },
-      ...Object.entries(msgs).map(([name, ontology_error]) => ({ name, uid: `uid-${name}`, state: 'active', ontology_error })),
-    ];
-
-    it('chips its rail row with the server message, and leaves a healthy row bare', async () => {
-      render(<RepoManager {...baseProps} repos={repos} />);
-      for (const [name, msg] of Object.entries(msgs)) {
-        const row = await screen.findByTestId(`repomgr-item-${name}`);
-        // The rail is compact (#443): a lock, with "read-only" and the server's
-        // message in the tooltip, so the chip adds no words beside the name.
-        const chip = within(row).getByTestId(`repo-ontology-error-${name}`);
-        expect(chip).toHaveAttribute('aria-label', 'read-only');
-        expect(chip).toHaveTextContent('');
-        expect(chip.getAttribute('title')).toContain('Read-only');
-        expect(chip.getAttribute('title')).toContain(msg);
-        // The Overview table is the other list of repos on this screen.
-        const fleet = await screen.findByTestId(`fleet-row-${name}`);
-        expect(within(fleet).getByTestId(`repo-ontology-error-${name}`).getAttribute('title')).toContain(msg);
-      }
-      expect(within(screen.getByTestId('repomgr-item-core')).queryByTestId('repo-ontology-error-core')).toBeNull();
-      expect(within(await screen.findByTestId('fleet-row-core')).queryByTestId('repo-ontology-error-core')).toBeNull();
-    });
+    const msg = 'ontology at .knomit/ontology.yaml does not parse: ontology id is required';
 
     it('states it on the repo page from the single GET', async () => {
       vi.mocked(api.getRepo).mockImplementation(async (name: string) =>
-        (name in msgs ? { name, ontology_error: msgs[name] } : { name }));
+        (name === 'garbled' ? { name, ontology_error: msg } : { name }));
       try {
-        render(<RepoManager {...baseProps} repos={repos} />);
-        fireEvent.click(await screen.findByTestId('repomgr-item-garbled'));
+        render(<Page name="garbled" />);
         const banner = await screen.findByTestId('repo-ontology-error');
         expect(banner).toHaveTextContent('every write to it is refused');
-        expect(banner).toHaveTextContent(msgs.garbled);
+        expect(banner).toHaveTextContent(msg);
       } finally {
         vi.mocked(api.getRepo).mockResolvedValue({ name: 'core' });
       }
@@ -274,18 +152,6 @@ describe('RepoManager', () => {
       await screen.findByTestId('repo-detail-branch');
       expect(screen.queryByTestId('repo-ontology-error')).toBeNull();
     });
-  });
-
-  // Zero repos is an ordinary state (fresh install, or the last repo was
-  // archived). currentRepo is "" then, so falling back to the repo detail pane
-  // would query a nameless repo; the create form is the only useful landing.
-  it('opens on the create form when there are no repos', async () => {
-    render(<RepoManager {...baseProps} repos={[]} currentRepo="" />);
-    // `step-source`: the wizard's first screen — see App.norepos.test.tsx.
-    expect(screen.getByTestId('step-source')).toBeInTheDocument();
-    await waitFor(() => expect(api.listArchived).toHaveBeenCalled());
-    expect(api.getAgentBranch).not.toHaveBeenCalled();
-    expect(api.getRepo).not.toHaveBeenCalled();
   });
 
   // "Not connected" is STATE, so the Remote block renders it and carries the
@@ -552,9 +418,9 @@ describe('RepoManager', () => {
   });
 
   it('retries a failed remote load', async () => {
-    // Driven by an explicit flag rather than mockRejectedValueOnce: Overview
-    // fans getOrigin out across EVERY repo on the way in, so a one-shot mock is
-    // consumed by the landing page before the repo's own pane ever asks.
+    // Driven by an explicit flag rather than mockRejectedValueOnce, so the
+    // failure lasts exactly as long as the test says, however many times the
+    // page asks.
     let failing = true;
     const getOrigin = api.getOrigin as ReturnType<typeof vi.fn>;
     getOrigin.mockImplementation((repo: string) => {
@@ -939,9 +805,7 @@ describe('RepoManager', () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }], description: 'note',
     });
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    renderLens();
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
 
     // A short draft is nowhere near the cap: no counter, Save enabled.
@@ -963,9 +827,7 @@ describe('RepoManager', () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }], description: 'note',
     });
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    renderLens();
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
 
     // 3-byte characters: under the cap by count, over it by size.
@@ -1005,9 +867,7 @@ describe('RepoManager', () => {
       name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: '# New lens note',
     });
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    renderLens();
 
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
     fireEvent.change(screen.getByTestId('repo-description-input'), { target: { value: '# New lens note' } });
@@ -1071,7 +931,7 @@ describe('RepoManager', () => {
 // to say something true instead: the branch it READS, marked read-only. The
 // server omits agent_branch for these (Task 9 DTO), so a UI that only knew
 // about agent_branch would render an empty chip and no explanation.
-describe('RepoManager — a subscription', () => {
+describe('RepoSettings — a subscription', () => {
   beforeEach(() => {
     vi.mocked(api.getRepo).mockResolvedValue({ name: 'core', mode: 'subscribe', read_branch: 'main' });
     // The server's answer for a subscription: no agent branch, so getAgentBranch
@@ -1161,7 +1021,7 @@ describe('RepoManager — a subscription', () => {
 // ordinary repo. Showing the editors meanwhile would flash, on a subscription,
 // controls whose every use fails (#324) — so the unknown mode locks them, and
 // the lock lifts once the mode says "ordinary".
-describe('RepoManager — mode not yet known', () => {
+describe('RepoSettings — mode not yet known', () => {
   it('withholds content editors and origin re-pointing until the mode resolves', async () => {
     let resolveRepo!: (r: Awaited<ReturnType<typeof api.getRepo>>) => void;
     vi.mocked(api.getRepo).mockReturnValue(new Promise(res => { resolveRepo = res; }));
@@ -1190,7 +1050,7 @@ describe('RepoManager — mode not yet known', () => {
 
 // A read-only INSTANCE is the one thing that locks every control on a repo's
 // page — registry operations included, which a subscription leaves open.
-describe('RepoManager — a read-only instance', () => {
+describe('RepoSettings — a read-only instance', () => {
   it('disables archive, rename and rebuild', async () => {
     vi.mocked(api.getRepo).mockResolvedValue({ name: 'core', description: '' });
     render(<Page serverReadOnly />);
@@ -1200,17 +1060,118 @@ describe('RepoManager — a read-only instance', () => {
     expect(screen.getByTestId('repo-rebuild')).toBeDisabled();
     expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
   });
+});
 
-  // Manage's own instance gates, which the page above does not own.
-  it('hides Logs and disables both + in Manage', async () => {
-    render(
-      <RepoManager open repos={[{ name: 'core', uid: 'uid-core' }]} currentRepo="core"
-        serverReadOnly hideRemoteConfig={false} onChanged={() => {}} onBrowse={() => {}} />,
-    );
-    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
-    expect(await screen.findByTestId('repo-archive')).toBeDisabled();
-    expect(screen.queryByTestId('repomgr-logs')).not.toBeInTheDocument();
-    expect(screen.getByTestId('repomgr-new')).toBeDisabled();
-    expect(screen.getByTestId('repomgr-new-lens')).toBeDisabled();
+// ── Re-homed from RepoManager.creates.test.tsx and ManageOverview.test.tsx ──
+// A repository still being created IS a repository page, in creating mode: the
+// create block first, with the one action its state allows, and every part
+// that cannot honestly be offered on a half-made repo withheld. It turns into
+// the ordinary page IN PLACE when the job finishes.
+describe('RepoSettings — creating mode', () => {
+  const job = (over: Partial<RepoCreateStatus> = {}): RepoCreateStatus =>
+    ({ create_id: 'c1', name: 'core', mode: 'subscribe', state: 'running', step: 'index', index_state: 'indexing', ...over });
+  const mount = (createJob: RepoCreateStatus | null, onCancelCreate = vi.fn()) => (
+    <RepoSettings name="core" lenses={[]} canArchive serverReadOnly={false} hideRemoteConfig={false}
+      createJob={createJob} onCancelCreate={onCancelCreate}
+      onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />
+  );
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.getRepo).mockResolvedValue({ name: 'core' }); });
+
+  it('leads with the create block and withholds what cannot be offered', async () => {
+    render(mount(job({ state: 'cancelling' })));
+    expect(await screen.findByTestId('create-progress')).toBeInTheDocument();
+    const ids = Array.from(document.querySelectorAll('section[id]')).map(s => s.id);
+    expect(ids[0]).toBe('create');
+    const cancel = screen.getByTestId('create-cancel-button');
+    expect(cancel).toBeDisabled();
+    expect(cancel).toHaveTextContent('Cancelling…');
+    // WITHHELD: nothing here can honestly be offered on a half-made repo.
+    expect(screen.queryByTestId('block-danger')).toBeNull();
+    expect(screen.queryByTestId('block-remote')).toBeNull();
+    expect(screen.queryByTestId('repo-rebuild')).toBeNull();
+    // SHOWN, read-only: what can be read stays.
+    expect(await screen.findByTestId('block-agent-branch')).toBeInTheDocument();
+  });
+
+  it('offers Cancel create while the job is running, and calls the owner', async () => {
+    const onCancelCreate = vi.fn();
+    render(mount(job(), onCancelCreate));
+    const cancel = await screen.findByTestId('create-cancel-button');
+    expect(cancel).toBeEnabled();
+    expect(cancel).toHaveTextContent('Cancel create');
+    fireEvent.click(cancel);
+    expect(onCancelCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns into the normal settings page when the job finishes, without remounting', async () => {
+    const { rerender } = render(mount(job()));
+    const page = await screen.findByTestId('repo-settings');
+    expect(screen.getByTestId('create-progress')).toBeInTheDocument();
+    rerender(mount(null));
+    await waitFor(() => expect(screen.queryByTestId('create-progress')).toBeNull());
+    expect(screen.getByTestId('repo-settings')).toBe(page);
+    expect(screen.queryByTestId('block-create')).toBeNull();
+    expect(await screen.findByTestId('block-danger')).toBeInTheDocument();
+    expect(screen.getByTestId('repo-rebuild')).toBeInTheDocument();
+  });
+});
+
+// Arriving with `focus` (the banner's Reconnect, the connect flow's return)
+// lands on that block — including one that only arrives after the page has
+// mounted — and only once.
+describe('RepoSettings — arriving with focus', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('still finds a block that only arrives after the page has mounted', async () => {
+    vi.mocked(api.getRepo).mockResolvedValue({ name: 'core', license: 'MIT License\n\nCopyright…' });
+    render(<Page focus="license" />);
+    await waitFor(() => expect(screen.getByTestId('block-license')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('toc-license')).toHaveAttribute('aria-current', 'true'));
+  });
+
+  it('does not re-scroll to the block once the reader has moved on', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>(res => { release = res; });
+    vi.mocked(api.getRepo).mockImplementation(async () => {
+      await gate;
+      return { name: 'core', license: 'MIT License' };
+    });
+    render(<Page focus="agent-branch" />);
+    await waitFor(() => expect(screen.getByTestId('toc-agent-branch')).toHaveAttribute('aria-current', 'true'));
+    // The reader takes over — a wheel releases the pin.
+    fireEvent.wheel(window);
+    await waitFor(() => expect(screen.getByTestId('toc-agent-branch')).not.toHaveAttribute('aria-current'));
+    // NOW the late section arrives, re-running the focus effect; the
+    // once-per-request guard keeps the page where the reader left it.
+    await act(async () => { release(); await gate; });
+    await screen.findByTestId('block-license');
+    expect(screen.getByTestId('toc-agent-branch')).not.toHaveAttribute('aria-current');
+    vi.mocked(api.getRepo).mockResolvedValue({ name: 'core' });
+  });
+});
+
+describe('RepoSettings — Mounted in', () => {
+  const mount = (lenses: Lens[]) => (
+    <RepoSettings name="core" lenses={lenses} canArchive serverReadOnly={false} hideRemoteConfig={false}
+      onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />
+  );
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.getRepo).mockResolvedValue({ name: 'core' }); });
+
+  it('is the reverse of a lens\'s read mounts', async () => {
+    render(mount([
+      { name: 'reads-core', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }] },
+      { name: 'writes-core', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }] },
+      { name: 'unrelated', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }] },
+    ]));
+    const block = await screen.findByTestId('block-mounted-in');
+    expect(within(block).getByTestId('repo-mounted-writes-core').textContent).toContain('write target');
+    expect(within(block).getByTestId('repo-mounted-reads-core').textContent).toContain('pinned');
+    expect(within(block).queryByTestId('repo-mounted-unrelated')).toBeNull();
+  });
+
+  it('has no block when no lens references the repo', async () => {
+    render(mount([]));
+    await screen.findByTestId('block-agent-branch');
+    expect(screen.queryByTestId('block-mounted-in')).toBeNull();
   });
 });

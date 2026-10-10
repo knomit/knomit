@@ -643,3 +643,35 @@ export function repoNameFromURL(url: string): string {
   const bare = segment.replace(/\.git$/i, '').toLowerCase();
   return isValidRepoName(bare) ? bare : '';
 }
+
+/**
+ * stepSummary is what a DONE step settled, for the mono line under it in the
+ * wizard's index column: the remote, the access method, the branch, the
+ * ontology's source. Short by design — the column truncates it — and '' for a
+ * step with nothing to say (review).
+ */
+export function stepSummary(s: WizardState, id: StepId): string {
+  switch (id) {
+    case 'source':
+      if (s.choice === 'local') return s.name.trim() ? `local · ${s.name.trim()}` : 'local';
+      return s.url.trim()
+        .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+        .replace(/^[^@/]+@/, '')
+        .replace(/\/+$/, '')
+        .replace(/\.git$/i, '');
+    case 'access':
+      return ACCESS_WORDS[s.authMethod] ?? s.authMethod;
+    case 'branch':
+      return s.branch;
+    case 'ontology':
+      if (s.useTemplate && s.template) return `template ${s.template.name}`;
+      if (s.preset) return `preset ${s.preset}`;
+      return 'custom';
+    default:
+      return '';
+  }
+}
+
+const ACCESS_WORDS: Record<string, string> = {
+  '': 'auto-detect', none: 'anonymous', token: 'token', basic: 'basic', ssh: 'ssh key',
+};

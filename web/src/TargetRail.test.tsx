@@ -368,4 +368,56 @@ describe('TargetRail — creates in flight', () => {
     renderRail({ repos: abc, pinned: { kind: 'pending', createId: 'c1' } });
     expect(await screen.findByTestId('pending-create-rail-b-kb')).toHaveAttribute('aria-current', 'true');
   });
+
+  // THE USER'S REPORT: create "agentic-engineering-kb", rename it, and a rail
+  // showed BOTH the real repo and a row under the old name. The rail matches a
+  // finished create to its repo by uid, not by name.
+  it('follows a created repo through a rename: one row, under the new name', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([
+      job({ name: 'agentic-engineering-kb', state: 'done', repo: { name: 'agentic-engineering-kb', uid: 'uid-ae' } }),
+    ]);
+    renderRail({ repos: [{ name: 'a-kb', uid: 'u-a' }, { name: 'agentic-engineering', uid: 'uid-ae' }] });
+    await waitFor(() => expect(api.listRepoCreates).toHaveBeenCalled());
+    expect(screen.getByTestId('rail-repo-agentic-engineering')).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-create-rail-agentic-engineering-kb')).toBeNull();
+    expect(document.querySelectorAll('[data-create-state]')).toHaveLength(0);
+  });
+});
+
+// THE NAME IS THE LAST THING ON A RAIL ROW TO GIVE WAY. The rail is a fixed
+// 236px column, so the badges are compact (a percentage, a word, an icon, with
+// the full wording in each tooltip) and the name is the element that shrinks.
+describe('TargetRail — row badges', () => {
+  const long = 'agentic-engineering-knowledge';
+  const indexing: RepoInfo = { name: long, uid: 'uid-long', index_state: 'indexing', index_done: 1259, index_total: 1259 };
+
+  it('keeps the index chip compact with its full wording in the tooltip, and lets the name shrink', () => {
+    renderRail({ repos: [indexing], context: { kind: 'repo', repo: long }, currentRepo: long });
+    const row = screen.getByTestId(`rail-repo-${long}`);
+    const chip = within(row).getByTestId('repo-index-indexing');
+    expect(chip).toHaveTextContent(/^100%$/);
+    expect(chip.getAttribute('title')).toContain('indexing 1259/1259');
+    const name = screen.getByTestId(`rail-repo-name-${long}`);
+    expect(name.style.minWidth).toBe('0px');
+    expect(name.style.textOverflow).toBe('ellipsis');
+    expect(name.style.flexGrow).toBe('1');
+  });
+
+  it('renders an index error as a one-word chip', () => {
+    renderRail({ repos: [{ ...indexing, index_state: 'error', index_reason: 'indexing cancelled' }] });
+    const chip = within(screen.getByTestId(`rail-repo-${long}`)).getByTestId('repo-index-error');
+    expect(chip).toHaveTextContent(/^error$/);
+    expect(chip.getAttribute('title')).toContain('indexing cancelled');
+  });
+
+  // A repo with no usable ontology is open but refuses writes: its row carries
+  // a lock with the server's message in the tooltip; a healthy row is bare.
+  it('chips a repo with no usable ontology with the server message, and leaves a healthy row bare', () => {
+    const msg = 'ontology at .knomit/ontology.yaml does not parse: ontology id is required';
+    renderRail({ repos: [{ name: 'core', uid: 'u-core' }, { name: 'garbled', uid: 'u-g', state: 'active', ontology_error: msg }] });
+    const chip = within(screen.getByTestId('rail-repo-garbled')).getByTestId('repo-ontology-error-garbled');
+    expect(chip).toHaveAttribute('aria-label', 'read-only');
+    expect(chip.getAttribute('title')).toContain(msg);
+    expect(within(screen.getByTestId('rail-repo-core')).queryByTestId('repo-ontology-error-core')).toBeNull();
+  });
 });

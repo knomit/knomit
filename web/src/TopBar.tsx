@@ -6,12 +6,15 @@ import type { RepoInfo } from './api';
 import { BookIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { otherRepoFailing } from './facets';
-import type { Facet } from './facets';
+import type { Facet, TargetLabel } from './facets';
 
 interface Props {
   state: AppState;
   /** Every listed repo. The rail toggle's dot reads their remote health. */
   repos: RepoInfo[];
+  /** The displayed target's label (facets.ts targetLabelFor). Absent, the
+   *  label is the browse context's. */
+  label?: TargetLabel;
   /** Whether the target rail is open; the toggle shows it lit. */
   railOpen: boolean;
   /** Opens or closes the target rail (the same thing ⌘B does). */
@@ -32,21 +35,11 @@ interface Props {
    *  same anchor — a way out that appears somewhere else makes the reader hunt
    *  for a control they just clicked. */
   onManageRepos: () => void;
-  /** True while the Manage mode owns the window. The gear then renders as a
-   *  step-out button, and the browse chrome — the rail toggle and the target
-   *  label — is omitted: Manage has its own rail, and the label would name a
-   *  surface that is not on screen. */
+  /** True while the Manage mode (the server pages) owns the window. The gear
+   *  then renders as a step-out button, and the target chrome — the rail
+   *  toggle, the label and the tabs — is omitted: the page below is about the
+   *  server, not a target. */
   manageOpen?: boolean;
-  /** True when Manage cannot be left — the zero-repository case, where there is
-   *  no browse surface to return to. The toggle is then not rendered at all: a
-   *  disabled exit is a control that answers "can I leave?" with noise. */
-  manageLocked?: boolean;
-  /** True while Manage is doing something that must not be interrupted — today,
-   *  a connect commit swapping a repository's store. Unlike `manageLocked` the
-   *  exit stays RENDERED and merely refuses: this state is temporary, and a
-   *  control that vanished mid-flow would read as the window losing its way
-   *  out rather than holding it. The tooltip carries the reason. */
-  manageBusy?: boolean;
 }
 
 // The top bar is the first of the shell's three levels, and it never changes
@@ -56,19 +49,17 @@ interface Props {
 // the dropdown that used to hang off the name is gone; the branch picker and
 // the filter moved to the Browse toolbar, because they act on the data being
 // read and must not stay on screen over a page that reads none.
-export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onManageRepos, manageOpen = false, manageLocked = false, manageBusy = false }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onManageRepos, manageOpen = false }: Props) {
   const lensCtx = isLensContext(state);
   // Where leaving Manage puts you back: the surface you were reading, which is
   // the lens in a lens context and the repo otherwise. Named in the exit's
   // tooltip so the destination is one hover away without a label in the bar.
-  const manageReturnTo = state.context.kind === 'lens' ? state.context.name : state.repo;
-  // "Held": in Manage, and Manage says it is mid-something uninterruptible.
-  // Only meaningful with manageOpen — busy is a state of the mode, not of a bar
-  // that is not showing it.
-  // Outside Manage the gear refuses while a connect commit runs in the
-  // Settings facet: opening Manage would unmount the page it reports to.
-  const held = manageOpen ? manageBusy : locked;
-  const heldReason = manageOpen ? 'Manage is finishing something — leave it running' : 'A remote is being connected — leave it running';
+  const manageReturnTo = given?.name ?? (state.context.kind === 'lens' ? state.context.name : state.repo);
+  // Held while a connect commit runs in the Settings facet: opening Manage
+  // would unmount the page it reports to. (Manage itself hosts nothing that
+  // locks, and the lock cannot be raised while it is open.)
+  const held = locked;
+  const heldReason = 'A remote is being connected — leave it running';
   // The toggle's dot: some repo OTHER than the current one has a failing
   // remote, so the rail has something to show you. The current repo is left
   // out because its failure already has the banner. Hidden on a read-only
@@ -132,9 +123,18 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
     display: 'flex', alignItems: 'center', gap: 8, paddingRight: 16, flexShrink: 0,
   };
 
-  const label = lensCtx
-    ? { name: state.context.kind === 'lens' ? state.context.name : '', color: LENS_ACCENT, icon: <LayersIcon color="currentColor" size={13} /> }
-    : { name: state.repo, color: '#7c9', icon: <BookIcon color="currentColor" size={13} /> };
+  // The label names the DISPLAYED target, which is the browse context unless a
+  // settings-only target is pinned or a draft is on screen. A draft is named
+  // by what it will create, in the create flow's blue (a lens draft in the
+  // lens accent).
+  const target: TargetLabel = given ?? (lensCtx
+    ? { kind: 'lens', name: state.context.kind === 'lens' ? state.context.name : '' }
+    : { kind: 'repo', name: state.repo });
+  const label = {
+    name: target.name,
+    color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : '#7c9',
+    icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} /> : <BookIcon color="currentColor" size={13} />,
+  };
 
   return (
     <div style={outerStyle} onMouseDown={startWindowDrag}>
@@ -144,8 +144,8 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
       {/* ── Toolbar row ── */}
       <div data-testid="toknomitr-bar" style={rowStyle}>
         {/* ── Lead: rail toggle · knomit identity ──
-            The toggle is withheld in Manage, which has its own rail: two rails
-            in one window would be two answers to "where do I pick a repo". */}
+            The toggle is withheld in Manage: the server pages are not about a
+            target, and the rail is not rendered beside them. */}
         <div style={leadStyle}>
           {!manageOpen && (
             <button
@@ -204,6 +204,13 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
           }}>
             {label.icon}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
+            {/* A target with only Settings says why: archived, its store
+                missing, or still being created. */}
+            {target.chip && (
+              <span data-testid="target-label-chip" data-tone={target.chip.tone} style={{ ...chipBase, ...CHIP_TONE[target.chip.tone] }}>
+                {target.chip.text}
+              </span>
+            )}
           </span>
         )}
 
@@ -255,7 +262,7 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
             an exit that appears on the other side of the window would make the
             reader hunt for the control they had just used. The tooltip carries
             the destination so the bar needs no label of its own. */}
-        {!manageLocked && <button
+        <button
           data-testid="toknomitr-manage-btn"
           data-nodrag
           onClick={onManageRepos}
@@ -274,7 +281,7 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
           onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : '#666'; }}
         >
           {manageOpen ? <ExitIcon color="currentColor" size={15} /> : <GearIcon color="currentColor" size={15} />}
-        </button>}
+        </button>
       </div>
     </div>
   );
@@ -284,6 +291,19 @@ const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activi
 
 // The spec's lens accent, for the label.
 const LENS_ACCENT = '#b9a6f0';
+
+// The label's state chip: the rail's chip geometry, in the spec's tones —
+// archive warm, error red, creating blue.
+const chipBase: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', marginLeft: 4,
+  fontSize: 10, lineHeight: 1.7, padding: '0 6px', borderRadius: 3, fontWeight: 400,
+  fontFamily: 'var(--k-font-mono)', whiteSpace: 'nowrap', flexShrink: 0,
+};
+const CHIP_TONE: Record<NonNullable<TargetLabel['chip']>['tone'], CSSProperties> = {
+  archived: { color: '#c4b29a', background: '#221d16', border: '1px solid #453a2a' },
+  bad: { color: '#e8a0a0', background: '#1f1414', border: '1px solid #4a2626' },
+  creating: { color: '#8ab6d6', background: '#131d26', border: '1px solid #244056' },
+};
 
 // PanelIcon is the rail toggle's glyph: a window with its left column ruled off.
 const PanelIcon = () => (
