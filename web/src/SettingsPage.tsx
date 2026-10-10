@@ -40,7 +40,7 @@ export interface Section {
 }
 
 /** The index heading names the kind of target, never "On this page". */
-const HEADINGS = { repo: 'Repository', lens: 'Lens', archived: 'Archived' } as const;
+const HEADINGS = { repo: 'Repository', lens: 'Lens' } as const;
 
 export function SettingsPage({ kind, sections, focus, onFocused, testid }: {
   kind: keyof typeof HEADINGS;

@@ -1,61 +1,29 @@
 import { useState } from 'react';
+import type { CSSProperties } from 'react';
 import { api, type ArchivedRepo } from './api';
 import { formatBytes } from './utils';
-import { ArchiveIcon } from './icons';
 import { btn, confirmBox, confirmInput } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
-import { detailHead } from './settingsStyles';
 
-// ArchivedSettings is every archived repo on ONE page, with the contents rail as
-// its index. An archived repo carries three lines — when it was archived, what
-// its origin was, and two buttons — so a rail entry each would have been a
-// click that buys almost nothing, and a detail pane per repo would have been
-// mostly empty. Restoring one is also usually a comparison ("which of these two
-// was it?"), which a list answers and a pane cannot.
-export function ArchivedSettings({ archived, readOnly, activeNames, onRestored, onPurged, onError }: {
-  archived: ArchivedRepo[]; readOnly: boolean; activeNames: Set<string>;
-  onRestored: (name: string) => void; onPurged: () => void; onError: (m: string) => void;
-}) {
-  const sections: Section[] = archived.map(info => ({
-    id: `archived-${info.id}`,
-    title: info.name,
-    hint: `archived ${info.reason?.source === 'system' ? 'automatically ' : ''}${new Date(info.archivedAt).toLocaleString()}`,
-    body: (
-      <ArchivedDetail
-        key={info.id}
-        info={info}
-        readOnly={readOnly}
-        activeNames={activeNames}
-        onRestored={onRestored}
-        onPurged={onPurged}
-        onError={onError}
-      />
-    ),
-  }));
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ ...detailHead, padding: '20px 20px 0' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <span style={archIconBox}><ArchiveIcon color="#a08c6a" size={16} /></span>
-          <div style={{ minWidth: 0 }}>
-            <h3 style={{ margin: 0, fontSize: 16 }}>Archived</h3>
-            <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
-              {archived.length} repositor{archived.length === 1 ? 'y' : 'ies'} · restorable, nothing is deleted
-            </div>
-          </div>
-        </div>
-        {/* No Browse: an archived repo is not a surface you can read. */}
-      </div>
-      <SettingsPage kind="archived" sections={sections} testid="archived-settings" />
-    </div>
-  );
-}
-
-function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onError }: {
-  info: ArchivedRepo; readOnly: boolean; activeNames: Set<string>;
-  onRestored: (name: string) => void; onPurged: () => void; onError: (m: string) => void;
+// ArchivedSettings is ONE archived repo's page: a target pinned from the rail's
+// Archived group, whose only facet is Settings (the top bar's label carries the
+// `archived` chip).
+//
+// It shows what ArchivedRepo carries and nothing it does not: when it was
+// archived, its origin, its size on disk and why it was archived — then
+// Restore, and Purge in the danger zone. The mock's store path, last commit and
+// fact count are not in the API, and an archived repo's description is not
+// readable (its store is closed), so those are omitted rather than invented.
+export function ArchivedSettings({ info, serverReadOnly, activeNames, onRestored, onPurged, onError }: {
+  info: ArchivedRepo;
+  /** The instance accepts no mutations: Restore and Purge are disabled. */
+  serverReadOnly: boolean;
+  /** Names of the active repos: restoring under a taken name asks for a new one. */
+  activeNames: Set<string>;
+  onRestored: (name: string) => void;
+  onPurged: () => void;
+  onError: (m: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<'restore' | 'purge' | null>(null);
@@ -64,6 +32,7 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
 
   const nameTaken = activeNames.has(info.name);
   const size = formatBytes(info.sizeBytes);
+  const off = serverReadOnly || busy;
 
   const beginRestore = () => {
     if (nameTaken) { setRenameTo(''); setConfirming('restore'); return; }
@@ -84,60 +53,79 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
     finally { setBusy(false); setConfirming(null); }
   };
 
-  return (
-    <div data-testid={`archived-body-${info.id}`}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12.5, color: '#8a8a8a' }}>
-          origin <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: info.origin ? '#9aa' : '#666' }}>{info.origin || 'none'}</span>
-        </span>
-        {/* What purging this would give back. An archived database keeps its
-            full size on disk under a filename derived from its uid, so there is
-            no directory the user could have looked in to work this out — which
-            is why the server sends it and why it belongs beside the Purge
-            button rather than on a page nobody opens. */}
-        {size && (
-          <span data-testid={`archived-size-${info.id}`} style={{ fontSize: 12.5, color: '#8a8a8a' }}>
-            on disk <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: '#9aa' }}>{size}</span>
-          </span>
-        )}
-        <div style={{ flex: 1 }} />
-        {confirming === null && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" data-testid={`archived-restore-${info.id}`} style={btn(readOnly || busy)} disabled={readOnly || busy} onClick={beginRestore}>Restore</button>
-            <button type="button" data-testid={`archived-purge-${info.id}`} style={btn(readOnly || busy, 'danger')} disabled={readOnly || busy} onClick={() => { setPurgeText(''); setConfirming('purge'); }}>Purge…</button>
+  const archivedOn = new Date(info.archivedAt).toLocaleString();
+  const sections: Section[] = [
+    {
+      id: 'archived',
+      title: 'Archived',
+      body: (
+        <div data-testid={`archived-body-${info.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={lede}>
+            Archived {info.reason?.source === 'system' ? 'automatically ' : ''}{archivedOn}. The store is kept on disk but
+            not indexed, synced, or offered to agents.
           </div>
-        )}
-      </div>
-
-      <ArchiveReasonLine info={info} />
-
-      {confirming === 'restore' && (
-        <div style={confirmBox}>
-          <div style={{ fontSize: 13, marginBottom: 8 }}>“{info.name}” is already active. Restore under a new name:</div>
-          <input autoFocus data-testid={`restore-name-input-${info.id}`} style={confirmInput} value={renameTo} placeholder="new repo name"
-            onChange={e => setRenameTo(e.target.value)} />
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button type="button" data-testid={`restore-confirm-${info.id}`} style={btn(busy || !renameTo, 'primary')} disabled={busy || !renameTo} onClick={() => doRestore(renameTo)}>Restore</button>
-            <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
-          </div>
+          <dl style={fields}>
+            <dt style={fieldKey}>Origin</dt>
+            <dd style={{ ...fieldVal, color: info.origin ? '#bbb' : '#666' }}>{info.origin || 'none'}</dd>
+            {/* What purging this would give back. An archived database keeps
+                its full size on disk under a filename derived from its uid, so
+                there is no directory the user could have looked in to work this
+                out — which is why the server sends it. */}
+            {size && <>
+              <dt style={fieldKey}>On disk</dt>
+              <dd data-testid={`archived-size-${info.id}`} style={fieldVal}>{size}</dd>
+            </>}
+          </dl>
+          <ArchiveReasonLine info={info} />
+          {confirming === 'restore' ? (
+            <div style={confirmBox}>
+              <div style={{ fontSize: 13, marginBottom: 8 }}>“{info.name}” is already active. Restore under a new name:</div>
+              <input autoFocus data-testid={`restore-name-input-${info.id}`} style={confirmInput} value={renameTo} placeholder="new repo name"
+                onChange={e => setRenameTo(e.target.value)} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button type="button" data-testid={`restore-confirm-${info.id}`} style={btn(busy || !renameTo, 'primary')} disabled={busy || !renameTo} onClick={() => doRestore(renameTo)}>Restore</button>
+                <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <button type="button" data-testid={`archived-restore-${info.id}`} style={btn(off, 'primary')} disabled={off} onClick={beginRestore}>Restore</button>
+            </div>
+          )}
         </div>
-      )}
-
-      {confirming === 'purge' && (
-        <div style={confirmBox}>
-          <div style={{ fontSize: 13, marginBottom: 8, color: '#f88' }}>
-            This permanently deletes the archived repo and its history. Type <b>{info.name}</b> to confirm:
-          </div>
-          <input autoFocus data-testid={`purge-confirm-input-${info.id}`} style={confirmInput} value={purgeText} placeholder={info.name}
-            onChange={e => setPurgeText(e.target.value)} />
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button type="button" data-testid={`purge-confirm-${info.id}`} style={btn(busy || purgeText !== info.name, 'danger')} disabled={busy || purgeText !== info.name} onClick={doPurge}>Confirm purge</button>
-            <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
-          </div>
+      ),
+    },
+    {
+      id: 'danger',
+      title: 'Danger zone',
+      danger: true,
+      body: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={lede}>Purging deletes the store from disk. The remote, if any, is untouched.</div>
+          {confirming === 'purge' ? (
+            <div style={confirmBox}>
+              <div style={{ fontSize: 13, marginBottom: 8, color: '#f88' }}>
+                This permanently deletes the archived repo and its history. Type <b>{info.name}</b> to confirm:
+              </div>
+              <input autoFocus data-testid={`purge-confirm-input-${info.id}`} style={confirmInput} value={purgeText} placeholder={info.name}
+                onChange={e => setPurgeText(e.target.value)} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button type="button" data-testid={`purge-confirm-${info.id}`} style={btn(busy || purgeText !== info.name, 'danger')} disabled={busy || purgeText !== info.name} onClick={doPurge}>Confirm purge</button>
+                <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <button type="button" data-testid={`archived-purge-${info.id}`} style={btn(off, 'danger')} disabled={off}
+                onClick={() => { setPurgeText(''); setConfirming('purge'); }}>Purge {info.name}…</button>
+            </div>
+          )}
         </div>
-      )}
-    </div>
-  );
+      ),
+    },
+  ];
+
+  return <SettingsPage kind="repo" sections={sections} testid="archived-settings" />;
 }
 
 // ArchiveReasonLine says why an archived repo is in the archive: by the user
@@ -150,7 +138,7 @@ function ArchiveReasonLine({ info }: { info: ArchivedRepo }) {
   if (why === undefined) return null; // an older server: say nothing rather than guess
   const text = why === null ? 'No reason recorded' : why.summary;
   return (
-    <div data-testid={`archived-reason-${info.id}`} style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.6 }}>
+    <div data-testid={`archived-reason-${info.id}`} style={{ fontSize: 12.5, lineHeight: 1.6 }}>
       <span style={{ color: why === null ? '#6a6a6a' : '#b8b8b8' }}>{text}</span>
       {why && why.condition && why.condition !== why.reason && (
         <div data-testid={`archived-condition-${info.id}`} style={{ fontSize: 11.5, color: '#777', fontFamily: 'var(--k-font-mono)' }}>
@@ -167,9 +155,9 @@ function ArchiveReasonLine({ info }: { info: ArchivedRepo }) {
   );
 }
 
-// archIconBox mirrors lensIconBox / repoIconBox in the warm archive tint.
-const archIconBox: React.CSSProperties = {
-  width: 30, height: 30, borderRadius: 7, flexShrink: 0,
-  background: '#211d18', border: '1px solid #453a2a',
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
+const lede: CSSProperties = { fontSize: 12, color: '#777', lineHeight: 1.6 };
+const fields: CSSProperties = {
+  display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 24, rowGap: 4, margin: 0, fontSize: 12.5,
 };
+const fieldKey: CSSProperties = { color: '#888', margin: 0 };
+const fieldVal: CSSProperties = { margin: 0, fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: '#bbb', overflowWrap: 'anywhere' };
