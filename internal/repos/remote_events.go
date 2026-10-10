@@ -42,6 +42,25 @@ func RemoteHealth(r *store.Remote) (sync, push string) {
 	return RemoteStatusValue(r.LastStatus), RemoteStatusValue(r.LastPushStatus)
 }
 
+// remoteEdgeSink is where a reconcile loop publishes its RemoteEvents: the
+// server-wide hub, plus the repo's name READ AT PUBLISH TIME. The name is a
+// func, not a string, because RenameRepo re-keys the instance without
+// restarting its Sync stage: a name captured when the loop started would stamp
+// every later edge with the OLD name, so the renamed row's dot would never
+// move and a repo later created under the old name would receive these edges.
+// publishIndex reads m.r.Name() per event for the same reason.
+//
+// The zero value publishes nothing (a loop built without a hub, in tests).
+type remoteEdgeSink struct {
+	hub  *RepoEventHub
+	name func() string
+}
+
+// remoteEdgeSink is this instance's sink: its Manager's hub and its live name.
+func (ri *RepoInstance) remoteEdgeSink() remoteEdgeSink {
+	return remoteEdgeSink{hub: ri.repoEventHub, name: ri.Name}
+}
+
 // publishRemoteEdge publishes a RemoteEvent when the origin's PERSISTED status
 // differs from the snapshot the tick took before it ran, and says nothing
 // otherwise. EDGES ONLY: a steady-state tick, healthy or failing, is silent.
@@ -58,8 +77,8 @@ func RemoteHealth(r *store.Remote) (sync, push string) {
 //
 // A failed or empty re-read publishes nothing: the client's list refetch on a
 // reconnect's `ready` is the fallback, as it is for every repo-event.
-func publishRemoteEdge(h *RepoEventHub, svc *store.Service, repo, prevSync, prevPush string, lg *zerolog.Logger) {
-	if h == nil {
+func publishRemoteEdge(sink remoteEdgeSink, svc *store.Service, prevSync, prevPush string, lg *zerolog.Logger) {
+	if sink.hub == nil || sink.name == nil {
 		return
 	}
 	after, err := svc.Remote().GetRemote("origin")
@@ -74,5 +93,5 @@ func publishRemoteEdge(h *RepoEventHub, svc *store.Service, repo, prevSync, prev
 	if s == prevSync && p == prevPush {
 		return
 	}
-	h.publish(RemoteEvent{Repo: repo, Sync: s, Push: p})
+	sink.hub.publish(RemoteEvent{Repo: sink.name(), Sync: s, Push: p})
 }

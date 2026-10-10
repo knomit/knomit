@@ -158,9 +158,10 @@ const reconcileFailureEscalateThreshold = 5
 func pushAllowed(readOnly bool, agentBranch string) bool { return !readOnly && agentBranch != "" }
 
 // remoteStatusIsError reports whether a persisted remote status column
-// (last_status / last_push_status) holds a failure. The column is NULL until
-// the first attempt, so a nil pointer means "never ran", not "failing".
-func remoteStatusIsError(status *string) bool { return status != nil && *status == "error" }
+// (last_status / last_push_status), in its wire form (RemoteStatusValue),
+// holds a failure. The column is NULL until the first attempt, which reads as
+// "" — "never ran", not "failing".
+func remoteStatusIsError(status string) bool { return status == "error" }
 
 // syncChanged reports whether a sync tick actually moved either branch. The
 // zero Mode ("") means the step did not run and is treated like ModeNoop.
@@ -256,13 +257,15 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // loop because the repo had an origin, and the origin's comings and goings
 // are the stage's to act on (a Detach restarts Sync), never the loop's.
 //
-// events (nil-safe) is the server-wide repo-event hub. A round that changes a
-// persisted status column publishes one RemoteEvent there (publishRemoteEdge);
-// a round that changes nothing publishes nothing.
+// events (zero value: publishes nothing) is where a round that changes a
+// persisted status column publishes one RemoteEvent (publishRemoteEdge); a
+// round that changes nothing publishes nothing. It carries a name func, not a
+// string, because `repo` below is fixed when the loop starts and a rename
+// does not restart it; `repo` labels this loop's logs and hooks only.
 //
 // once runs the immediate first round and returns: the Synchronous mode the
 // test harness uses, where no loop may race its assertions.
-func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, events *RepoEventHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, once bool) {
+func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, events remoteEdgeSink, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, once bool) {
 	defer mode.clear()
 
 	// Initial config read for logging context; a failed one only loses the
@@ -349,8 +352,13 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 		// A step skipped by an open breaker writes nothing, so after an open
 		// period this still reads the last REAL failure, and the probe's
 		// success is the recovery edge.
-		wasSyncFailing := remoteStatusIsError(fresh.LastStatus)
-		wasPushFailing := remoteStatusIsError(fresh.LastPushStatus)
+		//
+		// ONE snapshot serves both consumers: the per-branch recovery edge
+		// (wasSyncFailing/wasPushFailing → shouldBroadcast*OK) and the
+		// repo-level RemoteEvent edge (publishRemoteEdge, deferred below).
+		prevSync, prevPush := RemoteStatusValue(fresh.LastStatus), RemoteStatusValue(fresh.LastPushStatus)
+		wasSyncFailing := remoteStatusIsError(prevSync)
+		wasPushFailing := remoteStatusIsError(prevPush)
 
 		// The breakers. A step whose breaker is open is skipped outright: no
 		// request, no timeout, no status row, no SSE event. Their base is the
@@ -375,9 +383,10 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 		// on every way out of a round that ran a step, compare the persisted
 		// row with the snapshot above and publish only if it changed. Deferred
 		// here, after the both-skipped return, because a round that attempts
-		// nothing writes nothing and needs no re-read.
-		prevSync, prevPush := RemoteStatusValue(fresh.LastStatus), RemoteStatusValue(fresh.LastPushStatus)
-		defer publishRemoteEdge(events, svc, repo, prevSync, prevPush, &lg)
+		// nothing writes nothing and needs no re-read. The sink reads the
+		// repo's name when it publishes, not `repo` (fixed at loop start): a
+		// rename does not restart this loop.
+		defer publishRemoteEdge(events, svc, prevSync, prevPush, &lg)
 		attempt := func(step string) {
 			if h := currentSyncHooks().attempt; h != nil {
 				h(repo, step)

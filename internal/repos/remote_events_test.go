@@ -136,6 +136,29 @@ func TestRemoteEvents_RecoveryEdgeAfterRestart(t *testing.T) {
 	require.Equal(t, []RemoteEvent{{Repo: ri.Name(), Sync: "ok", Push: "ok"}}, log.settle(t))
 }
 
+// A RENAME DOES NOT RESTART THE LOOP (RenameRepo only re-keys the instance),
+// so the name an event carries must be read when it is published, as
+// publishIndex does. A loop that captured the name at start would keep
+// stamping the OLD name: the client matches rows by name, so the renamed
+// repo's dot would never move, and a repo later created under the old name
+// would receive these edges.
+//
+// Sabotage: stamp the name runReconcileLoop started with → Repo "core" → red.
+func TestRemoteEvents_CarryTheNameAtPublishTime(t *testing.T) {
+	ri, _, root := newOriginTriggerRepo(t)
+	require.Equal(t, testRepoName, ri.Name(), "precondition: the loop starts under the old name")
+	log := subscribeRemoteEvents(t, ri)
+	l := startBreakerLoop(t, ri, root, nil) // the loop is running under "core"
+	require.Empty(t, log.settle(t))
+
+	require.NoError(t, ri.env.m.RenameRepo(testRepoName, "renamed"))
+	require.Equal(t, "renamed", ri.Name(), "precondition: the same instance now reports the new name")
+
+	l.authFail.Store(true)
+	l.round(t, ri) // ok → error, in the SAME loop
+	require.Equal(t, []RemoteEvent{{Repo: "renamed", Sync: "error", Push: "ok"}}, log.settle(t))
+}
+
 // Pure: the wire vocabulary of one status column. NULL is "never ran", not
 // "ok" — a dot must not claim health for a half that has not been tried.
 func TestRemoteStatusValue(t *testing.T) {

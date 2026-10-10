@@ -10,16 +10,14 @@ import (
 	"knomit/internal/store"
 )
 
-func ptrString(s string) *string { return &s }
-
 func TestRemoteStatusIsError(t *testing.T) {
-	if remoteStatusIsError(nil) {
+	if remoteStatusIsError(RemoteStatusValue(nil)) {
 		t.Fatal("a NULL status is 'never attempted', not a failure")
 	}
-	if remoteStatusIsError(ptrString("ok")) {
+	if remoteStatusIsError("ok") {
 		t.Fatal("'ok' must not read as a failure")
 	}
-	if !remoteStatusIsError(ptrString("error")) {
+	if !remoteStatusIsError("error") {
 		t.Fatal("'error' must read as a failure")
 	}
 }
