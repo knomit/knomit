@@ -186,7 +186,7 @@ export function SettingsPage({ kind, sections, focus, onFocused, testid }: {
         // The index is what replaced a tab strip. Sticky by construction: it
         // is its own column, so it never scrolls away with the blocks — it is
         // how you get back after an edit pushes the page down.
-        <IndexColumn heading={HEADINGS[kind]} items={sections} active={active} onPick={jump} />
+        <IndexColumn heading={HEADINGS[kind]} items={sections} active={active} onPick={jump} tone={kind === 'lens' ? 'lens' : 'repo'} />
       }
     >
       <div ref={bodyRef} style={blocks}>

@@ -228,7 +228,7 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
                   onClick={() => onFacet?.(f)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '0 11px', fontSize: 12, border: 'none', background: 'none',
+                    padding: '0 11px', fontSize: 12, border: 'none', borderRadius: 0, background: 'none',
                     color: on ? '#eee' : '#7a7a7a',
                     boxShadow: on ? 'inset 0 -2px 0 #7c9' : 'none',
                     cursor: locked ? 'default' : 'pointer',

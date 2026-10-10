@@ -17,8 +17,11 @@ export interface IndexItem {
 // It is an index rather than a nav — every block is already on the page, so an
 // item scrolls rather than swaps. The active item uses the selected rail row's
 // treatment, so "this is where you are" reads the same in the rail and here.
-export function IndexColumn({ heading, items, active, onPick }: {
+export function IndexColumn({ heading, items, active, onPick, tone = 'repo' }: {
   heading: string;
+  /** Which selected-row treatment the active item borrows: a lens's index
+   *  reads in the lens accent, as its rail row does. */
+  tone?: 'repo' | 'lens';
   items: IndexItem[];
   active: string;
   onPick: (id: string) => void;
@@ -35,7 +38,7 @@ export function IndexColumn({ heading, items, active, onPick }: {
             data-testid={`toc-${it.id}`}
             onMouseDown={noMouseFocus}
             aria-current={on ? 'true' : undefined}
-            style={item(on, !!it.danger)}
+            style={item(on, !!it.danger, tone)}
             onClick={() => onPick(it.id)}
           >
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
@@ -60,11 +63,15 @@ const headingStyle: CSSProperties = {
   fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.08em',
   color: '#777', padding: '0 10px 8px',
 };
-const item = (on: boolean, danger: boolean): CSSProperties => ({
+const SELECTED = {
+  repo: { bg: '#1a231d', fg: '#dfe9e2', bar: '#7c9' },
+  lens: { bg: '#1d1a2c', fg: '#e6defc', bar: '#b9a6f0' },
+} as const;
+const item = (on: boolean, danger: boolean, tone: 'repo' | 'lens'): CSSProperties => ({
   display: 'flex', alignItems: 'center', gap: 7, width: '100%', boxSizing: 'border-box',
   padding: '6px 10px', borderRadius: 4, fontSize: 12.5, textAlign: 'left',
-  background: on ? '#1a231d' : 'transparent',
-  color: on ? '#dfe9e2' : danger ? '#c77' : '#999',
+  background: on ? SELECTED[tone].bg : 'transparent',
+  color: on ? SELECTED[tone].fg : danger ? '#c77' : '#999',
   border: 'none', cursor: 'pointer',
-  boxShadow: on ? 'inset 2px 0 0 #7c9' : 'none',
+  boxShadow: on ? `inset 2px 0 0 ${SELECTED[tone].bar}` : 'none',
 });
