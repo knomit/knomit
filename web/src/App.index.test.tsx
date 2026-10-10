@@ -330,29 +330,31 @@ describe('the create banner speaks for a repo still being made', () => {
     create_id: 'c1', name: 'alpha', mode: 'subscribe', state: 'running', ...over,
   });
 
-  it('says Creating… instead of Indexing… while the create is running', async () => {
+  // A repository still being made has ONE facet, Settings (facetsFor): its
+  // create block is the page's first block and speaks for it, in place of the
+  // Browse banner that used to. Browse comes back when the job is terminal.
+  it('lands a repo still being created on Settings, led by its create block', async () => {
+    localStorage.setItem('knomit.facet', 'browse');
     const api = await primeApi([repoRow('alpha', { index_state: 'indexing', index_done: 3, index_total: 10 })]);
     api.listRepoCreates.mockResolvedValue([creating()]);
     render(<App />);
 
-    const banner = await screen.findByTestId('repo-create-banner');
-    expect(banner).toHaveAttribute('data-create-state', 'running');
-    expect(banner).toHaveTextContent('Creating…');
-    expect(banner).toHaveTextContent('search and lists may be incomplete until this finishes');
-    // It REPLACES the index banner rather than stacking with it.
-    expect(screen.queryByTestId('indexing-banner')).toBeNull();
+    await waitFor(() => expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Settings']));
+    const cancel = await screen.findByTestId('create-cancel-button');
+    expect(cancel).toHaveTextContent('Cancel create');
+    const ids = Array.from(document.querySelectorAll('[data-testid^="block-"]')).map(n => n.id);
+    expect(ids[0]).toBe('create');
+    expect(screen.queryByTestId('library-splitter')).toBeNull();
   });
 
-  it('says the repository is being removed while the create is cancelling', async () => {
+  it('says the create is cancelling on that page', async () => {
     const api = await primeApi([repoRow('alpha', { index_state: 'indexing', index_done: 3, index_total: 10 })]);
     api.listRepoCreates.mockResolvedValue([creating({ state: 'cancelling' })]);
     render(<App />);
 
-    const banner = await screen.findByTestId('repo-create-banner');
-    expect(banner).toHaveAttribute('data-create-state', 'cancelling');
-    expect(banner).toHaveTextContent('Cancelling…');
-    expect(banner).toHaveTextContent('this repository is being removed');
-    expect(screen.queryByTestId('indexing-banner')).toBeNull();
+    const cancel = await screen.findByTestId('create-cancel-button');
+    await waitFor(() => expect(cancel).toHaveTextContent('Cancelling…'));
+    expect(cancel).toBeDisabled();
   });
 
   // A create for ANOTHER repo says nothing about this one, and a finished one

@@ -161,41 +161,9 @@ describe('Manage as a mode', () => {
     expect(screen.queryByTestId('target-label')).not.toBeInTheDocument();
   });
 
-  it("a page's Browse both leaves Manage and switches the surface", async () => {
-    await mountApp();
-    await enterManage();
-
-    // Pick the other repo in the rail, then Browse it. Unlike the top-bar
-    // step-out — which leaves the mode and changes nothing — this is a
-    // destination, which is why it is the one control that keeps the word.
-    await act(async () => { fireEvent.click(screen.getByTestId('repomgr-item-beta')); });
-    await act(async () => { fireEvent.click(screen.getByTestId('repo-browse')); });
-
-    await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('beta'));
-  });
-
-  // Manage is where a remote gets repaired, so every way OUT of it owes the
-  // banner a re-read. Browse used to skip it — it flipped the flag itself
-  // instead of going through the close path — so fixing a remote and then
-  // leaving by Browse left the failure on screen until the recheck timer
-  // eventually came round, up to a minute later.
-  it('re-reads the remote when Browse is the way out, not just the gear', async () => {
-    const m = await primeApi();
-    await mountApp();
-    await enterManage();
-
-    // The repo you are already browsing: the [state.repo] effect will not fire,
-    // so a re-read here can only have come from the close path.
-    await act(async () => { fireEvent.click(screen.getByTestId('repomgr-item-alpha')); });
-    await waitFor(() => expect(screen.getByTestId('repo-browse')).toBeInTheDocument());
-    const before = m.getOrigin.mock.calls.length;
-
-    await act(async () => { fireEvent.click(screen.getByTestId('repo-browse')); });
-
-    await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
-    await waitFor(() => expect(m.getOrigin.mock.calls.length).toBeGreaterThan(before));
-  });
+  // The repo page's Browse button is gone (the Browse tab replaced it), and
+  // with it the two tests of leaving Manage by it; App.facets.test.tsx pins
+  // the re-read on leaving Settings instead.
 
   // Every other shortcut in the app drives the BROWSE surface, which Manage has
   // replaced. Firing them from in here pops the nav stack or ends a history

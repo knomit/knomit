@@ -204,14 +204,18 @@ describe("TopBar — the rail toggle's health dot", () => {
   });
 });
 
-describe('TopBar — the gear (unchanged until the server pages land)', () => {
-  it('keeps the red dot for the CURRENT repo\'s remote failure', () => {
-    const { unmount } = render(bar());
-    const gear = screen.getByTestId('toknomitr-manage-btn');
-    expect(gear.querySelector('span')).toBeNull();
-    unmount();
-    render(bar({ state: { ...baseState, remoteSyncError: 'unreachable' } }));
-    expect(screen.getByTestId('toknomitr-manage-btn').querySelector('span')).not.toBeNull();
+describe('TopBar — the gear', () => {
+  // The dot moved to the Settings tab: the gear opens server pages, and a
+  // failing remote is a fact about the target. Paired with the control that
+  // the Settings tab DOES carry it in the same render.
+  it('has no red dot while the current repo fails; the Settings tab has it', () => {
+    render(bar({
+      state: { ...baseState, remoteSyncError: 'unreachable' },
+      facets: ['browse', 'activity', 'settings'], facet: 'browse', settingsDot: true,
+    }));
+    expect(screen.getByTestId('toknomitr-manage-btn').querySelector('span')).toBeNull();
+    expect(screen.getByTestId('toknomitr-manage-btn').style.color).toBe('rgb(102, 102, 102)');
+    expect(screen.getByTestId('facet-tab-settings-dot')).toBeInTheDocument();
   });
 
   it('still toggles Manage', () => {
@@ -219,6 +223,72 @@ describe('TopBar — the gear (unchanged until the server pages land)', () => {
     render(bar({ onManageRepos }));
     fireEvent.click(screen.getByTestId('toknomitr-manage-btn'));
     expect(onManageRepos).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses while a connect commit is writing, and says why', () => {
+    render(bar({ locked: true, facets: ['browse', 'activity', 'settings'], facet: 'settings' }));
+    const gear = screen.getByTestId('toknomitr-manage-btn');
+    expect(gear).toBeDisabled();
+    expect(gear.getAttribute('title')).toBe('A remote is being connected — leave it running');
+  });
+});
+
+describe('TopBar — facet tabs', () => {
+  it('draws exactly the facets it is given, in order, after the label', () => {
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Browse', 'Activity', 'Settings']);
+    const label = screen.getByTestId('target-label');
+    expect(label.compareDocumentPosition(screen.getByTestId('facet-tabs')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('omits a facet the target lacks rather than disabling it', () => {
+    render(bar({ facets: ['activity', 'settings'], facet: 'settings' }));
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Activity', 'Settings']);
+    expect(screen.queryByTestId('facet-tab-browse')).toBeNull();
+  });
+
+  it('marks the active tab #eee with the green underline, the others #7a7a7a', () => {
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'activity' }));
+    const on = screen.getByTestId('facet-tab-activity');
+    expect(on).toHaveAttribute('aria-selected', 'true');
+    expect(on.style.color).toBe('rgb(238, 238, 238)');
+    expect(on.style.boxShadow).toBe('inset 0 -2px 0 #7c9');
+    const off = screen.getByTestId('facet-tab-browse');
+    expect(off).toHaveAttribute('aria-selected', 'false');
+    expect(off.style.color).toBe('rgb(122, 122, 122)');
+    expect(off.style.fontSize).toBe('12px');
+    expect(off.style.padding).toBe('0px 11px');
+  });
+
+  it('reports a click with the facet', () => {
+    const onFacet = vi.fn();
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', onFacet }));
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    expect(onFacet).toHaveBeenCalledWith('settings');
+  });
+
+  it('puts the dot on Settings only when asked', () => {
+    const { unmount } = render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', settingsDot: true }));
+    const dot = screen.getByTestId('facet-tab-settings-dot');
+    expect(screen.getByTestId('facet-tab-settings').contains(dot)).toBe(true);
+    expect(dot.style.width).toBe('6px');
+    unmount();
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', settingsDot: false }));
+    expect(screen.getByTestId('facet-tab-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('facet-tab-settings-dot')).toBeNull();
+  });
+
+  it('disables every tab while locked', () => {
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'settings', locked: true }));
+    for (const t of screen.getAllByRole('tab')) expect(t).toBeDisabled();
+  });
+
+  it('draws no tabs in Manage (control: tabs outside it)', () => {
+    const { unmount } = render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    unmount();
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', manageOpen: true }));
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
   });
 });
 

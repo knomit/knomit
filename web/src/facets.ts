@@ -56,13 +56,18 @@ const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
  *
  * A repo that is listed but has no store, an archived repo and a create not yet
  * registered are not browse contexts at all; they arrive as pinned targets in
- * the next PR. Until then such a context (which only a stale persisted value
- * could produce) gets Settings alone, the safe answer.
+ * the next PR. Until then a listed repo with no store as the context (which
+ * only a stale persisted value could produce) gets Settings alone, the safe
+ * answer. A repo the list does not carry yet gets all three: the list lags a
+ * create or a rename by one refresh.
  */
 export function facetsFor(target: BrowseContext, repos: RepoInfo[], lenses: Lens[], creates: RepoCreateStatus[]): Facet[] {
   if (target.kind === 'repo') {
     const repo = repos.find(r => r.name === target.repo);
-    if (!repo || !repoAvailable(repo)) return ['settings'];
+    // Not listed (yet): the list can lag a create or a rename by a refresh,
+    // and the context's own reads will say if it is really gone.
+    if (!repo) return ALL_FACETS;
+    if (!repoAvailable(repo)) return ['settings'];
     if (activeCreateByRepo(creates).has(repo.name)) return ['settings'];
     return ALL_FACETS;
   }

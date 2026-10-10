@@ -1,11 +1,12 @@
 import { memo } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { AppState } from './state';
-import { isLensContext, remoteErrorText } from './state';
+import { isLensContext } from './state';
 import type { RepoInfo } from './api';
 import { BookIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { otherRepoFailing } from './facets';
+import type { Facet } from './facets';
 
 interface Props {
   state: AppState;
@@ -15,6 +16,18 @@ interface Props {
   railOpen: boolean;
   /** Opens or closes the target rail (the same thing ⌘B does). */
   onToggleRail: () => void;
+  /** The current target's facets, from facetsFor — the only tabs drawn. A
+   *  facet the target lacks is omitted, never disabled. */
+  facets?: Facet[];
+  /** The facet on screen; its tab is the active one. */
+  facet?: Facet;
+  onFacet?: (f: Facet) => void;
+  /** The Settings tab's red dot: the current repo's remote is failing. The
+   *  caller withholds it on a read-only server. */
+  settingsDot?: boolean;
+  /** A connect commit is in flight: the tabs and the gear refuse, because
+   *  each would unmount the page the commit is reporting to. */
+  locked?: boolean;
   /** Toggles the Manage mode. The SAME control both enters and leaves it, at the
    *  same anchor — a way out that appears somewhere else makes the reader hunt
    *  for a control they just clicked. */
@@ -43,12 +56,8 @@ interface Props {
 // the dropdown that used to hang off the name is gone; the branch picker and
 // the filter moved to the Browse toolbar, because they act on the data being
 // read and must not stay on screen over a page that reads none.
-export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRail, onManageRepos, manageOpen = false, manageLocked = false, manageBusy = false }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onManageRepos, manageOpen = false, manageLocked = false, manageBusy = false }: Props) {
   const lensCtx = isLensContext(state);
-  // The gear's red dot marks an unhealthy remote of EITHER kind on the CURRENT
-  // repo — a rejected push is as much a reason to open the manager as an
-  // unreachable origin. It moves to the Settings tab when the facets land.
-  const remoteError = remoteErrorText(state);
   // Where leaving Manage puts you back: the surface you were reading, which is
   // the lens in a lens context and the repo otherwise. Named in the exit's
   // tooltip so the destination is one hover away without a label in the bar.
@@ -56,7 +65,10 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
   // "Held": in Manage, and Manage says it is mid-something uninterruptible.
   // Only meaningful with manageOpen — busy is a state of the mode, not of a bar
   // that is not showing it.
-  const held = manageOpen && manageBusy;
+  // Outside Manage the gear refuses while a connect commit runs in the
+  // Settings facet: opening Manage would unmount the page it reports to.
+  const held = manageOpen ? manageBusy : locked;
+  const heldReason = manageOpen ? 'Manage is finishing something — leave it running' : 'A remote is being connected — leave it running';
   // The toggle's dot: some repo OTHER than the current one has a failing
   // remote, so the rail has something to show you. The current repo is left
   // out because its failure already has the banner. Hidden on a read-only
@@ -195,6 +207,47 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
           </span>
         )}
 
+        {/* ── Facet tabs: the pages of the target named on the left ──
+            Exactly facetsFor's list; a tab the target lacks is not drawn. The
+            active tab's underline sits on the bar's bottom edge. */}
+        {!manageOpen && facets.length > 0 && (
+          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" style={{ display: 'flex', alignItems: 'stretch' }}>
+            {facets.map(f => {
+              const on = f === facet;
+              return (
+                <button
+                  key={f}
+                  type="button"
+                  role="tab"
+                  data-testid={`facet-tab-${f}`}
+                  data-nodrag
+                  aria-selected={on}
+                  disabled={locked}
+                  title={locked ? 'A remote is being connected — leave it running' : undefined}
+                  onMouseDown={noMouseFocus}
+                  onClick={() => onFacet?.(f)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '0 11px', fontSize: 12, border: 'none', background: 'none',
+                    color: on ? '#eee' : '#7a7a7a',
+                    boxShadow: on ? 'inset 0 -2px 0 #7c9' : 'none',
+                    cursor: locked ? 'default' : 'pointer',
+                    opacity: locked && !on ? 0.5 : 1,
+                    ...noDrag,
+                  }}
+                >
+                  {FACET_LABEL[f]}
+                  {f === 'settings' && settingsDot && (
+                    <span data-testid="facet-tab-settings-dot" aria-label="the remote is failing" style={{
+                      width: 6, height: 6, borderRadius: '50%', background: '#f44336', flexShrink: 0,
+                    }} />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div style={{ flex: 1 }} />
 
         {/* One control, one anchor. In browse it is the gear that opens Manage;
@@ -209,24 +262,25 @@ export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRai
           onMouseDown={noMouseFocus}
           aria-pressed={manageOpen}
           disabled={held}
-          title={held ? 'Manage is finishing something — leave it running' : manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
-          aria-label={held ? 'Manage is finishing something — leave it running' : manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}
+          title={held ? heldReason : manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
+          aria-label={held ? heldReason : manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}
           // One control, one look: only the GLYPH changes between modes. A
           // tinted pill would make the way out read as a different kind of
           // thing from the way in, when it is the same button in the same pixel.
-          style={{ background: 'none', border: 'none', color: held ? '#3d3d3d' : !manageOpen && remoteError ? '#f44336' : '#666', cursor: held ? 'default' : 'pointer', padding: 4, display: 'flex', alignItems: 'center', alignSelf: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
-          onMouseEnter={e => { if (!held && (manageOpen || !remoteError)) e.currentTarget.style.color = '#aaa'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : !manageOpen && remoteError ? '#f44336' : '#666'; }}
+          // No red dot: the gear opens server pages now, and a failing remote is
+          // a fact about the target — its dot is on the Settings tab.
+          style={{ background: 'none', border: 'none', color: held ? '#3d3d3d' : '#666', cursor: held ? 'default' : 'pointer', padding: 4, display: 'flex', alignItems: 'center', alignSelf: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
+          onMouseEnter={e => { if (!held) e.currentTarget.style.color = '#aaa'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : '#666'; }}
         >
           {manageOpen ? <ExitIcon color="currentColor" size={15} /> : <GearIcon color="currentColor" size={15} />}
-          {!manageOpen && remoteError && (
-            <span style={{ position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#f44336' }} />
-          )}
         </button>}
       </div>
     </div>
   );
 });
+
+const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings' };
 
 // The spec's lens accent, for the label.
 const LENS_ACCENT = '#b9a6f0';
