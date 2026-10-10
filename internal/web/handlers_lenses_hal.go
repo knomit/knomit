@@ -62,6 +62,12 @@ type lensReadDTO struct {
 
 // lensView is the HAL representation of a lens.
 type lensView struct {
+	// UID is the lens's registry identity (lenses.uid). It is the spelling a
+	// client-session binding names a lens by (`lens:<uid>`, the ?binding=
+	// filter on /client-sessions), and unlike Name it survives a rename, so
+	// a client filtering sessions by lens needs it on both the list and the
+	// single GET.
+	UID         string        `json:"uid"`
 	Name        string        `json:"name"`
 	Write       lensMember    `json:"write"`
 	Description string        `json:"description,omitempty"`
@@ -157,7 +163,7 @@ func lensViewOf(b hal.URLBuilder, names lensNames, l repos.Lens) lensView {
 		return reads[i].UID < reads[j].UID
 	})
 	return lensView{
-		Name: l.Name, Write: names.member(l.WriteUID), Description: l.Description, Reads: reads,
+		UID: l.UID, Name: l.Name, Write: names.member(l.WriteUID), Description: l.Description, Reads: reads,
 		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
 		Links: hal.LinkMap{"self": {Href: b.Lens(l.Name)}},
 	}

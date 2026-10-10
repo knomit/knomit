@@ -71,7 +71,37 @@ type repoSummary struct {
 	// as its detail.
 	OntologyError string `json:"ontology_error,omitempty"`
 
+	// Remote is the persisted health of the repo's origin: the two status
+	// columns (remotes.last_status / last_push_status), `ok | error | ""`
+	// each, "" meaning that half has never run. ABSENT (a nil pointer, so the
+	// key itself is omitted) when the repo has no origin, when its store
+	// cannot be read (an unavailable row, a repo still populating), or when
+	// the read fails. A client must read absence as "nothing to show", never
+	// as healthy. The `remote` kind on /repo-events carries the same pair
+	// when it changes.
+	Remote *repoRemoteHealth `json:"remote,omitempty"`
+
 	Links hal.LinkMap `json:"_links"`
+}
+
+// repoRemoteHealth is repoSummary.Remote. Both fields are always present when
+// the object is: "" is a value (never ran), not an absence.
+type repoRemoteHealth struct {
+	Sync string `json:"sync"`
+	Push string `json:"push"`
+}
+
+// remoteHealthOf reads a listed repo's origin health through the same
+// provider GET /origin uses. Every failure is an absent field: a list row is
+// not the place to report that one repo's status row is unreadable, and the
+// repo's own origin view still says why.
+func remoteHealthOf(ctx context.Context, op originProvider, ri *repos.RepoInstance) *repoRemoteHealth {
+	remote, err := op.GetOrigin(ctx, ri)
+	if err != nil || remote == nil {
+		return nil
+	}
+	s, p := repos.RemoteHealth(remote)
+	return &repoRemoteHealth{Sync: s, Push: p}
 }
 
 // summaryFor is an ACTIVE repo's row, read from its machine's status.
@@ -115,7 +145,7 @@ const repoStateActive = "active"
 // break that. A repo being CREATED is mounted (its machine is at stage
 // populate, and its Acquire answers "repo is populating"), so it is listed with
 // its stage.
-func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+func handleHALRepos(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
 		instances := make(map[string]*repos.RepoInstance)
@@ -126,7 +156,11 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 
 		items := make([]repoSummary, 0, len(names))
 		for _, name := range names {
-			items = append(items, summaryFor(b, name, instances[name]))
+			row := summaryFor(b, name, instances[name])
+			// Per-repo remote health, so the client can mark every listed repo
+			// without a GET /origin per repo. Only live rows have a store to ask.
+			row.Remote = remoteHealthOf(r.Context(), op, instances[name])
+			items = append(items, row)
 		}
 		for _, u := range m.Unavailable() {
 			// No id: the root-commit identity is a property of a store this repo

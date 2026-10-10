@@ -38,7 +38,7 @@ type IndexEvent struct {
 const indexProgressInterval = time.Second
 
 // RepoEventHub fans REPO-LEVEL events in from every repo to one server-wide
-// stream. IndexEvent is its first and currently only kind.
+// stream. Its kinds are IndexEvent and RemoteEvent (remote_events.go).
 //
 // It exists because the per-repo TaskHub cannot answer the question the UI
 // actually asks. The web app holds ONE events stream, for the ACTIVE repo, but
@@ -66,8 +66,9 @@ func (h *RepoEventHub) Subscribe(ctx context.Context) goob.Events {
 }
 
 // publish is nil-safe: a Manager built without a hub (most tests) simply
-// broadcasts nothing, and every caller stays unconditional.
-func (h *RepoEventHub) publish(ev IndexEvent) {
+// broadcasts nothing, and every caller stays unconditional. ev is one of the
+// kinds named on RepoEventHub; the SSE handler drops anything else.
+func (h *RepoEventHub) publish(ev any) {
 	if h == nil || h.ob == nil {
 		return
 	}

@@ -110,6 +110,22 @@ export interface RepoInfo {
    * | serve | sync | ready. Informational; gate on `state` and `index_state`.
    */
   stage?: string;
+  /**
+   * The persisted health of the repo's origin: the last sync (fetch and
+   * reconcile) and the last push, each 'ok' | 'error' | '' ('' = never ran).
+   * ABSENT when the repo has no origin, when its store cannot be read, and on
+   * a server that predates the field: read absence as "nothing to show",
+   * never as healthy. Kept current by the `remote` kind on /repo-events
+   * (RepoRemoteEvent); the error text is on GET /origin.
+   */
+  remote?: RepoRemoteHealth;
+}
+
+// RepoRemoteHealth is RepoInfo.remote: the two halves of a remote fail
+// independently, so they are reported apart.
+export interface RepoRemoteHealth {
+  sync: '' | 'ok' | 'error';
+  push: '' | 'ok' | 'error';
 }
 
 // repoAvailable reports whether a repo can be read at all.
@@ -283,6 +299,10 @@ export interface LensReadRef extends LensMemberRef { branch?: string; source?: s
 // `reads` is server-ordered by member name and always includes the write repo.
 // created_at/updated_at are unix seconds, present on server responses.
 export interface Lens {
+  // uid is the lens's own registry uid (not a member's): the spelling a
+  // client-session binding uses (`lens:<uid>`), stable across a rename.
+  // Optional because an older server omits it.
+  uid?: string;
   name: string; write: LensMember; reads: LensRead[];
   description?: string;
   created_at?: number; updated_at?: number;
@@ -929,8 +949,31 @@ export interface RepoIndexEvent {
   reason?: string;
 }
 
+// RepoRemoteEvent is one repo's origin health, the `remote` kind on
+// /repo-events. The payload is the row's whole new `remote` value, so a
+// consumer replaces RepoInfo.remote with { sync, push }. The server sends it
+// only on an EDGE (a persisted status column changed), so silence means
+// "unchanged", never "healthy". `type` is added here, client-side, because the
+// wire tells the kinds apart by the SSE event name and the callback cannot.
+export interface RepoRemoteEvent {
+  type: 'remote';
+  repo: string;
+  sync: RepoRemoteHealth['sync'];
+  push: RepoRemoteHealth['push'];
+}
+
+// RepoEvent is everything subscribeRepoEvents reports. Only the index kind
+// has no `type`, which is how the wire delivered it first.
+export type RepoEvent = RepoIndexEvent | RepoRemoteEvent | { type: 'reconnect' };
+
+// remoteHealthValue narrows a wire value to the vocabulary, or undefined.
+function remoteHealthValue(v: unknown): RepoRemoteHealth['sync'] | undefined {
+  return v === '' || v === 'ok' || v === 'error' ? v : undefined;
+}
+
 // subscribeRepoEvents opens the SERVER-WIDE repo-event stream and reports every
-// index-state change, plus a `reconnect` whenever the stream reopens.
+// index-state change and every remote-health edge, plus a `reconnect` whenever
+// the stream reopens.
 //
 // Server-wide rather than per repo: the app renders an index chip for every
 // repo it lists, and the branch stream it already holds is scoped to the ACTIVE
@@ -942,7 +985,7 @@ export interface RepoIndexEvent {
 // FIRST ready is deliberately not one, because the caller has invariably just
 // read the list.
 export function subscribeRepoEvents(
-  onEvent: (ev: RepoIndexEvent | { type: 'reconnect' }) => void,
+  onEvent: (ev: RepoEvent) => void,
 ): () => void {
   const es = new EventSource(apiUrl('/api/v1/repo-events'));
   const outage = createOutageLog(diagStream);
@@ -966,6 +1009,23 @@ export function subscribeRepoEvents(
       // Ignore: see above.
     }
   };
+  // The same rule as onIndex: the payload is the update, so a frame that names
+  // no repo, or carries a value outside the vocabulary, is dropped whole
+  // rather than half-applied.
+  const onRemote = (e: unknown) => {
+    const data = (e as { data?: unknown } | undefined)?.data;
+    if (typeof data !== 'string' || data === '') return;
+    try {
+      const raw = JSON.parse(data) as { repo?: unknown; sync?: unknown; push?: unknown } | null;
+      if (!raw || typeof raw.repo !== 'string' || raw.repo === '') return;
+      const sync = remoteHealthValue(raw.sync);
+      const push = remoteHealthValue(raw.push);
+      if (sync === undefined || push === undefined) return;
+      onEvent({ type: 'remote', repo: raw.repo, sync, push });
+    } catch {
+      // Ignore: see onIndex.
+    }
+  };
   const onOpen = () => { outage.recovered('[index] reconnected'); };
   const onError = () => {
     outage.lost(es.readyState === EventSource.CLOSED
@@ -975,11 +1035,13 @@ export function subscribeRepoEvents(
 
   es.addEventListener('ready', onReady);
   es.addEventListener('index', onIndex);
+  es.addEventListener('remote', onRemote);
   es.addEventListener('open', onOpen);
   es.addEventListener('error', onError);
   return () => {
     es.removeEventListener('ready', onReady);
     es.removeEventListener('index', onIndex);
+    es.removeEventListener('remote', onRemote);
     es.removeEventListener('open', onOpen);
     es.removeEventListener('error', onError);
     es.close();
