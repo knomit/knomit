@@ -27,9 +27,12 @@ interface Props {
   serverReadOnly: boolean;
   /** Called with the picked target. Only browsable targets call it. */
   onSelect: (ctx: BrowseContext) => void;
-  /** Bumped by the app to ask for the search to take focus (⌘K). Any change,
-   *  including the first value at mount, focuses it once. */
+  /** Non-zero while the app is asking for the search to take focus (⌘K). The
+   *  rail focuses once and reports it through onFocusHandled, and the app
+   *  clears the request — so a rail that mounts LATER (the toggle, ⌘B, leaving
+   *  Manage) does not steal the keyboard for a ⌘K that was already served. */
   focusRequest?: number;
+  onFocusHandled?: () => void;
   /** A connect commit is in flight: every row refuses (and the list dims),
    *  because selecting anything would unmount the page the commit reports to.
    *  The search stays usable — it changes nothing on screen but the list. */
@@ -48,7 +51,7 @@ interface Props {
 // did. A repo with no store and a lens with a broken mount are listed and
 // explained but disabled; the repository page in Manage is still where they are
 // acted on, as are new repositories, archived ones and creates in flight.
-export function TargetRail({ repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect, focusRequest, locked = false }: Props) {
+export function TargetRail({ repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect, focusRequest, onFocusHandled, locked = false }: Props) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   // A create still working on a listed repo flags its row, as the manage rail
@@ -56,8 +59,18 @@ export function TargetRail({ repos, lenses, context, currentRepo, remoteError, s
   const activeCreates = activeCreateByRepo(useRepoCreates());
 
   useEffect(() => {
-    if (focusRequest) searchRef.current?.focus();
-  }, [focusRequest]);
+    if (!focusRequest) return;
+    searchRef.current?.focus();
+    onFocusHandled?.();
+  }, [focusRequest, onFocusHandled]);
+
+  // A pick hands the keyboard back to the page. Rows suppress mousedown focus
+  // (noMouseFocus), so without this a ⌘K → type → click left focus in the
+  // search, and the input guard kept every page shortcut dead.
+  const pick = (ctx: BrowseContext) => {
+    searchRef.current?.blur();
+    onSelect(ctx);
+  };
 
   const q = query.trim().toLowerCase();
   const match = (name: string) => !q || name.toLowerCase().includes(q);
@@ -117,7 +130,7 @@ export function TargetRail({ repos, lenses, context, currentRepo, remoteError, s
               // broken it is.
               title={available ? undefined : r.detail || `This repository has no store (${r.state}).`}
               onMouseDown={noMouseFocus}
-              onClick={available && !locked ? () => onSelect({ kind: 'repo', repo: r.name }) : undefined}
+              onClick={available && !locked ? () => pick({ kind: 'repo', repo: r.name }) : undefined}
               style={row(selected ? 'repo' : null, !available)}
             >
               <span style={{ display: 'inline-flex', flexShrink: 0, opacity: available ? 1 : 0.4 }}>
@@ -172,7 +185,7 @@ export function TargetRail({ repos, lenses, context, currentRepo, remoteError, s
               disabled={!available || locked}
               title={available ? undefined : `This lens cannot be read: its mount "${broken}" has no store.`}
               onMouseDown={noMouseFocus}
-              onClick={available && !locked ? () => onSelect({ kind: 'lens', name: l.name }) : undefined}
+              onClick={available && !locked ? () => pick({ kind: 'lens', name: l.name }) : undefined}
               style={{ ...row(selected ? 'lens' : null, !available), opacity: available ? 1 : 0.55 }}
             >
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: LENS.accent, flexShrink: 0 }} />

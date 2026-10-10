@@ -286,10 +286,12 @@ export default function App() {
   // facets.ts): whether the rail is open, the facet, the one-shot focus and
   // the connect lock. useViewState persists knomit.rail and knomit.facet.
   const [view, dispatchView] = useViewState();
-  // Bumped by ⌘K to ask the rail's search for focus. A counter rather than a
-  // flag so a second ⌘K focuses again, and so a rail that mounts BECAUSE of
-  // the ⌘K focuses on arrival.
+  // Raised by ⌘K to ask the rail's search for focus, and cleared by the rail
+  // once it has focused — so a rail that mounts BECAUSE of the ⌘K focuses on
+  // arrival, and one that mounts later (toggle, ⌘B, leaving Manage) does not
+  // re-serve a request that was already handled.
   const [railFocusRequest, setRailFocusRequest] = useState(0);
+  const clearRailFocusRequest = useCallback(() => setRailFocusRequest(0), []);
   const toggleRail = useCallback(() => dispatchView({ type: 'TOGGLE_RAIL' }), [dispatchView]);
   // Latest-state ref for async callbacks that resolve after the context may have
   // drifted (resolveLens fallback guard I3, onChanged refresh I4). Reads the
@@ -1356,6 +1358,7 @@ export default function App() {
               serverReadOnly={state.serverReadOnly}
               onSelect={onSelectTarget}
               focusRequest={railFocusRequest}
+              onFocusHandled={clearRailFocusRequest}
               locked={view.locked}
             />
           </ErrorBoundary>
