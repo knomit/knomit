@@ -11,6 +11,20 @@
 // and the pinned settings-only targets join it in the PRs that build them.
 
 import { loadRailOpen } from './repoSelection';
+import type { RepoInfo } from './api';
+
+/** remoteFailing: the listing says this repo's last sync or last push failed.
+ *  An absent `remote` (no origin, no store, older server) is nothing to show. */
+export function remoteFailing(r: Pick<RepoInfo, 'remote'>): boolean {
+  return r.remote?.sync === 'error' || r.remote?.push === 'error';
+}
+
+/** otherRepoFailing: some repo OTHER than `current` has a failing remote. The
+ *  rail toggle's dot. The current repo is excluded because its failure already
+ *  has the app banner. */
+export function otherRepoFailing(repos: RepoInfo[], current: string): boolean {
+  return repos.some(r => r.name !== current && remoteFailing(r));
+}
 
 export interface ViewState {
   /** Whether the target rail is open. Persisted under knomit.rail. */

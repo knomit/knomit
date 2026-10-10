@@ -10,6 +10,7 @@ import { RepoDot } from './settingsParts';
 import { useRepoCreates, activeCreateByRepo, createFlag } from './useRepoCreates';
 import { BookIcon, LayersIcon } from './icons';
 import { LENS, noMouseFocus } from './utils';
+import { remoteFailing } from './facets';
 
 interface Props {
   repos: RepoInfo[];
@@ -43,7 +44,7 @@ interface Props {
 // did. A repo with no store and a lens with a broken mount are listed and
 // explained but disabled; the repository page in Manage is still where they are
 // acted on, as are new repositories, archived ones and creates in flight.
-export function TargetRail({ repos, lenses, context, onSelect, focusRequest }: Props) {
+export function TargetRail({ repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect, focusRequest }: Props) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   // A create still working on a listed repo flags its row, as the manage rail
@@ -92,6 +93,11 @@ export function TargetRail({ repos, lenses, context, onSelect, focusRequest }: P
           const selected = context.kind === 'repo' && context.repo === r.name;
           const job = activeCreates.get(r.name);
           const jobFlag = job ? createFlag(job.state) : null;
+          // The health dot. The CURRENT repo reads the app's own remote state
+          // (the banner's source), so the row and the banner never disagree —
+          // dismissing the banner clears both. Every other repo reads the
+          // listing, which the `remote` repo-event keeps current.
+          const failing = !serverReadOnly && (r.name === currentRepo ? Boolean(remoteError) : remoteFailing(r));
           return (
             <button
               key={r.name}
@@ -126,6 +132,15 @@ export function TargetRail({ repos, lenses, context, onSelect, focusRequest }: P
                         <RepoOntologyChip repo={r} compact />
                         <RepoIndexChip repo={r} compact />
                       </>}
+                {failing && (
+                  <span
+                    data-testid={`rail-health-${r.name}`}
+                    role="img"
+                    aria-label="remote failing"
+                    title="The remote's last sync or push failed — see this repository's Remote settings"
+                    style={healthDot}
+                  />
+                )}
               </span>
             </button>
           );
@@ -224,6 +239,9 @@ const rowName: CSSProperties = {
 };
 const badges: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto',
+};
+const healthDot: CSSProperties = {
+  width: 6, height: 6, borderRadius: '50%', background: '#f44336', flexShrink: 0,
 };
 // Same chip as the manage rail's create flag: one fact, one rendering.
 const createChip: CSSProperties = {

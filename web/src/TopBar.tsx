@@ -5,6 +5,7 @@ import { isLensContext, remoteErrorText } from './state';
 import type { RepoInfo } from './api';
 import { BookIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
 import { noMouseFocus } from './utils';
+import { otherRepoFailing } from './facets';
 
 interface Props {
   state: AppState;
@@ -42,7 +43,7 @@ interface Props {
 // the dropdown that used to hang off the name is gone; the branch picker and
 // the filter moved to the Browse toolbar, because they act on the data being
 // read and must not stay on screen over a page that reads none.
-export const TopBar = memo(function TopBar({ state, railOpen, onToggleRail, onManageRepos, manageOpen = false, manageLocked = false, manageBusy = false }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, railOpen, onToggleRail, onManageRepos, manageOpen = false, manageLocked = false, manageBusy = false }: Props) {
   const lensCtx = isLensContext(state);
   // The gear's red dot marks an unhealthy remote of EITHER kind on the CURRENT
   // repo — a rejected push is as much a reason to open the manager as an
@@ -56,6 +57,12 @@ export const TopBar = memo(function TopBar({ state, railOpen, onToggleRail, onMa
   // Only meaningful with manageOpen — busy is a state of the mode, not of a bar
   // that is not showing it.
   const held = manageOpen && manageBusy;
+  // The toggle's dot: some repo OTHER than the current one has a failing
+  // remote, so the rail has something to show you. The current repo is left
+  // out because its failure already has the banner. Hidden on a read-only
+  // server, where the Remote settings are hidden and the dot would point at
+  // nothing.
+  const othersFailing = !state.serverReadOnly && otherRepoFailing(repos, state.repo);
 
   // In the desktop app the native title bar is hidden, so the macOS traffic
   // lights float over the top-left of this header. Wails uses the CSS custom
@@ -148,6 +155,12 @@ export const TopBar = memo(function TopBar({ state, railOpen, onToggleRail, onMa
               }}
             >
               <PanelIcon />
+              {othersFailing && (
+                <span data-testid="rail-toggle-dot" aria-hidden="true" style={{
+                  position: 'absolute', top: 3, right: 3, width: 6, height: 6,
+                  borderRadius: '50%', background: '#f44336', boxShadow: '0 0 0 2px #111',
+                }} />
+              )}
             </button>
           )}
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

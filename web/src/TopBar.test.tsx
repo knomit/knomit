@@ -162,6 +162,48 @@ describe('TopBar — the rail toggle', () => {
   });
 });
 
+// The toggle's dot is the cross-repo alert: SOME OTHER repo's remote is
+// failing, so opening the rail is worth it. The current repo's failure has the
+// banner (and, until the Settings tab exists, the gear's dot), so it must not
+// light the toggle too.
+describe("TopBar — the rail toggle's health dot", () => {
+  const failing = (name: string): RepoInfo => ({ name, uid: `u-${name}`, remote: { sync: 'ok', push: 'error' } });
+  const healthy = (name: string): RepoInfo => ({ name, uid: `u-${name}`, remote: { sync: 'ok', push: 'ok' } });
+
+  it('lights when a repo OTHER than the current one is failing', () => {
+    render(bar({ repos: [healthy('alpha'), failing('beta')] }));
+    expect(screen.getByTestId('rail-toggle-dot')).toBeInTheDocument();
+  });
+
+  it('stays dark when only the current repo is failing', () => {
+    render(bar({ repos: [failing('alpha'), healthy('beta')] }));
+    // Control: the toggle it would sit on is rendered.
+    expect(screen.getByTestId('rail-toggle')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-toggle-dot')).toBeNull();
+  });
+
+  it('reads a failing sync as well as a failing push', () => {
+    render(bar({ repos: [healthy('alpha'), { name: 'beta', uid: 'u-beta', remote: { sync: 'error', push: '' } }] }));
+    expect(screen.getByTestId('rail-toggle-dot')).toBeInTheDocument();
+  });
+
+  it('is hidden on a read-only server', () => {
+    render(bar({ state: { ...baseState, serverReadOnly: true }, repos: [healthy('alpha'), failing('beta')] }));
+    expect(screen.getByTestId('rail-toggle')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-toggle-dot')).toBeNull();
+  });
+
+  it('sits top-right on the toggle: 6px red with a 2px #111 ring', () => {
+    render(bar({ repos: [healthy('alpha'), failing('beta')] }));
+    const dot = screen.getByTestId('rail-toggle-dot');
+    expect(screen.getByTestId('rail-toggle').contains(dot)).toBe(true);
+    expect(dot).toHaveStyle({
+      position: 'absolute', top: '3px', right: '3px', width: '6px', height: '6px',
+      background: '#f44336', boxShadow: '0 0 0 2px #111',
+    });
+  });
+});
+
 describe('TopBar — the gear (unchanged until the server pages land)', () => {
   it('keeps the red dot for the CURRENT repo\'s remote failure', () => {
     const { unmount } = render(bar());

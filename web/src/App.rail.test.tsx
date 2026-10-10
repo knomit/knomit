@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent, cleanup, within } from '@testing-library/react';
 import App from './App';
-import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
 import { __resetRepoCreatesForTest } from './useRepoCreates';
 
 // The target rail: the left column that replaced the top bar's repo/lens
@@ -194,6 +194,39 @@ describe('the target rail in the app', () => {
     await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
     await waitFor(() => expect(screen.queryByTestId('manage-surface')).toBeNull());
     expect(screen.getByTestId('target-rail')).toBeInTheDocument();
+  });
+});
+
+describe('remote health reaches the rail and the toggle', () => {
+  it('a remote edge for another repo lights the toggle and that row, and its recovery clears both', async () => {
+    localStorage.setItem('knomit.rail', '1');
+    await primeApi();
+    await mountApp();
+    await waitFor(() => expect(latestStream('/api/v1/repo-events')).toBeDefined());
+    // Before: nothing failing anywhere.
+    expect(screen.queryByTestId('rail-toggle-dot')).toBeNull();
+    expect(screen.queryByTestId('rail-health-beta')).toBeNull();
+
+    act(() => { latestStream('/api/v1/repo-events')!.emit('remote', { repo: 'beta', sync: 'ok', push: 'error' }); });
+    await waitFor(() => expect(screen.getByTestId('rail-toggle-dot')).toBeInTheDocument());
+    expect(screen.getByTestId('rail-health-beta')).toBeInTheDocument();
+    // alpha is current and healthy: only beta's row is marked.
+    expect(screen.queryByTestId('rail-health-alpha')).toBeNull();
+
+    act(() => { latestStream('/api/v1/repo-events')!.emit('remote', { repo: 'beta', sync: 'ok', push: 'ok' }); });
+    await waitFor(() => expect(screen.queryByTestId('rail-toggle-dot')).toBeNull());
+    expect(screen.queryByTestId('rail-health-beta')).toBeNull();
+  });
+
+  it('a failing listing for the CURRENT repo alone does not light the toggle', async () => {
+    const api = await primeApi();
+    api.repos.mockResolvedValue([
+      { name: 'alpha', uid: 'u-a', remote: { sync: 'error', push: 'ok' } },
+      { name: 'beta', uid: 'u-b', remote: { sync: 'ok', push: 'ok' } },
+    ]);
+    await mountApp();
+    expect(screen.getByTestId('rail-toggle')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-toggle-dot')).toBeNull();
   });
 });
 

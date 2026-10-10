@@ -140,3 +140,52 @@ describe('TargetRail', () => {
     expect(screen.getByTestId('target-rail')).toHaveStyle({ width: '236px', background: '#0e0e0e' });
   });
 });
+
+
+// The health dot takes over the cross-repo alert the Knowledge page used to
+// give. A listed repo reads its own `remote` (kept current by the `remote`
+// repo-event); the CURRENT repo reads remoteErrorText(state), the same source
+// as the app banner, so the two never disagree about the repo being read.
+describe('TargetRail — remote health dots', () => {
+  const health: RepoInfo[] = [
+    { name: 'a', uid: 'u-a', remote: { sync: 'ok', push: 'ok' } },
+    { name: 'b', uid: 'u-b', remote: { sync: 'ok', push: 'error' } },
+    { name: 'c', uid: 'u-c' },
+    { name: 'd', uid: 'u-d', remote: { sync: 'error', push: '' } },
+  ];
+
+  it('marks a repo whose push or sync is failing, and only those', () => {
+    renderRail({ repos: health, context: { kind: 'repo', repo: 'c' }, currentRepo: 'c' });
+    expect(screen.getByTestId('rail-health-b')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-health-d')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-health-a')).toBeNull();
+    expect(screen.queryByTestId('rail-health-c')).toBeNull();
+  });
+
+  it('is a 6px red dot inside the row', () => {
+    renderRail({ repos: health, context: { kind: 'repo', repo: 'c' }, currentRepo: 'c' });
+    const dot = screen.getByTestId('rail-health-b');
+    expect(screen.getByTestId('rail-repo-b').contains(dot)).toBe(true);
+    expect(dot).toHaveStyle({ width: '6px', height: '6px', background: '#f44336' });
+  });
+
+  it("for the CURRENT repo follows the app's remote error, not the listing", () => {
+    // a's listing says healthy, but the app holds a remote error for it.
+    const { unmount } = renderRail({ repos: health, currentRepo: 'a', remoteError: 'push rejected' });
+    expect(screen.getByTestId('rail-health-a')).toBeInTheDocument();
+    unmount();
+    // b's listing says failing, but b is current and the app holds no error
+    // (the reader dismissed the banner): the row agrees with the banner.
+    renderRail({ repos: health, context: { kind: 'repo', repo: 'b' }, currentRepo: 'b', remoteError: '' });
+    expect(screen.queryByTestId('rail-health-b')).toBeNull();
+    // Control: a non-current failing repo still shows its dot in the same render.
+    expect(screen.getByTestId('rail-health-d')).toBeInTheDocument();
+  });
+
+  it('shows no dot at all on a read-only server, where the Remote settings are hidden', () => {
+    renderRail({ repos: health, currentRepo: 'a', remoteError: 'push rejected', serverReadOnly: true });
+    // Control: the rows themselves render.
+    expect(screen.getByTestId('rail-repo-b')).toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^rail-health-/)).toHaveLength(0);
+  });
+});
