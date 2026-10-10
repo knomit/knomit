@@ -7,7 +7,6 @@ import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, refreshRepoCreates, pendingCreates, createFlag, activeCreateByRepo } from './useRepoCreates';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { CreateLensForm } from './CreateLensForm';
-import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, noMouseFocus } from './utils';
 import { BookIcon, ArchiveIcon, PlusIcon, LayersIcon, TreeIcon, BroadcastIcon, ScrollIcon, GlobeIcon, BotIcon, EyeIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
@@ -95,11 +94,6 @@ type Selection =
   // started, and re-entering it to watch one that has would ask the user to
   // re-answer questions already answered. This page only observes.
   | { kind: 'create'; id: string }
-  // A repo's connect flow is a SELECTION, not a surface. It used to be a piece
-  // of component state that made this whole pane return early, taking the rail
-  // and the repo with it; as a selection it is a sub-page of the repo, the rail
-  // survives, and the repo's own row stays lit while you are in it.
-  | { kind: 'connect'; name: string }
   | { kind: 'archived' }
   | { kind: 'new' }
   | { kind: 'lens'; name: string }
@@ -316,6 +310,10 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
     ? { kind: 'new' as const }
     : { kind: 'overview' as const };
   const view = sel ?? fallback;
+  // Pages built on SettingsPage own their scroll container (its right column),
+  // so the detail column hands them its whole box instead of scrolling them.
+  const ownsScroll = view.kind === 'lens' || view.kind === 'archived'
+    || (view.kind === 'repo' && repoAvailable(repos.find(r => r.name === view.name) ?? {}));
 
 
   // No mode header. The rail names the sections, the detail pane names the
@@ -487,7 +485,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                 style={listItem(
                   job
                     ? view.kind === 'create' && view.id === job.create_id
-                    : (view.kind === 'repo' || view.kind === 'connect') && view.name === r.name)}
+                    : view.kind === 'repo' && view.name === r.name)}
                 disabled={connectBusy}
                 // WHILE A CREATE IS STILL WORKING ON IT, the row opens the
                 // CREATE page, not the settings page. The settings page offers
@@ -611,7 +609,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
           )}
 
           {/* ── Detail pane ── */}
-          <section ref={detailRef} data-testid="manage-detail" style={detailCol}>
+          <section ref={detailRef} data-testid="manage-detail" style={ownsScroll ? pageCol : detailCol}>
             {view.kind === 'overview' && (
               <ManageOverview
                 repos={repos}
@@ -665,7 +663,9 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                   await refreshRepoCreates();
                 }}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
-                onConnect={() => setSel({ kind: 'connect', name: view.name })}
+                // The connect flow is a sub-flow of the page now; its commit
+                // lock still holds this pane's rail.
+                onBusyChange={setConnectBusy}
                 onChanged={onChanged}
                 // refresh() picks up the lens list's re-derived member names
                 // (Mounted-in reads them off `lenses`, held in THIS pane's
@@ -673,28 +673,9 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                 // rename hint that lets the app follow a stale browse
                 // selection to the new name (see the Props.onChanged doc).
                 onRenamed={newName => { onChanged({ from: view.name, to: newName }); refresh(); setSel({ kind: 'repo', name: newName }); }}
-                onBrowse={onBrowse}
                 onEnterBranch={onEnterBranch}
                 currentBranch={currentBranch}
                 onError={setErr}
-              />
-            )}
-            {/* Both exits land back on the Remote block rather than at the top
-                of the settings page: it is the block you left from, and after a
-                successful connect it is the one carrying the new state. */}
-            {view.kind === 'connect' && (
-              <RemoteConnectWizard
-                key={view.name}
-                repo={view.name}
-                onCancel={() => setSel({ kind: 'repo', name: view.name, focus: 'remote' })}
-                onDone={() => {
-                  onChanged(); refresh();
-                  setSel({ kind: 'repo', name: view.name, focus: 'remote' });
-                }}
-                // Passed as the raw setter, not a closure: this runs from an
-                // effect keyed on the value it sets, so an identity that
-                // changed every render would re-run it every render.
-                onBusyChange={setConnectBusy}
               />
             )}
             {view.kind === 'archived' && (
@@ -756,7 +737,6 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                 // {from, to} for the app to follow a browsed lens to its new
                 // name instead of treating the old one as vanished.
                 onRenamed={newName => { onChanged({ from: view.name, to: newName }); refresh(); setSel({ kind: 'lens', name: newName }); }}
-                onBrowse={onBrowse}
                 onError={setErr}
               />
             )}
@@ -791,6 +771,7 @@ const errBox: React.CSSProperties = { background: '#311', border: '1px solid #53
 const body: React.CSSProperties = { display: 'flex', flex: 1, minHeight: 0 };
 const listCol: React.CSSProperties = { width: 236, flexShrink: 0, borderRight: '1px solid #222', padding: 10, overflowY: 'auto' };
 const detailCol: React.CSSProperties = { flex: 1, padding: 20, overflowY: 'auto' };
+const pageCol: React.CSSProperties = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
 const sectionHeader: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, padding: '6px 8px 5px', marginTop: 6, borderBottom: '1px solid #242424' };
 const sectionTitle: React.CSSProperties = { flex: 1, fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9a9a9a' };
 const viewingTag: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', color: '#7c9', flexShrink: 0 };

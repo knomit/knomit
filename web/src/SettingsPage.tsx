@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { noMouseFocus } from './utils';
+import { FacetColumns } from './FacetColumns';
+import { IndexColumn } from './IndexColumn';
 
 // SettingsPage lays an entity's settings out as ONE scrolling column of headed
-// blocks with a contents rail beside it.
+// blocks with an index column beside it. It is the Settings facet's body: the
+// index sits on the LEFT at the Library's width (FacetColumns), headed by the
+// target's kind, so the splitter lines up with Browse's.
 //
 // It replaces a stack of collapsed `Disclosure` cards. Those were the right
 // shape inside a 900×620 dialog, where the pane's whole vertical budget was
@@ -30,15 +33,25 @@ export interface Section {
   tail?: React.ReactNode;
   /** Destructive group — tinted apart in both the block and the rail. */
   danger?: boolean;
+  /** Something in this block needs attention (a failing remote): the index
+   *  item carries a red dot, so the problem is visible before you scroll. */
+  problem?: boolean;
   body: React.ReactNode;
 }
 
-export function SettingsPage({ sections, focus, testid }: {
+/** The index heading names the kind of target, never "On this page". */
+const HEADINGS = { repo: 'Repository', lens: 'Lens', archived: 'Archived' } as const;
+
+export function SettingsPage({ kind, sections, focus, onFocused, testid }: {
+  kind: keyof typeof HEADINGS;
   sections: Section[];
-  /** Block to bring into view when the page opens. Set when arriving from an
-   *  Overview cell, so "push rejected" lands you on Remote with the error in
-   *  view rather than at the top of a page you then have to scan. */
+  /** Block to bring into view when the page opens. Set when arriving from the
+   *  remote banner's Reconnect, or back from the connect flow, so a failing
+   *  remote lands you on Remote with the error in view rather than at the top
+   *  of a page you then have to scan. */
   focus?: string;
+  /** Called once the focus has been acted on, so a one-shot owner can drop it. */
+  onFocused?: () => void;
   testid?: string;
 }) {
   // TWO writers, one winner. `pinned` is what you asked for by clicking a rail
@@ -51,6 +64,8 @@ export function SettingsPage({ sections, focus, testid }: {
   const [spied, setSpied] = useState<string>(sections[0]?.id ?? '');
   const active = pinned ?? spied;
   const bodyRef = useRef<HTMLDivElement>(null);
+  // The page OWNS its scroll container: the right column of FacetColumns.
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // Section identity, not the array: the sections are rebuilt on every render of
   // the owning pane, so depending on the array itself would tear these listeners
@@ -69,14 +84,21 @@ export function SettingsPage({ sections, focus, testid }: {
   // `focused` makes it fire at most once per requested block. A plain re-run on
   // `ids` would yank the page back every time a later section landed, undoing a
   // scroll the user had already made for themselves.
+  // A focus that is cleared re-arms it, so the same block can be asked for
+  // again (a second Reconnect after the first was consumed).
   const focused = useRef<string | null>(null);
   useEffect(() => {
-    if (!focus || focused.current === focus) return;
+    if (!focus) { focused.current = null; return; }
+    if (focused.current === focus) return;
     const node = bodyRef.current?.querySelector(`#${CSS.escape(focus)}`);
     if (!node) return;
     focused.current = focus;
     setPinned(focus);
     node.scrollIntoView({ block: 'start' });
+    onFocused?.();
+    // onFocused is a notification, not an input: a new identity must not
+    // re-run the scroll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, ids]);
 
   // Scroll-spy, by POSITION rather than intersection. The previous version
@@ -91,7 +113,7 @@ export function SettingsPage({ sections, focus, testid }: {
   // definition, wherever it happens to sit.
   useEffect(() => {
     const el = bodyRef.current;
-    const container = scrollParentOf(el);
+    const container = scrollRef.current;
     if (!el || !container) return;
 
     const compute = () => {
@@ -157,8 +179,17 @@ export function SettingsPage({ sections, focus, testid }: {
   };
 
   return (
-    <div style={grid} data-testid={testid}>
-      <div ref={bodyRef}>
+    <FacetColumns
+      testId={testid}
+      scrollRef={scrollRef}
+      left={
+        // The index is what replaced a tab strip. Sticky by construction: it
+        // is its own column, so it never scrolls away with the blocks — it is
+        // how you get back after an edit pushes the page down.
+        <IndexColumn heading={HEADINGS[kind]} items={sections} active={active} onPick={jump} />
+      }
+    >
+      <div ref={bodyRef} style={blocks}>
         {sections.map(s => (
           <section key={s.id} id={s.id} style={block} data-testid={`block-${s.id}`}>
             <div style={blockHead}>
@@ -170,57 +201,14 @@ export function SettingsPage({ sections, focus, testid }: {
           </section>
         ))}
       </div>
-
-      {/* Sticky because the column it sits in is taller than the pane; it is
-          the one thing that should not scroll away, since it is how you get
-          back to where you were after an edit pushes the page down. */}
-      <nav style={toc} aria-label="On this page">
-        <div style={tocLabel}>On this page</div>
-        {sections.map(s => (
-          <button
-            key={s.id}
-            type="button"
-            data-testid={`toc-${s.id}`}
-            onMouseDown={noMouseFocus}
-            aria-current={active === s.id ? 'true' : undefined}
-            style={tocItem(active === s.id, !!s.danger)}
-            onClick={() => jump(s.id)}
-          >
-            <span>{s.title}</span>
-            {s.tail && <span style={{ marginLeft: 'auto' }}>{s.tail}</span>}
-          </button>
-        ))}
-      </nav>
-    </div>
+    </FacetColumns>
   );
 }
 
-/**
- * scrollParentOf finds the element that actually scrolls this page.
- *
- * SettingsPage does not own its overflow — the detail column above it does —
- * and asking for it as a prop would make every caller thread a ref through for
- * one internal detail. Walking up to the nearest scrollable ancestor keeps that
- * knowledge here, where it is used.
- *
- * Overflow alone, NOT "is it overflowing right now": the nearest auto/scroll
- * ancestor is the scroll container by CSS's own definition, whether or not it
- * has anything to scroll yet. Requiring scrollHeight > clientHeight meant a
- * page that happened to fit at mount got no listeners at all, and the rail then
- * stayed frozen on the first block for the rest of that page's life.
- */
-function scrollParentOf(el: HTMLElement | null): HTMLElement | null {
-  for (let n = el?.parentElement ?? null; n; n = n.parentElement) {
-    const overflow = getComputedStyle(n).overflowY;
-    if (overflow === 'auto' || overflow === 'scroll') return n;
-  }
-  return null;
-}
-
 // ── styles ──
-const grid: React.CSSProperties = {
-  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 178px', gap: 26, alignItems: 'start',
-};
+// A settings column reads worse the wider it gets, so the blocks are measured
+// rather than stretched across a wide window.
+const blocks: React.CSSProperties = { maxWidth: 760, padding: '8px 32px 48px' };
 // Blocks are separated by a rule rather than boxed: a page of seven bordered
 // cards reads as seven unrelated things, and these are one object's settings.
 const block: React.CSSProperties = {
@@ -242,18 +230,3 @@ const blockHint: React.CSSProperties = { fontSize: 11.5, color: '#6e6e6e' };
 const blockAction: React.CSSProperties = {
   marginLeft: 'auto', alignSelf: 'center', display: 'flex', gap: 7, alignItems: 'center',
 };
-
-const toc: React.CSSProperties = {
-  position: 'sticky', top: 0, display: 'flex', flexDirection: 'column', gap: 2, marginTop: 16,
-};
-const tocLabel: React.CSSProperties = {
-  fontSize: 9.5, letterSpacing: '0.13em', textTransform: 'uppercase', color: '#4e4e4e', padding: '0 8px 6px',
-};
-const tocItem = (on: boolean, danger: boolean): React.CSSProperties => ({
-  display: 'flex', alignItems: 'center', gap: 7, width: '100%',
-  padding: '4px 9px', borderRadius: 4, fontSize: 11.5, textAlign: 'left',
-  background: on ? '#1a231d' : 'transparent',
-  color: on ? '#dfe9e2' : danger ? '#97696e' : '#808080',
-  border: 'none', cursor: 'pointer',
-  boxShadow: on ? 'inset 2px 0 0 -0.5px #7c9' : 'none',
-});

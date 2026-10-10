@@ -35,8 +35,8 @@ export function ArchivedSettings({ archived, readOnly, activeNames, onRestored, 
   }));
 
   return (
-    <div>
-      <div style={detailHead}>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ ...detailHead, padding: '20px 20px 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <span style={archIconBox}><ArchiveIcon color="#a08c6a" size={16} /></span>
           <div style={{ minWidth: 0 }}>
@@ -48,7 +48,7 @@ export function ArchivedSettings({ archived, readOnly, activeNames, onRestored, 
         </div>
         {/* No Browse: an archived repo is not a surface you can read. */}
       </div>
-      <SettingsPage sections={sections} testid="archived-settings" />
+      <SettingsPage kind="archived" sections={sections} testid="archived-settings" />
     </div>
   );
 }

@@ -105,6 +105,31 @@ export function loadRailOpen(): boolean {
   }
 }
 
+// The facet of the current target: which of its pages is on screen. Persisted
+// beside the browse context so a reload lands on the same page of the same
+// target. Anything that is not one of the three names reads as Browse, so a
+// value written by a later version (or by hand) can never wedge the shell.
+export const FACET_STORAGE_KEY = 'knomit.facet';
+const FACETS = ['browse', 'activity', 'settings'] as const;
+export type StoredFacet = (typeof FACETS)[number];
+
+export function loadLastFacet(): StoredFacet {
+  try {
+    const raw = localStorage.getItem(FACET_STORAGE_KEY);
+    return (FACETS as readonly string[]).includes(raw ?? '') ? raw as StoredFacet : 'browse';
+  } catch {
+    return 'browse';
+  }
+}
+
+export function saveLastFacet(facet: StoredFacet): void {
+  try {
+    localStorage.setItem(FACET_STORAGE_KEY, facet);
+  } catch {
+    /* storage disabled — the facet is simply not remembered */
+  }
+}
+
 export function saveRailOpen(open: boolean): void {
   try {
     localStorage.setItem(RAIL_STORAGE_KEY, open ? '1' : '0');
