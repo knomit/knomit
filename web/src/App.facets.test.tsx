@@ -40,12 +40,15 @@ vi.mock('./api', async (importOriginal) => {
   };
 });
 
-async function primeApi({ readOnly = false } = {}) {
+const DEV_LENS = { name: 'dev', uid: 'l-dev', write: { uid: 'u-ops', name: 'ops-kb' }, reads: [{ uid: 'u-ops', name: 'ops-kb' }, { uid: 'u-core', name: 'core-kb' }] };
+
+async function primeApi({ readOnly = false, lenses = [] as unknown[] } = {}) {
   const mod = await import('./api');
   const m = mod.api as unknown as Record<string, ReturnType<typeof vi.fn>>;
   vi.mocked(mod.fetchVersion).mockResolvedValue({ version: '0.0.0', commit: 'abc', full: '0.0.0.abc', readOnly } as Awaited<ReturnType<typeof mod.fetchVersion>>);
   m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }]);
-  m.listLenses.mockResolvedValue([]);
+  m.listLenses.mockResolvedValue(lenses);
+  m.getLens.mockImplementation(async (name: string) => lenses.find(l => (l as { name: string }).name === name));
   m.listArchived.mockResolvedValue([]);
   m.getAgentBranch.mockResolvedValue('machine/test');
   m.status.mockResolvedValue(STATUS);
@@ -168,43 +171,81 @@ describe('facet tabs', () => {
   });
 });
 
+// The browse keys act on Browse state that is NOT on screen while Settings is:
+// the filter, and the nav stack Backspace pops. Each test therefore puts real
+// Browse state in place, presses the key on Settings, comes back to Browse and
+// finds it untouched — with the same key on Browse as the control that it
+// WOULD have changed it.
 describe('the browse keys belong to the Browse facet', () => {
-  it('/ focuses the filter on Browse (control), and does nothing on Settings', async () => {
+  // A free-text filter, committed with Enter (the input blurs itself).
+  async function filterBy(text: string) {
+    const input = document.getElementById('filter-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByTestId('browse-toolbar').textContent).toContain(text));
+  }
+  const filterShown = () => screen.getByTestId('browse-toolbar').textContent ?? '';
+  const toSettings = async () => {
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    await screen.findByTestId('repo-settings');
+    expect(document.activeElement).toBe(document.body);
+  };
+  const toBrowse = async () => {
+    fireEvent.click(screen.getByTestId('facet-tab-browse'));
+    await screen.findByTestId('browse-toolbar');
+  };
+
+  it('/ takes the key (and focuses the filter) on Browse; on Settings it leaves the key alone', async () => {
     await primeApi();
     await mountApp();
-    act(() => { fireEvent.keyDown(window, { key: '/' }); });
+    let notCancelled = true;
+    act(() => { notCancelled = fireEvent.keyDown(window, { key: '/' }); });
+    expect(notCancelled).toBe(false);
     await waitFor(() => expect(document.activeElement?.id).toBe('filter-input'));
     (document.activeElement as HTMLElement).blur();
 
-    fireEvent.click(screen.getByTestId('facet-tab-settings'));
-    await screen.findByTestId('repo-settings');
-    act(() => { fireEvent.keyDown(window, { key: '/' }); });
+    await toSettings();
+    act(() => { notCancelled = fireEvent.keyDown(window, { key: '/' }); });
+    // Not swallowed: a "/" on a page with no filter is the browser's (and
+    // any field's), not a shortcut for a box that is not there.
+    expect(notCancelled).toBe(true);
     expect(document.activeElement).toBe(document.body);
   });
 
-  it('Backspace on Settings does not go back', async () => {
-    const { m } = await primeApi();
-    await mountApp();
-    fireEvent.click(screen.getByTestId('facet-tab-settings'));
-    await screen.findByTestId('repo-settings');
-    const browseCalls = m.browse.mock.calls.length;
-    act(() => { fireEvent.keyDown(window, { key: 'Backspace' }); });
-    await act(async () => { await Promise.resolve(); });
-    expect(m.browse.mock.calls.length).toBe(browseCalls);
-    expect(document.activeElement).toBe(document.body);
-    expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('Escape on Settings changes nothing', async () => {
-    localStorage.setItem('knomit.rail', '1');
+  it('Escape on Settings leaves the Browse filter alone; on Browse it clears it', async () => {
     await primeApi();
     await mountApp();
-    fireEvent.click(screen.getByTestId('facet-tab-settings'));
-    await screen.findByTestId('repo-settings');
+    await filterBy('abc');
+
+    await toSettings();
     act(() => { fireEvent.keyDown(window, { key: 'Escape' }); });
     expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('target-rail')).toBeInTheDocument();
-    expect(screen.getByTestId('repo-settings')).toBeInTheDocument();
+    await toBrowse();
+    expect(filterShown()).toContain('abc');
+
+    // Control: the same key on Browse clears it.
+    act(() => { fireEvent.keyDown(window, { key: 'Escape' }); });
+    await waitFor(() => expect(filterShown()).not.toContain('abc'));
+  });
+
+  it('Backspace on Settings does not go back; on Browse it does', async () => {
+    await primeApi();
+    await mountApp();
+    await filterBy('abc');
+    // Escape on Browse clears the filter AND pushes the filtered view onto the
+    // nav stack, so Back has somewhere to go: the filter returns.
+    act(() => { fireEvent.keyDown(window, { key: 'Escape' }); });
+    await waitFor(() => expect(filterShown()).not.toContain('abc'));
+
+    await toSettings();
+    act(() => { fireEvent.keyDown(window, { key: 'Backspace' }); });
+    await toBrowse();
+    await act(async () => { await Promise.resolve(); });
+    expect(filterShown()).not.toContain('abc');
+
+    // Control: Backspace on Browse pops that entry and the filter comes back.
+    act(() => { fireEvent.keyDown(window, { key: 'Backspace' }); });
+    await waitFor(() => expect(filterShown()).toContain('abc'));
   });
 });
 
@@ -243,6 +284,48 @@ describe('the remote error on the facets', () => {
     await failSync();
     expect(screen.getByTestId('facet-tab-settings')).toBeInTheDocument();
     expect(screen.queryByTestId('facet-tab-settings-dot')).toBeNull();
+  });
+});
+
+// Leaving a lens for its WRITE repo keeps state.repo, so the status bootstrap
+// (keyed on the repo) does not re-run: the branch must survive the switch, or
+// Browse sits on "Opening…" for good with the branch stream closed.
+describe('leaving a lens for its own write repo', () => {
+  async function inLens() {
+    localStorage.setItem('knomit.context', JSON.stringify({ kind: 'lens', name: 'dev' }));
+    localStorage.setItem('knomit.rail', '1');
+    const api = await primeApi({ lenses: [DEV_LENS] });
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('dev'));
+    await screen.findByTestId('library-splitter');
+    await waitFor(() => expect(openStreams('/repos/ops-kb/branches/')).toBe(1));
+    return api;
+  }
+
+  it('Reconnect from the lens lands on the write repo, and its Browse opens', async () => {
+    const { m } = await inLens();
+    act(() => { latestStream('/branches/')!.emit('sync_error', { error: 'auth failed' }); });
+    fireEvent.click(await screen.findByTestId('remote-error-reconnect'));
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+    expect(await screen.findByTestId('repo-settings')).toBeInTheDocument();
+    const statusCalls = m.status.mock.calls.length;
+
+    fireEvent.click(screen.getByTestId('facet-tab-browse'));
+    expect(await screen.findByTestId('library-splitter')).toBeInTheDocument();
+    expect(screen.queryByTestId('browse-opening')).toBeNull();
+    // The branch is still known, so nothing had to be re-read to get here, and
+    // the branch's event stream (the live head) is still open.
+    expect(m.status.mock.calls.length).toBe(statusCalls);
+    expect(openStreams('/repos/ops-kb/branches/')).toBe(1);
+  });
+
+  it('a rail pick of the write repo from Browse keeps Browse open', async () => {
+    await inLens();
+    fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+    expect(screen.getByTestId('library-splitter')).toBeInTheDocument();
+    expect(screen.queryByTestId('browse-opening')).toBeNull();
+    expect(openStreams('/repos/ops-kb/branches/')).toBe(1);
   });
 });
 

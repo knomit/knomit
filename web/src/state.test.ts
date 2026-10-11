@@ -258,6 +258,27 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
     expect(s.lensSources).toBeNull();
   });
 
+  // Leaving a lens for its own WRITE repo (the banner's Reconnect, or the rail)
+  // does not change state.repo, so App's status bootstrap — keyed on the repo —
+  // never re-runs. Clearing the branch there stranded Browse on "Opening…"
+  // with the head poll and the event stream stopped. The branch the lens
+  // context already holds IS that repo's branch, so it is kept.
+  it('SET_CONTEXT {kind:repo} to the repo already in state keeps its branch and head', () => {
+    let s: AppState = { ...init, repo: 'work', branch: 'agent/x', headCommit: 'h1' };
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'lens', name: 'dev' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'work' } });
+    expect(s.context).toEqual({ kind: 'repo', repo: 'work' });
+    expect(s.branch).toBe('agent/x');
+    expect(s.headCommit).toBe('h1');
+    // Navigation still resets: it is a new browse context.
+    expect(s.filters).toHaveLength(0);
+    // Control: a DIFFERENT repo clears both, which is what re-runs the bootstrap.
+    const other = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'core' } });
+    expect(other.branch).toBe('');
+    expect(other.headCommit).toBe('');
+  });
+
   it('SET_REPO behaves byte-identically to SET_CONTEXT {kind:repo} on the shared fields', () => {
     const start: AppState = { ...init, filters: [{ category: 'domain', value: 'go' }], factPath: 'kb/y.md', freeText: 'q' };
     const viaRepo = reducer(start, { type: 'SET_REPO', repo: 'work' });
