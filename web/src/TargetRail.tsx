@@ -71,8 +71,10 @@ interface Props {
 // store, a create that is not registered yet and an archived repo have nothing
 // to browse, so picking one PINS it over the context (Settings is all they
 // have). A `+` inserts a draft row — the create form as a target of its own —
-// at the top of its section. A lens with a broken mount stays disabled: every
-// read under it answers 503 and its repair is the broken repo's.
+// at the top of its section. A lens with a broken mount is pinned too: every
+// read under it answers 503, so it cannot be the context, but its Settings is
+// where the broken mount is removed (the server will not archive a repo a lens
+// mounts, so nothing else can clear it).
 export function TargetRail({
   repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect,
   archived = [], pinned = null, onPin, drafts = { repo: false, lens: false }, draftShown = null,
@@ -297,23 +299,27 @@ export function TargetRail({
             // A lens binds ALL its members or none, so one member without a live
             // store makes every read under it answer 503 — while GET /lenses/{lens}
             // still answers 200, so the app's resolve-and-rescue cannot catch it.
-            // The refusal has to happen here.
+            // So it is never picked as the context here: it is pinned.
             const broken = brokenLensMember(l, repos);
             const available = broken === null;
-            const selected = onContext && context.kind === 'lens' && context.name === l.name;
+            const selected = available
+              ? onContext && context.kind === 'lens' && context.name === l.name
+              : pinned?.kind === 'brokenLens' && pinned.name === l.name;
             return (
               <button
                 key={l.name}
                 type="button"
                 data-testid={`rail-lens-${l.name}`}
                 aria-current={selected || undefined}
-                disabled={!available || locked}
+                disabled={locked}
                 title={available ? undefined : `This lens cannot be read: its mount "${broken}" has no store.`}
                 onMouseDown={noMouseFocus}
-                onClick={available && !locked ? () => pick({ kind: 'lens', name: l.name }) : undefined}
-                style={{ ...row(selected ? 'lens' : null, !available), opacity: available ? 1 : 0.55 }}
+                onClick={locked ? undefined : available
+                  ? () => pick({ kind: 'lens', name: l.name })
+                  : () => pin({ kind: 'brokenLens', name: l.name })}
+                style={row(selected ? 'lens' : null, !available)}
               >
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: LENS.accent, flexShrink: 0 }} />
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: LENS.accent, flexShrink: 0, opacity: available ? 1 : 0.4 }} />
                 <span data-testid={`rail-lens-name-${l.name}`} style={rowName}>{l.name}</span>
               </button>
             );

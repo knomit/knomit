@@ -48,3 +48,16 @@ export const repoIconBox = (repo: string): React.CSSProperties => ({
 
 export const writeReadTag: React.CSSProperties = { fontSize: 10, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', padding: '1px 7px', borderRadius: 3, letterSpacing: '0.03em' };
 export const readTag: React.CSSProperties = { fontSize: 10, color: '#777', border: '1px solid #333', padding: '1px 7px', borderRadius: 3, letterSpacing: '0.03em' };
+
+// The spec's warning callout: amber on dark amber. Amber, not red — the
+// registration is intact, and several of these states clear themselves. Used
+// by a repo with no store and by a lens with a mount that has none.
+export const warnCallout: React.CSSProperties = {
+  background: '#1d1a12', border: '1px solid #4a3f22', borderRadius: 6,
+  color: '#e2c07a', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6,
+};
+export const warnCalloutDot: React.CSSProperties = { width: 7, height: 7, borderRadius: '50%', background: '#e2c07a', flexShrink: 0 };
+export const warnDetail: React.CSSProperties = {
+  fontSize: 12, color: '#d9cfae', lineHeight: 1.6, fontFamily: 'var(--k-font-mono)',
+  paddingLeft: 15, overflowWrap: 'anywhere',
+};

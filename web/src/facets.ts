@@ -38,13 +38,20 @@ export type Facet = 'browse' | 'activity' | 'settings';
 /**
  * A target that can NOT be the browse context, because it has no store to read:
  * an archived repo, a create that is not registered yet, a registered repo whose
- * store did not open. It is pinned OVER the context, which stays where it was,
- * so leaving it lands back on the context with nothing to restore.
+ * store did not open, a lens with a mount that has no store. It is pinned OVER
+ * the context, which stays where it was, so leaving it lands back on the
+ * context with nothing to restore.
+ *
+ * A broken lens is pinned rather than entered because every read under it
+ * answers 503 (a lens binds all its members or none), and the context switch
+ * would fire those reads. Its Settings is still the only place the broken mount
+ * can be removed: the server refuses to archive a repo a lens mounts.
  */
 export type PinnedTarget =
   | { kind: 'archived'; id: string }
   | { kind: 'pending'; createId: string }
-  | { kind: 'unavailable'; repo: string };
+  | { kind: 'unavailable'; repo: string }
+  | { kind: 'brokenLens'; name: string };
 
 export type DraftKind = 'repo' | 'lens';
 
@@ -73,7 +80,7 @@ const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
  *   under such a lens answers 503, so there is nothing to Browse; its sessions
  *   and its settings (where the broken mount is repaired) still exist.
  * - A pinned target (archived, a create not yet registered, a registered repo
- *   with no store): Settings only. There is no store to browse and nobody
+ *   with no store, a lens with a mount that has no store): Settings only. There is no store to browse and nobody
  *   bound to it.
  * - A draft: nothing. It is a form, not a thing with pages.
  *
@@ -84,7 +91,8 @@ const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
  */
 export function facetsFor(target: Target, repos: RepoInfo[], lenses: Lens[], creates: RepoCreateStatus[]): Facet[] {
   if (target.kind === 'draft') return [];
-  if (target.kind === 'archived' || target.kind === 'pending' || target.kind === 'unavailable') return ['settings'];
+  if (target.kind === 'archived' || target.kind === 'pending' || target.kind === 'unavailable'
+    || target.kind === 'brokenLens') return ['settings'];
   if (target.kind === 'repo') {
     const repo = repos.find(r => r.name === target.repo);
     // Not listed (yet): the list can lag a create or a rename by a refresh,
@@ -148,8 +156,10 @@ export type ViewAction =
   /** The draft's target now exists: the draft row gives way to the real row.
    *  If the draft was on screen the reader lands on `facet` of the new target
    *  (Settings for a repo, which is still being created; Browse for a lens);
-   *  if it was hidden, they are left where they are. */
-  | { type: 'DRAFT_REGISTERED'; facet: Facet };
+   *  if it was hidden, they are left where they are. `kind` is the draft that
+   *  registered: a late result for a draft whose slot the other kind has
+   *  since taken retires nothing. */
+  | { type: 'DRAFT_REGISTERED'; kind: DraftKind; facet: Facet };
 
 /** initView reads the persisted parts of the view. Used as useReducer's init. */
 export function initView(): ViewState {
@@ -210,7 +220,10 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       };
     }
     case 'DRAFT_REGISTERED': {
-      if (!s.draft) return s;
+      // The repo wizard's create keeps polling after its draft is replaced by
+      // the lens draft (one slot), so its result can arrive for a draft that
+      // is no longer there. It must not clear the draft that is.
+      if (s.draft !== a.kind) return s;
       const cleared = { ...s, draft: null, draftShown: false, returnTo: null };
       // Registered while the reader was elsewhere: the draft row gives way to
       // the real one, and nobody is yanked off the page they chose.
@@ -280,6 +293,8 @@ export function targetLabelFor(
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };
     case 'unavailable':
       return { kind: 'repo', name: target.repo, chip: { text: unavailableWord(repos.find(r => r.name === target.repo)?.state), tone: 'bad' } };
+    case 'brokenLens':
+      return { kind: 'lens', name: target.name, chip: { text: 'mount missing', tone: 'bad' } };
     case 'pending': {
       const job = creates.find(c => c.create_id === target.createId);
       const flag = job ? createFlag(job.state) : null;

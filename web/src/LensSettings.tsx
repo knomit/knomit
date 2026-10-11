@@ -7,12 +7,16 @@ import { PencilIcon } from './icons';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
-import { dangerBox, renameInput, writeReadTag, readTag } from './settingsStyles';
+import { dangerBox, renameInput, writeReadTag, readTag, warnCallout, warnCalloutDot, warnDetail } from './settingsStyles';
 import { RepoDot, BranchChip, CheckMark, ConnectBody } from './settingsParts';
 import { useDescriptionEditor, DescriptionActions, DescriptionBody } from './DescriptionEditor';
 
-export function LensSettings({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onRenamed, onError }: {
+export function LensSettings({ lens: initial, name, repos, readOnly, broken = [], onDeleted, onSaved, onRenamed, onError }: {
   lens?: Lens; name: string; repos: RepoInfo[]; readOnly: boolean;
+  /** Mounts with no store (brokenLensMembers). Non-empty only on the page of a
+   *  pinned broken lens: a Mounts block heads the page, naming them and the
+   *  way out, and the rest of the page is the lens's ordinary settings. */
+  broken?: string[];
   onDeleted: () => void; onSaved: () => void;
   // Fired with the NEW name once the server confirms the rename — same
   // contract as RepoSettings's onRenamed. The pane is keyed on `name` by its
@@ -172,6 +176,39 @@ export function LensSettings({ lens: initial, name, repos, readOnly, onDeleted, 
   };
 
   const sections: Section[] = [];
+
+  if (broken.length > 0) {
+    const writeBroken = broken.includes(write);
+    sections.push({
+      id: 'mounts-missing',
+      title: 'Mounts',
+      problem: true,
+      body: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={lede}>Browse and Activity return once every mount has a store.</div>
+          <div data-testid="lens-broken-callout" style={warnCallout}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 12.5 }}>
+              <span style={warnCalloutDot} />
+              {broken.length === 1 ? 'A mount has no store' : `${broken.length} mounts have no store`}
+            </div>
+            {broken.map(b => {
+              const r = repos.find(x => x.name === b);
+              return (
+                <div key={b} data-testid={`lens-broken-mount-${b}`} style={warnDetail}>
+                  {b}{r?.state ? ` — ${r.state}` : ''}{r?.detail ? `: ${r.detail}` : ''}
+                </div>
+              );
+            })}
+          </div>
+          <div style={lede}>
+            {writeBroken
+              ? `${write} is the write target, which a lens cannot change: put its store back and restart knomit, or delete this lens below.`
+              : 'Every read under this lens fails until then. Remove the mount under Read mounts (the pencil), or put its store back and restart knomit. A repository a lens mounts cannot be archived, so this page is the way out.'}
+          </div>
+        </div>
+      ),
+    });
+  }
 
   if (lens?.description || !readOnly) {
     sections.push({
@@ -414,3 +451,5 @@ const editCheckbox = (on: boolean): React.CSSProperties => ({
   background: on ? LENS.accent : 'transparent', border: '1.5px solid ' + (on ? LENS.accent : '#444'),
   cursor: 'pointer',
 });
+
+const lede: React.CSSProperties = { fontSize: 12.5, color: '#888', lineHeight: 1.6 };

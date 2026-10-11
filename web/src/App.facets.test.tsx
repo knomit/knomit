@@ -38,7 +38,7 @@ vi.mock('./api', async (importOriginal) => {
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
       // The drafts and the pinned targets.
-      createRepo: vi.fn(), createLens: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
+      createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
       getRepoCreate: vi.fn(), cancelRepoCreate: vi.fn(), dismissRepoCreate: vi.fn(),
       ontologyPresets: vi.fn(), ontologyPresetYAML: vi.fn(), validateOntology: vi.fn(), ontologySchema: vi.fn(), listTemplates: vi.fn(),
     },
@@ -464,6 +464,69 @@ describe('edge targets', () => {
     expect(screen.getByTestId('rail-archived-older').getAttribute('aria-current')).toBeNull();
   });
 
+  // A lens with a mount that has no store: every read under it answers 503, so
+  // it is pinned, not entered; and its Settings is the only way out, because
+  // the server refuses to archive a repo a lens mounts.
+  it('a lens with a broken mount pins to Settings alone, names the missing mount, and comes back once repaired', async () => {
+    const { m } = await primeApi();
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, VENDOR]);
+    const haunted = {
+      name: 'haunted', uid: 'l-h', write: { uid: 'u-core', name: 'core-kb' },
+      reads: [{ uid: 'u-core', name: 'core-kb' }, { uid: 'u-v', name: 'vendor-docs' }], write_branch: STATUS,
+    };
+    const healthy = { name: 'dev', uid: 'l-dev', write: { uid: 'u-ops', name: 'ops-kb' }, reads: [{ uid: 'u-ops', name: 'ops-kb' }], write_branch: STATUS };
+    m.listLenses.mockResolvedValue([haunted, healthy]);
+    m.getLens.mockImplementation(async (name: string) => (name === 'dev' ? healthy : haunted));
+    await mountApp();
+    fireEvent.click(screen.getByTestId('facet-tab-activity'));
+    await screen.findByTestId('activity-toolbar');
+
+    const row = await screen.findByTestId('rail-lens-haunted');
+    expect(row).toBeEnabled();
+    fireEvent.click(row);
+    await waitFor(() => expect(tabNames()).toEqual(['Settings']));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('haunted');
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^mount missing$/);
+    expect(screen.getByTestId('lens-broken-callout')).toHaveTextContent('vendor-docs');
+    expect(screen.getByTestId('lens-broken-mount-vendor-docs')).toHaveTextContent('Nothing at /Volumes/ext/vendor-docs.');
+    // Only the missing mount is named, not the healthy one beside it.
+    expect(screen.queryByTestId('lens-broken-mount-core-kb')).toBeNull();
+    expect(row).toHaveAttribute('aria-current', 'true');
+    // The context did not move: the broken lens is never entered (its page
+    // re-reads the lens record, which is not a read through it).
+    const ctx = () => JSON.parse(localStorage.getItem('knomit.context') ?? 'null');
+    expect(ctx()).toEqual({ kind: 'repo', repo: 'ops-kb' });
+
+    // The repair: unmount the missing repo. The lens is readable again, so it
+    // becomes the context, still on Settings, with its three tabs.
+    const repaired = { ...haunted, reads: [{ uid: 'u-core', name: 'core-kb' }] };
+    m.updateLens.mockResolvedValue(repaired);
+    m.listLenses.mockResolvedValue([repaired, healthy]);
+    m.getLens.mockImplementation(async (name: string) => (name === 'dev' ? healthy : repaired));
+    fireEvent.click(screen.getByTestId('lens-edit'));
+    fireEvent.click(await screen.findByTestId('lens-read-vendor-docs'));
+    fireEvent.click(screen.getByTestId('lens-edit-save'));
+    await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+    expect(m.updateLens).toHaveBeenCalledWith('haunted', { reads: [] });
+    expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('target-label-chip')).toBeNull();
+    expect(screen.queryByTestId('lens-broken-callout')).toBeNull();
+    await waitFor(() => expect(ctx()).toEqual({ kind: 'lens', name: 'haunted' }));
+  });
+
+  it('a healthy lens is still picked as the context, with its three tabs (control)', async () => {
+    const { m } = await primeApi();
+    const healthy = { name: 'dev', uid: 'l-dev', write: { uid: 'u-ops', name: 'ops-kb' }, reads: [{ uid: 'u-ops', name: 'ops-kb' }], write_branch: STATUS };
+    m.listLenses.mockResolvedValue([healthy]);
+    m.getLens.mockResolvedValue(healthy);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-lens-dev'));
+    await waitFor(() => expect(m.getLens).toHaveBeenCalledWith('dev'));
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('dev'));
+    expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+    expect(screen.queryByTestId('target-label-chip')).toBeNull();
+  });
+
   it('restoring an archived repo lands on it as the context', async () => {
     const { m } = await primeApi();
     m.listArchived.mockResolvedValue([Q3]);
@@ -551,6 +614,48 @@ describe('drafts', () => {
     await waitFor(() => expect(screen.getByTestId('facet-tab-browse')).toHaveAttribute('aria-selected', 'true'));
     expect(screen.queryByTestId('rail-draft-lens')).toBeNull();
     expect(screen.getByTestId('rail-lens-platform')).toHaveAttribute('aria-current', 'true');
+  });
+
+  // The wizard's create keeps polling after its draft is replaced (one slot),
+  // so its registration can land while the LENS draft is on screen.
+  it('a repo create that registers while the lens draft is shown leaves the lens draft alone', async () => {
+    const { m } = await primeApi();
+    await mountApp();
+    fireEvent.click(screen.getByTestId('rail-new-repo'));
+    fireEvent.click(screen.getByTestId('choose-local'));
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'ops-new' } });
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByTestId('step-ontology');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^next$/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByTestId('step-review');
+
+    let report: ((s: unknown) => void) | null = null;
+    m.createRepo.mockImplementation(async (_b: unknown, onStatus: (s: unknown) => void) => {
+      report = onStatus;
+      return new Promise(() => {});
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create repository/i }));
+    await waitFor(() => expect(report).not.toBeNull());
+
+    // The reader moves on to a lens and starts filling it in.
+    fireEvent.click(screen.getByTestId('rail-new-lens'));
+    fireEvent.change(await screen.findByTestId('lens-name'), { target: { value: 'platform' } });
+
+    // Now the repo registers.
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, { name: 'ops-new', uid: 'u-new' }]);
+    m.listRepoCreates.mockResolvedValue([job()]);
+    const reposCalls = m.repos.mock.calls.length;
+    await act(async () => { report!(job()); });
+    // The lists were refreshed, so the registration was acted on…
+    await waitFor(() => expect(m.repos.mock.calls.length).toBeGreaterThan(reposCalls));
+    await screen.findByTestId('rail-repo-ops-new');
+    // …and the lens draft is still the one on screen, with what was typed.
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New lens');
+    expect(screen.getByTestId('rail-draft-lens')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('lens-name')).toHaveValue('platform');
+    expect(screen.getByTestId('rail-repo-ops-new').getAttribute('aria-current')).toBeNull();
+    expect(m.status).not.toHaveBeenCalledWith('ops-new', expect.anything());
   });
 
   it('survives a detour: what was typed is still there when the draft row is picked again', async () => {
