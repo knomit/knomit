@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import { api, MAX_ARCHIVE_NOTE_BYTES, type RepoInfo, type ArchivedRepo } from './api';
 import { btn, confirmBox, confirmInput } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
+import { warnCallout as callout, warnCalloutDot as calloutDot, warnDetail as detail } from './settingsStyles';
 import type { Section } from './SettingsPage';
 
 /**
@@ -146,14 +147,4 @@ const ADVICE: Record<string, string> = {
 };
 
 const lede: CSSProperties = { fontSize: 12.5, color: '#888', lineHeight: 1.6 };
-// The spec's warning callout: amber on dark amber. Amber, not red — the
-// registration is intact, and several of these states clear themselves.
-const callout: CSSProperties = {
-  background: '#1d1a12', border: '1px solid #4a3f22', borderRadius: 6,
-  color: '#e2c07a', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6,
-};
-const calloutDot: CSSProperties = { width: 7, height: 7, borderRadius: '50%', background: '#e2c07a', flexShrink: 0 };
-const detail: CSSProperties = {
-  fontSize: 12, color: '#d9cfae', lineHeight: 1.6, fontFamily: 'var(--k-font-mono)',
-  paddingLeft: 15, overflowWrap: 'anywhere',
-};
+

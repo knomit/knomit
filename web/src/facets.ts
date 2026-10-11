@@ -38,13 +38,20 @@ export type Facet = 'browse' | 'activity' | 'settings';
 /**
  * A target that can NOT be the browse context, because it has no store to read:
  * an archived repo, a create that is not registered yet, a registered repo whose
- * store did not open. It is pinned OVER the context, which stays where it was,
- * so leaving it lands back on the context with nothing to restore.
+ * store did not open, a lens with a mount that has no store. It is pinned OVER
+ * the context, which stays where it was, so leaving it lands back on the
+ * context with nothing to restore.
+ *
+ * A broken lens is pinned rather than entered because every read under it
+ * answers 503 (a lens binds all its members or none), and the context switch
+ * would fire those reads. Its Settings is still the only place the broken mount
+ * can be removed: the server refuses to archive a repo a lens mounts.
  */
 export type PinnedTarget =
   | { kind: 'archived'; id: string }
   | { kind: 'pending'; createId: string }
-  | { kind: 'unavailable'; repo: string };
+  | { kind: 'unavailable'; repo: string }
+  | { kind: 'brokenLens'; name: string };
 
 export type DraftKind = 'repo' | 'lens';
 
@@ -77,25 +84,30 @@ const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
  *   under such a lens answers 503, so there is nothing to Browse; its sessions
  *   and its settings (where the broken mount is repaired) still exist.
  * - A pinned target (archived, a create not yet registered, a registered repo
- *   with no store): Settings only. There is no store to browse and nobody
+ *   with no store, a lens with a mount that has no store): Settings only. There is no store to browse and nobody
  *   bound to it.
  * - A draft: nothing. It is a form, not a thing with pages.
  *
  * A listed repo with no store as the CONTEXT (which only a stale persisted
  * value could produce; the rail pins one instead) gets Settings alone, the safe
- * answer. A repo the list does not carry yet gets all three: the list lags a
- * create or a rename by one refresh.
+ * answer. A repo the list does not carry yet gets all three (the list lags a
+ * rename by one refresh) — unless a create is still working on it, which is
+ * checked first and gives Settings only.
  */
 export function facetsFor(target: Target, repos: RepoInfo[], lenses: Lens[], creates: RepoCreateStatus[]): Facet[] {
   if (target.kind === 'draft') return [];
-  if (target.kind === 'archived' || target.kind === 'pending' || target.kind === 'unavailable') return ['settings'];
+  if (target.kind === 'archived' || target.kind === 'pending' || target.kind === 'unavailable'
+    || target.kind === 'brokenLens') return ['settings'];
   if (target.kind === 'repo') {
+    // A create still working on it comes FIRST: the create's repo may not be
+    // in the listing yet, and it is Settings-only either way (the create block
+    // is where it is reported; Browse has no create banner).
+    if (activeCreateByRepo(creates).has(target.repo)) return ['settings'];
     const repo = repos.find(r => r.name === target.repo);
-    // Not listed (yet): the list can lag a create or a rename by a refresh,
-    // and the context's own reads will say if it is really gone.
+    // Not listed (yet): the list can lag a rename by a refresh, and the
+    // context's own reads will say if it is really gone.
     if (!repo) return ALL_FACETS;
     if (!repoAvailable(repo)) return ['settings'];
-    if (activeCreateByRepo(creates).has(repo.name)) return ['settings'];
     return ALL_FACETS;
   }
   const lens = lenses.find(l => l.name === target.name);
@@ -138,9 +150,9 @@ export type ViewAction =
   | { type: 'TOGGLE_RAIL' }
   | { type: 'SET_RAIL'; open: boolean }
   /** A tab click (or a route that means one: Reconnect, entering a branch). */
-  | { type: 'SET_FACET'; facet: Facet; focus?: string }
+  | { type: 'SET_FACET'; facet: Facet; focus?: string; keepServer?: boolean }
   /** A normal target was picked; `available` is facetsFor(that target). */
-  | { type: 'SELECT_CONTEXT_TARGET'; available: Facet[] }
+  | { type: 'SELECT_CONTEXT_TARGET'; available: Facet[]; keepServer?: boolean }
   | { type: 'SET_FOCUS'; focus: string }
   | { type: 'CLEAR_FOCUS' }
   | { type: 'SET_LOCKED'; locked: boolean }
@@ -157,8 +169,10 @@ export type ViewAction =
   /** The draft's target now exists: the draft row gives way to the real row.
    *  If the draft was on screen the reader lands on `facet` of the new target
    *  (Settings for a repo, which is still being created; Browse for a lens);
-   *  if it was hidden, they are left where they are. */
-  | { type: 'DRAFT_REGISTERED'; facet: Facet }
+   *  if it was hidden, they are left where they are. `kind` is the draft that
+   *  registered: a late result for a draft whose slot the other kind has
+   *  since taken retires nothing. */
+  | { type: 'DRAFT_REGISTERED'; kind: DraftKind; facet: Facet }
   /** The gear: open the server pages on `page`, or close them. */
   | { type: 'TOGGLE_SERVER' }
   /** A server tab click. */
@@ -201,12 +215,17 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       // target keeps what the reader just picked, not what they had before.
       // It is also a way back from the server pages (the banner's Reconnect):
       // a facet is a page of a target, so the target comes back on it.
-      return { ...s, facet: a.facet, lastFacet: null, focus: a.focus ?? null, server: null };
+      // `keepServer` is for the app's own corrections (a pin that vanished or
+      // healed under the server pages): they fix the target underneath, and
+      // nobody is taken off the page they chose.
+      return { ...s, facet: a.facet, lastFacet: null, focus: a.focus ?? null, server: a.keepServer ? s.server : null };
     case 'SELECT_CONTEXT_TARGET': {
       // A normal target IS the context: whatever was pinned over it goes, and
       // a shown draft is hidden (kept, so its row can be picked again).
-      // Picking any row is also the way off the server pages.
-      const base = s.pinned === null && !s.draftShown && s.server === null ? s : { ...s, pinned: null, draftShown: false, server: null };
+      // Picking any row is also the way off the server pages (but not an
+      // automatic unpin: `keepServer`).
+      const server = a.keepServer ? s.server : null;
+      const base = s.pinned === null && !s.draftShown && s.server === server ? s : { ...s, pinned: null, draftShown: false, server };
       return applyFacetRule(base, a.available);
     }
     case 'SELECT_PINNED':
@@ -227,7 +246,10 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       };
     }
     case 'DRAFT_REGISTERED': {
-      if (!s.draft) return s;
+      // The repo wizard's create keeps polling after its draft is replaced by
+      // the lens draft (one slot), so its result can arrive for a draft that
+      // is no longer there. It must not clear the draft that is.
+      if (s.draft !== a.kind) return s;
       const cleared = { ...s, draft: null, draftShown: false, returnTo: null };
       // Registered while the reader was elsewhere: the draft row gives way to
       // the real one, and nobody is yanked off the page they chose.
@@ -314,6 +336,8 @@ export function targetLabelFor(
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };
     case 'unavailable':
       return { kind: 'repo', name: target.repo, chip: { text: unavailableWord(repos.find(r => r.name === target.repo)?.state), tone: 'bad' } };
+    case 'brokenLens':
+      return { kind: 'lens', name: target.name, chip: { text: 'mount missing', tone: 'bad' } };
     case 'pending': {
       const job = creates.find(c => c.create_id === target.createId);
       const flag = job ? createFlag(job.state) : null;

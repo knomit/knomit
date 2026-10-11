@@ -27,7 +27,7 @@ vi.mock('./api', async (importOriginal) => {
       listOAuthPending: vi.fn(),
       getFleet: vi.fn(), listFleetMembers: vi.fn(),
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
-      status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
+      status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), updateLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
@@ -321,5 +321,37 @@ describe('a draft under the server pages', () => {
     expect(back).toBeVisible();
     expect(back.value).toBe('https://example.com/half-typed.git');
     expect(screen.getByTestId('target-label')).toHaveTextContent('New repository');
+  });
+});
+
+// A pinned settings-only target (here the broken-mount lens) is under the
+// server pages like any other target: the gear returns to it, on its page.
+describe('a pinned target under the server pages', () => {
+  it('comes back on the broken lens\'s Settings after the gear', async () => {
+    localStorage.setItem('knomit.rail', '1');
+    const m = await primeApi();
+    m.repos.mockResolvedValue([
+      { name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' },
+      { name: 'vendor-docs', uid: 'u-v', state: 'missing', detail: 'Nothing at /Volumes/ext/vendor-docs.' },
+    ]);
+    const haunted = {
+      name: 'haunted', uid: 'l-h', write: { uid: 'u-core', name: 'core-kb' },
+      reads: [{ uid: 'u-core', name: 'core-kb' }, { uid: 'u-v', name: 'vendor-docs' }], write_branch: STATUS,
+    };
+    m.listLenses.mockResolvedValue([haunted]);
+    m.getLens.mockResolvedValue(haunted);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-lens-haunted'));
+    expect(await screen.findByTestId('lens-broken-callout')).toBeInTheDocument();
+
+    await openServer();
+    expect(screen.queryByTestId('lens-broken-callout')).toBeNull();
+    // No row is selected under the server pages, the pinned one included.
+    expect(screen.getByTestId('rail-lens-haunted').getAttribute('aria-current')).toBeNull();
+
+    await act(async () => { fireEvent.click(gear()); });
+    expect(await screen.findByTestId('lens-broken-callout')).toBeInTheDocument();
+    expect(screen.getByTestId('target-label')).toHaveTextContent('haunted');
+    expect(screen.getByTestId('rail-lens-haunted')).toHaveAttribute('aria-current', 'true');
   });
 });

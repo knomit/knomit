@@ -1022,15 +1022,32 @@ export default function App() {
   }, [noRepos, dispatchBoot]);
 
   // A pinned target that no longer exists is unpinned: an archived repo purged
-  // elsewhere, a repo with no store that came back (or went). The reader lands
-  // on the context's facet, as when leaving any pinned target.
+  // elsewhere, a repo with no store that came back (or went), a broken lens
+  // that was deleted. The reader lands on the context's facet, as when leaving
+  // any pinned target. Both corrections happen to the target UNDER the
+  // server pages if they are open (keepServer): nobody is taken off them.
+  //
+  // A broken lens that was REPAIRED (its missing mount removed, or the store
+  // back) is readable again, so it becomes what a readable lens is: the
+  // context. The reader stays on its Settings, where the repair was made.
   useEffect(() => {
     const p = view.pinned;
     if (!p) return;
+    if (p.kind === 'brokenLens' && reposLoaded) {
+      const lens = lenses.find(l => l.name === p.name);
+      if (lens && brokenLensMember(lens, repos) === null) {
+        const ctx: BrowseContext = { kind: 'lens', name: p.name };
+        dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(ctx, repos, lenses, creates), keepServer: true });
+        dispatchView({ type: 'SET_FACET', facet: 'settings', keepServer: true });
+        dispatch({ type: 'SET_CONTEXT', context: ctx });
+        return;
+      }
+    }
     const gone = (p.kind === 'archived' && archivedLoaded && !archived.some(a => a.id === p.id))
-      || (p.kind === 'unavailable' && reposLoaded && !repos.some(r => r.name === p.repo && !repoAvailable(r)));
-    if (gone) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(state.context, repos, lenses, creates) });
-  }, [view.pinned, archived, archivedLoaded, repos, reposLoaded, lenses, creates, state.context, dispatchView]);
+      || (p.kind === 'unavailable' && reposLoaded && !repos.some(r => r.name === p.repo && !repoAvailable(r)))
+      || (p.kind === 'brokenLens' && reposLoaded && !lenses.some(l => l.name === p.name));
+    if (gone) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(state.context, repos, lenses, creates), keepServer: true });
+  }, [view.pinned, archived, archivedLoaded, repos, reposLoaded, lenses, creates, state.context, dispatch, dispatchView]);
 
   // The server pages, behind the gear. They show OVER the displayed target,
   // which stays exactly as it was, so the gear again (or any rail pick) is the
@@ -1298,20 +1315,33 @@ export default function App() {
   // draft was on screen — the reader lands on its Settings in creating mode
   // (E3), where Browse and Activity appear when the job is done. Lists first,
   // so the rail has the row to select.
+  //
+  // Whether the draft is on screen is read AFTER the refresh, and only for the
+  // REPOSITORY draft. The wizard's create keeps polling once its draft is gone
+  // (Cancel, or the lens draft taking the one slot), so this can fire for a
+  // draft that is no longer there; then it retires nothing and moves nobody.
   const onRepoDraftRegistered = useCallback((name: string) => {
-    const shown = displayedTarget(viewRef.current, stateRef.current.context, false).kind === 'draft'
-      || (viewRef.current.pinned === null && !viewRef.current.draftShown && repos.length === 0);
+    const hadNoRepos = repos.length === 0;
     void refreshLists().then(() => {
-      if (shown && !viewRef.current.draftShown) dispatchView({ type: 'SHOW_DRAFT', from: stateRef.current.context });
-      dispatchView({ type: 'DRAFT_REGISTERED', facet: 'settings' });
+      const v = viewRef.current;
+      if (v.draft !== 'repo') return;
+      // With no repositories the draft is the fallback target even when not
+      // marked shown (nothing is pinned over it).
+      const shown = v.draftShown || (hadNoRepos && v.pinned === null);
+      if (shown && !v.draftShown) dispatchView({ type: 'SHOW_DRAFT', from: stateRef.current.context });
+      dispatchView({ type: 'DRAFT_REGISTERED', kind: 'repo', facet: 'settings' });
       if (shown) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: name } });
     });
   }, [dispatch, dispatchView, refreshLists, repos.length]);
-  // The lens draft created its lens: land on its Browse.
+  // The lens draft created its lens: land on its Browse — if the lens draft is
+  // still the one on screen (the same guard as the repository draft's).
   const onLensDraftCreated = useCallback((name: string) => {
     void refreshLists().then(() => {
-      dispatchView({ type: 'DRAFT_REGISTERED', facet: 'browse' });
-      dispatch({ type: 'SET_CONTEXT', context: { kind: 'lens', name } });
+      const v = viewRef.current;
+      if (v.draft !== 'lens') return;
+      const shown = v.draftShown;
+      dispatchView({ type: 'DRAFT_REGISTERED', kind: 'lens', facet: 'browse' });
+      if (shown) dispatch({ type: 'SET_CONTEXT', context: { kind: 'lens', name } });
     });
   }, [dispatch, dispatchView, refreshLists]);
 
@@ -1375,7 +1405,13 @@ export default function App() {
     try { await api.cancelRepoCreate(job.create_id); } catch { /* the refresh tells the truth */ }
     await refreshRepoCreates();
   }, [creates]);
-  const onSettingsSelectLens = useCallback((name: string) => onSelectTarget({ kind: 'lens', name }), [onSelectTarget]);
+  // "Mounted in" on a repo's Settings: a lens with a mount that has no store is
+  // pinned, as from the rail, never entered (the rescue would bounce it).
+  const onSettingsSelectLens = useCallback((name: string) => {
+    const lens = lenses.find(l => l.name === name);
+    if (lens && brokenLensMember(lens, repos) !== null) { onPin({ kind: 'brokenLens', name }); return; }
+    onSelectTarget({ kind: 'lens', name });
+  }, [lenses, repos, onPin, onSelectTarget]);
   // The status footer's "N repositories being created": the creates are rows
   // in the rail, each with its chip, so the count opens the rail. Over the
   // server pages too: the rail sits beside them, and a row picked there

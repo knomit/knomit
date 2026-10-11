@@ -96,15 +96,30 @@ describe('TargetRail', () => {
     expect(onSelect).toHaveBeenCalledWith({ kind: 'lens', name: 'dev' });
   });
 
-  it('a lens with a mount that has no store is disabled with the reason', () => {
+  // A broken lens cannot be the context (every read under it answers 503), but
+  // its Settings is the only place its broken mount can be removed: the server
+  // refuses to archive a repo a lens mounts. So the row is live and PINS.
+  it('a lens with a mount that has no store is enabled, gives the reason, and pins', () => {
     const broken: Lens = { name: 'haunted', write: { uid: 'u-a', name: 'a' }, reads: [{ uid: 'u-ghost', name: 'ghost' }] };
-    const { onSelect } = renderRail({ lenses: [...lenses, broken] });
+    const onPin = vi.fn();
+    const { onSelect } = renderRail({ lenses: [...lenses, broken], onPin });
     const row = screen.getByTestId('rail-lens-haunted') as HTMLButtonElement;
-    expect((screen.getByTestId('rail-lens-dev') as HTMLButtonElement).disabled).toBe(false);
-    expect(row.disabled).toBe(true);
+    expect(row.disabled).toBe(false);
     expect(row).toHaveAttribute('title', 'This lens cannot be read: its mount "ghost" has no store.');
     fireEvent.click(row);
+    expect(onPin).toHaveBeenCalledWith({ kind: 'brokenLens', name: 'haunted' });
     expect(onSelect).not.toHaveBeenCalled();
+    // Control: a healthy lens is still picked as the context, not pinned.
+    fireEvent.click(screen.getByTestId('rail-lens-dev'));
+    expect(onSelect).toHaveBeenCalledWith({ kind: 'lens', name: 'dev' });
+    expect(onPin).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a pinned broken lens selected, and not the context', () => {
+    const broken: Lens = { name: 'haunted', write: { uid: 'u-a', name: 'a' }, reads: [{ uid: 'u-ghost', name: 'ghost' }] };
+    renderRail({ lenses: [...lenses, broken], context: { kind: 'repo', repo: 'b' }, pinned: { kind: 'brokenLens', name: 'haunted' } });
+    expect(screen.getByTestId('rail-lens-haunted').getAttribute('aria-current')).toBe('true');
+    expect(screen.getByTestId('rail-repo-b').getAttribute('aria-current')).toBeNull();
   });
 
   it('the selected repo row and the selected lens row carry their two different selected styles', () => {

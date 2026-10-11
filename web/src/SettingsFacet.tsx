@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { BrowseContext } from './state';
+import { brokenLensMembers } from './api';
 import type { Lens, RepoInfo, RepoCreateStatus, ArchivedRepo } from './api';
 import type { PinnedTarget } from './facets';
 import { RepoSettings } from './RepoSettings';
@@ -11,8 +12,9 @@ import { PendingCreateSettings } from './PendingCreateSettings';
 
 // SettingsFacet is a target's Settings page. For a normal target (the browse
 // context) that is RepoSettings or LensSettings; for a pinned, settings-only
-// target it is the page of what it is — ArchivedSettings, UnavailableSettings
-// or PendingCreateSettings. The pages own their index column and scroll
+// target it is the page of what it is — ArchivedSettings, UnavailableSettings,
+// PendingCreateSettings, or a broken lens's LensSettings headed by the mounts
+// that have no store. The pages own their index column and scroll
 // container; this adds only the error line their mutations report to.
 //
 // `serverReadOnly` is the instance gate and nothing else — never
@@ -95,6 +97,24 @@ export function SettingsFacet({
         />
       );
       break;
+    case 'brokenLens': {
+      const lens = lenses.find(l => l.name === target.name);
+      page = lens && (
+        <LensSettings
+          key={target.name}
+          lens={lens}
+          name={target.name}
+          repos={repos}
+          readOnly={serverReadOnly}
+          broken={brokenLensMembers(lens, repos)}
+          onDeleted={() => onChanged()}
+          onSaved={() => onChanged()}
+          onRenamed={to => onChanged({ from: target.name, to })}
+          onError={setErr}
+        />
+      );
+      break;
+    }
     case 'archived': {
       const info = archived.find(a => a.id === target.id);
       page = info && (

@@ -127,6 +127,13 @@ describe('facetsFor', () => {
     expect(facetsFor({ kind: 'repo', repo: 'core-kb' }, repos, lenses, creating)).toEqual(['settings']);
   });
 
+  it('gives a repo whose create is running but which is not listed yet only settings', () => {
+    const unlisted = [{ create_id: 'c2', name: 'new-kb', state: 'running' } as RepoCreateStatus];
+    expect(facetsFor({ kind: 'repo', repo: 'new-kb' }, repos, lenses, unlisted)).toEqual(['settings']);
+    // Control: unlisted with no create gets all three (the list lags by a refresh).
+    expect(facetsFor({ kind: 'repo', repo: 'new-kb' }, repos, lenses, [])).toEqual(['browse', 'activity', 'settings']);
+  });
+
   it('gives a lens with all mounts readable all three', () => {
     expect(facetsFor({ kind: 'lens', name: 'dev' }, repos, lenses, [])).toEqual(['browse', 'activity', 'settings']);
   });
@@ -169,6 +176,7 @@ describe('pinned targets and the facet rule', () => {
     expect(facetsFor({ kind: 'archived', id: 'x' }, [], [], [])).toEqual(['settings']);
     expect(facetsFor({ kind: 'pending', createId: 'c1' }, [], [], [])).toEqual(['settings']);
     expect(facetsFor({ kind: 'unavailable', repo: 'gone' }, [], [], [])).toEqual(['settings']);
+    expect(facetsFor({ kind: 'brokenLens', name: 'bad' }, [], [], [])).toEqual(['settings']);
     expect(facetsFor({ kind: 'draft', draft: 'repo' }, [], [], [])).toEqual([]);
   });
 });
@@ -204,7 +212,7 @@ describe('drafts', () => {
 
   it('E3: DRAFT_REGISTERED lands on settings, remembers the facet, and a job reaching done changes nothing', () => {
     const open = viewReducer({ ...initView(), facet: 'browse' }, { type: 'OPEN_DRAFT', kind: 'repo', from: ops });
-    const landed = viewReducer(open, { type: 'DRAFT_REGISTERED', facet: 'settings' });
+    const landed = viewReducer(open, { type: 'DRAFT_REGISTERED', kind: 'repo', facet: 'settings' });
     expect(landed.draft).toBeNull();
     expect(landed.draftShown).toBe(false);
     expect(landed.returnTo).toBeNull();
@@ -219,7 +227,7 @@ describe('drafts', () => {
 
   it('a lens draft registered lands on browse and forgets the remembered facet', () => {
     const open = viewReducer({ ...initView(), facet: 'settings', lastFacet: 'activity' }, { type: 'OPEN_DRAFT', kind: 'lens', from: ops });
-    const landed = viewReducer(open, { type: 'DRAFT_REGISTERED', facet: 'browse' });
+    const landed = viewReducer(open, { type: 'DRAFT_REGISTERED', kind: 'lens', facet: 'browse' });
     expect(landed.facet).toBe('browse');
     expect(landed.lastFacet).toBeNull();
   });
@@ -227,10 +235,23 @@ describe('drafts', () => {
   it('a draft that registers while HIDDEN is dropped without moving the reader', () => {
     const open = viewReducer({ ...initView(), facet: 'browse' }, { type: 'OPEN_DRAFT', kind: 'repo', from: ops });
     const away = viewReducer({ ...open, facet: 'activity' }, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] });
-    const done = viewReducer(away, { type: 'DRAFT_REGISTERED', facet: 'settings' });
+    const done = viewReducer(away, { type: 'DRAFT_REGISTERED', kind: 'repo', facet: 'settings' });
     expect(done.draft).toBeNull();
     expect(done.facet).toBe('activity');
     expect(done.lastFacet).toBeNull();
+  });
+
+  // The repo wizard's create keeps polling after the lens draft takes the one
+  // slot, so its result can arrive for a draft that is not there any more.
+  it('a registration for the OTHER kind of draft leaves the draft on screen alone', () => {
+    const repoOpen = viewReducer({ ...initView(), facet: 'browse' }, { type: 'OPEN_DRAFT', kind: 'repo', from: ops });
+    const lensOpen = viewReducer(repoOpen, { type: 'OPEN_DRAFT', kind: 'lens', from: ops });
+    const late = viewReducer(lensOpen, { type: 'DRAFT_REGISTERED', kind: 'repo', facet: 'settings' });
+    expect(late).toBe(lensOpen);
+    expect(late.draft).toBe('lens');
+    expect(late.draftShown).toBe(true);
+    // Control: the lens draft's own registration does retire it.
+    expect(viewReducer(lensOpen, { type: 'DRAFT_REGISTERED', kind: 'lens', facet: 'browse' }).draft).toBeNull();
   });
 
   it('with no repos the repo draft cannot be cancelled; with one it can, and a lens draft always can', () => {
@@ -281,6 +302,11 @@ describe('targetLabelFor', () => {
     expect(targetLabelFor({ kind: 'repo', repo: 'ops-kb' }, repos, [], [])).toEqual({ kind: 'repo', name: 'ops-kb' });
   });
 
+  it('chips a pinned broken lens "mount missing" in the bad tone', () => {
+    expect(targetLabelFor({ kind: 'brokenLens', name: 'haunted' }, repos, [], [])).toEqual(
+      { kind: 'lens', name: 'haunted', chip: { text: 'mount missing', tone: 'bad' } });
+  });
+
   it('labels a draft by what it will create', () => {
     expect(targetLabelFor({ kind: 'draft', draft: 'repo' }, repos, [], [])).toEqual({ kind: 'repo', name: 'New repository', draft: true });
     expect(targetLabelFor({ kind: 'draft', draft: 'lens' }, repos, [], [])).toEqual({ kind: 'lens', name: 'New lens', draft: true });
@@ -323,6 +349,27 @@ describe('the server pages', () => {
     const on: ViewState = { ...onActivity, server: 'fleet' };
     const back = viewReducer(on, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] });
     expect(back).toEqual({ ...onActivity, server: null });
+  });
+
+  // The app's own corrections (a pin that vanished or healed while the server
+  // pages were open) fix the target underneath without taking the reader off
+  // the page they chose. Control: the same actions from a pick do leave.
+  it('an automatic unpin or heal under them keeps them open, and still fixes the target underneath', () => {
+    const on: ViewState = { ...onActivity, server: 'logs', pinned: { kind: 'brokenLens', name: 'haunted' }, facet: 'settings', lastFacet: 'activity' };
+    const healed = viewReducer(
+      viewReducer(on, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'], keepServer: true }),
+      { type: 'SET_FACET', facet: 'settings', keepServer: true },
+    );
+    expect(healed.server).toBe('logs');
+    expect(healed.pinned).toBeNull();
+    expect(healed.facet).toBe('settings');
+    const gone = viewReducer(on, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'], keepServer: true });
+    expect(gone.server).toBe('logs');
+    expect(gone.pinned).toBeNull();
+    expect(gone.facet).toBe('activity');
+    // Control: without the flag the same actions leave them.
+    expect(viewReducer(on, { type: 'SELECT_CONTEXT_TARGET', available: ['settings'] }).server).toBeNull();
+    expect(viewReducer(on, { type: 'SET_FACET', facet: 'settings' }).server).toBeNull();
   });
 
   it('a reload never lands on them', () => {

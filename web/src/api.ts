@@ -171,6 +171,18 @@ export function brokenLensMember(l: LensMembership, repos: RepoInfo[]): string |
   return null;
 }
 
+/** brokenLensMembers: every member brokenLensMember would name, in mount order
+ *  (write repo first), each once. A broken lens's Settings names them all. */
+export function brokenLensMembers(l: LensMembership, repos: RepoInfo[]): string[] {
+  const byUID = new Map(repos.map(r => [r.uid, r]));
+  const out: string[] = [];
+  for (const m of [l.write, ...l.reads]) {
+    const r = byUID.get(m.uid);
+    if (r && !repoAvailable(r) && !out.includes(r.name)) out.push(r.name);
+  }
+  return out;
+}
+
 // lensAvailable reports whether a lens can be entered at all. Mirrors
 // repoAvailable, and is the gate every navigation into a lens must pass.
 export function lensAvailable(l: LensMembership, repos: RepoInfo[]): boolean {
