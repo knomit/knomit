@@ -126,6 +126,13 @@ describe('facetsFor', () => {
     expect(facetsFor({ kind: 'repo', repo: 'core-kb' }, repos, lenses, creating)).toEqual(['settings']);
   });
 
+  it('gives a repo whose create is running but which is not listed yet only settings', () => {
+    const unlisted = [{ create_id: 'c2', name: 'new-kb', state: 'running' } as RepoCreateStatus];
+    expect(facetsFor({ kind: 'repo', repo: 'new-kb' }, repos, lenses, unlisted)).toEqual(['settings']);
+    // Control: unlisted with no create gets all three (the list lags by a refresh).
+    expect(facetsFor({ kind: 'repo', repo: 'new-kb' }, repos, lenses, [])).toEqual(['browse', 'activity', 'settings']);
+  });
+
   it('gives a lens with all mounts readable all three', () => {
     expect(facetsFor({ kind: 'lens', name: 'dev' }, repos, lenses, [])).toEqual(['browse', 'activity', 'settings']);
   });
