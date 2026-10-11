@@ -31,6 +31,8 @@ vi.mock('./api', async (importOriginal) => {
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
+      // The repository draft's wizard.
+      ontologyPresets: vi.fn(), ontologyPresetYAML: vi.fn(), validateOntology: vi.fn(), ontologySchema: vi.fn(), listTemplates: vi.fn(),
     },
   };
 });
@@ -74,6 +76,11 @@ async function primeApi({ readOnly = false, oauth = [] as OAuthPending[] | null 
   m.listOAuthPending.mockResolvedValue(oauth);
   m.getFleet.mockResolvedValue({ state: 'standalone', agent_id: 'agent-7f3a' });
   m.listFleetMembers.mockResolvedValue([]);
+  m.ontologyPresets.mockResolvedValue([{ name: 'default', id: 'general', title: 'General', description: 'd', topics: ['people'] }]);
+  m.ontologyPresetYAML.mockResolvedValue('id: general\nname: General\ntopics:\n  people:\n');
+  m.validateOntology.mockResolvedValue({ ok: true, id: 'general', name: 'General', topics: ['people'], rule_count: 0 });
+  m.ontologySchema.mockResolvedValue([]);
+  m.listTemplates.mockResolvedValue([]);
   return m;
 }
 
@@ -284,5 +291,35 @@ describe('the keyboard on a server page', () => {
     await act(async () => { await Promise.resolve(); });
     await act(async () => { fireEvent.click(gear()); });
     expect(await screen.findByTestId('retract-btn')).toBeInTheDocument();
+  });
+});
+
+// A draft is a form someone is half-way through. Looking at the server pages
+// must not cost them what they typed: the draft stays mounted, hidden, under
+// the pages, and is there as they left it when the gear brings them back.
+describe('a draft under the server pages', () => {
+  it('keeps what was typed into the repository draft across a visit to the server pages', async () => {
+    localStorage.setItem('knomit.rail', '1');
+    await primeApi();
+    await mountApp();
+    fireEvent.click(screen.getByTestId('rail-new-repo'));
+    await screen.findByTestId('step-source');
+    fireEvent.click(screen.getByTestId('choose-remote'));
+    const url = await screen.findByTestId('create-url') as HTMLInputElement;
+    fireEvent.change(url, { target: { value: 'https://example.com/half-typed.git' } });
+    expect(url).toBeVisible();
+
+    await openServer();
+    // Control: hidden while the server pages show — but the same node, still
+    // mounted, still holding the text.
+    expect(url).not.toBeVisible();
+    expect(screen.getByTestId('create-url')).toBe(url);
+
+    await act(async () => { fireEvent.click(gear()); });
+    await waitFor(() => expect(screen.queryByTestId('server-pages')).toBeNull());
+    const back = screen.getByTestId('create-url') as HTMLInputElement;
+    expect(back).toBeVisible();
+    expect(back.value).toBe('https://example.com/half-typed.git');
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New repository');
   });
 });
