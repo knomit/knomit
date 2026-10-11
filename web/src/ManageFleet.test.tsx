@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { ManageFleet, capabilitiesText, registerBlocked, unregisterBlocked } from './ManageFleet';
+import { FleetPage, capabilitiesText, registerBlocked, unregisterBlocked } from './ManageFleet';
 import { api, type FleetStatus } from './api';
 
 vi.mock('./api', async importOriginal => ({
@@ -47,10 +47,10 @@ describe('the state machine decides what is allowed, and says why', () => {
   });
 });
 
-describe('ManageFleet', () => {
+describe('FleetPage', () => {
   it('shows the state, the record state and last_error verbatim, with the retry status', async () => {
     vi.mocked(api.getFleet).mockResolvedValue(unregistering);
-    render(<ManageFleet />);
+    render(<FleetPage />);
     await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('unregistering'));
     expect(screen.getByTestId('fleet-record-state').textContent).toContain('active');
     const errBox = screen.getByTestId('fleet-last-error');
@@ -60,7 +60,7 @@ describe('ManageFleet', () => {
 
   it('disables the forbidden actions with their reasons', async () => {
     vi.mocked(api.getFleet).mockResolvedValue(unregistering);
-    render(<ManageFleet />);
+    render(<FleetPage />);
     await waitFor(() => expect(screen.getByTestId('fleet-register')).toBeDisabled());
     expect(screen.getByTestId('fleet-unregister')).toBeDisabled();
     expect(screen.getByTestId('fleet-register-why').textContent).toMatch(/unregistration is still being pushed/);
@@ -69,7 +69,7 @@ describe('ManageFleet', () => {
 
   it('registers with the typed URL and keeps the form filled when it fails', async () => {
     vi.mocked(api.registerFleet).mockRejectedValue(new Error('clone failed: repository not found'));
-    render(<ManageFleet />);
+    render(<FleetPage />);
     await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('standalone'));
     const input = screen.getByLabelText('Fleet repository URL') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'https://github.com/knomit/fleet.git' } });
@@ -105,7 +105,7 @@ describe('F10: addresses, capabilities and the own record', () => {
 
   it('shows the configured addresses, the own record and "pending update"', async () => {
     vi.mocked(api.getFleet).mockResolvedValue(registered);
-    render(<ManageFleet />);
+    render(<FleetPage />);
     await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('registered'));
     expect(screen.getByTestId('fleet-external-addresses').textContent).toBe('https://h1v302.tail5113a7.ts.net');
     expect(screen.getByTestId('fleet-own-record').textContent).toContain('darwin/arm64 · 0.5.0.abc · read_only=false');
@@ -120,7 +120,7 @@ describe('F10: addresses, capabilities and the own record', () => {
       record_current: false,
       notice: 'no external addresses configured; set `external_addresses` in knomit.toml',
     });
-    render(<ManageFleet />);
+    render(<FleetPage />);
     await waitFor(() => expect(screen.getByTestId('fleet-notice').textContent).toContain('external_addresses'));
     expect(screen.getByTestId('fleet-external-addresses').textContent).toBe('none');
     expect(screen.getByTestId('fleet-record-sync').textContent).toMatch(/restart or re-register/);
@@ -132,7 +132,7 @@ describe('F10: addresses, capabilities and the own record', () => {
       { agent: 'h1v302', state: 'active', host: 'h1v302', addresses: ['https://h1v302.tail5113a7.ts.net'], capabilities: { os: 'darwin', arch: 'arm64', version: '0.5.0.abc' } },
       { agent: 'peer', state: 'left', host: 'box', addresses: ['not-a-url'], capabilities: { os: 'plan9' } },
     ]);
-    render(<ManageFleet />);
+    render(<FleetPage />);
     await waitFor(() => expect(screen.getAllByTestId('fleet-member')).toHaveLength(2));
     const [a, b] = screen.getAllByTestId('fleet-member');
     expect(a.textContent).toContain('https://h1v302.tail5113a7.ts.net');
@@ -141,5 +141,47 @@ describe('F10: addresses, capabilities and the own record', () => {
     expect(b.textContent).toContain('box');
     expect(b.textContent).toContain('not-a-url');
     expect(b.textContent).toContain('plan9/?');
+  });
+});
+
+// The page is the index + blocks layout: This instance, Members, then the one
+// action the state allows. Join and Leave render by state; both stay while a
+// push is still pending, each with its reason.
+describe('the Fleet page layout', () => {
+  const sectionIds = () => Array.from(screen.getByTestId('fleet-page').querySelectorAll('section')).map(s => s.id);
+  const registered: FleetStatus = { state: 'registered', agent_id: 'a1', fleet_repo: 'fleet', record_state: 'active' };
+
+  it('a registered instance shows only Leave', async () => {
+    vi.mocked(api.getFleet).mockResolvedValue(registered);
+    render(<FleetPage />);
+    await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('registered'));
+    expect(sectionIds()).toEqual(['this-instance', 'members', 'leave']);
+    expect(screen.queryByTestId('fleet-register')).toBeNull();
+    expect(screen.getByTestId('fleet-unregister')).toBeEnabled();
+  });
+
+  it('a standalone instance shows only Join', async () => {
+    render(<FleetPage />);
+    await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('standalone'));
+    expect(sectionIds()).toEqual(['this-instance', 'members', 'join']);
+    expect(screen.queryByTestId('fleet-unregister')).toBeNull();
+  });
+
+  it('indexes the blocks under a "Fleet" heading', async () => {
+    vi.mocked(api.getFleet).mockResolvedValue(registered);
+    render(<FleetPage />);
+    await waitFor(() => expect(sectionIds()).toEqual(['this-instance', 'members', 'leave']));
+    expect(screen.getByTestId('settings-index-heading')).toHaveTextContent('Fleet');
+    expect(screen.getByTestId('toc-this-instance')).toHaveTextContent('This instance');
+    expect(screen.getByTestId('toc-members')).toHaveTextContent('Members');
+    expect(screen.getByTestId('toc-leave')).toHaveTextContent('Leave fleet');
+  });
+
+  it('keeps both actions while a push is pending, each with its reason', async () => {
+    vi.mocked(api.getFleet).mockResolvedValue({ ...registered, state: 'registering' });
+    render(<FleetPage />);
+    await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('registering'));
+    expect(sectionIds()).toEqual(['this-instance', 'members', 'join', 'leave']);
+    expect(screen.getByTestId('fleet-register-why').textContent).toMatch(/registration is still being pushed/);
   });
 });

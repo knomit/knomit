@@ -158,16 +158,16 @@ describe('the target rail in the app', () => {
     expect(document.activeElement).toBe(document.body);
   });
 
-  it('nor when the rail remounts on the way out of Manage', async () => {
+  it('nor on the way in and out of the server pages', async () => {
     await primeApi();
     await mountApp();
     pressMod('k');
     await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('rail-search')));
     act(() => { (document.activeElement as HTMLElement).blur(); });
 
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
-    await screen.findByTestId('manage-surface');
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    await screen.findByTestId('server-pages');
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
     const search = await screen.findByTestId('rail-search');
     await act(async () => { await Promise.resolve(); });
     expect(document.activeElement).not.toBe(search);
@@ -257,23 +257,22 @@ describe('the target rail in the app', () => {
     expect(rail.parentElement).toHaveStyle({ display: 'flex' });
   });
 
-  it('is not rendered while Manage owns the window, and comes back after', async () => {
+  it('stays beside the server pages, where ⌘B and the toggle still answer', async () => {
     localStorage.setItem('knomit.rail', '1');
     await primeApi();
     await mountApp();
     expect(screen.getByTestId('target-rail')).toBeInTheDocument();
 
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
-    await screen.findByTestId('manage-surface');
-    expect(screen.queryByTestId('target-rail')).toBeNull();
-    expect(screen.queryByTestId('rail-toggle')).toBeNull();
-    // ⌘B is not answered in Manage.
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    await screen.findByTestId('server-pages');
+    expect(screen.getByTestId('target-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-toggle')).toHaveAttribute('aria-pressed', 'true');
     pressMod('b');
     expect(screen.queryByTestId('target-rail')).toBeNull();
-
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
-    await waitFor(() => expect(screen.queryByTestId('manage-surface')).toBeNull());
+    fireEvent.click(screen.getByTestId('rail-toggle'));
     expect(screen.getByTestId('target-rail')).toBeInTheDocument();
+    // Neither closed the server pages.
+    expect(screen.getByTestId('server-pages')).toBeInTheDocument();
   });
 });
 

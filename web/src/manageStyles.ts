@@ -1,6 +1,7 @@
-// Shared visual tokens for the Manage dialog (RepoManager + RemoteStatus).
+// Shared visual tokens for the settings pages and the server pages (and
+// RemoteStatus).
 //
-// These lived as private consts in RepoManager.tsx, with RemoteStatus.tsx
+// These lived as private consts in the old RepoManager.tsx, with RemoteStatus.tsx
 // carrying its own near-identical copies of btn/confirmBox and a `sectionLabel`
 // that did NOT match descLabel — which is why the Remote block read as a
 // bolted-on section rather than one of the detail pane's cards. One module, one

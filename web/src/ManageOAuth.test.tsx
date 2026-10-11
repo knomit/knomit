@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
-import { ManageOAuth, defaultScopes } from './ManageOAuth';
+import { AuthPage, defaultScopes } from './ManageOAuth';
 import { api, type OAuthPending } from './api';
 
 vi.mock('./api', async importOriginal => ({
@@ -59,9 +59,9 @@ describe('defaultScopes (D13: requested ∩ {read, write}, else read)', () => {
   });
 });
 
-describe('ManageOAuth', () => {
+describe('AuthPage', () => {
   it('shows what the operator judges by: client, redirect host first, resource, requested scopes, the opening browser, time left', async () => {
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     expect(within(r).getByTestId('oauth-redirect-host')).toHaveTextContent('localhost:52346');
     expect(r).toHaveTextContent('Claude Code');
@@ -78,7 +78,7 @@ describe('ManageOAuth', () => {
   it('renders requester-supplied text as text, never markup', async () => {
     const hostile = '<img src=x onerror="window.pwned=1">‮edoc';
     vi.mocked(api.listOAuthPending).mockResolvedValue([claude({ client_name: hostile, redirect_uri: 'https://evil.example/cb' })]);
-    const { container } = render(<ManageOAuth />);
+    const { container } = render(<AuthPage />);
     const r = await row();
     expect(container.querySelector('img')).toBeNull();
     expect(r.textContent).toContain(hostile);
@@ -86,14 +86,14 @@ describe('ManageOAuth', () => {
   });
 
   it('pre-checks the D13 default, not what the client asked for', async () => {
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     const checked = within(r).getAllByRole('checkbox').filter(c => (c as HTMLInputElement).checked).map(c => c.getAttribute('value'));
     expect(checked).toEqual(['read', 'write']);
   });
 
   it('approves with the subject and the checked scopes, then reloads', async () => {
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     const approve = within(r).getByRole('button', { name: /approve/i });
     expect(approve).toBeDisabled(); // no subject yet
@@ -107,7 +107,7 @@ describe('ManageOAuth', () => {
   it('after a re-approval, says the grants were left alone and names how to widen them (F19 3c R5)', async () => {
     vi.mocked(api.approveOAuthPending).mockResolvedValue({ subject: 'laptop', grantsUnchanged: true });
     vi.mocked(api.listOAuthPending).mockResolvedValueOnce([claude()]).mockResolvedValue([]);
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
     fireEvent.click(within(r).getByRole('button', { name: /approve/i }));
@@ -118,7 +118,7 @@ describe('ManageOAuth', () => {
 
   it('says nothing about grants after a first approval', async () => {
     vi.mocked(api.listOAuthPending).mockResolvedValueOnce([claude()]).mockResolvedValue([]);
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
     fireEvent.click(within(r).getByRole('button', { name: /approve/i }));
@@ -131,7 +131,7 @@ describe('ManageOAuth', () => {
   // <bdi> so its direction cannot leak into the address or the time left.
   it('isolates the user agent so a bidi override cannot reorder its neighbours (3b N1)', async () => {
     vi.mocked(api.listOAuthPending).mockResolvedValue([claude({ user_agent: 'agent\u202eevil' })]);
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     const ua = within(r).getByTestId('oauth-user-agent');
     expect(ua.tagName).toBe('BDI');
@@ -139,7 +139,7 @@ describe('ManageOAuth', () => {
   });
 
   it('cannot approve with no scope checked', async () => {
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
     fireEvent.click(within(r).getByRole('checkbox', { name: 'read' }));
@@ -148,7 +148,7 @@ describe('ManageOAuth', () => {
   });
 
   it('denies', async () => {
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     fireEvent.click(within(r).getByRole('button', { name: /deny/i }));
     await waitFor(() => expect(api.denyOAuthPending).toHaveBeenCalledWith(claude().id));
@@ -156,7 +156,7 @@ describe('ManageOAuth', () => {
 
   it('shows the server\'s refusal of an approval', async () => {
     vi.mocked(api.approveOAuthPending).mockRejectedValue(new Error('oauth: subject must be 1-128 characters'));
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     const r = await row();
     fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'bad subject' } });
     fireEvent.click(within(r).getByRole('button', { name: /approve/i }));
@@ -165,19 +165,43 @@ describe('ManageOAuth', () => {
 
   it('says so when nothing is waiting', async () => {
     vi.mocked(api.listOAuthPending).mockResolvedValue([]);
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     expect(await screen.findByText(/no authorization requests are waiting/i)).toBeInTheDocument();
   });
 
   it('shows why listing was refused', async () => {
     vi.mocked(api.listOAuthPending).mockRejectedValue(new Error('the anonymous loopback principal does not hold admin'));
-    render(<ManageOAuth />);
+    render(<AuthPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('does not hold admin');
   });
 
   it('reports the count so the tab can badge it', async () => {
     const onCount = vi.fn();
-    render(<ManageOAuth onCount={onCount} />);
+    render(<AuthPage onCount={onCount} />);
     await waitFor(() => expect(onCount).toHaveBeenCalledWith(1));
+  });
+});
+
+// The page is the index + blocks layout: one block per waiting request, titled
+// by the client as it names itself, or a single "Nothing waiting" block.
+describe('the Authorizations page layout', () => {
+  const sectionIds = () => Array.from(screen.getByTestId('auth-page').querySelectorAll('section')).map(s => s.id);
+
+  it('has one block per request, titled and indexed by its client', async () => {
+    vi.mocked(api.listOAuthPending).mockResolvedValue([claude(), claude({ id: 'second', client_name: 'Cursor' })]);
+    render(<AuthPage />);
+    await waitFor(() => expect(screen.getAllByTestId('oauth-row')).toHaveLength(2));
+    expect(sectionIds()).toEqual([`request-${claude().id}`, 'request-second']);
+    expect(screen.getByTestId('settings-index-heading')).toHaveTextContent('Authorizations');
+    expect(screen.getByTestId(`toc-request-${claude().id}`)).toHaveTextContent('Claude Code');
+    expect(screen.getByTestId('toc-request-second')).toHaveTextContent('Cursor');
+  });
+
+  it('has a single "Nothing waiting" block when nothing is', async () => {
+    vi.mocked(api.listOAuthPending).mockResolvedValue([]);
+    render(<AuthPage />);
+    expect(await screen.findByText(/no authorization requests are waiting/i)).toBeInTheDocument();
+    expect(sectionIds()).toEqual(['none']);
+    expect(screen.getByTestId('toc-none')).toHaveTextContent('Nothing waiting');
   });
 });

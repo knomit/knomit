@@ -141,7 +141,7 @@ function sourceRefTitle(raw: string): string {
  * with its own handler — clicking the ref text still does nothing at all.
  *
  * Own component because `copied` is per-row state and FactBody is a plain
- * function; the 1.5s reset mirrors RepoManager's ConnectPanel.
+ * function; the 1.5s reset mirrors the remote connect panel's.
  */
 function SourceRefRow({ raw, label }: { raw: string; label: string }) {
   const [copied, setCopied] = useState(false);

@@ -32,7 +32,7 @@ const lensState: AppState = {
 
 type BarProps = React.ComponentProps<typeof TopBar>;
 const bar = (over: Partial<BarProps> = {}) => (
-  <TopBar state={baseState} repos={repos} railOpen={false} onToggleRail={vi.fn()} onManageRepos={vi.fn()} {...over} />
+  <TopBar state={baseState} repos={repos} railOpen={false} onToggleRail={vi.fn()} onGear={vi.fn()} {...over} />
 );
 
 // The top bar holds controls: everything on it opens something. The commit is
@@ -113,12 +113,18 @@ describe('TopBar — the target label', () => {
     expect(screen.queryByTestId('toknomitr-search')).toBeNull();
   });
 
-  it('is withheld while Manage owns the window, like every browse-context control', () => {
+  it('names the server, by its host, over the server pages (control: the target outside them)', () => {
     const { unmount } = render(bar());
-    expect(screen.getByTestId('target-label')).toBeInTheDocument();
+    expect(screen.getByTestId('target-label')).toHaveTextContent('alpha');
+    expect(screen.queryByTestId('server-host')).toBeNull();
     unmount();
-    render(bar({ manageOpen: true }));
-    expect(screen.queryByTestId('target-label')).toBeNull();
+    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    const label = screen.getByTestId('target-label');
+    expect(label).toHaveTextContent(/^Server/);
+    expect(label).not.toHaveTextContent('alpha');
+    // The jsdom page's own host: the API base is relative here.
+    expect(screen.getByTestId('server-host')).toHaveTextContent(/^localhost:3000$/);
+    expect(screen.getByTestId('server-host')).toHaveStyle({ fontSize: '11px', color: '#666' });
   });
 });
 
@@ -151,14 +157,10 @@ describe('TopBar — the rail toggle', () => {
     expect(onToggleRail).toHaveBeenCalledTimes(1);
   });
 
-  it('is not rendered while Manage is open: Manage has its own rail until it goes', () => {
-    const { unmount } = render(bar());
+  it('stays over the server pages: the rail sits beside them', () => {
+    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
     expect(screen.getByTestId('rail-toggle')).toBeInTheDocument();
-    unmount();
-    render(bar({ manageOpen: true }));
-    expect(screen.queryByTestId('rail-toggle')).toBeNull();
-    // The gear is still there: it is the way back out.
-    expect(screen.getByTestId('toknomitr-manage-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('server-toggle')).toBeInTheDocument();
   });
 });
 
@@ -213,21 +215,39 @@ describe('TopBar — the gear', () => {
       state: { ...baseState, remoteSyncError: 'unreachable' },
       facets: ['browse', 'activity', 'settings'], facet: 'browse', settingsDot: true,
     }));
-    expect(screen.getByTestId('toknomitr-manage-btn').querySelector('span')).toBeNull();
-    expect(screen.getByTestId('toknomitr-manage-btn').style.color).toBe('rgb(102, 102, 102)');
+    expect(screen.getByTestId('server-toggle').querySelector('span')).toBeNull();
+    expect(screen.getByTestId('server-toggle').style.color).toBe('rgb(102, 102, 102)');
     expect(screen.getByTestId('facet-tab-settings-dot')).toBeInTheDocument();
   });
 
-  it('still toggles Manage', () => {
-    const onManageRepos = vi.fn();
-    render(bar({ onManageRepos }));
-    fireEvent.click(screen.getByTestId('toknomitr-manage-btn'));
-    expect(onManageRepos).toHaveBeenCalledTimes(1);
+  it('asks the app to open or close the server pages, once a click', () => {
+    const onGear = vi.fn();
+    render(bar({ onGear }));
+    fireEvent.click(screen.getByTestId('server-toggle'));
+    expect(onGear).toHaveBeenCalledTimes(1);
+  });
+
+  // The lit state IS the indicator: same glyph both ways, no exit icon.
+  it('is lit over the server pages with the rail toggle\'s treatment, and plain elsewhere', () => {
+    const { unmount } = render(bar());
+    const plain = screen.getByTestId('server-toggle');
+    expect(plain).toHaveAttribute('aria-pressed', 'false');
+    expect(plain).not.toHaveStyle({ background: '#1a231d' });
+    expect(plain.getAttribute('title')).toBe('Server: fleet, logs and authorizations');
+    const glyph = plain.innerHTML;
+    unmount();
+    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    const lit = screen.getByTestId('server-toggle');
+    expect(lit).toHaveAttribute('aria-pressed', 'true');
+    expect(lit).toHaveStyle({ color: '#dfe9e2', background: '#1a231d', width: '26px', height: '26px' });
+    expect(lit.innerHTML).toBe(glyph);
+    // The tooltip names where it returns to.
+    expect(lit.getAttribute('title')).toBe('Back to alpha');
   });
 
   it('refuses while a connect commit is writing, and says why', () => {
     render(bar({ locked: true, facets: ['browse', 'activity', 'settings'], facet: 'settings' }));
-    const gear = screen.getByTestId('toknomitr-manage-btn');
+    const gear = screen.getByTestId('server-toggle');
     expect(gear).toBeDisabled();
     expect(gear.getAttribute('title')).toBe('A remote is being connected — leave it running');
   });
@@ -283,12 +303,37 @@ describe('TopBar — facet tabs', () => {
     for (const t of screen.getAllByRole('tab')) expect(t).toBeDisabled();
   });
 
-  it('draws no tabs in Manage (control: tabs outside it)', () => {
+  it('draws the server tabs, not the facets, over the server pages (control: facets outside them)', () => {
     const { unmount } = render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
-    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Browse', 'Activity', 'Settings']);
     unmount();
-    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', manageOpen: true }));
-    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    expect(screen.queryByTestId('facet-tabs')).toBeNull();
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Fleet', 'Logs', 'Authorizations']);
+    expect(screen.getByTestId('server-tab-fleet')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('server-tab-fleet')).toHaveStyle({ boxShadow: 'inset 0 -2px 0 #7c9', color: '#eee' });
+  });
+
+  it('draws exactly the server pages it is given', () => {
+    render(bar({ server: { page: 'fleet', pages: ['fleet'], onPage: vi.fn(), authCount: 3 } }));
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Fleet']);
+    expect(screen.queryByTestId('server-tab-auth-badge')).toBeNull();
+  });
+
+  it('a server tab click asks for that page', () => {
+    const onPage = vi.fn();
+    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs'], onPage, authCount: null } }));
+    fireEvent.click(screen.getByTestId('server-tab-logs'));
+    expect(onPage).toHaveBeenCalledWith('logs');
+  });
+
+  it('badges Authorizations with the waiting count above zero only', () => {
+    const { unmount } = render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: 2 } }));
+    expect(screen.getByTestId('server-tab-auth-badge')).toHaveTextContent(/^2$/);
+    unmount();
+    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: 0 } }));
+    expect(screen.getByTestId('server-tab-auth')).toBeInTheDocument();
+    expect(screen.queryByTestId('server-tab-auth-badge')).toBeNull();
   });
 });
 
@@ -329,7 +374,7 @@ describe('TopBar desktop window drag', () => {
   it('does NOT start a drag from interactive controls (rail toggle, gear)', () => {
     render(bar());
     fireEvent.mouseDown(screen.getByTestId('rail-toggle'));
-    fireEvent.mouseDown(screen.getByTestId('toknomitr-manage-btn'));
+    fireEvent.mouseDown(screen.getByTestId('server-toggle'));
     expect(post).not.toHaveBeenCalled();
   });
 

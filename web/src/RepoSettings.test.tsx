@@ -167,7 +167,7 @@ describe('RepoSettings', () => {
 
   // The connect flow is a SUB-FLOW of the repo's page: while it runs it
   // replaces the whole body, and it hands back to the Remote block. It lives
-  // inside RepoSettings, so the Settings facet and Manage get the same flow.
+  // inside RepoSettings, so wherever the page is mounted it gets the same flow.
   describe('the connect sub-flow', () => {
     async function openConnect(props: Parameters<typeof Page>[0] = {}) {
       render(<Page {...props} />);

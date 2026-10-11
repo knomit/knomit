@@ -104,12 +104,15 @@ describe('the zero-repo shell', () => {
     await primeEmptyApi();
     await mountApp();
     await screen.findByTestId('step-source');
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
-    expect(await screen.findByTestId('manage-surface')).toBeInTheDocument();
-    expect(screen.getByTestId('repomgr-fleet')).toBeInTheDocument();
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
-    await waitFor(() => expect(screen.queryByTestId('manage-surface')).toBeNull());
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    expect(await screen.findByTestId('server-pages')).toBeInTheDocument();
+    expect(screen.getByTestId('server-tab-fleet')).toBeInTheDocument();
+    // The draft stays mounted underneath, hidden.
+    expect(screen.getByTestId('draft-repo')).toHaveStyle({ display: 'none' });
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    await waitFor(() => expect(screen.queryByTestId('server-pages')).toBeNull());
     expect(screen.getByTestId('step-source')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-repo')).toHaveStyle({ display: 'flex' });
   });
 
   // A read-only instance cannot create, so the draft says so instead of

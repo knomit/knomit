@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type FleetMember, type FleetStatus } from './api';
-import { btn, card, cardLabel } from './manageStyles';
+import { btn } from './manageStyles';
+import { SettingsPage, type Section } from './SettingsPage';
 
-// ManageFleet is this instance's fleet membership (F09): the state machine
+// The Fleet server page: this instance's fleet membership (F09): the state machine
 // standalone -> registering -> registered -> unregistering -> standalone, as
 // GET /api/v1/fleet reports it. Every error the server records (last_error) is
 // shown verbatim with when it happened and whether a retry is pending; an
-// action the current state forbids is disabled WITH its reason, never hidden.
+// action shown while the state forbids it is disabled WITH its reason.
 //
 // Registering pushes this instance's member record on its agent branch of the
 // fleet repository; a human accepts it by merging that branch into the fleet's
@@ -79,7 +80,20 @@ export function unregisterBlocked(st: FleetStatus): string {
   return '';
 }
 
-export function ManageFleet() {
+// Which action blocks the page shows. A standalone instance can only join and
+// a registered one can only leave, so each shows just the one that applies.
+// While a registration or an unregistration is still being pushed both stay,
+// each disabled with its reason where the state forbids it: that is when the
+// reader most needs to see why the button they expect does not work.
+function fleetActions(state: FleetStatus['state']): ('join' | 'leave')[] {
+  if (state === 'standalone') return ['join'];
+  if (state === 'registered') return ['leave'];
+  return ['join', 'leave'];
+}
+
+// FleetPage is the Fleet server page: the membership as ruled blocks with an
+// index beside them (This instance, Members, then Join or Leave by state).
+export function FleetPage() {
   const [st, setSt] = useState<FleetStatus | null>(null);
   const [members, setMembers] = useState<FleetMember[]>([]);
   // loadErr is a failed poll; actErr is the refusal of the last click. The
@@ -125,115 +139,171 @@ export function ManageFleet() {
     }
   };
 
+  const sections: Section[] = [];
   if (!st) {
-    return <div style={{ padding: '4px 2px', ...dim }}>{loadErr ? <div role="alert" style={errText}>{loadErr}</div> : 'Loading…'}</div>;
+    sections.push({
+      id: 'this-instance', title: 'This instance',
+      body: loadErr ? <div role="alert" style={errText}>{loadErr}</div> : <div style={dim}>Loading…</div>,
+    });
+    return <SettingsPage kind="fleet" sections={sections} testid="fleet-page" />;
   }
+
   const regWhy = registerBlocked(st);
   const unregWhy = unregisterBlocked(st);
   const pending = st.state === 'registering' || st.state === 'unregistering';
+  const sync = recordSync(st);
+  const actions = fleetActions(st.state);
+  const actErrNode = actErr && <div role="alert" data-testid="fleet-error" style={errText}>{actErr}</div>;
 
-  return (
-    <div style={{ padding: '4px 2px' }}>
-      <div style={dim}>
-        The fleet this instance belongs to. Joining pushes this instance's member record on its own branch of the fleet
-        repository; someone with access to that repository accepts it by merging the branch into its main.
-      </div>
-
-      <div data-testid="fleet-status" style={card}>
-        <div style={cardLabel}>State</div>
-        <div data-testid="fleet-state" style={{ fontSize: 16, fontWeight: 600, color: '#eee' }}>{st.state}</div>
-        {st.since && <div style={dim}>since {when(st.since)}</div>}
-
-        <div style={{ ...cardLabel, marginTop: 10 }}>This agent</div>
-        <div style={mono}>{st.agent_id}</div>
-
-        {st.fleet_repo && (
-          <>
-            <div style={{ ...cardLabel, marginTop: 10 }}>Fleet repository</div>
-            <div style={{ color: '#ddd' }}>{st.fleet_repo}</div>
-            {st.fleet_url && <div style={mono}>{st.fleet_url}</div>}
-            <div style={{ ...cardLabel, marginTop: 10 }}>Record on the fleet's main</div>
-            <div data-testid="fleet-record-state" style={{ color: '#ddd' }}>
-              {st.record_state ?? 'pending'}
-              {st.record_state === 'pending' && <span style={dim}> — waiting for someone to merge this instance's branch</span>}
-            </div>
-          </>
-        )}
-
-        <div style={{ ...cardLabel, marginTop: 10 }}>External addresses (knomit.toml)</div>
-        <div data-testid="fleet-external-addresses" style={mono}>
-          {(st.external_addresses ?? []).length > 0 ? (st.external_addresses ?? []).join(' ') : <span style={dim}>none</span>}
+  sections.push({
+    id: 'this-instance',
+    title: 'This instance',
+    action: <span data-testid="fleet-state" style={stateChip(st.state)}>{st.state}</span>,
+    body: (
+      <div data-testid="fleet-status" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={dim}>
+          The fleet this instance belongs to. Membership is recorded on the fleet repository's main branch.
+          {st.since && <> In this state since {when(st.since)}.</>}
+        </div>
+        <div style={kvGrid}>
+          <span style={kvKey}>Agent id</span>
+          <span style={mono}>{st.agent_id}</span>
+          {st.fleet_repo && (
+            <>
+              <span style={kvKey}>Fleet repository</span>
+              <span>
+                <span style={{ color: '#ddd' }}>{st.fleet_repo}</span>
+                {st.fleet_url && <span style={{ ...mono, display: 'block' }}>{st.fleet_url}</span>}
+              </span>
+              <span style={kvKey}>Record on main</span>
+              <span data-testid="fleet-record-state" style={{ color: '#ddd' }}>
+                {st.record_state ?? 'pending'}
+                {st.record_state === 'pending' && <span style={dim}> — waiting for someone to merge this instance's branch</span>}
+              </span>
+            </>
+          )}
+          <span style={kvKey}>External addresses</span>
+          <span data-testid="fleet-external-addresses" style={mono}>
+            {(st.external_addresses ?? []).length > 0 ? (st.external_addresses ?? []).join(' ') : <span style={dim}>none</span>}
+          </span>
+          {st.record && (
+            <>
+              <span style={kvKey}>This instance's record</span>
+              <span>
+                <span data-testid="fleet-own-record" style={{ ...mono, display: 'block' }}>
+                  <span style={{ display: 'block' }}>addresses: {st.record.addresses.length > 0 ? st.record.addresses.join(' ') : '—'}</span>
+                  <span style={{ display: 'block' }}>capabilities: {capabilitiesText(st.record.capabilities) || '—'}</span>
+                </span>
+                {sync && (
+                  <span data-testid="fleet-record-sync" style={{ ...(sync.warn ? { ...dim, color: '#fbbf24' } : dim), display: 'block' }}>{sync.text}</span>
+                )}
+              </span>
+            </>
+          )}
         </div>
         {st.notice && <div data-testid="fleet-notice" style={{ ...dim, color: '#fbbf24' }}>{st.notice}</div>}
-
-        {st.record && (() => {
-          const sync = recordSync(st);
-          return (
-            <>
-              <div style={{ ...cardLabel, marginTop: 10 }}>This instance's record</div>
-              <div data-testid="fleet-own-record" style={mono}>
-                <div>addresses: {st.record.addresses.length > 0 ? st.record.addresses.join(' ') : '—'}</div>
-                <div>capabilities: {capabilitiesText(st.record.capabilities) || '—'}</div>
-              </div>
-              {sync && (
-                <div data-testid="fleet-record-sync" style={sync.warn ? { ...dim, color: '#fbbf24' } : dim}>{sync.text}</div>
-              )}
-            </>
-          );
-        })()}
-
         {st.last_error && (
           <div data-testid="fleet-last-error" role="alert" style={errText}>
             Last attempt {when(st.last_attempt)} failed: <span style={mono}>{st.last_error}</span>
             {pending && <div style={dim}>Retrying on the next sync.</div>}
           </div>
         )}
+        {loadErr && <div role="alert" style={errText}>{loadErr}</div>}
       </div>
+    ),
+  });
 
-      <div style={card}>
-        <div style={cardLabel}>Join a fleet</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-          <input aria-label="Fleet repository URL" placeholder="https://… or git@…" value={url} onChange={e => setUrl(e.target.value)} style={input} />
-          <input aria-label="Access token" placeholder="access token (optional)" type="password" value={token} onChange={e => setToken(e.target.value)} style={input} />
-          <button type="button" data-testid="fleet-register" style={btn(busy || !!regWhy || url.trim() === '', 'primary')}
-            disabled={busy || !!regWhy || url.trim() === ''} title={regWhy}
-            onClick={() => act(() => api.registerFleet(url.trim(), token))}>
-            Register
+  sections.push({
+    id: 'members',
+    title: 'Members',
+    hint: st.fleet_repo ? "the fleet's main" : undefined,
+    body: !st.fleet_repo ? (
+      <div style={dim}>This instance is not in a fleet.</div>
+    ) : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={dim}>
+          {members.length} {members.length === 1 ? 'instance' : 'instances'}. Refreshes every {POLL_MS / 1000} seconds.
+        </div>
+        {members.map(m => (
+          <div key={m.path ?? m.agent} data-testid="fleet-member" style={{ display: 'flex', flexWrap: 'wrap', columnGap: 10, ...mono }}>
+            <span style={{ color: '#ddd' }}>{m.agent}</span>
+            <span>{m.state}</span>
+            {m.host && <span style={{ color: '#888' }}>{m.host}</span>}
+            {(m.addresses ?? []).length > 0 && <span>{(m.addresses ?? []).join(' ')}</span>}
+            {capabilitiesText(m.capabilities) && <span style={{ color: '#888' }}>{capabilitiesText(m.capabilities)}</span>}
+          </div>
+        ))}
+      </div>
+    ),
+  });
+
+  if (actions.includes('join')) {
+    sections.push({
+      id: 'join',
+      title: 'Join a fleet',
+      body: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={dim}>
+            Joining pushes this instance's member record on its own branch of the fleet repository; someone with access
+            to that repository accepts it by merging the branch into its main.
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+            <input aria-label="Fleet repository URL" placeholder="https://… or git@…" value={url} onChange={e => setUrl(e.target.value)} style={input} />
+            <input aria-label="Access token" placeholder="access token (optional)" type="password" value={token} onChange={e => setToken(e.target.value)} style={input} />
+            <button type="button" data-testid="fleet-register" style={btn(busy || !!regWhy || url.trim() === '', 'primary')}
+              disabled={busy || !!regWhy || url.trim() === ''} title={regWhy}
+              onClick={() => act(() => api.registerFleet(url.trim(), token))}>
+              Register
+            </button>
+          </div>
+          {regWhy && <div data-testid="fleet-register-why" style={dim}>{regWhy}</div>}
+          {!actions.includes('leave') && actErrNode}
+        </div>
+      ),
+    });
+  }
+
+  if (actions.includes('leave')) {
+    sections.push({
+      id: 'leave',
+      title: 'Leave fleet',
+      danger: true,
+      body: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+          <div style={dim}>
+            Pushes a "left" record first, and unmounts the fleet repository only once that push lands.
+          </div>
+          <button type="button" data-testid="fleet-unregister" style={btn(busy || !!unregWhy, 'danger')}
+            disabled={busy || !!unregWhy} title={unregWhy}
+            onClick={() => act(() => api.unregisterFleet())}>
+            Unregister
           </button>
+          {unregWhy && <div data-testid="fleet-unregister-why" style={dim}>{unregWhy}</div>}
+          {st.state === 'unregistering' && (
+            <div style={dim}>To stop retrying, archive the fleet repository by hand.</div>
+          )}
+          {actErrNode}
         </div>
-        {regWhy && <div data-testid="fleet-register-why" style={{ ...dim, marginTop: 6 }}>{regWhy}</div>}
-      </div>
+      ),
+    });
+  }
 
-      <div style={card}>
-        <div style={cardLabel}>Leave the fleet</div>
-        <button type="button" data-testid="fleet-unregister" style={btn(busy || !!unregWhy, 'danger')}
-          disabled={busy || !!unregWhy} title={unregWhy}
-          onClick={() => act(() => api.unregisterFleet())}>
-          Unregister
-        </button>
-        {unregWhy && <div data-testid="fleet-unregister-why" style={{ ...dim, marginTop: 6 }}>{unregWhy}</div>}
-        {st.state === 'unregistering' && (
-          <div style={{ ...dim, marginTop: 6 }}>To stop retrying, archive the fleet repository by hand.</div>
-        )}
-      </div>
-
-      {actErr && <div role="alert" data-testid="fleet-error" style={errText}>{actErr}</div>}
-      {loadErr && <div role="alert" style={errText}>{loadErr}</div>}
-
-      {members.length > 0 && (
-        <div style={card}>
-          <div style={cardLabel}>Members (the fleet's main)</div>
-          {members.map(m => (
-            <div key={m.path ?? m.agent} data-testid="fleet-member" style={{ display: 'flex', flexWrap: 'wrap', columnGap: 10, ...mono }}>
-              <span style={{ color: '#ddd' }}>{m.agent}</span>
-              <span>{m.state}</span>
-              {m.host && <span style={{ color: '#888' }}>{m.host}</span>}
-              {(m.addresses ?? []).length > 0 && <span>{(m.addresses ?? []).join(' ')}</span>}
-              {capabilitiesText(m.capabilities) && <span style={{ color: '#888' }}>{capabilitiesText(m.capabilities)}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  return <SettingsPage kind="fleet" sections={sections} testid="fleet-page" />;
 }
+
+// The state as a chip on the heading, in the rail's chip geometry: green once
+// registered, amber while a push is pending, neutral when standalone.
+const stateChip = (state: FleetStatus['state']): React.CSSProperties => ({
+  fontSize: 10.5, lineHeight: 1.7, padding: '0 7px', borderRadius: 3,
+  fontFamily: 'var(--k-font-mono)', whiteSpace: 'nowrap',
+  ...(state === 'registered'
+    ? { color: '#7c9', background: '#1a231d', border: '1px solid #2a4a33' }
+    : state === 'standalone'
+      ? { color: '#999', background: '#1a1a1a', border: '1px solid #2a2a2a' }
+      : { color: '#e2c07a', background: '#262013', border: '1px solid #4a3f22' }),
+});
+const kvGrid: React.CSSProperties = {
+  display: 'grid', gridTemplateColumns: 'minmax(120px, max-content) 1fr', columnGap: 18, rowGap: 6,
+  fontSize: 12, alignItems: 'baseline',
+};
+const kvKey: React.CSSProperties = { color: '#888', fontSize: 12 };

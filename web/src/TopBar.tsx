@@ -1,12 +1,13 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { AppState } from './state';
 import { isLensContext } from './state';
+import { apiUrl } from './api';
 import type { RepoInfo } from './api';
-import { BookIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
+import { BookIcon, GearIcon, LayersIcon, ServerIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { otherRepoFailing } from './facets';
-import type { Facet, TargetLabel } from './facets';
+import type { Facet, ServerPage, TargetLabel } from './facets';
 
 interface Props {
   state: AppState;
@@ -31,15 +32,25 @@ interface Props {
   /** A connect commit is in flight: the tabs and the gear refuse, because
    *  each would unmount the page the commit is reporting to. */
   locked?: boolean;
-  /** Toggles the Manage mode. The SAME control both enters and leaves it, at the
-   *  same anchor — a way out that appears somewhere else makes the reader hunt
-   *  for a control they just clicked. */
-  onManageRepos: () => void;
-  /** True while the Manage mode (the server pages) owns the window. The gear
-   *  then renders as a step-out button, and the target chrome — the rail
-   *  toggle, the label and the tabs — is omitted: the page below is about the
-   *  server, not a target. */
-  manageOpen?: boolean;
+  /** The gear: opens the server pages, and from them returns to the target
+   *  and facet that were on screen. The SAME control both ways, at the same
+   *  anchor — a way out that appears somewhere else makes the reader hunt for
+   *  a control they just clicked. */
+  onGear: () => void;
+  /** The server pages, while they are on screen. The label then reads
+   *  "Server" and the host, the tabs are the server's, and the gear is lit. */
+  server?: ServerBar | null;
+}
+
+/** What the bar shows over the server pages. */
+export interface ServerBar {
+  /** The page on screen; its tab is the active one. */
+  page: ServerPage;
+  /** serverPagesFor's list, the only tabs drawn. */
+  pages: ServerPage[];
+  onPage: (p: ServerPage) => void;
+  /** Requests waiting, badged on Authorizations when above zero. */
+  authCount: number | null;
 }
 
 // The top bar is the first of the shell's three levels, and it never changes
@@ -49,15 +60,15 @@ interface Props {
 // the dropdown that used to hang off the name is gone; the branch picker and
 // the filter moved to the Browse toolbar, because they act on the data being
 // read and must not stay on screen over a page that reads none.
-export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onManageRepos, manageOpen = false }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onGear, server = null }: Props) {
   const lensCtx = isLensContext(state);
-  // Where leaving Manage puts you back: the surface you were reading, which is
-  // the lens in a lens context and the repo otherwise. Named in the exit's
-  // tooltip so the destination is one hover away without a label in the bar.
-  const manageReturnTo = given?.name ?? (state.context.kind === 'lens' ? state.context.name : state.repo);
-  // Held while a connect commit runs in the Settings facet: opening Manage
-  // would unmount the page it reports to. (Manage itself hosts nothing that
-  // locks, and the lock cannot be raised while it is open.)
+  const serverOpen = server !== null;
+  // The host the server pages are about: the API's own, which in the desktop
+  // app is not the page's.
+  const host = useMemo(() => serverHost(), []);
+  // Held while a connect commit runs in the Settings facet: opening the server
+  // pages would unmount the page it reports to. (The server pages host nothing
+  // that locks, and the lock cannot be raised while they are open.)
   const held = locked;
   const heldReason = 'A remote is being connected — leave it running';
   // The toggle's dot: some repo OTHER than the current one has a failing
@@ -135,6 +146,18 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
     color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : '#7c9',
     icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} /> : <BookIcon color="currentColor" size={13} />,
   };
+  // Where the gear returns to from the server pages: the target under them,
+  // named in its tooltip so the destination is one hover away.
+  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: fleet, logs and authorizations';
+  const tabStyle = (on: boolean, disabled: boolean): CSSProperties => ({
+    display: 'flex', alignItems: 'center', gap: 6,
+    padding: '0 11px', fontSize: 12, border: 'none', borderRadius: 0, background: 'none',
+    color: on ? '#eee' : '#7a7a7a',
+    boxShadow: on ? 'inset 0 -2px 0 #7c9' : 'none',
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled && !on ? 0.5 : 1,
+    ...noDrag,
+  });
 
   return (
     <div style={outerStyle} onMouseDown={startWindowDrag}>
@@ -143,38 +166,34 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
       {/* ── Toolbar row ── */}
       <div data-testid="toknomitr-bar" style={rowStyle}>
-        {/* ── Lead: rail toggle · knomit identity ──
-            The toggle is withheld in Manage: the server pages are not about a
-            target, and the rail is not rendered beside them. */}
+        {/* ── Lead: rail toggle · knomit identity ── */}
         <div style={leadStyle}>
-          {!manageOpen && (
-            <button
-              type="button"
-              data-testid="rail-toggle"
-              data-nodrag
-              onClick={onToggleRail}
-              onMouseDown={noMouseFocus}
-              aria-pressed={railOpen}
-              aria-label={railOpen ? 'Hide repositories and lenses' : 'Show repositories and lenses'}
-              title={railOpen ? 'Hide repositories and lenses  (⌘B)' : 'Show repositories and lenses  (⌘B)'}
-              style={{
-                width: 26, height: 26, flexShrink: 0, position: 'relative',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                border: 'none', borderRadius: 4, padding: 0, cursor: 'pointer',
-                color: railOpen ? '#dfe9e2' : '#777',
-                background: railOpen ? '#1a231d' : 'transparent',
-                ...noDrag,
-              }}
-            >
-              <PanelIcon />
-              {othersFailing && (
-                <span data-testid="rail-toggle-dot" aria-hidden="true" style={{
-                  position: 'absolute', top: 3, right: 3, width: 6, height: 6,
-                  borderRadius: '50%', background: '#f44336', boxShadow: '0 0 0 2px #111',
-                }} />
-              )}
-            </button>
-          )}
+          <button
+            type="button"
+            data-testid="rail-toggle"
+            data-nodrag
+            onClick={onToggleRail}
+            onMouseDown={noMouseFocus}
+            aria-pressed={railOpen}
+            aria-label={railOpen ? 'Hide repositories and lenses' : 'Show repositories and lenses'}
+            title={railOpen ? 'Hide repositories and lenses  (⌘B)' : 'Show repositories and lenses  (⌘B)'}
+            style={{
+              width: 26, height: 26, flexShrink: 0, position: 'relative',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: 'none', borderRadius: 4, padding: 0, cursor: 'pointer',
+              color: railOpen ? '#dfe9e2' : '#777',
+              background: railOpen ? '#1a231d' : 'transparent',
+              ...noDrag,
+            }}
+          >
+            <PanelIcon />
+            {othersFailing && (
+              <span data-testid="rail-toggle-dot" aria-hidden="true" style={{
+                position: 'absolute', top: 3, right: 3, width: 6, height: 6,
+                borderRadius: '50%', background: '#f44336', boxShadow: '0 0 0 2px #111',
+              }} />
+            )}
+          </button>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <svg width="16" height="16" viewBox="0 0 80 80" style={{ display: 'block', flexShrink: 0 }}>
               <rect x="12" y="12" width="56" height="56" rx="10" transform="rotate(45 40 40)" fill="#7c9"/>
@@ -193,9 +212,19 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
         {/* ── Target label: what the page below is about ──
             A label, not a control: nothing here opens anything, so it stays
-            part of the drag region. Withheld in Manage, where the page below
-            is not about it. */}
-        {!manageOpen && (
+            part of the drag region. Over the server pages it names the
+            server, by its host. */}
+        {serverOpen ? (
+          <span data-testid="target-label" style={{
+            display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
+            padding: '0 14px', borderLeft: '1px solid #1e1e1e',
+            fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', color: '#ddd',
+          }}>
+            <ServerIcon color="currentColor" size={13} />
+            <span>Server</span>
+            <span data-testid="server-host" style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11, fontWeight: 400, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis' }}>{host}</span>
+          </span>
+        ) : (
           <span data-testid="target-label" style={{
             display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
             padding: '0 14px', borderLeft: '1px solid #1e1e1e',
@@ -217,7 +246,32 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
         {/* ── Facet tabs: the pages of the target named on the left ──
             Exactly facetsFor's list; a tab the target lacks is not drawn. The
             active tab's underline sits on the bar's bottom edge. */}
-        {!manageOpen && facets.length > 0 && (
+        {server && (
+          <div role="tablist" aria-label="Server pages" data-testid="server-tabs" style={{ display: 'flex', alignItems: 'stretch' }}>
+            {server.pages.map(p => {
+              const on = p === server.page;
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  role="tab"
+                  data-testid={`server-tab-${p}`}
+                  data-nodrag
+                  aria-selected={on}
+                  onMouseDown={noMouseFocus}
+                  onClick={() => server.onPage(p)}
+                  style={tabStyle(on, false)}
+                >
+                  <span>{SERVER_LABEL[p]}</span>
+                  {p === 'auth' && server.authCount !== null && server.authCount > 0 && (
+                    <span data-testid="server-tab-auth-badge" aria-label={`${server.authCount} waiting`} style={tabBadge}>{server.authCount}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {!serverOpen && facets.length > 0 && (
           <div role="tablist" aria-label="Facets" data-testid="facet-tabs" style={{ display: 'flex', alignItems: 'stretch' }}>
             {facets.map(f => {
               const on = f === facet;
@@ -233,17 +287,9 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
                   title={locked ? 'A remote is being connected — leave it running' : undefined}
                   onMouseDown={noMouseFocus}
                   onClick={() => onFacet?.(f)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '0 11px', fontSize: 12, border: 'none', borderRadius: 0, background: 'none',
-                    color: on ? '#eee' : '#7a7a7a',
-                    boxShadow: on ? 'inset 0 -2px 0 #7c9' : 'none',
-                    cursor: locked ? 'default' : 'pointer',
-                    opacity: locked && !on ? 0.5 : 1,
-                    ...noDrag,
-                  }}
+                  style={tabStyle(on, locked)}
                 >
-                  {FACET_LABEL[f]}
+                  <span>{FACET_LABEL[f]}</span>
                   {f === 'settings' && settingsDot && (
                     <span data-testid="facet-tab-settings-dot" aria-label="the remote is failing" style={{
                       width: 6, height: 6, borderRadius: '50%', background: '#f44336', flexShrink: 0,
@@ -257,30 +303,34 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
         <div style={{ flex: 1 }} />
 
-        {/* One control, one anchor. In browse it is the gear that opens Manage;
-            in Manage it is the step-out that leaves. Same handler, same pixel —
-            an exit that appears on the other side of the window would make the
-            reader hunt for the control they had just used. The tooltip carries
-            the destination so the bar needs no label of its own. */}
+        {/* One control, one anchor: the gear opens the server pages, and the
+            same button in the same pixel takes you back from them. While they
+            show it is LIT, with the rail toggle's treatment; the lit state is
+            the indicator, so the glyph never changes. No red dot: the gear is
+            server-only, and a failing remote is a fact about a target — its
+            dot is on the Settings tab. */}
         <button
-          data-testid="toknomitr-manage-btn"
+          data-testid="server-toggle"
           data-nodrag
-          onClick={onManageRepos}
+          onClick={onGear}
           onMouseDown={noMouseFocus}
-          aria-pressed={manageOpen}
+          aria-pressed={serverOpen}
           disabled={held}
-          title={held ? heldReason : manageOpen ? `Leave Manage — back to ${manageReturnTo}  (Esc)` : 'Manage repositories'}
-          aria-label={held ? heldReason : manageOpen ? `Leave Manage — back to ${manageReturnTo}` : 'Manage repositories'}
-          // One control, one look: only the GLYPH changes between modes. A
-          // tinted pill would make the way out read as a different kind of
-          // thing from the way in, when it is the same button in the same pixel.
-          // No red dot: the gear opens server pages now, and a failing remote is
-          // a fact about the target — its dot is on the Settings tab.
-          style={{ background: 'none', border: 'none', color: held ? '#3d3d3d' : '#666', cursor: held ? 'default' : 'pointer', padding: 4, display: 'flex', alignItems: 'center', alignSelf: 'center', position: 'relative', flexShrink: 0, ...noDrag }}
-          onMouseEnter={e => { if (!held) e.currentTarget.style.color = '#aaa'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : '#666'; }}
+          title={gearTitle}
+          aria-label={gearTitle}
+          style={{
+            width: 26, height: 26, flexShrink: 0, alignSelf: 'center',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: 'none', borderRadius: 4, padding: 0,
+            color: held ? '#3d3d3d' : serverOpen ? '#dfe9e2' : '#666',
+            background: serverOpen ? '#1a231d' : 'transparent',
+            cursor: held ? 'default' : 'pointer',
+            ...noDrag,
+          }}
+          onMouseEnter={e => { if (!held && !serverOpen) e.currentTarget.style.color = '#aaa'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : serverOpen ? '#dfe9e2' : '#666'; }}
         >
-          {manageOpen ? <ExitIcon color="currentColor" size={15} /> : <GearIcon color="currentColor" size={15} />}
+          <GearIcon color="currentColor" size={15} />
         </button>
       </div>
     </div>
@@ -288,6 +338,23 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 });
 
 const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings' };
+const SERVER_LABEL: Record<ServerPage, string> = { fleet: 'Fleet', logs: 'Logs', auth: 'Authorizations' };
+
+/** serverHost: the host:port the API is served from, resolved against the
+ *  page (a relative base is this page's own host). */
+function serverHost(): string {
+  try {
+    return new URL(apiUrl('/'), window.location.href).host;
+  } catch {
+    return '';
+  }
+}
+
+// The Authorizations tab's waiting count: the green badge it carried in Manage.
+const tabBadge: CSSProperties = {
+  fontSize: 10, padding: '0 5px', borderRadius: 8, lineHeight: 1.6,
+  background: '#1d2a22', color: '#4ade80', fontVariantNumeric: 'tabular-nums',
+};
 
 // The spec's lens accent, for the label.
 const LENS_ACCENT = '#b9a6f0';

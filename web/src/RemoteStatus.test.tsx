@@ -11,7 +11,7 @@ type Fn = ReturnType<typeof vi.fn>;
 
 // RemoteCard is the display half of the remote; RepoDetail owns the loaded
 // state (its ⋯ menu needs it too). Harness pairs them the way RepoDetail does.
-// Disconnect now lives in that menu — covered by RepoManager.test.tsx.
+// Disconnect now lives in that menu — covered by RepoSettings.test.tsx.
 function Harness({ repo, agentBranch, readOnly, onConnect, onChanged }: {
   repo: string; agentBranch: string; readOnly: boolean; onConnect: () => void; onChanged: () => void;
 }) {

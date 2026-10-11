@@ -3,10 +3,11 @@ import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-libra
 import App from './App';
 import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream } from './testEventSource';
 import { __resetRepoCreatesForTest } from './useRepoCreates';
+import { SUBSCRIPTION_TITLE } from './state';
 
 // The facets of a target: Browse, Activity and Settings, as tabs in the top
 // bar. facetsFor decides which exist; the facet is remembered under
-// knomit.facet; Settings and Activity are the target's own pages, not Manage's;
+// knomit.facet; Settings and Activity are the target's own pages;
 // the browse keys answer only on Browse; and a connect commit holds every way
 // off its page.
 
@@ -118,8 +119,8 @@ describe('facet tabs', () => {
     expect(await screen.findByTestId('repo-settings')).toBeInTheDocument();
     expect(await screen.findByText('ops runbooks')).toBeInTheDocument();
     expect(m.getRepo).toHaveBeenCalledWith('ops-kb');
-    // Not Manage: the body is the facet, and the Library is gone with Browse.
-    expect(screen.queryByTestId('manage-surface')).toBeNull();
+    // The body is the facet, and the Library is gone with Browse.
+    expect(screen.queryByTestId('server-pages')).toBeNull();
     expect(screen.queryByTestId('library-splitter')).toBeNull();
   });
 
@@ -245,7 +246,7 @@ describe('the remote error on the facets', () => {
     expect(screen.queryByTestId('facet-tab-settings-dot')).toBeNull();
     await failSync();
     expect(screen.getByTestId('facet-tab-settings-dot')).toBeInTheDocument();
-    expect(screen.getByTestId('toknomitr-manage-btn').querySelector('span')).toBeNull();
+    expect(screen.getByTestId('server-toggle').querySelector('span')).toBeNull();
   });
 
   it('puts no dot on the Settings tab on a read-only server, even with the banner up', async () => {
@@ -272,16 +273,16 @@ describe('Activity', () => {
     expect(openStreams('/sessions/events')).toBe(0);
   });
 
-  // Activity is the only sessions reader left (Manage's Sessions tab and its
-  // badge went with the global view), so opening Manage over it closes the
-  // one stream and opens none.
-  it('closes its sessions stream when Manage opens over it, and nothing else opens one', async () => {
+  // Activity is the only sessions reader left (the old Sessions tab and its
+  // badge went with the global view), so opening the server pages over it
+  // closes the one stream and opens none.
+  it('closes its sessions stream when the server pages open over it, and nothing else opens one', async () => {
     await primeApi();
     await mountApp();
     fireEvent.click(screen.getByTestId('facet-tab-activity'));
     await waitFor(() => expect(openStreams('/sessions/events')).toBe(1));
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
-    await screen.findByTestId('manage-surface');
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    await screen.findByTestId('server-pages');
     await waitFor(() => expect(openStreams('/sessions/events')).toBe(0));
     expect(screen.queryByTestId('activity-facet')).toBeNull();
   });
@@ -323,7 +324,7 @@ describe('a connect commit holds every way off its page', () => {
     // Positive control: before the commit, everything answers.
     expect(screen.getByTestId('rail-repo-core-kb')).toBeEnabled();
     expect(screen.getByTestId('facet-tab-browse')).toBeEnabled();
-    expect(screen.getByTestId('toknomitr-manage-btn')).toBeEnabled();
+    expect(screen.getByTestId('server-toggle')).toBeEnabled();
 
     await act(async () => { fireEvent.click(await screen.findByTestId('wizard-connect')); });
     await waitFor(() => expect((screen.getByTestId('wizard-crumb-back') as HTMLButtonElement).disabled).toBe(true));
@@ -331,16 +332,16 @@ describe('a connect commit holds every way off its page', () => {
     expect(screen.getByTestId('rail-repo-core-kb')).toBeDisabled();
     expect(screen.getByTestId('facet-tab-browse')).toBeDisabled();
     expect(screen.getByTestId('facet-tab-activity')).toBeDisabled();
-    expect(screen.getByTestId('toknomitr-manage-btn')).toBeDisabled();
+    expect(screen.getByTestId('server-toggle')).toBeDisabled();
 
     m.status.mockClear();
     fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
     fireEvent.click(screen.getByTestId('facet-tab-browse'));
-    fireEvent.click(screen.getByTestId('toknomitr-manage-btn'));
+    fireEvent.click(screen.getByTestId('server-toggle'));
     await act(async () => { await Promise.resolve(); });
     expect(m.status).not.toHaveBeenCalledWith('core-kb', expect.anything());
     expect(screen.getByTestId('remote-connect-wizard')).toBeInTheDocument();
-    expect(screen.queryByTestId('manage-surface')).toBeNull();
+    expect(screen.queryByTestId('server-pages')).toBeNull();
     // ⌘B still works: hiding the rail unmounts nothing in the body.
     act(() => { fireEvent.keyDown(window, { key: 'b', metaKey: true }); });
     expect(screen.queryByTestId('target-rail')).toBeNull();
@@ -595,5 +596,42 @@ describe('the status footer\'s creates count', () => {
     fireEvent.click(await screen.findByTestId('footer-creates'));
     expect(await screen.findByTestId('target-rail')).toBeInTheDocument();
     expect(await screen.findByTestId('pending-create-chip-rail-b-kb')).toHaveTextContent('creating');
+  });
+});
+
+// #324: the instance actions (+ repo, + lens and the Logs tab) were once gated
+// on the BROWSED repo's read-only state. A fresh origin has no remembered
+// context, so pickRepo lands on the first sorted repo — here a subscription —
+// and the instance looked read-only although the server accepts every write.
+describe('browsing a subscription on a writable instance', () => {
+  it('leaves the rail\'s + enabled and the Logs tab present, while fact authoring stays blocked', async () => {
+    localStorage.removeItem('knomit.context');
+    localStorage.setItem('knomit.rail', '1');
+    const { m } = await primeApi();
+    m.getRepo.mockImplementation(async (name: string) => ({ name, description: '', mode: 'subscribe', read_branch: 'main' }));
+    m.browse.mockResolvedValue({ path: 'kb', children: [{ name: 'foo.md', is_dir: false, title: 'Foo', type: 'observation' }] });
+    m.fact.mockResolvedValue({
+      path: 'kb/foo.md', title: 'Foo', body: 'body', type: 'observation', confidence: 0.9, sources: 1,
+      domain: [], entities: [], refs: [], commit_hash: 'aaa1111', commit_date: '2026-05-01T00:00:00Z',
+    });
+    m.factCommits.mockResolvedValue({ entries: [] });
+    m.explain.mockResolvedValue({ incoming: [], outgoing: [] });
+    m.commitDetail.mockResolvedValue(null);
+
+    await mountApp();
+    // SET_REPO_READONLY lands asynchronously, after the boot details. Wait until
+    // the subscription is OBSERVABLE — the fact pane's retract names it — so the
+    // instance assertions below cannot pass merely by running before it arrives.
+    fireEvent.click(await screen.findByTestId('dir-entry'));
+    await waitFor(() => {
+      const retract = screen.getByTestId('retract-btn');
+      expect(retract).toBeDisabled();
+      expect(retract).toHaveAttribute('title', SUBSCRIPTION_TITLE);
+    });
+
+    expect(screen.getByTestId('rail-new-repo')).toBeEnabled();
+    expect(screen.getByTestId('rail-new-lens')).toBeEnabled();
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    expect(await screen.findByTestId('server-tab-logs')).toBeInTheDocument();
   });
 });

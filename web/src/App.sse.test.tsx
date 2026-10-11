@@ -577,7 +577,7 @@ describe('App — remote-error banner lifecycle', () => {
 
     expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByTestId('repo-settings')).toBeTruthy();
-    expect(screen.queryByTestId('manage-surface')).toBeNull();
+    expect(screen.queryByTestId('server-pages')).toBeNull();
     expect(screen.queryByTestId('remote-error-banner')).toBeNull();
   });
 
@@ -599,20 +599,21 @@ describe('App — remote-error banner lifecycle', () => {
     await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });
 
-  it('re-reads the stored status when Manage is left', async () => {
+  it('re-reads the stored status when the server pages open over Settings', async () => {
     const api = await apiMock();
     api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
     await mountApp();
     await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
 
-    // Enter Manage, "fix" the remote there, leave: the banner must reflect the
-    // repaired connection without waiting for a reconcile tick. The way out is
-    // the same top-bar control that got you in.
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
-    await screen.findByTestId('manage-surface');
+    // Open Settings, "fix" the remote there, leave it by the gear: leaving
+    // Settings is leaving Settings, whichever way out, and the banner must
+    // reflect the repaired connection without waiting for a reconcile tick.
+    await act(async () => { fireEvent.click(screen.getByTestId('facet-tab-settings')); });
+    await screen.findByTestId('repo-settings');
     expect(screen.queryByTestId('remote-error-banner')).toBeTruthy();
     api.getOrigin.mockResolvedValue(ORIGIN_OK);
-    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    await screen.findByTestId('server-pages');
 
     await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });

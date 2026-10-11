@@ -2002,7 +2002,7 @@ async function oauthFailure(r: Response): Promise<Error> {
 
 // listOAuthPending returns the undecided requests, or null when this server
 // has no OAuth issuer (404: [oauth] unset, or the desktop, which never opens
-// the OAuth listener). null is what hides the Manage tab.
+// the OAuth listener). null is what hides the Authorizations server tab.
 async function listOAuthPending(): Promise<OAuthPending[] | null> {
   const r = await fetch(apiUrl('/api/v1/oauth/pending'), { headers: oauthHeaders(false) });
   if (r.status === 404) return null;

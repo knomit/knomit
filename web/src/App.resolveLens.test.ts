@@ -76,7 +76,7 @@ describe('resolveLens — App-level lens resolution', () => {
   });
 });
 
-// I4: after the RepoManager reports a create/delete/edit, re-sync the browse
+// I4: after a settings page reports a create/delete/edit, re-sync the browse
 // surface. A mutated active lens re-resolves (refreshing state.lens); a deleted
 // browsed lens falls back with the notice; a repo context switches off a removed
 // active repo.

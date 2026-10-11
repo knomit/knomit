@@ -110,7 +110,7 @@ function droppedMarker(count: number): string {
  * Replaces rather than appends, because every connect gets the same treatment
  * and the server's ring is the authority at that moment. A first connect finds
  * an empty store, so the two are identical there. A reconnect and a REMOUNT —
- * the user switching Manage tabs away and back, which closes this stream and
+ * the user switching server pages away and back, which closes this stream and
  * opens a new one against the same module-level store — would each otherwise
  * append a backlog the store already held, doubling every line.
  *

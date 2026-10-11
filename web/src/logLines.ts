@@ -3,7 +3,7 @@
 //
 // Split out for a mechanical reason with a real consequence: a module that
 // exports anything besides components opts out of react-refresh, and
-// ManageLogs needs visibleLines — it renders the "N shown" count through the
+// LogsFacet needs visibleLines — it renders the "N shown" count through the
 // very same function the body filters with, so the two can never disagree.
 // Everything visibleLines leans on had to come with it, which is why the whole
 // parse layer lives here rather than just the one function.

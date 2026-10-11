@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { initView, viewReducer, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor } from './facets';
+import { initView, viewReducer, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor, serverPagesFor } from './facets';
 import type { ViewState } from './facets';
 import { RAIL_STORAGE_KEY, loadRailOpen, saveRailOpen } from './repoSelection';
 import type { RepoInfo, Lens, RepoCreateStatus } from './api';
@@ -284,5 +284,55 @@ describe('targetLabelFor', () => {
   it('labels a draft by what it will create', () => {
     expect(targetLabelFor({ kind: 'draft', draft: 'repo' }, repos, [], [])).toEqual({ kind: 'repo', name: 'New repository', draft: true });
     expect(targetLabelFor({ kind: 'draft', draft: 'lens' }, repos, [], [])).toEqual({ kind: 'lens', name: 'New lens', draft: true });
+  });
+});
+
+// The server pages sit OVER the displayed target and leave it alone, so
+// closing them is the way back to the target and facet that were on screen.
+describe('the server pages', () => {
+  const ops = { kind: 'repo' as const, repo: 'ops-kb' };
+  const onActivity: ViewState = { ...initView(), facet: 'activity', lastFacet: null, server: null };
+
+  it('the gear opens them on Fleet and closes them, leaving the facet, the pin and the draft untouched', () => {
+    const start: ViewState = { ...onActivity, pinned: { kind: 'archived', id: 'a1' }, draft: 'lens', draftShown: false };
+    const open = viewReducer(start, { type: 'TOGGLE_SERVER' });
+    expect(open.server).toBe('fleet');
+    const closed = viewReducer({ ...open, server: 'logs' }, { type: 'TOGGLE_SERVER' });
+    expect(closed).toEqual({ ...start, server: null });
+  });
+
+  it('a tab click moves between pages', () => {
+    const open = viewReducer(onActivity, { type: 'TOGGLE_SERVER' });
+    expect(viewReducer(open, { type: 'SET_SERVER_PAGE', page: 'auth' }).server).toBe('auth');
+  });
+
+  it('every way of picking a target leaves them', () => {
+    const on: ViewState = { ...onActivity, server: 'logs' };
+    expect(viewReducer(on, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] }).server).toBeNull();
+    expect(viewReducer(on, { type: 'SELECT_PINNED', target: { kind: 'archived', id: 'a1' } }).server).toBeNull();
+    expect(viewReducer(on, { type: 'OPEN_DRAFT', kind: 'repo', from: ops }).server).toBeNull();
+    // The draft row already on screen under them.
+    const underDraft: ViewState = { ...on, draft: 'repo', draftShown: true };
+    expect(viewReducer(underDraft, { type: 'SHOW_DRAFT', from: ops }).server).toBeNull();
+    expect(viewReducer(underDraft, { type: 'OPEN_DRAFT', kind: 'repo', from: ops }).server).toBeNull();
+    // A facet route (Reconnect) lands on the target's facet.
+    expect(viewReducer(on, { type: 'SET_FACET', facet: 'settings', focus: 'remote' }).server).toBeNull();
+  });
+
+  it('picking the target that is already under them keeps its facet', () => {
+    const on: ViewState = { ...onActivity, server: 'fleet' };
+    const back = viewReducer(on, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] });
+    expect(back).toEqual({ ...onActivity, server: null });
+  });
+
+  it('a reload never lands on them', () => {
+    expect(initView().server).toBeNull();
+  });
+
+  it('serverPagesFor omits Logs and Authorizations on a read-only server, and Authorizations without an issuer', () => {
+    expect(serverPagesFor(false, true)).toEqual(['fleet', 'logs', 'auth']);
+    expect(serverPagesFor(false, false)).toEqual(['fleet', 'logs']);
+    expect(serverPagesFor(true, true)).toEqual(['fleet']);
+    expect(serverPagesFor(true, false)).toEqual(['fleet']);
   });
 });
