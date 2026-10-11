@@ -774,6 +774,88 @@ describe('drafts', () => {
   });
 });
 
+// The two flows where a context switch lands on a repo that refreshContextAfterChange
+// has already made current (SET_REPO), so the SET_CONTEXT that follows keeps
+// the repo. The branch must survive that (D's SET_CONTEXT rule), or Browse
+// sits on "Opening…" for good.
+describe('Browse opens after the repo it lands on was made current by the list refresh', () => {
+  beforeEach(() => { localStorage.setItem('knomit.rail', '1'); });
+
+  // listArchived answers AFTER the new repo's status: that is the order in
+  // which the second SET_CONTEXT lands on a repo that already has its branch.
+  const later = <T,>(v: T) => () => new Promise<T>(r => setTimeout(() => r(v), 60));
+
+  const browseOpen = async () => {
+    fireEvent.click(await screen.findByTestId('facet-tab-browse'));
+    await waitFor(() => expect(screen.getByTestId('library-splitter')).toBeInTheDocument());
+    expect(screen.queryByTestId('browse-opening')).toBeNull();
+  };
+
+  it('zero repos → create → done → Browse shows', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    localStorage.removeItem('knomit.context');
+    m.repos.mockResolvedValue([]);
+    await mountApp();
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New repository');
+
+    fireEvent.click(screen.getByTestId('choose-local'));
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'first-kb' } });
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByTestId('step-ontology');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^next$/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByTestId('step-review');
+
+    const job = (over: Record<string, unknown> = {}) => ({
+      create_id: 'c-first', name: 'first-kb', mode: 'initialize', state: 'running', step: 'index', phase: 'index',
+      index_state: 'indexing', repo: { name: 'first-kb', uid: 'u-first' }, ...over,
+    });
+    m.repos.mockResolvedValue([{ name: 'first-kb', uid: 'u-first' }]);
+    m.listArchived.mockImplementation(later([]));
+    m.listRepoCreates.mockResolvedValue([job()]);
+    m.createRepo.mockImplementation(async (_b: unknown, onStatus: (s: unknown) => void) => {
+      onStatus(job());
+      return new Promise(() => {});
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create repository/i }));
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toContain('first-kb'));
+    await waitFor(() => expect(tabNames()).toEqual(['Settings']));
+
+    m.listRepoCreates.mockResolvedValue([job({ state: 'done', step: 'done', index_state: 'ready' })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+    await browseOpen();
+  });
+
+  it('archive the last repo → restore it → Browse shows', async () => {
+    const { m } = await primeApi();
+    m.repos.mockResolvedValue([{ name: 'ops-kb', uid: 'u-ops' }]);
+    await mountApp();
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    fireEvent.click(await screen.findByTestId('repo-archive'));
+
+    const row = { id: 'u-ops', name: 'ops-kb', origin: '', archivedAt: '2026-10-10T00:00:00Z' };
+    m.archiveRepo.mockResolvedValue(row);
+    m.repos.mockResolvedValue([]);
+    m.listArchived.mockResolvedValue([row]);
+    fireEvent.click(screen.getByTestId('repo-archive-confirm'));
+    // The last repo gone: the shell is the repository draft.
+    await waitFor(() => expect(screen.getByTestId('target-label')).toHaveTextContent('New repository'));
+
+    fireEvent.click(await screen.findByTestId('rail-archived'));
+    fireEvent.click(screen.getByTestId('rail-archived-u-ops'));
+    await screen.findByTestId('archived-settings');
+    m.restoreRepo.mockResolvedValue({ name: 'ops-kb' });
+    m.listArchived.mockImplementation(later([]));
+    m.repos.mockResolvedValue([{ name: 'ops-kb', uid: 'u-ops' }]);
+    fireEvent.click(screen.getByTestId('archived-restore-u-ops'));
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+    await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+    await browseOpen();
+  });
+});
+
 describe('the status footer\'s creates count', () => {
   it('opens the rail, where each create is a row with its chip', async () => {
     const { m } = await primeApi();
