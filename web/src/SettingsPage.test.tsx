@@ -52,13 +52,45 @@ describe('SettingsPage', () => {
   // The page owns its scroll container now (no walk up to a scroll parent), so
   // the scroll listener is on `settings-scroll`.
   //
-  // NOTE jsdom has no layout, so every rect is zero and `compute` reads that as
-  // "scrolled to the end" — which is why the LAST entry is the one that ends up
-  // current. What this pins is that a listener is attached at all, on a page
-  // that does not overflow yet.
+  // NOTE jsdom has no layout, so every rect is zero: every block's top has
+  // "passed" the container's top, which is why the LAST entry is the one that
+  // ends up current. What this pins is that a listener is attached at all, on
+  // a page that does not overflow yet.
   it('tracks scrolling on a page that does not overflow yet', async () => {
     render(<SettingsPage kind="repo" sections={SECTIONS} />);
     fireEvent.scroll(screen.getByTestId('settings-scroll'));
+    await waitFor(() => expect(screen.getByTestId('toc-danger')).toHaveAttribute('aria-current', 'true'));
+  });
+
+  // A page short enough to fit (an archived repo's Archived + Danger zone) is
+  // "at the end" while unscrolled. Its first block is the one being read; the
+  // scrolled-to-the-end rule must not hand the index to the last one.
+  // Layout is stubbed: blocks 100px apart, container 500px, nothing overflows.
+  function layOut(scrollTop: number, scrollHeight: number) {
+    const container = screen.getByTestId('settings-scroll');
+    Object.defineProperty(container, 'scrollTop', { configurable: true, value: scrollTop });
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: scrollHeight });
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 500 });
+    container.getBoundingClientRect = () => ({ top: 0 } as DOMRect);
+    SECTIONS.forEach((s, i) => {
+      const node = container.querySelector(`#${s.id}`) as HTMLElement;
+      node.getBoundingClientRect = () => ({ top: i * 100 - scrollTop } as DOMRect);
+    });
+    fireEvent.scroll(container);
+  }
+
+  it('spies the first block of a page that fits, not the last', async () => {
+    render(<SettingsPage kind="repo" sections={SECTIONS} />);
+    layOut(0, 500);
+    await waitFor(() => expect(screen.getByTestId('toc-description')).toHaveAttribute('aria-current', 'true'));
+    expect(screen.getByTestId('toc-danger')).not.toHaveAttribute('aria-current');
+  });
+
+  it('still spies the last block once a long page is scrolled to its end', async () => {
+    render(<SettingsPage kind="repo" sections={SECTIONS} />);
+    // 800px of content in 500px, scrolled 300px: the end. Danger zone's top
+    // (400 - 300 = 100) never reaches the container's top, yet it is current.
+    layOut(300, 800);
     await waitFor(() => expect(screen.getByTestId('toc-danger')).toHaveAttribute('aria-current', 'true'));
   });
 
@@ -75,9 +107,9 @@ describe('SettingsPage', () => {
 
   it('releases the selection when you scroll under your own steam', async () => {
     render(<SettingsPage kind="repo" sections={SECTIONS} />);
-    // NOT the last section. jsdom has no layout (every scroll metric is 0), so
-    // the scroll-spy always decides "scrolled to the end" and spies the LAST
-    // block. Releasing a pin on that block would leave it current by the
+    // NOT the last section. jsdom has no layout (every rect is 0), so every
+    // block's top has "passed" the container's and the scroll-spy spies the
+    // LAST block. Releasing a pin on that block would leave it current by the
     // spy's own account (knomit#270), so pin a middle one.
     fireEvent.click(screen.getByTestId('toc-index'));
     expect(screen.getByTestId('toc-index')).toHaveAttribute('aria-current', 'true');
