@@ -242,9 +242,16 @@ func serveCmd() *cobra.Command {
 			// real TLS fronts it, never the plaintext port above.
 			oauthSrv, ol, err := openOAuthServer(cfg.OAuth, a.OAuthHandler(), srv)
 			if err != nil {
-				// Fail closed, as for the TLS listener above.
-				log.Error().Err(err).Msg("oauth listener failed")
-				return coded(err)
+				if availabilityOnly(supervised, err) {
+					// A held address is an availability problem, like TCP and
+					// TLS: the desktop must not lose its UI over it.
+					log.Warn().Err(err).Msg("oauth listener address is held by another process; serving without it")
+					oauthSrv, ol = nil, nil
+				} else {
+					// Fail closed, as for the TLS listener above.
+					log.Error().Err(err).Msg("oauth listener failed")
+					return coded(err)
+				}
 			}
 			if ol != nil {
 				defer ol.Close()
@@ -262,8 +269,13 @@ func serveCmd() *cobra.Command {
 				}
 			})
 			if err != nil {
-				log.Error().Err(err).Msg("runtime diagnostics listener failed")
-				return err
+				if availabilityOnly(supervised, err) {
+					log.Warn().Err(err).Msg("runtime diagnostics address is held by another process; serving without it")
+					diagSrv, dl = nil, nil
+				} else {
+					log.Error().Err(err).Msg("runtime diagnostics listener failed")
+					return coded(err)
+				}
 			}
 			if dl != nil {
 				defer dl.Close()
@@ -271,8 +283,18 @@ func serveCmd() *cobra.Command {
 
 			// server.json, LAST: every listener that can fail is bound, so the
 			// file never names a port nothing serves.
+			//
+			// Failing to write it does not stop a plain `knomit serve`: before
+			// the file existed nothing depended on it, and kb falls back to
+			// the socket. Supervised, the desktop needs it, and no retry fixes
+			// an unwritable state directory: exit 2.
 			if err := ls.Advertise(); err != nil {
-				return err
+				if !supervised {
+					log.Warn().Err(err).Str("path", ls.LockPath()).
+						Msg("server.json not written; kb and the desktop will not discover this server by file")
+				} else {
+					return coded(&serve.ConfigError{Err: err})
+				}
 			}
 
 			// Startup summary: everything above is bound.
@@ -470,4 +492,11 @@ func supervisedExit(supervised bool, err error) error {
 		return &ExitCodeError{Code: ExitSupervisedConfig, Err: err}
 	}
 	return err
+}
+
+// availabilityOnly reports whether err is an "address already in use" that a
+// supervised serve survives (WARN, serve without that listener). Unsupervised
+// serve keeps its refusal.
+func availabilityOnly(supervised bool, err error) bool {
+	return supervised && app.IsAddrInUse(err)
 }

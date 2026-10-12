@@ -5,11 +5,15 @@ package cmd
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -385,4 +389,149 @@ func TestServeSupervised_PortHeldWarnsAndServes(t *testing.T) {
 	if err := h.wait(15 * time.Second); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
+}
+
+// server.json is written LAST: after OAuth and the diagnostics listener are
+// bound, so it never names a server that then fails to come up. The ordering
+// of the call site is invisible to behaviour tests (Advertise moved earlier
+// leaves every one green), so this pins source order in serve's RunE:
+// openOAuthServer and openDiagServer come before ls.Advertise.
+func TestServe_AdvertiseIsAfterEveryOtherListener(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "serve.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pos := map[string]token.Pos{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if fn.Name == "openOAuthServer" || fn.Name == "openDiagServer" {
+				pos[fn.Name] = call.Pos()
+			}
+		case *ast.SelectorExpr:
+			if fn.Sel.Name == "Advertise" || fn.Sel.Name == "Open" {
+				pos[fn.Sel.Name] = call.Pos()
+			}
+		}
+		return true
+	})
+	for _, name := range []string{"Open", "openOAuthServer", "openDiagServer", "Advertise"} {
+		if !pos[name].IsValid() {
+			t.Fatalf("serve.go has no call to %s (positive control: the pin must find all four)", name)
+		}
+	}
+	if !(pos["Open"] < pos["openOAuthServer"] && pos["openOAuthServer"] < pos["Advertise"] && pos["openDiagServer"] < pos["Advertise"]) {
+		t.Fatalf("order in serve.go is wrong: Open=%v oauth=%v diag=%v Advertise=%v; Advertise must be last",
+			pos["Open"], pos["openOAuthServer"], pos["openDiagServer"], pos["Advertise"])
+	}
+}
+
+// An unwritable server.json (a directory sits where the file goes) does not
+// stop a plain `knomit serve`: WARN and keep serving. Supervised it is fatal,
+// exit 2.
+func TestServe_AdvertiseFailure(t *testing.T) {
+	t.Run("plain serve warns and keeps serving", func(t *testing.T) {
+		home := isolateServe(t)
+		if err := os.Mkdir(filepath.Join(home, "server.json"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		h := startServe(t, home)
+		waitSocket(t, h) // serving despite the unwritable file
+		if fi, err := os.Stat(filepath.Join(home, "server.json")); err != nil || !fi.IsDir() {
+			t.Fatalf("server.json was replaced or removed: %v %v", fi, err)
+		}
+		h.cancel()
+		if err := h.wait(15 * time.Second); err != nil {
+			t.Fatalf("stop: %v", err)
+		}
+	})
+	t.Run("supervised exits 2", func(t *testing.T) {
+		home := isolateServe(t)
+		if err := os.Mkdir(filepath.Join(home, "server.json"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		h := startServe(t, home, "--supervised")
+		err := h.wait(40 * time.Second)
+		if got := exitCode(t, err); got != ExitSupervisedConfig || !strings.Contains(err.Error(), "write lockfile") {
+			t.Fatalf("exit %d (%v), want %d naming the lockfile", got, err, ExitSupervisedConfig)
+		}
+	})
+}
+
+// A held OAuth or diagnostics address is an availability problem under
+// --supervised, like TCP and TLS: WARN and serve. Unsupervised keeps its
+// refusal (the positive control of each row).
+func TestServe_HeldOAuthAndDiagAddresses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(t *testing.T, addr string)
+	}{
+		{"oauth", func(t *testing.T, addr string) {
+			t.Setenv("KNOMIT_OAUTH_ISSUER", "https://kb.example.com")
+			t.Setenv("KNOMIT_OAUTH_ADDR", addr)
+		}},
+		{"diag", func(t *testing.T, addr string) { t.Setenv("KNOMIT_RUNTIME_ADDR", addr) }},
+	} {
+		t.Run(tc.name+" supervised warns and serves", func(t *testing.T) {
+			home := isolateServe(t)
+			held, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			tc.set(t, held.Addr().String())
+			h := startServe(t, home, "--supervised")
+			info := h.waitServing()
+			if info.Socket == "" {
+				t.Fatalf("server.json = %+v", info)
+			}
+			h.stdin.Close()
+			if err := h.wait(15 * time.Second); err != nil {
+				t.Fatalf("stop: %v", err)
+			}
+		})
+		t.Run(tc.name+" unsupervised still refuses", func(t *testing.T) {
+			home := isolateServe(t)
+			held, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			tc.set(t, held.Addr().String())
+			h := startServe(t, home)
+			err = h.wait(40 * time.Second)
+			if err == nil || !app.IsAddrInUse(err) {
+				t.Fatalf("unsupervised serve with a held %s address = %v, want an address-in-use failure", tc.name, err)
+			}
+		})
+	}
+}
+
+// waitSocket waits until the local socket answers, for runs that write no
+// server.json.
+func waitSocket(t *testing.T, h *serveHarness) string {
+	t.Helper()
+	sock, err := config.SocketPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(40 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-h.done:
+			t.Fatalf("serve returned before it was serving: %v", h.err)
+		default:
+		}
+		if c, err := auth.DialLocal(context.Background(), sock, time.Second); err == nil {
+			c.Close()
+			return sock
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("the socket never answered")
+	return ""
 }
