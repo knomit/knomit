@@ -54,6 +54,33 @@ type LockInfo struct {
 	TLS string `json:"tls,omitempty"`
 	// Generation counts listener-set applications by this process; 1 after boot.
 	Generation int `json:"generation,omitempty"`
+	// Reload is true when this process listens for a reload request (SIGHUP,
+	// or the Windows event). A server written before reload existed lacks it,
+	// and SIGHUP would end it, so `knomit reload` refuses to signal one.
+	Reload bool `json:"reload,omitempty"`
+	// ReloadError is "<RFC3339 time>: <message>" when the last reload request
+	// could not load or validate the configuration (the running configuration
+	// and Generation are unchanged); cleared by the next successful reload.
+	// The time makes a repeated identical error a new value.
+	ReloadError string `json:"reload_error,omitempty"`
+	// RestartNeeded names the config keys whose change the last reload saw
+	// and did NOT apply (socket, [auth].require, ...): the running process
+	// still has the old values until it is restarted. Empty after a boot.
+	RestartNeeded []string `json:"restart_needed,omitempty"`
+	// Listeners is, per reloadable listener ("http", "tls"), what the last
+	// boot or reload did with it, so a caller that signalled a reload can read
+	// the outcome (a held port) from the same file whose Generation it polls.
+	Listeners map[string]LockListener `json:"listeners,omitempty"`
+}
+
+// LockListener is one listener's outcome: the address as configured ("" =
+// off), the address bound ("" = not listening) and why they differ
+// ("addr_in_use", "no_certificate", "off", or the bind error of a reload that
+// kept the previous listener).
+type LockListener struct {
+	Configured string `json:"configured"`
+	Listening  string `json:"listening"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 // WriteLock serializes info to path atomically (write-then-rename) with 0600 perms.

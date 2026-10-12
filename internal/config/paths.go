@@ -38,14 +38,34 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
 	"knomit/internal/platform/userdirs"
 )
+
+// ReloadEventName is the name of the Windows event a running server waits on
+// to be told to re-read its configuration (the counterpart of SIGHUP, which
+// Windows does not have): `Local\knomit-reload-<hash of the data root>`.
+//
+// Local\ and not Global\: a Global\ object needs SeCreateGlobalPrivilege,
+// which a user session does not hold, and a reload is per user session
+// anyway. The suffix is derived from the data root and nothing else, with the
+// pipe name's normalisation (cleaned and lower-cased, because Windows paths
+// are case-insensitive), so two homes never share an event and a `knomit
+// reload` finds the server of the home it resolves. It is spelled on every
+// OS so the rule is testable off Windows.
+func ReloadEventName(home string) string {
+	norm := strings.ToLower(filepath.Clean(home))
+	sum := sha256.Sum256([]byte(norm))
+	return `Local\knomit-reload-` + hex.EncodeToString(sum[:8])
+}
 
 // appDir is the directory knomit owns inside whatever per-user location the
 // OS designates. One spelling, one place.
