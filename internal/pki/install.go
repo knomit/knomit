@@ -20,7 +20,7 @@ import (
 //
 // The functions take the pki directory and the key path, never a config: pki
 // imports no knomit package, and resolving [tls].dir and the key is the
-// caller's job (app.ResolveKeyPath, cfg.TLS.Dir).
+// caller's job (config.ResolveKeyPath, cfg.TLS.Dir).
 
 // The classes of install refusal. Each error InstallBundle returns wraps at
 // most one of these (or a VerifyInstanceChain sentinel, for a chain that does

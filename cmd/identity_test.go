@@ -18,7 +18,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/pki"
 	"knomit/internal/repos"
@@ -399,12 +398,12 @@ func TestIdentity_ReplaceRootNeedsConfirmationToo(t *testing.T) {
 	}
 }
 
-// The desktop's "Copy public key" line (app.PublicKeyLine) is accepted by
+// The desktop's "Copy public key" line (pki.PublicKeyLine) is accepted by
 // `enroll --pubkey` as the same key, and carries the host enroll would put in
 // the SAN — so an operator given only that line needs no --host.
 func TestIdentity_DesktopPublicKeyLineRoundTripsThroughEnroll(t *testing.T) {
 	home, pub, _ := instanceHome(t, "laptop")
-	line, err := app.PublicKeyLine(filepath.Join(home, "id_ed25519"))
+	line, err := pki.PublicKeyLine(filepath.Join(home, "id_ed25519"))
 	if err != nil {
 		t.Fatal(err)
 	}

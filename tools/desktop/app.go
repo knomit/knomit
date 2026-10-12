@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -20,16 +21,14 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
-	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
-	"knomit/internal/embeddings"
+	"knomit/internal/embeddings/params"
 	"knomit/internal/platform/privdir"
 	"knomit/internal/platform/version"
 	webui "knomit/web"
 
 	desktopui "knomit/tools/desktop/ui"
 
-	"knomit/internal/serveraddr"
 	"knomit/tools/desktop/internal/autostart"
 	"knomit/tools/desktop/internal/singleinstance"
 )
@@ -44,79 +43,68 @@ import (
 //go:embed appicon.png
 var appIcon []byte
 
-// wailsOrigins are the page origins Wails serves assets from, by platform
-// (confirmed in the Task 0 spike: darwin/linux use the "wails" scheme, windows
-// uses http). Both are allowed for CORS since the API binds looknomitck-only.
-var wailsOrigins = []string{"wails://localhost", "http://wails.localhost"}
-
-// desktopAppOptions are the app options the desktop boots with.
-func desktopAppOptions() knomitapp.Options {
-	return knomitapp.Options{
-		APIOnly:     true,
-		CORSOrigins: wailsOrigins,
-		// The desktop never opens the OAuth listener, so it builds no
-		// issuer: the pending endpoints are 404 and the web UI hides its
-		// panel (F19 phase 3b, W3).
-		NoOAuth: true,
-		// The Logs tab streams from this, through the very API base
-		// configInjectingHandler injects below. Serving it from the in-process
-		// server is what keeps the log stream part of the API rather than a
-		// second, desktop-only transport.
-		LogTap: logTap,
-	}
+// desktopLockPath is the desktop's single-instance lock for the data root
+// home: desktop.lock beside that home's server.json, i.e. <StateDir>/desktop.lock
+// for the default home and <home>/desktop.lock for any other. Keyed by home
+// like server.json, so a desktop on a scratch KNOMIT_HOME can run beside the
+// user's (kb gotcha desktop/rebuilding-kills-the-running-server). server.json
+// itself is the SERVER's file and no longer doubles as the desktop's lock.
+func desktopLockPath(home string) string {
+	return filepath.Join(filepath.Dir(config.LockfilePathFor(home)), "desktop.lock")
 }
 
-// run boots the in-process server and the Wails desktop shell.
+// run hosts the UI over the knomit server's local socket / pipe, attaching to a
+// server that already answers there or supervising one it spawns (see
+// supervisor.go). The desktop contains no server of its own.
 func run(ctx context.Context) error {
-	// The same file `knomit serve` and kb resolve for this data root
-	// (config.LockfilePath): the default home's lives in the state directory,
-	// any other home's in that home.
-	lockPath, err := config.LockfilePath()
+	home, err := config.ResolveHome()
 	if err != nil {
 		return err
 	}
-	if err := singleinstance.Acquire(lockPath); err != nil {
+	// Synchronous, before any UI: a second instance must fail before it builds
+	// anything (kb invariant desktop/startup/wails). The OS releases the lock
+	// when this process ends, however it ends.
+	lock, err := singleinstance.Acquire(desktopLockPath(home))
+	if err != nil {
 		if errors.Is(err, singleinstance.ErrAlreadyRunning) {
 			fmt.Println("knomit-desktop is already running.")
 			return nil
 		}
-		// A real error checking the lockfile (e.g. unreadable) — surface it
-		// rather than masking it as "already running".
 		return fmt.Errorf("check single instance: %w", err)
 	}
+	defer lock.Release()
 
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	// The server's discovery file for this home: read to name an attached
+	// server's pid and, by Settings, its listeners.
+	lockPath := config.LockfilePathFor(cfg.Home)
 
-	// The log file, resolved ONCE. Three things have to agree on it — the
-	// logger's own sink, "Reveal in Finder", and the path the Settings dialog
-	// shows — and resolving it separately per consumer is what let a configured
-	// `[log] file` send the log somewhere the rest of the app was not looking.
-	// See resolveLogFile.
-	logFile := resolveLogFile(cfg)
+	// Two log files, resolved ONCE. The SERVER owns the configured one (it is
+	// passed --log-file), so Reveal and the Settings dialog name the file being
+	// written; the desktop shell writes its own knomit-desktop.log beside it.
+	// Two processes must never rotate one file.
+	serverLog := resolveLogFile(cfg)
+	desktopLog := desktopLogFile(serverLog)
 
 	// Phase two of logging: now that knomit.toml has been read, rebuild the
 	// logger so the user's level and format apply. Phase one (bootstrapLogging)
 	// is what caught any failure in config.Load above.
-	if lerr := applyLogConfig(cfg.Log, logFile); lerr != nil {
+	if lerr := applyLogConfig(cfg.Log, desktopLog); lerr != nil {
 		log.Warn().Err(lerr).Msg("log config not applied; keeping bootstrap logger")
 	}
 	if ignored := config.IgnoredExecutableConfig(cfg.Home); ignored != "" {
 		log.Warn().Str("ignored", ignored).Str("read", filepath.Join(cfg.Home, "knomit.toml")).
 			Msg("knomit.toml beside the executable is not read; move its settings into the data root's knomit.toml")
 	}
-	// Says out loud which file everything downstream agreed on. main.go already
-	// logs the BOOTSTRAP path, and the two differ whenever knomit.toml names a
-	// file — so without this line the log's own account of where it lives is the
-	// path it stopped using seconds earlier. It is also the only externally
-	// visible evidence that Reveal and the Settings dialog will name the same
-	// file the logger is writing.
-	if logFile == "" {
-		log.Warn().Msg("no log file could be resolved; logging to stderr only, so there is no post-mortem record on disk")
+	// Says out loud which files everything downstream agreed on: main.go logs
+	// only the bootstrap path.
+	if serverLog == "" {
+		log.Warn().Msg("no log file could be resolved; the server logs to stderr only, so there is no post-mortem record on disk")
 	} else {
-		log.Info().Str("log_file", logFile).Msg("logging to file")
+		log.Info().Str("server_log", serverLog).Str("desktop_log", desktopLog).Msg("logging to file")
 	}
 
 	uiFS, err := webui.FS()
@@ -131,34 +119,41 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("embedded desktop UI: %w", err)
 	}
 
-	// Start the server FIRST but do not wait for it. Everything below this line
-	// is cheap; bootKnomit is not (seconds, dominated by loading the embedder
-	// and populating each repo's commit log). Running it inline is what used to
-	// keep the tray icon off the menu bar until it finished. Now it overlaps
-	// Wails' own startup, and the tray appears wearing the amber boot badge.
-	// The TLS listener's state, for Settings' Fleet identity section: made
-	// here because the boot starts before NativeService exists (see below).
-	tlsSt := &tlsStatus{}
-	// Where the webview's API traffic goes once the server's local listener is
-	// bound; bootKnomit fills it in. See uiproxy.go.
+	// Status changes reach the tray and the fatal dialog through this one-slot
+	// signal: the supervisor never blocks on the UI, and the consumer (started
+	// once the tray exists) always reads the CURRENT status, so a burst of
+	// transitions cannot be applied out of order.
+	changed := make(chan struct{}, 1)
+	// Where the webview's API traffic goes once a server answers. See uiproxy.go.
 	uiUp := &uiUpstream{}
-	boot := startServerBoot(ctx, func(ctx context.Context, setPhase func(bootPhase)) (string, func(), error) {
-		return bootKnomit(ctx, cfg, lockPath, setPhase, tlsSt, uiUp)
+	sup := newSupervisor(supervisorConfig{
+		socket:         cfg.Socket,
+		home:           cfg.Home,
+		lockPath:       lockPath,
+		logFile:        serverLog,
+		desktopVersion: version.String(),
+		serverBin:      serverBinaryPath,
+		environ:        os.Environ,
+		installTools:   func() { installDesktopTools(cfg.Home) },
+		modelsCached:   func() bool { return modelsCached(cfg) },
+		up:             uiUp,
+		onChange: func(bootStatus) {
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		},
 	})
-	// The status the UI sees. The webview reaches the API through the asset
-	// handler, so its API base is its OWN origin; boot.status() carries the
-	// server's TCP base, which only Settings' effective-port readout uses.
-	uiStatus := func() bootStatus {
-		s := boot.status()
-		if s.Ready {
-			s.APIBase = desktopOrigin()
-		}
-		return s
-	}
+	// Started FIRST but not waited for. Everything below this line is cheap;
+	// the server's boot is not (seconds; minutes on a first launch while models
+	// download), and it now happens in another process anyway. The tray appears
+	// wearing the amber boot badge.
+	sup.start(ctx)
+	uiStatus := uiStatusFrom(sup)
 	// Wails calls os.Exit on quit, so Go defers in run() do not fire. Cleanup
-	// runs via Wails' OnShutdown hook instead; serverBoot.stop is idempotent, so
-	// the belt-and-braces call after Run() below is harmless.
-	shutdown := boot.stop
+	// runs via Wails' OnShutdown hook instead; sup.stop is idempotent, so the
+	// belt-and-braces call after Run() below is harmless.
+	shutdown := sup.stop
 
 	// Self-update (macOS only — see updaterConfig). Resolved BEFORE the app is
 	// built, because the notifications service is registered only where
@@ -179,24 +174,8 @@ func run(ctx context.Context) error {
 	// only. configPath is <cfg.Home>/knomit.toml, the only file config.Load
 	// reads.
 	nativeSvc := newNativeService(
-		filepath.Join(cfg.Home, "knomit.toml"), logFile, autostart.New())
-	nativeSvc.tls = tlsSt
-	// Restarting must release this process's single-instance lockfile before
-	// spawning the replacement — see the releaseInstance field comment on
-	// NativeService. boot.stop is the same idempotent teardown OnShutdown
-	// below calls, so running it early here and again on the eventual
-	// shutdown is safe. serveraddr.RemoveLock is called explicitly too, rather than
-	// relying solely on stop()'s internal removal: stop() gives up WITHOUT
-	// calling its teardown (and so without removing the lockfile) if a boot
-	// still in flight has not settled within stopGrace — reachable here
-	// precisely because Settings, and so Restart, is available before boot
-	// completes. Safe only as long as stop()'s sync.Once means the later
-	// OnShutdown-driven call is always a no-op after this one — see the
-	// releaseInstance field comment for the risk if that ever changes.
-	nativeSvc.releaseInstance = func() {
-		boot.stop()
-		_ = serveraddr.RemoveLock(lockPath)
-	}
+		filepath.Join(cfg.Home, "knomit.toml"), serverLog, autostart.New())
+	nativeSvc.restartServer = sup.restartServer
 	services := []application.Service{application.NewService(nativeSvc)}
 	var notifySvc *notifications.NotificationService
 	if updatesEnabled {
@@ -209,15 +188,17 @@ func run(ctx context.Context) error {
 		Icon: appIcon,
 		Assets: application.AssetOptions{
 			Handler: apiProxy(configInjectingHandler(uiFS, desktopFS, uiStatus),
-				func() bool { return boot.status().Ready }, uiUp),
+				func() bool { return sup.status().Ready }, uiUp),
 		},
 		Services:   services,
 		OnShutdown: shutdown,
 	})
 	registerSSEStream(wapp, uiUp)
-	// Quit this instance only AFTER RestartApp has released the lockfile and
-	// spawned the replacement — see NativeService.RestartApp.
-	nativeSvc.onRestart = wapp.Quit
+	// An install-and-restart replaces the whole .app, the bundled server
+	// included, and relaunches: the server this desktop spawned must be gone
+	// first, or it keeps running the replaced binary (kb gotcha
+	// desktop/self-update, 7173001e).
+	installer := stopServerFirst{updateInstaller: wapp.Updater, stop: sup.stop, failed: sup.fail}
 
 	window := wapp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "Knomit",
@@ -291,13 +272,13 @@ func run(ctx context.Context) error {
 		seen := newNotifyLog()
 		item.OnClick(func(_ *application.Context) {
 			updateMenuAction(ctx, pending, wapp.Updater, notifySvc,
-				announcer, seen, wapp.Updater, updCfg.CurrentVersion)
+				announcer, seen, installer, updCfg.CurrentVersion)
 		})
 
 		// Best-effort: a broken update channel must never stop the app starting.
 		// Hide the item rather than leave it: with no updater behind it, a
 		// "Check for Updates…" that silently does nothing is worse than absent.
-		start, cerr := configureUpdater(ctx, wapp, notifySvc, announcer, seen, updCfg)
+		start, cerr := configureUpdater(ctx, wapp, installer, notifySvc, announcer, seen, updCfg)
 		if cerr != nil {
 			log.Warn().Err(cerr).Msg("self-update unavailable")
 			item.SetHidden(true)
@@ -317,48 +298,51 @@ func run(ctx context.Context) error {
 	wapp.Event.OnApplicationEvent(events.Common.ApplicationStarted,
 		func(*application.ApplicationEvent) { gate.open() })
 
-	// Clear the amber boot badge once the server answers. A boot FAILURE is
+	// The tray badge follows the server: amber while none answers (first boot,
+	// or a crashed server being restarted), cleared while one does. A FAILED
+	// supervisor (exit 2, the restart budget spent, an incomplete bundle) is
 	// fatal — the tray would otherwise sit there looking installed while every
-	// window it opens is dead — so say why in a dialog and quit. Before the
-	// server moved off the main path this was a plain error return from run();
-	// the dialog is what replaces the message on a stderr nobody sees, because
-	// LaunchServices points a bundle's stderr at /dev/null.
+	// window it opens is dead — so say why in a dialog and quit. LaunchServices
+	// points a bundle's stderr at /dev/null, so the dialog is the only place
+	// the user can read it.
 	go func() {
-		apiBase, err := boot.wait(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return // quitting already; the shutdown path has it
+		for {
+			st := sup.status()
+			switch {
+			case st.Phase == string(phaseFailed):
+				if ctx.Err() != nil {
+					return // quitting already; the shutdown path has it
+				}
+				msg := st.Error
+				// Through the gate, because a FAST failure (an incomplete
+				// bundle) can land here before Run() has assigned App.impl —
+				// and both calls below dereference it. Dialog.Error().Show()
+				// reaches impl.isOnMainThread() through InvokeSync and panics
+				// on the nil interface, on a non-main goroutine, with a
+				// bundle's stderr at /dev/null: the user sees nothing at all.
+				// Quit() is a documented no-op while impl is nil, which would
+				// leave the app sitting there with no server and a permanently
+				// amber tray. (SystemTray.SetIcon, used below, IS nil-guarded
+				// upstream, which is why the badge needs no gate.)
+				gate.after(func() {
+					wapp.Dialog.Error().
+						SetTitle("Knomit could not start").
+						SetMessage(msg).
+						Show()
+					wapp.Quit()
+				})
+				return
+			case st.Ready:
+				trayIcon.setBooting(false)
+			default:
+				trayIcon.setBooting(true)
 			}
-			log.Error().Err(err).Msg("knomit-desktop: server failed to start")
-			// Through the gate, because a FAST failure (an unwritable
-			// cfg.Home, or bootServer failing to listen) can land here before
-			// Run() has assigned App.impl — and both calls below dereference
-			// it. Dialog.Error().Show() reaches impl.isOnMainThread() through
-			// InvokeSync and panics on the nil interface, on a non-main
-			// goroutine, with a bundle's stderr at /dev/null: the user sees
-			// nothing at all. Quit() is quieter and no better — it is a
-			// documented no-op while impl is nil, which would leave the app
-			// sitting there with a dead server and a permanently amber tray.
-			//
-			// (SystemTray.SetIcon, the other pre-Run Wails call in this file,
-			// IS nil-guarded upstream — which is exactly why the tray's
-			// synchronous apply needs no gate and this does.)
-			gate.after(func() {
-				wapp.Dialog.Error().
-					SetTitle("Knomit could not start").
-					SetMessage(err.Error()).
-					Show()
-				wapp.Quit()
-			})
-			return
+			select {
+			case <-ctx.Done():
+				return
+			case <-changed:
+			}
 		}
-		// The bound port is only knowable here — it can differ from the
-		// configured one when 19278 was taken. Published BEFORE the boot badge
-		// clears, so nothing that reacts to "booted" can observe a zero port.
-		// Neither call touches Wails' platform layer (setEffectivePort is our
-		// own mutex; SetIcon is nil-guarded upstream), so neither is gated.
-		nativeSvc.setEffectivePort(portFromBaseURL(apiBase))
-		trayIcon.setBooting(false)
 	}()
 
 	// Everything that touches the OS notification centre starts HERE, not
@@ -371,21 +355,79 @@ func run(ctx context.Context) error {
 	}
 
 	// Quit the Wails run loop when the context is cancelled (SIGINT/SIGTERM),
-	// so deferred shutdown (lockfile removal, app close) runs on a clean exit.
+	// so the OnShutdown teardown (stopping a spawned server) runs.
 	go func() {
 		<-ctx.Done()
 		wapp.Quit()
 	}()
 
-	// The gap between this line and "server up (API-only)" is the window the
-	// boot badge covers. It used to be the other way round — the tray could not
-	// appear until the server had, which is the whole reason bootKnomit moved
-	// off this path — so log it, or a regression to that ordering is invisible.
+	// The gap between this line and "knomit server is answering" is the window
+	// the boot badge covers. The tray must come first; if this line ever
+	// follows the server's readiness, startup has regressed to waiting on it.
 	log.Info().Msg("knomit-desktop UI starting (tray up, server still booting)")
 
 	err = wapp.Run()
 	shutdown() // in case Run returns without triggering OnShutdown
 	return err
+}
+
+// uiStatusFrom is the status the UI sees: the supervisor's, with the API base
+// set to the page's OWN origin once a server answers, because the webview
+// reaches the API through the asset handler's /api/ proxy (uiproxy.go).
+func uiStatusFrom(sup *supervisor) func() bootStatus {
+	return func() bootStatus {
+		s := sup.status()
+		if s.Ready {
+			s.APIBase = desktopOrigin()
+		}
+		return s
+	}
+}
+
+// installDesktopTools is the desktop's own install step, the installing-tools
+// phase: the bundled kb and knomit-okf linked into <home>/bin so MCP clients
+// and the shell can run them by a stable path. Best-effort throughout: a
+// failure is logged and the server is started anyway.
+func installDesktopTools(home string) {
+	// The data root is private before installBridgeTool creates <home>/bin
+	// (at 0755), which on a first launch creates <home> itself. The server
+	// runs the same check as its backstop.
+	if err := privdir.Ensure(home); err != nil {
+		log.Warn().Err(err).Str("home", home).Msg("data root is not private; the server will report it")
+		return
+	}
+	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
+	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
+	// lives.
+	if link, lerr := installBridgeTool(home); lerr != nil {
+		log.Warn().Err(lerr).Msg("knomit-bridge: MCP integration link not installed")
+	} else {
+		log.Info().Str("path", link).Msg("knomit-bridge available for MCP clients")
+	}
+	// Same for knomit-okf, so the OKF export CLI is runnable by name rather
+	// than by a path inside the app bundle.
+	if link, lerr := installOKFTool(home); lerr != nil {
+		log.Warn().Err(lerr).Msg("knomit-okf: CLI link not installed")
+	} else {
+		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
+	}
+}
+
+// modelsCached reports whether the server's next start will find its
+// embedding model on disk. It only picks the boot screen's caption: on a FIRST
+// launch the server spends minutes fetching ~640 MB of model artifacts, on
+// every later one the same step is seconds of loading weights, and "Downloading
+// models…" would be a label that lies on all but one launch in the app's life.
+// params.ModelCached is presence-only and cheap (and cgo-free: the desktop does
+// not link the ONNX runtime or the tokenizers library for a caption); a lookup failure reads as
+// cached, since the caption is not worth an error and the server reports the
+// real one.
+func modelsCached(cfg config.Config) bool {
+	m, err := params.Lookup(cfg.Embeddings.Model)
+	if err != nil {
+		return true
+	}
+	return params.ModelCached(m, filepath.Join(cfg.Home, "models"))
 }
 
 // appStartGate defers work that must not reach Wails until the application has
@@ -435,86 +477,6 @@ func (g *appStartGate) open() {
 	for _, fn := range pending {
 		fn()
 	}
-}
-
-// bootKnomit starts everything behind the UI: the bundled CLI links, the
-// in-process knomit application, and the HTTP server it is served on. It
-// returns the API base URL and a teardown for what it started.
-//
-// This is the slow half of startup and it runs on a goroutine (see
-// startServerBoot), so it must not touch Wails — nothing here does.
-func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhase func(bootPhase), tlsSt *tlsStatus, uiUp *uiUpstream) (string, func(), error) {
-	setPhase(phaseInstallingTools)
-	// The data root is private before installBridgeTool creates <home>/bin
-	// (at 0755), which on a first launch creates <home> itself. knomitapp.New
-	// calls it again as the backstop.
-	if err := privdir.Ensure(cfg.Home); err != nil {
-		return "", nil, fmt.Errorf("data root %s: %w", cfg.Home, err)
-	}
-	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
-	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
-	// lives. Best-effort: a failure must not block the app from starting.
-	if link, lerr := installBridgeTool(cfg.Home); lerr != nil {
-		log.Warn().Err(lerr).Msg("knomit-bridge: MCP integration link not installed")
-	} else {
-		log.Info().Str("path", link).Msg("knomit-bridge available for MCP clients")
-	}
-
-	// Same for knomit-okf, so the OKF export CLI is runnable by name rather
-	// than by a path inside the app bundle. Also best-effort.
-	if link, lerr := installOKFTool(cfg.Home); lerr != nil {
-		log.Warn().Err(lerr).Msg("knomit-okf: CLI link not installed")
-	} else {
-		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
-	}
-
-	// Which phase app.New is about to spend its time in. On a FIRST launch it is
-	// dominated by fetching ~640 MB of model artifacts; on every launch after
-	// that those are on disk and the same call is seconds of loading weights and
-	// opening repos. Saying "Downloading models…" in the second case would be a
-	// label that lies on all but one launch in the app's life, so ask before
-	// claiming it. embeddings.ModelCached is presence-only and cheap (three
-	// os.Stat calls); a lookup failure is not fatal here, since the phase is a
-	// caption and app.New will report the real error moments later.
-	downloading := false
-	if m, lerr := embeddings.Lookup(cfg.Embeddings.Model); lerr == nil {
-		downloading = !embeddings.ModelCached(m, filepath.Join(cfg.Home, "models"))
-	}
-	if downloading {
-		setPhase(phaseDownloadingModels)
-	} else {
-		setPhase(phaseStartingEngine)
-	}
-
-	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
-	a, err := knomitapp.New(ctx, cfg, desktopAppOptions())
-	if err != nil {
-		return "", nil, err
-	}
-
-	setPhase(phaseStartingServer)
-	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String(), cfg, a.KeyPath())
-	if err != nil {
-		a.Close()
-		return "", nil, err
-	}
-	// The webview rides the local socket / pipe and nothing else. A boot that
-	// could not bind it (the path is held by another process) has no UI path:
-	// say so rather than serve a window whose every call fails, or — worse —
-	// dial a listener that is not ours.
-	if srv.local == "" {
-		srv.shutdown()
-		a.Close()
-		return "", nil, fmt.Errorf("the local socket %s could not be opened (another process holds it, or the path is unusable); the desktop UI needs it — stop that process or set [socket] in knomit.toml", cfg.Socket)
-	}
-	uiUp.set(srv.local)
-	tlsSt.set(srv.tlsState)
-	a.Manager().SetServerAddress(srv.address)
-	// The one line to copy into KNOMIT_SERVER to reach THIS instance.
-	log.Info().Str("knomit_server", srv.address).Msg("this server's address (KNOMIT_SERVER for kb)")
-	apiBase := fmt.Sprintf("http://127.0.0.1:%d", port)
-	log.Info().Str("api", apiBase).Int("port", port).Str("socket", cfg.Socket).Msg("knomit-desktop server up (API-only)")
-	return apiBase, func() { srv.shutdown(); a.Close() }, nil
 }
 
 // bootStatusPath is the endpoint the boot screen polls while the server is

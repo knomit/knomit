@@ -91,19 +91,49 @@ func TestResolveLogFileHonoursTheConfiguredFile(t *testing.T) {
 	}
 }
 
-// With no [log] file the desktop default is what everything agrees on — and it
-// must be the same string bootstrapLogging wrote to, or phase two moves the log
-// mid-launch.
-func TestResolveLogFileFallsBackToTheDesktopDefault(t *testing.T) {
-	got := resolveLogFile(config.Config{})
-	if got != defaultLogPath() {
-		t.Errorf("resolveLogFile = %q, want the desktop default %q", got, defaultLogPath())
+// With no [log] file the SERVER logs to knomit.log in the desktop's logs
+// directory, and the desktop shell to knomit-desktop.log beside it — the same
+// file bootstrapLogging wrote to, or phase two moves the desktop's log
+// mid-launch. Two processes must never share one rotating file.
+func TestResolveLogFileSplitsServerAndDesktop(t *testing.T) {
+	server := resolveLogFile(config.Config{})
+	if server == "" {
+		t.Skip("no logs directory on this host")
 	}
-	// bootstrapLogging writes to this same basename before config is read. If
-	// the two ever diverge, phase two silently moves the log mid-launch and the
-	// first seconds of every startup end up in a file nothing tails.
-	if got != "" && filepath.Base(got) != "knomit-desktop.log" {
-		t.Errorf("default log file = %q, want the basename bootstrapLogging uses", got)
+	if filepath.Base(server) != "knomit.log" || filepath.Dir(server) != filepath.Dir(defaultLogPath()) {
+		t.Errorf("server log = %q, want knomit.log beside the desktop default %q", server, defaultLogPath())
+	}
+	if got := desktopLogFile(server); got != defaultLogPath() {
+		t.Errorf("desktop log = %q, want the bootstrap default %q", got, defaultLogPath())
+	}
+	// A configured server log moves the desktop's beside it, never onto it.
+	custom := filepath.Join(t.TempDir(), "srv.log")
+	if got := desktopLogFile(custom); got != filepath.Join(filepath.Dir(custom), "knomit-desktop.log") || got == custom {
+		t.Errorf("desktop log for a configured %q = %q, want its sibling knomit-desktop.log", custom, got)
+	}
+}
+
+// applyLogConfig writes the desktop's own file even when [log] file names the
+// server's: a configured file must not get two writers.
+func TestApplyLogConfigNeverWritesTheServersFile(t *testing.T) {
+	// TempDir FIRST: cleanups run LIFO, so the logger reset below (which closes
+	// the open log file) must run before the directory is removed — Windows
+	// cannot delete a directory holding an open file.
+	dir := t.TempDir()
+	t.Cleanup(func() { _ = applyLogConfig(config.LogConfig{Level: "info"}, "") })
+	serverFile := filepath.Join(dir, "server.log")
+	desktopFile := filepath.Join(dir, "knomit-desktop.log")
+	prev := log.Logger
+	t.Cleanup(func() { log.Logger = prev })
+	if err := applyLogConfig(config.LogConfig{Level: "info", Format: "console", File: serverFile}, desktopFile); err != nil {
+		t.Fatal(err)
+	}
+	log.Info().Msg("desktop-line-marker")
+	if b, _ := os.ReadFile(desktopFile); !strings.Contains(string(b), "desktop-line-marker") {
+		t.Errorf("the desktop's own file did not receive its line: %q", b)
+	}
+	if _, err := os.Stat(serverFile); err == nil {
+		t.Error("the desktop wrote the server's configured log file")
 	}
 }
 

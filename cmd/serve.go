@@ -77,6 +77,9 @@ func serveCmd() *cobra.Command {
 			// minutes): a parent that dies during that wait must still end us.
 			var stdinClosed atomic.Bool
 			if supervised {
+				// The supervisor holds our stderr pipe too; its death must
+				// not kill us before the stdin-EOF shutdown below runs.
+				survivePipedStderrLoss()
 				watchStdin(cmd.InOrStdin(), func() {
 					if ctx.Err() != nil {
 						return // already stopping (or stopped): nothing to report

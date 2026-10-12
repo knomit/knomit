@@ -33,6 +33,28 @@ func installGoroutineDumpSignal(dir string) func() {
 	}
 }
 
+// survivePipedStderrLoss keeps a supervised server alive when the pipe its
+// stderr is connected to loses its reader: the desktop that started it died.
+// By default the Go runtime ends a process that writes to a broken pipe on fd 1
+// or 2 with SIGPIPE, so the very log line announcing "supervisor closed stdin"
+// killed the server mid-way, before it could stop its listeners and remove
+// server.json (observed: a SIGKILLed desktop left a stale server.json and an
+// unclean-exit marker behind). With SIGPIPE delivered to a channel instead, a
+// write to the dead pipe fails with EPIPE, the log line still reaches the log
+// file, and the stdin-EOF shutdown runs to the end.
+//
+// Notify, not signal.Ignore: an IGNORED signal stays ignored across exec, which
+// would change SIGPIPE for every recipe child (a shell pipeline that relies on
+// it to stop); a caught one is reset to the default in the child.
+func survivePipedStderrLoss() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGPIPE)
+	go func() {
+		for range ch {
+		}
+	}()
+}
+
 // installReloadSignal runs onReload, on its own goroutine and one call at a
 // time, for every SIGHUP the process receives: `kill -HUP <pid>` makes a
 // running server re-read its configuration (Listeners.Reload). Signals that

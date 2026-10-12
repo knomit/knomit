@@ -1,8 +1,9 @@
 //go:build desktop
 
-// knomit-desktop is the cross-platform Wails system-tray app. It boots the
-// knomit server in-process (API/MCP only) on a looknomitck port and serves the
-// React UI in-process via Wails.
+// knomit-desktop is the cross-platform Wails system-tray app. It runs the
+// bundled `knomit serve --supervised` (or attaches to a knomit already
+// answering on this home's socket) and hosts the React UI over that server's
+// local socket / named pipe.
 package main
 
 import (

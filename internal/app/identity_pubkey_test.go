@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"knomit/internal/pki"
 )
 
 // PublicKeyLine is the line an operator passes to `knomit identity enroll
@@ -22,7 +24,7 @@ func TestPublicKeyLine_IsTheLineEnsureKeyPairWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line, err := PublicKeyLine(path)
+	line, err := pki.PublicKeyLine(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,13 +39,13 @@ func TestPublicKeyLine_IsTheLineEnsureKeyPairWrites(t *testing.T) {
 	if err := os.WriteFile(path+".pub", []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGarbage knomit@elsewhere\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if again, err := PublicKeyLine(path); err != nil || again != line {
+	if again, err := pki.PublicKeyLine(path); err != nil || again != line {
 		t.Fatalf("PublicKeyLine followed a stale .pub: %q %v", again, err)
 	}
 }
 
 func TestPublicKeyLine_NoKeyIsAnError(t *testing.T) {
-	if _, err := PublicKeyLine(filepath.Join(t.TempDir(), "missing")); err == nil {
+	if _, err := pki.PublicKeyLine(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("PublicKeyLine of a missing key succeeded")
 	}
 }

@@ -12,10 +12,11 @@ import (
 )
 
 // uiPathFiles are the files that carry the desktop webview's traffic to the
-// server: the /api/ reverse proxy and the Wails Stream adapter. They must reach
-// the server through auth.DialLocal (the local socket / named pipe) and nothing
-// else.
-var uiPathFiles = []string{"tools/desktop/uiproxy.go", "tools/desktop/uistreams.go"}
+// server: the /api/ reverse proxy and the Wails Stream adapter, plus the
+// supervisor's readiness/attach probe, which decides which server the UI talks
+// to. They must reach the server through auth.DialLocal (the local socket /
+// named pipe) and nothing else.
+var uiPathFiles = []string{"tools/desktop/uiproxy.go", "tools/desktop/uistreams.go", "tools/desktop/supervisor.go"}
 
 // forbiddenTCP are the selector expressions that open a network connection
 // other than through the local dialer: a raw dial, a TLS dial, and the http
@@ -78,7 +79,7 @@ func TestDesktopUIPathNeverDialsTCP(t *testing.T) {
 		if rel == "tools/desktop/uiproxy.go" && !dialsLocal {
 			t.Errorf("%s never calls auth.DialLocal; the guard would pass vacuously", rel)
 		}
-		if rel == "tools/desktop/uistreams.go" && !usesSharedTransport {
+		if (rel == "tools/desktop/uistreams.go" || rel == "tools/desktop/supervisor.go") && !usesSharedTransport {
 			t.Errorf("%s does not use newUpstreamTransport, so its dial is unchecked", rel)
 		}
 	}

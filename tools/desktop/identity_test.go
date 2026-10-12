@@ -19,9 +19,10 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	knomitapp "knomit/internal/app"
+	"knomit/internal/config"
 	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
+	"knomit/internal/serveraddr"
 )
 
 // stubWindow stands in for the Wails window a binding call carries in its
@@ -66,7 +67,6 @@ func fleetHome(t *testing.T) (home, keyPath string) {
 func fleetService(t *testing.T, home string) *NativeService {
 	t.Helper()
 	n := newNativeService(filepath.Join(home, "knomit.toml"), filepath.Join(home, "desktop.log"), &stubToggler{})
-	n.tls = &tlsStatus{}
 	return n
 }
 
@@ -467,7 +467,14 @@ func TestFleetIdentity_GetIdentityStates(t *testing.T) {
 	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
 		t.Fatalf("install: %+v", res)
 	}
-	n.tls.set(tlsState{Configured: "0.0.0.0:19279", Reason: tlsNoCertificate})
+	// The running server's own account of its TLS listener, as `knomit serve`
+	// writes it into this home's server.json.
+	if err := serveraddr.WriteLock(config.LockfilePathFor(home), serveraddr.LockInfo{
+		PID: 1, Version: "x", Schema: serveraddr.LockSchemaV2,
+		Listeners: map[string]serveraddr.LockListener{"tls": {Configured: "0.0.0.0:19279", Reason: "no_certificate"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("KNOMIT_TLS_ADDR", "0.0.0.0:19279")
 	id, err = n.GetIdentity()
 	if err != nil {
@@ -477,7 +484,7 @@ func TestFleetIdentity_GetIdentityStates(t *testing.T) {
 		id.Serial != m.Cert.SerialNumber.Text(16) || id.RootFingerprint != rootFP(t, f) || id.CRLNumber != "1" || id.Dir != filepath.Join(home, "pki") {
 		t.Fatalf("enrolled: %+v", id)
 	}
-	if !id.TLS.Booted || id.TLS.Reason != tlsNoCertificate || id.TLS.ConfiguredNow != "0.0.0.0:19279" {
+	if !id.TLS.Booted || id.TLS.Reason != "no_certificate" || id.TLS.Configured != "0.0.0.0:19279" || id.TLS.ConfiguredNow != "0.0.0.0:19279" {
 		t.Fatalf("tls: %+v", id.TLS)
 	}
 }
@@ -489,7 +496,7 @@ func TestFleetIdentity_PublicKeyLineIsTheAppLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := knomitapp.PublicKeyLine(keyPath)
+	want, err := pki.PublicKeyLine(keyPath)
 	if err != nil || got != want {
 		t.Fatalf("binding %q, app %q (%v)", got, want, err)
 	}

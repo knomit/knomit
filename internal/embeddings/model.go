@@ -1,159 +1,36 @@
 // Package embeddings turns text into vectors via in-process ONNX inference.
 // Models are described by a Model descriptor and selected from a built-in
-// registry; see model.go for the descriptor and the supported models.
+// registry, which lives in the cgo-free internal/embeddings/params
+// (registry.go) so that knowing about a model never requires linking one.
 package embeddings
 
 import (
-	"fmt"
-	"sort"
-
 	"knomit/internal/embeddings/params"
 )
 
-// Pooling selects how a model's token-level output is reduced to one vector.
-type Pooling int
+// Model is params.Model: the descriptor of an embedding model. An alias, so
+// the inference code and every existing caller read exactly as before the
+// registry moved to params.
+type Model = params.Model
 
+// Pooling is params.Pooling: how a model's token-level output is reduced to
+// one vector.
+type Pooling = params.Pooling
+
+// The pooling modes, re-exported from params.
 const (
-	// PoolNone: the ONNX graph already emits a single pooled+normalized vector
-	// (e.g. EmbeddingGemma's `sentence_embedding` output). Read it directly.
-	PoolNone Pooling = iota
-	// PoolMean: mean over sequence length of last_hidden_state (nomic).
-	PoolMean
-	// PoolCLS: take token 0 of last_hidden_state.
-	PoolCLS
-	// PoolLastToken: take the last non-pad token (decoder embedding models).
-	PoolLastToken
+	PoolNone      = params.PoolNone
+	PoolMean      = params.PoolMean
+	PoolCLS       = params.PoolCLS
+	PoolLastToken = params.PoolLastToken
 )
 
-// Model is a self-contained description of an embedding model: where to fetch
-// it, its ONNX tensor names, how to pool, its dimension, and the retrieval
-// prompt templates. Templates carry {content} and optional {title} placeholders.
-type Model struct {
-	ID           string
-	ModelURL     string
-	DataURL      string // external-weights file (.onnx_data); "" if none
-	TokenizerURL string
-	// Optional lowercase-hex SHA-256 pins for the three downloads, verified
-	// before the file is renamed into the cache. Empty means "not pinned" —
-	// the downloader then falls back to Content-Length verification, which
-	// still catches the truncated-response case but not a substituted file.
-	//
-	// These are unset for the registry entries below: the URLs point at
-	// mutable HuggingFace `main` refs, so a pin here would break the download
-	// whenever upstream republishes. Pin them (and move the URLs to an
-	// immutable revision) if model provenance ever needs to be guaranteed.
-	ModelSHA256     string
-	DataSHA256      string
-	TokenizerSHA256 string
-	ONNXInputs      []string
-	ONNXOutputs     []string
-	Pooling         Pooling
-	Dim             int
-	// MaxTokens caps the tokenized sequence length fed to the ONNX graph.
-	// Sequences longer than this are truncated (with a warning) so a single
-	// oversized fact cannot exceed the model's max position embeddings — which
-	// would otherwise crash inference or yield an out-of-distribution vector the
-	// calibrated thresholds were never measured against. Must be > 0.
-	MaxTokens     int
-	QueryTemplate string
-	DocTemplate   string
-	// ShortStringTemplate renders a BARE SHORT STRING (a fact title, a motif
-	// name, a name+definition) for embedding. It is deliberately the title slot
-	// with a literal "none" body — the "title-hack".
-	//
-	// This looks wrong and is right: the task sweep recorded in
-	// .claude/plans/motif/2026-08-20-motif-summarizer-experiment.md measured the
-	// model card's own task prompts WORSE than this rendering for strings of a
-	// few words on embeddinggemma, and every operating point calibrated in that
-	// work assumes this exact string. Do not "fix" it to a task prompt without
-	// re-running the sweep. New embedding axes get their own calibrated
-	// operating points; never reuse fact-embedding thresholds
-	// (decisions/embeddings/model-dependent-thresholds-on-descriptor).
-	ShortStringTemplate string
-	// Thresholds are this model's cosine cutoffs for dedup/search/graph/reflect.
-	// They are calibrated per model against the real corpus (tools/calibrate),
-	// because each model has a different cosine distribution.
-	Thresholds params.Thresholds
-}
+// Lookup returns the descriptor for id, or an error listing valid ids
+// (params.Lookup).
+func Lookup(id string) (Model, error) { return params.Lookup(id) }
 
-const hfBase = "https://huggingface.co"
-
-// mustThresholds reads a model's calibrated set out of params at init time.
-//
-// It panics rather than defaulting because a descriptor naming a model params
-// has no calibration for is a build-time mistake in this file, not a runtime
-// condition — and the one thing worse than failing here would be silently
-// handing back some other model's geometry. That is the same reason
-// params.ForModel returns a bool instead of falling back to Defaults().
-// TestEveryDescriptorReadsItsThresholdsFromParams catches it before a build
-// ever runs.
-func mustThresholds(id string) params.Thresholds {
-	th, ok := params.ForModel(id)
-	if !ok {
-		panic("embeddings: no calibrated thresholds in params for model " + id)
-	}
-	return th
-}
-
-var registry = map[string]Model{
-	"embeddinggemma": {
-		ID:            "embeddinggemma",
-		ModelURL:      hfBase + "/onnx-community/embeddinggemma-300m-ONNX/resolve/main/onnx/model_fp16.onnx",
-		DataURL:       hfBase + "/onnx-community/embeddinggemma-300m-ONNX/resolve/main/onnx/model_fp16.onnx_data",
-		TokenizerURL:  hfBase + "/onnx-community/embeddinggemma-300m-ONNX/resolve/main/tokenizer.json",
-		ONNXInputs:    []string{"input_ids", "attention_mask"},
-		ONNXOutputs:   []string{"sentence_embedding"},
-		Pooling:       PoolNone,
-		Dim:           768,
-		MaxTokens:     2048, // EmbeddingGemma max position embeddings.
-		QueryTemplate: "task: search result | query: {content}",
-		DocTemplate:   "title: {title} | text: {content}",
-		// The title-hack — see the descriptor comment above.
-		ShortStringTemplate: "title: {content} | text: none",
-		// Calibration (and the comment describing how it was derived) lives in
-		// params, so a cgo-free caller can read this model's geometry without
-		// linking ONNX. Referenced the same way the nomic descriptor below
-		// references params.Defaults() — one source per model, no inline block.
-		Thresholds: mustThresholds(params.DefaultModelID),
-	},
-	"nomic-v1.5": {
-		ID:            "nomic-v1.5",
-		ModelURL:      hfBase + "/nomic-ai/nomic-embed-text-v1.5/resolve/main/onnx/model_quantized.onnx",
-		TokenizerURL:  hfBase + "/nomic-ai/nomic-embed-text-v1.5/resolve/main/tokenizer.json",
-		ONNXInputs:    []string{"input_ids", "attention_mask", "token_type_ids"},
-		ONNXOutputs:   []string{"last_hidden_state"},
-		Pooling:       PoolMean,
-		Dim:           768,
-		MaxTokens:     2048, // nomic-embed-text-v1.5 context window.
-		QueryTemplate: "search_query: {content}",
-		DocTemplate:   "search_document: {content}",
-		// Not swept on nomic: its document rendering has no title slot, so the
-		// title-hack has no analogue here. Re-measure before trusting any
-		// short-string operating point under this model.
-		ShortStringTemplate: "search_document: {content}",
-		// nomic was the original default; these are the historical literals the
-		// thresholds were implicitly tuned against (== params.Defaults()).
-		Thresholds: params.Defaults(),
-	},
-}
-
-// Lookup returns the descriptor for id, or an error listing valid ids.
-func Lookup(id string) (Model, error) {
-	if m, ok := registry[id]; ok {
-		return m, nil
-	}
-	return Model{}, fmt.Errorf("unknown embedding model %q; valid: %v", id, IDs())
-}
-
-// IDs returns the sorted set of registered model ids.
-func IDs() []string {
-	ids := make([]string, 0, len(registry))
-	for id := range registry {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
+// IDs returns the sorted set of registered model ids (params.IDs).
+func IDs() []string { return params.IDs() }
 
 // DefaultModelID is re-exported from internal/embeddings/params, where it lives
 // so that internal/config can reference it without importing this cgo-carrying

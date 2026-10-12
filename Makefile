@@ -431,9 +431,10 @@ else
 	  libglib2.0-dev libsqlite3-dev
 endif
 
-# Build the native desktop app (Wails v3, CGO). Serves the UI in-process and
-# runs the knomit server API-only on a looknomitck port (prefers 19278). Wails
-# cannot cross-compile, so this builds for the host platform only.
+# Build the native desktop app (Wails v3, CGO). It hosts the UI and supervises
+# the bundled `knomit serve --supervised` (the one $(DIST)/knomit `build`
+# produced), talking to it over the local socket/pipe. Wails cannot
+# cross-compile, so this builds for the host platform only.
 #   - macOS:        ONLY a real $(DIST)/Knomit.app bundle (the binary is built
 #                   straight into it — no loose executable left behind).
 #   - Linux/Windows: the standalone $(DIST)/knomit-desktop binary (no bundle).

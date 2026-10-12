@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -108,97 +109,6 @@ func TestWriteFile_TraversalStaysSandboxed(t *testing.T) {
 	}
 }
 
-// RestartApp cannot be exercised end-to-end without actually shelling out
-// (relaunchTarget/relaunch) and quitting the process (onRestart), so this
-// stubs all three to verify the one thing that is a correctness requirement,
-// not an implementation detail: relaunchTarget resolves BEFORE releaseInstance
-// tears anything down, releaseInstance completes before relaunch is invoked,
-// and onRestart does not fire before relaunch succeeds. Getting this order
-// wrong is exactly the bug this task exists to avoid — see the releaseInstance
-// and relaunchTarget field comments on NativeService — so it is worth pinning
-// with a real seam rather than leaving unverified.
-func TestRestartApp_ResolvesThenReleasesThenRelaunchesThenQuits(t *testing.T) {
-	var order []string
-
-	n := newNativeService("", "", &stubToggler{})
-	n.relaunchTarget = func() (string, error) {
-		order = append(order, "resolve")
-		return "target", nil
-	}
-	n.releaseInstance = func() { order = append(order, "release") }
-	n.relaunch = func(target string) error {
-		order = append(order, "relaunch:"+target)
-		return nil
-	}
-	n.onRestart = func() { order = append(order, "restart") }
-
-	if err := n.RestartApp(); err != nil {
-		t.Fatalf("RestartApp: %v", err)
-	}
-
-	want := []string{"resolve", "release", "relaunch:target", "restart"}
-	if len(order) != len(want) {
-		t.Fatalf("got calls %v, want %v", order, want)
-	}
-	for i := range want {
-		if order[i] != want[i] {
-			t.Fatalf("got call order %v, want %v", order, want)
-		}
-	}
-}
-
-// If resolving the relaunch target fails (a dev build with no bundle, or one
-// moved/deleted since launch), releaseInstance must NOT run: it tears down
-// this instance's server, and doing that before knowing there is anywhere to
-// relaunch to would kill the server and then fail, leaving a zombie tray with
-// a dead API and no replacement on the way.
-func TestRestartApp_DoesNotReleaseInstanceWhenTargetResolutionFails(t *testing.T) {
-	released := false
-	boom := errors.New("no bundle")
-
-	n := newNativeService("", "", &stubToggler{})
-	n.relaunchTarget = func() (string, error) { return "", boom }
-	n.releaseInstance = func() { released = true }
-	n.relaunch = func(string) error { t.Fatal("relaunch called despite resolution failure"); return nil }
-	n.onRestart = func() { t.Fatal("onRestart called despite resolution failure") }
-
-	err := n.RestartApp()
-	if err == nil {
-		t.Fatal("expected an error from a failing relaunchTarget")
-	}
-	if !errors.Is(err, boom) {
-		t.Errorf("error does not wrap the resolution failure: %v", err)
-	}
-	if released {
-		t.Error("releaseInstance ran despite the relaunch target failing to resolve")
-	}
-}
-
-// A relaunch failure (bundle moved/deleted/damaged between resolution and the
-// spawn attempt) must not quit this instance — quitting into nothing would
-// leave the user with no running app at all instead of a clear error.
-func TestRestartApp_DoesNotQuitWhenRelaunchFails(t *testing.T) {
-	quit := false
-	boom := errors.New("boom")
-
-	n := newNativeService("", "", &stubToggler{})
-	n.relaunchTarget = func() (string, error) { return "target", nil }
-	n.releaseInstance = func() {}
-	n.relaunch = func(string) error { return boom }
-	n.onRestart = func() { quit = true }
-
-	err := n.RestartApp()
-	if err == nil {
-		t.Fatal("expected an error from a failing relaunch")
-	}
-	if !errors.Is(err, boom) {
-		t.Errorf("error does not wrap the relaunch failure: %v", err)
-	}
-	if quit {
-		t.Error("onRestart fired despite relaunch failing")
-	}
-}
-
 // RevealLogFile must target n.logPath specifically, not some other path
 // (e.g. the config file) — that mistake would open the wrong directory in
 // the file manager. revealInFileManager itself shells out and is not
@@ -219,5 +129,43 @@ func TestRevealLogFile_UsesTheLogPath(t *testing.T) {
 	}
 	if got != logPath {
 		t.Errorf("got path %q, want %q", got, logPath)
+	}
+}
+
+// RestartApp now restarts the SERVER, and like everything that changes what
+// the server listens on it is the Settings window's alone (kb invariant
+// desktop/fleet/install-surface): the main window and a context with no window
+// are refused before anything is stopped.
+func TestRestartApp_RestartsTheServerOnlyFromSettings(t *testing.T) {
+	calls := 0
+	n := newNativeService("", "", &stubToggler{})
+	n.restartServer = func(context.Context) error { calls++; return nil }
+
+	for _, ctx := range []context.Context{fromMain, context.Background()} {
+		if err := n.RestartApp(ctx); !errors.Is(err, errNotSettingsWindow) {
+			t.Fatalf("RestartApp from a non-Settings caller = %v, want errNotSettingsWindow", err)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("a refused RestartApp restarted the server %d time(s)", calls)
+	}
+	// Positive control: the same call from Settings reaches the supervisor.
+	if err := n.RestartApp(fromSettings); err != nil {
+		t.Fatalf("RestartApp from Settings: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("restartServer called %d times from Settings, want 1", calls)
+	}
+}
+
+// The supervisor's refusal (attach mode: the server is not ours) reaches the
+// caller unchanged, so the Settings window can show "started outside the app".
+func TestRestartApp_PassesTheSupervisorsRefusalThrough(t *testing.T) {
+	n := newNativeService("", "", &stubToggler{})
+	n.restartServer = func(context.Context) error { return errAttachedServer{pid: 4242} }
+	err := n.RestartApp(fromSettings)
+	var att errAttachedServer
+	if !errors.As(err, &att) || att.pid != 4242 || !strings.Contains(err.Error(), "started outside the app (pid 4242)") {
+		t.Fatalf("RestartApp = %v, want the attached-server refusal naming pid 4242", err)
 	}
 }

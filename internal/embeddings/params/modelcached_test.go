@@ -1,4 +1,4 @@
-package embeddings
+package params
 
 import (
 	"os"
@@ -84,10 +84,10 @@ func TestModelCached_IgnoresTheDataFileWhenTheModelHasNone(t *testing.T) {
 	}
 }
 
-// modelPaths is shared with EnsureModel precisely so the two cannot disagree
+// ModelPaths is shared with embeddings.EnsureModel precisely so the two cannot disagree
 // about where a file lives. This pins the layout both of them depend on.
 func TestModelPaths_UsesTheURLBasenamesUnderTheModelID(t *testing.T) {
-	modelPath, dataPath, tokPath := modelPaths(testModel(), filepath.Join("root", "models"))
+	modelPath, dataPath, tokPath := ModelPaths(testModel(), filepath.Join("root", "models"))
 
 	want := filepath.Join("root", "models", "testmodel")
 	if got := filepath.Dir(modelPath); got != want {

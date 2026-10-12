@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/platform/logging"
 	"knomit/tools/desktop/internal/paths"
@@ -123,21 +121,6 @@ func (s *logSink) swap(w zerolog.LevelWriter, closer io.Closer) {
 	}
 }
 
-// logTap is the Manage Logs tab's source, served by the in-process server at
-// GET /api/v1/logs/events — the same API mount the desktop reaches everything
-// else through, which is the point of the design: no Wails IPC, no second
-// port.
-//
-// Package-level and created ONCE, because applyLogConfig rebuilds the sink on
-// every Settings save and the ring has to survive those swaps. A tap created
-// per build would throw away the backlog each time the user touched Settings.
-//
-// context.Background(): the tap lives as long as the process, and its
-// subscriptions are bounded by each request's own context instead.
-//
-// 2000 lines for the reason cmd/serve.go's logTapLines gives.
-var logTap = logging.NewTap(context.Background(), 2000)
-
 // globalSink backs log.Logger for the whole process. It starts on plain stderr
 // so anything logged before bootstrapLogging runs still lands somewhere.
 var globalSink = newLogSink(zerolog.MultiLevelWriter(zerolog.ConsoleWriter{Out: os.Stderr}))
@@ -156,16 +139,23 @@ func init() {
 	log.Logger = zerolog.New(globalSink).With().Timestamp().Logger()
 }
 
-// applyLogConfig builds the log sink from lc (after defaulting) and swaps it in
-// under globalSink. Called at least twice per launch — once with a zero config
-// to bootstrap, again once knomit.toml has been read — and then once per
-// Settings save, from a Wails IPC goroutine. Safe from any goroutine.
-func applyLogConfig(lc config.LogConfig, defaultFile string) error {
-	resolved := desktopLogConfig(lc, defaultFile)
-	// logTap.Writer() and not logTap: a bare writer would receive zerolog's raw
-	// JSON, and the Logs viewer parses the console shape. Re-tee'd on every
-	// swap — the tap itself is package-level and outlives them.
-	w, closer, lvl, err := logging.BuildWriter(knomitapp.LoggingOptions(resolved), os.Stderr, os.Stderr, nil, logTap.Writer())
+// applyLogConfig builds the desktop shell's log sink from lc (after defaulting)
+// and swaps it in under globalSink. Called at least twice per launch — once
+// with a zero config to bootstrap, again once knomit.toml has been read — and
+// then once per Settings save, from a Wails IPC goroutine. Safe from any
+// goroutine.
+//
+// file is ALWAYS the desktop's own file (desktopLogFile), whatever lc.File
+// says: [log] file names the SERVER's log, which the server process writes and
+// rotates, and two processes rotating one file lose lines. Level, format and
+// the rotation sizes are shared.
+//
+// There is no log tap any more: the Logs tab streams the server's own tap over
+// the API, so it shows server logs; the desktop shell's are reached by Reveal.
+func applyLogConfig(lc config.LogConfig, file string) error {
+	resolved := desktopLogConfig(lc, file)
+	resolved.File = file
+	w, closer, lvl, err := logging.BuildWriter(desktopLoggingOptions(resolved), os.Stderr, os.Stderr, nil)
 	if err != nil {
 		return fmt.Errorf("build logger: %w", err)
 	}
@@ -212,23 +202,61 @@ func defaultLogPath() string {
 	return filepath.Join(dir, "knomit-desktop.log")
 }
 
-// resolveLogFile returns the file the process will ACTUALLY be logging to: the
-// configured [log] file when there is one, the desktop default otherwise.
+// serverLogName is the server's log file in the desktop's logs directory when
+// knomit.toml names none.
+const serverLogName = "knomit.log"
+
+// resolveLogFile returns the file the SERVER will actually be logging to: the
+// configured [log] file when there is one, <logs dir>/knomit.log otherwise.
+// The supervisor passes it as `knomit serve --log-file`.
 //
 // This must be the single source of that answer. Everything downstream of it —
-// the logger's own sink, "Reveal in Finder", and the path the Settings dialog
+// the server's sink, "Reveal in Finder", and the path the Settings dialog
 // displays — has to agree, and it used to be resolved three separate ways. The
 // version that ignored lc.File meant that setting `[log] file` (or exporting
 // KNOMIT_LOG_FILE) sent the log somewhere the rest of the app was not looking,
 // with no error anywhere, while the Settings dialog beside it named a different
 // path.
 //
-// The file is now the post-mortem record rather than anything's live source:
-// the log a user READS comes from the server over the API, at Manage → Logs.
-// Reveal and the Settings path are what still depend on this answer.
+// The file is the post-mortem record rather than anything's live source: the
+// log a user READS comes from the server over the API, at Manage → Logs.
 //
 // It returns "" only when there is no log file at all — no configured path AND
 // no resolvable logs directory.
 func resolveLogFile(cfg config.Config) string {
-	return desktopLogConfig(cfg.Log, defaultLogPath()).File
+	if cfg.Log.File != "" {
+		return cfg.Log.File
+	}
+	dir, err := paths.LogsDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, serverLogName)
+}
+
+// desktopLogFile is the desktop shell's own log: knomit-desktop.log beside the
+// server's log, so Reveal shows both. With no server log it is the bootstrap
+// default (defaultLogPath), which may also be "".
+func desktopLogFile(serverLog string) string {
+	if serverLog == "" {
+		return defaultLogPath()
+	}
+	return filepath.Join(filepath.Dir(serverLog), "knomit-desktop.log")
+}
+
+// desktopLoggingOptions is config.LogConfig in the shape the log sink takes.
+// internal/app.LoggingOptions is the server's converter and the desktop must
+// not link internal/app (archtest TestDesktopLinksNoServer), so this is a
+// second spelling of the same mapping; TestDesktopLoggingOptionsMatchTheServers
+// pins the two field-for-field against a fully populated config, which is the
+// drift app.LoggingOptions' own comment warns about.
+func desktopLoggingOptions(lc config.LogConfig) logging.Options {
+	return logging.Options{
+		Format:     lc.Format,
+		Level:      lc.Level,
+		File:       lc.File,
+		MaxSizeMB:  lc.MaxSizeMB,
+		MaxBackups: lc.MaxBackups,
+		MaxAgeDays: lc.MaxAgeDays,
+	}
 }

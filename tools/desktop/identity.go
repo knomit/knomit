@@ -13,7 +13,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/pki"
 )
@@ -86,7 +85,7 @@ type FleetTLS struct {
 	Booted        bool   `json:"booted"` // false while the server is still starting
 	Configured    string `json:"configured"`
 	Listening     string `json:"listening"`
-	Reason        string `json:"reason"` // tlsNoCertificate | tlsAddrInUse | ""
+	Reason        string `json:"reason"` // the server's listener reason: no_certificate | addr_in_use | tls_failed | ...; "" when listening or off
 	ConfiguredNow string `json:"configuredNow"`
 }
 
@@ -122,27 +121,33 @@ type InstallResult struct {
 
 // fleetPaths resolves the pki dir and the key exactly as the CLI and the
 // running server do: config.Load (defaults, knomit.toml, env), then
-// app.ResolveKeyPath and [tls].dir.
+// config.ResolveKeyPath and [tls].dir.
 func fleetPaths() (cfg config.Config, dir, keyPath string, err error) {
 	cfg, err = config.Load()
 	if err != nil {
 		return config.Config{}, "", "", fmt.Errorf("load config: %w", err)
 	}
-	return cfg, cfg.TLS.Dir, knomitapp.ResolveKeyPath(cfg), nil
+	return cfg, cfg.TLS.Dir, config.ResolveKeyPath(cfg), nil
 }
 
 // GetIdentity reports the enrolment state and the TLS listener's. It is
 // read-only and open to any window: nothing in it is secret.
+//
+// The TLS listener's state is the running server's own record in server.json
+// (`listeners.tls`); Booted is false while no server has written one. A
+// listener the server reports as "off" is reported with no reason, as before.
 func (n *NativeService) GetIdentity() (FleetIdentity, error) {
 	cfg, dir, keyPath, err := fleetPaths()
 	if err != nil {
 		return FleetIdentity{}, err
 	}
 	out := FleetIdentity{Dir: dir, TLS: FleetTLS{ConfiguredNow: cfg.TLS.Addr}}
-	if n.tls != nil {
-		if st, ok := n.tls.get(); ok {
-			out.TLS.Booted = true
-			out.TLS.Configured, out.TLS.Listening, out.TLS.Reason = st.Configured, st.Listening, st.Reason
+	if info, ok := n.serverLock(); ok {
+		st := info.Listeners["tls"]
+		out.TLS.Booted = true
+		out.TLS.Configured, out.TLS.Listening, out.TLS.Reason = st.Configured, st.Listening, st.Reason
+		if st.Reason == "off" {
+			out.TLS.Reason = ""
 		}
 	}
 	if _, err := os.Stat(keyPath); errors.Is(err, os.ErrNotExist) {
@@ -196,7 +201,7 @@ func (n *NativeService) PublicKeyLine(ctx context.Context) (string, error) {
 	if _, err := os.Stat(keyPath); errors.Is(err, os.ErrNotExist) {
 		return "", errors.New("the instance key does not exist yet; it is created once Knomit has started")
 	}
-	return knomitapp.PublicKeyLine(keyPath)
+	return pki.PublicKeyLine(keyPath)
 }
 
 // InstallBundle installs an enrolment bundle, pasted or read from a file by

@@ -67,6 +67,18 @@ func ReloadEventName(home string) string {
 	return `Local\knomit-reload-` + hex.EncodeToString(sum[:8])
 }
 
+// ResolveKeyPath is where the instance key lives: [remote].ssh_key, else
+// <Home>/id_ed25519. The ONE definition: the server (app.New), `knomit
+// identity` and the desktop's Settings bindings must find the same key, and
+// the last two do so without booting the server. It lives here rather than in
+// internal/app so the desktop, which must not link the server, can ask too.
+func ResolveKeyPath(cfg Config) string {
+	if cfg.Remote.SSHKey != "" {
+		return cfg.Remote.SSHKey
+	}
+	return filepath.Join(cfg.Home, "id_ed25519")
+}
+
 // appDir is the directory knomit owns inside whatever per-user location the
 // OS designates. One spelling, one place.
 const appDir = "knomit"

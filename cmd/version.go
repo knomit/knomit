@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 
 	"knomit/internal/platform/version"
@@ -14,8 +16,11 @@ func versionCmd() *cobra.Command {
 		Short: "Print the build version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.Println(version.String())
-			return nil
+			// STDOUT, not cmd.Println (cobra's Println writes to stderr):
+			// the desktop reads this line from stdout to check that the
+			// bundled server is its own build (tools/desktop/serverbin.go).
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), version.String())
+			return err
 		},
 	}
 }

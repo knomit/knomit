@@ -6,16 +6,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/config"
+	"knomit/internal/serveraddr"
 	"knomit/tools/desktop/internal/autostart"
 	"knomit/tools/desktop/internal/paths"
 )
@@ -85,111 +84,61 @@ func writeFile(name, contents string) (string, error) {
 
 // NativeService is the Wails-bound service exposing native OS actions to the
 // React UI. Reachable only via Wails IPC from the embedded window — never over
-// the looknomitck API port. That boundary is why reading and writing settings
-// lives here rather than on the HTTP API: knomit.toml holds credentials, and
-// the API is reachable by anything on the machine.
+// the knomit API. That boundary is why reading and writing settings lives here
+// rather than on the HTTP API: knomit.toml holds credentials, and the API is
+// reachable by anything on the machine.
 //
 // Every method has a POINTER receiver: the service is registered as
-// &NativeService{} and Wails binds the pointer's method set, so a value
-// receiver would still bind — but the mutex below makes copying the struct a
-// vet error, and the effective port must be read from the one instance the
-// boot goroutine writes to.
+// &NativeService{} and Wails binds the pointer's method set; installMu makes
+// copying the struct a vet error.
 type NativeService struct {
 	// configPath is <cfg.Home>/knomit.toml — the only file config.Load reads.
 	configPath string
-	// logPath is the desktop's default log file, used to fill the gap when
-	// knomit.toml does not name one.
-	logPath   string
+	// logPath is the SERVER's log file (resolveLogFile): what Reveal opens and
+	// the Settings dialog names when knomit.toml does not name one.
+	logPath string
+	// desktopLogPath is the desktop shell's own log, which SaveSettings
+	// rebuilds the logger onto.
+	desktopLogPath string
+	// lockPath is this home's server.json: the server's own account of its
+	// port and listeners, which GetSettings and GetIdentity read.
+	lockPath  string
 	autostart autostart.Toggler
 
-	// mu guards effectivePort ONLY. It is written by the boot watcher
-	// goroutine in run() once the server has bound its port, and read by
-	// GetSettings on the UI thread, which can be called before that happens.
-	mu            sync.Mutex
-	effectivePort int
-
-	// tls is the boot's TLS listener state, published by the boot goroutine
-	// (see tlsStatus); nil until run() wires it.
-	tls *tlsStatus
 	// installMu serialises InstallBundle: see there.
 	installMu sync.Mutex
 
-	// relaunchTarget resolves WHERE to relaunch (the .app bundle on darwin, the
-	// executable path elsewhere) without spawning anything. Defaults to the
-	// platform's package-level relaunchTarget. It is pure and cheap, and
-	// RestartApp calls it FIRST, before releaseInstance: this is what lets a
-	// resolution failure (dev build with no bundle, or one moved/deleted)
-	// return an error WITHOUT having torn this instance's server down first.
-	relaunchTarget func() (string, error)
-	// relaunch spawns a fresh instance at the path relaunchTarget resolved.
-	// Defaults to the platform's package-level relaunch
-	// (restart_darwin.go / restart_others.go); overridden in tests so
-	// RestartApp's ordering can be verified without actually shelling out.
-	relaunch func(target string) error
 	// revealInFileManager opens a path's containing directory in the OS file
 	// manager. Defaults to the platform's package-level revealInFileManager;
 	// overridden in tests to check RevealLogFile forwards the right path
 	// without actually shelling out.
 	revealInFileManager func(string) error
-	// releaseInstance synchronously tears down THIS process's server AND
-	// guarantees the single-instance lockfile is gone by the time it returns
-	// — even if the server teardown itself times out (serverBoot.stop's
-	// stopGrace), which would otherwise leave stopFn — and the lockfile
-	// removal inside it — never called. It MUST run before relaunch: the
-	// lockfile check the new process performs on startup
-	// (singleinstance.Acquire) is a one-shot check, not a wait — if this
-	// process still holds the lock when the new one checks, the new instance
-	// sees ErrAlreadyRunning and exits immediately, and the "restart" silently
-	// does nothing. Wired in app.go to call serverBoot.stop (idempotent, so
-	// calling it here and again on the eventual OnShutdown costs nothing) AND
-	// an explicit lockfile.Remove that does not depend on stopFn having run.
-	//
-	// That explicit removal is safe only as long as serverBoot.stop's
-	// sync.Once means this process's OnShutdown-driven call is always a no-op
-	// after this one runs first: lockfile.Remove is path-based with no PID
-	// ownership check (see serveraddr.RemoveLock), so a stop() that became
-	// re-entrant/re-runnable could race and delete a REPLACEMENT instance's
-	// freshly-written lockfile instead of this one's. Nothing currently
-	// guards against that beyond stop()'s Once.
-	releaseInstance func()
-	// onRestart quits this instance once the replacement has been spawned.
-	// Wired to wapp.Quit in app.go (set after the Wails app exists, since
-	// NativeService is constructed first). Left nil in tests that do not
-	// exercise RestartApp.
-	onRestart func()
+	// restartServer stops the server the desktop spawned and waits for its
+	// replacement (supervisor.restartServer). Wired in app.go; nil in tests
+	// that do not exercise RestartApp.
+	restartServer func(context.Context) error
 }
 
-// newNativeService builds the service with the paths and OS toggler it needs.
-// The effective port is not known yet — see setEffectivePort. releaseInstance
-// and onRestart are wired separately once their dependencies (the server boot
-// handle and the Wails app) exist — see app.go.
+// newNativeService builds the service. configPath is <home>/knomit.toml, from
+// which the home's server.json is derived; logPath is the server's log file,
+// from which the desktop's own sibling log is derived. restartServer is wired
+// separately once the supervisor exists — see app.go.
 func newNativeService(configPath, logPath string, tog autostart.Toggler) *NativeService {
 	return &NativeService{
 		configPath:          configPath,
 		logPath:             logPath,
+		desktopLogPath:      desktopLogFile(logPath),
+		lockPath:            config.LockfilePathFor(filepath.Dir(configPath)),
 		autostart:           tog,
-		relaunchTarget:      relaunchTarget,
-		relaunch:            relaunch,
 		revealInFileManager: revealInFileManager,
 	}
 }
 
-// setEffectivePort records the port the server actually bound. Called from the
-// boot watcher goroutine, hence the mutex.
-func (n *NativeService) setEffectivePort(port int) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.effectivePort = port
-}
-
-// currentEffectivePort returns the port the server actually bound, or 0 while
-// the server is still booting. Unexported deliberately: every EXPORTED method
-// on this type becomes a Wails-bound IPC entry point, and the form already
-// gets this value inside Settings.
-func (n *NativeService) currentEffectivePort() int {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.effectivePort
+// serverLock reads this home's server.json; ok is false when there is none
+// (no server running, or one that has not finished binding its listeners).
+func (n *NativeService) serverLock() (serveraddr.LockInfo, bool) {
+	info, err := serveraddr.ReadLock(n.lockPath)
+	return info, err == nil
 }
 
 // WriteFile writes contents to a file named within the app's exports directory
@@ -206,7 +155,9 @@ func (n *NativeService) WriteFile(name, contents string) (string, error) {
 //
 // The values come from config.Load, i.e. AFTER the env layer, so an exported
 // KNOMIT_PORT is what the form shows — matched by OverriddenByEnv telling it
-// that field cannot be changed by saving.
+// that field cannot be changed by saving. The bound port is the running
+// server's own record (server.json `port`, 0 while none is up or when it has
+// no TCP listener).
 func (n *NativeService) GetSettings() (Settings, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -219,6 +170,10 @@ func (n *NativeService) GetSettings() (Settings, error) {
 		log.Warn().Err(terr).Msg("start at login: current state unknown")
 	}
 	resolved := desktopLogConfig(cfg.Log, n.logPath)
+	effective := 0
+	if info, ok := n.serverLock(); ok {
+		effective = info.Port
+	}
 
 	return Settings{
 		Port:            cfg.Port,
@@ -226,20 +181,20 @@ func (n *NativeService) GetSettings() (Settings, error) {
 		LogFormat:       resolved.Format,
 		StartAtLogin:    on,
 		TLSAddr:         cfg.TLS.Addr,
-		EffectivePort:   n.currentEffectivePort(),
+		EffectivePort:   effective,
 		ConfigPath:      n.configPath,
 		LogFilePath:     resolved.File,
 		OverriddenByEnv: envOverrides(os.Getenv),
 	}, nil
 }
 
-// SaveSettings persists the settings and applies what can be applied without a
-// restart. The PORT cannot: it is bound once at boot, and rebinding would
-// strand every connected MCP client, which caches the port at startup. The UI
-// is responsible for telling the user that.
+// SaveSettings persists the settings and applies what the desktop itself can
+// apply: the desktop shell's own log level and format. The SERVER picks up
+// the file on its next start or reload (applying it live from Settings is the
+// next PR's); the UI tells the user a restart is needed for the port.
 //
 // Gated to the Settings window: a save can set [tls].addr, which opens a
-// network port on the next launch (see callerIsSettings).
+// network port (see callerIsSettings).
 func (n *NativeService) SaveSettings(ctx context.Context, s Settings) error {
 	if !callerIsSettings(ctx) {
 		return errNotSettingsWindow
@@ -247,77 +202,48 @@ func (n *NativeService) SaveSettings(ctx context.Context, s Settings) error {
 	if err := applySettings(s, n.configPath, n.autostart, envOverrides(os.Getenv)); err != nil {
 		return err
 	}
-	// Level and format take effect immediately — there is no reason to make the
-	// user restart for them. Rebuilt from a FRESH config.Load rather than from s,
-	// so the logger ends up exactly as the next launch would have it: the
-	// rotation keys the dialog does not edit survive, and an exported
-	// KNOMIT_LOG_LEVEL still wins, matching what OverriddenByEnv told the user.
+	// Rebuilt from a FRESH config.Load rather than from s, so the logger ends
+	// up exactly as the next launch would have it: the rotation keys the
+	// dialog does not edit survive, and an exported KNOMIT_LOG_LEVEL still
+	// wins, matching what OverriddenByEnv told the user.
 	lc := config.LogConfig{Level: s.LogLevel, Format: s.LogFormat}
 	if cfg, cerr := config.Load(); cerr == nil {
 		lc = cfg.Log
 	}
 	// A failure here does not fail the save: the file is already correct and the
 	// next launch will pick it up.
-	if err := applyLogConfig(lc, n.logPath); err != nil {
+	if err := applyLogConfig(lc, n.desktopLogPath); err != nil {
 		log.Warn().Err(err).Msg("settings saved but the logger was not rebuilt")
 	}
 	return nil
 }
 
-// RestartApp relaunches Knomit. Used after a port change, which cannot take
-// effect without rebinding the listener.
+// RestartApp restarts the knomit SERVER the desktop spawned — not the app:
+// the desktop keeps running and its window reconnects once the replacement
+// answers. It returns when the new server answers (or with the reason it did
+// not). Refused for a server started outside the app (attach mode: it is not
+// ours to stop), named "started outside the app (pid N)".
 //
-// Order matters, in both directions:
+// The binding keeps its name so the Settings window's Call.ByName string is
+// unchanged; the Settings UI that says "Restart server" is the next PR's.
 //
-//  1. relaunchTarget resolves FIRST, before anything else runs. It is pure
-//     (no side effects), and its only realistic failure — a dev build with no
-//     bundle to reopen, or a bundle moved/deleted since this process started
-//     — must be reported without having torn anything down. Resolving after
-//     releaseInstance would mean a dev build's Restart button kills its own
-//     server and then fails, leaving a zombie tray with a dead API behind it.
-//  2. releaseInstance runs SECOND and is allowed to block briefly (it drains
-//     the HTTP server and removes the lockfile) so the lockfile is gone
-//     before the replacement process ever checks it — see the field comment
-//     on releaseInstance for why spawning first would race.
-//  3. onRestart (wapp.Quit) runs LAST, after the replacement is confirmed
-//     spawned, so a failed relaunch leaves this instance running rather than
-//     quitting into nothing.
-func (n *NativeService) RestartApp() error {
-	target, err := n.relaunchTarget()
-	if err != nil {
-		return fmt.Errorf("resolve relaunch target: %w", err)
+// Gated to the Settings window, like everything that changes what the server
+// listens on (kb invariant desktop/fleet/install-surface): a restart applies
+// a [tls].addr or port the Settings window wrote.
+func (n *NativeService) RestartApp(ctx context.Context) error {
+	if !callerIsSettings(ctx) {
+		return errNotSettingsWindow
 	}
-	if n.releaseInstance != nil {
-		n.releaseInstance()
+	if n.restartServer == nil {
+		return errors.New("no server to restart")
 	}
-	if err := n.relaunch(target); err != nil {
-		return fmt.Errorf("relaunch: %w", err)
-	}
-	if n.onRestart != nil {
-		n.onRestart()
-	}
-	return nil
+	return n.restartServer(ctx)
 }
 
-// RevealLogFile opens the log file's containing directory in the OS file
+// RevealLogFile opens the server log's containing directory in the OS file
 // manager, for the history no live view shows: Manage → Logs replays a bounded
-// ring of recent lines, and rotated files are not on it at all.
+// ring of recent lines, and rotated files are not on it at all. The desktop's
+// own knomit-desktop.log sits beside it.
 func (n *NativeService) RevealLogFile() error {
 	return n.revealInFileManager(n.logPath)
-}
-
-// portFromBaseURL extracts the port from an API base URL like
-// "http://127.0.0.1:19278", returning 0 if there is none to extract. The bound
-// port reaches the UI only through that string (see bootKnomit), and a
-// malformed one must cost the form its EffectivePort, nothing more.
-func portFromBaseURL(base string) int {
-	u, err := url.Parse(base)
-	if err != nil {
-		return 0
-	}
-	port, err := strconv.Atoi(u.Port())
-	if err != nil {
-		return 0
-	}
-	return port
 }

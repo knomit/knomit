@@ -34,9 +34,9 @@ type Settings struct {
 	// the restart the form offers (knomit#256).
 	TLSAddr string `json:"tlsAddr"`
 
-	// EffectivePort is the port actually bound, which differs from Port
-	// whenever the configured one was taken and the server fell back to an
-	// ephemeral port. Zero until the boot goroutine reports it.
+	// EffectivePort is the plaintext port the running server says it bound
+	// (its server.json `port`). Zero while no server has written the file, or
+	// when the server has no TCP listener.
 	EffectivePort int    `json:"effectivePort"`
 	ConfigPath    string `json:"configPath"`
 	LogFilePath   string `json:"logFilePath"`

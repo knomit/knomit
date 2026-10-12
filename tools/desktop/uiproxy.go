@@ -48,9 +48,9 @@ func desktopOrigin() string {
 }
 
 // uiUpstream is where the webview's API traffic goes: the server's local
-// socket / pipe path. It is empty until the in-process server has BOUND its
-// local listener, and stays empty if it could not (a held path belongs to
-// another process, and dialing it would hand the UI to a foreign server).
+// socket / pipe path. It is empty until the supervisor has seen a knomit
+// answer GET /api/v1/version there (the server it spawned, or one it attached
+// to), so the UI is never pointed at a path whose holder is not a knomit.
 type uiUpstream struct{ path atomic.Value } // string
 
 func (u *uiUpstream) set(p string) { u.path.Store(p) }
