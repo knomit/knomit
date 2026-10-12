@@ -91,11 +91,11 @@ beforeEach(() => {
 
 describe('panel memoization — a parent re-render with stable props costs zero panel renders', () => {
   it('TopBar', () => {
-    const dispatch = vi.fn();
+    const onToggleRail = vi.fn();
     const onManageRepos = vi.fn();
     render(
       <Rerender renderPanel={() => (
-        <TopBar state={baseState} repos={repos} dispatch={dispatch} onManageRepos={onManageRepos} leftWidth={300} />
+        <TopBar state={baseState} repos={repos} railOpen={false} onToggleRail={onToggleRail} onManageRepos={onManageRepos} />
       )} />,
     );
     const after = renders.isLensContext;
@@ -162,14 +162,14 @@ describe('panel memoization — a parent re-render with stable props costs zero 
 // nothing about the memo.
 describe('panel memoization — the counters are live', () => {
   it('a changed prop re-renders TopBar', () => {
-    const dispatch = vi.fn();
+    const onToggleRail = vi.fn();
     const onManageRepos = vi.fn();
     const { rerender } = render(
-      <TopBar state={baseState} repos={repos} dispatch={dispatch} onManageRepos={onManageRepos} leftWidth={300} />,
+      <TopBar state={baseState} repos={repos} railOpen={false} onToggleRail={onToggleRail} onManageRepos={onManageRepos} />,
     );
     const after = renders.isLensContext;
     rerender(
-      <TopBar state={baseState} repos={repos} dispatch={dispatch} onManageRepos={onManageRepos} leftWidth={340} />,
+      <TopBar state={baseState} repos={repos} railOpen={true} onToggleRail={onToggleRail} onManageRepos={onManageRepos} />,
     );
     expect(renders.isLensContext).toBeGreaterThan(after);
   });

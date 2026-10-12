@@ -600,11 +600,11 @@ describe('App SSE — teardown and resubscribe', () => {
     const es = await mountApp();
     expect(es.closeCount).toBe(0);
 
-    // Switch repos through the TopBar context switcher — the only user-facing
-    // path that changes state.repo.
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+    // Switch repos through the target rail — the only user-facing path that
+    // changes state.repo.
+    fireEvent.click(screen.getByTestId('rail-toggle'));
     await act(async () => {
-      fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
+      fireEvent.click(screen.getByTestId('rail-repo-beta'));
     });
 
     await waitFor(() => expect(streamsMatching('/branches/')).toHaveLength(2));
@@ -614,9 +614,9 @@ describe('App SSE — teardown and resubscribe', () => {
 
   it('after a resubscribe the new stream drives the app and the old one is dead', async () => {
     const es = await mountApp();
-    fireEvent.click(screen.getByTestId('toknomitr-repo-select'));
+    fireEvent.click(screen.getByTestId('rail-toggle'));
     await act(async () => {
-      fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
+      fireEvent.click(screen.getByTestId('rail-repo-beta'));
     });
     await waitFor(() => expect(streamsMatching('/branches/')).toHaveLength(2));
 

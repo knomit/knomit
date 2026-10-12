@@ -150,14 +150,15 @@ describe('Manage as a mode', () => {
 
   it('drops the browse context chips and the filter, which act on a surface it is not showing', async () => {
     await mountApp();
-    expect(screen.getByTestId('toknomitr-search')).toBeInTheDocument();
+    expect(screen.getByTestId('browse-toolbar')).toBeInTheDocument();
+    expect(screen.getByTestId('target-label')).toBeInTheDocument();
 
     await enterManage();
 
-    // Offering a repo switcher or a fact filter here would act on a surface
-    // that is not on screen.
-    expect(screen.queryByTestId('toknomitr-search')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('toknomitr-repo-select')).not.toBeInTheDocument();
+    // Naming the browsed target, or offering a fact filter, here would be
+    // about a surface that is not on screen.
+    expect(screen.queryByTestId('browse-toolbar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('target-label')).not.toBeInTheDocument();
   });
 
   it("a page's Browse both leaves Manage and switches the surface", async () => {
@@ -171,7 +172,7 @@ describe('Manage as a mode', () => {
     await act(async () => { fireEvent.click(screen.getByTestId('repo-browse')); });
 
     await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getByTestId('toknomitr-repo-select').textContent).toContain('beta'));
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('beta'));
   });
 
   // Manage is where a remote gets repaired, so every way OUT of it owes the

@@ -345,9 +345,10 @@ export function encodeBranch(name: string): string {
 export const E2E_REPO = 'knomit';
 
 /**
- * Create the e2e repo via POST /api/v1/repos. The endpoint streams NDJSON
- * progress events, so the body is drained to completion before returning:
- * the repo is not registered until the final "done" event has been written.
+ * Create the e2e repo via POST /api/v1/repos. The endpoint answers 202 with a
+ * create job and runs the create on its own; the job is polled through its
+ * self link until it reaches a terminal state, because the repo is not ready
+ * until the job is `done`.
  */
 export async function createRepo(baseURL: string, repo = E2E_REPO): Promise<void> {
   const res = await fetch(`${baseURL}/api/v1/repos`, {
@@ -358,9 +359,19 @@ export async function createRepo(baseURL: string, repo = E2E_REPO): Promise<void
   if (!res.ok) {
     throw new Error(`Failed to create repo ${repo}: ${res.status} ${res.statusText}\n${await res.text()}`);
   }
-  const body = await res.text();
-  if (!body.includes('"type":"done"')) {
-    throw new Error(`Repo ${repo} creation did not complete:\n${body}`);
+  let job = await res.json() as { state?: string; message?: string; _links?: { self?: { href?: string } } };
+  const href = job._links?.self?.href;
+  if (!href) throw new Error(`Repo ${repo} create answered without a job link:\n${JSON.stringify(job)}`);
+  const deadline = Date.now() + 60_000;
+  while (job.state === 'running' || job.state === 'cancelling') {
+    if (Date.now() > deadline) throw new Error(`Repo ${repo} creation did not finish in 60s:\n${JSON.stringify(job)}`);
+    await new Promise(r => setTimeout(r, 250));
+    const poll = await fetch(`${baseURL}${href}`);
+    if (!poll.ok) throw new Error(`Polling the ${repo} create failed: ${poll.status}\n${await poll.text()}`);
+    job = await poll.json();
+  }
+  if (job.state !== 'done') {
+    throw new Error(`Repo ${repo} creation did not complete:\n${JSON.stringify(job)}`);
   }
 }
 

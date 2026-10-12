@@ -12,15 +12,14 @@ import { bootstrapStatusWithRetry } from './bootstrap';
 import { useBoot } from './boot';
 import { BootScreen } from './BootScreen';
 import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
-import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
+import { pickRepo, loadLastContext, saveLastContext, saveRailOpen } from './repoSelection';
 import { useRepoCreates, activeCreateByRepo } from './useRepoCreates';
+import { initView, viewReducer } from './facets';
 import { TopBar } from './TopBar';
-import { ExperimentBand } from './ExperimentBand';
+import { TargetRail } from './TargetRail';
+import { BrowseFacet } from './BrowseFacet';
 import { RepoManager } from './RepoManager';
 import { ErrorBoundary } from './ErrorBoundary';
-import { FilterBar } from './FilterBar';
-import { LeftPanel } from './LeftPanel';
-import { RightPanel } from './RightPanel';
 import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import { createOutageLog } from './streamOutage';
@@ -278,6 +277,18 @@ function statusAction(s: Status): Action {
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
+  // The view state: which page of the shell is on screen. Its own reducer and
+  // NOT AppState, because none of it is a way of looking at facts (see
+  // facets.ts) — today it is only whether the target rail is open.
+  const [view, dispatchView] = useReducer(viewReducer, undefined, initView);
+  // Raised by ⌘K to ask the rail's search for focus, and cleared by the rail
+  // once it has focused — so a rail that mounts BECAUSE of the ⌘K focuses on
+  // arrival, and one that mounts later (toggle, ⌘B, leaving Manage) does not
+  // re-serve a request that was already handled.
+  const [railFocusRequest, setRailFocusRequest] = useState(0);
+  const clearRailFocusRequest = useCallback(() => setRailFocusRequest(0), []);
+  useEffect(() => { saveRailOpen(view.railOpen); }, [view.railOpen]);
+  const toggleRail = useCallback(() => dispatchView({ type: 'TOGGLE_RAIL' }), []);
   // Latest-state ref for async callbacks that resolve after the context may have
   // drifted (resolveLens fallback guard I3, onChanged refresh I4). Reads the
   // committed context at resolution time, not the stale closure value.
@@ -1028,6 +1039,23 @@ export default function App() {
         return;
       }
 
+      // The rail. Window-level like Back, so checked before the input guard:
+      // ⌘K is how you get to the rail's search from inside the filter box, and
+      // neither key types anything. ⌘B toggles; ⌘K opens if needed and asks
+      // the search for focus. Nothing here — and nothing below — closes the
+      // rail on Escape: it is a column of the layout, not a popup.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        dispatchView({ type: 'TOGGLE_RAIL' });
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        dispatchView({ type: 'SET_RAIL', open: true });
+        setRailFocusRequest(n => n + 1);
+        return;
+      }
+
       // Back is a WINDOW-level command, so it is checked BEFORE the two guards
       // below. Both exist to stop list keys firing in the wrong place — typing
       // "d" in the filter box must not be treated as a list shortcut, and the
@@ -1153,6 +1181,17 @@ export default function App() {
     dispatch({ type: 'SET_CONTEXT', context: ctx });
   }, [dispatch, closeRepoMgr]);
 
+  // A rail pick. It switches the browse context exactly as the top bar's
+  // dropdown did, and is a no-op on the target already shown — re-entering it
+  // would reset the reader's navigation for nothing. The rail stays open: it
+  // is a column of the layout, not a menu that closes on choice.
+  const onSelectTarget = useCallback((ctx: BrowseContext) => {
+    const cur = stateRef.current.context;
+    if (ctx.kind === 'repo' && cur.kind === 'repo' && cur.repo === ctx.repo) return;
+    if (ctx.kind === 'lens' && cur.kind === 'lens' && cur.name === ctx.name) return;
+    dispatch({ type: 'SET_CONTEXT', context: ctx });
+  }, [dispatch]);
+
   // Zero repos is an ordinary state — the first run creates none, and the last
   // one can be archived — so it must be a starting point, not a dead end.
   //
@@ -1166,9 +1205,8 @@ export default function App() {
     return (
       <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'var(--k-font-body)', overflow: 'hidden' }}>
         <ErrorBoundary variant="inline" label="The top bar hit an error">
-          <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch}
-            onEnterBranch={enterBranch}
-            onManageRepos={toggleRepoMgr} manageOpen manageLocked leftWidth={leftPanelWidth} />
+          <TopBar state={state} repos={repos} railOpen={false} onToggleRail={toggleRail}
+            onManageRepos={toggleRepoMgr} manageOpen manageLocked />
         </ErrorBoundary>
         <ErrorBoundary variant="inline" label="Manage hit an error" onReset={closeRepoMgr}>
           <RepoManager
@@ -1196,6 +1234,14 @@ export default function App() {
     return <BootScreen boot={boot} onRetry={onBootRetry} />;
   }
 
+  // The shell has three levels: the top bar, then a row of [rail | column],
+  // then the status footer. The rail is a COLUMN of that row, so opening it
+  // pushes everything beside it right instead of covering it.
+  //
+  // While Manage owns the window the rail is not rendered (Manage has its own
+  // rail, and two would be two answers to the same question). That bridge goes
+  // when Manage does.
+  const showRail = view.railOpen && !manageOpen;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'var(--k-font-body)', overflow: 'hidden' }}>
       {/* Every top-level panel gets its own INLINE boundary: one bad fact body
@@ -1203,204 +1249,108 @@ export default function App() {
           Manage gets one too — it is a pane like the others now, not an overlay
           that owns the screen. */}
       <ErrorBoundary variant="inline" label="The top bar hit an error">
-        {/* Search rides in the chrome row. It governs the fact LIST, and it
-            used to render as a band above the right pane — which reads
-            state.filters exactly zero times. History mode passes nothing: the
-            trail breadcrumb takes that job below, and there is no filtering
-            while anchored. Manage passes nothing either: it does not list facts. */}
-        <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch}
-          onEnterBranch={enterBranch}
-          onManageRepos={toggleRepoMgr} manageOpen={manageOpen} manageBusy={manageBusy} leftWidth={leftPanelWidth}
-          search={isLive(state) && !manageOpen ? (
-            <ErrorBoundary variant="inline" label="Search hit an error">
-              <FilterBar state={state} dispatch={dispatch} embedded />
-            </ErrorBoundary>
-          ) : undefined} />
+        <TopBar state={state} repos={repos}
+          railOpen={view.railOpen} onToggleRail={toggleRail}
+          onManageRepos={toggleRepoMgr} manageOpen={manageOpen} manageBusy={manageBusy} />
       </ErrorBoundary>
-      {/* The experiment band. Hidden while Manage owns the window: the
-          experiments panel is on screen there with the same three actions,
-          and a band above it would offer them twice for the same experiment.
-          Its presence is keyed on state.experiment — the branch row's own
-          object — never on an `exp/` prefix, for the reason the server gives:
-          the record is what makes a branch an experiment, the name is only a
-          convention. */}
-      {state.experiment && !manageOpen && (
-        <ErrorBoundary variant="inline" label="The experiment band hit an error">
-          <ExperimentBand
-            repo={state.repo}
-            branch={state.branch}
-            experiment={state.experiment}
-            onEnterBranch={enterBranch}
-          />
-        </ErrorBoundary>
-      )}
-      {/* THE CREATE BANNER REPLACES THE INDEX BANNER, it does not stack with
-          it. While a job is still working on this repo, "Indexing…" is a true
-          statement about a detail and a misleading one about the whole: the
-          repository is not finished being made, and if the create is being
-          cancelled it is on its way out. Reporting the index instead is how a
-          reader ended up watching a progress bar for a repository that was
-          being deleted underneath them. */}
-      {repoCreate && (
-        <div data-testid="repo-create-banner"
-          data-create-state={repoCreate.state}
-          style={{
-            background: repoCreate.state === 'cancelling' ? '#2a200e' : '#1c2b1c',
-            color: repoCreate.state === 'cancelling' ? '#f5c47a' : '#9c9',
-            fontSize: 12, padding: '4px 14px',
-            borderBottom: '1px solid ' + (repoCreate.state === 'cancelling' ? '#a36a18' : '#2a3a2a'),
-            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-          {repoCreate.state === 'cancelling' ? (
-            <>
-              <span>⟳ Cancelling…</span>
-              <span style={{ color: '#a08a54' }}>this repository is being removed</span>
-            </>
-          ) : (
-            <>
-              <span>⟳ Creating…</span>
-              <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>
-            </>
-          )}
-        </div>
-      )}
-      {!repoCreate && state.indexState === 'indexing' && (
-        <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
-          <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>
-        </div>
-      )}
-      {state.indexState === 'error' && (
-        <div data-testid="index-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>⚠ Indexing did not complete — search and lists may be incomplete. It will retry on the next restart.</span>
-        </div>
-      )}
-      {state.notice && (
-        <div data-testid="notice" style={{ background: '#2a200e', color: '#f5c47a', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #a36a18', flexShrink: 0 }}>
-          {state.notice}
-        </div>
-      )}
-      {/* The banner reports a REMEMBERED failure, so it needs a way out that
-          does not depend on the next remote event arriving. Both buttons clear
-          it: acting on it (Reconnect…) and acknowledging it (✕). Nothing is
-          lost by clearing — the repo manager's remote card still shows the
-          stored "✗ sync failed" line, and a remote that is still broken raises
-          the banner again on the next failing tick. */}
-      {remoteError && (
-        <div data-testid="remote-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span>⚠ Remote sync failed — {remoteError}</span>
-          <button
-            type="button"
-            data-testid="remote-error-reconnect"
-            onClick={() => { dispatch({ type: 'CLEAR_REMOTE_ERRORS' }); openRepoMgr(); }}
-            style={{ background: '#7f1d1d', color: '#eee', border: '1px solid #5c2a2a', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}
-          >
-            Reconnect…
-          </button>
-          <div style={{ flex: 1 }} />
-          <button
-            type="button"
-            data-testid="remote-error-dismiss"
-            aria-label="Dismiss the remote sync error"
-            title="Dismiss"
-            onClick={() => dispatch({ type: 'CLEAR_REMOTE_ERRORS' })}
-            style={{ background: 'none', color: '#b98080', border: 'none', fontSize: 14, lineHeight: 1, padding: '0 2px', cursor: 'pointer', flexShrink: 0 }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-      {/* Unified now/history surface: a rotating LeftPanel (Library ⇄ timeline
-          nav), a trail-aware FilterBar, and the fact RightPanel — which carries
-          the connections panel in its header. Time-travel (scrub/hop/
-          return-to-now) routes through `tt` so the same layout serves live and
-          history reads.
-
-          Manage REPLACES this block rather than floating over it: the status
-          footer below stays put in both modes, because it is the app's readout
-          rail and not part of browsing. */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {manageOpen ? (
-          <ErrorBoundary variant="inline" label="Manage hit an error" onReset={closeRepoMgr}>
-            <RepoManager
-              open
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+        {showRail && (
+          <ErrorBoundary variant="inline" label="The rail hit an error">
+            <TargetRail
               repos={repos}
+              lenses={lenses}
+              context={state.context}
               currentRepo={state.repo}
+              remoteError={remoteError}
               serverReadOnly={state.serverReadOnly}
-              hideRemoteConfig={state.serverReadOnly}
-              onChanged={onRepoMgrChanged}
-              onBrowse={onRepoMgrBrowse}
-              onEnterBranch={enterBranch}
-              currentBranch={state.branch}
-              onBusyChange={setManageBusy}
+              onSelect={onSelectTarget}
+              focusRequest={railFocusRequest}
+              onFocusHandled={clearRailFocusRequest}
             />
           </ErrorBoundary>
-        ) : (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
-          <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <ErrorBoundary variant="inline" label="The library hit an error">
-              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} narrow={libraryNarrow} />
-            </ErrorBoundary>
-          </div>
-          {/* Drag handle. 4px visible separator + 8px hit zone via negative
-              margins on either side so the cursor target is easier to grab
-              than the visible line. */}
-          <div
-            data-testid="library-splitter"
-            onMouseDown={startSplitterDrag}
-            title="Drag to resize"
-            style={{
-              width: 4, marginLeft: -2, marginRight: -2,
-              cursor: 'ew-resize', flexShrink: 0, zIndex: 1,
-              background: 'transparent',
-              borderLeft: '1px solid #222',
-            }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(136,170,255,0.15)'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-          />
-          <div style={{ flex: 1, overflow: 'hidden', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            {/* Filter bar lives over the content pane only, so the fact-list
-                column runs clean to the splitter. When history it swaps to the
-                trail breadcrumb. */}
-            {/* Anchored reads swap the filter input for the trail breadcrumb.
-                It stays over the content pane because it describes the hop
-                path that got you to the open FACT, not the list. */}
-            {!isLive(state) && (
-              <ErrorBoundary variant="inline" label="The trail bar hit an error">
-                <FilterBar state={state} dispatch={dispatch} onJumpTrail={jumpTrail} />
-              </ErrorBoundary>
-            )}
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
-              <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                <ErrorBoundary variant="inline" label="This fact could not be displayed">
-                  <RightPanel
-                    state={state}
-                    dispatch={dispatch}
-                    navigate={navigate}
-                    onScrub={tt.scrub}
-                    onHopRef={tt.hopEdge}
-                    repoNames={repoNames}
-                    refCommits={edges.refCommits}
-                    incoming={edges.incoming}
-                    outgoing={edges.outgoing}
-                    edgesError={edges.error}
-                    onHopEdge={tt.hopEdge}
-                  />
-                </ErrorBoundary>
-              </div>
-            </div>
-          </div>
-        </div>
         )}
-        <ErrorBoundary variant="inline" label="The status footer hit an error">
-          {/* Neither hint applies in Manage: it has no time axis to return
-              from and no filter field to focus. */}
-          <StatusFooter state={state} version={version}
-            searchKey={isLive(state) && !manageOpen}
-            historyKey={!isLive(state) && !manageOpen}
-            onOpenCreates={manageOpen ? undefined : toggleRepoMgr} />
-        </ErrorBoundary>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {state.notice && (
+            <div data-testid="notice" style={{ background: '#2a200e', color: '#f5c47a', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #a36a18', flexShrink: 0 }}>
+              {state.notice}
+            </div>
+          )}
+          {/* The banner reports a REMEMBERED failure, so it needs a way out that
+              does not depend on the next remote event arriving. Both buttons clear
+              it: acting on it (Reconnect…) and acknowledging it (✕). Nothing is
+              lost by clearing — the repo manager's remote card still shows the
+              stored "✗ sync failed" line, and a remote that is still broken raises
+              the banner again on the next failing tick. */}
+          {remoteError && (
+            <div data-testid="remote-error-banner" style={{ background: '#2b1c1c', color: '#e0a0a0', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #3a2a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span>⚠ Remote sync failed — {remoteError}</span>
+              <button
+                type="button"
+                data-testid="remote-error-reconnect"
+                onClick={() => { dispatch({ type: 'CLEAR_REMOTE_ERRORS' }); openRepoMgr(); }}
+                style={{ background: '#7f1d1d', color: '#eee', border: '1px solid #5c2a2a', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}
+              >
+                Reconnect…
+              </button>
+              <div style={{ flex: 1 }} />
+              <button
+                type="button"
+                data-testid="remote-error-dismiss"
+                aria-label="Dismiss the remote sync error"
+                title="Dismiss"
+                onClick={() => dispatch({ type: 'CLEAR_REMOTE_ERRORS' })}
+                style={{ background: 'none', color: '#b98080', border: 'none', fontSize: 14, lineHeight: 1, padding: '0 2px', cursor: 'pointer', flexShrink: 0 }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          {/* Manage REPLACES the Browse page rather than floating over it: the
+              status footer below stays put in both modes, because it is the
+              app's readout rail and not part of browsing. The bands that
+              describe what is being read (experiment, create, index) are part
+              of the Browse page, so Manage does not show them. */}
+          {manageOpen ? (
+            <ErrorBoundary variant="inline" label="Manage hit an error" onReset={closeRepoMgr}>
+              <RepoManager
+                open
+                repos={repos}
+                currentRepo={state.repo}
+                serverReadOnly={state.serverReadOnly}
+                hideRemoteConfig={state.serverReadOnly}
+                onChanged={onRepoMgrChanged}
+                onBrowse={onRepoMgrBrowse}
+                onEnterBranch={enterBranch}
+                currentBranch={state.branch}
+                onBusyChange={setManageBusy}
+              />
+            </ErrorBoundary>
+          ) : (
+            <BrowseFacet
+              state={state}
+              dispatch={dispatch}
+              navigate={navigate}
+              tt={tt}
+              edges={edges}
+              repoNames={repoNames}
+              repoCreate={repoCreate}
+              leftPanelWidth={leftPanelWidth}
+              libraryNarrow={libraryNarrow}
+              onSplitterDown={startSplitterDrag}
+              onJumpTrail={jumpTrail}
+              onEnterBranch={enterBranch}
+            />
+          )}
+        </div>
       </div>
+      <ErrorBoundary variant="inline" label="The status footer hit an error">
+        {/* Neither hint applies in Manage: it has no time axis to return
+            from and no filter field to focus. */}
+        <StatusFooter state={state} version={version}
+          searchKey={isLive(state) && !manageOpen}
+          historyKey={!isLive(state) && !manageOpen}
+          onOpenCreates={manageOpen ? undefined : toggleRepoMgr} />
+      </ErrorBoundary>
     </div>
   );
 }
