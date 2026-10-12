@@ -14,7 +14,7 @@ import { BootScreen } from './BootScreen';
 import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
-import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor } from './facets';
+import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, railShown } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
 import { TargetRail } from './TargetRail';
@@ -1120,8 +1120,12 @@ export default function App() {
       }
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        dispatchView({ type: 'SET_RAIL', open: true });
-        setRailFocusRequest(n => n + 1);
+        // Over the server pages there is no rail and no search to focus; a
+        // request raised now would fire when the rail mounts again.
+        if (view.server === null) {
+          dispatchView({ type: 'SET_RAIL', open: true });
+          setRailFocusRequest(n => n + 1);
+        }
         return;
       }
 
@@ -1175,7 +1179,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, state, tt, browseShown, dispatchView]);
+  }, [navigate, state, tt, browseShown, view.server, dispatchView]);
 
   // A finished task is news for a moment, not for the session. Nothing used to
   // return a task to idle, so the footer kept the LAST terminal result forever
@@ -1414,8 +1418,8 @@ export default function App() {
   }, [lenses, repos, onPin, onSelectTarget]);
   // The status footer's "N repositories being created": the creates are rows
   // in the rail, each with its chip, so the count opens the rail. Over the
-  // server pages too: the rail sits beside them, and a row picked there
-  // leaves them.
+  // server pages it does nothing: the rail is hidden there and keeps the
+  // reader's preference (SET_RAIL is refused).
   const onOpenCreates = useCallback(() => {
     dispatchView({ type: 'SET_RAIL', open: true });
   }, [dispatchView]);
@@ -1439,13 +1443,13 @@ export default function App() {
 
   // The shell has three levels: the top bar, then a row of [rail | column],
   // then the status footer. The rail is a COLUMN of that row, so opening it
-  // pushes everything beside it right instead of covering it. It stays beside
-  // the server pages, where picking any row is the way back to a target.
+  // pushes everything beside it right instead of covering it. The server pages
+  // hide it (railShown) and the reader's preference survives them.
   //
   // With no repositories the rail is forced open (not persisted): the draft is
   // the only row, and a row nobody can see would leave the reader with no
   // idea what they are creating or where it will appear.
-  const showRail = view.railOpen || noRepos;
+  const showRail = railShown(view, noRepos);
   const pinnedOrContext = displayed.kind === 'draft' ? null : displayed;
   const draftShownKind = displayed.kind === 'draft' ? displayed.draft : null;
   return (
@@ -1454,7 +1458,7 @@ export default function App() {
           or a malformed lens doc now blanks a single pane instead of the SPA. */}
       <ErrorBoundary variant="inline" label="The top bar hit an error">
         <TopBar state={state} repos={repos} label={targetLabel}
-          railOpen={view.railOpen || noRepos} onToggleRail={toggleRail}
+          railOpen={showRail} onToggleRail={toggleRail}
           facets={facets} facet={shownFacet ?? undefined} onFacet={onFacet} settingsDot={settingsDot} locked={view.locked}
           onGear={onGear} server={serverBar} />
       </ErrorBoundary>
@@ -1470,13 +1474,10 @@ export default function App() {
               serverReadOnly={state.serverReadOnly}
               onSelect={onSelectTarget}
               archived={archived}
-              // Over the server pages no row is selected: none of them is
-              // what the body shows.
-              pinned={displayed.kind === 'draft' || serverOpen ? null : view.pinned}
+              pinned={displayed.kind === 'draft' ? null : view.pinned}
               onPin={onPin}
               drafts={drafts}
-              draftShown={serverOpen ? null : draftShownKind}
-              noneSelected={serverOpen}
+              draftShown={draftShownKind}
               onNewDraft={onNewDraft}
               onPickDraft={onPickDraft}
               focusRequest={railFocusRequest}

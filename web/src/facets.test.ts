@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { initView, viewReducer, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor, serverPagesFor } from './facets';
+import { initView, viewReducer, railShown, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor, serverPagesFor } from './facets';
 import type { ViewState } from './facets';
 import { RAIL_STORAGE_KEY, loadRailOpen, saveRailOpen } from './repoSelection';
 import type { RepoInfo, Lens, RepoCreateStatus } from './api';
@@ -325,6 +325,29 @@ describe('the server pages', () => {
     expect(open.server).toBe('fleet');
     const closed = viewReducer({ ...open, server: 'logs' }, { type: 'TOGGLE_SERVER' });
     expect(closed).toEqual({ ...start, server: null });
+  });
+
+  it('TOGGLE_RAIL and SET_RAIL are ignored while they show; the preference is the same after open and close', () => {
+    for (const railOpen of [true, false]) {
+      const start: ViewState = { ...onActivity, railOpen };
+      const open = viewReducer(start, { type: 'TOGGLE_SERVER' });
+      expect(open.railOpen).toBe(railOpen);
+      expect(viewReducer(open, { type: 'TOGGLE_RAIL' })).toBe(open);
+      expect(viewReducer(open, { type: 'SET_RAIL', open: !railOpen })).toBe(open);
+      expect(viewReducer(viewReducer(open, { type: 'SET_SERVER_PAGE', page: 'logs' }), { type: 'TOGGLE_SERVER' }).railOpen).toBe(railOpen);
+      // Control: outside the pages the same action flips it.
+      expect(viewReducer(start, { type: 'TOGGLE_RAIL' }).railOpen).toBe(!railOpen);
+    }
+  });
+
+  it('railShown is false over the pages and the preference otherwise; no repositories force it open, but not over the pages', () => {
+    const open: ViewState = { ...onActivity, railOpen: true };
+    const closed: ViewState = { ...onActivity, railOpen: false };
+    expect(railShown(open)).toBe(true);
+    expect(railShown(closed)).toBe(false);
+    expect(railShown({ ...open, server: 'fleet' })).toBe(false);
+    expect(railShown({ ...closed, server: 'fleet' }, true)).toBe(false);
+    expect(railShown(closed, true)).toBe(true);
   });
 
   it('a tab click moves between pages', () => {

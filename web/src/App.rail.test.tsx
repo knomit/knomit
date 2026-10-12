@@ -257,22 +257,47 @@ describe('the target rail in the app', () => {
     expect(rail.parentElement).toHaveStyle({ display: 'flex' });
   });
 
-  it('stays beside the server pages, where ⌘B and the toggle still answer', async () => {
+  it('is hidden over the server pages, the toggle is off, and ⌘B and ⌘K do nothing; it returns when they close', async () => {
     localStorage.setItem('knomit.rail', '1');
     await primeApi();
     await mountApp();
     expect(screen.getByTestId('target-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-toggle')).toBeEnabled();
 
     await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
     await screen.findByTestId('server-pages');
-    expect(screen.getByTestId('target-rail')).toBeInTheDocument();
+    expect(screen.queryByTestId('target-rail')).toBeNull();
+    expect(screen.getByTestId('rail-toggle')).toBeDisabled();
+    expect(screen.getByTestId('rail-toggle')).toHaveAttribute('title', 'Repositories and lenses are hidden over the server pages');
+    pressMod('b');
+    fireEvent.click(screen.getByTestId('rail-toggle'));
+    pressMod('k');
+    expect(screen.queryByTestId('target-rail')).toBeNull();
+    expect(screen.getByTestId('server-pages')).toBeInTheDocument();
+    // The preference is not the shown state: it was not rewritten.
+    expect(localStorage.getItem('knomit.rail')).toBe('1');
+
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    expect(await screen.findByTestId('target-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-toggle')).toBeEnabled();
     expect(screen.getByTestId('rail-toggle')).toHaveAttribute('aria-pressed', 'true');
+    // ⌘K over the pages left no focus request behind to fire on the remount.
+    expect(document.activeElement).not.toBe(screen.getByTestId('rail-search'));
+  });
+
+  it('a closed rail stays closed through the server pages, and the toggle works again after', async () => {
+    await primeApi();
+    await mountApp();
+    expect(screen.queryByTestId('target-rail')).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    await screen.findByTestId('server-pages');
     pressMod('b');
     expect(screen.queryByTestId('target-rail')).toBeNull();
-    fireEvent.click(screen.getByTestId('rail-toggle'));
+    await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
+    await waitFor(() => expect(screen.queryByTestId('server-pages')).toBeNull());
+    expect(screen.queryByTestId('target-rail')).toBeNull();
+    pressMod('b');
     expect(screen.getByTestId('target-rail')).toBeInTheDocument();
-    // Neither closed the server pages.
-    expect(screen.getByTestId('server-pages')).toBeInTheDocument();
   });
 });
 

@@ -209,37 +209,22 @@ describe('the gear is lit while they show, and takes you back', () => {
     expect(screen.queryByTestId('fleet-page')).toBeNull();
   });
 
-  it('a rail pick while on Logs leaves them for the picked target, on its facet', async () => {
+  it('with the rail open, the pages hide it; the gear returns to the same target and facet with the rail back', async () => {
     localStorage.setItem('knomit.rail', '1');
     await primeApi();
     await mountApp();
     fireEvent.click(screen.getByTestId('facet-tab-settings'));
     await screen.findByTestId('repo-settings');
     await openServer();
-    // The rail stays beside the server pages, with no row selected: none of
-    // them is what the body shows.
-    expect(screen.getByTestId('target-rail')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-repo-ops-kb')).not.toHaveAttribute('aria-current');
+    expect(screen.queryByTestId('target-rail')).toBeNull();
     fireEvent.click(await screen.findByTestId('server-tab-logs'));
     await screen.findByTestId('logs-facet');
 
-    fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
-    await waitFor(() => expect(screen.getByTestId('target-label')).toHaveTextContent('core-kb'));
-    expect(screen.queryByTestId('logs-facet')).toBeNull();
-    expect(gear()).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
+    await act(async () => { fireEvent.click(gear()); });
     expect(await screen.findByTestId('repo-settings')).toBeInTheDocument();
-  });
-
-  it('a pick of the target already under them also leaves them', async () => {
-    localStorage.setItem('knomit.rail', '1');
-    await primeApi();
-    await mountApp();
-    await openServer();
-    fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
-    await waitFor(() => expect(screen.queryByTestId('fleet-page')).toBeNull());
-    expect(screen.getByTestId('target-label')).toHaveTextContent('ops-kb');
-    expect(screen.getByTestId('facet-tab-browse')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('target-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-repo-ops-kb')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
   });
 });
 
@@ -347,8 +332,8 @@ describe('a pinned target under the server pages', () => {
 
     await openServer();
     expect(screen.queryByTestId('lens-broken-callout')).toBeNull();
-    // No row is selected under the server pages, the pinned one included.
-    expect(screen.getByTestId('rail-lens-haunted').getAttribute('aria-current')).toBeNull();
+    // The rail is hidden under the server pages, the pinned row with it.
+    expect(screen.queryByTestId('rail-lens-haunted')).toBeNull();
 
     await act(async () => { fireEvent.click(gear()); });
     expect(await screen.findByTestId('lens-broken-callout')).toBeInTheDocument();

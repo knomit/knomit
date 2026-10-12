@@ -56,10 +56,6 @@ interface Props {
    *  reports to. The search stays usable — it changes nothing on screen but
    *  the list. */
   locked?: boolean;
-  /** The body shows something that is no row's target (the server pages):
-   *  no row is selected. Picking any row, the context's included, is the way
-   *  back to a target. */
-  noneSelected?: boolean;
 }
 
 // TargetRail is the shell's left column: every repository and lens, one flat
@@ -82,7 +78,7 @@ interface Props {
 export function TargetRail({
   repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect,
   archived = [], pinned = null, onPin, drafts = { repo: false, lens: false }, draftShown = null,
-  onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false, noneSelected = false,
+  onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false,
 }: Props) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -136,7 +132,7 @@ export function TargetRail({
 
   // Exactly one row is selected: the draft if it is on screen, else the
   // pinned target, else the context. None over the server pages.
-  const onContext = !noneSelected && draftShown === null && pinned === null;
+  const onContext = draftShown === null && pinned === null;
 
   return (
     <nav data-testid="target-rail" aria-label="Repositories and lenses" style={rail}>
