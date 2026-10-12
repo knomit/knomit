@@ -441,7 +441,15 @@ endif
 #                   so it opens no console and outlives the terminal that
 #                   started it; `knomit-desktop.exe --version` still prints to
 #                   the console it was launched from.
-desktop: web desktop-ui download-ort tokenizers-lib
+#
+# The bundle also carries the knomit SERVER binary beside knomit-desktop
+# (tools/desktop/serverbin.go finds it there). It is the ONE `knomit` that
+# `build` produces, copied in, never compiled a second time — hence `build` (which
+# itself runs web, tokenizers-lib and download-ort) as a prerequisite rather
+# than those three. On Windows and Linux-standalone `build` already leaves
+# knomit$(EXE) in $(DIST) beside knomit-desktop$(EXE) and lib/, which is the
+# layout the desktop expects, so nothing is copied there.
+desktop: build desktop-ui
 ifeq ($(GOOS),darwin)
 	@$(MAKE) --no-print-directory desktop-app-macos
 	@echo "Built $(APP) — launch with: open $(APP)"
@@ -450,7 +458,8 @@ else
 	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop$(EXE) ./tools/desktop
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/kb$(EXE) ./tools/bridge
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf$(EXE) ./tools/okf
-	@echo "Built $(DIST)/knomit-desktop$(EXE) + kb$(EXE) + knomit-okf$(EXE)"
+	@test -f $(DIST)/knomit$(EXE) || { echo "$(DIST)/knomit$(EXE) missing: the desktop bundle ships the server beside knomit-desktop"; exit 1; }
+	@echo "Built $(DIST)/knomit-desktop$(EXE) + knomit$(EXE) + kb$(EXE) + knomit-okf$(EXE)"
 endif
 
 # Assemble the macOS .app bundle. The desktop binary is built DIRECTLY into the
@@ -459,9 +468,11 @@ endif
 # so they are copied there. libtokenizers.a is linked statically (no runtime
 # lib). The bundle lives only at $(APP) (no top-level symlink — nothing
 # references it by a fixed path; launch it with `open $(APP)`). Assumes the
-# desktop target's prerequisites (web build + native libs) have already run.
+# desktop target's prerequisites (`build` for the server binary, web build,
+# native libs) have already run.
 APP := $(DIST)/Knomit.app
 desktop-app-macos:
+	@test -x $(DIST)/knomit || { echo "$(DIST)/knomit missing: run 'make build' (or 'make desktop') first; the bundle ships that one server binary"; exit 1; }
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS/lib $(APP)/Contents/Resources
 	$(DESKTOP_BUILD) -o $(APP)/Contents/MacOS/knomit-desktop ./tools/desktop
@@ -473,6 +484,13 @@ desktop-app-macos:
 	# <home>/bin on launch — a CLI reachable only at
 	# /Applications/Knomit.app/Contents/MacOS/knomit-okf is one nobody runs.
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-okf ./tools/okf
+	# knomit: the server the desktop supervises as a child process. NOT built
+	# here: the one `knomit` that `build` produced is copied in, so the server
+	# tarball and the bundle carry the same build. It resolves libonnxruntime
+	# from <exe>/lib, i.e. the lib/ directly below. What arrives is the
+	# linker's own ad-hoc signature, so the codesign step below re-signs it
+	# with the same flags as the desktop binary.
+	cp $(DIST)/knomit $(APP)/Contents/MacOS/knomit
 	cp $(LIBDIR)/libonnxruntime.dylib $(APP)/Contents/MacOS/lib/
 	# CFBundleShortVersionString gets the full $(VERSION), so a dev bundle reads
 	# 0.5.2-dev.<epoch> in Finder's Get Info rather than impersonating the last
@@ -530,6 +548,7 @@ desktop-app-macos:
 	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/lib/libonnxruntime.dylib
 	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/kb
 	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit-okf
+	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit
 	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit-desktop
 	codesign $(CODESIGN_FLAGS) $(APP)
 ifneq ($(CODESIGN_IDENTITY),)
@@ -539,6 +558,7 @@ ifneq ($(CODESIGN_IDENTITY),)
 	@for f in $(APP)/Contents/MacOS/lib/libonnxruntime.dylib \
 	          $(APP)/Contents/MacOS/kb \
 	          $(APP)/Contents/MacOS/knomit-okf \
+	          $(APP)/Contents/MacOS/knomit \
 	          $(APP)/Contents/MacOS/knomit-desktop \
 	          $(APP); do \
 	  codesign -dvvv "$$f" 2>&1 | grep -q "^Authority=Developer ID Application" \
@@ -553,6 +573,10 @@ endif
 	# user's machine runs on first launch.
 	@codesign --verify --deep --strict $(APP) \
 	  || { echo "$(APP): bundle signature does not validate"; exit 1; }
+	@for f in $(APP)/Contents/MacOS/knomit $(APP)/Contents/MacOS/knomit-desktop; do \
+	  codesign --verify --strict "$$f" \
+	    || { echo "$$f: nested signature does not validate"; exit 1; }; \
+	done
 
 # Regenerate every desktop icon asset from the canonical logos. Requires
 # rsvg-convert + iconutil (macOS). The outputs are committed (the Go binary
@@ -836,7 +860,7 @@ ifeq ($(GOOS),darwin)
 else
 	rm -rf $(APPDIR)
 	mkdir -p $(APPDIR)/usr/bin/lib
-	cp $(DIST)/knomit-desktop $(DIST)/kb $(DIST)/knomit-okf $(APPDIR)/usr/bin/
+	cp $(DIST)/knomit-desktop $(DIST)/knomit $(DIST)/kb $(DIST)/knomit-okf $(APPDIR)/usr/bin/
 	cp -R $(LIBDIR)/. $(APPDIR)/usr/bin/lib/
 	rm -f $(APPDIR)/usr/bin/lib/*.a
 	install -m 0755 tools/desktop/linux/AppRun $(APPDIR)/AppRun
