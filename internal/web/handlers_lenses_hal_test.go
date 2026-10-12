@@ -183,6 +183,55 @@ func postLensRaw(t *testing.T, r http.Handler, body string) *httptest.ResponseRe
 	return rec
 }
 
+// The lens's OWN uid (lenses.uid) is on the list and on the single GET: it is
+// how a client names a lens in a session binding (`lens:<uid>`), which a name
+// cannot do across a rename. Asserted against the registry's value, which is
+// distinct from the member uid already on `write`, so a view that echoed a
+// member uid would fail too.
+func TestLensViews_CarryTheLensUID(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	r := (&Server{Manager: m}).NewAPIRouter()
+	if rec := postLens(t, m, r, `{"name":"eng","write":{"uid":"`+m.Get("alpha").UID()+`"}}`); rec.Code != http.StatusCreated {
+		t.Fatalf("seed create: %d body=%s", rec.Code, rec.Body.String())
+	}
+	l, ok, err := m.LensRegistry().Get("eng")
+	if err != nil || !ok || l.UID == "" {
+		t.Fatalf("precondition: registry lens eng: ok=%v err=%v uid=%q", ok, err, l.UID)
+	}
+	if l.UID == m.Get("alpha").UID() {
+		t.Fatalf("precondition: the lens uid must differ from its member's")
+	}
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses/eng", nil))
+	var one struct {
+		UID string `json:"uid"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &one); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("get: %d %v body=%s", rec.Code, err, rec.Body.String())
+	}
+	if one.UID != l.UID {
+		t.Errorf("single GET uid: got %q, want %q", one.UID, l.UID)
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses", nil))
+	var list struct {
+		Embedded struct {
+			Lenses []struct {
+				UID  string `json:"uid"`
+				Name string `json:"name"`
+			} `json:"lenses"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("list: %d %v body=%s", rec.Code, err, rec.Body.String())
+	}
+	if len(list.Embedded.Lenses) != 1 || list.Embedded.Lenses[0].UID != l.UID {
+		t.Errorf("list: got %+v, want one lens with uid %q", list.Embedded.Lenses, l.UID)
+	}
+}
+
 // Lens JSON carries the uid (the durable key a client sends back) plus a
 // resolved display name, so the UI never has to put a uid in front of a human
 // and never needs a second fetch to render one. The write repo, which

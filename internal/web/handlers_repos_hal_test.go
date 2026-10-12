@@ -35,6 +35,71 @@ func newTestManagerWithRepos(t *testing.T, names ...string) *repos.Manager {
 	return m
 }
 
+// perRepoOriginProvider answers GetOrigin by repo name: a repo missing from
+// the map has no origin (nil, nil), the GET /origin provider's own "none".
+type perRepoOriginProvider struct {
+	stubOriginProvider
+	byName map[string]*store.Remote
+}
+
+func (p *perRepoOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*store.Remote, error) {
+	return p.byName[ri.Name()], nil
+}
+
+// Each listed row carries its origin's persisted health as
+// remote:{sync, push}, so a client can mark every repo without a GET /origin
+// per repo. A repo with NO origin carries no `remote` key at all — absence,
+// not an empty object and not "": a client reads the key's presence as "this
+// repo has an origin". beta's half that never ran is "" (NULL column), not
+// "ok": never-ran must not read as healthy.
+//
+// Sabotage: drop omitempty (or always build the object) → gamma has a key →
+// red; read last_status into both fields → alpha's push is "ok" → red.
+func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
+	ok, bad := "ok", "error"
+	op := &perRepoOriginProvider{byName: map[string]*store.Remote{
+		"alpha": {Name: "origin", URL: "https://x.test/a.git", LastStatus: &ok, LastPushStatus: &bad},
+		"beta":  {Name: "origin", URL: "https://x.test/b.git", LastStatus: &bad},
+	}}
+	s := &Server{
+		Manager:   newTestManagerWithRepos(t, "alpha", "beta", "gamma"),
+		providers: storeProviders{origin: op},
+	}
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Embedded struct {
+			Repos []map[string]json.RawMessage `json:"repos"`
+		} `json:"_embedded"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	rows := map[string]map[string]json.RawMessage{}
+	for _, row := range body.Embedded.Repos {
+		var name string
+		require.NoError(t, json.Unmarshal(row["name"], &name))
+		rows[name] = row
+	}
+	require.Len(t, rows, 3)
+
+	remoteOf := func(name string) map[string]string {
+		raw, present := rows[name]["remote"]
+		require.True(t, present, "%s must carry a remote key; row=%v", name, rows[name])
+		var got map[string]string
+		require.NoError(t, json.Unmarshal(raw, &got))
+		return got
+	}
+	require.Equal(t, map[string]string{"sync": "ok", "push": "error"}, remoteOf("alpha"))
+	require.Equal(t, map[string]string{"sync": "error", "push": ""}, remoteOf("beta"))
+
+	_, present := rows["gamma"]["remote"]
+	require.False(t, present, "a repo without an origin has NO remote key; row=%s", rows["gamma"])
+	_, hasName := rows["gamma"]["name"]
+	require.True(t, hasName, "positive control: gamma's row is decoded")
+}
+
 func TestHandleHALRepos_ReturnsCollection(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha", "beta")}
 	r := s.NewAPIRouter()

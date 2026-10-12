@@ -21,13 +21,21 @@ import (
 //   - `index` BELONGS. The index chip is rendered per repo, in the list, for
 //     repos the user is not looking at. Index state is a property of the repo,
 //     not of any branch being viewed.
+//
 //   - a HEAD CHANGE DOES NOT. A commit is meaningful only relative to a branch;
 //     "the head moved" says nothing without naming which. It stays on the
 //     per-branch stream, with task progress and sync/push results.
 //
+//   - `remote` BELONGS. The repo list shows a health dot per repo for repos the
+//     user is not looking at; the persisted status of a repo's origin is a
+//     whole-repo state. Payload {repo, sync, push}, each `ok | error | ""`
+//     ("" = never ran), the same values GET /repos carries as `remote`. It is
+//     an EDGE: published when a persisted status column changes value, silent
+//     in steady state (repos.publishRemoteEdge). The per-branch sync_*/push_*
+//     events are unchanged and still carry the error text for the active repo.
+//
 // Future kinds follow from the test rather than from this list, but as
-// illustration: a repo becoming unavailable, archived, restored, appearing, or
-// its origin failing at the repo level.
+// illustration: a repo becoming unavailable, archived, restored or appearing.
 //
 // THE `created` CASE, decided so it does not get two homes: the PROGRESS of a
 // creation belongs to the job stream at /repo-creates/{id}/events, which ends
@@ -40,7 +48,7 @@ import (
 // reaches the chip least likely to be stale and no other. The alternative, a
 // stream per repo, scales its connection count with the fleet.
 //
-// One `event:` line per kind. `index` is the first; adding another is a new
+// One `event:` line per kind: `index`, then `remote`. Adding another is a new
 // case in the switch below and a new entry in the OpenAPI description, not a
 // new stream.
 //
@@ -86,15 +94,20 @@ func handleRepoEvents(m *repos.Manager) http.HandlerFunc {
 				if !ok {
 					return
 				}
-				ev, ok := e.(repos.IndexEvent)
-				if !ok {
+				var kind string
+				switch e.(type) {
+				case repos.IndexEvent:
+					kind = "index"
+				case repos.RemoteEvent:
+					kind = "remote"
+				default:
 					continue
 				}
-				data, err := json.Marshal(ev)
+				data, err := json.Marshal(e)
 				if err != nil {
 					continue
 				}
-				if !stream.Write("event: index\ndata: %s\n\n", data) {
+				if !stream.Write("event: %s\ndata: %s\n\n", kind, data) {
 					return
 				}
 			case <-keepalive.C:

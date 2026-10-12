@@ -3,7 +3,7 @@ import type { Dispatch } from 'react';
 import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
-import type { RepoInfo, Lens, Status, RepoIndexEvent, RepoDetails } from './api';
+import type { RepoInfo, Lens, Status, RepoEvent, RepoDetails } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useFactEdges } from './useFactEdges';
@@ -784,7 +784,19 @@ export default function App() {
     // the `reconnect` refetch below never fires, with nothing on screen to say
     // the app stopped listening.
     if (serverBooting) return;
-    const stop = subscribeRepoEvents((ev: RepoIndexEvent | { type: 'reconnect' }) => {
+    const stop = subscribeRepoEvents((ev: RepoEvent) => {
+      if ('type' in ev && ev.type === 'remote') {
+        // A remote-health EDGE for one repo: replace that row's `remote` with
+        // the payload, which is the row's whole new value. Nothing else: the
+        // remote banner belongs to the per-branch stream's sync_*/push_*
+        // events (which carry the error text) for the active repo, and is
+        // re-read from GET /origin by syncRemoteError. Like an index event it
+        // is newer than any list refetch in flight, so it retires them.
+        repoListGen.current += 1;
+        const remote = { sync: ev.sync, push: ev.push };
+        setRepos(prev => prev.map(r => r.name === ev.repo ? { ...r, remote } : r));
+        return;
+      }
       if ('type' in ev) {
         // Reconnected: a terminal event is broadcast once and never replayed,
         // so anything that healed while we were disconnected is unrepresented.

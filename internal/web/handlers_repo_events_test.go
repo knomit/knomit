@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,150 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 )
+
+// remoteFrames pulls every `event: remote` payload out of an SSE body, in order.
+func remoteFrames(t *testing.T, body string) []repos.RemoteEvent {
+	t.Helper()
+	var out []repos.RemoteEvent
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		if l != "event: remote" || i+1 >= len(lines) {
+			continue
+		}
+		data, ok := strings.CutPrefix(lines[i+1], "data: ")
+		if !ok {
+			continue
+		}
+		var ev repos.RemoteEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			t.Fatalf("remote frame %q: %v", data, err)
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+// attachAlphaOrigin attaches (or re-attaches) alpha's origin. On the Synchronous
+// manager the Sync stage's restart runs exactly one real reconcile round
+// before this returns.
+func attachAlphaOrigin(t *testing.T, r http.Handler, url, branch string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin",
+		strings.NewReader(`{"url":"`+url+`","branch":"`+branch+`"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT origin (branch %s): %d %s", branch, rec.Code, rec.Body.String())
+	}
+}
+
+// settleRepoEvents makes "no frame" observable: it starts an index rebuild,
+// whose `index` frames are published AFTER everything the test did before, and
+// waits for its terminal frame. One subscriber receives in publish order, so
+// any `remote` frame published earlier is already in the body it returns.
+func settleRepoEvents(t *testing.T, r http.Handler, rec *streamRecorder) string {
+	t.Helper()
+	before := len(indexFrames(t, rec.body()))
+	post := httptest.NewRecorder()
+	r.ServeHTTP(post, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/index-rebuilds", nil)))
+	if post.Code != http.StatusCreated {
+		t.Fatalf("start rebuild: %d %s", post.Code, post.Body.String())
+	}
+	return rec.waitFor(t, "the rebuild's terminal index frame", func(b string) bool {
+		evs := indexFrames(t, b)
+		for _, e := range evs[min(before, len(evs)):] {
+			if e.Repo == "alpha" && (e.State == "ready" || e.State == "error") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// The `remote` kind, end to end through real reconcile rounds: the Sync
+// stage's own round on each origin attach, against a real file:// origin. It
+// is an EDGE: a frame when a persisted status column changes value, silence
+// when a round changes nothing. Upstream branch `nope` does not exist on the
+// origin, so that round's fetch really fails and persists sync=error.
+//
+// Sabotage: publish on every round (drop the comparison in
+// repos.publishRemoteEdge) → the re-attach round emits a second ok frame →
+// red; drop the `remote` case from the handler's switch → no frames → red.
+func TestRepoRemoteEvents_EdgesOnly(t *testing.T) {
+	originsRoot := t.TempDir()
+	url := seedBareKBOn(t, filepath.Join(originsRoot, "alpha.git"), "main")
+	home := t.TempDir()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
+		AgentBranch: "agent/test",
+		KeyPath:     filepath.Join(home, "agent.key"),
+		Machine:     repos.Options{Synchronous: true},
+	})
+	t.Cleanup(func() { _ = m.Close() })
+	if err := m.Start(); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	// A clone, so the agent branch and the origin share history and a healthy
+	// round really is healthy. Its own Sync round already ran both halves.
+	if _, err := m.Create(context.Background(), repos.CreateSpec{Name: "alpha", Mode: "clone",
+		Origin: &repos.OriginSpec{URL: url, Branch: "main"}}, nil); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	// The listing carries the row the clone's round wrote.
+	listRec := httptest.NewRecorder()
+	r.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/repos", nil))
+	if !strings.Contains(listRec.Body.String(), `"remote":{"sync":"ok","push":"ok"}`) {
+		t.Fatalf("precondition: GET /repos should list alpha healthy:\n%s", listRec.Body.String())
+	}
+
+	rec, stop := openIndexStream(t, r)
+	defer stop()
+
+	// THE CONTROL: another healthy round changes no column and says nothing.
+	attachAlphaOrigin(t, r, url, "main")
+	body := settleRepoEvents(t, r, rec)
+	if got := remoteFrames(t, body); len(got) != 0 {
+		t.Fatalf("an ok round over an ok row must publish nothing: remote frames = %+v", got)
+	}
+
+	// ok → error on the sync half: exactly one frame, the whole row.
+	attachAlphaOrigin(t, r, url, "nope")
+	body = settleRepoEvents(t, r, rec)
+	want := []repos.RemoteEvent{{Repo: "alpha", Sync: "error", Push: "ok"}}
+	if got := remoteFrames(t, body); !equalRemote(got, want) {
+		t.Fatalf("after a failing fetch: remote frames = %+v, want %+v", got, want)
+	}
+
+	// error → ok: the recovery edge, one more frame.
+	attachAlphaOrigin(t, r, url, "main")
+	body = settleRepoEvents(t, r, rec)
+	want = append(want, repos.RemoteEvent{Repo: "alpha", Sync: "ok", Push: "ok"})
+	if got := remoteFrames(t, body); !equalRemote(got, want) {
+		t.Fatalf("after recovery: remote frames = %+v, want %+v", got, want)
+	}
+
+	// And the listing agrees with the last frame.
+	listRec = httptest.NewRecorder()
+	r.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/repos", nil))
+	if !strings.Contains(listRec.Body.String(), `"remote":{"sync":"ok","push":"ok"}`) {
+		t.Fatalf("GET /repos disagrees with the stream:\n%s", listRec.Body.String())
+	}
+}
+
+func equalRemote(a, b []repos.RemoteEvent) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // indexFrames pulls every `event: index` payload out of an SSE body, in order.
 func indexFrames(t *testing.T, body string) []repos.IndexEvent {
