@@ -186,7 +186,7 @@ func TestGradeChain_WrongChainScoresBelow(t *testing.T) {
 	// q2 answered instead of a gap: the gap metrics catch it.
 	answered := synthesize.ReasonChain{
 		Question: "q2", World: synthesize.ChainWorld{Commit: w.Head},
-		Steps: []synthesize.ReasonStep{{Move: "entity", Arg: "Velmora pear", Facts: at(w, "f01")}},
+		Steps:  []synthesize.ReasonStep{{Move: "entity", Arg: "Velmora pear", Facts: at(w, "f01")}},
 		Assess: "answers", Posterior: 0.7,
 		Answers: []synthesize.AnswerFact{{
 			Topic: "practice", Category: "storage", Type: "synthesis",
