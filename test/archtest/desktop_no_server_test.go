@@ -16,6 +16,17 @@ import (
 // desktop/separate-server-boot-path).
 var desktopForbidden = []string{"knomit/internal/app", "knomit/internal/web"}
 
+// desktopForbiddenExact are packages the desktop must not link, matched
+// exactly: the cgo inference stack (the ONNX runtime binding, the tokenizers
+// library, and internal/embeddings, which links both). The desktop only needs
+// to KNOW about the model for its boot caption, and that lives in the cgo-free
+// internal/embeddings/params, which a prefix match would wrongly catch.
+var desktopForbiddenExact = []string{
+	"knomit/internal/embeddings",
+	"github.com/yalue/onnxruntime_go",
+	"github.com/daulet/tokenizers",
+}
+
 // TestDesktopLinksNoServer walks the TRANSITIVE import graph of knomit-desktop
 // (go list -deps resolves imports without compiling, so no cgo or native libs
 // are needed) on each OS the desktop ships for, and fails if a server package
@@ -36,6 +47,11 @@ func TestDesktopLinksNoServer(t *testing.T) {
 		// and its own main package), so an empty or wrong listing cannot pass.
 		if !contains(deps, "knomit/tools/desktop") || !contains(deps, "github.com/wailsapp/wails/v3/pkg/application") {
 			t.Fatalf("%s: go list did not return the desktop's import graph:\n%s", goos, out)
+		}
+		for _, f := range desktopForbiddenExact {
+			if contains(deps, f) {
+				t.Errorf("%s: knomit-desktop links %s; the desktop must not link the inference stack (the boot caption uses internal/embeddings/params)", goos, f)
+			}
 		}
 		for _, dep := range deps {
 			for _, f := range desktopForbidden {

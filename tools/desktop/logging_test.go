@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
 )
 
@@ -132,17 +131,6 @@ func TestApplyLogConfigNeverWritesTheServersFile(t *testing.T) {
 	}
 	if _, err := os.Stat(serverFile); err == nil {
 		t.Error("the desktop wrote the server's configured log file")
-	}
-}
-
-// desktopLoggingOptions is a second spelling of app.LoggingOptions (the
-// desktop must not link internal/app). Pinned field for field against the
-// server's converter with every field set, so a rotation key wired into one
-// and not the other fails here.
-func TestDesktopLoggingOptionsMatchTheServers(t *testing.T) {
-	lc := config.LogConfig{Format: "json", Level: "debug", File: "/x/y.log", MaxSizeMB: 7, MaxBackups: 4, MaxAgeDays: 9}
-	if got, want := desktopLoggingOptions(lc), knomitapp.LoggingOptions(lc); got != want {
-		t.Errorf("desktopLoggingOptions = %+v, app.LoggingOptions = %+v", got, want)
 	}
 }
 

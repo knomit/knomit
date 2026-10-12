@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"knomit/internal/auth"
+	"knomit/internal/config"
+	"knomit/internal/embeddings/params"
 	"knomit/internal/serveraddr"
 )
 
@@ -458,6 +460,45 @@ func (o *orderedInstaller) CheckAndInstall(context.Context) error {
 func (o *orderedInstaller) Restart(context.Context) error {
 	*o.order = append(*o.order, "restart")
 	return nil
+}
+
+// The boot caption: "downloading-models" only while the configured model's
+// artifacts are missing — all three of them, a partial download included — and
+// "starting-engine" once they are there or when the model is unknown (the
+// server reports that error itself).
+func TestModelsCachedPicksTheCaption(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Config{Home: home}
+	cfg.Embeddings.Model = params.DefaultModelID
+	if modelsCached(cfg) {
+		t.Fatal("a cold home reported the model cached: a first launch would not say it is downloading")
+	}
+	m, err := params.Lookup(params.DefaultModelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, dp, tp := params.ModelPaths(m, filepath.Join(home, "models"))
+	if err := os.MkdirAll(filepath.Dir(mp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range []string{mp, tp, dp} {
+		if p == "" {
+			continue
+		}
+		if i == 2 && modelsCached(cfg) {
+			t.Fatal("graph and tokenizer without the weights reported cached")
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !modelsCached(cfg) {
+		t.Fatal("a fully populated cache reported a download still needed")
+	}
+	cfg.Embeddings.Model = "no-such-model"
+	if !modelsCached(cfg) {
+		t.Error("an unknown model should read as cached (caption only; the server reports the error)")
+	}
 }
 
 func TestDesktopLockPathIsBesideTheHomesServerJSON(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"knomit/internal/config"
-	"knomit/internal/embeddings"
+	"knomit/internal/embeddings/params"
 	"knomit/internal/platform/privdir"
 	"knomit/internal/platform/version"
 	webui "knomit/web"
@@ -418,15 +418,16 @@ func installDesktopTools(home string) {
 // launch the server spends minutes fetching ~640 MB of model artifacts, on
 // every later one the same step is seconds of loading weights, and "Downloading
 // models…" would be a label that lies on all but one launch in the app's life.
-// embeddings.ModelCached is presence-only and cheap; a lookup failure reads as
+// params.ModelCached is presence-only and cheap (and cgo-free: the desktop does
+// not link the ONNX runtime or the tokenizers library for a caption); a lookup failure reads as
 // cached, since the caption is not worth an error and the server reports the
 // real one.
 func modelsCached(cfg config.Config) bool {
-	m, err := embeddings.Lookup(cfg.Embeddings.Model)
+	m, err := params.Lookup(cfg.Embeddings.Model)
 	if err != nil {
 		return true
 	}
-	return embeddings.ModelCached(m, filepath.Join(cfg.Home, "models"))
+	return params.ModelCached(m, filepath.Join(cfg.Home, "models"))
 }
 
 // appStartGate defers work that must not reach Wails until the application has
