@@ -373,6 +373,7 @@ func (s *Scenario) FactByID(id string) *ScenarioFact {
 }
 
 var scenarioIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
 // familyRe accepts F1..F99: E04 §2 lists F1-F16, and the expert-scenarios
 // repository extends the list (families/README files are the authority).
 var familyRe = regexp.MustCompile(`^F[1-9][0-9]?$`)
