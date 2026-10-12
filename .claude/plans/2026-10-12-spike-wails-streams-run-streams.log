@@ -1,0 +1,91 @@
+SPIKE 12:51:58.628 asset GET /boot/status
+SPIKE 12:51:58.971 asset GET /boot/status
+SPIKE 12:51:59.273 asset GET /boot/status
+SPIKE 12:51:59.281 PAGE 1791823919280.0 runtime loaded; Stream=function ua=5 (KHTML, like Gecko) wails.io
+SPIKE 12:51:59.282 PAGE 1791823919282.0 stats0 {"open":0,"total":0}
+SPIKE 12:51:59.284 PAGE 1791823919284.0 A repo-events wails-open
+SPIKE 12:51:59.284 stream open /api/v1/repo-events
+SPIKE 12:51:59.285 stream upstream conn opened open=1
+SPIKE 12:51:59.285 stream sent to page event="ready"
+SPIKE 12:51:59.285 PAGE 1791823919285.0 A repo-events #1 {"t":"open"}
+SPIKE 12:51:59.286 PAGE 1791823919285.0 A repo-events #2 {"t":"event","event":"ready","data":"{}"}
+SPIKE 12:51:59.685 PAGE 1791823919684.0 A stats {"open":1,"total":1}
+SPIKE 12:51:59.685 PAGE 1791823919685.0 A create-start streamsamv5hp4xx
+SPIKE 12:51:59.685 proxy begin POST /api/v1/repos
+SPIKE 12:51:59.685 body present with ContentLength 0 on POST /api/v1/repos: forcing -1
+SPIKE 12:51:59.685 upstream conn opened open=2
+SPIKE 12:51:59.686 proxy end /api/v1/repos after 1ms ctxErr=<nil>
+SPIKE 12:51:59.686 PAGE 1791823919686.0 A create-resp 202
+SPIKE 12:51:59.712 stream sent to page event="index"
+SPIKE 12:51:59.713 PAGE 1791823919712.0 A repo-events #3 {"t":"event","event":"index","data":"{\"repo\":\"streamsamv5hp4xx\",\"state\":\"indexing\",\"done\":0,\"total\
+SPIKE 12:51:59.715 stream sent to page event="index"
+SPIKE 12:51:59.715 PAGE 1791823919715.0 A repo-events #4 {"t":"event","event":"index","data":"{\"repo\":\"streamsamv5hp4xx\",\"state\":\"ready\",\"done\":0,\"total\":0
+SPIKE 12:52:00.289 proxy begin GET /api/v1/repos
+SPIKE 12:52:00.290 proxy end /api/v1/repos after 1ms ctxErr=<nil>
+SPIKE 12:52:00.290 PAGE 1791823920290.0 D logs wails-open
+SPIKE 12:52:00.291 stream open /api/v1/logs/events
+SPIKE 12:52:00.291 stream upstream conn opened open=3
+SPIKE 12:52:00.291 proxy begin GET /api/v1/repos/streamsamv5hp4xx/branches
+SPIKE 12:52:00.293 stream sent to page event="ready"
+SPIKE 12:52:00.293 proxy end /api/v1/repos/streamsamv5hp4xx/branches after 2ms ctxErr=<nil>
+SPIKE 12:52:00.293 PAGE 1791823920292.0 D logs #1 {"t":"open"}
+SPIKE 12:52:00.294 PAGE 1791823920293.0 branches {"count":2,"_links":{"self":{"href":"/api/v1/repos/streamsamv5hp4xx/branches"}},"_embedded":{"branches":[{"name":"agent/mindev.local-0a88fd15","_links"
+SPIKE 12:52:00.294 PAGE 1791823920294.0 D logs #2 {"t":"event","event":"line","data":"{\"line\":\"2026-10-12T12:51:58-04:00 INF knomit-desktop starting log_file
+SPIKE 12:52:00.295 PAGE 1791823920294.0 D logs #3 {"t":"event","event":"line","data":"{\"line\":\"2026-10-12T12:51:58-04:00 INF logging to file log_file=/tmp/ks
+SPIKE 12:52:00.295 PAGE 1791823920294.0 D logs #4 {"t":"event","event":"line","data":"{\"line\":\"2026-10-12T12:51:58-04:00 INF self-update disabled reason=\\\"
+SPIKE 12:52:00.295 PAGE 1791823920295.0 D logs #10 line
+SPIKE 12:52:00.295 PAGE 1791823920295.0 D logs #20 line
+SPIKE 12:52:00.295 PAGE 1791823920295.0 D logs #30 line
+SPIKE 12:52:00.295 PAGE 1791823920295.0 D logs #32 {"t":"event","event":"ready","data":"{\"retained\":30,\"max\":2000}"}
+SPIKE 12:52:00.296 PAGE 1791823920296.0 E branch wails-open
+SPIKE 12:52:00.296 stream open /api/v1/repos/streamsamv5hp4xx/branches/main/events
+SPIKE 12:52:00.296 stream upstream conn opened open=4
+SPIKE 12:52:00.297 stream sent to page event="status"
+SPIKE 12:52:00.297 PAGE 1791823920297.0 E branch #1 {"t":"open"}
+SPIKE 12:52:00.298 PAGE 1791823920298.0 E branch #2 {"t":"event","event":"status","data":"{\"head\":\"e625be9acbf6548b2b39b71cb13891cd42590315\"}"}
+SPIKE 12:52:00.798 PAGE 1791823920797.0 stats-3streams {"open":4,"total":4}
+SPIKE 12:52:00.798 proxy begin POST /api/v1/repos
+SPIKE 12:52:00.798 body present with ContentLength 0 on POST /api/v1/repos: forcing -1
+SPIKE 12:52:00.799 proxy end /api/v1/repos after 1ms ctxErr=<nil>
+SPIKE 12:52:00.800 PAGE 1791823920799.0 D create-2 202
+SPIKE 12:52:00.830 stream sent to page event="index"
+SPIKE 12:52:00.832 stream sent to page event="index"
+SPIKE 12:52:00.906 PAGE 1791823920905.0 A repo-events #5 {"t":"event","event":"index","data":"{\"repo\":\"streamsbmv5hp5st\",\"state\":\"indexing\",\"done\":0,\"total\
+SPIKE 12:52:00.906 PAGE 1791823920905.0 D logs #40 line
+SPIKE 12:52:00.906 PAGE 1791823920906.0 A repo-events #6 {"t":"event","event":"index","data":"{\"repo\":\"streamsbmv5hp5st\",\"state\":\"ready\",\"done\":0,\"total\":0
+SPIKE 12:52:01.404 PAGE 1791823921403.0 close() called on logs + branch streams
+SPIKE 12:52:01.404 upstream conn closed open=3
+SPIKE 12:52:01.405 stream handler end /api/v1/logs/events ctxErr=context canceled
+SPIKE 12:52:01.405 upstream conn closed open=2
+SPIKE 12:52:01.405 stream handler end /api/v1/repos/streamsamv5hp4xx/branches/main/events ctxErr=context canceled
+SPIKE 12:52:01.411 PAGE 1791823921411.0 D logs wails-close
+SPIKE 12:52:01.412 PAGE 1791823921411.0 E branch wails-close
+SPIKE 12:52:01.669 PAGE 1791823921668.0 closeB +264ms {"open":2,"total":4}
+SPIKE 12:52:01.959 PAGE 1791823921958.0 closeB +553ms {"open":2,"total":4}
+SPIKE 12:52:02.220 PAGE 1791823922218.0 closeB +814ms {"open":2,"total":4}
+SPIKE 12:52:02.519 PAGE 1791823922518.0 closeB +1113ms {"open":2,"total":4}
+SPIKE 12:52:02.820 PAGE 1791823922819.0 closeB +1415ms {"open":2,"total":4}
+SPIKE 12:52:02.820 PAGE 1791823922819.0 A about to drop upstream; A.n=6
+SPIKE 12:52:02.820 upstream conn closed open=1
+SPIKE 12:52:02.820 drop: closing 3 stream upstream conns
+SPIKE 12:52:02.820 stream upstream dropped (read unix ->/tmp/kspw/knomit.sock: use of closed network connection) retry in 500ms lastID=""
+SPIKE 12:52:02.823 PAGE 1791823922822.0 A repo-events #7 {"t":"error"}
+SPIKE 12:52:03.321 stream upstream conn opened open=2
+SPIKE 12:52:03.322 stream sent to page event="ready"
+SPIKE 12:52:03.376 PAGE 1791823923374.0 A repo-events #8 {"t":"open"}
+SPIKE 12:52:03.377 PAGE 1791823923376.0 A repo-events #9 {"t":"event","event":"ready","data":"{}"}
+SPIKE 12:52:04.373 PAGE 1791823924372.0 A after-drop stats {"open":2,"total":5} A.n=9
+SPIKE 12:52:04.373 proxy begin POST /api/v1/repos
+SPIKE 12:52:04.373 body present with ContentLength 0 on POST /api/v1/repos: forcing -1
+SPIKE 12:52:04.374 proxy end /api/v1/repos after 1ms ctxErr=<nil>
+SPIKE 12:52:04.375 PAGE 1791823924374.0 C create-after-resume 202
+SPIKE 12:52:04.414 stream sent to page event="index"
+SPIKE 12:52:04.415 PAGE 1791823924415.0 A repo-events #10 {"t":"event","event":"index","data":"{\"repo\":\"streamscmv5hp8k4\",\"state\":\"indexing\",\"done\":0,\"total\
+SPIKE 12:52:04.417 stream sent to page event="index"
+SPIKE 12:52:04.418 PAGE 1791823924417.0 A repo-events #11 {"t":"event","event":"index","data":"{\"repo\":\"streamscmv5hp8k4\",\"state\":\"ready\",\"done\":0,\"total\":0
+SPIKE 12:52:04.979 PAGE 1791823924978.0 A close() called
+SPIKE 12:52:04.980 upstream conn closed open=1
+SPIKE 12:52:04.981 stream handler end /api/v1/repo-events ctxErr=context canceled
+SPIKE 12:52:04.988 PAGE 1791823924987.0 A repo-events wails-close
+SPIKE 12:52:05.279 PAGE 1791823925278.0 closeA +299ms {"open":1,"total":5}
+SPIKE 12:52:05.581 PAGE 1791823925580.0 closeA +600ms {"open":1,"total":5}

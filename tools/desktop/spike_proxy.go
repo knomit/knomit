@@ -32,6 +32,9 @@ import (
 //go:embed spike_test.html
 var spikeTestPage []byte
 
+//go:embed spike_streams.html
+var spikeStreamsPage []byte
+
 func spikeEnabled() bool { return os.Getenv("KNOMIT_SPIKE_PROXY") == "1" }
 
 // spikeOrigin is the page origin Wails serves from on this platform.
@@ -106,6 +109,8 @@ func spikeAPIProxy(next http.Handler) http.Handler {
 			pr.Out.URL.Host = "localhost"
 			pr.Out.Host = "localhost"
 			pr.Out.Header.Del("Origin")
+			pr.Out.Header.Del("x-wails-window-id")
+			pr.Out.Header.Del("x-wails-window-name")
 		},
 		Transport:     tr,
 		FlushInterval: -1,
@@ -126,6 +131,12 @@ func spikeAPIProxy(next http.Handler) http.Handler {
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 			spikeLogf("sleep end")
 			_, _ = w.Write([]byte("ok"))
+		case r.URL.Path == "/spike/drop":
+			spikeLogf("drop: closing %d stream upstream conns", spikeDropStreamUpstreams())
+			_, _ = w.Write([]byte("ok"))
+		case r.URL.Path == "/spike/streams.html":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(spikeStreamsPage)
 		case r.URL.Path == "/spike/stats":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]int64{"open": spikeOpenConns.Load(), "total": spikeTotalConns.Load()})
@@ -166,12 +177,15 @@ func spikeWrap(uiFS, desktopFS fs.FS, status func() bootStatus) http.Handler {
 		}
 		return s
 	}
-	return spikeAPIProxy(configInjectingHandler(uiFS, desktopFS, st))
+	return spikeAPIProxy(spikeInjectTransport(configInjectingHandler(uiFS, desktopFS, st)))
 }
 
 func spikeStartURL() string {
 	if spikeEnabled() && os.Getenv("KNOMIT_SPIKE_PAGE") == "1" {
 		return "/spike/test.html"
+	}
+	if spikeEnabled() && os.Getenv("KNOMIT_SPIKE_PAGE") == "streams" {
+		return "/spike/streams.html"
 	}
 	return "/"
 }

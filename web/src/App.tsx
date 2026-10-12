@@ -1,3 +1,4 @@
+import { openEventStream } from './eventStream';
 import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
 import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
@@ -853,7 +854,7 @@ export default function App() {
     // empty when the last repo is archived — subscribing to either would open a
     // stream on a URL that cannot resolve.
     if (!state.repo || !state.branch) return;
-    const es = new EventSource(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
+    const es = openEventStream(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
     // EventSource silently auto-reconnects on disconnect. Without the error
     // handler below, a backend that 500s the stream produces a stale
     // LIVE/HISTORY pill (no SET_HEAD updates arrive) with no signal to the

@@ -1,3 +1,4 @@
+import { openEventStream } from './eventStream';
 import { createOutageLog } from './streamOutage';
 // API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
 // build (UI and API are same-origin, so URLs stay relative). The desktop build
@@ -905,7 +906,7 @@ export type ClientSessionChange =
 // Callers are responsible for coalescing: every MCP request from every
 // connected client produces an event. See useClientSessionChanges.
 export function subscribeClientSessions(onChange: (change: ClientSessionChange) => void): () => void {
-  const es = new EventSource(apiUrl('/api/v1/sessions/events'));
+  const es = openEventStream(apiUrl('/api/v1/sessions/events'));
   // Flap-limited, and shared with App's branch stream rather than copied —
   // without it a backend that 500s this stream leaves the badge and the
   // Sessions table quietly stale, and with it unbounded it would flood the
@@ -999,7 +1000,7 @@ function remoteHealthValue(v: unknown): RepoRemoteHealth['sync'] | undefined {
 export function subscribeRepoEvents(
   onEvent: (ev: RepoEvent) => void,
 ): () => void {
-  const es = new EventSource(apiUrl('/api/v1/repo-events'));
+  const es = openEventStream(apiUrl('/api/v1/repo-events'));
   const outage = createOutageLog(diagStream);
   let seenReady = false;
 
@@ -1076,14 +1077,14 @@ export function createSession(repo: string, opts: { url: string; auth_method?: s
 }
 
 export function streamTest(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): () => void {
-  const es = new EventSource(`${sessionBase(repo, sessionId)}/test`);
+  const es = openEventStream(`${sessionBase(repo, sessionId)}/test`);
   es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
   es.onerror = () => { es.close(); };
   return () => es.close();
 }
 
 export function streamPreview(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): () => void {
-  const es = new EventSource(`${sessionBase(repo, sessionId)}/preview`);
+  const es = openEventStream(`${sessionBase(repo, sessionId)}/preview`);
   es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
   es.onerror = () => { es.close(); };
   return () => es.close();

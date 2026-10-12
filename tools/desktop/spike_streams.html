@@ -1,0 +1,53 @@
+<!doctype html><meta charset="utf-8"><title>spike streams</title><body><pre id="o"></pre>
+<script type="module">
+const ts = () => (performance.timeOrigin + performance.now()).toFixed(1);
+function log(m){ const line = ts()+' '+m; document.getElementById('o').textContent += line+'\n'; fetch('/spike/log',{method:'POST',body:line}).catch(()=>{}); }
+const sleep = ms => fetch('/spike/sleep?ms='+ms).then(r=>r.text());
+const stats = () => fetch('/spike/stats').then(r=>r.json());
+window.onerror = (m) => log('JSERR '+m);
+const mk = (name) => fetch('/api/v1/repos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, mode:'preset', ontology_preset:'default'})});
+const dec = new TextDecoder();
+async function main(){
+  for(;;){ try{ const b=await (await fetch('/boot/status')).json(); if(b.ready) break; }catch(e){} await sleep(300); }
+  const { Stream } = await import('/wails/runtime.js');
+  log('runtime loaded; Stream='+typeof Stream+' ua='+navigator.userAgent.slice(-30));
+  function open(label, path, extra){
+    const s = Stream('knomit-sse'); s.binaryType='arraybuffer'; const st={s,label,n:0};
+    s.onopen = () => { log(label+' wails-open'); s.send(JSON.stringify(Object.assign({path}, extra||{}))); };
+    s.onmessage = (ev) => { const f = JSON.parse(dec.decode(ev.data)); st.n++; if (f.t==='event' && f.event==='line' && st.n>4) { if(st.n%10==0) log(label+' #'+st.n+' line'); return; } log(label+' #'+st.n+' '+JSON.stringify(f).slice(0,110)); };
+    s.onclose = () => log(label+' wails-close');
+    s.onerror = () => log(label+' wails-error');
+    return st;
+  }
+  log('stats0 '+JSON.stringify(await stats()));
+  const A = open('A repo-events','/api/v1/repo-events');
+  await sleep(400);
+  log('A stats '+JSON.stringify(await stats()));
+  const nameA='streamsa'+Date.now().toString(36);
+  log('A create-start '+nameA); const r = await mk(nameA); log('A create-resp '+r.status);
+  await sleep(600);
+  const L = open('D logs','/api/v1/logs/events');
+  const names = await (await fetch('/api/v1/repos')).json();
+  const br = await (await fetch('/api/v1/repos/'+nameA+'/branches')).text();
+  log('branches '+br.slice(0,160));
+  const B = open('E branch','/api/v1/repos/'+nameA+'/branches/main/events');
+  await sleep(500);
+  log('stats-3streams '+JSON.stringify(await stats()));
+  const r2 = await mk('streamsb'+Date.now().toString(36)); log('D create-2 '+r2.status);
+  await sleep(600);
+  // close B and L from the page
+  L.s.close(); B.s.close(); const t1=performance.now(); log('close() called on logs + branch streams');
+  for (let i=0;i<5;i++){ await sleep(250); log('closeB +'+(performance.now()-t1).toFixed(0)+'ms '+JSON.stringify(await stats())); }
+  // resume: drop upstream while A is open
+  log('A about to drop upstream; A.n='+A.n);
+  await fetch('/spike/drop');
+  await sleep(1500);
+  log('A after-drop stats '+JSON.stringify(await stats())+' A.n='+A.n);
+  const r3 = await mk('streamsc'+Date.now().toString(36)); log('C create-after-resume '+r3.status);
+  await sleep(600);
+  A.s.close(); const t2=performance.now(); log('A close() called');
+  for (let i=0;i<5;i++){ await sleep(250); log('closeA +'+(performance.now()-t2).toFixed(0)+'ms '+JSON.stringify(await stats())); }
+  log('DONE');
+}
+main().catch(e=>log('FATAL '+e));
+</script>

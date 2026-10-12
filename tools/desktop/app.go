@@ -198,6 +198,7 @@ func run(ctx context.Context) error {
 		Services:   services,
 		OnShutdown: shutdown,
 	})
+	spikeRegisterStreams(wapp)
 	// Quit this instance only AFTER RestartApp has released the lockfile and
 	// spawned the replacement — see NativeService.RestartApp.
 	nativeSvc.onRestart = wapp.Quit

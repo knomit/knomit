@@ -1,0 +1,76 @@
+SPIKE 12:54:21.212 asset GET /
+SPIKE 12:54:21.215 asset GET /config.js
+SPIKE 12:54:21.244 asset GET /boot/status
+SPIKE 12:54:21.290 proxy begin GET /api/v1/repo-creates
+SPIKE 12:54:21.290 asset GET /boot/status
+SPIKE 12:54:21.290 proxy error /api/v1/repo-creates: dial unix /tmp/kspw/knomit.sock: connect: no such file or directory
+SPIKE 12:54:21.291 proxy end /api/v1/repo-creates after 0s ctxErr=<nil>
+SPIKE 12:54:21.591 asset GET /boot/status
+SPIKE 12:54:21.895 asset GET /boot/status
+SPIKE 12:54:22.293 asset GET /boot/status
+SPIKE 12:54:22.297 proxy begin GET /api/v1/version
+SPIKE 12:54:22.297 proxy begin GET /api/v1/repos
+SPIKE 12:54:22.297 proxy begin GET /api/v1/lenses
+SPIKE 12:54:22.297 proxy begin GET /api/v1/archived
+SPIKE 12:54:22.297 upstream conn opened open=1
+SPIKE 12:54:22.298 upstream conn opened open=2
+SPIKE 12:54:22.298 upstream conn opened open=3
+SPIKE 12:54:22.298 upstream conn opened open=4
+SPIKE 12:54:22.298 proxy begin GET /api/v1/version
+SPIKE 12:54:22.298 upstream conn opened open=5
+SPIKE 12:54:22.299 proxy end /api/v1/version after 2ms ctxErr=<nil>
+SPIKE 12:54:22.300 proxy end /api/v1/version after 2ms ctxErr=<nil>
+SPIKE 12:54:22.300 upstream conn closed open=4
+SPIKE 12:54:22.300 upstream conn closed open=3
+SPIKE 12:54:22.300 upstream conn closed open=2
+SPIKE 12:54:22.300 proxy end /api/v1/archived after 2ms ctxErr=<nil>
+SPIKE 12:54:22.300 proxy end /api/v1/repos after 3ms ctxErr=<nil>
+SPIKE 12:54:22.300 proxy end /api/v1/lenses after 3ms ctxErr=<nil>
+SPIKE 12:54:22.315 stream open /api/v1/repo-events
+SPIKE 12:54:22.315 stream upstream conn opened open=3
+SPIKE 12:54:22.316 stream sent to page event="ready"
+SPIKE 12:54:22.317 proxy begin GET /api/v1/repos/railtest
+SPIKE 12:54:22.317 proxy begin GET /api/v1/repos/railtest/origin
+SPIKE 12:54:22.317 proxy end /api/v1/repos/railtest/origin after 0s ctxErr=<nil>
+SPIKE 12:54:22.318 proxy end /api/v1/repos/railtest after 1ms ctxErr=<nil>
+SPIKE 12:54:22.333 proxy begin GET /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/topics
+SPIKE 12:54:22.334 proxy end /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/topics after 0s ctxErr=<nil>
+SPIKE 12:54:22.336 proxy begin GET /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/stats
+SPIKE 12:54:22.336 proxy begin GET /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/activity
+SPIKE 12:54:22.336 proxy end /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/activity after 0s ctxErr=<nil>
+SPIKE 12:54:22.337 proxy end /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/stats after 1ms ctxErr=<nil>
+SPIKE 12:54:22.338 stream open /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/events
+SPIKE 12:54:22.338 stream upstream conn opened open=4
+SPIKE 12:54:22.338 stream sent to page event="status"
+SPIKE 12:54:22.344 proxy begin GET /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/motifs
+SPIKE 12:54:22.345 proxy end /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/motifs after 1ms ctxErr=<nil>
+SPIKE 12:54:23.400 PAGE 1791824063399.0 UI probe: rail has railtest2 before? false
+SPIKE 12:54:23.400 proxy begin POST /api/v1/repos
+SPIKE 12:54:23.400 body present with ContentLength 0 on POST /api/v1/repos: forcing -1
+SPIKE 12:54:23.402 proxy end /api/v1/repos after 1ms ctxErr=<nil>
+SPIKE 12:54:23.402 PAGE 1791824063402.0 UI probe: created 202
+SPIKE 12:54:23.440 stream sent to page event="index"
+SPIKE 12:54:23.442 stream sent to page event="index"
+SPIKE 12:54:24.107 PAGE 1791824064106.0 UI probe: rail has railtest2 after create, before resume? false
+SPIKE 12:54:24.107 upstream conn closed open=3
+SPIKE 12:54:24.108 drop: closing 2 stream upstream conns
+SPIKE 12:54:24.108 stream upstream dropped (read unix ->/tmp/kspw/knomit.sock: use of closed network connection) retry in 500ms lastID=""
+SPIKE 12:54:24.108 stream upstream dropped (read unix ->/tmp/kspw/knomit.sock: use of closed network connection) retry in 500ms lastID=""
+SPIKE 12:54:24.108 upstream conn closed open=2
+SPIKE 12:54:24.109 PAGE 1791824064108.0 UI probe: dropped upstreams
+SPIKE 12:54:24.609 stream upstream conn opened open=3
+SPIKE 12:54:24.609 stream upstream conn opened open=4
+SPIKE 12:54:24.609 stream sent to page event="ready"
+SPIKE 12:54:24.609 stream sent to page event="status"
+SPIKE 12:54:24.712 proxy begin GET /api/v1/repos
+SPIKE 12:54:24.712 proxy begin GET /api/v1/repos/railtest/origin
+SPIKE 12:54:24.712 proxy end /api/v1/repos/railtest/origin after 0s ctxErr=<nil>
+SPIKE 12:54:24.712 proxy end /api/v1/repos after 1ms ctxErr=<nil>
+SPIKE 12:55:16.050 upstream conn closed open=2
+SPIKE 12:55:16.050 upstream conn closed open=3
+SPIKE 12:55:16.050 stream upstream dropped (EOF) retry in 500ms lastID=""
+SPIKE 12:55:16.050 stream handler end /api/v1/repo-events ctxErr=context canceled
+SPIKE 12:55:16.050 stream upstream dropped (EOF) retry in 500ms lastID=""
+SPIKE 12:55:16.050 stream handler end /api/v1/repos/railtest/branches/agent:mindev.local-0a88fd15/events ctxErr=context canceled
+SPIKE 12:55:16.050 upstream conn closed open=1
+SPIKE 12:55:16.050 upstream conn closed open=0
