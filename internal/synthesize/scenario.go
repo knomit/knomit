@@ -13,6 +13,7 @@ package synthesize
 //	families: [F6, F7, F11]           # family ids (E04 §2 and the scenarios repo); first is primary
 //	ontology_shape: code              # free label: code | general | <generated name>
 //	description: one paragraph, for humans; never loaded into the world
+//	tell_check: "1-10 pass, family items pass"  # the author's generator-tell self-check line
 //	ontology: |                       # the world's own .knomit/ontology.yaml, verbatim
 //	  id: ...
 //	ontology_file: ../../x.yaml       # OR a path (relative to the spec file) to that YAML;
@@ -92,6 +93,7 @@ type Scenario struct {
 	Families        []string           `yaml:"families"`
 	OntologyShape   string             `yaml:"ontology_shape"`
 	Description     string             `yaml:"description"`
+	TellCheck       string             `yaml:"tell_check"`
 	Ontology        string             `yaml:"ontology"`
 	OntologyFile    string             `yaml:"ontology_file"`
 	ExternalSources []string           `yaml:"external_sources"`
