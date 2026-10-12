@@ -9,13 +9,13 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/config"
+	"knomit/internal/serveraddr"
 )
 
 // Config layers defaults -> knomit.toml -> env, so an exported KNOMIT_PORT
@@ -444,45 +444,6 @@ func TestApplySettingsFilePermissions(t *testing.T) {
 	}
 }
 
-// The effective port arrives from the boot goroutine while the UI thread can
-// already be calling GetSettings. Run under -race, this is the guard on that.
-func TestSetEffectivePortIsRaceFree(t *testing.T) {
-	n := newNativeService(filepath.Join(t.TempDir(), "knomit.toml"), "", &stubToggler{})
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		n.setEffectivePort(41234)
-	}()
-	go func() {
-		defer wg.Done()
-		_ = n.currentEffectivePort()
-	}()
-	wg.Wait()
-
-	if got := n.currentEffectivePort(); got != 41234 {
-		t.Errorf("effective port = %d, want 41234", got)
-	}
-}
-
-func TestPortFromBaseURL(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want int
-	}{
-		{"http://127.0.0.1:19278", 19278},
-		{"http://127.0.0.1:54321/", 54321},
-		{"", 0},
-		{"http://127.0.0.1", 0},
-		{"::not a url", 0},
-	} {
-		if got := portFromBaseURL(tc.in); got != tc.want {
-			t.Errorf("portFromBaseURL(%q) = %d, want %d", tc.in, got, tc.want)
-		}
-	}
-}
-
 // desktopHome points config.Load at a temp dir and returns it, so a test can
 // exercise GetSettings without reading the developer's real knomit.toml.
 func desktopHome(t *testing.T) string {
@@ -540,11 +501,13 @@ func TestGetSettingsReadsBackWhatSaveSettingsWrote(t *testing.T) {
 		t.Error("LogFilePath is empty; the form has nothing to point Reveal at")
 	}
 	if got.EffectivePort != 0 {
-		t.Errorf("EffectivePort = %d before boot reported one, want 0", got.EffectivePort)
+		t.Errorf("EffectivePort = %d with no server.json, want 0", got.EffectivePort)
 	}
-	// Once the boot goroutine reports the bound port, the form must see it —
-	// this is the field that tells the user 19278 was taken.
-	n.setEffectivePort(41000)
+	// Once the server has written its home's server.json, the form shows the
+	// port it says it bound — the server's own record, not the configured one.
+	if err := serveraddr.WriteLock(config.LockfilePathFor(home), serveraddr.LockInfo{PID: 1, Port: 41000, Version: "x", Schema: serveraddr.LockSchemaV2}); err != nil {
+		t.Fatal(err)
+	}
 	got, err = n.GetSettings()
 	if err != nil {
 		t.Fatalf("GetSettings: %v", err)

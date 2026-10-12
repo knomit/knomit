@@ -8,18 +8,21 @@ launcher (clunky, CGO-heavy, no real systray on Linux).
 
 - **System tray** — icon/label with a menu: *Show Knomit*, *Start at login*,
   *Quit*.
-- **Native webview window** — shows the knomit React UI, served **in-process**
-  by Wails from the embedded `web/dist` assets (no second frontend build).
-- **In-process server** — boots the knomit server in the same process in
-  **API-only** mode (no UI routes) on a looknomitck TCP port, preferring `19278`
-  and falling back to an ephemeral port if it is taken.
-- **Discovery** — writes the port to `<StateDir>/server.json` (the same lockfile
-  knomit-remote / MCP clients already read), so Claude Code et al. can reach the
-  MCP endpoint over HTTP. Opening the port in a browser returns the API
-  (problem+json), **not** a duplicate UI.
+- **Native webview window** — shows the knomit React UI, served by Wails from
+  the embedded `web/dist` assets (no second frontend build).
+- **A supervised server, not an embedded one** — the app contains no knomit
+  server. It runs the bundled `knomit` binary (never one on `PATH`) as
+  `knomit serve --supervised` and hosts the UI over that process's local socket
+  (named pipe on Windows): `/api/` through a proxy in the asset handler, the
+  event streams as Wails Streams. If a knomit already answers on this home's
+  socket (a `knomit serve` you started), the app **attaches** to it instead and
+  never stops or restarts it. See `supervisor.go`.
+- **Discovery** — the server writes its own `server.json` (the default home's
+  in the state directory, any other home's in that home), which kb and MCP
+  clients read; kb dials the socket first.
 - **Native actions** — exposed to the UI as typed Wails bindings
   (`NativeService`), reachable only from the embedded window (never over the
-  looknomitck port).
+  API).
 - **Bundled MCP bridge** — ships `kb` (the stdio↔HTTP MCP adapter)
   and, on launch, symlinks it to `<home>/bin/kb` so stdio MCP clients
   have a stable command path (see [MCP integration](#mcp-integration)).
@@ -27,19 +30,21 @@ launcher (clunky, CGO-heavy, no real systray on Linux).
 ## How it fits together
 
 ```
-knomit-desktop (CGO, Wails v3)
-├─ Wails AssetServer ── serves web/dist + a dynamic /config.js  → webview window
-│                         (sets window.__KNOMIT_API_BASE__ = http://127.0.0.1:PORT)
-├─ in-process http.Server :PORT ── API + MCP + git only (APIOnly=true)
-│                         ← Claude Code / MCP clients, and the webview's fetch/SSE
+knomit-desktop (Wails v3, no server code)          knomit serve --supervised (bundled binary)
+├─ desktop.lock (one desktop per data root)          local socket / pipe (mandatory)
+├─ supervisor: probe -> attach | spawn ------------> stdin pipe (EOF = stop); Linux Pdeathsig,
+│    restart with backoff; exit 2 = give up;           Windows Job Object as backstops
+│    exit 3 = attach                                  TCP / TLS if configured; server.json
+├─ Wails AssetServer: web/dist, /config.js, /boot/status,
+│    /api/* proxy + Wails Streams ---- auth.DialLocal ---> the socket
 └─ system tray + NativeService bindings (native OS actions)
 ```
 
-The React app is the **same bundle** as the cloud build; it reads
-`window.__KNOMIT_API_BASE__` at runtime (empty/same-origin in the cloud,
-the looknomitck URL here) so its API/SSE calls reach the in-process server
-cross-origin. CORS allows the Wails origin (`wails://localhost` on
-macOS/Linux, `http://wails.localhost` on Windows).
+The React app is the **same bundle** as the cloud build; `/config.js` reports
+`__KNOMIT_BOOTING__` until the server answers on its socket, then the page's
+own origin as `__KNOMIT_API_BASE__`, so every API call is same-origin.
+Quitting the app stops a server it spawned (stdin closed, killed after 10 s)
+and leaves an attached one running.
 
 ## Build & run
 
@@ -257,11 +262,8 @@ Or scaffold a project's integration files with
 `"command": "kb"` and relies on `PATH`, so the absolute path is only needed for
 clients you configure by hand.)
 
-Run **either** the app **or** `knomit serve`, not both — the app falls back to
-an ephemeral port when `:19278` is taken, leaving two servers and an ambiguous
-`server.json`. The bridge resolves its target once at startup, so if the app
-quits and relaunches on a new port, restart the MCP client to pick up the new
-`server.json`.
+Running `knomit serve` on the same home as the app is fine: the app finds it
+answering on the socket and attaches to it (one server, one `server.json`).
 
 ## Fleet peer
 
@@ -288,13 +290,17 @@ warning and serves without the listener.
 
 ## Logs
 
-The app logs to a rotating file (also to stderr when run from a terminal):
+Two rotating files in the same directory: the server's `knomit.log` (or the
+`[log] file` knomit.toml names; the app passes it as `--log-file`), which
+Settings names and Reveal opens, and the app shell's own `knomit-desktop.log`
+beside it, which also receives the server's stderr tail when it exits
+unexpectedly:
 
-- **macOS:** `~/Library/Logs/knomit/knomit-desktop.log`
-- **Linux:** `$XDG_STATE_HOME/knomit/knomit-desktop.log` (or `~/.local/state/knomit/…`)
+- **macOS:** `~/Library/Logs/knomit/`
+- **Linux:** `$XDG_STATE_HOME/knomit/` (or `~/.local/state/knomit/`)
 
 ```sh
-tail -f ~/Library/Logs/knomit/knomit-desktop.log
+tail -f ~/Library/Logs/knomit/knomit.log ~/Library/Logs/knomit/knomit-desktop.log
 ```
 
 When launched as a `.app`, stderr is discarded by macOS, so the file is the only
@@ -303,9 +309,11 @@ gets human-readable output.
 
 ## Reused internals
 
-`internal/{lockfile,netutil,paths,singleinstance,autostart}` were salvaged from
-the old `tools/tray` and moved here. The supervisor + `webview_go` / `fyne.io/systray`
-glue is gone — the server runs in-process, not as a supervised subprocess.
+`internal/{paths,singleinstance,autostart}` were salvaged from the old
+`tools/tray` and moved here (the lockfile code now lives in
+`internal/serveraddr`, the single-instance lock is an OS lock on
+`desktop.lock`). The server runs as a supervised subprocess again, this time
+the same `knomit serve` binary the CLI ships.
 
 ## Caveats
 

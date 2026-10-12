@@ -452,6 +452,23 @@ func installAndRestart(ctx context.Context, u updateInstaller) error {
 	return u.Restart(ctx)
 }
 
+// stopServerFirst is the updater the app hands every install path: its
+// Restart stops the server the desktop spawned BEFORE the updater swaps the
+// .app and relaunches. The swap replaces Contents/MacOS/knomit too, and a
+// server still running the old inode would otherwise outlive the update, keep
+// the socket, and leave the new desktop attached to the old build (kb gotcha
+// desktop/self-update, 7173001e). stop is the supervisor's: idempotent, and a
+// no-op for a server started outside the app.
+type stopServerFirst struct {
+	updateInstaller
+	stop func()
+}
+
+func (s stopServerFirst) Restart(ctx context.Context) error {
+	s.stop()
+	return s.updateInstaller.Restart(ctx)
+}
+
 // activateNotifications performs the notification-centre setup: the permission
 // prompt and the category that carries the banner's action button.
 //
@@ -502,6 +519,7 @@ func activateNotifications(n updateAuthorizer) {
 func configureUpdater(
 	ctx context.Context,
 	wapp *application.App,
+	installer updateInstaller,
 	notify *notifications.NotificationService,
 	announce updateAnnouncer,
 	seen notifyLog,
@@ -524,7 +542,7 @@ func configureUpdater(
 			return
 		}
 		go func() {
-			if err := installAndRestart(ctx, wapp.Updater); err != nil {
+			if err := installAndRestart(ctx, installer); err != nil {
 				log.Warn().Err(err).Msg("update install failed")
 			}
 		}()

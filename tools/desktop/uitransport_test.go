@@ -16,7 +16,7 @@ import (
 func TestConfigInjectingHandler_FlagsTheWailsStreamTransportBootingAndReady(t *testing.T) {
 	for name, st := range map[string]func() bootStatus{
 		"ready":   staticBase(desktopOrigin()),
-		"booting": bootingAt(phaseStartingServer),
+		"booting": bootingAt(phaseStartingEngine),
 	} {
 		h := configInjectingHandler(testUIFS(), nil, st)
 		rec := httptest.NewRecorder()
@@ -32,7 +32,7 @@ func TestConfigInjectingHandler_FlagsTheWailsStreamTransportBootingAndReady(t *t
 // is up.
 func TestAPIProxyInFrontOfTheAssetHandler_APINeverReachesTheSPAFallback(t *testing.T) {
 	for name, ready := range map[string]bool{"booting": false, "ready, nothing listening": true} {
-		st := bootingAt(phaseStartingServer)
+		st := bootingAt(phaseStartingEngine)
 		if ready {
 			st = staticBase(desktopOrigin())
 		}

@@ -1,6 +1,10 @@
 package archtest
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -59,21 +63,63 @@ func TestNoRetiredServerVariable(t *testing.T) {
 	}
 }
 
-// Both server entry points hand the repos Manager their own address once
-// their listeners are bound, or a recipe's `exec` child gets no
-// KNOMIT_SERVER on that kind of install and its `kb` falls back to the
-// lockfile — the bug KNOMIT_SERVER exists to remove. Which address is chosen
-// is pinned by tests beside each (cmd/server_address_unix_test.go,
-// tools/desktop/boot_*_test.go); this pins that each entry point passes it on.
-func TestBothServerEntryPointsRecordTheirAddress(t *testing.T) {
+// The ONE server entry point, `knomit serve`, hands the repos Manager its own
+// address once its listeners are bound, or a recipe's `exec` child gets no
+// KNOMIT_SERVER and its `kb` falls back to the lockfile — the bug
+// KNOMIT_SERVER exists to remove. The desktop runs `knomit serve --supervised`
+// as a child instead of booting a server of its own, so cmd/serve.go is the
+// only production file that may reference Manager.SetServerAddress: a second
+// one would be a second server construction path coming back. Which address
+// is chosen is pinned by the tests beside internal/app/listeners.go.
+//
+// References are found with go/ast (a selector named SetServerAddress, called
+// or taken as a method value), so a comment naming the method does not count;
+// internal/repos, which DEFINES it, is excluded.
+func TestOnlyServeRecordsItsAddress(t *testing.T) {
 	root := moduleRoot(t)
-	for _, f := range []string{"cmd/serve.go", "tools/desktop/app.go"} {
-		b, err := os.ReadFile(filepath.Join(root, f))
+	fset := token.NewFileSet()
+	var got []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
-		if !strings.Contains(string(b), ".Manager().SetServerAddress(") {
-			t.Errorf("%s does not hand its address to the repos Manager (Manager().SetServerAddress)", f)
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".claude", "node_modules", "dist", "build", "third_party":
+				return filepath.SkipDir
+			}
+			return nil
 		}
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "internal/repos/") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", rel, err)
+		}
+		found := false
+		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "SetServerAddress" {
+				found = true
+			}
+			return !found
+		})
+		if found {
+			got = append(got, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Positive control: the one expected reference is found by this walk, so
+	// an empty result cannot pass by the walker seeing nothing.
+	if len(got) != 1 || got[0] != "cmd/serve.go" {
+		t.Fatalf("Manager.SetServerAddress is referenced from %v; want exactly [cmd/serve.go], the one server entry point", got)
 	}
 }

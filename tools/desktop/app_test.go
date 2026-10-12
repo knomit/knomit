@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -129,10 +130,8 @@ func TestConfigInjectingHandler_ReportsAFailedBoot(t *testing.T) {
 // the knomit server does not exist, which is the whole reason it is served from
 // the desktop process rather than the API.
 func TestBootStatus_WalksThePhasesAndCarriesTheBaseWhenReady(t *testing.T) {
-	var boot serverBoot
-	boot.done = make(chan struct{})
-	boot.phase.Store(phaseStarting)
-	h := configInjectingHandler(testUIFS(), nil, boot.status)
+	sup := newSupervisor(supervisorConfig{socket: "unused", up: &uiUpstream{}})
+	h := configInjectingHandler(testUIFS(), nil, uiStatusFrom(sup))
 
 	ask := func() bootStatus {
 		t.Helper()
@@ -151,8 +150,8 @@ func TestBootStatus_WalksThePhasesAndCarriesTheBaseWhenReady(t *testing.T) {
 		return s
 	}
 
-	for _, p := range []bootPhase{phaseInstallingTools, phaseDownloadingModels, phaseStartingServer} {
-		boot.setPhase(p)
+	for _, p := range []bootPhase{phaseInstallingTools, phaseDownloadingModels, phaseStartingEngine} {
+		sup.setPhase(p)
 		got := ask()
 		if got.Ready {
 			t.Errorf("phase %s reported ready", p)
@@ -165,19 +164,29 @@ func TestBootStatus_WalksThePhasesAndCarriesTheBaseWhenReady(t *testing.T) {
 		}
 	}
 
-	// Settle the boot exactly as the goroutine does: write, then close.
-	boot.apiBase = "http://127.0.0.1:54321"
-	close(boot.done)
-
+	// A server answers: the base is the page's own origin, never a port.
+	sup.setReady()
 	got := ask()
 	if !got.Ready {
-		t.Fatal("a settled boot did not report ready")
+		t.Fatal("a ready supervisor did not report ready")
 	}
-	if got.APIBase != "http://127.0.0.1:54321" {
-		t.Errorf("api_base = %q, want the booted address", got.APIBase)
+	if got.APIBase != desktopOrigin() {
+		t.Errorf("api_base = %q, want the page origin %q", got.APIBase, desktopOrigin())
 	}
 	if got.Error != "" {
 		t.Errorf("a successful boot carried error %q", got.Error)
+	}
+
+	// A crashed server being restarted is "booting" again, with no base.
+	sup.setPhase(phaseStartingEngine)
+	if got := ask(); got.Ready || got.APIBase != "" || got.Phase != string(phaseStartingEngine) {
+		t.Errorf("after the server went away: %+v, want not ready, no base, starting-engine", got)
+	}
+
+	// A failure is data for the boot screen, carried with the reason.
+	sup.fail(errors.New("the knomit server refused its configuration"))
+	if got := ask(); got.Phase != string(phaseFailed) || !strings.Contains(got.Error, "refused its configuration") {
+		t.Errorf("failed supervisor reported %+v", got)
 	}
 }
 
@@ -262,7 +271,7 @@ func TestConfigInjectingHandler_RefusesWailsRuntimePaths(t *testing.T) {
 // application.App.impl — what every Dialog, Quit and InvokeSync call
 // dereferences — is assigned INSIDE Run(). The boot watcher goroutine is
 // started ~45 lines earlier, so a fast bootKnomit failure (an unwritable
-// cfg.Home, or bootServer failing to listen) can reach Wails while impl is
+// cfg.Home, or an incomplete bundle) can reach Wails while impl is
 // still a nil interface: Dialog.Error().Show() panics on a non-main goroutine
 // with a bundle's stderr at /dev/null, and Quit() is a documented no-op. Either
 // way the user gets a tray that looks installed and a server that is dead.

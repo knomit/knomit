@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -75,4 +76,35 @@ func Short(fp string) string { return fp[:8] }
 // to disk: that would be a second copy of the instance key.
 func PKCS8(priv ed25519.PrivateKey) ([]byte, error) {
 	return x509.MarshalPKCS8PrivateKey(priv)
+}
+
+// AuthorizedKeyLine is the instance's public key as one authorized_keys line
+// with the "knomit@<hostname>" comment, which `knomit identity enroll` reads
+// the certificate's host label from. ONE builder, so the .pub the server
+// writes when it creates the key (internal/app ensureKeyPair) and
+// PublicKeyLine cannot differ.
+func AuthorizedKeyLine(pub ssh.PublicKey) string {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "local"
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))) + " knomit@" + hostname
+}
+
+// PublicKeyLine returns the line to hand the fleet operator for `knomit
+// identity enroll --pubkey`: the one the server wrote to <keyPath>.pub,
+// without its newline. It is derived from the PRIVATE key at keyPath, not
+// read from .pub, which can be stale or — for a [remote].ssh_key — absent.
+// It lives here and not in internal/app because the desktop's Settings
+// binding needs it and the desktop must not link the server.
+func PublicKeyLine(keyPath string) (string, error) {
+	data, err := os.ReadFile(keyPath)
+	if err != nil {
+		return "", fmt.Errorf("read key %s: %w", keyPath, err)
+	}
+	signer, err := ssh.ParsePrivateKey(data)
+	if err != nil {
+		return "", fmt.Errorf("parse private key %s: %w", keyPath, err)
+	}
+	return AuthorizedKeyLine(signer.PublicKey()), nil
 }

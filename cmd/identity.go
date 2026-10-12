@@ -18,7 +18,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/pki"
 )
@@ -299,7 +298,7 @@ func isTerminal(r io.Reader) bool {
 // under its lock, so a concurrent install by another process is refused
 // rather than overwritten.
 func installBundle(out io.Writer, cfg config.Config, raw []byte, opts installOpts) error {
-	dir, keyPath := cfg.TLS.Dir, app.ResolveKeyPath(cfg)
+	dir, keyPath := cfg.TLS.Dir, config.ResolveKeyPath(cfg)
 	preview, err := pki.PreviewBundle(keyPath, raw)
 	if err != nil {
 		return err
@@ -497,7 +496,7 @@ func identityShowCmd() *cobra.Command {
 }
 
 func showIdentity(out io.Writer, cfg config.Config) error {
-	st, err := pki.Status(cfg.TLS.Dir, app.ResolveKeyPath(cfg))
+	st, err := pki.Status(cfg.TLS.Dir, config.ResolveKeyPath(cfg))
 	if err != nil {
 		return err
 	}
