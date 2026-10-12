@@ -31,7 +31,6 @@ import (
 
 	"knomit/tools/desktop/internal/autostart"
 	"knomit/tools/desktop/internal/lockfile"
-	"knomit/tools/desktop/internal/paths"
 	"knomit/tools/desktop/internal/singleinstance"
 )
 
@@ -69,7 +68,10 @@ func desktopAppOptions() knomitapp.Options {
 
 // run boots the in-process server and the Wails desktop shell.
 func run(ctx context.Context) error {
-	lockPath, err := paths.LockfilePath()
+	// The same file `knomit serve` and kb resolve for this data root
+	// (config.LockfilePath): the default home's lives in the state directory,
+	// any other home's in that home.
+	lockPath, err := config.LockfilePath()
 	if err != nil {
 		return err
 	}

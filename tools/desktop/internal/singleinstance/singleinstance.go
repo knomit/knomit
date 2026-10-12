@@ -27,6 +27,11 @@ func Acquire(path string) error {
 	if info.PID <= 0 {
 		return nil
 	}
+	// A schema 2 file was written by `knomit serve`, which records its own
+	// home's server.json too. Its pid is a server, not another tray.
+	if info.Schema >= 2 {
+		return nil
+	}
 	if isAlive(info.PID) {
 		return ErrAlreadyRunning
 	}

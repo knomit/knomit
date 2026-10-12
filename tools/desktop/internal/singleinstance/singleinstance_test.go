@@ -51,6 +51,19 @@ func TestAcquire_LivePID_ReturnsErrAlreadyRunning(t *testing.T) {
 	}
 }
 
+// `knomit serve` writes server.json for its own home too (schema 2), so a
+// live pid in it is a SERVER, not another desktop. Counting it would make
+// the desktop refuse to start beside a running `knomit serve` with a message
+// about itself. The positive control is the previous test: the same live pid
+// in a file with no schema blocks.
+func TestAcquire_LiveServerFileIsNotAnotherDesktop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.json")
+	must(t, lockfile.Write(path, lockfile.Info{PID: os.Getpid(), Port: 10003, Version: "0.1.0", Schema: 2}))
+	if err := singleinstance.Acquire(path); err != nil {
+		t.Errorf("Acquire(live knomit serve) = %v, want nil", err)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
