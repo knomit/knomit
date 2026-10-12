@@ -1,0 +1,52 @@
+<!doctype html><meta charset="utf-8"><title>spike</title><body><pre id="o"></pre>
+<script>
+const ts = () => (performance.timeOrigin + performance.now()).toFixed(1);
+function log(m){ const line = ts()+' '+m; document.getElementById('o').textContent += line+'\n'; fetch('/spike/log',{method:'POST',body:line}).catch(()=>{}); }
+const sleep = ms => fetch('/spike/sleep?ms='+ms).then(r=>r.text());
+const stats = () => fetch('/spike/stats').then(r=>r.json());
+async function sha(buf){ if(crypto&&crypto.subtle){ const h=await crypto.subtle.digest('SHA-256',buf); return [...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join(''); } return 'nosubtle'; }
+const PRESET = new URLSearchParams(location.search).get('preset') || 'default';
+function mk(name){ return fetch('/api/v1/repos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, mode:'preset', ontology_preset:PRESET})}); }
+window.onerror=(m)=>log('JSERR '+m);
+async function main(){
+  for(;;){ try{ const b=await (await fetch('/boot/status')).json(); if(b.ready) break; }catch(e){} await sleep(300); }
+  log('origin='+location.origin+' ua='+navigator.userAgent);
+  log('stats0 '+JSON.stringify(await stats()));
+  // (a) SSE per-event arrival
+  const es = new EventSource('/api/v1/repo-events');
+  let n=0; es.onopen=()=>log('A es.open'); es.onerror=()=>log('A es.error readyState='+es.readyState);
+  for (const k of ['index','remote','repo','ready','message']) es.addEventListener(k, e=>{ n++; log('A event#'+n+' type='+k+' data='+String(e.data).slice(0,80)); });
+  await sleep(300);
+  log('stats-after-open '+JSON.stringify(await stats()));
+  const name='spike'+Date.now().toString(36);
+  log('A create-start '+name);
+  const r = await mk(name);
+  log('A create-resp '+r.status);
+  await sleep(500);
+  // (c) large response
+  const t=performance.now(); const big = await fetch('/api/v1/openapi.yaml'); const buf = await big.arrayBuffer();
+  log('C openapi status='+big.status+' len='+buf.byteLength+' sha256='+await sha(buf)+' ms='+(performance.now()-t).toFixed(0));
+  // (d) logs tail
+  log('D opening logs');
+  const ls = new EventSource('/api/v1/logs/events'); let ln=0;
+  ls.onerror=()=>log('D logs error rs='+ls.readyState);
+  for (const k of ['line','ready','dropped']) ls.addEventListener(k,e=>{ ln++; if(k!=='line'||ln<=3) log('D logs#'+ln+' '+k+' '+String(e.data).slice(0,70)); });
+  await sleep(300);
+  log('D backlog+ready so far='+ln);
+  const r2 = await mk('spikelog'+Date.now().toString(36));
+  log('D create-for-logs '+r2.status);
+  await sleep(500);
+  log('D logs total='+ln);
+  // (b) cancellation: EventSource.close
+  log('B stats-before-close '+JSON.stringify(await stats()));
+  es.close(); ls.close(); const tc=performance.now(); log('B es.close() called x2 (repo-events + logs)');
+  for (let i=0;i<6;i++){ await sleep(250); log('B +'+(performance.now()-tc).toFixed(0)+'ms stats='+JSON.stringify(await stats())); }
+  // (b2) fetch + AbortController
+  const ac = new AbortController(); const rr = await fetch('/api/v1/repo-events',{signal:ac.signal}); const rd = rr.body.getReader();
+  const c1 = await rd.read(); log('B2 fetch stream first chunk bytes='+(c1.value&&c1.value.length)); log('B2 stats-open '+JSON.stringify(await stats()));
+  ac.abort(); const ta=performance.now(); log('B2 abort() called');
+  for (let i=0;i<6;i++){ await sleep(250); log('B2 +'+(performance.now()-ta).toFixed(0)+'ms stats='+JSON.stringify(await stats())); }
+  log('DONE');
+}
+main().catch(e=>log('FATAL '+e));
+</script>

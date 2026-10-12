@@ -1,0 +1,113 @@
+SPIKE 12:19:32.582 sleep 300ms begin
+SPIKE 12:19:32.883 sleep end
+SPIKE 12:19:32.885 sleep 300ms begin
+SPIKE 12:19:33.186 sleep end
+SPIKE 12:19:33.187 PAGE 1791821973186.0 origin=wails://localhost ua=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) wails.io
+SPIKE 12:19:33.188 PAGE 1791821973187.0 stats0 {"open":0,"total":0}
+SPIKE 12:19:33.188 sleep 300ms begin
+SPIKE 12:19:33.188 proxy begin GET /api/v1/repo-events
+SPIKE 12:19:33.188 upstream conn opened open=1
+SPIKE 12:19:33.189 handler write #1 /api/v1/repo-events bytes=23 first="event: ready"
+SPIKE 12:19:33.189 PAGE 1791821973188.0 A es.open
+SPIKE 12:19:33.189 PAGE 1791821973188.0 A event#1 type=ready data={}
+SPIKE 12:19:33.489 sleep end
+SPIKE 12:19:33.492 PAGE 1791821973491.0 stats-after-open {"open":1,"total":1}
+SPIKE 12:19:33.493 PAGE 1791821973491.0 A create-start spikemv5gjf90
+SPIKE 12:19:33.493 proxy begin POST /api/v1/repos
+SPIKE 12:19:33.493 body present with ContentLength 0 on POST /api/v1/repos: forcing -1
+SPIKE 12:19:33.493 upstream conn opened open=2
+SPIKE 12:19:33.494 proxy end /api/v1/repos after 2ms ctxErr=<nil>
+SPIKE 12:19:33.495 PAGE 1791821973494.0 A create-resp 202
+SPIKE 12:19:33.495 sleep 500ms begin
+SPIKE 12:19:33.535 handler write #2 /api/v1/repo-events bytes=83 first="event: index"
+SPIKE 12:19:33.536 PAGE 1791821973535.0 A event#2 type=index data={"repo":"spikemv5gjf90","state":"indexing","done":0,"total":1}
+SPIKE 12:19:33.538 handler write #3 /api/v1/repo-events bytes=80 first="event: index"
+SPIKE 12:19:33.539 PAGE 1791821973538.0 A event#3 type=index data={"repo":"spikemv5gjf90","state":"ready","done":0,"total":0}
+SPIKE 12:19:33.996 sleep end
+SPIKE 12:19:33.998 proxy begin GET /api/v1/openapi.yaml
+SPIKE 12:19:34.001 proxy end /api/v1/openapi.yaml after 3ms ctxErr=<nil>
+SPIKE 12:19:34.018 PAGE 1791821974015.0 C openapi status=200 len=256751 sha256=953cb852c8cbc7af6d2d0b1d72f1119248a1132a1abfba61ae1eb04ccf508e8a ms=18
+SPIKE 12:19:34.018 PAGE 1791821974016.0 D opening logs
+SPIKE 12:19:34.018 sleep 300ms begin
+SPIKE 12:19:34.018 proxy begin GET /api/v1/logs/events
+SPIKE 12:19:34.019 handler write #1 /api/v1/logs/events bytes=290 first="event: line"
+SPIKE 12:19:34.019 handler write #2 /api/v1/logs/events bytes=4373 first="event: line"
+SPIKE 12:19:34.021 PAGE 1791821974020.0 D logs#1 line {"line":"2026-10-12T12:19:32-04:00 INF knomit-desktop starting log_fil
+SPIKE 12:19:34.021 PAGE 1791821974020.0 D logs#2 line {"line":"2026-10-12T12:19:32-04:00 INF logging to file log_file=/tmp/k
+SPIKE 12:19:34.022 PAGE 1791821974020.0 D logs#3 line {"line":"2026-10-12T12:19:32-04:00 INF self-update disabled reason=\"d
+SPIKE 12:19:34.022 PAGE 1791821974021.0 D logs#29 ready {"retained":28,"max":2000}
+SPIKE 12:19:34.319 sleep end
+SPIKE 12:19:34.322 PAGE 1791821974320.0 D backlog+ready so far=29
+SPIKE 12:19:34.322 proxy begin POST /api/v1/repos
+SPIKE 12:19:34.322 body present with ContentLength 0 on POST /api/v1/repos: forcing -1
+SPIKE 12:19:34.322 upstream conn opened open=3
+SPIKE 12:19:34.323 proxy end /api/v1/repos after 1ms ctxErr=<nil>
+SPIKE 12:19:34.324 PAGE 1791821974323.0 D create-for-logs 202
+SPIKE 12:19:34.324 sleep 500ms begin
+SPIKE 12:19:34.348 handler write #3 /api/v1/logs/events bytes=131 first="event: line"
+SPIKE 12:19:34.349 handler write #4 /api/v1/logs/events bytes=140 first="event: line"
+SPIKE 12:19:34.355 handler write #5 /api/v1/logs/events bytes=112 first="event: line"
+SPIKE 12:19:34.356 handler write #6 /api/v1/logs/events bytes=105 first="event: line"
+SPIKE 12:19:34.357 handler write #7 /api/v1/logs/events bytes=144 first="event: line"
+SPIKE 12:19:34.358 handler write #8 /api/v1/logs/events bytes=126 first="event: line"
+SPIKE 12:19:34.360 handler write #9 /api/v1/logs/events bytes=112 first="event: line"
+SPIKE 12:19:34.360 handler write #4 /api/v1/repo-events bytes=86 first="event: index"
+SPIKE 12:19:34.361 handler write #10 /api/v1/logs/events bytes=115 first="event: line"
+SPIKE 12:19:34.361 PAGE 1791821974360.0 A event#4 type=index data={"repo":"spikelogmv5gjfw1","state":"indexing","done":0,"total":1}
+SPIKE 12:19:34.361 handler write #11 /api/v1/logs/events bytes=123 first="event: line"
+SPIKE 12:19:34.361 handler write #12 /api/v1/logs/events bytes=117 first="event: line"
+SPIKE 12:19:34.362 handler write #5 /api/v1/repo-events bytes=83 first="event: index"
+SPIKE 12:19:34.362 handler write #13 /api/v1/logs/events bytes=153 first="event: line"
+SPIKE 12:19:34.362 PAGE 1791821974361.0 A event#5 type=index data={"repo":"spikelogmv5gjfw1","state":"ready","done":0,"total":0}
+SPIKE 12:19:34.826 sleep end
+SPIKE 12:19:34.914 PAGE 1791821974912.0 D logs total=40
+SPIKE 12:19:34.916 PAGE 1791821974915.0 B stats-before-close {"open":3,"total":3}
+SPIKE 12:19:34.919 upstream conn closed open=2
+SPIKE 12:19:34.919 upstream conn closed open=1
+SPIKE 12:19:34.920 proxy end /api/v1/repo-events after 1.731s ctxErr=context canceled
+SPIKE 12:19:34.920 proxy end /api/v1/logs/events after 902ms ctxErr=context canceled
+SPIKE 12:19:34.920 PAGE 1791821974919.0 B es.close() called x2 (repo-events + logs)
+SPIKE 12:19:34.920 sleep 250ms begin
+SPIKE 12:19:35.171 sleep end
+SPIKE 12:19:35.209 PAGE 1791821975207.0 B +286ms stats={"open":1,"total":3}
+SPIKE 12:19:35.209 sleep 250ms begin
+SPIKE 12:19:35.459 sleep end
+SPIKE 12:19:35.502 PAGE 1791821975500.0 B +580ms stats={"open":1,"total":3}
+SPIKE 12:19:35.502 sleep 250ms begin
+SPIKE 12:19:35.753 sleep end
+SPIKE 12:19:35.802 PAGE 1791821975801.0 B +881ms stats={"open":1,"total":3}
+SPIKE 12:19:35.802 sleep 250ms begin
+SPIKE 12:19:36.053 sleep end
+SPIKE 12:19:36.101 PAGE 1791821976099.0 B +1179ms stats={"open":1,"total":3}
+SPIKE 12:19:36.101 sleep 250ms begin
+SPIKE 12:19:36.352 sleep end
+SPIKE 12:19:36.395 PAGE 1791821976394.0 B +1473ms stats={"open":1,"total":3}
+SPIKE 12:19:36.395 sleep 250ms begin
+SPIKE 12:19:36.647 sleep end
+SPIKE 12:19:36.650 PAGE 1791821976648.0 B +1728ms stats={"open":1,"total":3}
+SPIKE 12:19:36.650 proxy begin GET /api/v1/repo-events
+SPIKE 12:19:36.651 handler write #1 /api/v1/repo-events bytes=23 first="event: ready"
+SPIKE 12:19:36.656 PAGE 1791821976654.0 B2 fetch stream first chunk bytes=23
+SPIKE 12:19:36.657 PAGE 1791821976656.0 B2 stats-open {"open":1,"total":3}
+SPIKE 12:19:36.657 upstream conn closed open=0
+SPIKE 12:19:36.657 proxy end /api/v1/repo-events after 8ms ctxErr=context canceled
+SPIKE 12:19:36.658 PAGE 1791821976657.0 B2 abort() called
+SPIKE 12:19:36.658 sleep 250ms begin
+SPIKE 12:19:36.909 sleep end
+SPIKE 12:19:36.950 PAGE 1791821976949.0 B2 +290ms stats={"open":0,"total":3}
+SPIKE 12:19:36.951 sleep 250ms begin
+SPIKE 12:19:37.202 sleep end
+SPIKE 12:19:37.249 PAGE 1791821977247.0 B2 +588ms stats={"open":0,"total":3}
+SPIKE 12:19:37.249 sleep 250ms begin
+SPIKE 12:19:37.500 sleep end
+SPIKE 12:19:37.550 PAGE 1791821977549.0 B2 +890ms stats={"open":0,"total":3}
+SPIKE 12:19:37.551 sleep 250ms begin
+SPIKE 12:19:37.801 sleep end
+SPIKE 12:19:37.849 PAGE 1791821977847.0 B2 +1188ms stats={"open":0,"total":3}
+SPIKE 12:19:37.849 sleep 250ms begin
+SPIKE 12:19:38.099 sleep end
+SPIKE 12:19:38.150 PAGE 1791821978148.0 B2 +1490ms stats={"open":0,"total":3}
+SPIKE 12:19:38.150 sleep 250ms begin
+SPIKE 12:19:38.401 sleep end
+SPIKE 12:19:38.449 PAGE 1791821978447.0 B2 +1789ms stats={"open":0,"total":3}
+SPIKE 12:19:38.449 PAGE 1791821978448.0 DONE

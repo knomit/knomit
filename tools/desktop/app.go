@@ -193,7 +193,7 @@ func run(ctx context.Context) error {
 		Name: "Knomit",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
-			Handler: configInjectingHandler(uiFS, desktopFS, boot.status),
+			Handler: spikeWrap(uiFS, desktopFS, boot.status),
 		},
 		Services:   services,
 		OnShutdown: shutdown,
@@ -218,7 +218,12 @@ func run(ctx context.Context) error {
 			TitleBar: application.MacTitleBarHidden,
 		},
 	})
-	window.SetURL("/")
+	window.SetURL(spikeStartURL())
+	if spikeEnabled() {
+		window.SetAlwaysOnTop(true)
+		window.Show()
+		window.Focus()
+	}
 
 	// Hide (don't destroy) the window when closed, so "Open Knomit" can bring
 	// it back. Registered as a hook so Cancel() short-circuits Wails' default
