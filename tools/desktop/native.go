@@ -147,7 +147,7 @@ type NativeService struct {
 	// That explicit removal is safe only as long as serverBoot.stop's
 	// sync.Once means this process's OnShutdown-driven call is always a no-op
 	// after this one runs first: lockfile.Remove is path-based with no PID
-	// ownership check (see internal/lockfile.Remove), so a stop() that became
+	// ownership check (see serveraddr.RemoveLock), so a stop() that became
 	// re-entrant/re-runnable could race and delete a REPLACEMENT instance's
 	// freshly-written lockfile instead of this one's. Nothing currently
 	// guards against that beyond stop()'s Once.

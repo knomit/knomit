@@ -18,7 +18,6 @@ import (
 	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/serveraddr"
-	"knomit/tools/desktop/internal/lockfile"
 	"knomit/tools/desktop/internal/netutil"
 )
 
@@ -63,7 +62,7 @@ func (s *server) shutdown() {
 	}
 	s.closeTLS() // Shutdown alone misses a listener Serve has not registered yet
 	s.closeSocket()
-	_ = lockfile.Remove(s.lockPath)
+	_ = serveraddr.RemoveLock(s.lockPath)
 }
 
 // bootServer binds a loopback listener (netutil.Listen prefers cfg.Port,
@@ -96,7 +95,7 @@ func (s *server) shutdown() {
 //  3. auth.RequireLocalListener
 //  4. the TLS listener — LAST of the listeners, so a refusal at 3 never has
 //     a network port to release
-//  5. lockfile.Write — no lockfile until every listener that can fail is
+//  5. serveraddr.WriteLock — no lockfile until every listener that can fail is
 //     open, so nothing advertises a dead port
 //
 // A held [tls].addr (app.ErrTLSAddrInUse) is NOT a failure here: it is an
@@ -142,7 +141,7 @@ func bootServer(parent context.Context, handler http.Handler, lockPath, version 
 	// advertising the TCP port; the bridge prefers the socket when it exists
 	// and falls back to TCP (knomitapi/dial.go). Without this the desktop —
 	// the normal install — never opened the socket at all (issue #248). It
-	// runs BEFORE lockfile.Write: no lockfile until every listener that can
+	// runs BEFORE serveraddr.WriteLock: no lockfile until every listener that can
 	// fail has been opened, so a socket failure never advertises a dead port.
 	ul, closeSocket, err := auth.ListenLocal(local.Path)
 	switch {
@@ -215,7 +214,7 @@ func bootServer(parent context.Context, handler http.Handler, lockPath, version 
 			}
 		}()
 	}
-	if err := lockfile.Write(lockPath, lockfile.Info{PID: os.Getpid(), Port: port, Version: version}); err != nil {
+	if err := serveraddr.WriteLock(lockPath, serveraddr.LockInfo{PID: os.Getpid(), Port: port, Version: version}); err != nil {
 		cancel() // also stops the TLS listener's pki re-judging loop
 		closeTCP()
 		closeTLS()

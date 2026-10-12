@@ -1,6 +1,6 @@
 //go:build !windows
 
-package serve
+package app
 
 import (
 	"context"
@@ -13,12 +13,11 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/app"
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/lockfile"
 	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
+	"knomit/internal/serveraddr"
 )
 
 // The listener set's contract: the order it binds in, that every failure
@@ -74,7 +73,7 @@ func (f *fixture) withCert(t *testing.T) {
 
 func (f fixture) open(t *testing.T, supervised bool) (*Listeners, error) {
 	t.Helper()
-	return Open(context.Background(), Options{
+	return OpenListeners(context.Background(), ListenerOptions{
 		Config:     f.cfg,
 		Handler:    http.NotFoundHandler(),
 		Base:       context.Background(),
@@ -130,12 +129,12 @@ func TestOpen_EveryFailureReleasesEveryAddress(t *testing.T) {
 		}
 		defer held.Close()
 		ls, err := f.open(t, false)
-		if ls != nil || !errors.Is(err, app.ErrTLSAddrInUse) {
+		if ls != nil || !errors.Is(err, ErrTLSAddrInUse) {
 			t.Fatalf("Open = %v, %v; want ErrTLSAddrInUse", ls, err)
 		}
-		var ce *ConfigError
+		var ce *ListenerConfigError
 		if errors.As(err, &ce) {
-			t.Fatalf("a held address is an availability failure, not a ConfigError: %v", err)
+			t.Fatalf("a held address is an availability failure, not a ListenerConfigError: %v", err)
 		}
 		requireFree(t, f.cfg.Host+":"+f.cfg.Port)
 		requireSocketFree(t, f.cfg.Socket)
@@ -147,9 +146,9 @@ func TestOpen_EveryFailureReleasesEveryAddress(t *testing.T) {
 		f.withCert(t)
 		f.keyPath, _ = pkitest.NewKey(t) // not the key the certificate wraps
 		ls, err := f.open(t, false)
-		var ce *ConfigError
-		if ls != nil || !errors.As(err, &ce) || errors.Is(err, app.ErrTLSAddrInUse) {
-			t.Fatalf("Open = %v, %v; want a *ConfigError that is not an in-use error", ls, err)
+		var ce *ListenerConfigError
+		if ls != nil || !errors.As(err, &ce) || errors.Is(err, ErrTLSAddrInUse) {
+			t.Fatalf("Open = %v, %v; want a *ListenerConfigError that is not an in-use error", ls, err)
 		}
 		requireFree(t, f.cfg.Host+":"+f.cfg.Port)
 		requireFree(t, f.tlsAddr)
@@ -183,7 +182,7 @@ func TestOpen_EveryFailureReleasesEveryAddress(t *testing.T) {
 		}
 		defer held.Close()
 		ls, err := f.open(t, false)
-		if ls != nil || !app.IsAddrInUse(err) || !strings.Contains(err.Error(), f.cfg.Port) {
+		if ls != nil || !IsAddrInUse(err) || !strings.Contains(err.Error(), f.cfg.Port) {
 			t.Fatalf("Open = %v, %v; want an address-in-use error naming the address", ls, err)
 		}
 		requireSocketFree(t, f.cfg.Socket)
@@ -196,7 +195,7 @@ func TestOpen_EveryFailureReleasesEveryAddress(t *testing.T) {
 		if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		ls, err := Open(context.Background(), Options{
+		ls, err := OpenListeners(context.Background(), ListenerOptions{
 			Config: f.cfg, Handler: http.NotFoundHandler(), Base: context.Background(), KeyPath: f.keyPath,
 			LockPath: filepath.Join(blocker, "server.json"), // a directory below a regular file
 		})
@@ -235,13 +234,13 @@ func TestOpen_HTTPFalseBindsNoTCP(t *testing.T) {
 	if ls.Local == nil || ls.Address != "unix://"+f.cfg.Socket {
 		t.Fatalf("Local=%v Address=%q, want the socket", ls.Local, ls.Address)
 	}
-	if ls.HTTPState.Reason != ReasonOff {
+	if ls.HTTPState.Reason != ListenerReasonOff {
 		t.Fatalf("HTTPState = %+v", ls.HTTPState)
 	}
 	if err := ls.Advertise(); err != nil {
 		t.Fatal(err)
 	}
-	info, err := lockfile.Read(lock)
+	info, err := serveraddr.ReadLock(lock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,13 +279,13 @@ func TestAdvertise_WritesV2LastAndCloseRemovesOnlyItsOwn(t *testing.T) {
 	if err := ls.Advertise(); err != nil {
 		t.Fatal(err)
 	}
-	info, err := lockfile.Read(lock)
+	info, err := serveraddr.ReadLock(lock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	port, _ := strconv.Atoi(f.cfg.Port)
-	want := lockfile.Info{
-		PID: os.Getpid(), Port: port, Version: "9.9.9-test", Schema: lockfile.SchemaV2, Home: f.cfg.Home,
+	want := serveraddr.LockInfo{
+		PID: os.Getpid(), Port: port, Version: "9.9.9-test", Schema: serveraddr.LockSchemaV2, Home: f.cfg.Home,
 		HTTP: "http://" + f.cfg.Host + ":" + f.cfg.Port, Address: "unix://" + f.cfg.Socket,
 		Socket: f.cfg.Socket, TLS: f.tlsAddr, Generation: 1,
 	}
@@ -295,11 +294,11 @@ func TestAdvertise_WritesV2LastAndCloseRemovesOnlyItsOwn(t *testing.T) {
 	}
 
 	// Another server has since written its own file: ours must not delete it.
-	if err := lockfile.Write(lock, lockfile.Info{PID: os.Getpid() + 1, Port: 1}); err != nil {
+	if err := serveraddr.WriteLock(lock, serveraddr.LockInfo{PID: os.Getpid() + 1, Port: 1}); err != nil {
 		t.Fatal(err)
 	}
 	ls.Close()
-	if got, err := lockfile.Read(lock); err != nil || got.PID != os.Getpid()+1 {
+	if got, err := serveraddr.ReadLock(lock); err != nil || got.PID != os.Getpid()+1 {
 		t.Fatalf("Close removed a successor's server.json: %+v %v", got, err)
 	}
 	requireFree(t, f.cfg.Host+":"+f.cfg.Port)
@@ -338,7 +337,7 @@ func TestAdvertise_DoesNotClobberAnotherHomesFile(t *testing.T) {
 	open := func(home string) *Listeners {
 		f := newFixture(t)
 		f.cfg.Home = home
-		ls, err := Open(context.Background(), Options{
+		ls, err := OpenListeners(context.Background(), ListenerOptions{
 			Config: f.cfg, Handler: http.NotFoundHandler(), Base: context.Background(), Version: "v",
 		}) // LockPath empty: the home's own file
 		if err != nil {
@@ -366,7 +365,7 @@ func TestAdvertise_DoesNotClobberAnotherHomesFile(t *testing.T) {
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("the other home's Advertise changed the default home's server.json:\nbefore %s\nafter  %s (%v)", before, after, err)
 	}
-	bi, err := lockfile.Read(b.LockPath())
+	bi, err := serveraddr.ReadLock(b.LockPath())
 	if err != nil || bi.Home == "" || bi.Home == def {
 		t.Fatalf("home b's file = %+v, %v", bi, err)
 	}
@@ -410,9 +409,9 @@ func TestOpen_Supervised(t *testing.T) {
 		}
 		defer release()
 		ls, err := f.open(t, true)
-		var ce *ConfigError
+		var ce *ListenerConfigError
 		if ls != nil || !errors.Is(err, auth.ErrSocketInUse) || errors.As(err, &ce) {
-			t.Fatalf("Open = %v, %v; want ErrSocketInUse that is NOT a ConfigError (the supervisor attaches)", ls, err)
+			t.Fatalf("Open = %v, %v; want ErrSocketInUse that is NOT a ListenerConfigError (the supervisor attaches)", ls, err)
 		}
 		requireFree(t, f.cfg.Host+":"+f.cfg.Port)
 	})
@@ -426,7 +425,7 @@ func TestOpen_Supervised(t *testing.T) {
 		}
 		defer release()
 		_, err = f.open(t, true)
-		var ce *ConfigError
+		var ce *ListenerConfigError
 		if !errors.Is(err, auth.ErrSocketInUse) || errors.As(err, &ce) {
 			t.Fatalf("Open = %v; want a bare ErrSocketInUse", err)
 		}
@@ -445,7 +444,7 @@ func TestOpen_Supervised(t *testing.T) {
 			t.Fatalf("Open: %v", err)
 		}
 		defer ls.Close()
-		if ls.TCP != nil || ls.Local == nil || ls.HTTPState.Reason != ReasonAddrInUse {
+		if ls.TCP != nil || ls.Local == nil || ls.HTTPState.Reason != ListenerReasonAddrInUse {
 			t.Fatalf("tcp=%v local=%v state=%+v", ls.TCP, ls.Local, ls.HTTPState)
 		}
 		if ls.Address != "unix://"+f.cfg.Socket {
@@ -457,7 +456,7 @@ func TestOpen_Supervised(t *testing.T) {
 		if err := ls.Advertise(); err != nil {
 			t.Fatal(err)
 		}
-		info, _ := lockfile.Read(filepath.Join(f.cfg.Home, "server.json"))
+		info, _ := serveraddr.ReadLock(filepath.Join(f.cfg.Home, "server.json"))
 		if info.Port != 0 || info.HTTP != "" {
 			t.Fatalf("server.json advertises a TCP listener that is not ours: %+v", info)
 		}
@@ -479,7 +478,7 @@ func TestOpen_Supervised(t *testing.T) {
 		if ls.TLS != nil || ls.TCP == nil || ls.Local == nil {
 			t.Fatalf("tcp=%v local=%v tls=%v", ls.TCP, ls.Local, ls.TLS)
 		}
-		if ls.TLSState.Reason != ReasonAddrInUse || ls.TLSState.Configured != f.tlsAddr {
+		if ls.TLSState.Reason != ListenerReasonAddrInUse || ls.TLSState.Configured != f.tlsAddr {
 			t.Fatalf("TLSState = %+v", ls.TLSState)
 		}
 	})
@@ -489,9 +488,9 @@ func TestOpen_Supervised(t *testing.T) {
 		f.withCert(t)
 		f.keyPath, _ = pkitest.NewKey(t)
 		_, err := f.open(t, true)
-		var ce *ConfigError
+		var ce *ListenerConfigError
 		if !errors.As(err, &ce) {
-			t.Fatalf("Open = %v, want a *ConfigError", err)
+			t.Fatalf("Open = %v, want a *ListenerConfigError", err)
 		}
 	})
 
@@ -499,9 +498,9 @@ func TestOpen_Supervised(t *testing.T) {
 		f := newFixture(t)
 		f.cfg.Socket = "/tmp/" + strings.Repeat("l", 120) + "/knomit.sock"
 		_, err := f.open(t, true)
-		var ce *ConfigError
+		var ce *ListenerConfigError
 		if !errors.As(err, &ce) || !errors.Is(err, auth.ErrPathTooLong) {
-			t.Fatalf("Open = %v, want a *ConfigError wrapping ErrPathTooLong", err)
+			t.Fatalf("Open = %v, want a *ListenerConfigError wrapping ErrPathTooLong", err)
 		}
 	})
 

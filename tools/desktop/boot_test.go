@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/tools/desktop/internal/lockfile"
+	"knomit/internal/serveraddr"
 )
 
 func TestBootServer_ServesAndWritesLockfile(t *testing.T) {
@@ -24,7 +24,7 @@ func TestBootServer_ServesAndWritesLockfile(t *testing.T) {
 	defer srv.shutdown()
 
 	// Lockfile records the live port + this process's PID + version.
-	info, err := lockfile.Read(lockPath)
+	info, err := serveraddr.ReadLock(lockPath)
 	if err != nil {
 		t.Fatalf("read lockfile: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestBootServer_ShutdownRemovesLockfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.shutdown()
-	if _, err := lockfile.Read(lockPath); err == nil {
+	if _, err := serveraddr.ReadLock(lockPath); err == nil {
 		t.Error("shutdown must remove the lockfile")
 	}
 }

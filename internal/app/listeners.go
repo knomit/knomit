@@ -1,16 +1,16 @@
-// Package serve opens the listeners a knomit server answers on and tells the
+// Listener set: opens the listeners a knomit server answers on and tells the
 // processes that look for it where they are. It is the ONE boot path:
 // `knomit serve` calls it, and so will the desktop once it spawns the server
 // as a child instead of building its own.
 //
 // # The order, and why it is load-bearing
 //
-// Open binds, in this order,
+// OpenListeners binds, in this order,
 //
 //  1. plaintext TCP (host:port), unless `http = false`
 //  2. the local socket or pipe (auth.ListenLocal)
 //  3. auth.RequireLocalListener
-//  4. the mTLS listener (app.OpenTLSServer) -- the last listener Open binds,
+//  4. the mTLS listener (OpenTLSServer) -- the last listener Open binds,
 //     so a refusal at 3 never has a network port to release
 //
 // and Advertise writes server.json LAST, after the caller has bound whatever
@@ -23,7 +23,8 @@
 // http.Server.Close only closes listeners Serve has already registered, and
 // Serve runs on a goroutine, so a failure or shutdown straight after boot
 // could otherwise leave the port bound.
-package serve
+
+package app
 
 import (
 	"context"
@@ -37,45 +38,43 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/app"
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/lockfile"
 	"knomit/internal/serveraddr"
 )
 
-// ConfigError marks an Open failure that no retry will fix: a trust failure
+// ListenerConfigError marks an Open failure that no retry will fix: a trust failure
 // (a certificate that is installed but cannot be loaded), a local listener
 // the configuration cannot have, or a refusal under [auth].require. A
 // supervisor reads it as "do not restart"; `knomit serve --supervised` exits
 // 2 for it.
-type ConfigError struct{ Err error }
+type ListenerConfigError struct{ Err error }
 
-func (e *ConfigError) Error() string { return e.Err.Error() }
-func (e *ConfigError) Unwrap() error { return e.Err }
+func (e *ListenerConfigError) Error() string { return e.Err.Error() }
+func (e *ListenerConfigError) Unwrap() error { return e.Err }
 
 // The reasons a configured listener is not listening.
 const (
-	ReasonAddrInUse     = "addr_in_use"    // another process holds the address
-	ReasonNoCertificate = "no_certificate" // [tls].addr set, nothing installed in [tls].dir
-	ReasonOff           = "off"            // switched off (http = false)
+	ListenerReasonAddrInUse     = "addr_in_use"    // another process holds the address
+	ListenerReasonNoCertificate = "no_certificate" // [tls].addr set, nothing installed in [tls].dir
+	ListenerReasonOff           = "off"            // switched off (http = false)
 )
 
-// State is what Open did with one configured listener, for server.json and
+// ListenerState is what Open did with one configured listener, for server.json and
 // for the log: the address as configured, the address bound, and why those
 // differ.
-type State struct {
+type ListenerState struct {
 	Configured string `json:"configured"` // "" = off
 	Listening  string `json:"listening"`  // the bound address; "" when not listening
 	Reason     string `json:"reason"`     // why Configured is not Listening
 }
 
-// Options is everything Open needs. It takes the WHOLE config, not values
+// ListenerOptions is everything Open needs. It takes the WHOLE config, not values
 // derived from it: serve used to pass cfg.Socket and cfg.Auth.Require as two
 // adjacent arguments, and mutating one to a constant left every test green
 // (knomit#245), so the mapping from config to listener happens inside, where
 // the tests reach it.
-type Options struct {
+type ListenerOptions struct {
 	Config  config.Config
 	Handler http.Handler
 	// Base is every server's BaseContext (cancel it to unblock SSE handlers)
@@ -89,10 +88,10 @@ type Options struct {
 	//
 	//   - the local listener is MANDATORY: a held one is auth.ErrSocketInUse
 	//     (the supervisor attaches to its owner instead), an unusable path a
-	//     *ConfigError;
+	//     *ListenerConfigError;
 	//   - an address that is simply HELD (plaintext TCP, TLS) is an
 	//     availability problem: WARN and serve without it;
-	//   - a trust failure stays fatal (*ConfigError).
+	//   - a trust failure stays fatal (*ListenerConfigError).
 	//
 	// Unsupervised, `knomit serve` keeps its refusal: a held TCP or TLS
 	// address fails the boot, and a held local path serves TCP only.
@@ -123,11 +122,11 @@ type Listeners struct {
 	// belongs to another instance and must never be named.
 	Address string
 
-	HTTPState State
-	TLSState  State
+	HTTPState ListenerState
+	TLSState  ListenerState
 
 	lockPath string
-	opts     Options
+	opts     ListenerOptions
 	// skipLock: the local listener is held by another live process, which
 	// owns this home's server.json; writing ours would repoint kb at a
 	// TCP-only sibling.
@@ -139,10 +138,10 @@ type Listeners struct {
 	wroteLock   bool
 }
 
-// Open binds the listeners in the documented order. On any error it has
+// OpenListeners binds the listeners in the documented order. On any error it has
 // closed everything it opened, and the error is returned with nothing
-// serving. See Options for how Supervised changes which failures are fatal.
-func Open(ctx context.Context, o Options) (*Listeners, error) {
+// serving. See ListenerOptions for how Supervised changes which failures are fatal.
+func OpenListeners(ctx context.Context, o ListenerOptions) (*Listeners, error) {
 	cfg := o.Config
 	l := &Listeners{opts: o, closeSocket: func() {}}
 	l.lockPath = o.LockPath
@@ -173,8 +172,8 @@ func Open(ctx context.Context, o Options) (*Listeners, error) {
 		case err == nil:
 			l.TCP = ln
 			l.HTTPState.Listening = ln.Addr().String()
-		case o.Supervised && app.IsAddrInUse(err):
-			l.HTTPState.Reason = ReasonAddrInUse
+		case o.Supervised && IsAddrInUse(err):
+			l.HTTPState.Reason = ListenerReasonAddrInUse
 			log.Warn().Err(err).Str("addr", listenAddr).
 				Msg("plaintext listener address is held by another process; serving without it")
 		default:
@@ -182,7 +181,7 @@ func Open(ctx context.Context, o Options) (*Listeners, error) {
 			return nil, l.fail(err)
 		}
 	} else {
-		l.HTTPState.Reason = ReasonOff
+		l.HTTPState.Reason = ListenerReasonOff
 		log.Info().Msg("http = false: no plaintext TCP listener; serving on the local listener only")
 	}
 
@@ -198,7 +197,7 @@ func Open(ctx context.Context, o Options) (*Listeners, error) {
 		if errors.Is(benign, auth.ErrSocketInUse) {
 			return nil, l.fail(fmt.Errorf("local listener: %w", benign))
 		}
-		return nil, l.fail(&ConfigError{Err: fmt.Errorf("local listener: %w", benign)})
+		return nil, l.fail(&ListenerConfigError{Err: fmt.Errorf("local listener: %w", benign)})
 	}
 	if benign != nil {
 		log.Warn().Err(benign).Str("socket", cfg.Socket).
@@ -211,7 +210,7 @@ func Open(ctx context.Context, o Options) (*Listeners, error) {
 	}
 	if err != nil {
 		if o.Supervised {
-			err = &ConfigError{Err: err}
+			err = &ListenerConfigError{Err: err}
 		}
 		return nil, l.fail(err)
 	}
@@ -235,10 +234,10 @@ func Open(ctx context.Context, o Options) (*Listeners, error) {
 	// certificate.
 	tcfg := cfg.TLS
 	l.TLSState.Configured = tcfg.Addr
-	tlsSrv, tln, err := app.OpenTLSServer(o.Base, tcfg, o.KeyPath, l.HTTP)
+	tlsSrv, tln, err := OpenTLSServer(o.Base, tcfg, o.KeyPath, l.HTTP)
 	switch {
-	case errors.Is(err, app.ErrTLSAddrInUse) && o.Supervised:
-		l.TLSState.Reason = ReasonAddrInUse
+	case errors.Is(err, ErrTLSAddrInUse) && o.Supervised:
+		l.TLSState.Reason = ListenerReasonAddrInUse
 		log.Warn().Err(err).Str("addr", tcfg.Addr).
 			Msg("tls listener address is held by another process; serving without the mTLS listener")
 	case err != nil:
@@ -246,12 +245,12 @@ func Open(ctx context.Context, o Options) (*Listeners, error) {
 		// configured to open. A held address is the only availability
 		// failure (and only supervised survives it); the rest is trust.
 		log.Error().Err(err).Str("dir", tcfg.Dir).Msg("tls listener failed")
-		if !errors.Is(err, app.ErrTLSAddrInUse) {
-			err = &ConfigError{Err: err}
+		if !errors.Is(err, ErrTLSAddrInUse) {
+			err = &ListenerConfigError{Err: err}
 		}
 		return nil, l.fail(err)
 	case tlsSrv == nil && tcfg.Addr != "":
-		l.TLSState.Reason = ReasonNoCertificate
+		l.TLSState.Reason = ListenerReasonNoCertificate
 	case tlsSrv != nil:
 		l.TLSServer, l.TLS = tlsSrv, tln
 		l.TLSState.Listening = tln.Addr().String()
@@ -279,10 +278,10 @@ func (l *Listeners) Advertise() error {
 			Msg("not writing server.json: another process holds this home's local listener and owns it")
 		return nil
 	}
-	info := lockfile.Info{
+	info := serveraddr.LockInfo{
 		PID:        os.Getpid(),
 		Version:    l.opts.Version,
-		Schema:     lockfile.SchemaV2,
+		Schema:     serveraddr.LockSchemaV2,
 		Home:       l.opts.Config.Home,
 		Address:    l.Address,
 		Socket:     l.LocalPath,
@@ -293,7 +292,7 @@ func (l *Listeners) Advertise() error {
 		info.Port = l.TCP.Addr().(*net.TCPAddr).Port
 		info.HTTP = serveraddr.ForTCP(l.TCP.Addr().String())
 	}
-	if err := lockfile.Write(l.lockPath, info); err != nil {
+	if err := serveraddr.WriteLock(l.lockPath, info); err != nil {
 		return fmt.Errorf("write lockfile: %w", err)
 	}
 	l.mu.Lock()
@@ -319,7 +318,7 @@ func (l *Listeners) Close() {
 	l.mu.Unlock()
 
 	if wrote {
-		_ = lockfile.RemoveIfOwner(l.lockPath, os.Getpid())
+		_ = serveraddr.RemoveLockIfOwner(l.lockPath, os.Getpid())
 	}
 	if l.TLSServer != nil {
 		_ = l.TLSServer.Close()

@@ -146,6 +146,6 @@ func (WarnWriter) Write(p []byte) (int, error) {
 
 // IsAddrInUse reports whether a listen error is "address already in use", on
 // this platform's spelling of it. Exported so a caller that binds its own
-// listener (internal/serve's plaintext one) can tell an availability failure
+// listener (the listener set's plaintext one) can tell an availability failure
 // from a configuration one by the same test OpenTLSServer uses.
 func IsAddrInUse(err error) bool { return isAddrInUse(err) }

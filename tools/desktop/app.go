@@ -29,8 +29,8 @@ import (
 
 	desktopui "knomit/tools/desktop/ui"
 
+	"knomit/internal/serveraddr"
 	"knomit/tools/desktop/internal/autostart"
-	"knomit/tools/desktop/internal/lockfile"
 	"knomit/tools/desktop/internal/singleinstance"
 )
 
@@ -185,7 +185,7 @@ func run(ctx context.Context) error {
 	// spawning the replacement — see the releaseInstance field comment on
 	// NativeService. boot.stop is the same idempotent teardown OnShutdown
 	// below calls, so running it early here and again on the eventual
-	// shutdown is safe. lockfile.Remove is called explicitly too, rather than
+	// shutdown is safe. serveraddr.RemoveLock is called explicitly too, rather than
 	// relying solely on stop()'s internal removal: stop() gives up WITHOUT
 	// calling its teardown (and so without removing the lockfile) if a boot
 	// still in flight has not settled within stopGrace — reachable here
@@ -195,7 +195,7 @@ func run(ctx context.Context) error {
 	// releaseInstance field comment for the risk if that ever changes.
 	nativeSvc.releaseInstance = func() {
 		boot.stop()
-		_ = lockfile.Remove(lockPath)
+		_ = serveraddr.RemoveLock(lockPath)
 	}
 	services := []application.Service{application.NewService(nativeSvc)}
 	var notifySvc *notifications.NotificationService

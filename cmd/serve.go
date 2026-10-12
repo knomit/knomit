@@ -26,7 +26,6 @@ import (
 	"knomit/internal/platform/logging"
 	"knomit/internal/platform/privdir"
 	"knomit/internal/platform/version"
-	"knomit/internal/serve"
 )
 
 // The exit codes `knomit serve --supervised` documents to its supervisor (the
@@ -92,7 +91,7 @@ func serveCmd() *cobra.Command {
 
 			cfg, err := config.Load()
 			if err != nil {
-				return coded(&serve.ConfigError{Err: fmt.Errorf("load config: %w", err)})
+				return coded(&app.ListenerConfigError{Err: fmt.Errorf("load config: %w", err)})
 			}
 			if portOverride != "" {
 				cfg.Port = portOverride
@@ -210,14 +209,14 @@ func serveCmd() *cobra.Command {
 			defer cancelServe()
 
 			// Every listener is BOUND before "knomit ready" and before any of
-			// them serves, in internal/serve's order (TCP, local socket/pipe,
+			// them serves, in internal/app's listener-set order (TCP, local socket/pipe,
 			// require check, mTLS), each step undoing all before it. A taken
 			// port or a failed TLS/OAuth setup is then an error RunE returns
 			// while nothing is serving yet, and the deferred closes release
 			// whatever was already bound. Open takes the WHOLE config:
 			// listenerFrom-style pairs of arguments are how knomit#245's
 			// mis-wiring went unnoticed.
-			ls, err := serve.Open(serveCtx, serve.Options{
+			ls, err := app.OpenListeners(serveCtx, app.ListenerOptions{
 				Config:     cfg,
 				Handler:    router,
 				Base:       serveCtx,
@@ -293,7 +292,7 @@ func serveCmd() *cobra.Command {
 					log.Warn().Err(err).Str("path", ls.LockPath()).
 						Msg("server.json not written; kb and the desktop will not discover this server by file")
 				} else {
-					return coded(&serve.ConfigError{Err: err})
+					return coded(&app.ListenerConfigError{Err: err})
 				}
 			}
 
@@ -484,7 +483,7 @@ func supervisedExit(supervised bool, err error) error {
 	if !supervised || err == nil {
 		return err
 	}
-	var ce *serve.ConfigError
+	var ce *app.ListenerConfigError
 	switch {
 	case errors.Is(err, auth.ErrSocketInUse):
 		return &ExitCodeError{Code: ExitSupervisedHeld, Err: err}

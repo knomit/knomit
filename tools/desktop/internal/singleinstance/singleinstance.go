@@ -5,7 +5,7 @@ import (
 	"errors"
 	"os"
 
-	"knomit/tools/desktop/internal/lockfile"
+	"knomit/internal/serveraddr"
 )
 
 var ErrAlreadyRunning = errors.New("another knomit-desktop is already running")
@@ -13,13 +13,13 @@ var ErrAlreadyRunning = errors.New("another knomit-desktop is already running")
 // Acquire returns nil if the process should proceed (no lockfile, or the
 // recorded PID is dead). Returns ErrAlreadyRunning if the PID is alive.
 func Acquire(path string) error {
-	info, err := lockfile.Read(path)
+	info, err := serveraddr.ReadLock(path)
 	if err != nil {
 		// No file, or a file we cannot parse: either way no live instance is
 		// recorded, so proceed — bootServer overwrites the lockfile on start. A
 		// genuine I/O error (e.g. permission denied) is a real problem and is
 		// returned to the caller.
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, lockfile.ErrCorrupt) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, serveraddr.ErrLockCorrupt) {
 			return nil
 		}
 		return err

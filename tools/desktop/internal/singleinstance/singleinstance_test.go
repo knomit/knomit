@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/tools/desktop/internal/lockfile"
+	"knomit/internal/serveraddr"
 	"knomit/tools/desktop/internal/singleinstance"
 )
 
@@ -20,7 +20,7 @@ func TestAcquire_NoFile(t *testing.T) {
 func TestAcquire_StalePID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.json")
 	// 99999 is overwhelmingly likely to be dead; bump higher if flaky on exotic systems.
-	must(t, lockfile.Write(path, lockfile.Info{PID: 99999, Port: 10001, Version: "0.1.0"}))
+	must(t, serveraddr.WriteLock(path, serveraddr.LockInfo{PID: 99999, Port: 10001, Version: "0.1.0"}))
 
 	if err := singleinstance.Acquire(path); err != nil {
 		t.Errorf("Acquire(stale) = %v, want nil (stale treated as free)", err)
@@ -43,7 +43,7 @@ func TestAcquire_CorruptFile_ReturnsNil(t *testing.T) {
 
 func TestAcquire_LivePID_ReturnsErrAlreadyRunning(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.json")
-	must(t, lockfile.Write(path, lockfile.Info{PID: os.Getpid(), Port: 10002, Version: "0.1.0"}))
+	must(t, serveraddr.WriteLock(path, serveraddr.LockInfo{PID: os.Getpid(), Port: 10002, Version: "0.1.0"}))
 
 	err := singleinstance.Acquire(path)
 	if !errors.Is(err, singleinstance.ErrAlreadyRunning) {
@@ -58,7 +58,7 @@ func TestAcquire_LivePID_ReturnsErrAlreadyRunning(t *testing.T) {
 // in a file with no schema blocks.
 func TestAcquire_LiveServerFileIsNotAnotherDesktop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.json")
-	must(t, lockfile.Write(path, lockfile.Info{PID: os.Getpid(), Port: 10003, Version: "0.1.0", Schema: 2}))
+	must(t, serveraddr.WriteLock(path, serveraddr.LockInfo{PID: os.Getpid(), Port: 10003, Version: "0.1.0", Schema: 2}))
 	if err := singleinstance.Acquire(path); err != nil {
 		t.Errorf("Acquire(live knomit serve) = %v, want nil", err)
 	}

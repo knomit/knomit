@@ -1,4 +1,4 @@
-package serve
+package app
 
 import (
 	"strings"

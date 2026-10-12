@@ -23,10 +23,10 @@ import (
 	"knomit/internal/app"
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/lockfile"
 	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/crashdump"
+	"knomit/internal/serveraddr"
 	"knomit/test/testenv"
 )
 
@@ -108,7 +108,7 @@ func startServe(t *testing.T, home string, args ...string) *serveHarness {
 
 // waitServing blocks until server.json exists (written last, after every
 // listener) and returns what it says.
-func (h *serveHarness) waitServing() lockfile.Info {
+func (h *serveHarness) waitServing() serveraddr.LockInfo {
 	h.t.Helper()
 	deadline := time.Now().Add(40 * time.Second)
 	for time.Now().Before(deadline) {
@@ -117,13 +117,13 @@ func (h *serveHarness) waitServing() lockfile.Info {
 			h.t.Fatalf("serve returned before it was serving: %v", h.err)
 		default:
 		}
-		if info, err := lockfile.Read(h.lock); err == nil {
+		if info, err := serveraddr.ReadLock(h.lock); err == nil {
 			return info
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	h.t.Fatal("serve never wrote server.json")
-	return lockfile.Info{}
+	return serveraddr.LockInfo{}
 }
 
 func (h *serveHarness) wait(d time.Duration) error {
@@ -154,7 +154,7 @@ func TestServeSupervised_StdinEOFStopsCleanly(t *testing.T) {
 	home := isolateServe(t)
 	h := startServe(t, home, "--supervised")
 	info := h.waitServing()
-	if info.PID != os.Getpid() || info.Schema != lockfile.SchemaV2 {
+	if info.PID != os.Getpid() || info.Schema != serveraddr.LockSchemaV2 {
 		t.Fatalf("server.json = %+v", info)
 	}
 	start := time.Now()
@@ -413,20 +413,20 @@ func TestServe_AdvertiseIsAfterEveryOtherListener(t *testing.T) {
 				pos[fn.Name] = call.Pos()
 			}
 		case *ast.SelectorExpr:
-			if fn.Sel.Name == "Advertise" || fn.Sel.Name == "Open" {
+			if fn.Sel.Name == "Advertise" || fn.Sel.Name == "OpenListeners" {
 				pos[fn.Sel.Name] = call.Pos()
 			}
 		}
 		return true
 	})
-	for _, name := range []string{"Open", "openOAuthServer", "openDiagServer", "Advertise"} {
+	for _, name := range []string{"OpenListeners", "openOAuthServer", "openDiagServer", "Advertise"} {
 		if !pos[name].IsValid() {
 			t.Fatalf("serve.go has no call to %s (positive control: the pin must find all four)", name)
 		}
 	}
-	if !(pos["Open"] < pos["openOAuthServer"] && pos["openOAuthServer"] < pos["Advertise"] && pos["openDiagServer"] < pos["Advertise"]) {
+	if !(pos["OpenListeners"] < pos["openOAuthServer"] && pos["openOAuthServer"] < pos["Advertise"] && pos["openDiagServer"] < pos["Advertise"]) {
 		t.Fatalf("order in serve.go is wrong: Open=%v oauth=%v diag=%v Advertise=%v; Advertise must be last",
-			pos["Open"], pos["openOAuthServer"], pos["openDiagServer"], pos["Advertise"])
+			pos["OpenListeners"], pos["openOAuthServer"], pos["openDiagServer"], pos["Advertise"])
 	}
 }
 

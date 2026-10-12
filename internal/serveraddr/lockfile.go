@@ -1,11 +1,11 @@
-// Package lockfile reads and writes the knomit server discovery file
-// (server.json): what a running server tells the processes that look for it
-// (kb, hooks, the desktop) about itself.
+// The server discovery file (server.json): what a running server tells the
+// processes that look for it (kb, hooks, the desktop) about itself -- its own
+// address, so it lives beside the one spelling of that address.
 //
 // WHICH file is a question for internal/config (LockfilePath, LockfilePathFor):
 // the default home's file lives in the per-user state directory, any other
 // home's lives in that home, so two homes cannot overwrite each other's.
-package lockfile
+package serveraddr
 
 import (
 	"encoding/json"
@@ -15,16 +15,16 @@ import (
 	"path/filepath"
 )
 
-// ErrCorrupt wraps a lockfile that exists but cannot be parsed. Callers
+// ErrLockCorrupt wraps a lockfile that exists but cannot be parsed. Callers
 // distinguish it from a genuine I/O error (e.g. permission denied): a corrupt
 // lockfile records no usable instance and is safe to overwrite, whereas an I/O
 // error is a real problem the caller should surface.
-var ErrCorrupt = errors.New("corrupt lockfile")
+var ErrLockCorrupt = errors.New("corrupt lockfile")
 
-// SchemaV2 is Info.Schema of a file written by `knomit serve`.
-const SchemaV2 = 2
+// LockSchemaV2 is LockInfo.Schema of a file written by `knomit serve`.
+const LockSchemaV2 = 2
 
-// Info is the file's content. Schema 1 was {pid, port, version} and its
+// LockInfo is the file's content. Schema 1 was {pid, port, version} and its
 // readers (older kb builds) still work on a schema 2 file: Port keeps its
 // meaning and is 0 when the server has no TCP listener, which they read as
 // "use the default address", i.e. the local socket first.
@@ -34,12 +34,12 @@ const SchemaV2 = 2
 // None of them names the socket kb dials: kb derives that itself from
 // KNOMIT_HOME (config.SocketPath), because a file that can be shared between
 // homes must not decide which instance a client talks to.
-type Info struct {
+type LockInfo struct {
 	PID     int    `json:"pid"`
 	Port    int    `json:"port"` // plaintext TCP port; 0 = the server has no TCP listener
 	Version string `json:"version"`
 
-	Schema int    `json:"schema,omitempty"` // SchemaV2 for files written by `knomit serve`
+	Schema int    `json:"schema,omitempty"` // LockSchemaV2 for files written by `knomit serve`
 	Home   string `json:"home,omitempty"`   // the data root this server serves
 	// HTTP is the plaintext listener's full base URL ("http://127.0.0.1:19278"),
 	// "" when the server runs with http = false. Always written, so an off
@@ -56,9 +56,9 @@ type Info struct {
 	Generation int `json:"generation,omitempty"`
 }
 
-// Write serializes info to path atomically (write-then-rename) with 0600 perms.
+// WriteLock serializes info to path atomically (write-then-rename) with 0600 perms.
 // Creates parent directories as needed.
-func Write(path string, info Info) error {
+func WriteLock(path string, info LockInfo) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 	}
@@ -94,36 +94,36 @@ func Write(path string, info Info) error {
 	return nil
 }
 
-// Read returns the Info recorded in the lockfile at path.
+// ReadLock returns the LockInfo recorded in the lockfile at path.
 // If the file does not exist, returns an error wrapping os.ErrNotExist.
-func Read(path string) (Info, error) {
-	var info Info
+func ReadLock(path string) (LockInfo, error) {
+	var info LockInfo
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return info, err
 	}
 	if err := json.Unmarshal(data, &info); err != nil {
-		return info, fmt.Errorf("%w: parse %s: %v", ErrCorrupt, path, err)
+		return info, fmt.Errorf("%w: parse %s: %v", ErrLockCorrupt, path, err)
 	}
 	return info, nil
 }
 
-// Remove deletes the lockfile at path. Missing file is not an error.
-func Remove(path string) error {
+// RemoveLock deletes the lockfile at path. Missing file is not an error.
+func RemoveLock(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
 }
 
-// RemoveIfOwner deletes the lockfile at path only when it still records pid.
+// RemoveLockIfOwner deletes the lockfile at path only when it still records pid.
 // A server stopping must not delete the file of a successor (or of a sibling
 // that overwrote it) that has since written its own. A missing or unreadable
 // file is left alone and is not an error.
-func RemoveIfOwner(path string, pid int) error {
-	info, err := Read(path)
+func RemoveLockIfOwner(path string, pid int) error {
+	info, err := ReadLock(path)
 	if err != nil || info.PID != pid {
 		return nil
 	}
-	return Remove(path)
+	return RemoveLock(path)
 }
