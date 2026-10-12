@@ -266,6 +266,23 @@ func (w *LoadedWorld) learn(ctx context.Context, si int, st ScenarioStep, moment
 	for _, id := range st.Retracts {
 		w.RetractedAt[id] = commit
 	}
+	// knomit_learn settles a hypothesis an incoming observation matches by
+	// citing it and retracting it in the same commit (subsumeHypothesis).
+	// The spec must say so (retracts), or the gold would treat a retracted
+	// hypothesis as live.
+	for id, p := range w.Paths {
+		if _, gone := w.RetractedAt[id]; gone {
+			continue
+		}
+		live, err := w.Svc.Search().FactLiveAtCommit(ctx, w.Branch, p, commit)
+		if err != nil {
+			return "", fmt.Errorf("liveness of fact %s: %w", id, err)
+		}
+		if !live {
+			return "", &ScenarioError{World: w.Spec.ID, Where: fmt.Sprintf("history[%d]", si),
+				Reason: fmt.Sprintf("knomit_learn retracted fact %s in this commit (an incoming observation subsumed the hypothesis); list it in this step's retracts if the settlement is intended, or reword so it does not match", id)}
+		}
+	}
 	return commit, nil
 }
 

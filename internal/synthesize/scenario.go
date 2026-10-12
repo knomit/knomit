@@ -10,7 +10,7 @@ package synthesize
 //
 //	format: knomit-scenario/v1        # required, exact
 //	id: kebab-case-world-id           # required, unique across all worlds
-//	families: [F6, F7, F11]           # E04 §2 family ids; the first is primary
+//	families: [F6, F7, F11]           # family ids (E04 §2 and the scenarios repo); first is primary
 //	ontology_shape: code              # free label: code | general | <generated name>
 //	description: one paragraph, for humans; never loaded into the world
 //	ontology: |                       # the world's own .knomit/ontology.yaml, verbatim
@@ -373,7 +373,9 @@ func (s *Scenario) FactByID(id string) *ScenarioFact {
 }
 
 var scenarioIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-var familyRe = regexp.MustCompile(`^F([1-9]|1[0-6])$`)
+// familyRe accepts F1..F99: E04 §2 lists F1-F16, and the expert-scenarios
+// repository extends the list (families/README files are the authority).
+var familyRe = regexp.MustCompile(`^F[1-9][0-9]?$`)
 
 // Check is the static half of validation: everything decidable without a
 // repo. The write path (scenario_load.go) is the other half; a spec that
@@ -394,7 +396,7 @@ func (s *Scenario) Check() error {
 	}
 	for _, f := range s.Families {
 		if !familyRe.MatchString(f) {
-			return bad("families", "%q is not an E04 family id (F1..F16)", f)
+			return bad("families", "%q is not a family id (F1..F99)", f)
 		}
 	}
 	if strings.TrimSpace(s.Ontology) == "" {
@@ -584,7 +586,7 @@ func (s *Scenario) Check() error {
 			return bad(where, "text is required")
 		}
 		if !familyRe.MatchString(q.Family) {
-			return bad(where, "family %q is not F1..F16", q.Family)
+			return bad(where, "family %q is not a family id (F1..F99)", q.Family)
 		}
 		if !OutcomeLabels[q.Outcome] {
 			return bad(where, "outcome %q is not answer, partly or gap", q.Outcome)
