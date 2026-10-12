@@ -33,6 +33,10 @@ interface Props {
    *  Manage) does not steal the keyboard for a ⌘K that was already served. */
   focusRequest?: number;
   onFocusHandled?: () => void;
+  /** A connect commit is in flight: every row refuses (and the list dims),
+   *  because selecting anything would unmount the page the commit reports to.
+   *  The search stays usable — it changes nothing on screen but the list. */
+  locked?: boolean;
 }
 
 // TargetRail is the shell's left column: every repository and lens, one flat
@@ -47,7 +51,7 @@ interface Props {
 // did. A repo with no store and a lens with a broken mount are listed and
 // explained but disabled; the repository page in Manage is still where they are
 // acted on, as are new repositories, archived ones and creates in flight.
-export function TargetRail({ repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect, focusRequest, onFocusHandled }: Props) {
+export function TargetRail({ repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect, focusRequest, onFocusHandled, locked = false }: Props) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   // A create still working on a listed repo flags its row, as the manage rail
@@ -96,7 +100,7 @@ export function TargetRail({ repos, lenses, context, currentRepo, remoteError, s
         <kbd style={kbd}>⌘K</kbd>
       </label>
 
-      <div style={list}>
+      <div data-testid="rail-list" style={locked ? { ...list, opacity: 0.4 } : list}>
         <div style={sectionHeader}>
           <BookIcon color="#7c9" size={13} />
           <span style={sectionTitle}>Repositories</span>
@@ -118,7 +122,7 @@ export function TargetRail({ repos, lenses, context, currentRepo, remoteError, s
               data-testid={`rail-repo-${r.name}`}
               data-repo-state={r.state ?? 'active'}
               aria-current={selected || undefined}
-              disabled={!available}
+              disabled={!available || locked}
               // A registered repo with no live store is listed but NOT
               // selectable: every request this pick would fire answers 409. It
               // stays visible — vanishing is the failure the server-side
@@ -126,7 +130,7 @@ export function TargetRail({ repos, lenses, context, currentRepo, remoteError, s
               // broken it is.
               title={available ? undefined : r.detail || `This repository has no store (${r.state}).`}
               onMouseDown={noMouseFocus}
-              onClick={available ? () => pick({ kind: 'repo', repo: r.name }) : undefined}
+              onClick={available && !locked ? () => pick({ kind: 'repo', repo: r.name }) : undefined}
               style={row(selected ? 'repo' : null, !available)}
             >
               <span style={{ display: 'inline-flex', flexShrink: 0, opacity: available ? 1 : 0.4 }}>
@@ -178,10 +182,10 @@ export function TargetRail({ repos, lenses, context, currentRepo, remoteError, s
               type="button"
               data-testid={`rail-lens-${l.name}`}
               aria-current={selected || undefined}
-              disabled={!available}
+              disabled={!available || locked}
               title={available ? undefined : `This lens cannot be read: its mount "${broken}" has no store.`}
               onMouseDown={noMouseFocus}
-              onClick={available ? () => pick({ kind: 'lens', name: l.name }) : undefined}
+              onClick={available && !locked ? () => pick({ kind: 'lens', name: l.name }) : undefined}
               style={{ ...row(selected ? 'lens' : null, !available), opacity: available ? 1 : 0.55 }}
             >
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: LENS.accent, flexShrink: 0 }} />

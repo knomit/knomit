@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, type RepoInfo, type Lens, type LensReadRef } from './api';
+import { api, repoAvailable, MAX_LENS_DESCRIPTION_BYTES, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { LENS } from './utils';
-import { LayersIcon, PencilIcon } from './icons';
+import { PencilIcon } from './icons';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
-import type { BrowseContext } from './state';
-import { detailHead, headActions, dangerBox, renameInput, browseBtn, writeReadTag, readTag } from './settingsStyles';
+import { dangerBox, renameInput, writeReadTag, readTag } from './settingsStyles';
 import { RepoDot, BranchChip, CheckMark, ConnectBody } from './settingsParts';
 import { useDescriptionEditor, DescriptionActions, DescriptionBody } from './DescriptionEditor';
 
-export function LensSettings({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onRenamed, onBrowse, onError }: {
+export function LensSettings({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onRenamed, onError }: {
   lens?: Lens; name: string; repos: RepoInfo[]; readOnly: boolean;
   onDeleted: () => void; onSaved: () => void;
   // Fired with the NEW name once the server confirms the rename — same
@@ -20,7 +19,7 @@ export function LensSettings({ lens: initial, name, repos, readOnly, onDeleted, 
   // caller, so this is how the parent learns to stop addressing it by the old
   // one.
   onRenamed: (newName: string) => void;
-  onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
+  onError: (m: string) => void;
 }) {
   const [lens, setLens] = useState<Lens | undefined>(initial);
   // Owned here for the same reason as a repo's descEditing: the Note block's
@@ -79,8 +78,6 @@ export function LensSettings({ lens: initial, name, repos, readOnly, onDeleted, 
   // only place that needs that spelling.
   const write = lens?.write.name ?? '';
   const reads = lens?.reads ?? [];
-  // The mount that makes this lens unreadable, or null. See the Browse button.
-  const brokenMount = lens ? brokenLensMember(lens, repos) : null;
   // Name → registry uid for every repo this screen can mount, taken from the
   // same listing the rows are drawn from.
   const uidByName = new Map(repos.filter(r => r.uid).map(r => [r.name, r.uid as string]));
@@ -258,6 +255,68 @@ export function LensSettings({ lens: initial, name, repos, readOnly, onDeleted, 
             A pinned mount reads a fixed branch and never follows that repo's agent branch — the only way a lens shows stale content on purpose.
           </div>
         )}
+        {/* Edit mode expands directly under the mounts it edits, inside their
+            block, so the card you are changing stays in view above the editor.
+            It is pulled into view so its Save/Cancel are never left below the fold. */}
+        {editReads && (
+          <div ref={editRef} style={{ ...card, borderColor: LENS.border }}>
+            <div style={cardLabel}>Edit read mounts</div>
+            {write && (
+              <div style={editRow(true)}>
+                <span style={editCheckbox(true)}><CheckMark color={LENS.text} /></span>
+                <RepoDot repo={write} />
+                <span style={{ fontSize: 13, color: '#eee', minWidth: 76 }}>{write}</span>
+                <span style={writeReadTag}>write · always read</span>
+              </div>
+            )}
+            {repos.filter(r => r.name !== write).map(r => {
+              const on = r.name in editReads;
+              const others = (branchNames[r.name] ?? []).filter(n => n !== agentBranches[r.name]);
+              // A repo with no live store cannot be MOUNTED — the server answers
+              // 422 `repo not found: "<ksuid>"`, naming a uid the reader has
+              // never seen — so its checkbox is disabled while it is off.
+              //
+              // But it is still RENDERED, and still toggleable while it is ON,
+              // and that asymmetry is the whole point. beginEdit seeds editReads
+              // from the lens's current reads by name and save re-sends the WHOLE
+              // set, so filtering a broken repo out of this list would hide the
+              // one row that has to be unchecked: the mount that is breaking the
+              // lens. Every save would then re-send it and 422 forever, with no
+              // control on screen capable of repairing it.
+              const mountable = repoAvailable(r);
+              const toggleable = mountable || on;
+              return (
+                <div key={r.name} style={{ ...editRow(on), opacity: toggleable ? 1 : 0.6 }}>
+                  <button type="button" data-testid={`lens-read-${r.name}`} style={editCheckbox(on)}
+                    disabled={busy || !toggleable}
+                    title={toggleable ? undefined : r.detail || `${r.name} has no store (${r.state}) and cannot be mounted.`}
+                    onClick={() => toggleRead(r.name)} aria-label={r.name} aria-pressed={on}>
+                    {on && <CheckMark color={LENS.text} />}
+                  </button>
+                  <RepoDot repo={r.name} />
+                  <span style={{ fontSize: 13, color: on ? '#eee' : '#aaa', minWidth: 76 }}>{r.name}</span>
+                  {!mountable && <RepoStateChip repo={r} />}
+                  {mountable && <RepoIndexChip repo={r} />}
+                  <div style={{ flex: 1 }} />
+                  {on && (
+                    <select data-testid={`lens-branch-${r.name}`}
+                      style={{ background: '#111', border: '1px solid #333', color: '#eee', padding: '5px 7px', borderRadius: 4, fontSize: 12, maxWidth: 200 }}
+                      value={editReads[r.name]} disabled={busy} onChange={e => setBranch(r.name, e.target.value)}>
+                      <option value="">agent branch (default)</option>
+                      {others.map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  )}
+                </div>
+              );
+            })}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button type="button" data-testid="lens-edit-save" style={btn(busy, 'primary')} disabled={busy} onClick={save}>
+                {busy ? 'Saving…' : 'Save mounts'}
+              </button>
+              <button type="button" data-testid="lens-edit-cancel" style={btn(busy)} disabled={busy} onClick={() => setEditReads(null)}>Cancel</button>
+            </div>
+          </div>
+        )}
       </>
     ),
   });
@@ -337,112 +396,11 @@ export function LensSettings({ lens: initial, name, repos, readOnly, onDeleted, 
     ),
   });
 
-  return (
-    <div>
-      <div style={detailHead}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <span style={lensIconBox}><LayersIcon color={LENS.accent} size={16} /></span>
-          <div style={{ minWidth: 0 }}>
-            <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
-            <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
-              lens settings · {reads.length} mount{reads.length === 1 ? '' : 's'} · writes to {write || '…'}
-            </div>
-          </div>
-        </div>
-        {/* Same header grammar as RepoSettings: Browse alone. Delete moved to the
-            Danger zone block, which is the last thing the ⋯ menu held. */}
-        <div style={headActions}>
-          {/* A lens binds all of its members or none, so one mount without a
-              live store makes every read endpoint under the lens answer 503.
-              GET /lenses/{lens} still answers 200 for it — this button is the
-              only thing standing between the user and a surface that fails on
-              arrival. It reports which mount, because that is what they have to
-              repair, and the editor below is where they can. */}
-          <button type="button" data-testid="lens-browse" style={browseBtn}
-            disabled={brokenMount !== null}
-            title={brokenMount === null ? undefined : `This lens cannot be read: its mount "${brokenMount}" has no store.`}
-            onClick={() => onBrowse({ kind: 'lens', name })}>
-            <LayersIcon color={LENS.accent} size={13} /> Browse
-          </button>
-        </div>
-      </div>
-
-      {/* Edit mode expands directly under the mounts it edits, so the card you
-          are changing stays in view above the editor. It is pulled into view so
-          its Save/Cancel are never left below the fold. */}
-      {editReads && (
-        <div ref={editRef} style={{ ...card, borderColor: LENS.border }}>
-          <div style={cardLabel}>Edit read mounts</div>
-          {write && (
-            <div style={editRow(true)}>
-              <span style={editCheckbox(true)}><CheckMark color={LENS.text} /></span>
-              <RepoDot repo={write} />
-              <span style={{ fontSize: 13, color: '#eee', minWidth: 76 }}>{write}</span>
-              <span style={writeReadTag}>write · always read</span>
-            </div>
-          )}
-          {repos.filter(r => r.name !== write).map(r => {
-            const on = r.name in editReads;
-            const others = (branchNames[r.name] ?? []).filter(n => n !== agentBranches[r.name]);
-            // A repo with no live store cannot be MOUNTED — the server answers
-            // 422 `repo not found: "<ksuid>"`, naming a uid the reader has
-            // never seen — so its checkbox is disabled while it is off.
-            //
-            // But it is still RENDERED, and still toggleable while it is ON,
-            // and that asymmetry is the whole point. beginEdit seeds editReads
-            // from the lens's current reads by name and save re-sends the WHOLE
-            // set, so filtering a broken repo out of this list would hide the
-            // one row that has to be unchecked: the mount that is breaking the
-            // lens. Every save would then re-send it and 422 forever, with no
-            // control on screen capable of repairing it.
-            const mountable = repoAvailable(r);
-            const toggleable = mountable || on;
-            return (
-              <div key={r.name} style={{ ...editRow(on), opacity: toggleable ? 1 : 0.6 }}>
-                <button type="button" data-testid={`lens-read-${r.name}`} style={editCheckbox(on)}
-                  disabled={busy || !toggleable}
-                  title={toggleable ? undefined : r.detail || `${r.name} has no store (${r.state}) and cannot be mounted.`}
-                  onClick={() => toggleRead(r.name)} aria-label={r.name} aria-pressed={on}>
-                  {on && <CheckMark color={LENS.text} />}
-                </button>
-                <RepoDot repo={r.name} />
-                <span style={{ fontSize: 13, color: on ? '#eee' : '#aaa', minWidth: 76 }}>{r.name}</span>
-                {!mountable && <RepoStateChip repo={r} />}
-                {mountable && <RepoIndexChip repo={r} />}
-                <div style={{ flex: 1 }} />
-                {on && (
-                  <select data-testid={`lens-branch-${r.name}`}
-                    style={{ background: '#111', border: '1px solid #333', color: '#eee', padding: '5px 7px', borderRadius: 4, fontSize: 12, maxWidth: 200 }}
-                    value={editReads[r.name]} disabled={busy} onChange={e => setBranch(r.name, e.target.value)}>
-                    <option value="">agent branch (default)</option>
-                    {others.map(n => <option key={n} value={n}>{n}</option>)}
-                  </select>
-                )}
-              </div>
-            );
-          })}
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <button type="button" data-testid="lens-edit-save" style={btn(busy, 'primary')} disabled={busy} onClick={save}>
-              {busy ? 'Saving…' : 'Save mounts'}
-            </button>
-            <button type="button" data-testid="lens-edit-cancel" style={btn(busy)} disabled={busy} onClick={() => setEditReads(null)}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      <SettingsPage sections={sections} testid="lens-settings" />
-    </div>
-  );
+  return <SettingsPage kind="lens" sections={sections} testid="lens-settings" />;
 }
 
 const mountOrdinal: React.CSSProperties = {
   width: 12, flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#4a4a4a',
-};
-
-const lensIconBox: React.CSSProperties = {
-  width: 30, height: 30, borderRadius: 7, flexShrink: 0,
-  background: LENS.bg, border: '1px solid ' + LENS.border,
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
 
 // editRow / editCheckbox mirror CreateLensForm's row/checkbox (LENS tokens).

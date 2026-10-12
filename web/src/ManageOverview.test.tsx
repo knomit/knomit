@@ -298,7 +298,7 @@ describe('Mounted in', () => {
 
     // Clicking a lens opens the LENS, not the repo — you clicked the lens.
     fireEvent.click(within(block).getByTestId('repo-mounted-open-writes-core'));
-    await waitFor(() => expect(screen.getByTestId('lens-browse')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('lens-settings')).toBeInTheDocument());
   });
 
   it('has no block when no lens references the repo', async () => {

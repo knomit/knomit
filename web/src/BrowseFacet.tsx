@@ -1,7 +1,6 @@
 import type { Dispatch, MouseEvent as ReactMouseEvent } from 'react';
 import type { AppState, Action } from './state';
 import { isLive, isLensContext } from './state';
-import type { RepoCreateStatus } from './api';
 import type { NavRequest } from './useNavigationManager';
 import type { useTimeTravel } from './useTimeTravel';
 import type { FactEdges } from './useFactEdges';
@@ -13,6 +12,7 @@ import { MountsPicker } from './MountsPicker';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
+import { FacetSplitter } from './FacetColumns';
 
 interface Props {
   state: AppState;
@@ -21,8 +21,6 @@ interface Props {
   tt: ReturnType<typeof useTimeTravel>;
   edges: FactEdges;
   repoNames: Record<string, string>;
-  /** The create still working on the browsed repo, if any. */
-  repoCreate?: RepoCreateStatus;
   leftPanelWidth: number;
   libraryNarrow: boolean;
   onSplitterDown: (e: ReactMouseEvent) => void;
@@ -37,10 +35,23 @@ interface Props {
 // bar: they act on the data being read, so they belong to the page that reads
 // it and not to the chrome every page shares.
 export function BrowseFacet({
-  state, dispatch, navigate, tt, edges, repoNames, repoCreate,
+  state, dispatch, navigate, tt, edges, repoNames,
   leftPanelWidth, libraryNarrow, onSplitterDown, onJumpTrail, onEnterBranch,
 }: Props) {
   const live = isLive(state);
+  // A context switch clears the branch until the new target's status lands.
+  // The shell stays up (the BootScreen is the first boot's only), so this page
+  // stands in for itself — and mounts NO panel: every panel reads under the
+  // branch, and one mounted with an empty branch would ask for a route that
+  // 404s.
+  if (!state.branch) {
+    const name = state.context.kind === 'lens' ? state.context.name : state.context.repo;
+    return (
+      <div data-testid="browse-opening" style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#777', fontSize: 13 }}>
+        Opening {name}…
+      </div>
+    );
+  }
   return (
     <div data-testid="browse-facet" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* The experiment band. Its presence is keyed on state.experiment — the
@@ -57,37 +68,10 @@ export function BrowseFacet({
           />
         </ErrorBoundary>
       )}
-      {/* THE CREATE BANNER REPLACES THE INDEX BANNER, it does not stack with
-          it. While a job is still working on this repo, "Indexing…" is a true
-          statement about a detail and a misleading one about the whole: the
-          repository is not finished being made, and if the create is being
-          cancelled it is on its way out. Reporting the index instead is how a
-          reader ended up watching a progress bar for a repository that was
-          being deleted underneath them. */}
-      {repoCreate && (
-        <div data-testid="repo-create-banner"
-          data-create-state={repoCreate.state}
-          style={{
-            background: repoCreate.state === 'cancelling' ? '#2a200e' : '#1c2b1c',
-            color: repoCreate.state === 'cancelling' ? '#f5c47a' : '#9c9',
-            fontSize: 12, padding: '4px 14px',
-            borderBottom: '1px solid ' + (repoCreate.state === 'cancelling' ? '#a36a18' : '#2a3a2a'),
-            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-          {repoCreate.state === 'cancelling' ? (
-            <>
-              <span>⟳ Cancelling…</span>
-              <span style={{ color: '#a08a54' }}>this repository is being removed</span>
-            </>
-          ) : (
-            <>
-              <span>⟳ Creating…</span>
-              <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>
-            </>
-          )}
-        </div>
-      )}
-      {!repoCreate && state.indexState === 'indexing' && (
+      {/* No create banner: a repo whose create is still running has only the
+          Settings facet (facetsFor), where the create block reports it, so
+          Browse is never on screen for one. */}
+      {state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
           <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>
@@ -129,22 +113,9 @@ export function BrowseFacet({
             <LeftPanel state={state} dispatch={dispatch} navigate={navigate} onScrub={tt.scrub} onOpenFileAt={tt.openFileAt} onReturnToLive={tt.returnToNow} narrow={libraryNarrow} />
           </ErrorBoundary>
         </div>
-        {/* Drag handle. 4px visible separator + 8px hit zone via negative
-            margins on either side so the cursor target is easier to grab
-            than the visible line. */}
-        <div
-          data-testid="library-splitter"
-          onMouseDown={onSplitterDown}
-          title="Drag to resize"
-          style={{
-            width: 4, marginLeft: -2, marginRight: -2,
-            cursor: 'ew-resize', flexShrink: 0, zIndex: 1,
-            background: 'transparent',
-            borderLeft: '1px solid #222',
-          }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(136,170,255,0.15)'; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-        />
+        {/* The same splitter every facet column uses, so its rule sits at the
+            same x on Browse and on Settings. */}
+        <FacetSplitter onMouseDown={onSplitterDown} testId="library-splitter" />
         <div style={{ flex: 1, overflow: 'hidden', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           {/* Anchored reads swap the filter input for the trail breadcrumb.
               It stays over the content pane because it describes the hop

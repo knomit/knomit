@@ -481,6 +481,14 @@ function applyAction(s: AppState, a: Action): AppState {
       if (a.context.kind === 'repo') {
         // Repo context: repo/branch are authoritative. Clearing branch/headCommit
         // re-triggers the status bootstrap. lens state is not applicable.
+        //
+        // EXCEPT when the repo does not change — leaving a lens for its own
+        // write repo (the remote banner's Reconnect, a rail pick). App's status
+        // bootstrap is keyed on the repo NAME, so it would not re-run, and a
+        // cleared branch would strand Browse on its "Opening…" placeholder
+        // with the head poll and the event stream stopped. The branch the lens
+        // context holds is that repo's own, so it is kept.
+        if (a.context.repo === s.repo) return { ...base, repo: s.repo, lens: null, lensSources: null };
         return { ...base, repo: a.context.repo, headCommit: '', branch: '', lens: null, lensSources: null };
       }
       // Lens context: the write mount isn't known until SET_LENS resolves the

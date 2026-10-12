@@ -1,22 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { api, isTerminalCreateState, RepoIndexingError, MAX_REPO_DESCRIPTION_BYTES, MAX_ARCHIVE_NOTE_BYTES, type Lens, type RepoCreateStatus } from './api';
-import { createFlag } from './useRepoCreates';
 import { CreateProgress } from './CreateProgress';
 import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
-import { LENS, repoHue } from './utils';
-import { BookIcon, LayersIcon } from './icons';
+import { LENS } from './utils';
+import { LayersIcon } from './icons';
 import { btn, card, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { ExperimentsPanel } from './ExperimentsPanel';
 import { PushedBranchesPanel } from './PushedBranchesPanel';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
-import type { BrowseContext } from './state';
-import { detailHead, headActions, dangerBox, renameInput, browseBtn, repoIconBox, writeReadTag, readTag } from './settingsStyles';
+import { RemoteConnectWizard } from './RemoteConnectWizard';
+import { dangerBox, renameInput, writeReadTag, readTag } from './settingsStyles';
 import { RepoDot, BranchChip, ConnectBody } from './settingsParts';
 import { useDescriptionEditor, DescriptionActions, DescriptionBody } from './DescriptionEditor';
 
-export function RepoSettings({ name, lenses, focus, canArchive, serverReadOnly, hideRemoteConfig, createJob, onCancelCreate, onArchived, onConnect, onChanged, onRenamed, onBrowse, onEnterBranch, currentBranch, onSelectLens, onError }: {
+export function RepoSettings({ name, lenses, focus, onFocused, canArchive, serverReadOnly, hideRemoteConfig, createJob, onCancelCreate, onArchived, onChanged, onRenamed, onEnterBranch, currentBranch, onSelectLens, onError, onBusyChange }: {
   name: string; canArchive: boolean; hideRemoteConfig: boolean;
   /** The instance accepts no mutations: every control on this page is off. */
   serverReadOnly: boolean;
@@ -27,18 +26,26 @@ export function RepoSettings({ name, lenses, focus, canArchive, serverReadOnly, 
   // Every lens, so the Mounted-in block can be derived rather than fetched —
   // it is the reverse of a lens's read mounts, and the list is already here.
   lenses: Lens[];
-  // Block to scroll to on open, set when arriving from an Overview cell so the
-  // failing remote is in view rather than at the bottom of a page you must hunt.
+  // Block to scroll to on open, set when arriving from the remote banner's
+  // Reconnect so the failing remote is in view rather than at the bottom of a
+  // page you must hunt.
   focus?: string;
-  onArchived: () => void; onConnect: () => void; onChanged: () => void;
+  /** The focus was acted on; a one-shot owner drops it. */
+  onFocused?: () => void;
+  onArchived: () => void; onChanged: () => void;
   // Fired with the NEW name once the server confirms the rename. The pane is
   // keyed on `name` by its caller, so this is how the parent learns to stop
   // addressing it by the old one.
   onRenamed: (newName: string) => void;
-  onBrowse: (ctx: BrowseContext) => void; onSelectLens: (name: string) => void;
+  onSelectLens: (name: string) => void;
   onEnterBranch?: (branch: string) => void;
   currentBranch?: string;
   onError: (m: string) => void;
+  /** Raised while a connect commit is in flight and dropped when it ends (or
+   *  this page unmounts). The commit stream has no abort and no undo, so the
+   *  owner must keep every way off this page shut while it is up. Called only
+   *  on a change: true when the commit starts, false when it ends. */
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   // '' for an ordinary repo; 'subscribe' means it follows a remote branch
@@ -107,6 +114,26 @@ export function RepoSettings({ name, lenses, focus, canArchive, serverReadOnly, 
   // each state — Connect when there is none, the card when there is, the error
   // when the read failed. RemoteCard is the display half of that same state.
   const remote = useRemote(name, !hideRemoteConfig);
+  // The connect flow is a SUB-FLOW of this page: while it runs it replaces the
+  // whole body, and it hands back to the Remote block when it ends. It lives
+  // here (not in whatever mounts this page) so the Settings facet and Manage
+  // get the same flow from one place.
+  const [connecting, setConnecting] = useState(false);
+  // Where to land when the connect flow hands back: the Remote block, which is
+  // where it was opened from and where its result shows.
+  const [returnFocus, setReturnFocus] = useState<string | undefined>(undefined);
+  // The wizard reports its commit lock here; relayed upward below.
+  const [connectBusy, setConnectBusy] = useState(false);
+  // A LAYOUT effect, like every hop of this relay: a passive one would leave a
+  // window after the commit started in which the owner's exits still answer.
+  // Raised only while busy, and the cleanup drops it — so an unmount mid-commit
+  // (an error boundary resetting) never leaves the owner holding a lock whose
+  // holder is gone.
+  useLayoutEffect(() => {
+    if (!connectBusy) return;
+    onBusyChange?.(true);
+    return () => { onBusyChange?.(false); };
+  }, [connectBusy, onBusyChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,9 +234,8 @@ export function RepoSettings({ name, lenses, focus, canArchive, serverReadOnly, 
     }
   };
 
-  // Blocks, ordered identity → wiring → operations → danger. That ordering is
-  // the rule for where a NEW setting goes, which is what a page with no tabs
-  // needs in place of a nav to reorganise.
+  // Blocks are collected below and then put in SECTION_ORDER (bottom of this
+  // file), which is the one place the page's order is decided.
   const sections: Section[] = [];
 
   // CREATING MODE. The repository exists and is readable, but the job that
@@ -436,7 +462,9 @@ export function RepoSettings({ name, lenses, focus, canArchive, serverReadOnly, 
       // A subscription pulls and never pushes; saying otherwise here is the one
       // place the UI would still claim it writes upstream.
       hint: subscribed ? 'pulls from an origin; never pushes' : 'pull and push against an origin',
-      tail: remote.origin ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: remote.err ? '#f88' : '#7c9', display: 'inline-block' }} /> : undefined,
+      // The failing half of the origin marks the index item, so a rejected
+      // push is visible from the top of the page.
+      problem: remote.origin?.last_status === 'error' || remote.origin?.last_push_status === 'error',
       body: connected ? (
         <>
           {/* agentBranch here means "this machine's agent branch", which drives
@@ -446,7 +474,7 @@ export function RepoSettings({ name, lenses, focus, canArchive, serverReadOnly, 
               so passing it through would claim the repo is push-only when it is
               exactly the opposite. */}
           <RemoteCard repo={name} agentBranch={subscribed ? '' : agentBranch} readOnly={serverReadOnly} lockOrigin={subscribed || modeUnknown}
-            state={remote} onConnect={onConnect} onDisconnect={() => setConfirming('disconnect')}
+            state={remote} onConnect={() => setConnecting(true)} onDisconnect={() => setConfirming('disconnect')}
             onChanged={onChanged} />
           {confirming === 'disconnect' && (
             <div style={confirmBox}>
@@ -472,7 +500,7 @@ export function RepoSettings({ name, lenses, focus, canArchive, serverReadOnly, 
           {/* The block is headed "Remote" and the line beside it says "Not
               connected", so the object needs no third naming. The ellipsis
               stays: this opens the wizard, it does not connect anything. */}
-          <button type="button" data-testid="remote-connect" style={btn(serverReadOnly)} disabled={serverReadOnly} onClick={onConnect}>
+          <button type="button" data-testid="remote-connect" style={btn(serverReadOnly)} disabled={serverReadOnly} onClick={() => setConnecting(true)}>
             Connect…
           </button>
         </div>
@@ -638,36 +666,45 @@ export function RepoSettings({ name, lenses, focus, canArchive, serverReadOnly, 
     ),
   });
 
-  return (
-    <div>
-      <div style={detailHead}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <span style={repoIconBox(name)}><BookIcon color={repoHue(name)} size={16} /></span>
-          <div style={{ minWidth: 0 }}>
-            <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
-            {/* The flag goes exactly where the subtitle goes — the only
-                difference between this header and an ordinary repository's. */}
-            <div data-testid="repo-detail-subtitle" style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
-              {creating && createJob ? createFlag(createJob.state) : 'repository settings'}
-            </div>
-          </div>
-        </div>
-        {/* Browse is the only action left in the header, and the only place the
-            word appears in the whole mode: it leaves Manage AND switches the app
-            to this repo, which is what separates it from the top bar's step-out.
-            The ⋯ menu is gone — each of its items now sits in the block that
-            owns it (Rebuild → Index, Archive → Danger zone, Connect → Remote). */}
-        <div style={headActions}>
-          <button type="button" data-testid="repo-browse" style={browseBtn} onClick={() => onBrowse({ kind: 'repo', repo: name })}>
-            <BookIcon color={repoHue(name)} size={13} /> Browse
-          </button>
-        </div>
-      </div>
+  sections.sort((a, b) => SECTION_ORDER.indexOf(a.id) - SECTION_ORDER.indexOf(b.id));
 
-      <SettingsPage sections={sections} focus={focus} testid="repo-settings" />
-    </div>
+  if (connecting) {
+    const back = () => { setConnecting(false); setReturnFocus('remote'); };
+    return (
+      <div data-testid="repo-connect-flow" style={connectFlow}>
+        <RemoteConnectWizard
+          repo={name}
+          onCancel={back}
+          onDone={() => { back(); remote.reload(); onChanged(); }}
+          // The raw setter, not a closure: the wizard relays from an effect
+          // keyed on this identity.
+          onBusyChange={setConnectBusy}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <SettingsPage kind="repo" sections={sections} focus={returnFocus ?? focus}
+      onFocused={returnFocus ? () => setReturnFocus(undefined) : onFocused} testid="repo-settings" />
   );
 }
+
+// The page's order, from the spec: what the repository is (description), how
+// it is wired (remote, licence, branches), what operates on it (index), who
+// reads it (mounted in, agent access), then the danger zone. In creating mode
+// the create block leads, because it is why the page looks the way it does.
+// A NEW block goes where this list says, not where its push happens to be.
+const SECTION_ORDER = [
+  'create', 'description', 'remote', 'license', 'agent-branch', 'experiments',
+  'pushed-branches', 'index', 'mounted-in', 'agent-access', 'danger',
+];
+
+// The connect flow fills the facet body and scrolls inside it.
+const connectFlow: React.CSSProperties = {
+  flex: '1 1 0', minHeight: 0, height: '100%', overflowY: 'auto', padding: '8px 32px 48px',
+  boxSizing: 'border-box',
+};
 
 // licenseText renders LICENSE preformatted, not as markdown — a licence's
 // single newlines are meaningful, and a markdown renderer reflows them away.

@@ -568,14 +568,34 @@ describe('App — remote-error banner lifecycle', () => {
     expect(screen.queryByTestId('remote-error-banner')).toBeNull();
   });
 
-  it('Reconnect… clears the banner and switches to Manage', async () => {
+  it('Reconnect… clears the banner and lands on the repo\'s Settings', async () => {
     const es = await mountApp();
     act(() => { es.emit('sync_error', { error: 'auth failed' }); });
 
     await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
 
-    expect(screen.getByTestId('manage-surface')).toBeTruthy(); // the mode is up
+    expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByTestId('repo-settings')).toBeTruthy();
+    expect(screen.queryByTestId('manage-surface')).toBeNull();
     expect(screen.queryByTestId('remote-error-banner')).toBeNull();
+  });
+
+  it('re-reads the stored status when the Settings facet is left', async () => {
+    const api = await apiMock();
+    api.getOrigin.mockResolvedValue(ORIGIN_FAILING);
+    await mountApp();
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeTruthy());
+
+    // Open Settings by its tab (the banner stays up), "fix" the remote there,
+    // leave by the Browse tab: the banner must reflect the repaired connection
+    // without waiting for a reconcile tick.
+    await act(async () => { fireEvent.click(screen.getByTestId('facet-tab-settings')); });
+    await screen.findByTestId('repo-settings');
+    expect(screen.queryByTestId('remote-error-banner')).toBeTruthy();
+    api.getOrigin.mockResolvedValue(ORIGIN_OK);
+    await act(async () => { fireEvent.click(screen.getByTestId('facet-tab-browse')); });
+
+    await waitFor(() => expect(screen.queryByTestId('remote-error-banner')).toBeNull());
   });
 
   it('re-reads the stored status when Manage is left', async () => {
@@ -587,7 +607,9 @@ describe('App — remote-error banner lifecycle', () => {
     // Enter Manage, "fix" the remote there, leave: the banner must reflect the
     // repaired connection without waiting for a reconcile tick. The way out is
     // the same top-bar control that got you in.
-    await act(async () => { fireEvent.click(screen.getByTestId('remote-error-reconnect')); });
+    await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
+    await screen.findByTestId('manage-surface');
+    expect(screen.queryByTestId('remote-error-banner')).toBeTruthy();
     api.getOrigin.mockResolvedValue(ORIGIN_OK);
     await act(async () => { fireEvent.click(screen.getByTestId('toknomitr-manage-btn')); });
 

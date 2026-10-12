@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
+import { useState } from 'react';
 import { RepoManager } from './RepoManager';
+import { RepoSettings } from './RepoSettings';
 import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, RepoIndexingError, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
 
 // `api` and the origin-session streams are stubbed; the module's other exports
@@ -52,6 +54,47 @@ const ARCHIVED_FIXTURE = [
   { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
 ];
 
+const LENSES = [
+  { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] },
+];
+
+// Page mounts RepoSettings DIRECTLY, the way the Settings facet does, with the
+// little wiring every owner gives it: an error line for onError, the pane
+// following a rename to the new name, and archiving gated on the instance.
+// onChanged receives {from, to} on a rename, as the app's refresh expects.
+function Page({ name: initial = 'core', serverReadOnly = false, hideRemoteConfig = false,
+  onChanged, onRenamed, onBusyChange, onSelectLens, focus }: {
+  name?: string; serverReadOnly?: boolean; hideRemoteConfig?: boolean;
+  onChanged?: (renamed?: { from: string; to: string }) => void;
+  onRenamed?: (n: string) => void;
+  onBusyChange?: (busy: boolean) => void;
+  onSelectLens?: (n: string) => void;
+  focus?: string;
+}) {
+  const [name, setName] = useState(initial);
+  const [err, setErr] = useState('');
+  return (
+    <>
+      {err && <div data-testid="page-error">{err}</div>}
+      <RepoSettings
+        key={name}
+        name={name}
+        lenses={LENSES}
+        focus={focus}
+        canArchive={!serverReadOnly}
+        serverReadOnly={serverReadOnly}
+        hideRemoteConfig={hideRemoteConfig}
+        onArchived={() => onChanged?.()}
+        onChanged={() => onChanged?.()}
+        onRenamed={n => { onChanged?.({ from: name, to: n }); onRenamed?.(n); setName(n); }}
+        onSelectLens={onSelectLens ?? (() => {})}
+        onBusyChange={onBusyChange}
+        onError={setErr}
+      />
+    </>
+  );
+}
+
 describe('RepoManager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -71,16 +114,8 @@ describe('RepoManager', () => {
     onBrowse: () => {},
   };
 
-  // Manage lands on Overview — the one screen that answers "which repository
-  // needs something". Tests about a repo's settings PAGE therefore pick it out
-  // of the rail first, which is the same single click a reader makes.
-  async function selectRepo(name = 'core') {
-    fireEvent.click(await screen.findByTestId(`repomgr-item-${name}`));
-  }
-
   it('shows a repo detail pane when one is picked from the rail', async () => {
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     // RepoDetail for core loads its agent branch and its origin.
     await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('core'));
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
@@ -234,8 +269,7 @@ describe('RepoManager', () => {
     });
 
     it('says nothing on the page of a repo that has an ontology', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectRepo('core');
+      render(<Page />);
       await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
       await screen.findByTestId('repo-detail-branch');
       expect(screen.queryByTestId('repo-ontology-error')).toBeNull();
@@ -258,34 +292,25 @@ describe('RepoManager', () => {
   // action that changes it — rather than the block vanishing and the offer
   // hiding in an overflow menu, which is what a boxed pane forced.
   it('says so in the Remote block when unconnected, with Connect on it', async () => {
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
     const block = await screen.findByTestId('block-remote');
     expect(block.textContent).toContain('Not connected');
     expect(within(block).getByTestId('remote-connect')).toBeInTheDocument();
   });
 
-  // The connect flow is a SUB-PAGE of the repo, not a surface of its own. It
-  // used to make RepoManager return early, which took the rail and every other
-  // way out of the pane with it — so these assert on what survives the click,
-  // not just on what appears.
-  describe('the connect sub-page', () => {
-    async function openConnect(name = 'core') {
-      render(<RepoManager {...baseProps} />);
-      await selectRepo(name);
+  // The connect flow is a SUB-FLOW of the repo's page: while it runs it
+  // replaces the whole body, and it hands back to the Remote block. It lives
+  // inside RepoSettings, so the Settings facet and Manage get the same flow.
+  describe('the connect sub-flow', () => {
+    async function openConnect(props: Parameters<typeof Page>[0] = {}) {
+      render(<Page {...props} />);
       fireEvent.click(await within(await screen.findByTestId('block-remote')).findByTestId('remote-connect'));
       return screen.findByTestId('remote-connect-wizard');
     }
 
-    it('keeps the rail, and leaves the repo it belongs to selected', async () => {
+    it('names the repository it belongs to in its crumb', async () => {
       await openConnect();
-      expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
-      expect(screen.getByTestId('repomgr-item-work')).toBeInTheDocument();
-      expect(screen.getByTestId('repomgr-overview')).toBeInTheDocument();
-      // aria-current is not what the rail uses; the lit row is a style. Assert
-      // the thing a reader actually relies on instead: the crumb still names
-      // the repository whose page this is.
       expect(screen.getByTestId('wizard-crumb-back').textContent).toBe('core');
     });
 
@@ -300,24 +325,16 @@ describe('RepoManager', () => {
       await screen.findByTestId('repo-settings');
       expect(screen.queryByTestId('remote-connect-wizard')).not.toBeInTheDocument();
       // focus='remote' is what lands the reader back on the block they left
-      // from; SettingsPage marks the focused block current in its rail.
+      // from; SettingsPage marks the focused block current in its index.
       await waitFor(() => expect(screen.getByTestId('toc-remote')).toHaveAttribute('aria-current', 'true'));
     });
 
-    it('switching repos in the rail leaves the flow', async () => {
-      await openConnect();
-      fireEvent.click(screen.getByTestId('repomgr-item-work'));
-      await screen.findByTestId('repo-settings');
-      expect(screen.queryByTestId('remote-connect-wizard')).not.toBeInTheDocument();
-    });
-
-    // ...but NOT once the commit is in flight. Selecting anything unmounts the
-    // wizard, and the commit stream has no abort and no undo: the swap and
-    // rebuild would run on with nothing left listening, and the next session
-    // the user starts deletes the temp dir it is still reading from. The wizard
-    // withholds its own crumb; the rail is the other exit and this pane's to
-    // withhold.
-    it('the rail refuses to leave while the commit is in flight', async () => {
+    // The commit stream has no abort and no undo: unmounting the wizard mid-
+    // commit leaves the swap and rebuild running with nothing listening. The
+    // wizard withholds its own crumb; every OTHER exit belongs to whoever
+    // mounts this page, so the page raises onBusyChange for exactly the span
+    // of the commit — and only on a change, so the owner sees [true, false].
+    it('raises onBusyChange(true) while the commit is in flight and false after', async () => {
       type Fn = ReturnType<typeof vi.fn>;
       (createSession as unknown as Fn).mockResolvedValueOnce({ session_id: 'sess-lock' });
       (streamTest as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
@@ -331,23 +348,21 @@ describe('RepoManager', () => {
       (streamApply as unknown as Fn).mockImplementation(async (_r: string, _s: string, _st: string, _b: string | undefined, onEvent: (e: unknown) => void) => {
         onEvent({ phase: 'done', result: { total_facts: 0, from_local: 0, from_remote: 0, overwrites: 0 } });
       });
-      // Never resolves — the commit is in flight for the rest of the test.
-      (streamCommit as unknown as Fn).mockImplementation(() => new Promise(() => {}));
 
-      await openConnect();
+      let finish!: () => void;
+      (streamCommit as unknown as Fn).mockImplementation(() => new Promise<void>((_res, rej) => { finish = () => rej(new Error('commit failed')); }));
+      const calls: boolean[] = [];
+      await openConnect({ onBusyChange: b => calls.push(b) });
+      expect(calls).toEqual([]);
       fireEvent.change(screen.getByTestId('wizard-url'), { target: { value: 'https://example.com/repo.git' } });
       fireEvent.click(screen.getByTestId('wizard-test'));
       fireEvent.click(await screen.findByTestId('wizard-connect'));
 
-      await waitFor(() => expect(screen.getByTestId('repomgr-item-work')).toBeDisabled());
-      expect(screen.getByTestId('repomgr-overview')).toBeDisabled();
-      expect(screen.getByTestId('repomgr-archived')).toBeDisabled();
-      expect(screen.getByTestId('repomgr-new')).toBeDisabled();
-      expect(screen.getByTestId('repomgr-new-lens')).toBeDisabled();
-      expect(screen.getByTestId('repomgr-lens-dev')).toBeDisabled();
-
-      // The rail is not merely styled as held — the click does nothing.
-      fireEvent.click(screen.getByTestId('repomgr-item-work'));
+      await waitFor(() => expect(calls).toEqual([true]));
+      // The commit ends (here by failing, the outcome that keeps the wizard
+      // mounted), and the lock drops exactly once.
+      await act(async () => { finish(); });
+      await waitFor(() => expect(calls).toEqual([true, false]));
       expect(screen.getByTestId('remote-connect-wizard')).toBeInTheDocument();
     });
 
@@ -367,8 +382,7 @@ describe('RepoManager', () => {
       name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
       last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     await waitFor(() => expect(screen.getByTestId('sync-line')).toBeInTheDocument());
     expect(screen.queryByTestId('remote-connect')).not.toBeInTheDocument();
   });
@@ -377,37 +391,75 @@ describe('RepoManager', () => {
   // behind a disclosure to leave room for state; the mode has the room, and a
   // fold is a click on the way to the thing you came for.
   it('renders the agent-access snippets without anything to expand', async () => {
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     expect(await screen.findByTestId('repo-copy')).toBeInTheDocument();
     expect(screen.getByTestId('repo-copy-mcp')).toBeInTheDocument();
     expect(screen.queryByTestId('repo-connect-toggle')).not.toBeInTheDocument();
   });
 
-  // Blocks run identity → wiring → operations → danger, which is also the rule
-  // for where a NEW setting goes on a page that has no tabs to reorganise.
-  it('orders the repo page identity → wiring → operations → danger', async () => {
+  // The order is the spec's: Description, Remote, Licence, Agent branch,
+  // Experiments, Pushed branches, Index, Mounted in, Agent access (kept, plan
+  // assumption 6), Danger zone. Asserted as the FULL id list, so a block that
+  // moves or appears anywhere fails it.
+  it('orders the repo page as the spec lists it', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: 'Root manifest.', license: 'MIT License' });
     (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
       last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     await screen.findByTestId('block-license');
+    await screen.findByTestId('block-pushed-branches');
+    await screen.findByTestId('block-mounted-in');
 
-    const order = ['block-description', 'block-license', 'block-agent-branch', 'block-remote',
-      'block-agent-access', 'block-index', 'block-danger'].map(id => screen.getByTestId(id));
-    for (let i = 1; i < order.length; i++) {
-      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
+    const ids = Array.from(document.querySelectorAll('[data-testid^="block-"]')).map(n => n.id);
+    expect(ids).toEqual(['description', 'remote', 'license', 'agent-branch', 'experiments', 'pushed-branches', 'index', 'mounted-in', 'agent-access', 'danger']);
+    // The index lists them in the same order.
+    const toc = Array.from(document.querySelectorAll('[data-testid^="toc-"]'))
+      .map(n => n.getAttribute('data-testid')!).filter(t => !t.endsWith('-problem')).map(t => t.slice(4));
+    expect(toc).toEqual(ids);
+  });
+
+  it('a failing push marks the Remote index item', async () => {
+    (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+      last_push_status: 'error', last_push_error: 'rejected',
+    });
+    render(<Page />);
+    expect(await screen.findByTestId('toc-remote-problem')).toBeInTheDocument();
+  });
+
+  it('a healthy origin leaves the Remote index item unmarked', async () => {
+    (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+      last_push_status: 'ok', last_push_error: null,
+    });
+    render(<Page />);
+    // The card has loaded (positive control), so the absence is the rule.
+    await screen.findByTestId('sync-line');
+    expect(screen.getByTestId('toc-remote')).toBeInTheDocument();
+    expect(screen.queryByTestId('toc-remote-problem')).toBeNull();
+  });
+
+  it('opens a lens from Mounted in through onSelectLens', async () => {
+    const onSelectLens = vi.fn();
+    render(<Page onSelectLens={onSelectLens} />);
+    fireEvent.click(await screen.findByTestId('repo-mounted-open-dev'));
+    expect(onSelectLens).toHaveBeenCalledWith('dev');
+  });
+
+  it('has no Browse button: the Browse tab replaced it', async () => {
+    render(<Page />);
+    await screen.findByTestId('repo-detail-branch');
+    expect(screen.queryByTestId('repo-browse')).toBeNull();
   });
 
   // Pushed branches (F11 UI merge) sit directly under Experiments on an
   // ordinary repo: both are other branches whose facts can be brought in.
   it('shows the Pushed branches block right after Experiments', async () => {
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     const pushed = await screen.findByTestId('block-pushed-branches');
     const exps = screen.getByTestId('block-experiments');
     expect(exps.compareDocumentPosition(pushed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -417,8 +469,7 @@ describe('RepoManager', () => {
   // page, so it lists them all rather than gating any behind a selection.
   it('lists every block in the contents rail', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: 'Root manifest.' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     await screen.findByTestId('toc-description');
     for (const id of ['description', 'agent-branch', 'remote', 'agent-access', 'index', 'danger']) {
       expect(screen.getByTestId(`toc-${id}`)).toBeInTheDocument();
@@ -436,8 +487,7 @@ describe('RepoManager', () => {
     });
     (api.deleteOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     const onChanged = vi.fn();
-    render(<RepoManager {...baseProps} onChanged={onChanged} />);
-    await selectRepo();
+    render(<Page onChanged={onChanged} />);
 
     const remoteCard = await screen.findByTestId('remote-card');
     fireEvent.click(within(remoteCard).getByTestId('remote-disconnect'));
@@ -459,8 +509,7 @@ describe('RepoManager', () => {
     (api.deleteOrigin as ReturnType<typeof vi.fn>)
       .mockRejectedValueOnce(new RepoIndexingError('wait for it to finish or cancel indexing', '/api/v1/repos/core/index:cancel'))
       .mockResolvedValueOnce(undefined);
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     fireEvent.click(within(await screen.findByTestId('remote-card')).getByTestId('remote-disconnect'));
     fireEvent.click(screen.getByTestId('disconnect-confirm'));
@@ -482,8 +531,7 @@ describe('RepoManager', () => {
   // overwrite a remote that is merely unreadable.
   it('surfaces a failed remote load instead of rendering it as unconnected', async () => {
     (api.getOrigin as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     await waitFor(() => expect(screen.getByTestId('remote-error')).toHaveTextContent(/could not load remote status/i));
     const block = screen.getByTestId('block-remote');
@@ -495,8 +543,7 @@ describe('RepoManager', () => {
   // Sabotage: archive on the first click (no confirm) → no note input → red.
   it('archives a repo with the note from the confirm', async () => {
     vi.mocked(api.archiveRepo).mockResolvedValue({ id: 'uid-core', name: 'core', origin: '', archivedAt: '2026-10-09T00:00:00Z' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     fireEvent.click(await screen.findByTestId('repo-archive'));
     expect(api.archiveRepo).not.toHaveBeenCalled();
     fireEvent.change(screen.getByTestId('repo-archive-note'), { target: { value: 'superseded' } });
@@ -518,8 +565,7 @@ describe('RepoManager', () => {
         last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
       });
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     const retry = await screen.findByTestId('remote-retry');
     failing = false;
@@ -531,8 +577,7 @@ describe('RepoManager', () => {
   // Archive was the ⋯ menu's last item. It now sits in the Danger zone block,
   // fenced off by its own tint rather than by an overflow that had to be opened.
   it('puts Archive in the Danger zone block, not behind an overflow', async () => {
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     const danger = await screen.findByTestId('block-danger');
     expect(within(danger).getByTestId('repo-archive')).toBeInTheDocument();
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
@@ -544,8 +589,7 @@ describe('RepoManager', () => {
   // (agent MCP URLs) instead of borrowing Archive's "this is dangerous" tone.
   describe('Rename', () => {
     it('puts Rename in the Danger zone block, beside Archive', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectRepo();
+      render(<Page />);
       const danger = await screen.findByTestId('block-danger');
       expect(within(danger).getByTestId('repo-rename-submit')).toBeInTheDocument();
     });
@@ -556,16 +600,14 @@ describe('RepoManager', () => {
     // display name, so a query outlives a rename that runs underneath it. It
     // must not read as "agent activity breaks" generally.
     it('warns that MCP endpoint URLs break but in-flight agent queries are unaffected', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectRepo();
+      render(<Page />);
       const warning = await screen.findByTestId('repo-rename-warning');
       expect(warning).toHaveTextContent(/MCP/i);
       expect(warning.textContent).toMatch(/in-flight agent quer(y|ies) (is|are) unaffected/i);
     });
 
     it('keeps Rename disabled until the current name is typed exactly', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectRepo();
+      render(<Page />);
 
       const submit = await screen.findByTestId('repo-rename-submit');
       expect(submit).toBeDisabled();
@@ -584,8 +626,7 @@ describe('RepoManager', () => {
     // change nothing — confusing rather than dangerous, so it is disabled
     // rather than sent.
     it('disables Rename when the new name equals the current name', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectRepo();
+      render(<Page />);
 
       fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'core' } });
       fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
@@ -594,8 +635,7 @@ describe('RepoManager', () => {
 
     it('calls renameRepo with the new name and follows the pane to it', async () => {
       (api.renameRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'beta' });
-      render(<RepoManager {...baseProps} />);
-      await selectRepo();
+      render(<Page />);
 
       fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
       fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
@@ -603,11 +643,11 @@ describe('RepoManager', () => {
 
       await waitFor(() => expect(api.renameRepo).toHaveBeenCalledWith('core', 'beta'));
       // The pane is addressed by name; it must follow the repo to its new one
-      // rather than show a 404 on the next read under the old name. The rail
-      // itself still reads "core"/"work" here — this component gets its repo
-      // LIST from a prop the parent owns and hasn't re-fetched in this test —
-      // but the selected detail pane's own heading must already say "beta".
-      await waitFor(() => expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('beta'));
+      // rather than show a 404 on the next read under the old name. The page
+      // has no heading of its own any more (the top bar's label names the
+      // target), so "follows" is read off the page re-reading under the new
+      // name.
+      await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('beta'));
     });
 
     // The parent learns about the rename too — with BOTH names — so it can
@@ -616,8 +656,7 @@ describe('RepoManager', () => {
     it('reports the rename to the parent as {from, to}, not a bare refresh', async () => {
       (api.renameRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'beta' });
       const onChanged = vi.fn();
-      render(<RepoManager {...baseProps} onChanged={onChanged} />);
-      await selectRepo();
+      render(<Page onChanged={onChanged} />);
 
       fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
       fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
@@ -635,8 +674,7 @@ describe('RepoManager', () => {
       (api.renameRepo as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('/api/v1/repos/core/rename → 409 repo "core" was renamed or removed while this request was in flight; re-read it and retry'),
       );
-      render(<RepoManager {...baseProps} />);
-      await selectRepo();
+      render(<Page />);
 
       fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
       fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
@@ -646,8 +684,7 @@ describe('RepoManager', () => {
     });
 
     it('is disabled entirely on a read-only instance', async () => {
-      render(<RepoManager {...baseProps} serverReadOnly />);
-      await selectRepo();
+      render(<Page serverReadOnly />);
 
       fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
       fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'core' } });
@@ -661,8 +698,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', description: '# Knowledge Base\n\nRoot manifest.',
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(await screen.findByTestId('repo-description')).toHaveTextContent('Root manifest.');
   });
@@ -672,8 +708,7 @@ describe('RepoManager', () => {
       name: 'core',
       description: '# KB\n\n| Topic | Meaning |\n|---|---|\n| invariants | violate this and it breaks |',
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
 
     const desc = await screen.findByTestId('repo-description');
@@ -693,8 +728,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', license: mit,
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
 
     expect((await screen.findByTestId('repo-license')).textContent).toBe(mit);
@@ -705,7 +739,7 @@ describe('RepoManager', () => {
   // way to create one gets no heading for it.
   it('omits the license block when read-only and the repo has no LICENSE', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
-    render(<RepoManager {...baseProps} serverReadOnly />);
+    render(<Page serverReadOnly />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('block-license')).toBeNull();
     expect(screen.queryByTestId('toc-license')).toBeNull();
@@ -715,8 +749,7 @@ describe('RepoManager', () => {
   // empty-but-writable state.
   it('offers to add a LICENSE when there is none', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     expect(await screen.findByText(/No LICENSE at the repo root/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add license/i })).toBeEnabled();
@@ -728,8 +761,7 @@ describe('RepoManager', () => {
   it('saves a new LICENSE through updateRepo', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
     (api.updateRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', license: 'MIT\n' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     fireEvent.click(await screen.findByRole('button', { name: /add license/i }));
     fireEvent.change(screen.getByTestId('license-textarea'), { target: { value: 'MIT' } });
@@ -745,8 +777,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', license: 'MIT License\n\n* not a bullet\nsecond line\n',
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     const pre = await screen.findByTestId('repo-license');
     expect(pre.tagName).toBe('PRE');
@@ -765,8 +796,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', license_oversize: true,
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     expect(await screen.findByTestId('repo-license-oversize')).toHaveTextContent(/too large/i);
     expect(screen.queryByTestId('repo-license')).toBeNull();
@@ -783,8 +813,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', license_oversize: true,
     });
-    render(<RepoManager {...baseProps} serverReadOnly />);
-    await selectRepo();
+    render(<Page serverReadOnly />);
 
     expect(await screen.findByTestId('repo-license-oversize')).toBeInTheDocument();
   });
@@ -793,15 +822,14 @@ describe('RepoManager', () => {
   // written — but only when the user could actually write one.
   it('offers an empty description block when the repo has no README.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(await screen.findByTestId('repo-description')).toHaveTextContent(/No description yet/i);
   });
 
   it('hides the description block entirely when read-only and empty', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
-    render(<RepoManager {...baseProps} serverReadOnly />);
+    render(<Page serverReadOnly />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('block-description')).not.toBeInTheDocument();
   });
@@ -811,8 +839,7 @@ describe('RepoManager', () => {
   // gutter's width down its whole length for a glyph only visible at the top.
   it('puts the description pencil in the block heading, not beside the prose', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     const pencil = await screen.findByTestId('repo-description-edit');
     expect(screen.getByTestId('block-description')).toContainElement(pencil);
@@ -825,8 +852,7 @@ describe('RepoManager', () => {
   // swap for a control of the same height and nothing moves.
   it('puts save and cancel in the block heading, where the pencil was', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
     const save = screen.getByTestId('repo-description-save');
@@ -846,8 +872,7 @@ describe('RepoManager', () => {
   // are there: appearing at 80% of the cap must not shove the page down.
   it('shows the byte counter in the block heading', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
     fireEvent.change(screen.getByTestId('repo-description-input'),
@@ -862,8 +887,7 @@ describe('RepoManager', () => {
   it('edits a repo description and saves it to README.md', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     (api.updateRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# New\n\nBody.' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     // The pencil opens the card AND enters edit mode in one click.
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
@@ -882,8 +906,7 @@ describe('RepoManager', () => {
   it('keeps the editor open and shows the error when a description save fails', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
     (api.updateRepo as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('description too long'));
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
     fireEvent.change(screen.getByTestId('repo-description-input'), { target: { value: 'x' } });
@@ -896,8 +919,7 @@ describe('RepoManager', () => {
 
   it('cancelling a description edit discards the draft', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
 
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
     fireEvent.change(screen.getByTestId('repo-description-input'), { target: { value: 'scratch' } });
@@ -955,8 +977,7 @@ describe('RepoManager', () => {
 
   it('uses the much larger repo cap for a repo description', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     fireEvent.click(await screen.findByTestId('repo-description-edit'));
 
     // Over a lens's cap, nowhere near a repo's: no counter, Save enabled.
@@ -968,8 +989,7 @@ describe('RepoManager', () => {
 
   it('hides the description edit affordance in read-only mode', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
-    render(<RepoManager {...baseProps} serverReadOnly />);
-    await selectRepo();
+    render(<Page serverReadOnly />);
     await screen.findByTestId('repo-description');
     expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
   });
@@ -1003,8 +1023,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', description: 'line\n'.repeat(40),
     });
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     const body = await screen.findByTestId('repo-description');
     expect(screen.queryByTestId('repo-description-toggle')).not.toBeInTheDocument();
     const prose = body.querySelector('.k-prose') as HTMLElement;
@@ -1014,8 +1033,7 @@ describe('RepoManager', () => {
   });
 
   it('rebuild gives immediate feedback and a completion message', async () => {
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     fireEvent.click(await screen.findByTestId('repo-rebuild'));
     await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('core', 'agent/test'));
     // Visible confirmation that the background rebuild kicked off (the bug: none).
@@ -1028,8 +1046,7 @@ describe('RepoManager', () => {
   // into the old "already running" copy.
   it('reports a rebuild error verbatim, without the retired "already running" copy', async () => {
     vi.mocked(api.rebuild).mockRejectedValueOnce(new Error('/api/v1/repos/core/branches/agent:test/index-rebuilds → 409 something else'));
-    render(<RepoManager {...baseProps} />);
-    await selectRepo();
+    render(<Page />);
     fireEvent.click(await screen.findByTestId('repo-rebuild'));
     expect(await screen.findByText(/^rebuild failed: .*409 something else/)).toBeInTheDocument();
     expect(screen.queryByText(/already running/)).not.toBeInTheDocument();
@@ -1037,23 +1054,13 @@ describe('RepoManager', () => {
 
   it('hideRemoteConfig hides the remote block entirely', async () => {
     // First verify the block IS present when hideRemoteConfig is false (non-vacuity check).
-    const { unmount } = render(<RepoManager {...baseProps} hideRemoteConfig={false} />);
-    await selectRepo();
+    const { unmount } = render(<Page hideRemoteConfig={false} />);
     await waitFor(() => expect(screen.getByTestId('block-remote')).toBeInTheDocument());
     unmount();
 
     // Now render with hideRemoteConfig=true and assert the panel is absent.
-    render(
-      <RepoManager
-        open
-        repos={[{ name: 'core', uid: 'uid-core' }]}
-        currentRepo="core"
-        serverReadOnly
-        hideRemoteConfig
-        onChanged={() => {}}
-        onBrowse={() => {}}
-      />,
-    );
+    render(<Page serverReadOnly hideRemoteConfig />);
+    await screen.findByTestId('block-agent-branch');
     // No block, and nothing in the contents rail pointing at one.
     expect(screen.queryByTestId('block-remote')).toBeNull();
     expect(screen.queryByTestId('toc-remote')).toBeNull();
@@ -1072,16 +1079,6 @@ describe('RepoManager — a subscription', () => {
     vi.mocked(api.getAgentBranch).mockResolvedValue('main');
   });
 
-  const subProps = {
-    open: true as const,
-    repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
-    currentRepo: 'core',
-    serverReadOnly: false,
-    hideRemoteConfig: false,
-    onChanged: () => {},
-    onBrowse: () => {},
-  };
-
   // The degenerate-upstream warning means "the consensus branch IS this
   // machine's agent branch, so pulls are disabled". A subscription has no agent
   // branch and is pull-only, so the warning is wrong in both directions — and
@@ -1092,8 +1089,7 @@ describe('RepoManager — a subscription', () => {
       url: 'https://example.com/kb.git', branch: 'main', auth_method: 'none',
     } as unknown as Awaited<ReturnType<typeof api.getOrigin>>);
 
-    render(<RepoManager {...subProps} />);
-    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    render(<Page />);
 
     // The read branch still renders — proving the page loaded and the mode was
     // applied, so the absence below is not an empty render.
@@ -1107,15 +1103,13 @@ describe('RepoManager — a subscription', () => {
 
   // Nothing can be merged into a subscription: it has no agent branch.
   it('has no Pushed branches block', async () => {
-    render(<RepoManager {...subProps} />);
-    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    render(<Page />);
     await waitFor(() => expect(screen.getByTestId('repo-readonly-badge')).toBeInTheDocument());
     expect(screen.queryByTestId('block-pushed-branches')).not.toBeInTheDocument();
   });
 
   it('names the read branch and badges it read-only', async () => {
-    render(<RepoManager {...subProps} />);
-    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    render(<Page />);
 
     const row = await screen.findByTestId('repo-detail-branch');
     await waitFor(() => expect(screen.getByTestId('repo-readonly-badge')).toBeInTheDocument());
@@ -1131,8 +1125,7 @@ describe('RepoManager — a subscription', () => {
     vi.mocked(api.getOrigin).mockResolvedValue({
       url: 'https://example.com/kb.git', branch: 'main', auth_method: 'none',
     } as unknown as Awaited<ReturnType<typeof api.getOrigin>>);
-    render(<RepoManager {...subProps} />);
-    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    render(<Page />);
     await waitFor(() => expect(screen.getByTestId('repo-readonly-badge')).toBeInTheDocument());
 
     expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
@@ -1156,8 +1149,7 @@ describe('RepoManager — a subscription', () => {
         : { name: 'work', description: '' }
     ) as Awaited<ReturnType<typeof api.getRepo>>);
     vi.mocked(api.getAgentBranch).mockResolvedValue('machine/test');
-    render(<RepoManager {...subProps} currentRepo="core" />);
-    fireEvent.click(await screen.findByTestId('repomgr-item-work'));
+    render(<Page name="work" />);
 
     expect(await screen.findByTestId('repo-description-edit')).toBeInTheDocument();
     expect(screen.queryByTestId('repo-readonly-badge')).not.toBeInTheDocument();
@@ -1177,11 +1169,7 @@ describe('RepoManager — mode not yet known', () => {
     vi.mocked(api.getOrigin).mockResolvedValue({
       url: 'https://example.com/kb.git', branch: 'main', auth_method: 'none',
     } as unknown as Awaited<ReturnType<typeof api.getOrigin>>);
-    render(
-      <RepoManager open repos={[{ name: 'core', uid: 'uid-core' }]} currentRepo="core"
-        serverReadOnly={false} hideRemoteConfig={false} onChanged={() => {}} onBrowse={() => {}} />,
-    );
-    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    render(<Page />);
 
     // The origin has loaded — the card is drawn — so the absences below are
     // the mode gate, not an empty page.
@@ -1205,16 +1193,22 @@ describe('RepoManager — mode not yet known', () => {
 describe('RepoManager — a read-only instance', () => {
   it('disables archive, rename and rebuild', async () => {
     vi.mocked(api.getRepo).mockResolvedValue({ name: 'core', description: '' });
-    render(
-      <RepoManager open repos={[{ name: 'core', uid: 'uid-core' }]} currentRepo="core"
-        serverReadOnly hideRemoteConfig={false} onChanged={() => {}} onBrowse={() => {}} />,
-    );
-    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    render(<Page serverReadOnly />);
 
     expect(await screen.findByTestId('repo-archive')).toBeDisabled();
     expect(screen.getByTestId('repo-rename-input')).toBeDisabled();
     expect(screen.getByTestId('repo-rebuild')).toBeDisabled();
     expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
+  });
+
+  // Manage's own instance gates, which the page above does not own.
+  it('hides Logs and disables both + in Manage', async () => {
+    render(
+      <RepoManager open repos={[{ name: 'core', uid: 'uid-core' }]} currentRepo="core"
+        serverReadOnly hideRemoteConfig={false} onChanged={() => {}} onBrowse={() => {}} />,
+    );
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    expect(await screen.findByTestId('repo-archive')).toBeDisabled();
     expect(screen.queryByTestId('repomgr-logs')).not.toBeInTheDocument();
     expect(screen.getByTestId('repomgr-new')).toBeDisabled();
     expect(screen.getByTestId('repomgr-new-lens')).toBeDisabled();

@@ -231,9 +231,9 @@ describe('creates in the repo manager', () => {
     // The REPOSITORY page, not a create page.
     expect(await screen.findByTestId('repo-settings')).toBeInTheDocument();
     expect(screen.queryByTestId('create-watch')).not.toBeInTheDocument();
-    // Flagged where the subtitle goes — the only difference from an ordinary
-    // repository's header.
-    expect(screen.getByTestId('repo-detail-subtitle')).toHaveTextContent('cancelling');
+    // Flagged on its row (the page has no header of its own any more: the
+    // label chip on the top bar takes that job in the facet shell).
+    expect(screen.getByTestId('repomgr-create-chip-core')).toHaveTextContent('cancelling');
 
     // The progress block, with the one action this state allows.
     expect(screen.getByTestId('create-progress')).toBeInTheDocument();
@@ -245,8 +245,8 @@ describe('creates in the repo manager', () => {
     expect(screen.queryAllByText('Danger zone')).toHaveLength(0);
     expect(screen.queryAllByText('Remote')).toHaveLength(0);
     expect(screen.queryByTestId('repo-rebuild')).not.toBeInTheDocument();
-    // SHOWN, read-only: the repo is readable from the index phase on.
-    expect(screen.getByTestId('repo-browse')).toBeInTheDocument();
+    // SHOWN, read-only: what can be read stays.
+    expect(screen.getByTestId('block-agent-branch')).toBeInTheDocument();
   });
 
   it('offers Cancel create on the merged page while the job is running', async () => {
@@ -257,7 +257,7 @@ describe('creates in the repo manager', () => {
     fireEvent.click(await screen.findByTestId('repomgr-item-core'));
     await screen.findByTestId('repo-settings');
 
-    expect(screen.getByTestId('repo-detail-subtitle')).toHaveTextContent('creating');
+    expect(screen.getByTestId('repomgr-create-chip-core')).toHaveTextContent('creating');
     const cancel = screen.getByTestId('create-cancel-button');
     expect(cancel).toBeEnabled();
     expect(cancel).toHaveTextContent('Cancel create');
@@ -282,7 +282,7 @@ describe('creates in the repo manager', () => {
     ]);
     await waitFor(() => expect(screen.queryByTestId('create-progress')).not.toBeInTheDocument(), { timeout: 5000 });
     expect(screen.getByTestId('repo-settings')).toBeInTheDocument();
-    expect(screen.getByTestId('repo-detail-subtitle')).toHaveTextContent('repository settings');
+    expect(screen.queryByTestId('block-create')).not.toBeInTheDocument();
     expect(screen.queryAllByText('Danger zone').length).toBeGreaterThan(0);
     expect(screen.getByTestId('repo-rebuild')).toBeInTheDocument();
   });

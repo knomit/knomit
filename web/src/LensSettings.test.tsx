@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { useState } from 'react';
 import { RepoManager } from './RepoManager';
+import { LensSettings } from './LensSettings';
+import type { Lens, RepoInfo } from './api';
 import { api } from './api';
 
 // `api` and the origin-session streams are stubbed; the module's other exports
@@ -52,6 +55,28 @@ const ARCHIVED_FIXTURE = [
   { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
 ];
 
+const DEV: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] };
+
+// LensPage mounts LensSettings DIRECTLY, as the Settings facet does: an error
+// line for onError, the pane following a rename, onChanged for every mutation
+// ({from, to} on a rename, which is what the app's refresh takes).
+function LensPage({ repos = [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }], serverReadOnly = false, onChanged }: {
+  repos?: RepoInfo[]; serverReadOnly?: boolean;
+  onChanged?: (renamed?: { from: string; to: string }) => void;
+}) {
+  const [name, setName] = useState('dev');
+  const [err, setErr] = useState('');
+  return (
+    <>
+      {err && <div data-testid="page-error">{err}</div>}
+      <LensSettings key={name} lens={name === 'dev' ? DEV : undefined} name={name} repos={repos} readOnly={serverReadOnly}
+        onDeleted={() => onChanged?.()} onSaved={() => onChanged?.()}
+        onRenamed={n => { onChanged?.({ from: name, to: n }); setName(n); }}
+        onError={setErr} />
+    </>
+  );
+}
+
 describe('RepoManager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -71,13 +96,6 @@ describe('RepoManager', () => {
     onBrowse: () => {},
   };
 
-  // Manage lands on Overview — the one screen that answers "which repository
-  // needs something". Tests about a repo's settings PAGE therefore pick it out
-  // of the rail first, which is the same single click a reader makes.
-  async function selectRepo(name = 'core') {
-    fireEvent.click(await screen.findByTestId(`repomgr-item-${name}`));
-  }
-
   it('lists lenses fetched via api.listLenses', async () => {
     render(<RepoManager {...baseProps} />);
     await waitFor(() => expect(api.listLenses).toHaveBeenCalled());
@@ -85,10 +103,7 @@ describe('RepoManager', () => {
   });
 
   it('shows a lens detail with write/reads and deletes it', async () => {
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage />);
     // Detail pane shows the write target and read mounts (with branch pins).
     expect(screen.getByTestId('lens-detail-write')).toHaveTextContent('work');
     expect(screen.getByTestId('lens-detail-read-core')).toHaveTextContent('main');
@@ -105,13 +120,9 @@ describe('RepoManager', () => {
   // has no history of its own to lose, and its identity (uid) survives the
   // rename, so mounts and in-flight agent queries are unaffected.
   describe('Lens rename', () => {
-    async function selectLens(name = 'dev') {
-      fireEvent.click(await screen.findByTestId(`repomgr-lens-${name}`));
-    }
 
     it('puts Rename in the Danger zone block, beside Delete', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectLens();
+      render(<LensPage />);
       const danger = await screen.findByTestId('block-danger');
       expect(within(danger).getByTestId('lens-rename-submit')).toBeInTheDocument();
     });
@@ -120,8 +131,7 @@ describe('RepoManager', () => {
     // has none of its own), and it must say the lens's IDENTITY survives the
     // rename — the MCP cursor pin is lens:<uid>, never the name.
     it('warns that MCP endpoint URLs break but the lens keeps its identity', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectLens();
+      render(<LensPage />);
       const warning = await screen.findByTestId('lens-rename-warning');
       expect(warning).toHaveTextContent(/MCP/i);
       expect(warning.textContent).toMatch(/lens keeps its identity/i);
@@ -129,8 +139,7 @@ describe('RepoManager', () => {
     });
 
     it('keeps Rename disabled until the current name is typed exactly', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectLens();
+      render(<LensPage />);
 
       const submit = await screen.findByTestId('lens-rename-submit');
       expect(submit).toBeDisabled();
@@ -146,8 +155,7 @@ describe('RepoManager', () => {
     });
 
     it('disables Rename when the new name equals the current name', async () => {
-      render(<RepoManager {...baseProps} />);
-      await selectLens();
+      render(<LensPage />);
 
       fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'dev' } });
       fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
@@ -156,8 +164,7 @@ describe('RepoManager', () => {
 
     it('calls renameLens with the new name and follows the pane to it', async () => {
       (api.renameLens as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'newdev' });
-      render(<RepoManager {...baseProps} />);
-      await selectLens();
+      render(<LensPage />);
 
       fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
       fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
@@ -165,7 +172,9 @@ describe('RepoManager', () => {
 
       await waitFor(() => expect(api.renameLens).toHaveBeenCalledWith('dev', 'newdev'));
       // The pane is addressed by name; it must follow the lens to its new one.
-      await waitFor(() => expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('newdev'));
+      // The page has no heading of its own (the top bar's label names the
+      // target); "follows" is read off the page re-reading under the new name.
+      await waitFor(() => expect(api.getLens).toHaveBeenCalledWith('newdev'));
     });
 
     // The parent learns about the rename too — with BOTH names — so it can
@@ -174,8 +183,7 @@ describe('RepoManager', () => {
     it('reports the rename to the parent as {from, to}, not a bare refresh', async () => {
       (api.renameLens as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'newdev' });
       const onChanged = vi.fn();
-      render(<RepoManager {...baseProps} onChanged={onChanged} />);
-      await selectLens();
+      render(<LensPage onChanged={onChanged} />);
 
       fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
       fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
@@ -188,8 +196,7 @@ describe('RepoManager', () => {
       (api.renameLens as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('/api/v1/lenses/dev/rename → 409 name "newdev" is held by another lens or repository'),
       );
-      render(<RepoManager {...baseProps} />);
-      await selectLens();
+      render(<LensPage />);
 
       fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
       fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
@@ -199,8 +206,7 @@ describe('RepoManager', () => {
     });
 
     it('is disabled entirely when read-only', async () => {
-      render(<RepoManager {...baseProps} serverReadOnly />);
-      await selectLens();
+      render(<LensPage serverReadOnly />);
 
       fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
       fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'dev' } });
@@ -210,29 +216,16 @@ describe('RepoManager', () => {
     });
   });
 
-  it('lens Browse button fires onBrowse with the lens context', async () => {
-    const onBrowse = vi.fn();
-    render(<RepoManager {...baseProps} onBrowse={onBrowse} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
-    fireEvent.click(screen.getByTestId('lens-browse'));
-    expect(onBrowse).toHaveBeenCalledWith({ kind: 'lens', name: 'dev' });
-  });
-
-  it('repo Browse button fires onBrowse with the repo context', async () => {
-    const onBrowse = vi.fn();
-    render(<RepoManager {...baseProps} onBrowse={onBrowse} />);
-    await selectRepo();
-    // Detail pane defaults to the current repo (core).
-    await waitFor(() => expect(screen.getByTestId('repo-browse')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repo-browse'));
-    expect(onBrowse).toHaveBeenCalledWith({ kind: 'repo', repo: 'core' });
+  // The page has no Browse button any more: the Browse tab replaced it, and
+  // facetsFor (not a disabled button) is what keeps a broken lens unbrowsable.
+  it('has no Browse button', async () => {
+    render(<LensPage />);
+    expect(await screen.findByTestId('lens-detail-write')).toBeInTheDocument();
+    expect(screen.queryByTestId('lens-browse')).toBeNull();
   });
 
   it('does not double-list the write repo in the read mounts', async () => {
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage />);
     // The write repo (work) shows exactly once in the mount list, tagged write · read.
     const workRows = screen.getAllByTestId('lens-detail-read-work');
     expect(workRows).toHaveLength(1);
@@ -242,9 +235,7 @@ describe('RepoManager', () => {
   it('copies the init command to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage />);
     fireEvent.click(screen.getByTestId('lens-copy'));
     expect(writeText).toHaveBeenCalledWith('kb claude init --lens dev');
   });
@@ -254,9 +245,7 @@ describe('RepoManager', () => {
   it('offers the Antigravity init command alongside the Claude Code one', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage />);
     fireEvent.click(screen.getByTestId('lens-copy-agy'));
     expect(writeText).toHaveBeenCalledWith('kb antigravity init --lens dev');
   });
@@ -264,9 +253,7 @@ describe('RepoManager', () => {
   // Without a registered workspace Antigravity silently loads nothing, and the
   // user gets no error — so the card has to say so.
   it('warns that Antigravity needs a registered workspace', async () => {
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage />);
     expect(await screen.findByTestId('lens-connect')).toHaveTextContent('--add-dir');
   });
 
@@ -275,9 +262,7 @@ describe('RepoManager', () => {
       name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: '# Dev lens\n\nEngineering read union.',
     });
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage />);
 
     expect(await screen.findByTestId('repo-description')).toHaveTextContent('Engineering read union.');
   });
@@ -287,16 +272,12 @@ describe('RepoManager', () => {
       name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],
       description: 'Engineering read union.',
     });
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage />);
     await screen.findByTestId('block-note');
 
-    const order = ['block-note', 'block-write-target', 'block-read-mounts', 'block-agent-access', 'block-danger']
-      .map(id => screen.getByTestId(id));
-    for (let i = 1; i < order.length; i++) {
-      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
+    const ids = Array.from(document.querySelectorAll('[data-testid^="block-"]')).map(n => n.id);
+    expect(ids).toEqual(['note', 'write-target', 'read-mounts', 'agent-access', 'danger']);
+    expect(screen.getByTestId('settings-index-heading').textContent).toBe('Lens');
   });
 
   it('edits mounts, saves via updateLens, and re-renders the new mounts', async () => {
@@ -304,9 +285,7 @@ describe('RepoManager', () => {
       name: 'dev', write: { uid: 'uid-work', name: 'work' },
       reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }, { uid: 'uid-docs', name: 'docs' }],
     });
-    render(<RepoManager {...baseProps} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
 
     // Enter edit mode, mount 'docs', and save.
     fireEvent.click(screen.getByTestId('lens-edit'));
@@ -331,9 +310,7 @@ describe('RepoManager', () => {
     // docs carries a real branch literally named after the write repo's agent branch.
     (api.listBranchNames as ReturnType<typeof vi.fn>).mockImplementation((repo: string) =>
       Promise.resolve(repo === 'docs' ? ['agent/x', 'main', 'agent/w'] : []));
-    render(<RepoManager {...baseProps} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
 
     fireEvent.click(screen.getByTestId('lens-edit'));
     fireEvent.click(screen.getByTestId('lens-read-docs'));
@@ -369,9 +346,7 @@ describe('RepoManager', () => {
     ];
 
     it('offers an unmounted broken repo as a chipped, disabled row', async () => {
-      render(<RepoManager {...baseProps} repos={withBroken} />);
-      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      render(<LensPage repos={withBroken} />);
       fireEvent.click(await screen.findByTestId('lens-edit'));
 
       const box = screen.getByTestId('lens-read-docs');
@@ -392,9 +367,7 @@ describe('RepoManager', () => {
       (api.updateLens as ReturnType<typeof vi.fn>).mockResolvedValue({
         name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }],
       });
-      render(<RepoManager {...baseProps} repos={withBroken} />);
-      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+      render(<LensPage repos={withBroken} />);
       fireEvent.click(await screen.findByTestId('lens-edit'));
 
       const box = await screen.findByTestId('lens-read-docs');
@@ -404,17 +377,6 @@ describe('RepoManager', () => {
       fireEvent.click(screen.getByTestId('lens-edit-save'));
 
       await waitFor(() => expect(api.updateLens).toHaveBeenCalledWith('dev', expect.objectContaining({ reads: [] })));
-    });
-
-    it('refuses Browse into a lens one of whose mounts has no store', async () => {
-      (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
-        name: 'dev', write: { uid: 'uid-work', name: 'work' },
-        reads: [{ uid: 'uid-work', name: 'work' }, { uid: 'uid-docs', name: 'docs' }],
-      });
-      render(<RepoManager {...baseProps} repos={withBroken} />);
-      await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-      fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
-      await waitFor(() => expect(screen.getByTestId('lens-browse')).toBeDisabled());
     });
   });
 
@@ -439,9 +401,7 @@ describe('RepoManager', () => {
 
   it('fires onChanged on lens delete', async () => {
     const onChanged = vi.fn();
-    render(<RepoManager {...baseProps} onChanged={onChanged} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage onChanged={onChanged} />);
     fireEvent.click(await screen.findByTestId('lens-delete'));
     fireEvent.click(await screen.findByTestId('lens-delete-confirm'));
     await waitFor(() => expect(api.deleteLens).toHaveBeenCalled());
@@ -450,9 +410,7 @@ describe('RepoManager', () => {
 
   it('fires onChanged on lens edit-save', async () => {
     const onChanged = vi.fn();
-    render(<RepoManager {...baseProps} onChanged={onChanged} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    render(<LensPage onChanged={onChanged} repos={[{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }, { name: 'docs', uid: 'uid-docs' }]} />);
     fireEvent.click(await screen.findByTestId('lens-edit'));
     fireEvent.click(screen.getByTestId('lens-read-docs'));
     fireEvent.click(screen.getByTestId('lens-edit-save'));
