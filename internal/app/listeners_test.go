@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -288,8 +289,12 @@ func TestAdvertise_WritesV2LastAndCloseRemovesOnlyItsOwn(t *testing.T) {
 		PID: os.Getpid(), Port: port, Version: "9.9.9-test", Schema: serveraddr.LockSchemaV2, Home: f.cfg.Home,
 		HTTP: "http://" + f.cfg.Host + ":" + f.cfg.Port, Address: "unix://" + f.cfg.Socket,
 		Socket: f.cfg.Socket, TLS: f.tlsAddr, Generation: 1,
+		Listeners: map[string]serveraddr.LockListener{
+			"http": {Configured: f.cfg.Host + ":" + f.cfg.Port, Listening: f.cfg.Host + ":" + f.cfg.Port},
+			"tls":  {Configured: f.tlsAddr, Listening: f.tlsAddr},
+		},
 	}
-	if info != want {
+	if !reflect.DeepEqual(info, want) {
 		t.Fatalf("server.json = %+v\nwant          %+v", info, want)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -14,12 +15,17 @@ import (
 func TestV2FieldsRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.json")
 	in := serveraddr.LockInfo{PID: 7, Port: 0, Version: "1.2.3", Schema: serveraddr.LockSchemaV2, Home: "/h",
-		HTTP: "", Address: "unix:///h/knomit.sock", Socket: "/h/knomit.sock", TLS: "127.0.0.1:9", Generation: 1}
+		HTTP: "", Address: "unix:///h/knomit.sock", Socket: "/h/knomit.sock", TLS: "127.0.0.1:9", Generation: 2, Reload: true,
+		RestartNeeded: []string{"auth.require"},
+		Listeners: map[string]serveraddr.LockListener{
+			"http": {Configured: "127.0.0.1:1", Listening: "", Reason: "addr_in_use"},
+			"tls":  {Configured: "127.0.0.1:9", Listening: "127.0.0.1:9"},
+		}}
 	if err := serveraddr.WriteLock(path, in); err != nil {
 		t.Fatal(err)
 	}
 	got, err := serveraddr.ReadLock(path)
-	if err != nil || got != in {
+	if err != nil || !reflect.DeepEqual(got, in) {
 		t.Fatalf("Read = %+v, %v; want %+v", got, err, in)
 	}
 	raw, _ := os.ReadFile(path)
@@ -76,7 +82,7 @@ func TestWriteRead_Roundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if got != in {
+	if !reflect.DeepEqual(got, in) {
 		t.Errorf("Read = %+v, want %+v", got, in)
 	}
 }

@@ -100,6 +100,15 @@ type ListenerOptions struct {
 	// LockPath overrides where server.json goes (tests). Empty = the home's
 	// file, config.LockfilePathFor(Config.Home).
 	LockPath string
+
+	// Serve starts serving a listener that Apply binds after boot (the boot
+	// listeners are served by the caller). It must return at once and treat
+	// the listener's retirement as a clean stop: see Listeners.Retired. Nil
+	// means Apply cannot add a listener (it reports that instead).
+	Serve func(what string, srv *http.Server, ln net.Listener)
+	// OnAddress is told the new Address when a reload changes it (only when
+	// the local listener did not bind, so the TCP listener IS the address).
+	OnAddress func(addr string)
 }
 
 // Listeners is what Open bound. Serving is the caller's: it runs
@@ -136,6 +145,22 @@ type Listeners struct {
 	closed      bool
 	closeSocket func()
 	wroteLock   bool
+
+	// Reload state (listeners_reload.go). applyMu serializes Apply and
+	// Close against it; mu guards the fields Apply replaces (TCP, TLS,
+	// TLSServer, the states, Address) against Snapshot and Close.
+	applyMu       sync.Mutex
+	cfg           config.Config // the config the listeners currently reflect
+	builtHost     string        // Config.Host when app.New built its middleware
+	generation    int
+	restartNeeded []string
+	retired       map[net.Listener]bool
+	reloadable    bool    // a reload trigger is installed (server.json "reload")
+	level         *string //[log].level last applied by a reload; nil = the boot value
+	boundHTTP     string  // host:port the TCP listener was bound for; "" = none
+	boundTLS      string  // [tls].addr + dir the TLS listener was opened for; "" = none
+	boundTLSCfg   *config.TLSConfig
+	tlsCancel     context.CancelFunc // stops the TLS certificate re-check loop
 }
 
 // OpenListeners binds the listeners in the documented order. On any error it has
@@ -143,7 +168,11 @@ type Listeners struct {
 // serving. See ListenerOptions for how Supervised changes which failures are fatal.
 func OpenListeners(ctx context.Context, o ListenerOptions) (*Listeners, error) {
 	cfg := o.Config
-	l := &Listeners{opts: o, closeSocket: func() {}}
+	l := &Listeners{
+		opts: o, closeSocket: func() {},
+		cfg: cfg, builtHost: cfg.Host, generation: 1,
+		retired: map[net.Listener]bool{},
+	}
 	l.lockPath = o.LockPath
 	if l.lockPath == "" {
 		l.lockPath = config.LockfilePathFor(cfg.Home)
@@ -171,6 +200,7 @@ func OpenListeners(ctx context.Context, o ListenerOptions) (*Listeners, error) {
 		switch {
 		case err == nil:
 			l.TCP = ln
+			l.boundHTTP = listenAddr
 			l.HTTPState.Listening = ln.Addr().String()
 		case o.Supervised && IsAddrInUse(err):
 			l.HTTPState.Reason = ListenerReasonAddrInUse
@@ -234,7 +264,13 @@ func OpenListeners(ctx context.Context, o ListenerOptions) (*Listeners, error) {
 	// certificate.
 	tcfg := cfg.TLS
 	l.TLSState.Configured = tcfg.Addr
-	tlsSrv, tln, err := OpenTLSServer(o.Base, tcfg, o.KeyPath, l.HTTP)
+	tctx, tcancel := context.WithCancel(o.Base)
+	tlsSrv, tln, err := OpenTLSServer(tctx, tcfg, o.KeyPath, l.HTTP)
+	if tlsSrv != nil {
+		l.tlsCancel = tcancel // Close and a later drop stop its re-check loop
+	} else {
+		tcancel() // nothing runs on it
+	}
 	switch {
 	case errors.Is(err, ErrTLSAddrInUse) && o.Supervised:
 		l.TLSState.Reason = ListenerReasonAddrInUse
@@ -253,6 +289,9 @@ func OpenListeners(ctx context.Context, o ListenerOptions) (*Listeners, error) {
 		l.TLSState.Reason = ListenerReasonNoCertificate
 	case tlsSrv != nil:
 		l.TLSServer, l.TLS = tlsSrv, tln
+		l.boundTLS = tcfg.Addr + "\x00" + tcfg.Dir
+		c := tcfg
+		l.boundTLSCfg = &c
 		l.TLSState.Listening = tln.Addr().String()
 	}
 	return l, nil
@@ -278,20 +317,9 @@ func (l *Listeners) Advertise() error {
 			Msg("not writing server.json: another process holds this home's local listener and owns it")
 		return nil
 	}
-	info := serveraddr.LockInfo{
-		PID:        os.Getpid(),
-		Version:    l.opts.Version,
-		Schema:     serveraddr.LockSchemaV2,
-		Home:       l.opts.Config.Home,
-		Address:    l.Address,
-		Socket:     l.LocalPath,
-		TLS:        l.TLSState.Listening,
-		Generation: 1,
-	}
-	if l.TCP != nil {
-		info.Port = l.TCP.Addr().(*net.TCPAddr).Port
-		info.HTTP = serveraddr.ForTCP(l.TCP.Addr().String())
-	}
+	l.mu.Lock()
+	info := l.lockInfoLocked()
+	l.mu.Unlock()
 	if err := serveraddr.WriteLock(l.lockPath, info); err != nil {
 		return fmt.Errorf("write lockfile: %w", err)
 	}
@@ -299,6 +327,36 @@ func (l *Listeners) Advertise() error {
 	l.wroteLock = true
 	l.mu.Unlock()
 	return nil
+}
+
+// lockInfoLocked is the content of server.json for the current listeners.
+// l.mu must be held.
+func (l *Listeners) lockInfoLocked() serveraddr.LockInfo {
+	info := serveraddr.LockInfo{
+		PID:           os.Getpid(),
+		Version:       l.opts.Version,
+		Schema:        serveraddr.LockSchemaV2,
+		Home:          l.opts.Config.Home,
+		Address:       l.Address,
+		Socket:        l.LocalPath,
+		TLS:           l.TLSState.Listening,
+		Generation:    l.generation,
+		Reload:        l.reloadable,
+		RestartNeeded: append([]string(nil), l.restartNeeded...),
+		Listeners: map[string]serveraddr.LockListener{
+			"http": lockListener(l.HTTPState),
+			"tls":  lockListener(l.TLSState),
+		},
+	}
+	if l.TCP != nil {
+		info.Port = l.TCP.Addr().(*net.TCPAddr).Port
+		info.HTTP = serveraddr.ForTCP(l.TCP.Addr().String())
+	}
+	return info
+}
+
+func lockListener(s ListenerState) serveraddr.LockListener {
+	return serveraddr.LockListener{Configured: s.Configured, Listening: s.Listening, Reason: s.Reason}
 }
 
 // LockPath is where Advertise writes.
@@ -316,21 +374,30 @@ func (l *Listeners) Close() {
 	l.closed = true
 	wrote := l.wroteLock
 	l.mu.Unlock()
+	// Wait for an Apply in flight: it must not bind a listener after this.
+	l.applyMu.Lock()
+	defer l.applyMu.Unlock()
+	l.mu.Lock()
+	tlsSrv, tlsLn, tcp, tlsCancel := l.TLSServer, l.TLS, l.TCP, l.tlsCancel
+	l.mu.Unlock()
 
 	if wrote {
 		_ = serveraddr.RemoveLockIfOwner(l.lockPath, os.Getpid())
 	}
-	if l.TLSServer != nil {
-		_ = l.TLSServer.Close()
+	if tlsSrv != nil {
+		_ = tlsSrv.Close()
 	}
-	if l.TLS != nil {
-		_ = l.TLS.Close()
+	if tlsCancel != nil {
+		tlsCancel()
+	}
+	if tlsLn != nil {
+		_ = tlsLn.Close()
 	}
 	if l.HTTP != nil {
 		_ = l.HTTP.Close()
 	}
-	if l.TCP != nil {
-		_ = l.TCP.Close()
+	if tcp != nil {
+		_ = tcp.Close()
 	}
 	if l.Local != nil {
 		_ = l.Local.Close()
@@ -346,7 +413,7 @@ func listenTCP(addr string) (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("plaintext listener: %w", err) // err names the address
 	}
-	return ln, nil
+	return newTrackedListener(ln), nil
 }
 
 // openLocalListener opens the local authenticated listener for cfg and decides

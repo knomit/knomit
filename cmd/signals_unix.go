@@ -32,3 +32,34 @@ func installGoroutineDumpSignal(dir string) func() {
 		close(ch)
 	}
 }
+
+// installReloadSignal runs onReload, on its own goroutine and one call at a
+// time, for every SIGHUP the process receives: `kill -HUP <pid>` makes a
+// running server re-read its configuration (Listeners.Reload). Signals that
+// arrive while a reload runs coalesce into at most one more.
+//
+// SIGHUP no longer ends the process: a server whose terminal closes keeps
+// serving, as a daemon would. The returned func stops the handler and waits
+// for a reload in flight; home is unused here (Windows keys its event by it).
+func installReloadSignal(home string, onReload func()) (func(), error) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP)
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for {
+			select {
+			case <-ch:
+				onReload()
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(ch)
+		close(done)
+		<-finished
+	}, nil
+}

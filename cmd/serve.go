@@ -89,31 +89,42 @@ func serveCmd() *cobra.Command {
 			// coded gives a supervised failure its documented exit code.
 			coded := func(err error) error { return supervisedExit(supervised, err) }
 
-			cfg, err := config.Load()
+			// loadCfg is the ONE way this process reads its configuration:
+			// the loader (defaults, knomit.toml, env) and then the command-
+			// line flags, which win. A reload runs it again, so a reload and
+			// a boot cannot disagree about what the configuration is.
+			loadCfg := func() (config.Config, error) {
+				cfg, err := config.Load()
+				if err != nil {
+					return config.Config{}, err
+				}
+				if portOverride != "" {
+					cfg.Port = portOverride
+				}
+				if hostOverride != "" {
+					cfg.Host = hostOverride
+				}
+
+				// Logging flags override config/env (flags win). The rotating-file
+				// flags only override when explicitly set, so they don't clobber a
+				// configured value with their own defaults.
+				if logFile != "" {
+					cfg.Log.File = logFile
+				}
+				if cmd.Flags().Changed("log-max-size") {
+					cfg.Log.MaxSizeMB = logMaxSizeMB
+				}
+				if cmd.Flags().Changed("log-max-backups") {
+					cfg.Log.MaxBackups = logMaxBackups
+				}
+				if cmd.Flags().Changed("log-max-age") {
+					cfg.Log.MaxAgeDays = logMaxAgeDays
+				}
+				return cfg, nil
+			}
+			cfg, err := loadCfg()
 			if err != nil {
 				return coded(&app.ListenerConfigError{Err: fmt.Errorf("load config: %w", err)})
-			}
-			if portOverride != "" {
-				cfg.Port = portOverride
-			}
-			if hostOverride != "" {
-				cfg.Host = hostOverride
-			}
-
-			// Logging flags override config/env (flags win). The rotating-file
-			// flags only override when explicitly set, so they don't clobber a
-			// configured value with their own defaults.
-			if logFile != "" {
-				cfg.Log.File = logFile
-			}
-			if cmd.Flags().Changed("log-max-size") {
-				cfg.Log.MaxSizeMB = logMaxSizeMB
-			}
-			if cmd.Flags().Changed("log-max-backups") {
-				cfg.Log.MaxBackups = logMaxBackups
-			}
-			if cmd.Flags().Changed("log-max-age") {
-				cfg.Log.MaxAgeDays = logMaxAgeDays
 			}
 
 			// The Logs tab's source. Created before the logger so every line
@@ -216,13 +227,24 @@ func serveCmd() *cobra.Command {
 			// whatever was already bound. Open takes the WHOLE config:
 			// listenerFrom-style pairs of arguments are how knomit#245's
 			// mis-wiring went unnoticed.
-			ls, err := app.OpenListeners(serveCtx, app.ListenerOptions{
+			//
+			// errCh gets one slot per listener Serve below plus room for the
+			// listeners a reload binds later; a reload's send never blocks.
+			errCh := make(chan error, 16)
+			var ls *app.Listeners // set below; the hooks run only after that
+			ls, err = app.OpenListeners(serveCtx, app.ListenerOptions{
 				Config:     cfg,
 				Handler:    router,
 				Base:       serveCtx,
 				KeyPath:    a.KeyPath(),
 				Version:    version.String(),
 				Supervised: supervised,
+				// A reload binds listeners after boot; they are served here,
+				// like the boot ones.
+				Serve: func(what string, srv *http.Server, ln net.Listener) {
+					serveRetirable(errCh, func(l net.Listener) bool { return ls.Retired(l) }, what, srv, ln)
+				},
+				OnAddress: a.Manager().SetServerAddress,
 			})
 			if err != nil {
 				return coded(err)
@@ -280,6 +302,31 @@ func serveCmd() *cobra.Command {
 				defer dl.Close()
 			}
 
+			// The reload trigger (SIGHUP; on Windows a named event). It is
+			// installed before server.json is written so the file can say
+			// "reload": true, but a reload that arrives before the listeners
+			// are serving waits for `ready` (it must not rebind listeners this
+			// function has yet to serve) and gives up if the server stops
+			// first. The deferred stop runs AFTER abort is closed (LIFO), so
+			// it never waits on a reload parked at the gate.
+			ready := make(chan struct{})
+			abort := make(chan struct{})
+			stopReload, rerr := installReloadSignal(cfg.Home, func() {
+				select {
+				case <-ready:
+				case <-abort:
+					return
+				}
+				reloadListeners(ls, loadCfg)
+			})
+			if rerr != nil {
+				log.Warn().Err(rerr).Msg("reload trigger not installed; configuration changes need a restart")
+			} else {
+				ls.SetReloadable(true)
+			}
+			defer stopReload()
+			defer close(abort)
+
 			// server.json, LAST: every listener that can fail is bound, so the
 			// file never names a port nothing serves.
 			//
@@ -320,15 +367,15 @@ func serveCmd() *cobra.Command {
 			// the first failure, instead of the failure ending the process:
 			// an exit skips RunE's defers, and the crash marker's release is
 			// one of them, so the next boot would report a crash that never
-			// happened (#261). One slot per listener below, so no send blocks.
+			// happened (#261). errCh is made before the listeners open, with a
+			// slot for each, so no boot send blocks.
 			//
 			// Each server's Close is deferred AFTER its listeners' closes, so
 			// on return (LIFO) the servers stop first and no Serve sees its
 			// listener, or the socket file, disappear underneath it. After
 			// serveUntil's graceful Shutdown the Closes have nothing to do.
-			errCh := make(chan error, 5)
 			if ls.TCP != nil {
-				serveInto(errCh, "listen", srv, ls.TCP)
+				serveRetirable(errCh, ls.Retired, "listen", srv, ls.TCP)
 			}
 			if ls.Local != nil {
 				// `via` names the MECHANISM, so the line says which credential
@@ -360,6 +407,7 @@ func serveCmd() *cobra.Command {
 				defer diagSrv.Close()
 			}
 
+			close(ready) // reloads may run now
 			// a.Close() runs via defer — shuts down repos and releases resources.
 			return serveUntil(ctx, errCh, cancelServe, 5*time.Second, srv, tlsSrv, oauthSrv, diagSrv)
 		},
@@ -420,6 +468,40 @@ func openDiagServer(cfg config.Config, like *http.Server, statusExtra func() map
 		WriteTimeout: 0,
 		BaseContext:  like.BaseContext,
 	}, ln, nil
+}
+
+// serveRetirable is serveInto for a plaintext/TLS listener that a reload may
+// close on purpose: retired(ln) reports that, and the resulting Serve error
+// ("use of closed network connection") is then a clean stop, not a failure.
+// The send never blocks: a reload may start more listeners than errCh had
+// slots for at boot.
+func serveRetirable(errCh chan<- error, retired func(net.Listener) bool, what string, srv *http.Server, ln net.Listener) {
+	go func() {
+		err := srv.Serve(ln)
+		if err == nil || errors.Is(err, http.ErrServerClosed) || retired(ln) {
+			return
+		}
+		select {
+		case errCh <- fmt.Errorf("%s: %w", what, err):
+		default:
+			log.Error().Err(err).Str("listener", what).Msg("listener failed and the error channel is full")
+		}
+	}()
+}
+
+// reloadListeners is what a reload trigger does: re-read the configuration
+// with the boot loader and apply it. It is the ONLY production caller of
+// Listeners.Reload/Apply (test/archtest pins that): a reload must never be
+// reachable from an HTTP route.
+func reloadListeners(ls *app.Listeners, load func() (config.Config, error)) {
+	log.Info().Msg("reload requested")
+	res, err := ls.Reload(load)
+	if err != nil {
+		return // logged by Reload; generation unchanged
+	}
+	for item, why := range res.Failed {
+		log.Error().Str("item", item).Str("error", why).Msg("reload: left as it was")
+	}
 }
 
 // serveInto runs srv.Serve(ln) in a goroutine and sends any failure to errCh,

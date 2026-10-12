@@ -22,6 +22,7 @@ func RootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(serveCmd())
+	root.AddCommand(reloadCmd())
 	root.AddCommand(oauthCmd())
 	root.AddCommand(fleetCmd())
 	root.AddCommand(verifyCmd())
