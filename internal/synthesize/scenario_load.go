@@ -426,8 +426,9 @@ func derefInt(p *int) int      { return *p }
 // CheckGold is the mechanical half of E04 §3's gold validation, run on a
 // loaded world: every fact a question's answer must rest on or cite is live
 // at the head (a retracted fact cannot be gold support), no fact is both
-// required and forbidden, and the answer's topic accepts the context keys an
-// engine answer carries. What it cannot check without the engine — that each
+// required and forbidden. (The engine writes only `reason_run` into an
+// answer's context, and only where the ontology declares it, so the answer
+// topic's context declarations are not a gold property.) What it cannot check without the engine — that each
 // distractor is reachable by a legal move, that the gap premise is entailed
 // by nothing — stays with the teacher runs and the judge.
 func CheckGold(ctx context.Context, w *LoadedWorld) error {
@@ -460,11 +461,6 @@ func CheckGold(ctx context.Context, w *LoadedWorld) error {
 				if slices.Contains(a.MustNotCite, id) || slices.Contains(q.Forbidden, id) {
 					return bad(q.ID, "fact %s is both required and forbidden", id)
 				}
-			}
-			probe := fact.NewFact(fact.BuildFactPath("kb", a.Topic, a.Category))
-			probe.Context = map[string]any{"question": "q-" + q.ID}
-			if err := fact.ValidateContext(w.Spec.parsed, strings.Trim(a.Topic+"/"+a.Category, "/"), probe.Context); err != nil {
-				return bad(q.ID, "the answer topic %s does not accept the engine's context key question: %v", a.Topic, err)
 			}
 		}
 	}

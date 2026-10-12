@@ -1,11 +1,13 @@
 package synthesize
 
 // Graders for scenario worlds (expert spike, E05 §1-§2): they score one
-// ReasonChain against one question's gold, in the loaded world, with knomit's
-// own validators (fact.ValidateFact with the world's ontology,
-// fact.SerializeFact, fact.ClassifyRef) and the world's store for ref
-// resolution. Mechanical only: the judge-graded metrics (claim entailment,
-// synthesis support rate, hypothesis premise match) are not here.
+// engine run (ReasonChain, the decoded repos.ReasonResult) against one
+// question's gold, in the loaded world, with knomit's own validators
+// (fact.ValidateFact with the world's ontology, fact.SerializeFact,
+// fact.ClassifyRef) and the world's store. The answer facts are read from the
+// store at the paths the host wrote. Mechanical only: the judge-graded
+// metrics (claim entailment, synthesis support rate, hypothesis premise
+// match) are not here.
 //
 // Every ratio is n/d with 0/0 = 1: nothing expected and nothing wrong is a
 // perfect score, so a gap question is not punished for citing nothing.
@@ -14,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -35,34 +38,36 @@ type ChainScore struct {
 	// ExtraMoves: run moves that matched no gold step (E05 "regret").
 	ExtraMoves int
 
-	// RelevancePrecision / RelevanceRecall of the run's `relevant` verdicts
+	// RelevancePrecision / RelevanceRecall of the run's `relevant` labels
 	// against the gold relevant labels (E05 `relevant`).
 	RelevancePrecision float64
 	RelevanceRecall    float64
 	// SupportAccuracy: gold support labels the run reproduced exactly.
 	SupportAccuracy float64
-	// Misattribution: share of the run's `supports` verdicts given to a fact
+	// Misattribution: share of the run's `supports` labels given to a fact
 	// the question forbids or the world plants as a distractor.
 	Misattribution float64
-	// AssessCorrect: the final ASSESS label equals the gold one.
-	AssessCorrect bool
+	// OutcomeCorrect: the run's outcome matches the gold one (an `answer` run
+	// matches gold answer and partly; `gap` matches gap).
+	OutcomeCorrect bool
 
-	// ChainRecall: gold support facts cited by the answer(s) over the gold
-	// support set. ChainPrecision: cited world facts that are support (or
-	// should-cite methodology/policy) over cited world facts.
+	// ChainRecall: gold support facts cited by the answer fact(s) over the
+	// gold support set. ChainPrecision: cited world facts that are support
+	// (should-cite and partial-support facts are neutral) over cited world
+	// facts.
 	ChainRecall    float64
 	ChainPrecision float64
 	// ForbiddenCited are forbidden fact ids the answer cites.
 	ForbiddenCited []string
 
 	// AnswerValidity: checks passed over checks run on the primary answer
-	// fact (or the gap's hypothesis fact); AnswerFailures names each failure.
+	// fact (or, for a gap, the hypothesis fact); AnswerFailures names each.
 	AnswerValidity float64
 	AnswerFailures []string
 
-	// RefCorrectness: refs that resolve in the world at the commit the chain
-	// read them (else the chain's world commit, else the world head) over all
-	// refs of the emitted facts; BadRefs names each failure.
+	// RefCorrectness: refs of the emitted facts that resolve in the world at
+	// the head the run started from (a kb:// ref carries no commit) over all
+	// refs; BadRefs names each failure.
 	RefCorrectness float64
 	BadRefs        []string
 
@@ -79,27 +84,83 @@ type ChainScore struct {
 	Brier float64
 }
 
+// emittedFact is an answer fact read back from the store.
+type emittedFact struct {
+	path  string
+	topic string // the path's topic/category walk, for ValidateFact
+	f     fact.Fact
+}
+
+// readEmitted reads the facts the run wrote (AnswerFacts, on the experiment
+// branch the run opened, else the world branch) and the existing fact it
+// returned instead of writing (ExistingAnswer, on the world branch).
+func readEmitted(ctx context.Context, w *LoadedWorld, chain ReasonChain) ([]emittedFact, error) {
+	read := func(branch, p string) (emittedFact, error) {
+		res, err := w.Svc.Facts().ReadFact(ctx, branch, p, nil)
+		if err != nil {
+			return emittedFact{}, fmt.Errorf("read answer fact %s on %s: %w", p, branch, err)
+		}
+		f, err := fact.ParseFact(p, res.Content)
+		if err != nil {
+			return emittedFact{}, fmt.Errorf("parse answer fact %s: %w", p, err)
+		}
+		rel := strings.TrimPrefix(strings.ToLower(p), "kb/")
+		return emittedFact{path: p, topic: path.Dir(rel), f: f}, nil
+	}
+	branch := chain.ExperimentBranch
+	if branch == "" {
+		branch = w.Branch
+	}
+	var out []emittedFact
+	for _, p := range chain.AnswerFacts {
+		e, err := read(branch, p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	if chain.ExistingAnswer != "" {
+		e, err := read(w.Branch, chain.ExistingAnswer)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
 // GradeChain scores chain against question q of world w.
-func GradeChain(ctx context.Context, w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain) ChainScore {
-	sc := ChainScore{Question: q.ID, Posterior: chain.Posterior, GapExpected: q.Outcome == "gap", GapDeclared: chain.Gap != nil}
+func GradeChain(ctx context.Context, w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain) (ChainScore, error) {
+	sc := ChainScore{Question: q.ID, Posterior: chain.Posterior, GapExpected: q.Outcome == "gap",
+		GapDeclared: chain.Outcome == "gap" || len(chain.Gaps) > 0}
+	emitted, err := readEmitted(ctx, w, chain)
+	if err != nil {
+		return sc, err
+	}
+	var answers, hyps []emittedFact
+	for _, e := range emitted {
+		if e.f.Type == fact.Hypothesis {
+			hyps = append(hyps, e)
+		} else {
+			answers = append(answers, e)
+		}
+	}
 	gradeMoves(w, q, chain, &sc)
 	gradeJudgments(w, q, chain, &sc)
-	sc.AssessCorrect = chain.Assess == q.Assess
-
-	// Facts the run emitted: the answers, or the gap's hypothesis.
-	var emitted []AnswerFact
-	emitted = append(emitted, chain.Answers...)
-	if chain.Gap != nil && chain.Gap.Hypothesis != nil {
-		emitted = append(emitted, *chain.Gap.Hypothesis)
+	switch q.Outcome {
+	case "gap":
+		sc.OutcomeCorrect = chain.Outcome == "gap"
+	default:
+		sc.OutcomeCorrect = chain.Outcome == "answer"
 	}
 	gradeCitations(w, q, emitted, &sc)
-	gradeValidity(w, q, chain, &sc)
-	gradeRefs(ctx, w, chain, emitted, &sc)
+	gradeValidity(w, q, chain, answers, hyps, &sc)
+	gradeRefs(ctx, w, emitted, &sc)
 
 	if sc.GapExpected {
-		sc.Correct = sc.GapDeclared && len(chain.Answers) == 0 && sc.AssessCorrect && sc.GapHypothesisValid
+		sc.Correct = sc.GapDeclared && sc.OutcomeCorrect && len(answers) == 0 && sc.GapHypothesisValid
 	} else {
-		sc.Correct = len(chain.Answers) > 0 && sc.AssessCorrect && sc.ChainRecall == 1 &&
+		sc.Correct = len(answers) > 0 && sc.OutcomeCorrect && sc.ChainRecall == 1 &&
 			len(sc.ForbiddenCited) == 0 && sc.AnswerValidity == 1 && sc.RefCorrectness == 1
 	}
 	c := 0.0
@@ -107,7 +168,7 @@ func GradeChain(ctx context.Context, w *LoadedWorld, q *ScenarioQuestion, chain 
 		c = 1
 	}
 	sc.Brier = (chain.Posterior - c) * (chain.Posterior - c)
-	return sc
+	return sc, nil
 }
 
 func ratio(n, d int) float64 {
@@ -123,9 +184,9 @@ func ratio(n, d int) float64 {
 func gradeMoves(w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain, sc *ChainScore) {
 	matched := map[string]bool{}
 	runMoves, hits := 0, 0
-	for _, st := range chain.Steps {
-		if st.Move == "" {
-			continue
+	for _, st := range chain.Chain {
+		if st.Move == "" || !ScenarioMoves[st.Move] {
+			continue // a judgment-only step (e.g. the engine's "judge")
 		}
 		runMoves++
 		for _, g := range q.Chain {
@@ -200,12 +261,9 @@ func gradeJudgments(w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain, sc *
 		}
 	}
 	runRel, runSup := map[string]string{}, map[string]string{}
-	for _, st := range chain.Steps {
-		if st.Judgment == nil {
-			continue
-		}
+	for _, st := range chain.Chain {
 		var into map[string]string
-		switch st.Judgment.Kind {
+		switch st.Judgment {
 		case "relevant":
 			into = runRel
 		case "support":
@@ -213,15 +271,14 @@ func gradeJudgments(w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain, sc *
 		default:
 			continue
 		}
-		for p, v := range st.Judgment.Verdicts {
+		for p, v := range st.Support {
 			id := w.IDOfPath(p)
 			if id == "" {
 				id = "path:" + p
 			}
-			into[id] = v // the last verdict on a fact stands
+			into[id] = v // the last label on a fact stands
 		}
 	}
-	// Relevance: precision over the run's "yes" on gold-labelled facts.
 	tp, runYes, goldYes := 0, 0, 0
 	for id, v := range goldRel {
 		if v == "yes" {
@@ -271,10 +328,10 @@ func gradeJudgments(w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain, sc *
 }
 
 // citedIDs maps every local ref of the emitted facts to a world fact id.
-func citedIDs(w *LoadedWorld, facts []AnswerFact) map[string]bool {
+func citedIDs(w *LoadedWorld, facts []emittedFact) map[string]bool {
 	out := map[string]bool{}
-	for _, a := range facts {
-		for _, r := range a.Refs {
+	for _, e := range facts {
+		for _, r := range e.f.Refs {
 			c := fact.ClassifyRef(r, w.RepoID)
 			if c.Kind != fact.RefLocalFact {
 				continue
@@ -287,7 +344,7 @@ func citedIDs(w *LoadedWorld, facts []AnswerFact) map[string]bool {
 	return out
 }
 
-func gradeCitations(w *LoadedWorld, q *ScenarioQuestion, emitted []AnswerFact, sc *ChainScore) {
+func gradeCitations(w *LoadedWorld, q *ScenarioQuestion, emitted []emittedFact, sc *ChainScore) {
 	cited := citedIDs(w, emitted)
 	support := map[string]bool{}
 	for _, id := range q.Support {
@@ -336,24 +393,9 @@ func gradeCitations(w *LoadedWorld, q *ScenarioQuestion, emitted []AnswerFact, s
 	sort.Strings(sc.ForbiddenCited)
 }
 
-// toFact builds the fact.Fact knomit would validate for a.
-func toFact(a AnswerFact) fact.Fact {
-	f := fact.NewFact(fact.BuildFactPath("kb", a.Topic, a.Category))
-	f.Title, f.Body = a.Title, a.Body
-	f.Kind, f.Type = fact.Kind(a.Kind), fact.Type(a.Type)
-	if f.Kind == "" {
-		f.Kind = fact.DefaultKind
-	}
-	f.Origin = fact.Origin(a.Origin)
-	f.Confidence, f.Sources = a.Confidence, a.Sources
-	f.Domain, f.Entities, f.Motifs, f.Refs = a.Domain, a.Entities, a.Motifs, a.Refs
-	f.Context = jsonRoundTrip(a.Context)
-	return f
-}
-
-// checkFact runs knomit's own checks on a and returns the failures and the
-// number of checks run.
-func checkFact(w *LoadedWorld, a AnswerFact) (fails []string, n int) {
+// checkFact runs knomit's own checks on an emitted fact and returns the
+// failures and the number of checks run.
+func checkFact(w *LoadedWorld, e emittedFact) (fails []string, n int) {
 	o := w.Spec.parsed
 	check := func(name string, ok bool, detail string) {
 		n++
@@ -361,21 +403,34 @@ func checkFact(w *LoadedWorld, a AnswerFact) (fails []string, n int) {
 			fails = append(fails, name+": "+detail)
 		}
 	}
-	perr := o.ValidatePath(a.Topic + "/" + a.Category)
-	check("ontology_path", a.Topic != "" && a.Category != "" && perr == nil, fmt.Sprint(perr))
-	f := toFact(a)
-	verr := fact.ValidateFact(o, a.Topic+"/"+a.Category, f)
+	perr := o.ValidatePath(e.topic)
+	check("ontology_path", perr == nil, fmt.Sprint(perr))
+	verr := fact.ValidateFact(o, e.topic, e.f)
 	check("validate_fact", verr == nil, fmt.Sprint(verr))
-	_, serr := fact.SerializeFact(f)
+	_, serr := fact.SerializeFact(e.f)
 	check("serialize", serr == nil, fmt.Sprint(serr))
-	check("kind_allows_type", f.Kind.AllowsType(f.Type), string(f.Kind)+"/"+string(f.Type))
-	check("fields", strings.TrimSpace(a.Title) != "" && strings.TrimSpace(a.Body) != "" &&
-		len(a.Domain) > 0 && len(a.Entities) > 0 && len(a.Refs) > 0,
+	kind := e.f.Kind
+	if kind == "" {
+		kind = fact.DefaultKind
+	}
+	check("kind_allows_type", kind.AllowsType(e.f.Type), string(kind)+"/"+string(e.f.Type))
+	check("fields", strings.TrimSpace(e.f.Title) != "" && strings.TrimSpace(e.f.Body) != "" &&
+		len(e.f.Domain) > 0 && len(e.f.Entities) > 0 && len(e.f.Refs) > 0,
 		"title, body, domain, entities and refs must all be populated")
 	return fails, n
 }
 
-func gradeValidity(w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain, sc *ChainScore) {
+// inCategory reports whether the topic walk got (topic/category...) sits at
+// the gold topic and category: the same category, or a descendant of it. A
+// category that merely starts with the same letters ("storage-legacy" for
+// "storage") is a different category.
+func inCategory(got, topic, category string) bool {
+	want := strings.ToLower(strings.Trim(topic+"/"+category, "/"))
+	got = strings.ToLower(strings.Trim(got, "/"))
+	return got == want || strings.HasPrefix(got, want+"/")
+}
+
+func gradeValidity(w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain, answers, hyps []emittedFact, sc *ChainScore) {
 	var fails []string
 	n := 0
 	check := func(name string, ok bool, detail string) {
@@ -385,42 +440,41 @@ func gradeValidity(w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain, sc *C
 		}
 	}
 	if q.Outcome == "gap" {
-		var h *AnswerFact
-		if chain.Gap != nil {
-			h = chain.Gap.Hypothesis
-		}
-		check("gap_declared", chain.Gap != nil, "the gold outcome is a gap")
-		check("no_answer", len(chain.Answers) == 0, "a gap question must not emit an answer")
-		check("hypothesis_present", h != nil, "a gap emits an evidence-free hypothesis fact")
-		if h != nil {
-			f, k := checkFact(w, *h)
+		check("gap_declared", sc.GapDeclared, "the gold outcome is a gap")
+		check("no_answer", len(answers) == 0, "a gap question must not emit an answer")
+		check("hypothesis_present", len(hyps) > 0, "a gap emits an evidence-free hypothesis fact")
+		if len(hyps) > 0 {
+			f, k := checkFact(w, hyps[0])
 			fails, n = append(fails, f...), n+k
-			check("hypothesis_type", h.Type == string(fact.Hypothesis), "type is "+h.Type)
-			check("settlement", strings.TrimSpace(chain.Gap.Settlement) != "", "a gap names the evidence that would settle it")
+			missing := false
+			for _, g := range chain.Gaps {
+				if strings.TrimSpace(g.Missing) != "" {
+					missing = true
+				}
+			}
+			check("missing_premise", missing, "a gap names the missing premise")
 		}
 		sc.AnswerValidity = ratio(n-len(fails), n)
 		sc.AnswerFailures = fails
-		sc.GapHypothesisValid = h != nil && len(fails) == 0
+		sc.GapHypothesisValid = len(hyps) > 0 && len(fails) == 0
 		return
 	}
 	g := q.Answer
-	if len(chain.Answers) == 0 {
+	if len(answers) == 0 {
 		sc.AnswerValidity = 0
 		sc.AnswerFailures = []string{"no_answer: the gold outcome is " + q.Outcome}
 		return
 	}
-	a := chain.Answers[0]
+	a := answers[0]
 	f, k := checkFact(w, a)
 	fails, n = append(fails, f...), n+k
-	check("type", slices.Contains(g.Types, a.Type), fmt.Sprintf("%s not in %v", a.Type, g.Types))
-	check("topic", strings.EqualFold(a.Topic, g.Topic) &&
-		(g.Category == "" || strings.HasPrefix(strings.ToLower(a.Category), strings.ToLower(g.Category))),
-		a.Topic+"/"+a.Category)
+	check("type", slices.Contains(g.Types, string(a.f.Type)), fmt.Sprintf("%s not in %v", a.f.Type, g.Types))
+	check("topic", inCategory(a.topic, g.Topic, g.Category), a.topic)
 	if len(g.Confidence) == 2 {
-		check("confidence", a.Confidence >= g.Confidence[0] && a.Confidence <= g.Confidence[1],
-			fmt.Sprintf("%v outside %v", a.Confidence, g.Confidence))
+		check("confidence", a.f.Confidence >= g.Confidence[0] && a.f.Confidence <= g.Confidence[1],
+			fmt.Sprintf("%v outside %v", a.f.Confidence, g.Confidence))
 	}
-	cited := citedIDs(w, chain.Answers)
+	cited := citedIDs(w, answers)
 	for _, set := range []struct {
 		name string
 		ids  []string
@@ -435,46 +489,32 @@ func gradeValidity(w *LoadedWorld, q *ScenarioQuestion, chain ReasonChain, sc *C
 		sort.Strings(bad)
 		check(set.name, len(bad) == 0, strings.Join(bad, ","))
 	}
-	check("entities", containsAllFold(a.Entities, g.Entities), fmt.Sprintf("want %v", g.Entities))
-	check("motifs", containsAllFold(a.Motifs, g.Motifs), fmt.Sprintf("want %v", g.Motifs))
+	check("entities", containsAllFold(a.f.Entities, g.Entities), fmt.Sprintf("want %v", g.Entities))
+	check("motifs", containsAllFold(a.f.Motifs, g.Motifs), fmt.Sprintf("want %v", g.Motifs))
 	sc.AnswerValidity = ratio(n-len(fails), n)
 	sc.AnswerFailures = fails
 }
 
-func gradeRefs(ctx context.Context, w *LoadedWorld, chain ReasonChain, emitted []AnswerFact, sc *ChainScore) {
-	readAt := map[string]string{}
-	for _, st := range chain.Steps {
-		for _, fa := range st.Facts {
-			c := fact.ClassifyRef(fa.Path, w.RepoID)
-			if c.Kind == fact.RefLocalFact && fa.Commit != "" {
-				readAt[c.Path] = fa.Commit
-			}
-		}
-	}
-	base := chain.World.Commit
-	if base == "" {
-		base = w.Head
-	}
+// gradeRefs judges every ref of the emitted facts against the world head the
+// run started from (LoadedWorld.Head). A kb:// ref carries no commit, so
+// there is no other commit to judge it at.
+func gradeRefs(ctx context.Context, w *LoadedWorld, emitted []emittedFact, sc *ChainScore) {
 	sources := map[string]bool{}
 	for _, u := range w.Spec.ExternalSources {
 		sources[u] = true
 	}
 	total, ok := 0, 0
-	for _, a := range emitted {
-		for _, r := range a.Refs {
+	for _, e := range emitted {
+		for _, r := range e.f.Refs {
 			total++
 			c := fact.ClassifyRef(r, w.RepoID)
 			good := false
 			switch c.Kind {
 			case fact.RefLocalFact:
-				at := readAt[c.Path]
-				if at == "" {
-					at = base
-				}
-				live, err := w.Svc.Search().FactLiveAtCommit(ctx, w.Branch, c.Path, at)
+				live, err := w.Svc.Search().FactLiveAtCommit(ctx, w.Branch, c.Path, w.Head)
 				good = err == nil && live
 			case fact.RefLocalSystemFile:
-				_, err := w.Svc.Facts().ReadFact(ctx, w.Branch, c.Path, &store.ReadFactOpts{AtCommit: base})
+				_, err := w.Svc.Facts().ReadFact(ctx, w.Branch, c.Path, &store.ReadFactOpts{AtCommit: w.Head})
 				good = err == nil
 			case fact.RefExternalURL:
 				good = sources[r]
