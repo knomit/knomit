@@ -58,10 +58,15 @@ func RecentFactsURL(repo, branch string, limit int) string {
 // block silently reported a twentieth of what it should. The two targeted
 // queries this function and InvariantFactsURL build are also far smaller than
 // the 200-row page they replace.
-func GlobalPrinciplesURL(repo, branch string, limit int) string {
-	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/facts?path=%s&entity=designer&domain=global&limit=%d",
+//
+// The /facts handler takes no sort parameter (sort=recent is accepted but the
+// store always orders by committed_at DESC, path ASC), so the page order is
+// not under the caller's control; SessionContext re-sorts by path. offset
+// pages through the collection in that order.
+func GlobalPrinciplesURL(repo, branch string, limit, offset int) string {
+	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/facts?path=%s&entity=designer&domain=global&limit=%d&offset=%d",
 		BaseURL(), url.PathEscape(repo), url.PathEscape(EncodeBranch(branch)),
-		url.QueryEscape("kb/principles/"), limit)
+		url.QueryEscape("kb/principles/"), limit, offset)
 }
 
 // InvariantFactsURL asks for load-bearing invariants directly, for the rollout
@@ -101,9 +106,10 @@ func FetchFacts(u string) []FactSummary {
 // FilterGlobalPrinciples returns facts under kb/principles/ whose Entities
 // contain "designer" and Domain contains "global", up to max. The two-axis
 // filter is what makes a principle "global": designer-authored AND scoped
-// project-wide rather than to a single subarea.
-func FilterGlobalPrinciples(facts []FactSummary, max int) []FactSummary {
-	out := make([]FactSummary, 0, max)
+// project-wide rather than to a single subarea. There is no cap: every global
+// principle must reach the session.
+func FilterGlobalPrinciples(facts []FactSummary) []FactSummary {
+	out := make([]FactSummary, 0, len(facts))
 	for _, f := range facts {
 		if !strings.HasPrefix(f.Path, "kb/principles/") {
 			continue
@@ -115,9 +121,6 @@ func FilterGlobalPrinciples(facts []FactSummary, max int) []FactSummary {
 			continue
 		}
 		out = append(out, f)
-		if len(out) >= max {
-			break
-		}
 	}
 	return out
 }
