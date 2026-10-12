@@ -553,8 +553,9 @@ desktop-app-macos:
 	codesign $(CODESIGN_FLAGS) $(APP)
 ifneq ($(CODESIGN_IDENTITY),)
 	# Assert what notarization will check, here where it is a build failure
-	# rather than a 20-minute round trip to Apple. Both of these were real
-	# rejection reasons on submission d7e41665.
+	# rather than a 20-minute round trip to Apple. The first two were real
+	# rejection reasons on submission d7e41665; the hardened runtime flag is
+	# the third thing notarization requires of every nested Mach-O.
 	@for f in $(APP)/Contents/MacOS/lib/libonnxruntime.dylib \
 	          $(APP)/Contents/MacOS/kb \
 	          $(APP)/Contents/MacOS/knomit-okf \
@@ -565,6 +566,8 @@ ifneq ($(CODESIGN_IDENTITY),)
 	    || { echo "$$f: not signed with a Developer ID certificate"; exit 1; }; \
 	  codesign -dvvv "$$f" 2>&1 | grep -q "^Timestamp=" \
 	    || { echo "$$f: signature has no secure timestamp"; exit 1; }; \
+	  codesign -dv "$$f" 2>&1 | grep -q "^CodeDirectory .*flags=[^ ]*(.*runtime" \
+	    || { echo "$$f: signature lacks the hardened runtime flag"; exit 1; }; \
 	done
 	@echo "  all nested code carries Developer ID + secure timestamp"
 endif
