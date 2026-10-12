@@ -407,8 +407,8 @@ func writeEngineScript(t *testing.T, src string) string {
 
 // A run that never gets the model slot still logs `reason start` and
 // `reason done` with its run key (fix-later 10), and returns interrupted.
-// Sabotage: move the start line back after the slot wait (red: no start
-// line for the run).
+// Sabotage: drop the done line on the slot-timeout path (red: no done line
+// for the run).
 func TestEngine_SlotTimeoutLogsStartAndDone(t *testing.T) {
 	buf := captureEngineLog(t)
 	ri := newEngineTestRepo(t)
