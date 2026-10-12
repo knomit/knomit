@@ -1,10 +1,8 @@
-package cmd
+package serveraddr
 
 import (
 	"strings"
 	"testing"
-
-	"knomit/internal/serveraddr"
 )
 
 // Windows' "no event" answer depends on whether server.json's pid is alive
@@ -20,17 +18,22 @@ func TestMissingEventError_NamesTheOtherSessionWhenThePidIsAlive(t *testing.T) {
 	}
 }
 
-func TestReloadOutcome_OnlyAFailedListenerIsAnError(t *testing.T) {
-	ok := serveraddr.LockInfo{Listeners: map[string]serveraddr.LockListener{
+func TestReloadListenerFailures_OnlyAFailedListenerCounts(t *testing.T) {
+	ok := LockInfo{Listeners: map[string]LockListener{
 		"http": {Reason: "off"}, "tls": {Configured: "a", Listening: "a"},
 	}}
-	if err := reloadOutcome(ok); err != nil {
-		t.Fatalf("off and healthy are not failures: %v", err)
+	if bad := ReloadListenerFailures(ok); len(bad) != 0 {
+		t.Fatalf("off and healthy are not failures: %v", bad)
 	}
 	for _, reason := range []string{"addr_in_use", "bind_failed", "tls_failed", "no_certificate", "refused"} {
-		bad := serveraddr.LockInfo{Listeners: map[string]serveraddr.LockListener{"http": {Configured: "x", Reason: reason}}}
-		if err := reloadOutcome(bad); err == nil || !strings.Contains(err.Error(), reason) {
-			t.Fatalf("reason %s: %v", reason, err)
+		bad := LockInfo{Listeners: map[string]LockListener{"http": {Configured: "x", Reason: reason}}}
+		failed := ReloadListenerFailures(bad)
+		if len(failed) != 1 || !strings.Contains(failed[0], reason) {
+			t.Fatalf("reason %s: %v", reason, failed)
+		}
+		err := &ReloadListenerError{Info: bad, Failed: failed}
+		if !strings.Contains(err.Error(), reason) {
+			t.Fatalf("reason %s missing from %v", reason, err)
 		}
 	}
 }

@@ -132,26 +132,26 @@ func TestRevealLogFile_UsesTheLogPath(t *testing.T) {
 	}
 }
 
-// RestartApp now restarts the SERVER, and like everything that changes what
+// RestartServer now restarts the SERVER, and like everything that changes what
 // the server listens on it is the Settings window's alone (kb invariant
 // desktop/fleet/install-surface): the main window and a context with no window
 // are refused before anything is stopped.
-func TestRestartApp_RestartsTheServerOnlyFromSettings(t *testing.T) {
+func TestRestartServer_RestartsTheServerOnlyFromSettings(t *testing.T) {
 	calls := 0
 	n := newNativeService("", "", &stubToggler{})
 	n.restartServer = func(context.Context) error { calls++; return nil }
 
 	for _, ctx := range []context.Context{fromMain, context.Background()} {
-		if err := n.RestartApp(ctx); !errors.Is(err, errNotSettingsWindow) {
-			t.Fatalf("RestartApp from a non-Settings caller = %v, want errNotSettingsWindow", err)
+		if err := n.RestartServer(ctx); !errors.Is(err, errNotSettingsWindow) {
+			t.Fatalf("RestartServer from a non-Settings caller = %v, want errNotSettingsWindow", err)
 		}
 	}
 	if calls != 0 {
-		t.Fatalf("a refused RestartApp restarted the server %d time(s)", calls)
+		t.Fatalf("a refused RestartServer restarted the server %d time(s)", calls)
 	}
 	// Positive control: the same call from Settings reaches the supervisor.
-	if err := n.RestartApp(fromSettings); err != nil {
-		t.Fatalf("RestartApp from Settings: %v", err)
+	if err := n.RestartServer(fromSettings); err != nil {
+		t.Fatalf("RestartServer from Settings: %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("restartServer called %d times from Settings, want 1", calls)
@@ -160,12 +160,12 @@ func TestRestartApp_RestartsTheServerOnlyFromSettings(t *testing.T) {
 
 // The supervisor's refusal (attach mode: the server is not ours) reaches the
 // caller unchanged, so the Settings window can show "started outside the app".
-func TestRestartApp_PassesTheSupervisorsRefusalThrough(t *testing.T) {
+func TestRestartServer_PassesTheSupervisorsRefusalThrough(t *testing.T) {
 	n := newNativeService("", "", &stubToggler{})
 	n.restartServer = func(context.Context) error { return errAttachedServer{pid: 4242} }
-	err := n.RestartApp(fromSettings)
+	err := n.RestartServer(fromSettings)
 	var att errAttachedServer
 	if !errors.As(err, &att) || att.pid != 4242 || !strings.Contains(err.Error(), "started outside the app (pid 4242)") {
-		t.Fatalf("RestartApp = %v, want the attached-server refusal naming pid 4242", err)
+		t.Fatalf("RestartServer = %v, want the attached-server refusal naming pid 4242", err)
 	}
 }

@@ -33,6 +33,17 @@ type Settings struct {
 	// binds, "" = off. Like Port it is bound once at boot, so a change needs
 	// the restart the form offers (knomit#256).
 	TLSAddr string `json:"tlsAddr"`
+	// HTTPScope is who may reach the plaintext HTTP port: "off" (http =
+	// false, socket only), "local" (this computer only: a loopback host) or
+	// "all" (every network interface). "other" is what GetSettings reports
+	// for a knomit.toml that binds some other host (a LAN address, a DNS
+	// name): Settings does not edit that, and saving "other" changes nothing.
+	// Empty on a save means "leave http and host alone".
+	HTTPScope string `json:"httpScope"`
+
+	// Server is the running server's own account of itself, from server.json
+	// and the supervisor. Read-only context: a save ignores it.
+	Server ServerState `json:"server"`
 
 	// EffectivePort is the plaintext port the running server says it bound
 	// (its server.json `port`). Zero while no server has written the file, or
@@ -45,6 +56,46 @@ type Settings struct {
 	// knomit.toml. Fields they control cannot be changed by writing the file,
 	// so the form disables them rather than pretending otherwise.
 	OverriddenByEnv []string `json:"overriddenByEnv"`
+}
+
+// Scopes of the plaintext HTTP port (Settings.HTTPScope).
+const (
+	scopeOff   = "off"
+	scopeLocal = "local"
+	scopeAll   = "all"
+	scopeOther = "other"
+)
+
+// hostIsAllInterfaces: the hosts that bind every interface. An empty host is
+// ":port" to net.Listen, which is all of them.
+func hostIsAllInterfaces(h string) bool {
+	switch strings.Trim(strings.ToLower(h), "[]") {
+	case "", "0.0.0.0", "::":
+		return true
+	}
+	return false
+}
+
+// hostIsLoopback: the hosts that bind this computer only.
+func hostIsLoopback(h string) bool {
+	switch strings.Trim(strings.ToLower(h), "[]") {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
+// scopeOf is the scope http and host add up to.
+func scopeOf(http bool, host string) string {
+	switch {
+	case !http:
+		return scopeOff
+	case hostIsAllInterfaces(host):
+		return scopeAll
+	case hostIsLoopback(host):
+		return scopeLocal
+	}
+	return scopeOther
 }
 
 // configKeys is the single source of truth for the knomit.toml keys this
@@ -74,11 +125,19 @@ var configKeys = []struct {
 	key      string
 	value    func(Settings) string
 	optional bool
+	// scope marks the keys the HTTP scope owns (http, host). They are written
+	// by scopeEdits, not by the string loop, because one choice sets up to two
+	// keys and a key is written only when the scope moves; the entries are
+	// here so the environment variables that beat them are reported (and the
+	// scope refused) from the same table.
+	scope bool
 }{
 	{env: "KNOMIT_PORT", table: "", key: "port", value: func(s Settings) string { return s.Port }},
 	{env: "KNOMIT_LOG_LEVEL", table: "log", key: "level", value: func(s Settings) string { return s.LogLevel }},
 	{env: "KNOMIT_LOG_FORMAT", table: "log", key: "format", value: func(s Settings) string { return s.LogFormat }},
 	{env: "KNOMIT_TLS_ADDR", table: "tls", key: "addr", value: func(s Settings) string { return s.TLSAddr }, optional: true},
+	{env: "KNOMIT_HTTP", table: "", key: "http", scope: true},
+	{env: "KNOMIT_HOST", table: "", key: "host", scope: true},
 }
 
 // envKeys are the environment variables in configKeys, derived so the two can
@@ -130,6 +189,11 @@ func validateSettings(s Settings) error {
 	}
 	if s.LogFormat != "console" && s.LogFormat != "json" {
 		return fmt.Errorf("log format must be console or json, got %q", s.LogFormat)
+	}
+	switch s.HTTPScope {
+	case "", scopeOff, scopeLocal, scopeAll, scopeOther:
+	default:
+		return fmt.Errorf("http scope must be off, local or all, got %q", s.HTTPScope)
 	}
 	return validateTLSAddr(s.TLSAddr, p)
 }
@@ -192,6 +256,9 @@ func applySettings(s Settings, configPath string, tog autostart.Toggler, overrid
 		return fmt.Errorf("read %s: %w", configPath, err)
 	}
 	for _, c := range configKeys {
+		if c.scope {
+			continue
+		}
 		// An env-owned key is never written, neither updated nor created.
 		// GetSettings reports values from AFTER the env layer, so s carries the
 		// ENVIRONMENT's value for an overridden field — not the file's. Writing
@@ -209,6 +276,10 @@ func applySettings(s Settings, configPath string, tog autostart.Toggler, overrid
 		if err != nil {
 			return fmt.Errorf("set %s: %w", c.key, err)
 		}
+	}
+	src, err = scopeEdits(src, s.HTTPScope, overriddenByEnv)
+	if err != nil {
+		return err
 	}
 	// tomledit edits text within a subset of TOML (see its package doc): on a
 	// file outside it — an inline `tls = { … }`, say — an edit can produce a
@@ -240,6 +311,59 @@ func applySettings(s Settings, configPath string, tog autostart.Toggler, overrid
 		return err
 	}
 	return nil
+}
+
+// scopeEdits moves the plaintext HTTP port to the requested scope, writing
+// ONLY the keys that have to change to get there: a scope the file already
+// means writes nothing (no `http = true` / `host = "127.0.0.1"` noise in a
+// file that never had them), "off" touches http alone, and "local" over a
+// loopback host leaves host as the user spelled it. Neither key is written
+// while its environment variable owns it (the scope is refused whole: half a
+// scope would be a surprise), and "other" / "" are never written.
+func scopeEdits(src []byte, want string, overriddenByEnv []string) ([]byte, error) {
+	if want == "" || want == scopeOther {
+		return src, nil
+	}
+	for _, c := range configKeys {
+		if c.scope && slices.Contains(overriddenByEnv, c.env) {
+			return src, nil
+		}
+	}
+	// The file as the server will read it, over the defaults: absent keys mean
+	// their defaults (http true, host localhost).
+	cur := config.Defaults()
+	if _, err := toml.Decode(string(src), &cur); err != nil {
+		return nil, fmt.Errorf("the existing knomit.toml would not load, so it was not edited (fix it by hand): %w", err)
+	}
+	var err error
+	setHTTP := func(on bool) {
+		if err == nil && cur.HTTP != on {
+			src, err = tomledit.SetBool(src, "", "http", on)
+		}
+	}
+	setHost := func(host string) {
+		if err == nil {
+			src, err = tomledit.SetString(src, "", "host", host)
+		}
+	}
+	switch want {
+	case scopeOff:
+		setHTTP(false)
+	case scopeLocal:
+		setHTTP(true)
+		if !hostIsLoopback(cur.Host) {
+			setHost("127.0.0.1")
+		}
+	case scopeAll:
+		setHTTP(true)
+		if !hostIsAllInterfaces(cur.Host) {
+			setHost("0.0.0.0")
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("set http scope: %w", err)
+	}
+	return src, nil
 }
 
 // setAutostart drives the toggler to the requested state.

@@ -519,3 +519,51 @@
   padding: 4px 10px;
   font-size: 12px;
 }
+
+/* ---- HTTP port scope, attach banner -------------------------------------- */
+
+.rowlabel {
+  font-size: 12.5px;
+  color: var(--k-text);
+}
+
+.control.scopes {
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+}
+
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 12.5px;
+  color: var(--k-text);
+  cursor: pointer;
+}
+
+/* The consequence of "All networks": amber like the env note, because nothing
+   has failed, but it is not what a hurried reader assumes. */
+.sub.warn {
+  color: var(--k-amber);
+}
+
+/* The server is not the app's own: same left-bar vocabulary as the restart bar. */
+.banner {
+  margin: 0 0 0.7rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--k-line);
+  border-left: 3px solid var(--k-blue);
+  border-radius: var(--k-r-control);
+  background: var(--k-raised);
+  color: var(--k-text-2);
+  font-size: 12px;
+}
+
+.banner p {
+  margin: 0;
+}
+
+.banner .sub {
+  grid-column: auto;
+  margin-top: 0.25rem;
+}

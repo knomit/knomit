@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsApp } from './SettingsApp.tsx'
 import type { Settings } from './SettingsForm.tsx'
 import { enrolled, notEnrolled } from './fleetFixtures.ts'
+import { ack, baseSettings } from './settingsFixtures.ts'
 
 // The bound-method strings are the whole contract with Go and nothing checks
 // them at build time — there is no binding codegen. Mocking Call at this level
@@ -18,17 +19,7 @@ vi.mock('@wailsio/runtime', () => ({
   },
 }))
 
-const loaded: Settings = {
-  port: '19278',
-  logLevel: 'info',
-  logFormat: 'console',
-  startAtLogin: false,
-  tlsAddr: '',
-  effectivePort: 19278,
-  configPath: '/home/u/.knomit/knomit.toml',
-  logFilePath: '/home/u/Library/Logs/knomit/knomit-desktop.log',
-  overriddenByEnv: [],
-}
+const loaded: Settings = baseSettings
 
 // Answers GetSettings and resolves everything else, unless a test overrides it.
 function respond(overrides: Record<string, unknown> = {}) {
@@ -36,6 +27,7 @@ function respond(overrides: Record<string, unknown> = {}) {
     if (name in overrides) return overrides[name]
     if (name === 'main.NativeService.GetSettings') return Promise.resolve(loaded)
     if (name === 'main.NativeService.GetIdentity') return Promise.resolve(notEnrolled)
+    if (name === 'main.NativeService.SaveSettings') return Promise.resolve(ack())
     return Promise.resolve(undefined)
   })
 }
@@ -56,7 +48,7 @@ describe('SettingsApp', () => {
     expect(byName).toHaveBeenCalledWith('main.NativeService.GetSettings')
     // The port field carrying the loaded value is the proof the response was
     // used, not merely requested.
-    await waitFor(() => expect(screen.getByLabelText(/port/i)).toHaveValue('19278'))
+    await waitFor(() => expect(screen.getByLabelText(/^port$/i)).toHaveValue('19278'))
   })
 
   it('reports a load failure instead of rendering an empty form', async () => {
@@ -66,14 +58,14 @@ describe('SettingsApp', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(/load config: bad toml/),
     )
-    expect(screen.queryByLabelText(/port/i)).toBeNull()
+    expect(screen.queryByLabelText(/^port$/i)).toBeNull()
   })
 
   it('sends the whole settings struct to the bound SaveSettings method', async () => {
     render(<SettingsApp />)
-    await screen.findByLabelText(/port/i)
+    await screen.findByLabelText(/^port$/i)
 
-    fireEvent.change(screen.getByLabelText(/port/i), { target: { value: '20000' } })
+    fireEvent.change(screen.getByLabelText(/^port$/i), { target: { value: '20000' } })
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() =>
@@ -84,23 +76,39 @@ describe('SettingsApp', () => {
     )
   })
 
-  it('calls the bound RestartApp method after a port change', async () => {
-    // Never settles, exactly as the real one does not — see SettingsForm.
-    respond({ 'main.NativeService.RestartApp': new Promise<void>(() => {}) })
+  it('calls the bound RestartServer method, and leaves "Restarting…" when it resolves', async () => {
+    const needing = { ...loaded, server: { ...loaded.server, restartNeeded: ['auth.require'] } }
+    const restarted = { ...loaded, server: { ...loaded.server, pid: 5555 } }
+    let didRestart = false
+    byName.mockImplementation((name: string) => {
+      if (name === 'main.NativeService.GetSettings') return Promise.resolve(didRestart ? restarted : needing)
+      if (name === 'main.NativeService.GetIdentity') return Promise.resolve(notEnrolled)
+      if (name === 'main.NativeService.RestartServer') {
+        didRestart = true
+        return Promise.resolve(undefined)
+      }
+      return Promise.resolve(undefined)
+    })
     render(<SettingsApp />)
-    await screen.findByLabelText(/port/i)
 
-    fireEvent.change(screen.getByLabelText(/port/i), { target: { value: '20000' } })
+    fireEvent.click(await screen.findByRole('button', { name: /restart server/i }))
+
+    expect(byName).toHaveBeenCalledWith('main.NativeService.RestartServer')
+    expect(await screen.findByRole('status')).toHaveTextContent(/server restarted/i)
+    expect(screen.queryByRole('button', { name: /restarting/i })).toBeNull()
+  })
+
+  it('reads the settings again after a save, for the server state', async () => {
+    render(<SettingsApp />)
+    await screen.findByLabelText(/^port$/i)
+    byName.mockClear()
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
-    fireEvent.click(await screen.findByRole('button', { name: /restart now/i }))
-
-    expect(byName).toHaveBeenCalledWith('main.NativeService.RestartApp')
-    expect(await screen.findByRole('button', { name: /restarting/i })).toBeDisabled()
+    await waitFor(() => expect(byName).toHaveBeenCalledWith('main.NativeService.GetSettings'))
   })
 
   it('calls the bound RevealLogFile method', async () => {
     render(<SettingsApp />)
-    await screen.findByLabelText(/port/i)
+    await screen.findByLabelText(/^port$/i)
 
     fireEvent.click(screen.getByRole('button', { name: /reveal/i }))
     await waitFor(() =>
@@ -153,7 +161,7 @@ describe('SettingsApp fleet identity', () => {
   it('keeps the settings usable when GetIdentity fails', async () => {
     respond({ 'main.NativeService.GetIdentity': Promise.reject(new Error('load config: bad toml')) })
     render(<SettingsApp />)
-    expect(await screen.findByLabelText(/port/i)).toHaveValue('19278')
+    expect(await screen.findByLabelText(/^port$/i)).toHaveValue('19278')
     expect(screen.getByText(/loading…/i)).toBeInTheDocument()
   })
 })

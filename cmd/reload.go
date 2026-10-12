@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/serveraddr"
 )
@@ -49,82 +46,26 @@ On unix this is kill -HUP; on Windows it sets the server's reload event.`,
 }
 
 func runReload(ctx context.Context, out io.Writer, wait time.Duration) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	home, err := config.ResolveHome()
 	if err != nil {
 		return err
 	}
-	path := config.LockfilePathFor(home)
-	info, err := serveraddr.ReadLock(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("no running knomit serve for %s (no %s)", home, path)
-	}
+	cur, err := serveraddr.RequestReload(ctx, home, wait)
 	if err != nil {
-		return err
-	}
-	if info.Home != "" && info.Home != home {
-		return fmt.Errorf("server.json at %s belongs to the data root %s, not %s", path, info.Home, home)
-	}
-	if !info.Reload {
-		return fmt.Errorf("the server (pid %d, %s) does not listen for reload: restart it to apply configuration changes", info.PID, info.Version)
-	}
-	if info.Socket != "" {
-		// The pid in the file is only as good as the file: ask the listener
-		// that file names whether anything is there, before signalling.
-		dctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		conn, derr := auth.DialLocal(dctx, info.Socket, 2*time.Second)
-		cancel()
-		if derr != nil {
-			return fmt.Errorf("server.json names pid %d, but its local listener does not answer (%v); not signalling it", info.PID, derr)
+		// The generation advanced but a listener is not as configured: the
+		// outcome is still worth printing before the non-zero exit.
+		var le *serveraddr.ReloadListenerError
+		if errors.As(err, &le) {
+			printReload(out, cur)
 		}
-		conn.Close()
-	}
-	if err := signalReload(home, info.PID); err != nil {
 		return err
 	}
 	if wait <= 0 {
 		fmt.Fprintln(out, "reload requested")
 		return nil
 	}
-	deadline := time.Now().Add(wait)
-	for {
-		cur, rerr := serveraddr.ReadLock(path)
-		if rerr == nil && cur.PID == info.PID && cur.Generation > info.Generation {
-			printReload(out, cur)
-			return reloadOutcome(cur)
-		}
-		if rerr == nil && cur.PID == info.PID && cur.ReloadError != "" && cur.ReloadError != info.ReloadError {
-			// The configuration did not load: nothing changed, generation too.
-			return fmt.Errorf("reload refused, the running configuration is unchanged: %s", cur.ReloadError)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("reload requested, but the server did not acknowledge within %s (generation still %d); "+
-				"its log says why if the configuration did not load", wait, info.Generation)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-}
-
-// reloadOutcome is non-nil when a listener reason says a requested change did
-// not happen ("off" is a state the user asked for, not a failure).
-func reloadOutcome(cur serveraddr.LockInfo) error {
-	var bad []string
-	for n, l := range cur.Listeners {
-		if l.Reason != "" && l.Reason != "off" {
-			bad = append(bad, n+": "+l.Reason)
-		}
-	}
-	if len(bad) == 0 {
-		return nil
-	}
-	sort.Strings(bad)
-	return fmt.Errorf("reloaded, but not every listener is as configured (%s); the previous listener keeps serving where there was one", strings.Join(bad, ", "))
+	printReload(out, cur)
+	return nil
 }
 
 func printReload(out io.Writer, cur serveraddr.LockInfo) {
@@ -149,19 +90,4 @@ func printReload(out io.Writer, cur serveraddr.LockInfo) {
 	if len(cur.RestartNeeded) > 0 {
 		fmt.Fprintf(out, "  needs a restart: %v\n", cur.RestartNeeded)
 	}
-}
-
-// missingEventError is `knomit reload`'s answer on Windows when the reload
-// event does not exist. Local\ objects are per logon session, so if
-// server.json names a pid that is alive the likeliest cause is that the
-// server runs in a different Windows session (a service, another user's
-// session, an RDP session) than this command; only a dead pid means "no
-// server". Spelled here, not in the Windows file, so it is testable anywhere.
-func missingEventError(pid int, alive bool) error {
-	if alive {
-		return fmt.Errorf("the reload event does not exist, but server.json names pid %d, which is running: "+
-			"the server is probably running in a different Windows session (the event is session-local); "+
-			"run knomit reload from that session, or restart the server", pid)
-	}
-	return errors.New("no running knomit serve found for this data root (its reload event does not exist and the pid in server.json is not running)")
 }

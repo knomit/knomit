@@ -74,6 +74,15 @@ func run(ctx context.Context) error {
 	}
 	defer lock.Release()
 
+	// A fresh install starts with the plaintext HTTP port off (socket only);
+	// an upgrade keeps it. Decided here, before any server is spawned and
+	// before the config is read, so the first boot already reads it.
+	if wrote, ferr := ensureFreshInstallDefaults(home); ferr != nil {
+		log.Warn().Err(ferr).Msg("fresh-install defaults not written; the server will start with the HTTP port on")
+	} else if wrote {
+		log.Info().Msg("fresh install: wrote knomit.toml with http = false (socket only); Settings turns the HTTP port on")
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -176,6 +185,8 @@ func run(ctx context.Context) error {
 	nativeSvc := newNativeService(
 		filepath.Join(cfg.Home, "knomit.toml"), serverLog, autostart.New())
 	nativeSvc.restartServer = sup.restartServer
+	nativeSvc.isAttached = sup.isAttached
+	nativeSvc.desktopVersion = version.String()
 	services := []application.Service{application.NewService(nativeSvc)}
 	var notifySvc *notifications.NotificationService
 	if updatesEnabled {

@@ -121,3 +121,62 @@ func TestListenersApplyHasOnlyTheSignalLoopAsCaller(t *testing.T) {
 		t.Fatalf("internal/web files import internal/app: %v -- a handler that can name Listeners can reload it", webImportsApp)
 	}
 }
+
+// The CLIENT half of the same pin. Asking a server to reload (RequestReload,
+// and the OS trigger under it, SignalReload) is how listener config reaches a
+// running server, so it too has exactly two front ends: the operator's
+// `knomit reload` and the desktop Settings window's SaveSettings binding. No
+// route, no handler package, no other binding may ask for one. The match is on
+// the selector name in files importing internal/serveraddr (plus the package's
+// own files), with the equality as the positive control: a rename or a third
+// caller changes the list.
+func TestReloadRequestHasOnlyTheCLIAndTheSettingsBindingAsCallers(t *testing.T) {
+	root := moduleRoot(t)
+	fset := token.NewFileSet()
+	var callers []string
+	for _, f := range prodGoFiles(t, root) {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		file, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		inPkg := strings.HasPrefix(rel, "internal/serveraddr/")
+		imports := false
+		for _, imp := range file.Imports {
+			if p, _ := strconv.Unquote(imp.Path.Value); p == "knomit/internal/serveraddr" {
+				imports = true
+			}
+		}
+		if !imports && !inPkg {
+			continue
+		}
+		declared := map[*ast.Ident]bool{} // a declaration is not a use
+		ast.Inspect(file, func(n ast.Node) bool {
+			if fd, ok := n.(*ast.FuncDecl); ok {
+				declared[fd.Name] = true
+			}
+			// A reference, not only a call: native.go stores the function in a
+			// field (so tests can fake it), and that is still the call site.
+			var name string
+			switch x := n.(type) {
+			case *ast.SelectorExpr:
+				name = x.Sel.Name
+			case *ast.Ident:
+				if !declared[x] {
+					name = x.Name
+				}
+			}
+			if name == "RequestReload" || name == "SignalReload" {
+				callers = append(callers, rel)
+			}
+			return true
+		})
+	}
+	slices.Sort(callers)
+	callers = slices.Compact(callers)
+	want := []string{"cmd/reload.go", "internal/serveraddr/reload.go", "tools/desktop/native.go"}
+	if !slices.Equal(callers, want) {
+		t.Fatalf("RequestReload/SignalReload are called from %v; only %v may: listener config reaches a running server through `knomit reload` and the Settings binding alone", callers, want)
+	}
+}

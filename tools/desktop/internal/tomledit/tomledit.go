@@ -45,10 +45,21 @@ import (
 // SetString returns src with table.key set to value, quoted as a TOML basic
 // string. An empty table means the root table.
 func SetString(src []byte, table, key, value string) ([]byte, error) {
+	return set(src, table, key, quote(value))
+}
+
+// SetBool returns src with table.key set to the TOML boolean value, under
+// exactly the matching and limits SetString has.
+func SetBool(src []byte, table, key string, value bool) ([]byte, error) {
+	return set(src, table, key, fmt.Sprintf("%t", value))
+}
+
+// set writes `key = rendered`, rendered being an already-valid TOML value.
+func set(src []byte, table, key, rendered string) ([]byte, error) {
 	if key == "" {
 		return nil, fmt.Errorf("tomledit: key must not be empty")
 	}
-	assignment := fmt.Sprintf("%s = %s", key, quote(value))
+	assignment := fmt.Sprintf("%s = %s", key, rendered)
 
 	lines := splitLines(string(src))
 	inTarget := table == "" // the root table is open from line one
