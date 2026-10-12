@@ -7,20 +7,19 @@ test.describe('API: Origin', () => {
     expect([200, 204]).toContain(res.status());
   });
 
-  test('sets origin URL', async ({ freshKnomit }) => {
+  test('an unreachable origin is refused and nothing is persisted', async ({ freshKnomit }) => {
     const res = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/repos/knomit/origin`, {
       data: { url: 'git@github.com:test/origin-e2e.git' },
     });
-    // The URL is unreachable from the e2e harness, so ActivateSync fails and
-    // the handler returns 502. The contract (handlers_origin_hal.go) is that
-    // the origin row IS persisted even when activation fails — the 502 only
-    // signals the initial reconcile didn't succeed.
+    // The attach probes the remote BEFORE writing anything (handlers_origin_hal.go,
+    // lifecycle event AttachOrigin): an unreachable remote or a refused credential
+    // is a 502 "Origin not attached" and the origin row is NOT persisted.
     expect(res.status()).toBe(502);
+    const problem = await res.json();
+    expect(problem.title).toBe('Origin not attached');
 
-    // Verify the URL was persisted despite the 502.
+    // Nothing was persisted: no origin is configured.
     const getRes = await freshKnomit.api.get(`${freshKnomit.baseURL}/api/v1/repos/knomit/origin`);
-    expect(getRes.ok()).toBeTruthy();
-    const body = await getRes.json();
-    expect(body.url).toBe('git@github.com:test/origin-e2e.git');
+    expect(getRes.status()).toBe(204);
   });
 });

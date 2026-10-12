@@ -1,4 +1,5 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { firstLocalRef } from '../../helpers/nav.js';
 
 test.describe('Reference Navigation', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
@@ -27,14 +28,14 @@ test.describe('Reference Navigation', () => {
     expect(titleBefore).toContain('Query Planning');
 
     // Step 2: Click local ref → should switch to history
-    const localRef = page.locator('span').filter({ hasText: /^→/ }).first();
+    const localRef = firstLocalRef(page);
     await expect(localRef).toBeVisible({ timeout: 5_000 });
     const refText = await localRef.textContent();
     console.log(`Step 2 - clicking ref: ${refText}`);
     await localRef.click();
 
     // Step 3: Verify history mode and correct fact loaded
-    await expect(page.getByTestId('history-timeline')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('timeline-nav')).toBeVisible({ timeout: 10_000 });
     // Wait for the fact title to change from "Query Planning" to the referenced fact
     await expect(page.getByTestId('fact-title')).not.toContainText('Query Planning', { timeout: 10_000 });
     const titleInHistory = await page.getByTestId('fact-title').textContent();
@@ -57,7 +58,7 @@ test.describe('Reference Navigation', () => {
     // Step 5: Verify we're back to tree mode with Query Planning
     const viewAfterBack = await page.evaluate(() => {
       // Check if history timeline is visible (still in history mode)
-      return document.querySelector('[data-testid="history-timeline"]') ? 'history' : 'tree/chrono';
+      return document.querySelector('[data-testid="timeline-nav"]') ? 'history' : 'tree/chrono';
     });
     console.log(`Step 5 - view after back: ${viewAfterBack}`);
 

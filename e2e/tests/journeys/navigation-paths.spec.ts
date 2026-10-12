@@ -1,8 +1,9 @@
+import type { Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/knomit.js';
 import { FactPanel } from '../../pages/fact-panel.page.js';
 
 /** Navigate into the first directory until a non-directory entry appears. */
-async function navigateToFirstFact(page: Parameters<typeof test>[1]['page']) {
+async function navigateToFirstFact(page: Page) {
   const factEntries = page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]'));
   const dirEntries = page.getByTestId('dir-entry').and(page.locator('[data-isdir="true"]'));
 
@@ -38,48 +39,39 @@ test.describe('Navigation Paths', () => {
     const treeFactTitle = await factPanel.getTitle();
     expect(treeFactTitle.length).toBeGreaterThan(0);
 
-    // Switch to history mode
-    await page.keyboard.press('3');
+    // Open history from the fact's version chip
+    await page.getByTestId('version-walker').click();
 
-    // Immediately after keypress: stats-view must never appear
-    // (APPLY_NAV sets factPath atomically — no intermediate summary state)
+    // The stats view must never appear (same fact, no intermediate summary state)
     await expect(page.getByTestId('stats-view')).not.toBeVisible({ timeout: 1000 });
 
-    // History timeline should appear
-    await expect(page.getByTestId('history-timeline')).toBeVisible({ timeout: 5_000 });
-
-    // Right panel should show a fact (not the summary/stats view)
-    // The fact title should appear and the stats view should NOT be visible
+    // The timeline appears and the fact stays on screen
+    await expect(page.getByTestId('timeline-nav')).toBeVisible({ timeout: 5_000 });
     await expect(factPanel.title).toBeVisible({ timeout: 10_000 });
+    expect(await factPanel.getTitle()).toBe(treeFactTitle);
     await expect(page.getByTestId('stats-view')).not.toBeVisible();
 
-    // The commit panel (with commit files) should be visible
-    const commitFiles = page.getByTestId('commit-file');
-    await commitFiles.first().waitFor({ timeout: 10_000 });
-    expect(await commitFiles.count()).toBeGreaterThan(0);
+    // The timeline lists at least the fact's own version
+    await expect(page.getByTestId('timeline-row').first()).toBeVisible({ timeout: 10_000 });
   });
 
-  test('tree → history → NAV_BACK returns to tree with same fact', async ({ page }) => {
+  test('tree → history → return to live: back in the library with the same fact', async ({ page }) => {
     const factPanel = new FactPanel(page);
 
-    // Navigate into subdirectories until we find a fact file, then open it
     await navigateToFirstFact(page);
     const factEntries = page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]'));
     await factEntries.first().click();
     await expect(factPanel.title).toBeVisible({ timeout: 10_000 });
     const treeFactTitle = await factPanel.getTitle();
 
-    // Switch to history
-    await page.keyboard.press('3');
-    await expect(page.getByTestId('history-timeline')).toBeVisible({ timeout: 5_000 });
+    await page.getByTestId('version-walker').click();
+    await expect(page.getByTestId('timeline-nav')).toBeVisible({ timeout: 5_000 });
 
-    // Navigate back
-    await page.keyboard.press('Backspace');
+    await page.getByTestId('timeline-return-live').click();
 
-    // Should return to tree view showing the same fact
+    await expect(page.getByTestId('timeline-nav')).toHaveCount(0, { timeout: 5_000 });
     await expect(page.getByTestId('left-panel')).toBeVisible({ timeout: 5_000 });
     await expect(factPanel.title).toBeVisible({ timeout: 5_000 });
-    const backFactTitle = await factPanel.getTitle();
-    expect(backFactTitle).toBe(treeFactTitle);
+    expect(await factPanel.getTitle()).toBe(treeFactTitle);
   });
 });

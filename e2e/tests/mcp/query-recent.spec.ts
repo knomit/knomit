@@ -17,7 +17,9 @@ async function learnFact(
         body: `Body for ${title}.`,
         domain: ['testing'],
         confidence: 0.9,
-        entities: ['recent-entity'],
+        // Distinct per fact: the learn guard refuses a fact that shares an
+        // entity with a similar fact already on the branch.
+        entities: [`entity of ${title}`],
       },
     ],
   });

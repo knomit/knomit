@@ -128,17 +128,20 @@ export const test = base.extend<{
     if (!pid) throw new Error('Failed to start fresh knomit process');
 
     const baseURL = `http://localhost:${port}`;
-    await waitForHealthy(baseURL);
+    let api: APIRequestContext | undefined;
 
-    // A fresh server has no repos, so make the one the tests write to.
-    await createRepo(baseURL);
-    const branch = await discoverAgentBranch(baseURL);
-    const api = await playwright.request.newContext({ baseURL });
-
+    // From here on the server and home exist: every exit path, including a
+    // failed health wait or repo create, must kill and remove them.
     try {
+      await waitForHealthy(baseURL);
+
+      // A fresh server has no repos, so make the one the tests write to.
+      await createRepo(baseURL);
+      const branch = await discoverAgentBranch(baseURL);
+      api = await playwright.request.newContext({ baseURL });
       await use({ baseURL, branch, api });
     } finally {
-      await api.dispose();
+      await api?.dispose();
 
       // Kill process
       try { process.kill(-pid, 'SIGTERM'); } catch {

@@ -1,4 +1,5 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { enterChrono } from '../../helpers/nav.js';
 import { BrowsePage } from '../../pages/browse.page.js';
 import { FactPanel } from '../../pages/fact-panel.page.js';
 
@@ -97,9 +98,7 @@ Third fact about the discovery topic.`,
     await expect(chip.first()).toBeVisible({ timeout: 5_000 });
 
     // Switch to chrono view where entity filter chips are applied to the recent API
-    await page.keyboard.press('2');
-    const chronoList = page.getByTestId('chrono-list');
-    await expect(chronoList).toBeVisible();
+    await enterChrono(page);
 
     // Wait for filtered chrono results
     let chronoItems: string[] = [];

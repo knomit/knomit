@@ -2,6 +2,7 @@ import { test, expect } from '../../fixtures/knomit.js';
 import { BrowsePage } from '../../pages/browse.page.js';
 import { FactPanel } from '../../pages/fact-panel.page.js';
 import { McpClient } from '../../helpers/mcp-client.js';
+import { openHistory } from '../../helpers/nav.js';
 
 test.describe.serial('Knowledge Lifecycle', () => {
   test('create → view → search → edit → history → retract', async ({ freshKnomit, page }) => {
@@ -78,16 +79,13 @@ Updated content after edit.`;
     await browse.clickEntry('demo.md');
     await expect(factPanel.body).toContainText('Updated content after edit');
 
-    // 7. Check history has multiple commits
-    await page.keyboard.press('3');
-    const timeline = page.getByTestId('history-timeline');
-    await timeline.waitFor({ timeout: 10_000 });
-    const commits = page.getByTestId('history-commit');
-    const commitCount = await commits.count();
-    expect(commitCount).toBeGreaterThanOrEqual(2);
+    // 7. Check the fact's timeline lists both versions
+    await openHistory(page);
+    await expect(page.getByTestId('timeline-row')).toHaveCount(2);
 
-    // Exit history view back to tree
-    await page.keyboard.press('1');
+    // Exit history back to the library
+    await page.getByTestId('timeline-return-live').click();
+    await expect(page.getByTestId('timeline-nav')).toHaveCount(0);
 
     // 8. Retract via MCP
     const mcp = new McpClient(freshKnomit.baseURL, 'knomit', 'code', freshKnomit.branch);

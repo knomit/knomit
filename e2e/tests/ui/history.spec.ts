@@ -1,113 +1,120 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { BrowsePage } from '../../pages/browse.page.js';
+import { FactPanel } from '../../pages/fact-panel.page.js';
 import { HistoryPage } from '../../pages/history.page.js';
+import { openFirstFact, openHistory } from '../../helpers/nav.js';
 
-test.describe('History Mode', () => {
+// History is a per-fact timeline: open a fact, click its version chip. There
+// is no repo-wide commit history view and no 1/2/3 view keys any more.
+test.describe('History (per-fact timeline)', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
     await page.waitForLoadState('domcontentloaded');
   });
 
-  test('pressing "3" enters history view and shows timeline', async ({ page }) => {
-    // Press '3' to switch to history view (keyboard shortcut from App.tsx)
-    await page.keyboard.press('3');
-    const timeline = page.getByTestId('history-timeline');
-    await expect(timeline).toBeVisible();
-  });
+  test('the version chip opens the timeline of the open fact', async ({ page }) => {
+    await openFirstFact(page);
+    // Positive control: live, no timeline yet.
+    await expect(page.getByTestId('timeline-nav')).toHaveCount(0);
 
-  test('timeline shows commits with data-hash attribute', async ({ page }) => {
-    await page.keyboard.press('3');
+    await openHistory(page);
     const history = new HistoryPage(page);
-    await history.timeline.waitFor({ timeout: 10_000 });
+    await expect(history.timeline).toBeVisible();
+    await expect(page.getByRole('img', { name: 'HISTORY' })).toBeVisible();
 
     const commits = await history.getCommits();
-    expect(commits.length).toBeGreaterThan(0);
-    // Each commit should have a non-empty hash
+    expect(commits.length).toBeGreaterThanOrEqual(1);
     for (const c of commits) {
-      expect(c.hash).toBeTruthy();
-      expect(c.hash.length).toBeGreaterThanOrEqual(7);
+      expect(c.hash).toMatch(/^[0-9a-f]{7}$/);
     }
+    // The fact stays on screen beside the timeline.
+    await expect(page.getByTestId('fact-title')).toBeVisible();
   });
 
-  test('multiple commits exist from seed batches', async ({ page }) => {
-    await page.keyboard.press('3');
-    const history = new HistoryPage(page);
-    await history.timeline.waitFor({ timeout: 10_000 });
+  test('the return-to-live control leaves history, keeping the fact', async ({ page }) => {
+    await openFirstFact(page);
+    const title = await new FactPanel(page).getTitle();
+    await openHistory(page);
 
-    const commits = await history.getCommits();
-    // Seed data is written in multiple batches, so there should be multiple commits
-    expect(commits.length).toBeGreaterThanOrEqual(2);
+    await page.getByTestId('timeline-return-live').click();
+
+    await expect(page.getByTestId('timeline-nav')).toHaveCount(0);
+    await expect(page.getByTestId('left-panel')).toBeVisible();
+    await expect(page.getByRole('img', { name: 'LIVE' })).toBeVisible();
+    expect(await new FactPanel(page).getTitle()).toBe(title);
   });
 
-  test('expanding a commit and clicking a file shows fact in right panel', async ({ page }) => {
-    await page.keyboard.press('3');
-    const history = new HistoryPage(page);
-    await history.timeline.waitFor({ timeout: 10_000 });
+  test('"h" returns from history to live', async ({ page }) => {
+    await openFirstFact(page);
+    await openHistory(page);
 
-    const commits = await history.getCommits();
-    expect(commits.length).toBeGreaterThan(0);
+    await page.locator('body').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('h');
 
-    // Click the first commit to select it
-    await history.clickCommit(commits[0].hash);
-
-    // Press Enter to expand the commit (shows file list)
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(1000);
-
-    // Click a file within the expanded commit
-    const expandedFiles = page.locator('[data-testid="history-commit"] + div div[style*="cursor: pointer"]');
-    const fileCount = await expandedFiles.count();
-    if (fileCount > 0) {
-      await expandedFiles.first().click();
-      // The right panel should show the fact
-      const factTitle = page.getByTestId('fact-title');
-      await expect(factTitle).toBeVisible({ timeout: 10_000 });
-    }
-  });
-
-  test('pressing "1" exits history view back to tree', async ({ page }) => {
-    await page.keyboard.press('3');
-    await expect(page.getByTestId('history-timeline')).toBeVisible();
-
-    await page.keyboard.press('1');
+    await expect(page.getByTestId('timeline-nav')).toHaveCount(0);
     await expect(page.getByTestId('left-panel')).toBeVisible();
   });
 
-  // Regression: History button click with a fact open should (1) highlight that fact in
-  // CommitPanel and (2) require only ONE back step to return to tree mode.
-  test('History button with fact open: fact highlighted in CommitPanel, one back returns to tree', async ({ page }) => {
-    // Use search to land on a specific fact at a known path.
-    const filterInput = page.locator('#filter-input');
-    await filterInput.focus();
-    await filterInput.fill('mvcc');
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(800);
+  test('Backspace from history leaves the timeline', async ({ page }) => {
+    await openFirstFact(page);
+    await openHistory(page);
 
-    const factEntry = page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]')).first();
-    if (!await factEntry.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      test.skip(true, 'mvcc fact not found in seed data');
-      return;
-    }
-    await factEntry.click();
-    await expect(page.getByTestId('fact-title')).toBeVisible({ timeout: 10_000 });
-    const factPath = await factEntry.getAttribute('data-path');
-
-    // Wait for FACT_LOADED to fire so factCommit is set in state.
-    await page.waitForTimeout(800);
-
-    // Click the History button (not keyboard shortcut) — the bug was this bypassed the manager.
-    await page.getByTitle('History').click();
-    await expect(page.getByTestId('history-timeline')).toBeVisible({ timeout: 10_000 });
-
-    // The fact should be highlighted in CommitPanel (same path, same commit).
-    if (factPath) {
-      await expect(page.locator(`[data-testid="commit-file"][data-path="${factPath}"]`)).toBeVisible({ timeout: 5_000 });
-    }
-
-    // ONE back step must return to tree mode (previously required two).
-    await page.locator('body').click();
+    await page.locator('body').click({ position: { x: 5, y: 5 } });
     await page.keyboard.press('Backspace');
-    await page.waitForTimeout(500);
-    await expect(page.getByTestId('history-timeline')).not.toBeVisible({ timeout: 3_000 });
+
+    // Opening the timeline is not a navigation step (SET_AS_OF does not push
+    // the back stack), so Back pops the step BEFORE the fact was opened. Only
+    // the exit from history is asserted; the fact is not on screen afterwards.
+    await expect(page.getByTestId('timeline-nav')).toHaveCount(0);
     await expect(page.getByTestId('left-panel')).toBeVisible();
+    await expect(page.getByRole('img', { name: 'LIVE' })).toBeVisible();
+  });
+});
+
+test.describe('History (fact with several versions)', () => {
+  test('the timeline lists every version and selecting an older one shows its content', async ({ freshKnomit, page }) => {
+    const factPath = 'kb/history/demo.md';
+    const put = async (body: string) => {
+      const res = await freshKnomit.api.put(
+        `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/${factPath}`,
+        {
+          data: {
+            content: `---
+type: observation
+domain: [testing]
+confidence: 0.9
+sources: 1
+entities: [history-entity]
+refs: []
+---
+# History Demo
+
+${body}`,
+          },
+        },
+      );
+      expect(res.ok()).toBeTruthy();
+    };
+    await put('first version text');
+    await put('second version text');
+
+    await page.goto(freshKnomit.baseURL);
+    await page.waitForLoadState('domcontentloaded');
+    const browse = new BrowsePage(page);
+    await browse.clickEntry('history');
+    await browse.clickEntry('demo.md');
+    const fact = new FactPanel(page);
+    await expect(fact.body).toContainText('second version text');
+
+    await openHistory(page);
+    const history = new HistoryPage(page);
+    await expect(page.getByTestId('timeline-row')).toHaveCount(2);
+    const [newest, older] = await history.getCommits();
+    expect(newest.hash).not.toBe(older.hash);
+
+    // Select the older version: the body is the first text, not the second.
+    await page.getByTestId('timeline-row').nth(1).click();
+    await expect(fact.body).toContainText('first version text');
+    await expect(fact.body).not.toContainText('second version text');
   });
 });
