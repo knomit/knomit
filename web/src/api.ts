@@ -1,4 +1,5 @@
 import { createOutageLog } from './streamOutage';
+import { openEventStream, streamErrorSuffix } from './eventStream';
 // API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
 // build (UI and API are same-origin, so URLs stay relative). The desktop build
 // serves the UI in-process via Wails from a different origin and sets
@@ -905,7 +906,7 @@ export type ClientSessionChange =
 // Callers are responsible for coalescing: every MCP request from every
 // connected client produces an event. See useClientSessionChanges.
 export function subscribeClientSessions(onChange: (change: ClientSessionChange) => void): () => void {
-  const es = new EventSource(apiUrl('/api/v1/sessions/events'));
+  const es = openEventStream(apiUrl('/api/v1/sessions/events'));
   // Flap-limited, and shared with App's branch stream rather than copied —
   // without it a backend that 500s this stream leaves the badge and the
   // Sessions table quietly stale, and with it unbounded it would flood the
@@ -931,9 +932,9 @@ export function subscribeClientSessions(onChange: (change: ClientSessionChange) 
     onChange({ type: 'session', kind });
   };
   const onOpen = () => { outage.recovered('[sessions] reconnected'); };
-  const onError = () => {
+  const onError = (e?: unknown) => {
     outage.lost(es.readyState === EventSource.CLOSED
-      ? '[sessions] stream closed — the live count may be stale'
+      ? `[sessions] stream closed${streamErrorSuffix(e)} — the live count may be stale`
       : '[sessions] connection lost — retrying');
   };
 
@@ -999,7 +1000,7 @@ function remoteHealthValue(v: unknown): RepoRemoteHealth['sync'] | undefined {
 export function subscribeRepoEvents(
   onEvent: (ev: RepoEvent) => void,
 ): () => void {
-  const es = new EventSource(apiUrl('/api/v1/repo-events'));
+  const es = openEventStream(apiUrl('/api/v1/repo-events'));
   const outage = createOutageLog(diagStream);
   let seenReady = false;
 
@@ -1039,9 +1040,9 @@ export function subscribeRepoEvents(
     }
   };
   const onOpen = () => { outage.recovered('[index] reconnected'); };
-  const onError = () => {
+  const onError = (e?: unknown) => {
     outage.lost(es.readyState === EventSource.CLOSED
-      ? '[index] stream closed — index chips may be stale'
+      ? `[index] stream closed${streamErrorSuffix(e)} — index chips may be stale`
       : '[index] connection lost — retrying');
   };
 
@@ -1076,14 +1077,14 @@ export function createSession(repo: string, opts: { url: string; auth_method?: s
 }
 
 export function streamTest(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): () => void {
-  const es = new EventSource(`${sessionBase(repo, sessionId)}/test`);
+  const es = openEventStream(`${sessionBase(repo, sessionId)}/test`);
   es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
   es.onerror = () => { es.close(); };
   return () => es.close();
 }
 
 export function streamPreview(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): () => void {
-  const es = new EventSource(`${sessionBase(repo, sessionId)}/preview`);
+  const es = openEventStream(`${sessionBase(repo, sessionId)}/preview`);
   es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
   es.onerror = () => { es.close(); };
   return () => es.close();

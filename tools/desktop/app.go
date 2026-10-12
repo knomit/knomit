@@ -137,9 +137,22 @@ func run(ctx context.Context) error {
 	// The TLS listener's state, for Settings' Fleet identity section: made
 	// here because the boot starts before NativeService exists (see below).
 	tlsSt := &tlsStatus{}
+	// Where the webview's API traffic goes once the server's local listener is
+	// bound; bootKnomit fills it in. See uiproxy.go.
+	uiUp := &uiUpstream{}
 	boot := startServerBoot(ctx, func(ctx context.Context, setPhase func(bootPhase)) (string, func(), error) {
-		return bootKnomit(ctx, cfg, lockPath, setPhase, tlsSt)
+		return bootKnomit(ctx, cfg, lockPath, setPhase, tlsSt, uiUp)
 	})
+	// The status the UI sees. The webview reaches the API through the asset
+	// handler, so its API base is its OWN origin; boot.status() carries the
+	// server's TCP base, which only Settings' effective-port readout uses.
+	uiStatus := func() bootStatus {
+		s := boot.status()
+		if s.Ready {
+			s.APIBase = desktopOrigin()
+		}
+		return s
+	}
 	// Wails calls os.Exit on quit, so Go defers in run() do not fire. Cleanup
 	// runs via Wails' OnShutdown hook instead; serverBoot.stop is idempotent, so
 	// the belt-and-braces call after Run() below is harmless.
@@ -193,11 +206,13 @@ func run(ctx context.Context) error {
 		Name: "Knomit",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
-			Handler: configInjectingHandler(uiFS, desktopFS, boot.status),
+			Handler: apiProxy(configInjectingHandler(uiFS, desktopFS, uiStatus),
+				func() bool { return boot.status().Ready }, uiUp),
 		},
 		Services:   services,
 		OnShutdown: shutdown,
 	})
+	registerSSEStream(wapp, uiUp)
 	// Quit this instance only AFTER RestartApp has released the lockfile and
 	// spawned the replacement — see NativeService.RestartApp.
 	nativeSvc.onRestart = wapp.Quit
@@ -426,7 +441,7 @@ func (g *appStartGate) open() {
 //
 // This is the slow half of startup and it runs on a goroutine (see
 // startServerBoot), so it must not touch Wails — nothing here does.
-func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhase func(bootPhase), tlsSt *tlsStatus) (string, func(), error) {
+func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhase func(bootPhase), tlsSt *tlsStatus, uiUp *uiUpstream) (string, func(), error) {
 	setPhase(phaseInstallingTools)
 	// The data root is private before installBridgeTool creates <home>/bin
 	// (at 0755), which on a first launch creates <home> itself. knomitapp.New
@@ -481,6 +496,16 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhas
 		a.Close()
 		return "", nil, err
 	}
+	// The webview rides the local socket / pipe and nothing else. A boot that
+	// could not bind it (the path is held by another process) has no UI path:
+	// say so rather than serve a window whose every call fails, or — worse —
+	// dial a listener that is not ours.
+	if srv.local == "" {
+		srv.shutdown()
+		a.Close()
+		return "", nil, fmt.Errorf("the local socket %s could not be opened (another process holds it, or the path is unusable); the desktop UI needs it — stop that process or set [socket] in knomit.toml", cfg.Socket)
+	}
+	uiUp.set(srv.local)
 	tlsSt.set(srv.tlsState)
 	a.Manager().SetServerAddress(srv.address)
 	// The one line to copy into KNOMIT_SERVER to reach THIS instance.
@@ -599,6 +624,12 @@ func configInjectingHandler(uiFS, desktopFS fs.FS, status func() bootStatus) htt
 			// no base at all, which is the last thing to let a cache remember.
 			w.Header().Set("Cache-Control", "no-store")
 			fmt.Fprint(w, "window.__KNOMIT_DESKTOP__ = true;\n")
+			// The UI opens its event streams as Wails Streams rather than
+			// EventSource (web/src/eventStream.ts, uistreams.go). Unconditional,
+			// not gated on the boot: the flag does not depend on the server, and
+			// the boot gate keeps every stream closed until it is up, so a page
+			// that loaded while booting still finds it set when it first opens one.
+			fmt.Fprint(w, "window.__KNOMIT_EVENT_TRANSPORT__ = \"wails-stream\";\n")
 			if !st.Ready {
 				// Deliberately no __KNOMIT_API_BASE__. Leaving it UNSET is what
 				// makes the client's gate unmissable: any code that skips the

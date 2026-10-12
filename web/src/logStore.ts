@@ -1,4 +1,5 @@
 import { apiUrl } from './api';
+import { openEventStream } from './eventStream';
 
 /**
  * How many lines the view keeps. The server's ring is the archive — this is
@@ -119,7 +120,7 @@ function droppedMarker(count: number): string {
  * the honest answer: the server can only vouch for what it kept.
  */
 export function connectLogStream(): () => void {
-  const es = new EventSource(apiUrl('/api/v1/logs/events'));
+  const es = openEventStream(apiUrl('/api/v1/logs/events'));
   // Per-connection state.
   let backlog: string[] = [];
   let inBacklog = true;
