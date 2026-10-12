@@ -422,6 +422,32 @@ func TestStopServerFirstStopsBeforeTheUpdaterRestarts(t *testing.T) {
 	}
 }
 
+// If the updater's restart fails AFTER the server was stopped for it, nothing
+// serves any more: the supervisor must say so (failed status, which drives
+// the fatal dialog), not keep reporting the stopped server as ready.
+func TestStopServerFirst_AFailedRestartIsAFailedBoot(t *testing.T) {
+	e, s := newFakeEnv(t, "ready")
+	s.start(context.Background())
+	waitReady(t, s)
+	pid := e.spawns(t)[0].PID
+
+	boom := errors.New("helper could not relaunch")
+	i := stopServerFirst{updateInstaller: &failingRestart{err: boom}, stop: s.stop, failed: s.fail}
+	if err := installAndRestart(context.Background(), i); !errors.Is(err, boom) {
+		t.Fatalf("installAndRestart = %v, want the restart error", err)
+	}
+	waitGone(t, pid, 5*time.Second) // positive control: the server WAS stopped for the update
+	st := s.status()
+	if st.Ready || st.Phase != string(phaseFailed) || !strings.Contains(st.Error, "helper could not relaunch") {
+		t.Fatalf("status after a failed update restart = %+v, want failed naming the restart error", st)
+	}
+}
+
+type failingRestart struct{ err error }
+
+func (f *failingRestart) CheckAndInstall(context.Context) error { return nil }
+func (f *failingRestart) Restart(context.Context) error         { return f.err }
+
 type orderedInstaller struct{ order *[]string }
 
 func (o *orderedInstaller) CheckAndInstall(context.Context) error {

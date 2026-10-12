@@ -198,7 +198,7 @@ func run(ctx context.Context) error {
 	// included, and relaunches: the server this desktop spawned must be gone
 	// first, or it keeps running the replaced binary (kb gotcha
 	// desktop/self-update, 7173001e).
-	installer := stopServerFirst{updateInstaller: wapp.Updater, stop: sup.stop}
+	installer := stopServerFirst{updateInstaller: wapp.Updater, stop: sup.stop, failed: sup.fail}
 
 	window := wapp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "Knomit",

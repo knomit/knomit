@@ -459,14 +459,24 @@ func installAndRestart(ctx context.Context, u updateInstaller) error {
 // the socket, and leave the new desktop attached to the old build (kb gotcha
 // desktop/self-update, 7173001e). stop is the supervisor's: idempotent, and a
 // no-op for a server started outside the app.
+//
+// If the restart then FAILS, the app keeps running with its server stopped
+// (supervision cannot be resumed: stop ended it). failed reports that as a
+// failed boot — the tray's fatal-dialog path, which tells the user to reopen
+// Knomit — instead of leaving a "ready" status in front of a dead socket.
 type stopServerFirst struct {
 	updateInstaller
-	stop func()
+	stop   func()
+	failed func(error)
 }
 
 func (s stopServerFirst) Restart(ctx context.Context) error {
 	s.stop()
-	return s.updateInstaller.Restart(ctx)
+	err := s.updateInstaller.Restart(ctx)
+	if err != nil && s.failed != nil {
+		s.failed(fmt.Errorf("the update could not restart Knomit (%v); the knomit server was already stopped for it. Reopen Knomit", err))
+	}
+	return err
 }
 
 // activateNotifications performs the notification-centre setup: the permission
