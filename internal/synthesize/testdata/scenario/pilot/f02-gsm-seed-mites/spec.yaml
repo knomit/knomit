@@ -1,0 +1,872 @@
+# Copied from the expert-scenarios data repo at f696456 (worlds/general-sciences-markets/f02-multi-hop-refs/f02-gsm-seed-mites) with its ontology_file inlined,
+# so the engine tests are hermetic. Do not edit here; regenerate from the data repo.
+format: knomit-scenario/v1
+id: f02-gsm-seed-mites
+families: [F2]
+ontology_shape: general
+tell_check: "1-10 pass, family items pass (the revised mite threshold keeps its title shape and is revised on new chamber data; two humidity distractors are station observations in the terminal's folder with matching length and refs; no signpost words; questions rephrased)"
+description: >-
+  Nembrisa seed, an invented oilseed grown mostly on the invented Okkaran
+  Plateau and traded on the invented Valdrona Seed Exchange. The 2031 price
+  spike is explained three hops down from a market synthesis (price ->
+  yield loss -> mite outbreak threshold -> station humidity record); the
+  mite threshold was revised after the yield observation cited it. Two
+  same-station humidity records (another year, another season) sit beside
+  the terminal. A second question asks how much oil a presser recovers per
+  tonne (two hops to a reference).
+ontology: |
+  # Synthetic ontology for scenario worlds: a general-knowledge base shaped like
+  # a reader's notebook on natural science, applied engineering and markets.
+  # Shape only; worlds fill it with invented species, materials, firms, places
+  # and numbers. No triggers.
+  #
+  # `principles` here is deliberately an ordinary topic with no kind/type rule:
+  # it holds epistemic and pragmatic facts alike, so a world can show that the
+  # folder confers no standing (the a-priori definition is the TYPE principle).
+  #
+  # Context: answer-fact keys (question / reason_run / trust_policy) are declared
+  # on every topic, because there is no root-level context block.
+  id: general-sciences-markets
+  name: Sciences and Markets
+  description: >-
+    General knowledge about the natural world, applied engineering, and the
+    markets that trade what both produce: measurements, mechanisms, models,
+    prices and the reasoning that connects them.
+  validations:
+    - name: domain-non-empty
+      message: every fact names at least one domain
+      rule: "fact.domain.length > 0"
+    - name: no-signals
+      message: coordination signals do not belong in a knowledge base
+      rule: "fact.type !== 'signal'"
+  topics:
+    science:
+      description: Natural and applied science — organisms, materials, processes, measurements
+      validations:
+        - name: measurement-cites-source
+          message: an observation or reference in science cites where it was measured (at least one ref)
+          rule: "(fact.type !== 'observation' && fact.type !== 'reference') || fact.refs.length > 0"
+        - name: reference-carries-value
+          message: a reference fact states a value (its body contains a digit)
+          rule: "fact.type !== 'reference' || /[0-9]/.test(fact.body)"
+      context:
+        measured_at:  {type: time}
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        biology:
+          description: Organisms, populations, ecosystems
+        chemistry:
+          description: Compounds, reactions, materials
+        earth:
+          description: Climate, soils, water, geology
+        engineering:
+          description: Applied science — devices, processes, tolerances
+    markets:
+      description: Firms, products, prices, trade and the forces that move them
+      validations:
+        - name: market-fact-names-party
+          message: a market observation names at least one party (firm, exchange, regulator, product)
+          rule: "fact.type !== 'observation' || fact.entities.length > 0"
+      context:
+        as_of:        {type: time}
+        currency:     {type: string, pattern: "^[A-Z]{3}$"}
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        firms:
+          description: Companies, their products and results
+        commodities:
+          description: Raw materials and their prices
+        trade:
+          description: Flows between regions, tariffs, logistics
+        regulation:
+          description: Rules that bind market participants
+    society:
+      description: Institutions, policy, places and people as they bear on the above
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        institutions:
+          description: Agencies, universities, standards bodies
+        places:
+          description: Regions, cities, sites
+    principles:
+      description: General laws, definitions and rules of thumb the notebook relies on — any kind, any type
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+    meta:
+      description: Knowledge about this knowledge base
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        reasoning:
+          description: Methodology — how to weigh sources, models and forecasts here
+        sources:
+          description: Notes on the reliability of the sources this notebook cites
+external_sources:
+  - https://ledger.okkaran-growers.invalid/station/humidity
+  - https://ledger.okkaran-growers.invalid/trials/blister-mite
+  - https://ledger.okkaran-growers.invalid/exchange/settlements
+  - https://ledger.okkaran-growers.invalid/pressing/assays
+
+facts:
+  - id: m01
+    topic: science
+    category: biology
+    type: observation
+    title: "Nembrisa is a shrubby oilseed grown mainly on the Okkaran Plateau"
+    body: >-
+      Nembrisa is a perennial shrub whose seed is pressed for oil. About three
+      fifths of the traded crop comes from smallholdings on the Okkaran
+      Plateau; the rest from lowland farms to the south.
+    confidence: 0.85
+    sources: 2
+    domain: [oilseeds, agronomy]
+    entities: [nembrisa, Okkaran Plateau]
+    refs: [https://ledger.okkaran-growers.invalid/exchange/settlements]
+    role: background
+  - id: m02
+    topic: markets
+    category: commodities
+    type: observation
+    title: "The Valdrona Seed Exchange sets the benchmark nembrisa price"
+    body: >-
+      Physical nembrisa trades against the Valdrona Seed Exchange's monthly
+      settlement price, quoted in VLD per tonne of cleaned seed. In ordinary
+      seasons it moved within about 15% of 900 VLD.
+    confidence: 0.8
+    sources: 1
+    domain: [commodity-markets, oilseeds]
+    entities: [Valdrona Seed Exchange, nembrisa benchmark]
+    refs: [https://ledger.okkaran-growers.invalid/exchange/settlements]
+    context: {currency: VLD, as_of: "2030-12-31T00:00:00Z"}
+    role: background
+  - id: m03
+    topic: society
+    category: places
+    type: observation
+    title: "The Okkaran Plateau sits at about 1,400 m with a single rainy season"
+    body: >-
+      The plateau's farms lie around 1,400 m above sea level. Rain falls mostly
+      in the late summer months; spring, when nembrisa flowers, is usually
+      mild and moderately humid.
+    confidence: 0.8
+    sources: 1
+    domain: [geography, climate]
+    entities: [Okkaran Plateau]
+    refs: [https://ledger.okkaran-growers.invalid/station/humidity]
+    role: background
+  - id: m04
+    topic: science
+    category: biology
+    type: observation
+    title: "Nembrisa flowers for five to six weeks from late spring"
+    body: >-
+      On the plateau nembrisa comes into flower in the second half of spring
+      and keeps flowering for five to six weeks; seed set depends on buds
+      surviving that whole window.
+    confidence: 0.8
+    sources: 1
+    domain: [oilseeds, phenology]
+    entities: [nembrisa flowering]
+    refs: [https://ledger.okkaran-growers.invalid/trials/blister-mite]
+    role: background
+  - id: m05
+    topic: science
+    category: biology
+    type: observation
+    title: "Blister mites feed inside nembrisa flower buds and kill them"
+    body: >-
+      The nembrisa blister mite lives inside flower buds; infested buds swell,
+      blister and drop without setting seed. A heavy infestation can take most
+      buds on a shrub.
+    confidence: 0.85
+    sources: 1
+    domain: [crop-pests, oilseeds]
+    entities: [nembrisa blister mite, nembrisa flowering]
+    refs: [https://ledger.okkaran-growers.invalid/trials/blister-mite]
+    role: background
+  - id: m06
+    topic: science
+    category: earth
+    type: observation
+    title: "Okkaran station, 2031 flowering season: humidity below 40% for 17 consecutive days"
+    body: >-
+      The Okkaran weather station logged daily mean relative humidity below
+      40% on 17 consecutive days in the middle of the 2031 flowering season,
+      the longest dry run in its record. Afternoon minima reached 22%.
+    confidence: 0.9
+    sources: 1
+    domain: [climate, humidity]
+    entities: [Okkaran weather station, flowering-season humidity]
+    refs: [https://ledger.okkaran-growers.invalid/station/humidity]
+    context: {measured_at: "2031-05-31T00:00:00Z"}
+    role: support
+  - id: m13
+    topic: markets
+    category: trade
+    type: observation
+    title: "The VLD weakened about 7% against importers' currencies in 2031"
+    body: >-
+      Over the 2031 season the VLD lost about 7% against the currencies of the
+      main importing markets, making plateau seed cheaper abroad in their
+      terms.
+    confidence: 0.75
+    sources: 1
+    domain: [currency, trade]
+    entities: [VLD exchange rate]
+    refs: [https://ledger.okkaran-growers.invalid/exchange/settlements]
+    context: {as_of: "2031-12-31T00:00:00Z"}
+    role: background
+
+  - id: m07
+    topic: science
+    category: earth
+    type: observation
+    title: "Okkaran station, 2030 flowering season: humidity stayed above 52% on all but two days"
+    body: >-
+      In the 2030 flowering season daily mean relative humidity at the Okkaran
+      station stayed above 52% except on two isolated days, close to the
+      station's long-run spring average.
+    confidence: 0.85
+    sources: 1
+    domain: [climate, humidity]
+    entities: [Okkaran weather station, flowering-season humidity]
+    refs: [https://ledger.okkaran-growers.invalid/station/humidity]
+    context: {measured_at: "2030-05-31T00:00:00Z"}
+    distinct_from: [m06]
+    role: distractor
+  - id: m08
+    topic: science
+    category: earth
+    type: observation
+    title: "Okkaran station, 2031 harvest season: humidity below 40% for 4 days in September"
+    body: >-
+      During the 2031 harvest, the Okkaran station recorded four days with
+      daily mean relative humidity below 40%, all in mid-September; humidity
+      was otherwise near normal for the season.
+    confidence: 0.85
+    sources: 1
+    domain: [climate, humidity]
+    entities: [Okkaran weather station, harvest-season humidity]
+    refs: [https://ledger.okkaran-growers.invalid/station/humidity]
+    context: {measured_at: "2031-09-30T00:00:00Z"}
+    distinct_from: [m06]
+    role: distractor
+  - id: m09
+    topic: science
+    category: biology
+    type: observation
+    title: "Blister mite numbers explode when flowering-season humidity stays below 45% for two weeks"
+    body: >-
+      Field counts suggest blister mite populations multiply several-fold when
+      relative humidity during flowering stays below 45% for two weeks or
+      more; in humid springs predatory mites keep them in check. The 2031
+      season was the clearest case on record.
+    confidence: 0.75
+    sources: 2
+    domain: [crop-pests, humidity]
+    entities: [nembrisa blister mite, mite outbreak threshold]
+    motifs: [dry-spell-unleashes-pest]
+    refs: ["fact:m06", https://ledger.okkaran-growers.invalid/trials/blister-mite]
+    role: support
+  - id: m12
+    topic: science
+    category: biology
+    type: observation
+    title: "Lowland nembrisa yields in 2031 were close to normal"
+    body: >-
+      Lowland farms, which flower earlier and under more humid air, reported
+      2031 yields within 5% of their five-year average and little blister mite
+      damage.
+    confidence: 0.75
+    sources: 1
+    domain: [oilseeds, yields]
+    entities: [lowland nembrisa farms]
+    refs: [https://ledger.okkaran-growers.invalid/exchange/settlements]
+    role: background
+  - id: m14
+    topic: markets
+    category: firms
+    type: observation
+    title: "Plaxtow Pressers bought a record share of the 2031 crop forward"
+    body: >-
+      Plaxtow Pressers, the largest seed buyer, had contracted about 30% more
+      seed forward for 2031 than the year before, before the size of the crop
+      was known.
+    confidence: 0.7
+    sources: 1
+    domain: [oilseed-processing, contracts]
+    entities: [Plaxtow Pressers, forward contracts]
+    refs: [https://ledger.okkaran-growers.invalid/exchange/settlements]
+    context: {as_of: "2031-03-31T00:00:00Z"}
+    role: background
+  - id: m16
+    topic: science
+    category: chemistry
+    type: observation
+    title: "Plaxtow's screw presses leave part of the oil in the cake"
+    body: >-
+      Plaxtow presses cleaned seed cold in screw presses and sells the cake
+      as feed. Cold pressing keeps the oil's flavour but leaves a share of it
+      in the cake, which is why recovery is checked on every lot.
+    confidence: 0.8
+    sources: 1
+    domain: [oilseed-processing, extraction]
+    entities: [Plaxtow screw presses, press cake]
+    refs: ["fact:m14", https://ledger.okkaran-growers.invalid/pressing/assays]
+    role: support
+
+  - id: m17
+    topic: science
+    category: chemistry
+    type: reference
+    title: "Okkaran nembrisa seed assay: 31.5% oil by mass, 88% recovered by Plaxtow's presses"
+    body: >-
+      Lot assays of Okkaran seed average 31.5% oil by mass at 8% moisture, and
+      Plaxtow's screw presses recover 88% of that oil; the remainder stays in
+      the cake.
+    confidence: 0.9
+    sources: 2
+    domain: [oilseed-processing, assays]
+    entities: [Okkaran nembrisa seed, oil content]
+    refs: [https://ledger.okkaran-growers.invalid/pressing/assays]
+    role: support
+  - id: m18
+    topic: science
+    category: chemistry
+    type: reference
+    title: "Lowland nembrisa seed assay: 27.2% oil by mass"
+    body: >-
+      Lowland seed lots assayed at an average of 27.2% oil by mass at 8%
+      moisture; buyers pay a discount on lowland seed for that reason.
+    confidence: 0.85
+    sources: 1
+    domain: [oilseed-processing, assays]
+    entities: [lowland nembrisa seed, oil content]
+    refs: [https://ledger.okkaran-growers.invalid/pressing/assays]
+    distinct_from: [m17]
+    role: distractor
+  - id: m21
+    topic: science
+    category: biology
+    type: observation
+    title: "Chamber trials put the blister mite's take-off at ten dry days"
+    body: >-
+      In humidity chambers, blister mite colonies on cut nembrisa shoots
+      multiplied fastest once relative humidity had stayed below 40% for ten
+      consecutive days; at 45% growth was slow and predatory mites kept pace.
+    confidence: 0.8
+    sources: 1
+    domain: [crop-pests, humidity]
+    entities: [nembrisa blister mite, humidity chamber trials]
+    refs: [https://ledger.okkaran-growers.invalid/trials/blister-mite]
+    distinct_from: [m09]
+    role: background
+  - id: m19
+    topic: markets
+    category: regulation
+    type: observation
+    title: "Raw nembrisa seed leaving the plateau pays a 6% export duty"
+    body: >-
+      Seed exported unpressed pays a 6% duty on its declared value; oil and
+      cake pay none. The duty is meant to keep pressing on the plateau.
+    confidence: 0.8
+    sources: 1
+    domain: [trade-policy]
+    entities: [nembrisa export duty]
+    refs: [https://ledger.okkaran-growers.invalid/exchange/settlements]
+    context: {as_of: "2029-01-01T00:00:00Z"}
+    role: background
+  - id: m20
+    topic: principles
+    category: markets
+    type: observation
+    title: "A crop grown mostly in one region swings hard on that region's weather"
+    body: >-
+      When most of a crop comes from one region, a single bad season there
+      moves the world price much more than its share of total supply alone
+      would suggest, because buyers have nowhere else to turn at short
+      notice.
+    confidence: 0.75
+    sources: 1
+    domain: [commodity-markets]
+    entities: [regional concentration]
+    motifs: [single-region-supply-shock]
+    refs: ["fact:m01"]
+    role: background
+
+  - id: m10
+    topic: science
+    category: biology
+    type: observation
+    title: "Okkaran nembrisa yields fell by about a third in 2031 where blister mites took hold"
+    body: >-
+      Growers' crop estimates show plateau yields down about a third on 2030,
+      with the losses concentrated on farms where mites infested most buds.
+      Lowland farms did not share the loss, which points at the plateau's
+      dry flowering season rather than a general cause.
+    confidence: 0.8
+    sources: 2
+    domain: [oilseeds, yields]
+    entities: [Okkaran nembrisa crop, nembrisa blister mite]
+    motifs: [dry-spell-unleashes-pest]
+    refs: ["fact:m09", "fact:m12"]
+    role: support
+  - id: m22
+    topic: science
+    category: biology
+    type: observation
+    title: "Releasing predatory mites halved bud loss in a dry-spring trial"
+    body: >-
+      On trial plots where predatory mites were released at the start of
+      flowering, bud loss in a dry spring was about half that of untreated
+      plots nearby.
+    confidence: 0.7
+    sources: 1
+    domain: [crop-pests, biocontrol]
+    entities: [predatory mite release]
+    refs: ["fact:m05"]
+    role: background
+  - id: m23
+    topic: markets
+    category: firms
+    type: observation
+    title: "Plaxtow Pressers can press about 48,000 t of seed a year"
+    body: >-
+      Plaxtow's two plateau mills together handle around 48,000 t of cleaned
+      seed a year, roughly half of the plateau crop in a normal season.
+    confidence: 0.75
+    sources: 1
+    domain: [oilseed-processing, capacity]
+    entities: [Plaxtow Pressers, plateau mills]
+    refs: ["fact:m14"]
+    context: {as_of: "2030-12-31T00:00:00Z"}
+    role: background
+  - id: m25
+    topic: meta
+    category: sources
+    type: observation
+    title: "Exchange prices here are monthly settlement averages"
+    body: >-
+      Nembrisa prices recorded here are the exchange's monthly settlement
+      averages for cleaned seed; daily highs during the 2031 season were
+      higher than the averages show.
+    confidence: 0.75
+    sources: 1
+    domain: [source-reliability, prices]
+    entities: [settlement averages]
+    refs: ["fact:m02"]
+    role: background
+  - id: m26
+    topic: meta
+    category: sources
+    type: observation
+    title: "Station humidity is measured hourly at 2 m and averaged by day"
+    body: >-
+      The Okkaran station measures relative humidity hourly at 2 m above
+      ground; daily means are the average of the 24 readings.
+    confidence: 0.75
+    sources: 1
+    domain: [source-reliability, instrumentation]
+    entities: [Okkaran weather station]
+    refs: ["fact:m06"]
+    role: background
+
+  - id: m11
+    topic: markets
+    category: commodities
+    type: synthesis
+    title: "The nembrisa benchmark roughly doubled in the 2031 season on a short Okkaran crop"
+    body: >-
+      Settlement prices rose from about 900 VLD to over 1,800 VLD a tonne
+      through the 2031 season. The plateau crop came in about a third short
+      and lowland supply could not make it up; a weaker VLD and heavy forward
+      buying likely added to the move but do not explain its size.
+    confidence: 0.8
+    sources: 3
+    domain: [commodity-markets, oilseeds]
+    entities: [nembrisa benchmark, Okkaran nembrisa crop]
+    motifs: [single-region-supply-shock]
+    refs: ["fact:m10", "fact:m13", "fact:m14"]
+    context: {currency: VLD, as_of: "2031-12-31T00:00:00Z"}
+    role: support
+  - id: m15
+    topic: markets
+    category: firms
+    type: synthesis
+    title: "Plaxtow Pressers' margin per tonne turns on how much oil it gets out of the seed"
+    body: >-
+      Seed is bought by the tonne and oil sold by the litre, so Plaxtow's
+      margin rises and falls with the oil content of the seed and the share
+      its presses recover. A dearer tonne of seed matters less when the seed
+      is oil-rich.
+    confidence: 0.8
+    sources: 1
+    domain: [oilseed-processing, margins]
+    entities: [Plaxtow Pressers, pressing margin]
+    refs: ["fact:m16", "fact:m02"]
+    distinct_from: [m14, m23]
+    role: support
+  - id: m24
+    topic: markets
+    category: commodities
+    type: observation
+    title: "The 2032 benchmark fell back about 40% with a normal plateau crop"
+    body: >-
+      With a normal 2032 plateau harvest, the monthly settlement price fell
+      about 40% from its 2031 peak by the end of the season.
+    confidence: 0.75
+    sources: 1
+    domain: [commodity-markets, oilseeds]
+    entities: [nembrisa benchmark]
+    motifs: [single-region-supply-shock]
+    refs: ["fact:m11"]
+    context: {currency: VLD, as_of: "2032-12-31T00:00:00Z"}
+    distinct_from: [m02]
+    role: background
+  - id: m27
+    topic: society
+    category: institutions
+    type: observation
+    title: "The Okkaran Growers' Union publishes the plateau's crop estimates"
+    body: >-
+      Crop estimates for the plateau come from the Okkaran Growers' Union,
+      which samples about 300 farms each season; the exchange quotes them in
+      its monthly reports.
+    confidence: 0.8
+    sources: 1
+    domain: [institutions, crop-statistics]
+    entities: [Okkaran Growers' Union]
+    refs: ["fact:m10"]
+    role: background
+  - id: m28
+    topic: science
+    category: earth
+    type: observation
+    title: "Plateau soils are thin and volcanic and hold little water"
+    body: >-
+      Most plateau farms sit on thin volcanic soils over rock, which drain
+      fast; shrubs depend on the rainy season to carry them through the
+      spring.
+    confidence: 0.7
+    sources: 1
+    domain: [soils, agronomy]
+    entities: [plateau soils]
+    refs: ["fact:m03"]
+    role: background
+  - id: m29
+    topic: science
+    category: biology
+    type: observation
+    title: "Nembrisa is pollinated mainly by a native ground-nesting bee"
+    body: >-
+      A small native ground-nesting bee carries out most nembrisa pollination
+      on the plateau; fields near uncultivated slopes set more seed.
+    confidence: 0.7
+    sources: 1
+    domain: [pollination, oilseeds]
+    entities: [ground-nesting bee]
+    refs: ["fact:m04"]
+    role: background
+  - id: m30
+    topic: markets
+    category: trade
+    type: observation
+    title: "Three importing markets take most of the plateau's oil"
+    body: >-
+      Nembrisa oil from the plateau goes mostly to three importing markets,
+      where it is sold as a premium cooking oil; seed exports are small
+      because of the duty.
+    confidence: 0.7
+    sources: 1
+    domain: [trade, oilseeds]
+    entities: [nembrisa oil exports]
+    refs: ["fact:m19"]
+    role: background
+
+  - id: m31
+    topic: science
+    category: engineering
+    type: observation
+    title: "Seed is dried to 8% moisture before it is stored"
+    body: >-
+      Cleaned seed is dried to about 8% moisture before storage; wetter seed
+      heats in the bin and its oil turns rancid within weeks.
+    confidence: 0.75
+    sources: 1
+    domain: [post-harvest, storage]
+    entities: [seed drying]
+    refs: ["fact:m17"]
+    role: background
+  - id: m32
+    topic: markets
+    category: firms
+    type: observation
+    title: "Lowland growers planted about 12% more nembrisa after the 2031 season"
+    body: >-
+      Encouraged by 2031 prices, lowland farms expanded nembrisa plantings by
+      about 12%; the new shrubs bear their first full crop in their third
+      year.
+    confidence: 0.7
+    sources: 1
+    domain: [agronomy, supply-response]
+    entities: [lowland nembrisa farms]
+    refs: ["fact:m12"]
+    context: {as_of: "2032-06-30T00:00:00Z"}
+    distinct_from: [m12]
+    role: background
+  - id: m33
+    topic: society
+    category: places
+    type: observation
+    title: "The lowland nembrisa belt runs along the southern river valleys"
+    body: >-
+      Lowland nembrisa grows in a belt of river valleys south of the plateau,
+      below about 500 m, where spring air is warmer and more humid.
+    confidence: 0.75
+    sources: 1
+    domain: [geography]
+    entities: [lowland belt]
+    refs: ["fact:m03"]
+    role: background
+  - id: m34
+    topic: science
+    category: chemistry
+    type: observation
+    title: "Nembrisa oil is rich in a single monounsaturated fatty acid"
+    body: >-
+      About two thirds of nembrisa oil is one monounsaturated fatty acid,
+      which gives it a long shelf life and is the basis of its premium.
+    confidence: 0.7
+    sources: 1
+    domain: [oil-chemistry]
+    entities: [nembrisa oil]
+    refs: ["fact:m17"]
+    role: background
+  - id: m35
+    topic: markets
+    category: regulation
+    type: observation
+    title: "The exchange limits daily nembrisa price moves to 8%"
+    body: >-
+      Nembrisa contracts on the Valdrona exchange may not settle more than 8%
+      away from the previous day's price; the limit was hit on eleven days in
+      2031.
+    confidence: 0.75
+    sources: 1
+    domain: [exchange-rules]
+    entities: [Valdrona Seed Exchange, daily price limit]
+    refs: ["fact:m25"]
+    role: background
+  - id: m36
+    topic: science
+    category: biology
+    type: observation
+    title: "Blister mites overwinter in bark crevices on the shrub"
+    body: >-
+      Adult blister mites spend the winter in crevices of older bark and move
+      to the buds as they form; pruning old wood appears to lower the next
+      spring's starting numbers.
+    confidence: 0.7
+    sources: 1
+    domain: [crop-pests]
+    entities: [nembrisa blister mite, overwintering]
+    refs: ["fact:m22"]
+    role: background
+  - id: m37
+    topic: principles
+    category: ecology
+    type: observation
+    title: "Pest thresholds tied to weather are usually runs of consecutive days"
+    body: >-
+      For small arthropods a dry or hot spell matters through its length, not
+      its single worst day; thresholds are therefore stated as a level held
+      for a number of consecutive days.
+    confidence: 0.7
+    sources: 1
+    domain: [pest-ecology]
+    entities: [weather thresholds]
+    motifs: [dry-spell-unleashes-pest]
+    refs: ["fact:m21"]
+    role: background
+  - id: m38
+    topic: markets
+    category: commodities
+    type: observation
+    title: "Open interest in nembrisa futures hit a record in mid-2031"
+    body: >-
+      Open interest in the exchange's nembrisa contract reached a record in
+      the middle of 2031, about twice the previous year's peak, as buyers
+      hedged against a short crop.
+    confidence: 0.7
+    sources: 1
+    domain: [commodity-markets, futures]
+    entities: [nembrisa futures]
+    refs: ["fact:m35"]
+    context: {as_of: "2031-07-31T00:00:00Z"}
+    role: background
+  - id: m39
+    topic: science
+    category: earth
+    type: observation
+    title: "The plateau's rainy season starts on average in the first week of August"
+    body: >-
+      Over the station record the rainy season's first heavy rain has fallen
+      on average in the first week of August, with a spread of about three
+      weeks either way.
+    confidence: 0.7
+    sources: 1
+    domain: [climate, rainfall]
+    entities: [plateau rainy season]
+    refs: ["fact:m26"]
+    role: background
+  - id: m40
+    topic: meta
+    category: reasoning
+    type: observation
+    title: "Prices in this notebook are nominal VLD unless marked otherwise"
+    body: >-
+      Every price recorded here is in nominal VLD at the time quoted; no
+      figures are adjusted for inflation or exchange rates.
+    confidence: 0.75
+    sources: 1
+    domain: [knowledge-base, units]
+    entities: [price convention]
+    refs: ["fact:m25"]
+    role: background
+
+history:
+  - moment: crop and market background
+    learn: [m01, m02, m03, m04, m05, m06, m13]
+  - moment: station records, pests and processing notes
+    learn: [m07, m08, m09, m12, m14]
+  - moment: assays and chamber trials
+    learn: [m16, m17, m19, m20, m22, m23, m25, m26]
+  - moment: yield losses
+    learn: [m10, m18, m21, m28, m29, m30]
+  - moment: season write-ups
+    learn: [m11, m15, m27, m31, m32, m33]
+  - moment: chamber trials refine the mite threshold
+    update: m09
+    set:
+      title: "Blister mite numbers explode when flowering-season humidity stays below 40% for ten days"
+      body: >-
+        Field counts and chamber trials show blister mite populations multiply
+        several-fold once relative humidity during flowering has stayed below
+        40% for ten consecutive days; at 45% and above predatory mites keep
+        them in check. The 2031 season was the clearest field case on record.
+      confidence: 0.85
+      refs: ["fact:m06", "fact:m21", https://ledger.okkaran-growers.invalid/trials/blister-mite]
+  - moment: later notes
+    learn: [m24, m34, m35, m36, m37, m39, m40]
+  - moment: futures note
+    learn: [m38]
+
+questions:
+  - id: q1
+    family: F2
+    text: What actually drove nembrisa seed prices so high during the 2031 season?
+    outcome: answer
+    assess: answers
+    support: [m11, m10, m09, m06]
+    forbidden: [m07, m08]
+    chain:
+      - id: s1
+        moves:
+          - {move: neighbours, arg: question}
+          - {move: entity, arg: nembrisa benchmark}
+        surfaces: [m11, m24, m02]
+        relevant: {m11: "yes", m24: "no", m02: "no"}
+      - id: s2
+        requires: [s1]
+        moves:
+          - {move: refs_out, from: m11}
+        surfaces: [m10, m13, m14]
+        relevant: {m10: "yes", m13: "no", m14: "no"}
+        support: {m10: supports}
+      - id: s3
+        requires: [s2]
+        moves:
+          - {move: refs_out, from: m10}
+        surfaces: [m09, m12]
+        relevant: {m09: "yes", m12: "yes"}
+        support: {m09: supports, m12: supports}
+      - id: s4
+        requires: [s3]
+        moves:
+          - {move: supersession, from: m09}
+          - {move: history, from: m09}
+        surfaces: [m09]
+        support: {m09: supports}
+      - id: s5
+        requires: [s3]
+        moves:
+          - {move: refs_out, from: m09}
+        surfaces: [m06, m21]
+        relevant: {m06: "yes", m21: "yes"}
+        support: {m06: supports, m21: supports}
+    answer:
+      claim: >-
+        The nembrisa benchmark roughly doubled in 2031 because the Okkaran
+        Plateau crop came in about a third short. Blister mites destroyed the
+        flower buds: mite numbers explode once flowering-season humidity stays
+        below 40% for ten consecutive days, and the Okkaran station logged
+        humidity below 40% for 17 consecutive days in the 2031 flowering
+        season. The yield write-up first relied on an older threshold (below
+        45% for two weeks); the current threshold comes from chamber trials.
+      types: [synthesis]
+      topic: markets
+      category: commodities
+      must_cite: [m11, m10, m09, m06]
+      must_not_cite: [m07, m08]
+      confidence: [0.7, 0.8]
+      entities: [nembrisa benchmark, nembrisa blister mite]
+  - id: q2
+    family: F2
+    text: Roughly how many kilograms of oil does Plaxtow get out of a tonne of plateau seed?
+    outcome: answer
+    assess: answers
+    support: [m15, m16, m17]
+    forbidden: [m18]
+    chain:
+      - id: s1
+        moves:
+          - {move: neighbours, arg: question}
+          - {move: entity, arg: Plaxtow Pressers}
+        surfaces: [m15, m23, m14]
+        relevant: {m15: "yes", m23: "no", m14: "no"}
+      - id: s2
+        requires: [s1]
+        moves:
+          - {move: refs_out, from: m15}
+        surfaces: [m16, m02]
+        relevant: {m16: "yes", m02: "no"}
+      - id: s3
+        requires: [s2]
+        moves:
+          - {move: refs_out, from: m16}
+        surfaces: [m17, m14]
+        relevant: {m17: "yes", m14: "no"}
+        support: {m17: supports}
+    answer:
+      claim: >-
+        Okkaran seed assays at 31.5% oil by mass and Plaxtow's screw presses
+        recover 88% of that oil, so a tonne of plateau seed yields roughly 277
+        kg of oil, the rest staying in the cake.
+      types: [synthesis]
+      topic: science
+      category: chemistry
+      must_cite: [m15, m16, m17]
+      must_not_cite: [m18]
+      confidence: [0.7, 0.8]
+      entities: [Plaxtow Pressers]

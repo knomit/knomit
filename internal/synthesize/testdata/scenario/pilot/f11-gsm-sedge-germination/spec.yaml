@@ -1,0 +1,736 @@
+# Copied from the expert-scenarios data repo at f696456 (worlds/general-sciences-markets/f11-gap/f11-gsm-sedge-germination) with its ontology_file inlined,
+# so the engine tests are hermetic. Do not edit here; regenerate from the data repo.
+format: knomit-scenario/v1
+id: f11-gsm-sedge-germination
+families: [F11]
+ontology_shape: general
+description: >-
+  Ulvick sedge (Thryocarex ulvickae) seed is collected for marsh
+  restoration by the Agglen Field Station. Q1 asks how the 2034 seed lot
+  from Hethmoor marsh germinates in a cold (12 °C) trial. Premise never
+  stated. Near-misses: the 2034 Gleddon fen lot at 12 °C (other site), the
+  2031 Hethmoor lot at 12 °C (other year), the 2034 Hethmoor lot at
+  20 °C (other condition), the 2034 Hethmoor lot's tetrazolium viability
+  (same lot, other quantity), and a synthesis that cold costs 25-30 points
+  of germination, built only from Gleddon peat lots (over-general); a
+  concept fact gives Hethmoor brackish clay water, which breaks that
+  synthesis's coverage, and a methodology says cold response does not
+  transfer across water chemistry. Same-words distractor: Yspen rush seed
+  from Hethmoor at 12 °C. Best partial answer: below the 83% at 20 °C,
+  magnitude unknown (direction only), posterior 0.4. Gold hypothesis (own
+  learn step, type hypothesis, topic science/biology, confidence 0.35):
+  "the 2034 Hethmoor lot germinates 40-60% at 12 °C". Q2 (sister,
+  answerable, direct): the 2034 Gleddon lot at 12 °C.
+tell_check: "1-10 pass, family items pass (each near-miss is a plain trial record of its own lot and condition; the synthesis states its members without naming what it omits; hedges appear in filler too)"
+ontology: |
+  # Synthetic ontology for scenario worlds: a general-knowledge base shaped like
+  # a reader's notebook on natural science, applied engineering and markets.
+  # Shape only; worlds fill it with invented species, materials, firms, places
+  # and numbers. No triggers.
+  #
+  # `principles` here is deliberately an ordinary topic with no kind/type rule:
+  # it holds epistemic and pragmatic facts alike, so a world can show that the
+  # folder confers no standing (the a-priori definition is the TYPE principle).
+  #
+  # Context: answer-fact keys (question / reason_run / trust_policy) are declared
+  # on every topic, because there is no root-level context block.
+  id: general-sciences-markets
+  name: Sciences and Markets
+  description: >-
+    General knowledge about the natural world, applied engineering, and the
+    markets that trade what both produce: measurements, mechanisms, models,
+    prices and the reasoning that connects them.
+  validations:
+    - name: domain-non-empty
+      message: every fact names at least one domain
+      rule: "fact.domain.length > 0"
+    - name: no-signals
+      message: coordination signals do not belong in a knowledge base
+      rule: "fact.type !== 'signal'"
+  topics:
+    science:
+      description: Natural and applied science — organisms, materials, processes, measurements
+      validations:
+        - name: measurement-cites-source
+          message: an observation or reference in science cites where it was measured (at least one ref)
+          rule: "(fact.type !== 'observation' && fact.type !== 'reference') || fact.refs.length > 0"
+        - name: reference-carries-value
+          message: a reference fact states a value (its body contains a digit)
+          rule: "fact.type !== 'reference' || /[0-9]/.test(fact.body)"
+      context:
+        measured_at:  {type: time}
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        biology:
+          description: Organisms, populations, ecosystems
+        chemistry:
+          description: Compounds, reactions, materials
+        earth:
+          description: Climate, soils, water, geology
+        engineering:
+          description: Applied science — devices, processes, tolerances
+    markets:
+      description: Firms, products, prices, trade and the forces that move them
+      validations:
+        - name: market-fact-names-party
+          message: a market observation names at least one party (firm, exchange, regulator, product)
+          rule: "fact.type !== 'observation' || fact.entities.length > 0"
+      context:
+        as_of:        {type: time}
+        currency:     {type: string, pattern: "^[A-Z]{3}$"}
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        firms:
+          description: Companies, their products and results
+        commodities:
+          description: Raw materials and their prices
+        trade:
+          description: Flows between regions, tariffs, logistics
+        regulation:
+          description: Rules that bind market participants
+    society:
+      description: Institutions, policy, places and people as they bear on the above
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        institutions:
+          description: Agencies, universities, standards bodies
+        places:
+          description: Regions, cities, sites
+    principles:
+      description: General laws, definitions and rules of thumb the notebook relies on — any kind, any type
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+    meta:
+      description: Knowledge about this knowledge base
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        reasoning:
+          description: Methodology — how to weigh sources, models and forecasts here
+        sources:
+          description: Notes on the reliability of the sources this notebook cites
+external_sources:
+  - https://records.agglen-station.invalid/germination
+  - https://records.agglen-station.invalid/collections
+  - https://records.agglen-station.invalid/sites
+  - https://records.agglen-station.invalid/market
+
+facts:
+  - id: p01
+    topic: science
+    category: biology
+    type: process
+    title: Agglen germination trials sow four replicates of 50 seeds and count for 42 days
+    body: >-
+      Each Agglen Field Station germination trial sows four replicates of 50
+      seeds on wet filter paper in a cabinet held at the trial temperature
+      with 12 hours of light, and counts a seed as germinated when the
+      radicle reaches 2 mm, for 42 days.
+    confidence: 0.9
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Agglen Field Station, germination cabinet]
+    refs: [https://records.agglen-station.invalid/germination]
+    role: background
+  - id: n01
+    topic: science
+    category: biology
+    type: observation
+    title: Gleddon fen's 2034 Ulvick sedge lot germinated 58% at 12 °C
+    body: >-
+      The 2034 Gleddon fen seed lot of Ulvick sedge reached 58%
+      germination (replicates 52-63%) in the 12 °C cabinet trial run in
+      November 2034; most seeds that germinated did so between days 18 and
+      30.
+    confidence: 0.85
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge, Gleddon fen]
+    motifs: [cold-delays-emergence]
+    refs: [https://records.agglen-station.invalid/germination]
+    context: {measured_at: "2034-11-28T00:00:00Z"}
+    distinct_from: [b03, b04, b13, b17, n02, n04, b16]
+    role: support
+  - id: n02
+    topic: science
+    category: biology
+    type: observation
+    title: The 2031 Hethmoor seed of Ulvick sedge germinated 41% in the cold cabinet
+    body: >-
+      Seed of Ulvick sedge collected at Hethmoor marsh in 2031 reached
+      41% germination at 12 °C in the trial of January 2032, against 77%
+      at 20 °C for the same lot.
+    confidence: 0.8
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge, Hethmoor marsh]
+    motifs: [cold-delays-emergence]
+    refs: [https://records.agglen-station.invalid/germination]
+    context: {measured_at: "2032-01-20T00:00:00Z"}
+    role: distractor
+  - id: n03
+    topic: science
+    category: biology
+    type: observation
+    title: Ulvick sedge seed from Hethmoor, 2034 harvest, reached 83% germination at 20 °C
+    body: >-
+      The 2034 Hethmoor marsh lot germinated 83% (replicates 78-88%) at
+      20 °C in the October 2034 trial, with half of the final count reached
+      by day 9.
+    confidence: 0.85
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge, Hethmoor marsh]
+    refs: [https://records.agglen-station.invalid/germination]
+    context: {measured_at: "2034-10-30T00:00:00Z"}
+    distinct_from: [n02, n04, b03, b04, b16]
+    role: distractor
+  - id: n04
+    topic: science
+    category: biology
+    type: observation
+    title: Tetrazolium staining put the 2034 Hethmoor sedge lot at 91% viable
+    body: >-
+      A tetrazolium test of 200 seeds from the 2034 Hethmoor marsh lot of
+      Ulvick sedge stained 91% of embryos red, meaning live, in September
+      2034, a month after collection.
+    confidence: 0.8
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge, Hethmoor marsh]
+    refs: [https://records.agglen-station.invalid/collections]
+    context: {measured_at: "2034-09-12T00:00:00Z"}
+    distinct_from: [n02]
+    role: distractor
+  - id: n05
+    topic: science
+    category: biology
+    type: synthesis
+    title: Ulvick sedge seed germinates 25 to 30 points lower at 12 °C than at 20 °C
+    body: >-
+      In the three Gleddon fen lots trialled at both temperatures (2032,
+      2033, 2034), germination at 12 °C ran 25 to 30 percentage points
+      below germination at 20 °C, and took about twice as long to reach
+      half its final count.
+    confidence: 0.75
+    sources: 3
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge, Gleddon fen]
+    motifs: [cold-delays-emergence]
+    refs: ["fact:n01", "fact:b03", "fact:b04"]
+    distinct_from: [n01, b03, b04, n02, n03, n04, b13, b17, d01, b16]
+    role: distractor
+  - id: b03
+    topic: science
+    category: biology
+    type: observation
+    title: The 2032 Gleddon sedge lot germinated 81% at 20 °C and 54% at 12 °C
+    body: >-
+      Gleddon fen's 2032 Ulvick sedge lot reached 81% germination at 20 °C
+      and 54% at 12 °C in the paired trials of early 2033.
+    confidence: 0.8
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge, Gleddon fen]
+    refs: [https://records.agglen-station.invalid/germination]
+    context: {measured_at: "2033-02-14T00:00:00Z"}
+    role: background
+  - id: b04
+    topic: science
+    category: biology
+    type: observation
+    title: Gleddon's 2033 sedge seed reached 86% at 20 °C and 59% at 12 °C
+    body: >-
+      In the paired trials of December 2033 the 2033 Gleddon fen lot of
+      Ulvick sedge germinated 86% at 20 °C and 59% at 12 °C.
+    confidence: 0.8
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge, Gleddon fen]
+    refs: [https://records.agglen-station.invalid/germination]
+    context: {measured_at: "2033-12-09T00:00:00Z"}
+    role: background
+  - id: b05
+    topic: science
+    category: earth
+    type: reference
+    title: Hethmoor marsh water runs at 6 to 9 g/L salinity over clay
+    body: >-
+      Pore water sampled at twelve points across Hethmoor marsh in 2033
+      held 6 to 9 g/L dissolved salts; the marsh sits on estuarine clay
+      with a pH of 7.6 to 8.1.
+    confidence: 0.85
+    sources: 1
+    domain: [hydrology, wetlands]
+    entities: [Hethmoor marsh]
+    refs: [https://records.agglen-station.invalid/sites]
+    context: {measured_at: "2033-07-01T00:00:00Z"}
+    role: distractor
+  - id: b06
+    topic: science
+    category: earth
+    type: reference
+    title: Gleddon fen is an acid peat fen with water below 0.3 g/L salinity
+    body: >-
+      Gleddon fen lies on 2 to 4 m of sedge peat; its water holds less than
+      0.3 g/L dissolved salts and a pH of 5.1 to 5.8.
+    confidence: 0.85
+    sources: 1
+    domain: [hydrology, wetlands]
+    entities: [Gleddon fen]
+    refs: [https://records.agglen-station.invalid/sites]
+    context: {measured_at: "2033-07-01T00:00:00Z"}
+    role: background
+  - id: d01
+    topic: science
+    category: biology
+    type: observation
+    title: Yspen rush seed from Hethmoor germinated 33% at 12 °C in 2034
+    body: >-
+      The 2034 Hethmoor marsh lot of Yspen rush, trialled beside the
+      sedge lots, reached 33% germination at 12 °C and 71% at 20 °C.
+    confidence: 0.8
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Yspen rush, Hethmoor marsh]
+    motifs: [cold-delays-emergence]
+    refs: [https://records.agglen-station.invalid/germination]
+    context: {measured_at: "2034-11-28T00:00:00Z"}
+    distinct_from: [n02, b16, n04]
+    role: distractor
+  - id: b01
+    topic: science
+    category: biology
+    type: observation
+    title: Ulvick sedge sheds ripe seed over about three weeks from late July
+    body: >-
+      On both collection sites Ulvick sedge seed ripens and sheds over
+      roughly three weeks starting in the last week of July; collectors
+      strip heads in the second week, when shedding peaks.
+    confidence: 0.75
+    sources: 1
+    domain: [botany, phenology]
+    entities: [Ulvick sedge]
+    refs: [https://records.agglen-station.invalid/collections]
+    role: background
+  - id: b02
+    topic: science
+    category: biology
+    type: reference
+    title: A thousand Ulvick sedge seeds weigh about 1.4 g
+    body: >-
+      Cleaned Ulvick sedge seed averages 1.38 g per thousand seeds across
+      the lots weighed since 2031, with lots ranging from 1.21 to 1.52 g.
+    confidence: 0.8
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge]
+    refs: [https://records.agglen-station.invalid/collections]
+    role: background
+  - id: b07
+    topic: science
+    category: engineering
+    type: process
+    title: Collected seed is dried to 6% moisture and stored at 4 °C in sealed foil
+    body: >-
+      Agglen dries each cleaned lot over silica to about 6% moisture, seals
+      it in foil bags and stores it at 4 °C until trial or sale; lots are
+      trialled within six months of collection.
+    confidence: 0.85
+    sources: 1
+    domain: [seed-storage]
+    entities: [Agglen Field Station]
+    refs: [https://records.agglen-station.invalid/collections]
+    role: background
+  - id: b08
+    topic: society
+    category: institutions
+    type: observation
+    title: The Agglen Field Station runs the seed programme for three restoration trusts
+    body: >-
+      Agglen Field Station collects, cleans, tests and stores native marsh
+      seed under contract to three regional restoration trusts, and sells
+      surplus lots through Cuddis Seeds.
+    confidence: 0.8
+    sources: 1
+    domain: [restoration, institutions]
+    entities: [Agglen Field Station, Cuddis Seeds]
+    role: background
+  - id: b09
+    topic: society
+    category: places
+    type: observation
+    title: Hethmoor marsh is a 140-hectare brackish marsh behind a tidal sluice
+    body: >-
+      Hethmoor marsh covers about 140 ha behind a tidal sluice that lets
+      in sea water on the highest spring tides; Ulvick sedge grows in a
+      band along its landward edge.
+    confidence: 0.8
+    sources: 1
+    domain: [wetlands, places]
+    entities: [Hethmoor marsh]
+    role: background
+  - id: b10
+    topic: markets
+    category: firms
+    type: observation
+    title: Cuddis Seeds listed Ulvick sedge seed at 610 OZK per kilogram for 2035 sowing
+    body: >-
+      Cuddis Seeds' restoration catalogue for spring 2035 lists Ulvick
+      sedge seed at 610 OZK per kg, Gleddon and Hethmoor lots priced
+      alike, with a germination certificate supplied on request.
+    confidence: 0.75
+    sources: 1
+    domain: [seed-trade]
+    entities: [Cuddis Seeds, Ulvick sedge]
+    refs: [https://records.agglen-station.invalid/market]
+    context: {as_of: "2034-12-01T00:00:00Z", currency: OZK}
+    distinct_from: [b11]
+    role: background
+  - id: b11
+    topic: markets
+    category: commodities
+    type: observation
+    title: Restoration sedge seed prices rose about 15% between 2032 and 2034
+    body: >-
+      Across the four native sedges Cuddis Seeds sells, list prices rose
+      about 15% from 2032 to 2034, which the firm puts down to poor seed set
+      in the wet summer of 2033.
+    confidence: 0.65
+    sources: 1
+    domain: [seed-trade]
+    entities: [Cuddis Seeds]
+    refs: [https://records.agglen-station.invalid/market]
+    context: {as_of: "2034-12-01T00:00:00Z", currency: OZK}
+    role: background
+  - id: b12
+    topic: science
+    category: biology
+    type: observation
+    title: Ulvick sedge seedlings sown in autumn mostly emerge the following April
+    body: >-
+      On restoration plots sown in October, most Ulvick sedge seedlings
+      appeared in April, when soil at 5 cm passed about 10 °C; few emerged
+      over winter.
+    confidence: 0.7
+    sources: 1
+    domain: [botany, restoration]
+    entities: [Ulvick sedge]
+    refs: [https://records.agglen-station.invalid/sites]
+    role: background
+  - id: b13
+    topic: science
+    category: biology
+    type: observation
+    title: Gleddon sedge lots lose about 4 points of germination a year in cold storage
+    body: >-
+      Re-trials at 20 °C of the 2031 and 2032 Gleddon fen lots after one and
+      two years at 4 °C showed germination falling by about 4 points a year.
+    confidence: 0.7
+    sources: 1
+    domain: [botany, seed-storage]
+    entities: [Ulvick sedge, Gleddon fen]
+    refs: [https://records.agglen-station.invalid/germination]
+    role: background
+  - id: b14
+    topic: principles
+    category: seed-testing
+    type: concept
+    title: Germination percentage is the share of sown seeds that produce a radicle within the trial window
+    body: >-
+      A germination figure counts seeds whose radicle emerges within the
+      trial's fixed window, out of all seeds sown; dead, dormant and slow
+      seeds all count against it, which is why viability by staining can
+      run well above it.
+    confidence: 0.85
+    sources: 1
+    domain: [seed-testing]
+    entities: [germination percentage]
+    role: background
+  - id: b15
+    topic: principles
+    category: seed-testing
+    type: concept
+    title: Seed dormancy is a live seed's failure to germinate under conditions that would allow it
+    body: >-
+      A dormant seed is alive but does not germinate under conditions that
+      suit the species; cold, light or a period of moist chilling may be
+      needed to release it, and the depth of dormancy can differ between
+      populations.
+    confidence: 0.85
+    sources: 1
+    domain: [botany]
+    entities: [seed dormancy]
+    role: background
+  - id: b16
+    topic: science
+    category: biology
+    type: observation
+    title: The 2034 Hethmoor sedge collection yielded 3.2 kg of cleaned seed
+    body: >-
+      Collectors stripped Ulvick sedge heads along the Hethmoor landward
+      band on 6 and 7 August 2034; cleaning gave 3.2 kg of seed, about 2.3
+      million seeds.
+    confidence: 0.8
+    sources: 1
+    domain: [botany, collection]
+    entities: [Ulvick sedge, Hethmoor marsh]
+    refs: [https://records.agglen-station.invalid/collections]
+    distinct_from: [n02]
+    role: background
+  - id: b17
+    topic: science
+    category: biology
+    type: observation
+    title: Moist chilling for eight weeks raised Gleddon sedge germination at 20 °C by about 6 points
+    body: >-
+      A 2033 side trial gave part of the 2032 Gleddon fen lot eight weeks
+      of moist chilling at 3 °C before sowing at 20 °C; it reached 87%
+      against 81% unchilled.
+    confidence: 0.65
+    sources: 1
+    domain: [botany, seed-testing]
+    entities: [Ulvick sedge, Gleddon fen]
+    refs: [https://records.agglen-station.invalid/germination]
+    distinct_from: [b03, b04, b13]
+    role: background
+  - id: b18
+    topic: science
+    category: earth
+    type: observation
+    title: Spring soil at 5 cm on the restoration plots warms past 10 °C in mid April
+    body: >-
+      Loggers at 5 cm depth on the three restoration plots crossed 10 °C on
+      a daily mean between 9 and 22 April in 2032 to 2034, and sat between
+      6 and 9 °C through March.
+    confidence: 0.75
+    sources: 1
+    domain: [soil, restoration]
+    entities: [restoration plots]
+    refs: [https://records.agglen-station.invalid/sites]
+    role: background
+  - id: b19
+    topic: meta
+    category: sources
+    type: observation
+    title: Agglen trial records give each replicate's count, not only the mean
+    body: >-
+      The germination records list counts for every replicate and day, so a
+      lot's spread can be read directly; summaries quoted in catalogues give
+      only the mean.
+    confidence: 0.8
+    sources: 1
+    domain: [sources, seed-testing]
+    entities: [Agglen germination records]
+    role: background
+  - id: b20
+    topic: society
+    category: institutions
+    type: observation
+    title: Restoration trusts ask for a 12 °C germination figure before autumn sowing
+    body: >-
+      The three trusts plan seeding rates from germination at 12 °C, close
+      to autumn and spring soil temperatures, and ask Agglen for that figure
+      for each lot they buy.
+    confidence: 0.75
+    sources: 1
+    domain: [restoration, institutions]
+    entities: [Agglen Field Station]
+    role: background
+  - id: b21
+    topic: science
+    category: earth
+    type: observation
+    title: The Hethmoor sluice let sea water in on four spring tides in 2034
+    body: >-
+      The tidal sluice logger at Hethmoor recorded inflow on four spring
+      tides in 2034, in February, March, September and October; the marsh
+      edge where the sedge grows flooded only on the March tide.
+    confidence: 0.75
+    sources: 1
+    domain: [hydrology, wetlands]
+    entities: [Hethmoor sluice]
+    refs: [https://records.agglen-station.invalid/sites]
+    role: background
+  - id: b22
+    topic: science
+    category: biology
+    type: observation
+    title: Yspen rush ripens later than the sedge and is collected in early September
+    body: >-
+      On Hethmoor marsh Yspen rush capsules split from the last days of
+      August; Agglen collects the rush in the first week of September,
+      about four weeks after the sedge.
+    confidence: 0.7
+    sources: 1
+    domain: [botany, phenology]
+    entities: [Yspen rush]
+    refs: [https://records.agglen-station.invalid/collections]
+    role: background
+  - id: b23
+    topic: science
+    category: biology
+    type: synthesis
+    title: Autumn-sown Ulvick sedge waits for spring because plot soil stays below 10 °C all winter
+    body: >-
+      Seedlings on the autumn-sown plots appeared in April, in the same
+      fortnight the 5 cm soil passed a 10 °C daily mean, after a winter
+      between 6 and 9 °C.
+    confidence: 0.7
+    sources: 2
+    domain: [botany, restoration]
+    entities: [Ulvick sedge, restoration plots]
+    refs: ["fact:b12", "fact:b18"]
+    distinct_from: [b12, b18]
+    role: background
+  - id: m01
+    topic: meta
+    category: reasoning
+    type: methodology
+    title: Do not carry a cold-germination penalty between sedge populations from different water chemistry
+    body: >-
+      How much cold lowers germination depends on the depth of dormancy,
+      which differs between populations, and brackish and acid-peat
+      populations of one sedge can differ widely. Carry a penalty measured
+      on one population only to lots from water of similar salinity and pH.
+    confidence: 0.75
+    sources: 1
+    domain: [reasoning, seed-testing]
+    entities: [cold-germination penalty]
+    role: methodology
+  - id: h01
+    topic: science
+    category: biology
+    type: hypothesis
+    title: Eight weeks of moist chilling would lift Ulvick sedge emergence on autumn-sown plots
+    body: >-
+      Chilling seed before autumn sowing could raise April emergence by
+      relieving dormancy before the plots warm. Settled by paired chilled
+      and unchilled sowings on one restoration plot, counted in May.
+    confidence: 0.4
+    sources: 1
+    domain: [botany, restoration]
+    entities: [Ulvick sedge, restoration plots]
+    refs: ["fact:b17", "fact:b12"]
+    distinct_from: [b17, b12, b23, b18]
+    role: hypothesis
+
+history:
+  - moment: station protocols and sites
+    learn: [p01, b06, b07, b08, b09, b14, b15, b19]
+  - moment: 2032 and 2033 trials
+    learn: [b03, b04, n02, b05, b02, b13]
+  - moment: storage and plot notes
+    learn: [b17, b12, b18, b20, b11]
+  - moment: 2034 collections
+    learn: [b16, n04, b01, b21, b22]
+  - moment: autumn 2034 trials
+    learn: [n03, n01, d01]
+  - moment: what cold does to sedge seed
+    learn: [n05, b10, b23]
+  - moment: reading cold trials and a sowing idea
+    learn: [m01, h01]
+
+questions:
+  - id: q1
+    family: F11
+    text: If we sow this year's Hethmoor sedge seed into cold ground, what share of it should we expect to come up, going by a 12 degree test?
+    outcome: gap
+    assess: not
+    support: []
+    forbidden: [d01, h01]
+    chain:
+      - id: g1
+        moves:
+          - {move: neighbours, arg: question}
+          - {move: entity, arg: Hethmoor marsh}
+        surfaces: [n03, n04, n02, d01, b05, b16]
+        relevant: {n03: "yes", n04: "yes", n02: "yes", d01: "no", b16: "no"}
+        support: {n03: unrelated, n04: unrelated, n02: unrelated}
+      - id: w1
+        requires: [g1]
+        moves:
+          - {move: motif, arg: cold-delays-emergence}
+          - {move: entity, arg: Ulvick sedge}
+        surfaces: [n01, n05, n02, d01]
+        relevant: {n05: "yes", n01: "yes"}
+        support: {n01: unrelated, n05: unrelated}
+      - id: w2
+        requires: [w1]
+        moves:
+          - {move: refs_out, from: n05}
+        surfaces: [n01, b03, b04]
+        support: {b03: unrelated, b04: unrelated}
+      - id: w3
+        requires: [w2]
+        moves:
+          - {move: domain, arg: wetlands}
+          - {move: entity, arg: Gleddon fen}
+        surfaces: [b05, b06, b09]
+        relevant: {b05: "yes", b06: "yes"}
+      - id: w4
+        requires: [w2]
+        moves:
+          - {move: kind_type, arg: methodology}
+          - {move: ontology, arg: kb/meta/reasoning}
+        surfaces: [m01]
+        relevant: {m01: "yes"}
+      - id: s1
+        requires: [w3, w4]
+        optional: true
+        moves:
+          - {move: domain, arg: seed-testing}
+        surfaces: [n01, n03, n05, d01]
+      - id: k1
+        requires: [w3]
+        moves:
+          - {move: kind_type, arg: hypothesis}
+        surfaces: [h01]
+        relevant: {h01: "no"}
+    gap:
+      missing_premise: >-
+        The 2034 Hethmoor marsh lot of Ulvick sedge germinates between
+        40% and 60% in a 12 °C cabinet trial.
+      settlement: >-
+        An Agglen Field Station 12 °C cabinet trial of the 2034 Hethmoor
+        lot (four replicates of 50 seeds, 42 days), reported by the end of
+        March 2035 so it lands before spring sowing; a mean outside 40-60%
+        falsifies it.
+      partial_support: [n02, n03, n04, n05, n01, b05, b06, m01]
+  - id: q2
+    family: F1
+    text: How did the Gleddon fen sedge seed collected in 2034 do in the cold germination test?
+    outcome: answer
+    assess: answers
+    support: [n01]
+    forbidden: [d01, n03]
+    chain:
+      - id: g1
+        moves:
+          - {move: neighbours, arg: question}
+          - {move: entity, arg: Gleddon fen}
+        surfaces: [n01, n05, b04, b06]
+        relevant: {n01: "yes", n05: "yes", b06: "no"}
+        support: {n01: supports, n05: unrelated}
+    answer:
+      claim: >-
+        The 2034 Gleddon fen lot of Ulvick sedge reached 58% germination at
+        12 °C (replicates 52-63%), most of it between days 18 and 30.
+      types: [synthesis, observation]
+      topic: science
+      category: biology
+      must_cite: [n01]
+      must_not_cite: [d01, n03]
+      confidence: [0.75, 0.9]
+      entities: [Gleddon fen, Ulvick sedge]

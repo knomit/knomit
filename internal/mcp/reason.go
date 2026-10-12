@@ -31,8 +31,8 @@ func reasonTool() mcpgo.Tool {
 		mcpgo.WithString("question", mcpgo.Required(),
 			mcpgo.Description("The question, in plain words.")),
 		mcpgo.WithNumber("budget",
-			mcpgo.Description(fmt.Sprintf("Wall-clock budget for the whole run, in seconds (default %d). The run's ONLY deadline: "+
-				"when it runs out the loop stops and the result says `interrupted`.", int(repos.DefaultReasonBudget.Seconds())))),
+			mcpgo.Description(fmt.Sprintf("Wall-clock budget for the whole run, in seconds (default %d, at most %d). The run's ONLY deadline: "+
+				"when it runs out the loop stops and the result says `interrupted`.", int(repos.DefaultReasonBudget.Seconds()), int(repos.MaxReasonBudget.Seconds())))),
 		bindingArg(true),
 	)
 }
@@ -75,6 +75,13 @@ func ReasonHandler(engine func() *repos.Engine) func(context.Context, mcpgo.Call
 			}
 			if !ok || math.IsNaN(secs) || math.IsInf(secs, 0) || secs <= 0 {
 				return mcpgo.NewToolResultError(fmt.Sprintf("`budget` must be a positive number of seconds, got %v", raw)), nil
+			}
+			// Checked before the conversion: a run holds the engine's one
+			// model slot for its whole budget, and seconds large enough
+			// overflow time.Duration into a negative (= default) budget.
+			if secs > repos.MaxReasonBudget.Seconds() {
+				return mcpgo.NewToolResultError(fmt.Sprintf("`budget` may be at most %d seconds (one run holds the engine's model endpoint for its whole budget), got %v",
+					int(repos.MaxReasonBudget.Seconds()), raw)), nil
 			}
 			budget = time.Duration(secs * float64(time.Second))
 		}

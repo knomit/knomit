@@ -88,6 +88,10 @@ type callLog struct {
 	Arg       string   `json:"arg"`
 	Judgment  string   `json:"judgment"`
 	Posterior *float64 `json:"posterior"`
+	// Facts are the paths a judgment is about (a model call touches no fact
+	// by itself, so the script names them); a read's facts come from its
+	// result instead.
+	Facts []string `json:"facts"`
 }
 
 // display is the move as one log token: name(from|arg).
@@ -143,6 +147,9 @@ func (h *engineHost) stepLine(l callLog, move, judgment, verdict string, facts [
 	move = l.display(move)
 	if judgment == "" {
 		judgment = l.Judgment
+	}
+	if len(facts) == 0 && len(l.Facts) > 0 {
+		facts = l.Facts
 	}
 	shown := facts
 	if len(shown) > 5 {
@@ -334,16 +341,22 @@ func (h *engineHost) incoming(file, commit string) (refs []store.RefSummary, bra
 //
 // commit is deliberately absent: accepting the answer is the asker's
 // decision (E02 §7).
-func (h *engineHost) engExperiment(args []any) (any, error) {
+func (h *engineHost) engExperiment(args []any) (out any, err error) {
 	args, l := withLogOpts(args, 0)
+	// A Go panic inside the call is recovered HERE, as every host call's is
+	// (kb/architecture/fact/ontology/triggers/script-sandbox): the script
+	// gets an Error and the run its Warn line, never a crashed dispatcher.
+	defer func() {
+		if r := recover(); r != nil {
+			crashdump.ReportRecovered("engine:"+h.runID+":experiment", r)
+			out, err = nil, fmt.Errorf("knomit.experiment: panic: %v", r)
+			h.stepLine(l, "experiment", "", "", nil, 0, err)
+		}
+	}()
 	opts := objectArg(args, 0)
 	action, _ := opts["action"].(string)
 	name, _ := opts["name"].(string)
 	desc, _ := opts["description"].(string)
-	var (
-		out any
-		err error
-	)
 	switch action {
 	case "open":
 		out, err = h.experimentOpen(name, desc)
@@ -403,6 +416,29 @@ func (h *engineHost) experimentOpen(name, desc string) (any, error) {
 	h.opened[exp.Name] = true
 	h.setBinding(NewBindingOfRepo(ri, exp.Branch()))
 	return map[string]any{"name": exp.Name, "branch": exp.Branch(), "parent": exp.Parent, "fork_commit": exp.ForkCommit}, nil
+}
+
+// experimentExists reports whether the experiment this run opened is still
+// there. Any session can commit or roll it back while the run is still
+// writing its result, so Engine.Run asks before it reports the answer as
+// pending the asker's decision. A failed lookup is reported as existing: the
+// check exists to stop a false "pending", not to invent a missing one.
+func (h *engineHost) experimentExists() bool {
+	if h.experiment == "" {
+		return false
+	}
+	ri := h.world.Write()
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return true
+	}
+	defer release()
+	// The run ctx may be past its deadline here; the lookup is bounded on
+	// its own.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, exists, err := svc.Experiments().GetExperiment(ctx, h.experiment)
+	return err != nil || exists
 }
 
 func (h *engineHost) experimentRollback(name string) (any, error) {

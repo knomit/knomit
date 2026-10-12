@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -369,4 +370,116 @@ func TestEngine_Learn_OnlyInsideItsExperimentAndNeverRetracts(t *testing.T) {
 	require.True(t, exists, "the fact named in retract survives on the experiment")
 	require.True(t, hasWarn(buf.lines(t), "reason-0000abcd", "writes only inside an experiment"))
 	require.True(t, hasWarn(buf.lines(t), "reason-0000abcd", "opts.retract is refused"))
+}
+
+// --- PR 3: the Go-side fixes ------------------------------------------------
+
+// The budget is capped (fix-later 5): a run holds the single model slot for
+// its whole budget, so a budget past MaxReasonBudget is clamped to it — the
+// start line logs the budget the run actually has. Sabotage: drop the clamp
+// in withDefaults (red: the start line says 100h).
+func TestEngine_BudgetIsCapped(t *testing.T) {
+	buf := captureEngineLog(t)
+	ri := newEngineTestRepo(t)
+	e := NewEngine(EngineConfig{Home: writeEngineScript(t, `({outcome: "gap", posterior: 0, chain: [], gaps: []})`)})
+	res, err := e.RunWith(context.Background(), NewBindingOfRepo(ri, ri.AgentBranch()), "q", ReasonOptions{Budget: 100 * time.Hour})
+	require.NoError(t, err)
+	var start map[string]any
+	for _, l := range buf.lines(t) {
+		if l["message"] == "reason start" && l["reason_run"] == res.Run {
+			start = l
+		}
+	}
+	require.NotNil(t, start)
+	require.Equal(t, float64(MaxReasonBudget.Milliseconds()), start["budget"], "zerolog logs a Dur in ms")
+	require.Equal(t, MaxReasonBudget, ReasonOptions{Budget: 100 * time.Hour}.withDefaults().Budget)
+	require.Equal(t, DefaultReasonBudget, ReasonOptions{}.withDefaults().Budget)
+}
+
+// writeEngineScript puts src at <home>/engine/reason.js and returns home.
+func writeEngineScript(t *testing.T, src string) string {
+	t.Helper()
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "engine"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "engine", "reason.js"), []byte(src), 0o644))
+	return home
+}
+
+// A run that never gets the model slot still logs `reason start` and
+// `reason done` with its run key (fix-later 10), and returns interrupted.
+// Sabotage: move the start line back after the slot wait (red: no start
+// line for the run).
+func TestEngine_SlotTimeoutLogsStartAndDone(t *testing.T) {
+	buf := captureEngineLog(t)
+	ri := newEngineTestRepo(t)
+	e := NewEngine(EngineConfig{})
+	e.slot <- struct{}{} // another run holds the endpoint
+	defer func() { <-e.slot }()
+	res, err := e.Run(context.Background(), NewBindingOfRepo(ri, ri.AgentBranch()), "q", 50*time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, "interrupted", res.Outcome)
+	msgs := map[string]int{}
+	for _, l := range buf.lines(t) {
+		if l["reason_run"] == res.Run {
+			msgs[l["message"].(string)]++
+		}
+	}
+	require.Equal(t, 1, msgs["reason start"], "%v", msgs)
+	require.Equal(t, 1, msgs["reason done"], "%v", msgs)
+}
+
+// A Go panic inside model or experiment is recovered by the host (fix-later
+// 7): the script gets an Error, the run a Warn line; nothing crashes.
+// Sabotage: delete either defer/recover (red: the test binary panics).
+func TestEngine_ModelAndExperimentRecoverPanics(t *testing.T) {
+	buf := captureEngineLog(t)
+	ri := newEngineTestRepo(t)
+	fm := newFakeModel(t, `{"verdict": "supports"}`, "stop")
+	e := fm.engine()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	h := newEngineHost(e, ctx, NewBindingOfRepo(ri, ri.AgentBranch()), "reason-0000beef", time.Now())
+	h.e = nil     // model: modelCall dereferences the engine
+	h.world = nil // experiment: list dereferences the world
+	prog, err := fact.CompileScript("probe", `
+		var m; try { knomit.model({schema: `+verdictSchemaJS+`, user: "u"}); m = "returned" } catch (e) { m = e.message }
+		var x; try { knomit.experiment({action: "list"}); x = "returned" } catch (e) { x = e.message }
+		({model: m, experiment: x})`)
+	require.NoError(t, err)
+	out, err := fact.RunScriptResult(ctx, prog, "probe", nil, h.functions(), time.Now().UTC())
+	require.NoError(t, err)
+	m := out.(map[string]any)
+	require.Contains(t, m["model"], "knomit.model: panic:")
+	require.Contains(t, m["experiment"], "knomit.experiment: panic:")
+	require.True(t, hasWarn(buf.lines(t), "reason-0000beef", "knomit.model: panic"))
+	require.True(t, hasWarn(buf.lines(t), "reason-0000beef", "knomit.experiment: panic"))
+}
+
+// Before reporting the answer as pending the asker's decision, the run
+// checks its experiment still exists (fix-later R2): here another session
+// rolls it back while the run is still inside its model call, and the
+// result says it is gone instead of offering commit/rollback. Sabotage:
+// drop the experimentExists check in RunWith (red: Next offers "commit").
+func TestEngine_GoneExperimentIsNotPending(t *testing.T) {
+	ri := newEngineTestRepo(t)
+	svc := testService(t, ri)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// another session declines the experiment mid-run
+		require.NoError(t, svc.Experiments().RollbackExperiment(context.Background(), "reason-r2"))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": `{"verdict": "supports"}`}, "finish_reason": "stop"}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	e := NewEngine(EngineConfig{
+		Model: config.EngineConfig{ModelURL: srv.URL + "/v1"},
+		Home: writeEngineScript(t, `knomit.experiment({action: "open", name: "reason-r2"});
+			knomit.model({schema: `+verdictSchemaJS+`, user: "u"});
+			({outcome: "gap", posterior: 0, chain: [], gaps: []})`),
+	})
+	res, err := e.Run(context.Background(), NewBindingOfRepo(ri, ri.AgentBranch()), "q", 30*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "reason-r2", res.Experiment)
+	require.Contains(t, res.Next, "no longer exists")
+	require.NotContains(t, res.Next, `action: "commit"`)
 }

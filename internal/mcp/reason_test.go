@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -94,12 +96,70 @@ type reasonFixture struct {
 	model    *httptest.Server
 	modelMu  sync.Mutex
 	requests int
+	byName   map[string]int
 	delay    time.Duration
 	eng      *repos.Engine
+	// script answers one judgment: the json_schema name and the user
+	// message in, the reply content out. Default: scriptedJudgment.
+	script func(f *reasonFixture, name, user string) string
 }
 
-const reasonJudgment = `{"claim": "Alpha holds only while beta is configured.", ` +
-	`"verdicts": [{"fact": 1, "verdict": "supports"}, {"fact": 2, "verdict": "supports"}], "missing": ""}`
+// briefFact matches a numbered fact line of a briefing: "[n] <path> (...".
+var briefFact = regexp.MustCompile(`(?m)^\[(\d+)\] (\S+) \(`)
+
+// briefMenu matches a menu line: "n. move(arg) — ...".
+var briefMenu = regexp.MustCompile(`(?m)^(\d+)\. ([a-z_]+\(.*\)) — `)
+
+// briefPaths is the numbered facts of a briefing, in order.
+func briefPaths(user string) []string {
+	var out []string
+	for _, m := range briefFact.FindAllStringSubmatch(user, -1) {
+		out = append(out, m[2])
+	}
+	return out
+}
+
+// scriptedJudgment is the fixture's model: every fact is relevant; A and B
+// support, anything else is unrelated; the first move it is offered is
+// refs_in(A), then it stops; the claim is fixed and answers.
+func scriptedJudgment(f *reasonFixture, name, user string) string {
+	switch name {
+	case "relevant":
+		var labels []string
+		for i := range briefPaths(user) {
+			labels = append(labels, fmt.Sprintf(`{"fact": %d, "relevant": "yes"}`, i+1))
+		}
+		return `{"reasoning": "r", "labels": [` + strings.Join(labels, ",") + `]}`
+	case "support":
+		var vs []string
+		for i, p := range briefPaths(user) {
+			v := "unrelated"
+			if p == f.a || p == f.b {
+				v = "supports"
+			}
+			vs = append(vs, fmt.Sprintf(`{"fact": %d, "verdict": %q}`, i+1, v))
+		}
+		return `{"reasoning": "r", "verdicts": [` + strings.Join(vs, ",") + `]}`
+	case "choose_move", "backtrack_choice":
+		if !strings.Contains(user, "- refs_in("+f.a+")") {
+			for _, m := range briefMenu.FindAllStringSubmatch(user, -1) {
+				if m[2] == "refs_in("+f.a+")" {
+					return `{"reasoning": "r", "choice": ` + m[1] + `}`
+				}
+			}
+		}
+		return `{"reasoning": "r", "choice": 0}`
+	case "synthesize":
+		return `{"reasoning": "r", "claim": "Alpha holds only while beta is configured.", "consequence": "", "misreading": "", "carriers": [1, 2]}`
+	case "assess":
+		return `{"reasoning": "r", "assess": "answers", "missing": ""}`
+	case "hypothesize":
+		return `{"reasoning": "r", "claim": "Alpha holds without beta.", "settlement": "a trial without beta", "observable": "alpha holding"}`
+	case "seek":
+		return `{"reasoning": "r", "search": "alpha without beta"}`
+	}
+	return `{}`
+}
 
 func newReasonFixture(t *testing.T, ontologyYAML string) *reasonFixture {
 	t.Helper()
@@ -140,10 +200,36 @@ func newReasonFixture(t *testing.T, ontologyYAML string) *reasonFixture {
 		"entities": []any{"gamma"}, "refs": []any{f.a}})
 
 	f.model = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+			ResponseFormat struct {
+				JSONSchema struct {
+					Name string `json:"name"`
+				} `json:"json_schema"`
+			} `json:"response_format"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		name, user := req.ResponseFormat.JSONSchema.Name, ""
+		for _, m := range req.Messages {
+			if m.Role == "user" {
+				user = m.Content
+			}
+		}
 		f.modelMu.Lock()
 		f.requests++
+		if f.byName == nil {
+			f.byName = map[string]int{}
+		}
+		f.byName[name]++
 		d := f.delay
+		script := f.script
 		f.modelMu.Unlock()
+		if script == nil {
+			script = scriptedJudgment
+		}
 		if d > 0 {
 			select {
 			case <-time.After(d):
@@ -152,7 +238,7 @@ func newReasonFixture(t *testing.T, ontologyYAML string) *reasonFixture {
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": reasonJudgment}, "finish_reason": "stop"}},
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": script(f, name, user)}, "finish_reason": "stop"}},
 		})
 	}))
 	t.Cleanup(f.model.Close)
@@ -223,14 +309,17 @@ func TestReason_EndToEnd_AnswerInExperimentThenRollback(t *testing.T) {
 
 	require.Equal(t, "answer", out.Outcome, resultText(t, res))
 	require.Regexp(t, `^reason-[0-9a-f]{8}$`, out.Run)
-	require.Equal(t, 1, out.ModelCalls)
+	// relevant(A, B), support(A, B), choose refs_in(A), relevant(C),
+	// support(C), choose stop, synthesize, assess
+	require.Equal(t, 8, out.ModelCalls, f.byName)
 	require.Len(t, out.AnswerFacts, 1)
 	require.True(t, strings.HasPrefix(out.Experiment, "reason-does-alpha-match-target-hold-"), out.Experiment)
 	require.Equal(t, "exp/"+out.Experiment, out.ExperimentBranch)
-	require.Equal(t, 0.63, out.Posterior, "(0.9 + 0.8) / (0.9 + 0.8 + 1)")
+	require.Equal(t, 0.8, out.Posterior, "the weakest of the two supports (0.9, 0.8)")
 	require.Contains(t, out.Next, `{action: "rollback", name: "`+out.Experiment+`"}`)
 
-	// the chain: gather, widen (refs_in of A surfaces C), the judgment, the write
+	// the chain: gather, the first support judgment (A and B), widen
+	// (refs_in of A surfaces C), the write
 	var moves []string
 	var sawC bool
 	var assess *repos.ReasonStep
@@ -239,7 +328,7 @@ func TestReason_EndToEnd_AnswerInExperimentThenRollback(t *testing.T) {
 		if s.Move == "refs_in" && s.From == f.a {
 			sawC = len(s.Facts) == 1 && s.Facts[0] == f.c
 		}
-		if s.Judgment == "support" {
+		if s.Judgment == "support" && assess == nil {
 			assess = &out.Chain[i]
 		}
 	}
@@ -263,7 +352,8 @@ func TestReason_EndToEnd_AnswerInExperimentThenRollback(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "synthesis", string(parsed.Type))
 	require.Equal(t, "authored", string(parsed.Origin))
-	require.Equal(t, 0.63, parsed.Confidence)
+	require.Equal(t, 0.8, parsed.Confidence)
+	require.Equal(t, 2, parsed.Sources, "two independent supports")
 	require.Equal(t, out.Run, parsed.Context["reason_run"])
 	require.Len(t, parsed.Refs, 2)
 	require.True(t, strings.HasSuffix(parsed.Refs[0], f.a) || strings.HasSuffix(parsed.Refs[1], f.a), parsed.Refs)
@@ -281,9 +371,9 @@ func TestReason_EndToEnd_AnswerInExperimentThenRollback(t *testing.T) {
 	}
 	require.Equal(t, 1, msgs["reason start"])
 	require.Equal(t, 1, msgs["reason done"])
-	require.GreaterOrEqual(t, msgs["reason step"], 8, "query, 2x(explain, incoming), model, experiment, learn")
-	require.Equal(t, 1, msgs["reason model request"])
-	require.Equal(t, 1, msgs["reason model reply"])
+	require.GreaterOrEqual(t, msgs["reason step"], 16, "query, 3 reads, incoming, 8 judgments, 2 freshness reads, experiment, learn")
+	require.Equal(t, 8, msgs["reason model request"])
+	require.Equal(t, 8, msgs["reason model reply"])
 
 	// decline: the asker rolls the experiment back and the answer is gone
 	var rb mcpgo.CallToolRequest
@@ -389,6 +479,14 @@ func TestReason_ArgumentsValidated(t *testing.T) {
 	res = f.call(t, map[string]any{"question": "q", "budget": -3})
 	require.True(t, res.IsError)
 	require.Contains(t, resultText(t, res), "positive number of seconds")
+
+	// over the cap (fix-later 5): refused before the conversion, so a huge
+	// value can neither overflow time.Duration nor hold the model slot.
+	// Sabotage: drop the MaxReasonBudget check (red: 1e12 s overflows to a
+	// negative duration, the run takes the default budget and is not refused).
+	res = f.call(t, map[string]any{"question": "q", "budget": 1e12})
+	require.True(t, res.IsError)
+	require.Contains(t, resultText(t, res), "may be at most 3600 seconds")
 
 	res = f.call(t, map[string]any{"question": "  "})
 	require.True(t, res.IsError)

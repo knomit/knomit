@@ -26,11 +26,14 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/platform/crashdump"
 )
 
 // chatMessage is one message of a chat-completions request.
@@ -72,6 +75,53 @@ type chatResponse struct {
 	} `json:"usage"`
 }
 
+// schemaNameRe is what a judgment name may be.
+var schemaNameRe = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+// marshalReasoningFirst marshals the request with the schema's top-level
+// `reasoning` property FIRST in its properties object (E07 §3: the reasoning
+// block, then the structured answer). A schema-to-grammar server emits
+// properties in the order the schema lists them, and Go marshals a map's
+// keys sorted, which would put e.g. "claim" before "reasoning" and make the
+// model commit to its answer before it reasons.
+func marshalReasoningFirst(req chatRequest) ([]byte, error) {
+	props, _ := req.ResponseFormat.JSONSchema.Schema["properties"].(map[string]any)
+	if _, has := props["reasoning"]; !has {
+		return json.Marshal(req)
+	}
+	var ordered bytes.Buffer
+	ordered.WriteByte('{')
+	keys := make([]string, 0, len(props))
+	for k := range props {
+		if k != "reasoning" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	keys = append([]string{"reasoning"}, keys...)
+	for i, k := range keys {
+		if i > 0 {
+			ordered.WriteByte(',')
+		}
+		kb, _ := json.Marshal(k)
+		vb, err := json.Marshal(props[k])
+		if err != nil {
+			return nil, err
+		}
+		ordered.Write(kb)
+		ordered.WriteByte(':')
+		ordered.Write(vb)
+	}
+	ordered.WriteByte('}')
+	schema := map[string]any{}
+	for k, v := range req.ResponseFormat.JSONSchema.Schema {
+		schema[k] = v
+	}
+	schema["properties"] = json.RawMessage(ordered.Bytes())
+	req.ResponseFormat.JSONSchema.Schema = schema
+	return json.Marshal(req)
+}
+
 // thinkBlock is a reasoning segment a server left inline in the content.
 var thinkBlock = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
@@ -90,6 +140,10 @@ func replyJSON(content string) string {
 
 // modelArgs is model()'s argument object.
 type modelArgs struct {
+	// Name names the judgment (relevant, support, choose_move, …); it is sent
+	// as the json_schema name, so the endpoint's own logs say which judgment a
+	// request was. Default "judgment".
+	Name        string         `json:"name"`
 	Schema      map[string]any `json:"schema"`
 	System      string         `json:"system"`
 	User        string         `json:"user"`
@@ -101,12 +155,25 @@ type modelArgs struct {
 // engModel is model({schema, system?, user? | messages?, max_tokens?,
 // temperature?, log?}) → {output, finish_reason, usage}. output is the
 // reply parsed and validated against schema.
-func (h *engineHost) engModel(args []any) (any, error) {
+func (h *engineHost) engModel(args []any) (out any, err error) {
 	opts := objectArg(args, 0)
 	l := takeLog(opts)
 	h.modelCalls++
 	t0 := time.Now()
-	out, verdict, err := h.modelCall(opts, l)
+	var verdict string
+	func() {
+		// A Go panic inside the call (a schema the validator chokes on, a
+		// reply shape nobody anticipated) is recovered here and thrown to
+		// the script as an Error, like every other host call's
+		// (kb/architecture/fact/ontology/triggers/script-sandbox).
+		defer func() {
+			if r := recover(); r != nil {
+				crashdump.ReportRecovered("engine:"+h.runID+":model", r)
+				out, verdict, err = nil, "", fmt.Errorf("knomit.model: panic: %v", r)
+			}
+		}()
+		out, verdict, err = h.modelCall(opts, l)
+	}()
 	h.spent += time.Since(t0)
 	h.stepLine(l, "", "", verdict, nil, 0, err)
 	return out, err
@@ -146,9 +213,18 @@ func (h *engineHost) modelCall(opts map[string]any, l callLog) (out any, verdict
 	req := chatRequest{Model: h.e.cfg.Model.Model, Messages: msgs, MaxTokens: a.MaxTokens, Temperature: a.Temperature}
 	req.ResponseFormat.Type = "json_schema"
 	req.ResponseFormat.JSONSchema.Name = "judgment"
+	if a.Name != "" {
+		if !schemaNameRe.MatchString(a.Name) {
+			return nil, "", fmt.Errorf("knomit.model: name %q must be 1-64 of [a-z0-9_]", a.Name)
+		}
+		req.ResponseFormat.JSONSchema.Name = a.Name
+	}
 	req.ResponseFormat.JSONSchema.Strict = true
 	req.ResponseFormat.JSONSchema.Schema = a.Schema
-	body, _ := json.Marshal(req)
+	body, err := marshalReasoningFirst(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("knomit.model: %w", err)
+	}
 
 	url := strings.TrimRight(h.e.cfg.Model.ModelURL, "/") + "/chat/completions"
 	log.Debug().Str("reason_run", h.runID).Int("step", l.Step).Str("judgment", l.Judgment).

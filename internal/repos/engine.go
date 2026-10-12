@@ -50,6 +50,61 @@ var embeddedReasonJS string
 // corpus constant: the asker sets it per question.
 const DefaultReasonBudget = 10 * time.Minute
 
+// MaxReasonBudget caps the wall-clock budget of one run. A run holds the
+// engine's single model slot for its whole budget, so an unbounded budget
+// lets one asker hold the endpoint indefinitely; and a budget in seconds
+// large enough overflows time.Duration. The MCP handler refuses a larger
+// budget; Engine.Run clamps one that reaches it from Go.
+const MaxReasonBudget = time.Hour
+
+// ReasonOptions are the request properties of one run besides its
+// wall-clock budget (E02 §2: the budget is the asker's, per question, never a
+// corpus property). Zero values mean the defaults below.
+type ReasonOptions struct {
+	// Budget is the wall-clock budget; <= 0 means DefaultReasonBudget, and
+	// it is capped at MaxReasonBudget.
+	Budget time.Duration
+	// MaxMoves bounds the exploration moves (reads the loop chooses: the
+	// gather, each widening move, each seek). Default DefaultReasonMoves.
+	MaxMoves int
+	// MaxSteps bounds the loop's state transitions. When it is reached the
+	// loop stops exploring and closes (synthesize, decide, emit or gap),
+	// which takes a few more steps. Default DefaultReasonSteps.
+	MaxSteps int
+	// Trust is the posterior an answer must reach to be emitted, in (0, 1].
+	// Default DefaultReasonTrust.
+	Trust float64
+}
+
+// The defaults of ReasonOptions. Request properties with a default, stated
+// here so they are not mistaken for measured values: E05 fits the trust
+// default on scenario worlds; the move and step bounds are briefing-size and
+// latency bounds for one question, not properties of any corpus.
+const (
+	DefaultReasonMoves = 12
+	DefaultReasonSteps = 60
+	DefaultReasonTrust = 0.5
+)
+
+func (o ReasonOptions) withDefaults() ReasonOptions {
+	if o.Budget <= 0 {
+		o.Budget = DefaultReasonBudget
+	}
+	if o.Budget > MaxReasonBudget {
+		o.Budget = MaxReasonBudget
+	}
+	if o.MaxMoves <= 0 {
+		o.MaxMoves = DefaultReasonMoves
+	}
+	if o.MaxSteps <= 0 {
+		o.MaxSteps = DefaultReasonSteps
+	}
+	if o.Trust <= 0 || o.Trust > 1 {
+		o.Trust = DefaultReasonTrust
+	}
+	return o
+}
+
 // EngineConfig is what an Engine needs: the model endpoint (server
 // configuration, never a script argument), the in-process tool set the
 // script host already uses, and knomit's home for the reason.js override.
@@ -191,12 +246,17 @@ func (e *Engine) loadReasonScript() (prog *goja.Program, source string, err erro
 // on its deadline or on a cancelled ctx returns outcome "interrupted" with
 // whatever the host recorded so far, and no Go error.
 func (e *Engine) Run(ctx context.Context, world *Binding, question string, budget time.Duration) (ReasonResult, error) {
+	return e.RunWith(ctx, world, question, ReasonOptions{Budget: budget})
+}
+
+// RunWith is Run with every request property: the wall-clock budget, the
+// move and step budgets, and the trust bar.
+func (e *Engine) RunWith(ctx context.Context, world *Binding, question string, opts ReasonOptions) (ReasonResult, error) {
 	if world == nil || world.Write() == nil {
 		return ReasonResult{}, errors.New("engine: no world: the call carries no binding")
 	}
-	if budget <= 0 {
-		budget = DefaultReasonBudget
-	}
+	opts = opts.withDefaults()
+	budget := opts.Budget
 	t0 := time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
@@ -204,6 +264,12 @@ func (e *Engine) Run(ctx context.Context, world *Binding, question string, budge
 	id := newReasonRunID()
 	ri := world.Write()
 	res := ReasonResult{Run: id, Question: question, Repo: ri.Name(), Branch: world.WriteMountBranch(), AnswerFacts: []string{}, Chain: []ReasonStep{}}
+
+	// The start line is written before the slot wait, so a run that never
+	// gets the endpoint still has its start and done lines (fix-later 10).
+	log.Info().Str("reason_run", id).Str("world", ri.Name()+"@"+res.Branch).Str("question", capForLog(question)).
+		Dur("budget", budget).Int("max_moves", opts.MaxMoves).Int("max_steps", opts.MaxSteps).
+		Float64("trust", opts.Trust).Msg("reason start")
 
 	// One run at a time per model endpoint; the wait counts against the
 	// budget, so a queued run cannot outlive its own deadline.
@@ -213,27 +279,41 @@ func (e *Engine) Run(ctx context.Context, world *Binding, question string, budge
 	case <-runCtx.Done():
 		res.Outcome, res.Error = "interrupted", "budget ran out while waiting for the model endpoint (another run holds it)"
 		res.ElapsedMS = time.Since(t0).Milliseconds()
+		log.Warn().Str("reason_run", id).Str("outcome", res.Outcome).Str("error", res.Error).Int("answer_facts", 0).
+			Float64("posterior", 0).Int("model_calls", 0).Int64("elapsed_ms", res.ElapsedMS).Msg("reason done")
 		return res, nil
 	}
 
 	prog, source, err := e.loadReasonScript()
 	if err != nil {
+		log.Warn().Str("reason_run", id).Str("outcome", "error").Str("error", capForLog(err.Error())).
+			Int64("elapsed_ms", time.Since(t0).Milliseconds()).Msg("reason done")
 		return ReasonResult{}, err
 	}
 
 	h := newEngineHost(e, runCtx, world, id, t0)
-	log.Info().Str("reason_run", id).Str("world", ri.Name()+"@"+res.Branch).Str("question", capForLog(question)).
-		Dur("budget", budget).Str("script", source).Msg("reason start")
+	log.Debug().Str("reason_run", id).Str("script", source).Msg("reason script")
 
 	ont := ri.Ontology()
+	root := ri.ontologyRoot
+	if root == "" {
+		root = "kb"
+	}
+	var topics []any
+	if ont != nil {
+		for _, t := range ont.TopicNames() {
+			topics = append(topics, strings.ToLower(t))
+		}
+	}
 	globals := map[string]any{
-		"ontology": map[string]any{"context": declaredContextKeys(ont)},
+		"ontology": map[string]any{"context": declaredContextKeys(ont), "topics": topics},
 		"question": question,
 		"run": map[string]any{
 			"id": id, "budget_ms": budget.Milliseconds(),
+			"max_moves": opts.MaxMoves, "max_steps": opts.MaxSteps, "trust": opts.Trust,
 		},
 		"world": map[string]any{
-			"repo": ri.Name(), "repo_id": ri.ShortID(), "branch": res.Branch, "writable": world.WriteOK(),
+			"repo": ri.Name(), "repo_id": ri.ShortID(), "branch": res.Branch, "writable": world.WriteOK(), "root": root,
 		},
 	}
 	out, runErr := fact.RunScriptResult(runCtx, prog, "engine reason.js", globals, h.functions(), time.Now().UTC())
@@ -249,6 +329,12 @@ func (e *Engine) Run(ctx context.Context, world *Binding, question string, budge
 
 	var interrupted *goja.InterruptedError
 	switch {
+	case runErr == nil && runCtx.Err() != nil:
+		// The script caught the failed host calls and finished, but the
+		// budget had run out under it: what it returned is partial.
+		res.Outcome = "interrupted"
+		res.Error = fmt.Sprintf("the budget (%s) ran out before the loop finished", budget)
+		res.Chain = h.chainSoFar()
 	case runErr == nil:
 		var sr scriptReturn
 		b, _ := json.Marshal(out)
@@ -269,7 +355,15 @@ func (e *Engine) Run(ctx context.Context, world *Binding, question string, budge
 		res.Outcome, res.Error = "error", runErr.Error()
 		res.Chain = h.chainSoFar()
 	}
-	if res.Experiment != "" {
+	if res.Experiment != "" && !h.experimentExists() {
+		// Any session can commit or roll back an experiment
+		// (kb/gotchas/knomit/experiments/commit-ordering): never report
+		// "pending your decision" on one that is gone (fix-later R2).
+		res.Next = fmt.Sprintf("The experiment %q this run wrote to no longer exists: another session committed it "+
+			"(the answer facts are then on the agent branch) or rolled it back (they are gone). Nothing is pending your decision.",
+			res.Experiment)
+		log.Warn().Str("reason_run", id).Str("experiment", res.Experiment).Msg("reason experiment gone before the run returned")
+	} else if res.Experiment != "" {
 		res.Next = fmt.Sprintf("The answer facts are on experiment %q (branch %s) and nothing has been committed. "+
 			"Read them with knomit_explain; accept with knomit_experiment {action: \"commit\", name: %q}, "+
 			"or decline with knomit_experiment {action: \"rollback\", name: %q}.",

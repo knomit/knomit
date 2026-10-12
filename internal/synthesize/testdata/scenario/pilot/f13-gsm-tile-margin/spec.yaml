@@ -1,0 +1,849 @@
+# Copied from the expert-scenarios data repo at f696456 (worlds/general-sciences-markets/f13-backtrack-required/f13-gsm-tile-margin) with its ontology_file inlined,
+# so the engine tests are hermetic. Do not edit here; regenerate from the data repo.
+format: knomit-scenario/v1
+id: f13-gsm-tile-margin
+families: [F13, F11]
+ontology_shape: general
+tell_check: "1-10 pass, family items pass (the retracted kaolin price observation has the same fields, length and refs as the gas tariff observation; the clay hypothesis is marked only by its type; the successful line shares no unusual word with the question)"
+description: >-
+  Corsewick Ceramics, an invented floor-tile maker. q1 (F13, answer): why its
+  operating margin fell in the second half of 2041. The first gather shows
+  three lines: the synthesis c10 (clay cost; highest ranked, three refs), the
+  Eddisford freight distractor c11, and the Lunsey kiln-gas tariff
+  observation c05. c10 rests on the Ulvane kaolin contract-price observation
+  c01, which is retracted (dead-end cause i, depth 2). ASSESS on the clay
+  line is "not" (s3 backtrack); backtrack_choice s4 goes down the second menu
+  line on the energy axis (domain energy / refs) to c06 and c07. The margin
+  figure c03 is common to both lines and stays support. q2 (gap): how much
+  of the drop came from clay. Line 1 dies on the retracted c01; line 2 is
+  the hypothesis c12 (a predicted contract price, no support mass) and the
+  undisclosed-terms filing c13 that gives no number. The gap names both.
+ontology: |
+  # Synthetic ontology for scenario worlds: a general-knowledge base shaped like
+  # a reader's notebook on natural science, applied engineering and markets.
+  # Shape only; worlds fill it with invented species, materials, firms, places
+  # and numbers. No triggers.
+  #
+  # `principles` here is deliberately an ordinary topic with no kind/type rule:
+  # it holds epistemic and pragmatic facts alike, so a world can show that the
+  # folder confers no standing (the a-priori definition is the TYPE principle).
+  #
+  # Context: answer-fact keys (question / reason_run / trust_policy) are declared
+  # on every topic, because there is no root-level context block.
+  id: general-sciences-markets
+  name: Sciences and Markets
+  description: >-
+    General knowledge about the natural world, applied engineering, and the
+    markets that trade what both produce: measurements, mechanisms, models,
+    prices and the reasoning that connects them.
+  validations:
+    - name: domain-non-empty
+      message: every fact names at least one domain
+      rule: "fact.domain.length > 0"
+    - name: no-signals
+      message: coordination signals do not belong in a knowledge base
+      rule: "fact.type !== 'signal'"
+  topics:
+    science:
+      description: Natural and applied science — organisms, materials, processes, measurements
+      validations:
+        - name: measurement-cites-source
+          message: an observation or reference in science cites where it was measured (at least one ref)
+          rule: "(fact.type !== 'observation' && fact.type !== 'reference') || fact.refs.length > 0"
+        - name: reference-carries-value
+          message: a reference fact states a value (its body contains a digit)
+          rule: "fact.type !== 'reference' || /[0-9]/.test(fact.body)"
+      context:
+        measured_at:  {type: time}
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        biology:
+          description: Organisms, populations, ecosystems
+        chemistry:
+          description: Compounds, reactions, materials
+        earth:
+          description: Climate, soils, water, geology
+        engineering:
+          description: Applied science — devices, processes, tolerances
+    markets:
+      description: Firms, products, prices, trade and the forces that move them
+      validations:
+        - name: market-fact-names-party
+          message: a market observation names at least one party (firm, exchange, regulator, product)
+          rule: "fact.type !== 'observation' || fact.entities.length > 0"
+      context:
+        as_of:        {type: time}
+        currency:     {type: string, pattern: "^[A-Z]{3}$"}
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        firms:
+          description: Companies, their products and results
+        commodities:
+          description: Raw materials and their prices
+        trade:
+          description: Flows between regions, tariffs, logistics
+        regulation:
+          description: Rules that bind market participants
+    society:
+      description: Institutions, policy, places and people as they bear on the above
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        institutions:
+          description: Agencies, universities, standards bodies
+        places:
+          description: Regions, cities, sites
+    principles:
+      description: General laws, definitions and rules of thumb the notebook relies on — any kind, any type
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+    meta:
+      description: Knowledge about this knowledge base
+      context:
+        question:     {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+        reason_run:   {type: string, pattern: "^reason-[0-9a-f]{8}$"}
+        trust_policy: {type: string, max_len: 64}
+      children:
+        reasoning:
+          description: Methodology — how to weigh sources, models and forecasts here
+        sources:
+          description: Notes on the reliability of the sources this notebook cites
+external_sources:
+  - https://ledger.corsewick-watch.invalid/results
+  - https://ledger.corsewick-watch.invalid/energy
+  - https://ledger.corsewick-watch.invalid/clay
+  - https://ledger.corsewick-watch.invalid/trade
+
+facts:
+  - id: c01
+    topic: markets
+    category: commodities
+    type: observation
+    title: Ulvane's kaolin contract price to tile makers rose 22 percent in July 2041
+    body: >-
+      The Ulvane pit's half-year contract price for washed kaolin to tile
+      makers went from 118 to 144 QNL a tonne on 1 July 2041, the largest
+      step since the pit reopened.
+    confidence: 0.7
+    sources: 1
+    domain: [clay, prices]
+    entities: [Ulvane kaolin contract price]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    context: {as_of: "2041-07-01T00:00:00Z", currency: QNL}
+    role: superseded
+  - id: c02
+    topic: markets
+    category: firms
+    type: observation
+    title: Corsewick buys about 70 percent of its body clay from the Ulvane pit
+    body: >-
+      Corsewick's supplier list for 2041 puts Ulvane at about 70 percent of
+      body clay by tonnage, with the rest from two smaller pits blended in at
+      the mill.
+    confidence: 0.75
+    sources: 1
+    domain: [clay, supply]
+    entities: [Corsewick Ceramics, Ulvane pit]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    role: background
+  - id: c03
+    topic: markets
+    category: firms
+    type: observation
+    title: Corsewick's operating margin fell from 14.2 to 8.9 percent between the first and second halves of 2041
+    body: >-
+      Corsewick's half-year statements show operating margin at 14.2 percent
+      for January to June 2041 and 8.9 percent for July to December, on
+      revenue up 3 percent between the halves.
+    confidence: 0.85
+    sources: 2
+    domain: [results, margins]
+    entities: [Corsewick Ceramics, operating margin]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    context: {as_of: "2042-02-20T00:00:00Z", currency: QNL}
+    role: support
+  - id: c04
+    topic: science
+    category: engineering
+    type: reference
+    title: A roller kiln firing porcelain floor tile burns about 1.9 GJ of gas per tonne fired
+    body: >-
+      Typical specific energy for single-fired porcelain floor tile in a
+      modern roller kiln is about 1.9 GJ of natural gas per tonne of fired
+      tile, with drying adding roughly 0.4 GJ.
+    confidence: 0.7
+    sources: 1
+    domain: [kilns, energy]
+    entities: [roller kiln energy use]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    role: background
+  - id: c05
+    topic: markets
+    category: commodities
+    type: observation
+    title: Lunsey Gas raised its tariff for kiln and furnace users by 37 percent from 1 July 2041
+    body: >-
+      Lunsey Gas, the sole pipeline supplier in the Corsewick valley, moved its
+      interruptible industrial tariff from 41 to 56 QNL per megawatt-hour on
+      1 July 2041, citing storage costs.
+    confidence: 0.75
+    sources: 1
+    domain: [energy, prices]
+    entities: [Lunsey Gas, industrial gas tariff]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    context: {as_of: "2041-07-01T00:00:00Z", currency: QNL}
+    role: support
+  - id: c06
+    topic: markets
+    category: firms
+    type: observation
+    title: Kiln gas made up about 31 percent of Corsewick's cost of goods in the first half of 2041
+    body: >-
+      Corsewick's cost breakdown for January to June 2041 attributes 31 percent
+      of cost of goods to kiln and dryer gas, 24 percent to clay and glaze, and
+      the rest to labour, packing and depreciation.
+    confidence: 0.8
+    sources: 1
+    domain: [costs, energy]
+    entities: [Corsewick cost breakdown, Lunsey Gas]
+    motifs: [input-shock-margin-lag]
+    refs: ["fact:c05", https://ledger.corsewick-watch.invalid/results]
+    context: {as_of: "2041-08-15T00:00:00Z", currency: QNL}
+    role: support
+  - id: c07
+    topic: markets
+    category: firms
+    type: observation
+    title: Corsewick held its tile list prices unchanged until January 2042
+    body: >-
+      Corsewick's distributor price list stayed at its March 2041 level through
+      December 2041; a 9 percent rise took effect on 3 January 2042.
+    confidence: 0.8
+    sources: 1
+    domain: [pricing, tiles]
+    entities: [Corsewick list prices]
+    motifs: [input-shock-margin-lag]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    context: {as_of: "2042-01-03T00:00:00Z", currency: QNL}
+    role: support
+  - id: c08
+    topic: science
+    category: chemistry
+    type: observation
+    title: Ulvane kaolin fires whiter than the valley's other clays because of its low iron oxide
+    body: >-
+      Assays of Ulvane washed kaolin show iron oxide near 0.6 percent against
+      1.5 to 2.2 percent in the other valley pits, which is why it is used for
+      the light-coloured tile bodies.
+    confidence: 0.8
+    sources: 1
+    domain: [clay, chemistry]
+    entities: [Ulvane kaolin assay]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    role: background
+  - id: c09
+    topic: markets
+    category: trade
+    type: observation
+    title: Corsewick ships most export tile through the port of Eddisford
+    body: >-
+      About four fifths of Corsewick's export tonnage leaves through Eddisford,
+      in containers to the coastal distributors; the rest goes by road.
+    confidence: 0.75
+    sources: 1
+    domain: [logistics, exports]
+    entities: [Corsewick exports, Eddisford port]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    role: background
+  - id: c10
+    topic: markets
+    category: firms
+    type: synthesis
+    title: Corsewick's margin fell in late 2041 because Ulvane clay became much dearer
+    body: >-
+      Corsewick draws most of its body clay from Ulvane, and Ulvane's contract
+      price jumped in July 2041, the same month the margin began to slide; with
+      prices to distributors unchanged, the clay step explains most of the
+      drop from 14.2 to 8.9 percent.
+    confidence: 0.7
+    sources: 3
+    domain: [margins, clay]
+    entities: [Corsewick Ceramics, Ulvane pit]
+    motifs: [input-shock-margin-lag]
+    refs: ["fact:c01", "fact:c02", "fact:c03"]
+    role: superseded
+  - id: c11
+    topic: markets
+    category: trade
+    type: observation
+    title: Eddisford container dwell times doubled in the autumn of 2041
+    body: >-
+      Average container dwell at Eddisford rose from 3.1 days in June to 6.4
+      days in October 2041 during a crane replacement, delaying export
+      shipments by about a week.
+    confidence: 0.75
+    sources: 1
+    domain: [logistics, ports]
+    entities: [Eddisford port, container dwell time]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    context: {as_of: "2041-10-31T00:00:00Z"}
+    role: distractor
+  - id: c12
+    topic: markets
+    category: commodities
+    type: hypothesis
+    title: Ulvane's reopened 2041 contract probably priced washed kaolin near 140 QNL a tonne
+    body: >-
+      With the pit's haulage costs up and two tile makers bidding, the 2041
+      contract for washed kaolin likely settled around 140 QNL a tonne.
+      Settled by Corsewick's second-half clay invoices or Ulvane's filed
+      contract terms.
+    confidence: 0.45
+    sources: 1
+    domain: [clay, prices]
+    entities: [Ulvane kaolin contract price]
+    refs: ["fact:c02"]
+    role: hypothesis
+  - id: c13
+    topic: markets
+    category: regulation
+    type: observation
+    title: Ulvane filed its 2041 supply contracts with the valley trade board under commercial confidentiality
+    body: >-
+      The valley trade board register lists Ulvane's 2041 supply contracts by
+      buyer and tonnage only; prices are held under the confidentiality clause
+      the board allows for single-pit suppliers.
+    confidence: 0.75
+    sources: 1
+    domain: [regulation, clay]
+    entities: [valley trade board register, Ulvane pit]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    role: background
+  - id: c14
+    topic: science
+    category: engineering
+    type: observation
+    title: Corsewick's two roller kilns run at about 1,210 degrees for porcelain bodies
+    body: >-
+      Plant notes give a peak firing temperature of 1,205 to 1,215 °C on both
+      kilns, with a 52-minute cold-to-cold cycle.
+    confidence: 0.75
+    sources: 1
+    domain: [kilns, firing]
+    entities: [Corsewick roller kilns]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    role: background
+  - id: c15
+    topic: markets
+    category: firms
+    type: observation
+    title: Corsewick's tile output was flat between the two halves of 2041
+    body: >-
+      The plant fired about 41,000 tonnes in the first half and 40,600 tonnes
+      in the second half of 2041.
+    confidence: 0.8
+    sources: 1
+    domain: [production, tiles]
+    entities: [Corsewick output]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    role: background
+  - id: c16
+    topic: principles
+    category: margins
+    type: principle
+    title: An input cost rise lowers margin by its cost share times the rise when prices hold still
+    body: >-
+      If selling prices and volumes are unchanged, a rise r in an input that
+      makes up a share s of cost of goods lowers gross margin by about s times
+      r of cost of goods.
+    confidence: 0.85
+    sources: 1
+    domain: [economics, margins]
+    entities: [cost share rule]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    role: background
+  - id: c17
+    topic: markets
+    category: firms
+    type: observation
+    title: Competitor Hexworth Tiles raised its list prices in August 2041
+    body: >-
+      Hexworth Tiles, a rival plant in the next valley on a different gas
+      network, put its list prices up 6 percent on 1 August 2041.
+    confidence: 0.7
+    sources: 1
+    domain: [pricing, competitors]
+    entities: [Hexworth Tiles]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    role: background
+  - id: c18
+    topic: science
+    category: earth
+    type: observation
+    title: The Ulvane pit works a kaolinised granite lens about 40 metres thick
+    body: >-
+      Survey cores put the workable kaolinised zone at 35 to 45 metres, with
+      quartz-rich sand rejected at the wash plant.
+    confidence: 0.7
+    sources: 1
+    domain: [geology, clay]
+    entities: [Ulvane granite lens]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    role: background
+  - id: c19
+    topic: society
+    category: places
+    type: observation
+    title: The Corsewick valley has one gas pipeline and no rail freight line
+    body: >-
+      Industrial users in the valley take gas from a single pipeline operated
+      by Lunsey Gas; bulk goods leave by road to Eddisford.
+    confidence: 0.75
+    sources: 1
+    domain: [infrastructure, region]
+    entities: [Corsewick valley]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    role: background
+  - id: c20
+    topic: markets
+    category: regulation
+    type: observation
+    title: The valley trade board approves industrial gas tariffs only after a 60-day notice
+    body: >-
+      Tariff changes for industrial users must be posted 60 days before they
+      apply; the July 2041 change was posted on 30 April.
+    confidence: 0.7
+    sources: 1
+    domain: [regulation, energy]
+    entities: [tariff notice rule]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    role: background
+  - id: c21
+    topic: science
+    category: chemistry
+    type: observation
+    title: Abbrel zircon glaze needs a firing about 15 degrees hotter than clear glazes
+    body: >-
+      Trials on the Corsewick line show Abbrel opaque glaze matures fully only
+      above about 1,220 °C, so glazed runs are fired at the top of the kiln
+      range.
+    confidence: 0.65
+    sources: 1
+    domain: [glaze, firing]
+    entities: [Abbrel glaze]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    role: background
+  - id: c22
+    topic: markets
+    category: commodities
+    type: observation
+    title: Zircon opacifier prices were stable through 2041
+    body: >-
+      Zircon flour for glazes traded between 2,040 and 2,090 QNL a tonne all
+      year at the coastal merchants.
+    confidence: 0.7
+    sources: 1
+    domain: [glaze, prices]
+    entities: [zircon flour]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    context: {as_of: "2041-12-31T00:00:00Z", currency: QNL}
+    role: background
+  - id: c23
+    topic: meta
+    category: sources
+    type: observation
+    title: Corsewick's half-year statements give cost shares but not unit input prices
+    body: >-
+      The statements break cost of goods into shares by input and give no
+      price per tonne or per megawatt-hour, so unit prices come from suppliers
+      or the trade board.
+    confidence: 0.75
+    sources: 1
+    domain: [sources, results]
+    entities: [Corsewick statements]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    role: background
+  - id: c24
+    topic: markets
+    category: firms
+    type: observation
+    title: Corsewick's distributor contracts fix list prices for six months at a time
+    body: >-
+      Distributor agreements reset prices each January and July; the July 2041
+      reset kept prices flat after a quiet first half.
+    confidence: 0.7
+    sources: 1
+    domain: [pricing, contracts]
+    entities: [distributor agreements]
+    motifs: [input-shock-margin-lag]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    role: background
+  - id: c25
+    topic: science
+    category: engineering
+    type: observation
+    title: Waste-heat recovery on Corsewick's kiln two was postponed to 2043
+    body: >-
+      A recuperator that would cut dryer gas by about a fifth was quoted in
+      2040 and deferred to 2043 for lack of capital.
+    confidence: 0.65
+    sources: 1
+    domain: [kilns, energy]
+    entities: [kiln two recuperator]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    role: background
+  - id: c26
+    topic: markets
+    category: firms
+    type: observation
+    title: Corsewick's headcount stayed at about 310 through 2041
+    body: >-
+      Employee numbers in the annual filing were 312 at the start and 309 at
+      the end of 2041; wage rates rose 2 percent in April.
+    confidence: 0.75
+    sources: 1
+    domain: [labour, costs]
+    entities: [Corsewick workforce]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    role: background
+  - id: c27
+    topic: meta
+    category: reasoning
+    type: observation
+    title: Margin explanations in this notebook start from the cost shares in the statements
+    body: >-
+      Past entries on valley manufacturers weigh each input by its share of
+      cost of goods before comparing price moves, so a small input with a
+      large rise is not ranked above a large input with a moderate one.
+    confidence: 0.6
+    sources: 1
+    domain: [reasoning, margins]
+    entities: [cost share weighting]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    role: background
+  - id: c28
+    topic: science
+    category: earth
+    type: observation
+    title: Winter rain floods the lower Ulvane workings for about six weeks a year
+    body: >-
+      Pumping records show the lower bench under water each January and
+      February; extraction moves to the upper bench in those weeks.
+    confidence: 0.7
+    sources: 1
+    domain: [geology, mining]
+    entities: [Ulvane lower bench]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    role: background
+  - id: c29
+    topic: markets
+    category: trade
+    type: observation
+    title: Coastal distributors held about nine weeks of Corsewick tile stock in late 2041
+    body: >-
+      Distributor surveys put stock cover at eight to ten weeks in November
+      2041, above the usual six, after slower building starts.
+    confidence: 0.65
+    sources: 1
+    domain: [distribution, demand]
+    entities: [distributor stock cover]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    role: background
+  - id: c30
+    topic: markets
+    category: commodities
+    type: observation
+    title: Lunsey Gas cut its industrial tariff back to 49 QNL per megawatt-hour in March 2042
+    body: >-
+      After storage costs eased, Lunsey Gas lowered the interruptible
+      industrial tariff to 49 QNL per megawatt-hour from 1 March 2042.
+    confidence: 0.7
+    sources: 1
+    domain: [energy, prices]
+    entities: [Lunsey spring tariff]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    context: {as_of: "2042-03-01T00:00:00Z", currency: QNL}
+    role: background
+  - id: c31
+    topic: science
+    category: chemistry
+    type: observation
+    title: Blending Ulvane kaolin with local ball clay keeps tile bodies plastic enough to press
+    body: >-
+      Pressing trials need at least 18 percent ball clay in the body; pure
+      kaolin bodies crack at the press edges.
+    confidence: 0.7
+    sources: 1
+    domain: [clay, processing]
+    entities: [body blend]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    role: background
+  - id: c32
+    topic: society
+    category: institutions
+    type: observation
+    title: The valley trade board publishes supplier registers twice a year
+    body: >-
+      The board posts its supplier and contract registers in March and
+      September; each register covers the previous half year.
+    confidence: 0.7
+    sources: 1
+    domain: [institutions, disclosure]
+    entities: [valley trade board]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    role: background
+  - id: c33
+    topic: markets
+    category: firms
+    type: observation
+    title: Corsewick's export share rose to 38 percent of revenue in 2041
+    body: >-
+      Export sales grew faster than home sales and reached 38 percent of
+      revenue for the year, up from 33 percent in 2040.
+    confidence: 0.75
+    sources: 1
+    domain: [exports, results]
+    entities: [Corsewick export share]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    role: background
+  - id: c34
+    topic: science
+    category: engineering
+    type: observation
+    title: A kiln gas price rise reaches cost of goods within weeks because fired stock turns fast
+    body: >-
+      Fired tile spends about three weeks in Corsewick's yard before dispatch,
+      so a change in gas price shows in cost of goods within the same month.
+    confidence: 0.65
+    sources: 1
+    domain: [costs, inventory]
+    entities: [yard stock turn]
+    motifs: [input-shock-margin-lag]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    role: background
+  - id: c35
+    topic: markets
+    category: regulation
+    type: observation
+    title: A valley emissions levy on kiln users starts in 2043
+    body: >-
+      The levy will charge kiln operators 3 QNL per tonne of carbon dioxide
+      from January 2043, rising each year to 2048.
+    confidence: 0.7
+    sources: 1
+    domain: [regulation, emissions]
+    entities: [kiln emissions levy]
+    refs: [https://ledger.corsewick-watch.invalid/energy]
+    role: background
+  - id: c36
+    topic: meta
+    category: sources
+    type: observation
+    title: Supplier price notes in this notebook come from trade-press summaries
+    body: >-
+      Clay and gas prices recorded here were copied from monthly trade-press
+      price round-ups, which cite supplier notices but not invoices.
+    confidence: 0.6
+    sources: 1
+    domain: [sources, prices]
+    entities: [trade-press price round-ups]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    role: background
+  - id: c37
+    topic: science
+    category: biology
+    type: observation
+    title: Reed beds at the Ulvane settling ponds trap most of the fine clay washed from the pit
+    body: >-
+      Turbidity below the settling ponds is about a tenth of that at the wash
+      plant outlet; the reed beds were planted in 2036.
+    confidence: 0.65
+    sources: 1
+    domain: [ecology, water]
+    entities: [Ulvane settling ponds]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    role: background
+  - id: c38
+    topic: markets
+    category: firms
+    type: observation
+    title: Corsewick's first-half 2042 margin recovered to 12.6 percent
+    body: >-
+      The January to June 2042 statement shows operating margin of 12.6
+      percent after the January price rise and the March gas tariff cut.
+    confidence: 0.75
+    sources: 1
+    domain: [results, margins]
+    entities: [Corsewick 2042 margin]
+    refs: [https://ledger.corsewick-watch.invalid/results]
+    context: {as_of: "2042-08-20T00:00:00Z", currency: QNL}
+    role: background
+  - id: c39
+    topic: principles
+    category: pricing
+    type: heuristic
+    kind: pragmatic
+    title: Read a manufacturer's half-year margin against the dates its list prices last moved
+    body: >-
+      Before attributing a margin change to costs, line up the price-list reset
+      dates; a cost rise that lands just after a reset hits the margin in
+      full until the next one.
+    confidence: 0.6
+    sources: 1
+    domain: [pricing, margins]
+    entities: [price reset check]
+    refs: [https://ledger.corsewick-watch.invalid/trade]
+    role: background
+  - id: c40
+    topic: markets
+    category: commodities
+    type: observation
+    title: Ball clay from the valley's small pits held at about 61 QNL a tonne in 2041
+    body: >-
+      The two small pits that supply Corsewick's ball clay kept a flat 60 to
+      62 QNL a tonne through the year.
+    confidence: 0.7
+    sources: 1
+    domain: [clay, prices]
+    entities: [ball clay price]
+    refs: [https://ledger.corsewick-watch.invalid/clay]
+    context: {as_of: "2041-12-31T00:00:00Z", currency: QNL}
+    role: background
+
+history:
+  - moment: valley and factory notes
+    learn: [c02, c04, c08, c09, c14, c16, c18, c19, c31]
+  - moment: first half 2041
+    learn: [c20, c21, c22, c24, c26, c28, c32, c37]
+  - moment: july price notices
+    learn: [c01, c05, c17, c25, c40]
+  - moment: autumn notes
+    learn: [c11, c29, c34, c36, c06, c15]
+  - moment: second half results
+    learn: [c03, c07, c23, c33, c35]
+  - moment: why the margin fell
+    learn: [c10, c27, c39]
+  - moment: trade board register
+    learn: [c13, c30]
+  - moment: clay price note
+    retract: c01
+  - moment: spring 2042 results
+    learn: [c38]
+  - moment: what the clay contract might say
+    learn: [c12]
+
+questions:
+  - id: q1
+    family: F13
+    text: What squeezed Corsewick Ceramics' profitability in the back half of 2041?
+    outcome: answer
+    assess: answers
+    support: [c03, c05, c06, c07]
+    forbidden: [c10, c01, c11, c12]
+    chain:
+      - id: s1
+        moves:
+          - {move: neighbours, arg: question}
+          - {move: entity, arg: Corsewick Ceramics}
+        surfaces: [c10, c05, c11, c03]
+        relevant: {c10: "yes", c05: "yes", c11: "no", c03: "yes"}
+      - id: s2
+        requires: [s1]
+        moves:
+          - {move: refs_out, from: c10}
+        surfaces: [c01, c02, c03]
+        support: {c01: supports, c02: supports, c03: supports}
+      - id: s3
+        requires: [s2]
+        backtrack: true
+        moves:
+          - {move: supersession, from: c10}
+        surfaces: [c01]
+        support: {c01: unrelated}
+      - id: s4
+        requires: [s3]
+        moves:
+          - {move: refs_in, from: c05}
+          - {move: entity, arg: Lunsey Gas}
+        surfaces: [c06]
+        support: {c05: supports, c06: supports}
+      - id: s5
+        requires: [s4]
+        moves:
+          - {move: motif, arg: input-shock-margin-lag}
+        surfaces: [c07, c24, c34]
+        support: {c07: supports, c24: unrelated, c34: unrelated}
+    answer:
+      claim: >-
+        Kiln gas squeezed the margin. Lunsey Gas raised its industrial tariff
+        37 percent on 1 July 2041; gas was about 31 percent of Corsewick's cost
+        of goods, and Corsewick held list prices flat until January 2042, so
+        the rise went straight into the margin, which fell from 14.2 to 8.9
+        percent. The clay-price account rests on a price observation that is
+        retracted at HEAD and is not support.
+      types: [synthesis]
+      topic: markets
+      category: firms
+      must_cite: [c03, c05, c06, c07]
+      must_not_cite: [c10, c01, c11, c12]
+      confidence: [0.75, 0.8]
+      entities: [Corsewick Ceramics, Lunsey Gas]
+  - id: q2
+    family: F13
+    text: How big a slice of Corsewick's late-2041 profit slide can be put down to what it paid for clay?
+    outcome: gap
+    assess: not
+    support: []
+    forbidden: [c01, c10, c12]
+    chain:
+      - id: s1
+        moves:
+          - {move: neighbours, arg: question}
+          - {move: entity, arg: Ulvane pit}
+        surfaces: [c10, c02, c13]
+        relevant: {c10: "yes", c02: "yes", c13: "yes"}
+      - id: s2
+        requires: [s1]
+        backtrack: true
+        moves:
+          - {move: refs_out, from: c10}
+          - {move: supersession, from: c10}
+        surfaces: [c01]
+        support: {c01: unrelated}
+      - id: s3
+        requires: [s2]
+        backtrack: true
+        moves:
+          - {move: entity, arg: Ulvane kaolin contract price}
+          - {move: kind_type, arg: hypothesis}
+        surfaces: [c12, c13]
+        support: {c12: unrelated, c13: unrelated}
+      - id: s4
+        requires: [s1]
+        optional: true
+        moves:
+          - {move: neighbours, from: c02}
+        surfaces: [c06, c40]
+        relevant: {c06: "yes", c40: "yes"}
+    gap:
+      missing_premise: >-
+        The price Corsewick paid for Ulvane washed kaolin in the second half
+        of 2041. Tried: the clay-synthesis line rests on a contract-price
+        observation that has since been retracted; the contract line has only
+        a hypothesis about the price (no support mass) and a register entry
+        that holds prices under confidentiality. With clay at about a quarter
+        of cost of goods (with glaze), no clay share of the drop can be put
+        without the price.
+      settlement: >-
+        Corsewick's second-half 2041 clay invoices, or Ulvane's 2041 contract
+        price if the trade board lifts confidentiality; then apply the cost
+        share rule to the price change.
+      partial_support: [c02, c03, c06]
