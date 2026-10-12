@@ -151,6 +151,8 @@ func serveSSEStream(c streamConn, open sseOpener, bo sseBackoff) {
 	}
 	lastID := sub.LastEventID
 	delay := bo.initial
+	log.Debug().Str("path", sub.Path).Msg("desktop sse stream: opened")
+	defer func() { log.Debug().Str("path", sub.Path).Err(ctx.Err()).Msg("desktop sse stream: ended") }()
 	for ctx.Err() == nil {
 		resp, err := open(ctx, sub.Path, lastID)
 		if err == nil && resp.StatusCode == http.StatusOK {

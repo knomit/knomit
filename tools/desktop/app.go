@@ -570,7 +570,8 @@ const wailsPrefix = "/wails/"
 // retried forever and never recovered, even once the server was up.
 //
 // So it answers immediately, and says which of the two worlds the client is in:
-// a base when there is one, __KNOMIT_BOOTING__ when there is not. The client
+// a base when there is one (the page's own origin: /api/ is proxied to the
+// server's local socket, see apiProxy), __KNOMIT_BOOTING__ when there is not. The client
 // polls /boot/status and picks the base up from there (see web/src/bootStatus.ts).
 //
 // desktopFS may be nil, which disables the /desktop/ tree entirely. run always
@@ -618,10 +619,9 @@ func configInjectingHandler(uiFS, desktopFS fs.FS, status func() bootStatus) htt
 		if r.URL.Path == "/config.js" {
 			st := status()
 			w.Header().Set("Content-Type", "application/javascript")
-			// Never cache: the API base embeds the chosen port, which can differ
-			// between launches (ephemeral fallback when 19278 is taken). A cached
-			// copy would point the UI at a dead port — and while booting there is
-			// no base at all, which is the last thing to let a cache remember.
+			// Never cache: while booting there is no base at all, which is the
+			// last thing to let a cache remember, and the transport flags must
+			// reflect this launch.
 			w.Header().Set("Cache-Control", "no-store")
 			fmt.Fprint(w, "window.__KNOMIT_DESKTOP__ = true;\n")
 			// The UI opens its event streams as Wails Streams rather than

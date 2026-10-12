@@ -2,9 +2,11 @@ import { createOutageLog } from './streamOutage';
 import { openEventStream, streamErrorSuffix } from './eventStream';
 // API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
 // build (UI and API are same-origin, so URLs stay relative). The desktop build
-// serves the UI in-process via Wails from a different origin and sets
-// window.__KNOMIT_API_BASE__ (via /config.js) to the looknomitck API URL, making
-// all calls cross-origin to the TCP listener. One bundle, runtime-configured.
+// serves the UI from the Wails asset handler and sets window.__KNOMIT_API_BASE__
+// (via /config.js, or /boot/status once the server is up) to that same origin:
+// the handler proxies /api/ to the server's local socket, so no call leaves the
+// page's origin and no TCP port is involved. The event streams are opened
+// through openEventStream (eventStream.ts). One bundle, runtime-configured.
 // apiBase reads the configured base at call time (not import time) so it is
 // robust to script/module evaluation order and easy to test.
 function apiBase(): string {
