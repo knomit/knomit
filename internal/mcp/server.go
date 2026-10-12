@@ -189,6 +189,10 @@ func toolRegistrationsWith(skills *skillSource, mgr *repos.Manager, embedders ..
 		// commit merges one into the agent branch and rollback deletes one.
 		// A read-only server must not expose it.
 		{experimentTool(), ExperimentHandler(mgr), true, gateRequired},
+		// A WRITE tool: it opens an experiment and writes its answer facts
+		// there (never committing it). Blocking; its deadline is its own
+		// `budget`, not a handler timeout.
+		{reasonTool(), ReasonHandler(mgr.Engine), true, gateRequired},
 		// Neither is a write tool, and knomit_repos needs no handle: a
 		// read-only server still needs both, or nothing on the unscoped mount
 		// could be discovered, bound, and therefore read.

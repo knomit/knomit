@@ -297,6 +297,28 @@ type TriggersConfig struct {
 	ScriptRatePerMinute int `toml:"script_rate_per_minute"`
 }
 
+// DefaultEngineModelURL is where the reasoning engine's model is reached when
+// [engine].model_url is unset: llama-server's OpenAI-compatible API on its
+// default port (E07: llama-server is the serving shape). Ollama serves the
+// same API at http://127.0.0.1:11434/v1, and then [engine].model names the
+// model, since Ollama serves several.
+const DefaultEngineModelURL = "http://127.0.0.1:8080/v1"
+
+// EngineConfig configures the reasoning engine (knomit_reason, the expert
+// spike's E02): which model its `model` host function calls. The endpoint is
+// server configuration, never a script argument: a script cannot point the
+// engine at another server.
+type EngineConfig struct {
+	// ModelURL is the base URL of an OpenAI-compatible chat-completions API
+	// (POST <ModelURL>/chat/completions) that honours response_format
+	// json_schema: llama-server, or Ollama's /v1. Env KNOMIT_ENGINE_MODEL_URL.
+	ModelURL string `toml:"model_url"`
+	// Model is the `model` field of every request. llama-server serves the one
+	// model it was started with and ignores it; Ollama needs it. Env
+	// KNOMIT_ENGINE_MODEL.
+	Model string `toml:"model"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	Home string `toml:"repo"`
@@ -351,6 +373,7 @@ type Config struct {
 	Discovery           DiscoveryConfig    `toml:"discovery"`
 	Experiments         ExperimentsConfig  `toml:"experiments"`
 	Triggers            TriggersConfig     `toml:"triggers"`
+	Engine              EngineConfig       `toml:"engine"`
 	Embeddings          EmbeddingsConfig   `toml:"embeddings"`
 	LLM                 LLMConfig          `toml:"llm"`
 	Remote              RemoteAuthConfig   `toml:"remote"`
@@ -595,6 +618,7 @@ func Defaults() Config {
 		},
 		Experiments: ExperimentsConfig{ExpiryDays: 30},
 		Triggers:    TriggersConfig{ScriptRatePerMinute: DefaultScriptRatePerMinute},
+		Engine:      EngineConfig{ModelURL: DefaultEngineModelURL},
 		Git: GitConfig{
 			Serve:                  true,
 			NetworkTimeout:         120 * time.Second,
@@ -664,6 +688,8 @@ func Load() (Config, error) {
 	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
+	envOr("KNOMIT_ENGINE_MODEL_URL", &cfg.Engine.ModelURL)
+	envOr("KNOMIT_ENGINE_MODEL", &cfg.Engine.Model)
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)
 	if err := envBoolOr("KNOMIT_LLM_CACHE", &cfg.LLM.Cache); err != nil {
 		return Config{}, err

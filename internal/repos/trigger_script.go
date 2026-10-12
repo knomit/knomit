@@ -276,7 +276,7 @@ func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendi
 	hostCtx = WithBinding(hostCtx, NewBindingOfRepo(d.ri, d.branch))
 	hostCtx = store.WithTrailers(hostCtx, store.Trailers{Trace: p.trace, Cause: p.commit, Trigger: p.trig.Name})
 	rf, rt := rs.fireRange()
-	h := &scriptHost{d: d, p: p, cs: cs, ctx: hostCtx, globals: globals, rangeFrom: rf, rangeTo: rt}
+	h := &scriptHost{toolHost: d.newToolHost(hostCtx, p, cs), d: d, p: p, cs: cs, globals: globals, rangeFrom: rf, rangeTo: rt}
 	h.onRow = func(r store.TriggerFire) { h.rows = append(h.rows, r) }
 
 	err := fact.RunScript(hostCtx, cs.prog, cs.script, globals, h.functions(), rs.now)
@@ -305,14 +305,32 @@ func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendi
 	}
 }
 
+// toolHost is the half of a host object that reaches the injected tools:
+// query, explain, learn, update and retract, each through call under a
+// recover, with the private- and artifact-path refusals applied BEFORE the
+// handler sees the call. It is shared by every host tier — the `do: script`
+// and recipe hosts (scriptHost) and the reasoning engine's (engineHost) — so
+// the five closures have ONE implementation and one set of refusals.
+type toolHost struct {
+	tools ScriptTools
+	ctx   context.Context // budget deadline + binding + trailers
+	spent time.Duration   // time inside host calls (host_ms)
+	// root is the write repo's ontology root ("" means kb), for the path
+	// refusals; moment is the default moment_name of a write.
+	root   string
+	moment string
+	// onPanic reports a Go panic recovered inside a tool call (the tier
+	// decides how: once per trigger blob, or once per engine run).
+	onPanic func(tool string, r any)
+}
+
 // scriptHost is the `knomit` object of one fire — a script's, or a recipe's
 // (which adds `exec`, recipeHostFunctions).
 type scriptHost struct {
-	d     *triggerDispatcher
-	p     pendingFire
-	cs    *compiledScript
-	ctx   context.Context // budget deadline + binding + trailers
-	spent time.Duration   // time inside host calls (host_ms)
+	*toolHost
+	d  *triggerDispatcher
+	p  pendingFire
+	cs *compiledScript
 	// globals is the fire's fact/agent/change, handed on to a recipe that
 	// knomit.run starts; rangeFrom/rangeTo the fire's range for its late row.
 	globals            map[string]any
@@ -322,6 +340,20 @@ type scriptHost struct {
 	// late inbox (it runs outside phase B).
 	onRow func(store.TriggerFire)
 	rows  []store.TriggerFire
+}
+
+// newToolHost is the tool half of one fire's host: the injected tools, the
+// fire's ctx, the repo's ontology root, "trigger:<name>" as the default
+// moment, and a panic reported once per (trigger, blob, tool).
+func (d *triggerDispatcher) newToolHost(ctx context.Context, p pendingFire, cs *compiledScript) *toolHost {
+	return &toolHost{
+		tools: d.sc.tools, ctx: ctx, root: d.ri.ontologyRoot, moment: "trigger:" + p.trig.Name,
+		onPanic: func(tool string, r any) {
+			if d.warnOnce("panic:" + p.trig.Name + "@" + cs.blob + ":" + tool) {
+				crashdump.ReportRecovered("triggers:"+d.repo+":script:"+tool, r)
+			}
+		},
+	}
 }
 
 // functions is the host object: exactly these eight names, nothing else is
@@ -344,21 +376,21 @@ func (h *scriptHost) functions() fact.ScriptHost {
 // script, crashdumped once per (trigger, blob, tool) — never left to escape
 // RunProgram, where safeRun would drop the buffer and re-run the whole range
 // on every kick, forever, for a panic that is deterministic for this fire.
-func (h *scriptHost) call(tool string, args map[string]any) (out any, err error) {
+func (h *toolHost) call(tool string, args map[string]any) (out any, err error) {
 	t0 := time.Now()
 	defer func() {
 		h.spent += time.Since(t0)
 		if r := recover(); r != nil {
-			if h.d.warnOnce("panic:" + h.p.trig.Name + "@" + h.cs.blob + ":" + tool) {
-				crashdump.ReportRecovered("triggers:"+h.d.repo+":script:"+tool, r)
+			if h.onPanic != nil {
+				h.onPanic(tool, r)
 			}
 			out, err = nil, fmt.Errorf("knomit.%s: panic: %v", tool, r)
 		}
 	}()
-	if h.d.sc.tools == nil {
+	if h.tools == nil {
 		return nil, fmt.Errorf("knomit.%s: no script tools on this instance", tool)
 	}
-	text, isErr, err := h.d.sc.tools.Call(h.ctx, tool, args)
+	text, isErr, err := h.tools.Call(h.ctx, tool, args)
 	if err != nil {
 		return nil, fmt.Errorf("knomit.%s: %w", tool, err)
 	}
@@ -375,19 +407,20 @@ func (h *scriptHost) call(tool string, args map[string]any) (out any, err error)
 	return v, nil
 }
 
-// momentName is `opts.moment_name`, else "trigger:<name>".
-func (h *scriptHost) momentName(opts map[string]any) string {
+// momentName is `opts.moment_name`, else the tier's default ("trigger:<name>"
+// for a script or recipe).
+func (h *toolHost) momentName(opts map[string]any) string {
 	if m, ok := opts["moment_name"].(string); ok && m != "" {
 		return m
 	}
-	return "trigger:" + h.p.trig.Name
+	return h.moment
 }
 
-func (h *scriptHost) query(args []any) (any, error) {
+func (h *toolHost) query(args []any) (any, error) {
 	return h.call("query", objectArg(args, 0))
 }
 
-func (h *scriptHost) explain(args []any) (any, error) {
+func (h *toolHost) explain(args []any) (any, error) {
 	file, ok := stringArg(args, 0)
 	if !ok {
 		return nil, errors.New("knomit.explain(path, opts?): path must be a string")
@@ -397,7 +430,7 @@ func (h *scriptHost) explain(args []any) (any, error) {
 	return h.call("explain", a)
 }
 
-func (h *scriptHost) learn(args []any) (any, error) {
+func (h *toolHost) learn(args []any) (any, error) {
 	var facts []any
 	switch v := argAt(args, 0).(type) {
 	case []any:
@@ -455,7 +488,7 @@ func (h *scriptHost) learn(args []any) (any, error) {
 	return h.call("learn", call)
 }
 
-func (h *scriptHost) update(args []any) (any, error) {
+func (h *toolHost) update(args []any) (any, error) {
 	file, err := h.factPath("update", args)
 	if err != nil {
 		return nil, err
@@ -466,7 +499,7 @@ func (h *scriptHost) update(args []any) (any, error) {
 	return h.call("update", a)
 }
 
-func (h *scriptHost) retract(args []any) (any, error) {
+func (h *toolHost) retract(args []any) (any, error) {
 	file, err := h.factPath("retract", args)
 	if err != nil {
 		return nil, err
@@ -483,7 +516,7 @@ func (h *scriptHost) retract(args []any) (any, error) {
 // `.knomit/x.md` are refused alike. The handler accepts a well-formed
 // `artifacts/<area>/…` path from a script on the same terms as a session
 // (F25 follow-up); `.knomit/` stays closed to a script as to everyone.
-func (h *scriptHost) factPath(tool string, args []any) (string, error) {
+func (h *toolHost) factPath(tool string, args []any) (string, error) {
 	file, ok := stringArg(args, 0)
 	if !ok || file == "" {
 		return "", fmt.Errorf("knomit.%s(path, opts?): path must be a string", tool)
@@ -501,12 +534,12 @@ func (h *scriptHost) factPath(tool string, args []any) (string, error) {
 // handler is even called. internal/mcp cannot be imported here (internal/mcp
 // imports internal/repos), so the predicates are fact's, not mcp's, and the
 // message text is this package's own.
-func (h *scriptHost) privateRefused(tool string, v any) (string, error) {
+func (h *toolHost) privateRefused(tool string, v any) (string, error) {
 	file, ok := v.(string)
 	if !ok || file == "" {
 		return "", fmt.Errorf("knomit.%s: a path must be a non-empty string, got %v", tool, v)
 	}
-	root := h.d.ri.ontologyRoot
+	root := h.root
 	if root == "" {
 		root = "kb"
 	}

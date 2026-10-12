@@ -78,7 +78,8 @@ var triggersRepoAllowedCalls = map[string][]string{
 	// pure computation. Nothing here writes a fact, a ref or an object.
 	"trigger_script.go": {
 		// the store: the script blob at the head, and the injected tool set
-		"tr.ScriptAt", "?.Call",
+		// (reached through the shared toolHost, which the engine tier reuses)
+		"tr.ScriptAt", "h.tools.Call", "d.newToolHost", "h.onPanic",
 		// knomit.run (F07 PR 5): the name rule, the start (trigger_recipe.go),
 		// its row handed to the fire (or the late inbox), the counter
 		"fact.ValidRecipeName", "h.d.startRecipe", "h.onRow", "?.recordRecipe", "rs.fireRange",
@@ -95,7 +96,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// the hub (through emit) and the log
 		"h.d.emit", "h.d.wakeSync", "log.Error", "log.Warn", "?.Str", "?.Int", "?.Dur", "?.Msg", "crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
-		"currentTriggerHooks", "d.scriptFor", "d.rateAllows", "d.warnOnce", "h.d.warnOnce", "h.functions", "h.call", "h.momentName", "h.factPath",
+		"currentTriggerHooks", "d.scriptFor", "d.rateAllows", "d.warnOnce", "h.functions", "h.call", "h.momentName", "h.factPath",
 		"h.privateRefused", // factPath's rule for one path, also on knomit.learn's opts.retract (F08 M2)
 		"d.mu.Lock", "d.mu.Unlock", "argAt", "stringArg", "objectArg", "capForLog",
 		// pure helpers
@@ -118,7 +119,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"os.Stat", "os.ReadFile", "filepath.Join", "fi.Mode", "?.IsRegular", "fi.ModTime", "fi.Size", "cur.mtime.Equal",
 		"sha256.Sum256", "hex.EncodeToString",
 		// the sandbox and the host
-		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "WithBinding", "NewBindingOfRepo", "store.WithTrailers",
+		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "d.newToolHost", "WithBinding", "NewBindingOfRepo", "store.WithTrailers",
 		"recipeHostFunctions", "recipeMCP", "serverkey.ServerKey", "json.Marshal", "os.Environ", "mergeEnv",
 		"d.recipeGlobals", "d.recipeEnv",
 		// F5: which result outcomes are failures (their text in `error`, else

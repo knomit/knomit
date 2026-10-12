@@ -59,6 +59,12 @@ type Manager struct {
 	ctx   context.Context
 	deps  Deps
 
+	// engine is the reasoning engine (knomit_reason), built on first use
+	// from deps: one per instance, so one model endpoint runs one question
+	// at a time.
+	engineOnce sync.Once
+	engine     *Engine
+
 	// sessionReaperStop is set by Start when the background idle-session
 	// reaper is launched, and invoked by Close to wind it down. nil only when
 	// Start hasn't been called — the reaper itself is never disabled (see
@@ -1219,4 +1225,17 @@ func (m *Manager) OrphanFiles() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return append([]string(nil), m.orphanFiles...)
+}
+
+// Engine returns this instance's reasoning engine: [engine] from the config,
+// the same injected tool set trigger scripts use, and the home directory for
+// the <home>/engine/reason.js override. Nil-safe on a nil Manager (nil).
+func (m *Manager) Engine() *Engine {
+	if m == nil {
+		return nil
+	}
+	m.engineOnce.Do(func() {
+		m.engine = NewEngine(EngineConfig{Model: m.deps.Cfg.Engine, Tools: m.deps.ScriptTools, Home: m.deps.Cfg.Home})
+	})
+	return m.engine
 }
