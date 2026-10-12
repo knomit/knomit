@@ -61,8 +61,11 @@ func isolateLockfile(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(p, dir) {
-		t.Fatalf("the lockfile path %q is not under the isolated dir %q", p, dir)
+	// The lockfile is keyed by home: under a non-default KNOMIT_HOME (every
+	// test here sets one) it is <home>/server.json, not in the state dir.
+	// Either is a directory this test owns; neither may be a real one.
+	if home := os.Getenv("KNOMIT_HOME"); !strings.HasPrefix(p, dir) && (home == "" || !strings.HasPrefix(p, home)) {
+		t.Fatalf("the lockfile path %q is under neither the isolated state dir %q nor KNOMIT_HOME %q", p, dir, home)
 	}
 	return p
 }

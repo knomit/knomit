@@ -80,15 +80,58 @@ func StateDir() (string, error) {
 // internal/platform/userdirs owns that rule and the reason for it.
 func DefaultHome() (string, error) { return defaultHome() }
 
-// LockfilePath is <StateDir>/server.json: the port and PID of the server
-// running on this machine. Shared by the desktop (which writes it) and the
-// bridge (which reads it) so the two cannot look in different places.
+// LockfilePath is the server discovery file (server.json) for the data root
+// this process resolves: LockfilePathFor(ResolveHome()). `knomit serve`, the
+// desktop and kb all reach it through here so they cannot look in different
+// places. When the data root cannot be resolved it is the state directory's
+// file, which is what every build before the file was keyed by home used.
 func LockfilePath() (string, error) {
-	dir, err := StateDir()
+	home, err := ResolveHome()
 	if err != nil {
-		return "", err
+		dir, serr := StateDir()
+		if serr != nil {
+			return "", serr
+		}
+		return filepath.Join(dir, "server.json"), nil
 	}
-	return filepath.Join(dir, "server.json"), nil
+	return LockfilePathFor(home), nil
+}
+
+// LockfilePathFor is the discovery file of the server whose data root is
+// home. The key is the file's location:
+//
+//   - the DEFAULT home's file is <StateDir>/server.json, the one place every
+//     older kb and desktop already looks, so a default install changes
+//     nothing for them;
+//   - any OTHER home's is <home>/server.json. StateDir is per user, not per
+//     home, so a single shared file let a rehearsal or e2e server overwrite
+//     the real server's port (the 2026-10-02 wrong-instance shape); a file
+//     inside the home cannot be another home's.
+//
+// home must be the resolved data root (ResolveHome, Config.Home). If the
+// default home cannot be resolved there is nothing to compare against and
+// the home's own file is used.
+func LockfilePathFor(home string) string {
+	if def, err := DefaultHome(); err == nil && sameDir(home, def) {
+		if dir, err := StateDir(); err == nil {
+			return filepath.Join(dir, "server.json")
+		}
+	}
+	return filepath.Join(home, "server.json")
+}
+
+// sameDir reports whether a and b name the same directory: equal once
+// cleaned, or the same file on disk (a symlinked home spelled differently).
+func sameDir(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	return err == nil && os.SameFile(ai, bi)
 }
 
 // withHomeHint adds knomit's own way out to an OS-level resolution failure.

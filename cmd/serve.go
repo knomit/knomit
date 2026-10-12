@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -23,6 +25,19 @@ import (
 	"knomit/internal/platform/diag"
 	"knomit/internal/platform/logging"
 	"knomit/internal/platform/privdir"
+	"knomit/internal/platform/version"
+)
+
+// The exit codes `knomit serve --supervised` documents to its supervisor (the
+// desktop). Unsupervised serve exits 0 or 1 only.
+//
+//	0  stopped (signal or stdin closed)
+//	2  configuration or trust failure: restarting cannot help
+//	3  the local socket/pipe is held by another server: attach to it instead
+//	   anything else: a crash; the supervisor may restart
+const (
+	ExitSupervisedConfig = 2
+	ExitSupervisedHeld   = 3
 )
 
 // logTapLines is how many recent log lines the server keeps for the Manage
@@ -43,14 +58,40 @@ func serveCmd() *cobra.Command {
 		logMaxSizeMB  int
 		logMaxBackups int
 		logMaxAgeDays int
+		supervised    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the knomit HTTP server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// ctx is the command's context plus a cancel of our own, so the
+			// supervisor's stdin closing stops the server exactly as SIGTERM
+			// does: serveUntil returns, the defers run, the exit is 0.
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			ctx, stop := context.WithCancel(ctx)
+			defer stop()
+			// Started before anything slow (app.New may download models for
+			// minutes): a parent that dies during that wait must still end us.
+			var stdinClosed atomic.Bool
+			if supervised {
+				watchStdin(cmd.InOrStdin(), func() {
+					if ctx.Err() != nil {
+						return // already stopping (or stopped): nothing to report
+					}
+					stdinClosed.Store(true)
+					log.Info().Msg("supervisor closed stdin; shutting down")
+					stop()
+				})
+			}
+			// coded gives a supervised failure its documented exit code.
+			coded := func(err error) error { return supervisedExit(supervised, err) }
+
 			cfg, err := config.Load()
 			if err != nil {
-				return fmt.Errorf("load config: %w", err)
+				return coded(&app.ListenerConfigError{Err: fmt.Errorf("load config: %w", err)})
 			}
 			if portOverride != "" {
 				cfg.Port = portOverride
@@ -79,7 +120,7 @@ func serveCmd() *cobra.Command {
 			// this process writes from here on is in the ring a browser
 			// replays on connect; bounded, so it cannot grow. Its context is
 			// the command's, so subscriptions end when the server stops.
-			logTap := logging.NewTap(cmd.Context(), logTapLines)
+			logTap := logging.NewTap(ctx, logTapLines)
 
 			// Reconfigure the logger from config (main set a console base);
 			// keep tee'ing through the crash ring so reports retain the log tail.
@@ -147,85 +188,52 @@ func serveCmd() *cobra.Command {
 			stopDumps := installGoroutineDumpSignal(filepath.Join(cfg.Home, "dumps"))
 			defer stopDumps()
 
-			a, err := app.New(cmd.Context(), cfg, serveAppOptions(app.Options{LogTap: logTap}))
+			a, err := app.New(ctx, cfg, serveAppOptions(app.Options{LogTap: logTap}))
 			if err != nil {
+				if stdinClosed.Load() {
+					return nil // asked to stop while still booting
+				}
 				return err
 			}
 			defer a.Close()
 
 			router := a.Handler()
 
-			// Every listener is BOUND before "knomit ready" and before any of
-			// them serves. A taken port or a failed TLS/OAuth setup is then an
-			// error RunE returns while nothing is serving yet, and the deferred
-			// closes below release whatever was already bound.
-			listenAddr := cfg.Host + ":" + cfg.Port
-			ln, err := listenTCP(listenAddr)
-			if err != nil {
-				log.Error().Err(err).Msg("listen failed")
-				return err
-			}
-			defer ln.Close()
-
-			// serveCtx is every server's BaseContext. It is cmd.Context()
-			// (cancelled by SIGINT/SIGTERM) plus a cancel of its own, which
-			// serveUntil calls before Shutdown. That way SSE handlers, which
-			// select on r.Context().Done(), unblock promptly on a listener
-			// failure exactly as they do on a signal, and Shutdown does not
-			// wait out its grace for them.
-			serveCtx, cancelServe := context.WithCancel(cmd.Context())
+			// serveCtx is every server's BaseContext. It is ctx (cancelled by
+			// SIGINT/SIGTERM or the supervisor's stdin) plus a cancel of its
+			// own, which serveUntil calls before Shutdown. That way SSE
+			// handlers, which select on r.Context().Done(), unblock promptly
+			// on a listener failure exactly as they do on a signal, and
+			// Shutdown does not wait out its grace for them.
+			serveCtx, cancelServe := context.WithCancel(ctx)
 			defer cancelServe()
 
-			// HTTP server. The TLS and OAuth servers copy its timeouts and
-			// BaseContext.
-			srv := &http.Server{
-				Addr:              listenAddr,
-				Handler:           router,
-				ReadHeaderTimeout: 10 * time.Second,
-				ReadTimeout:       30 * time.Second,
-				WriteTimeout:      0, // 0 = no limit for SSE long-poll
-				IdleTimeout:       60 * time.Second,
-				BaseContext:       func(_ net.Listener) context.Context { return serveCtx },
-				// ConnContext runs once per accepted connection, which is the
-				// only moment the net.Conn exists: it asks the kernel who is on
-				// the other end of a unix socket and puts the answer where
-				// internal/web's AuthMiddleware can read it. TCP connections are
-				// left untouched.
-				ConnContext: auth.ConnContext,
-			}
-
-			// Local authenticated listener: a unix socket, or a named pipe on
-			// Windows. openLocalListener takes the WHOLE config rather than a
-			// path and a flag, so there is no pair of arguments here to wire up
-			// the wrong way round, and its policy is pinned by a test.
-			ul, closeSocket, err := openLocalListener(cfg)
+			// Every listener is BOUND before "knomit ready" and before any of
+			// them serves, in internal/app's listener-set order (TCP, local socket/pipe,
+			// require check, mTLS), each step undoing all before it. A taken
+			// port or a failed TLS/OAuth setup is then an error RunE returns
+			// while nothing is serving yet, and the deferred closes release
+			// whatever was already bound. Open takes the WHOLE config:
+			// listenerFrom-style pairs of arguments are how knomit#245's
+			// mis-wiring went unnoticed.
+			ls, err := app.OpenListeners(serveCtx, app.ListenerOptions{
+				Config:     cfg,
+				Handler:    router,
+				Base:       serveCtx,
+				KeyPath:    a.KeyPath(),
+				Version:    version.String(),
+				Supervised: supervised,
+			})
 			if err != nil {
-				return err
+				return coded(err)
 			}
-			defer closeSocket()
+			defer ls.Close()
+			srv, tlsSrv, tl := ls.HTTP, ls.TLSServer, ls.TLS
 			// The address this server's own children (recipe `exec`) get as
 			// KNOMIT_SERVER: the local listener only if it bound.
-			ownAddr := serverAddress(cfg, ul, ln.Addr().String())
-			a.Manager().SetServerAddress(ownAddr)
+			a.Manager().SetServerAddress(ls.Address)
 			// The one line to copy into KNOMIT_SERVER to reach THIS instance.
-			log.Info().Str("knomit_server", ownAddr).Msg("this server's address (KNOMIT_SERVER for kb)")
-
-			// mTLS listener for enrolled instances (F19 phase 2): its OWN
-			// http.Server over the same handler, off until [tls].addr is set
-			// and `knomit identity install` has placed a certificate. The
-			// plaintext listener above is unchanged. serveCtx also bounds its
-			// certificate re-check loop.
-			tlsSrv, tl, err := app.OpenTLSServer(serveCtx, cfg.TLS, a.KeyPath(), srv)
-			if err != nil {
-				// Fail closed: serve does not run without a listener it was
-				// configured to open. The returned error exits 1 through
-				// main.go, after RunE's defers have run.
-				log.Error().Err(err).Str("dir", cfg.TLS.Dir).Msg("tls listener failed")
-				return err
-			}
-			if tl != nil {
-				defer tl.Close()
-			}
+			log.Info().Str("knomit_server", ls.Address).Msg("this server's address (KNOMIT_SERVER for kb)")
 
 			// OAuth listener (F19 phase 3a): its OWN http.Server over the
 			// OAuth router, off until [oauth].issuer and [oauth].addr are set.
@@ -233,9 +241,16 @@ func serveCmd() *cobra.Command {
 			// real TLS fronts it, never the plaintext port above.
 			oauthSrv, ol, err := openOAuthServer(cfg.OAuth, a.OAuthHandler(), srv)
 			if err != nil {
-				// Fail closed, as for the TLS listener above.
-				log.Error().Err(err).Msg("oauth listener failed")
-				return err
+				if availabilityOnly(supervised, err) {
+					// A held address is an availability problem, like TCP and
+					// TLS: the desktop must not lose its UI over it.
+					log.Warn().Err(err).Msg("oauth listener address is held by another process; serving without it")
+					oauthSrv, ol = nil, nil
+				} else {
+					// Fail closed, as for the TLS listener above.
+					log.Error().Err(err).Msg("oauth listener failed")
+					return coded(err)
+				}
 			}
 			if ol != nil {
 				defer ol.Close()
@@ -253,23 +268,46 @@ func serveCmd() *cobra.Command {
 				}
 			})
 			if err != nil {
-				log.Error().Err(err).Msg("runtime diagnostics listener failed")
-				return err
+				if availabilityOnly(supervised, err) {
+					log.Warn().Err(err).Msg("runtime diagnostics address is held by another process; serving without it")
+					diagSrv, dl = nil, nil
+				} else {
+					log.Error().Err(err).Msg("runtime diagnostics listener failed")
+					return coded(err)
+				}
 			}
 			if dl != nil {
 				defer dl.Close()
 			}
 
+			// server.json, LAST: every listener that can fail is bound, so the
+			// file never names a port nothing serves.
+			//
+			// Failing to write it does not stop a plain `knomit serve`: before
+			// the file existed nothing depended on it, and kb falls back to
+			// the socket. Supervised, the desktop needs it, and no retry fixes
+			// an unwritable state directory: exit 2.
+			if err := ls.Advertise(); err != nil {
+				if !supervised {
+					log.Warn().Err(err).Str("path", ls.LockPath()).
+						Msg("server.json not written; kb and the desktop will not discover this server by file")
+				} else {
+					return coded(&app.ListenerConfigError{Err: err})
+				}
+			}
+
 			// Startup summary: everything above is bound.
 			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(a.Signer().PublicKey())))
-			httpAddr := "http://" + listenAddr
-			startupLog := log.Info().
-				Str("http", httpAddr).
-				Str("api", httpAddr+"/api/v1/repos/{repo}").
-				Str("mcp", httpAddr+"/api/v1/repos/{repo}/branches/{branch}/mcp")
-
-			if cfg.Git.Serve {
-				startupLog = startupLog.Str("git_remote", httpAddr+"/git")
+			startupLog := log.Info()
+			if ls.TCP != nil {
+				httpAddr := "http://" + ls.TCP.Addr().String()
+				startupLog = startupLog.
+					Str("http", httpAddr).
+					Str("api", httpAddr+"/api/v1/repos/{repo}").
+					Str("mcp", httpAddr+"/api/v1/repos/{repo}/branches/{branch}/mcp")
+				if cfg.Git.Serve {
+					startupLog = startupLog.Str("git_remote", httpAddr+"/git")
+				}
 			}
 
 			startupLog.
@@ -289,13 +327,15 @@ func serveCmd() *cobra.Command {
 			// listener, or the socket file, disappear underneath it. After
 			// serveUntil's graceful Shutdown the Closes have nothing to do.
 			errCh := make(chan error, 5)
-			serveInto(errCh, "listen", srv, ln)
-			if ul != nil {
+			if ls.TCP != nil {
+				serveInto(errCh, "listen", srv, ls.TCP)
+			}
+			if ls.Local != nil {
 				// `via` names the MECHANISM, so the line says which credential
 				// a session over it will carry rather than assuming a socket.
 				log.Info().Str("socket", cfg.Socket).Str("via", string(auth.LocalVia)).
 					Msg("local authenticated listener listening")
-				serveInto(errCh, "local authenticated listener", srv, ul)
+				serveInto(errCh, "local authenticated listener", srv, ls.Local)
 			}
 			defer srv.Close()
 			if tlsSrv != nil {
@@ -321,7 +361,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// a.Close() runs via defer — shuts down repos and releases resources.
-			return serveUntil(cmd.Context(), errCh, cancelServe, 5*time.Second, srv, tlsSrv, oauthSrv, diagSrv)
+			return serveUntil(ctx, errCh, cancelServe, 5*time.Second, srv, tlsSrv, oauthSrv, diagSrv)
 		},
 	}
 	cmd.Flags().StringVar(&portOverride, "port", "", "override the listen port (default: from config)")
@@ -330,18 +370,11 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().IntVar(&logMaxSizeMB, "log-max-size", 10, "max log file size in MB before rotation")
 	cmd.Flags().IntVar(&logMaxBackups, "log-max-backups", 3, "max number of rotated log files to keep")
 	cmd.Flags().IntVar(&logMaxAgeDays, "log-max-age", 7, "max age in days to keep rotated log files")
+	cmd.Flags().BoolVar(&supervised, "supervised", false,
+		"run as a supervised child (the desktop): stop cleanly when stdin closes; the local socket/pipe is mandatory "+
+			"(held by another server: exit 3); a held TCP or TLS address is a warning, not a failure; "+
+			"configuration or trust failure exits 2")
 	return cmd
-}
-
-// listenTCP binds the plaintext listener. It is separate from http.Server's
-// ListenAndServe so serve can bind synchronously, before it reports ready, and
-// return the error.
-func listenTCP(addr string) (net.Listener, error) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("plaintext listener: %w", err) // err names the address
-	}
-	return ln, nil
 }
 
 // openDiagServer binds the runtime diagnostics listener when [runtime].addr is
@@ -430,3 +463,39 @@ func serveUntil(ctx context.Context, errCh <-chan error, cancelServe context.Can
 // the listener failures below are pinned against RunE's returned error,
 // which is the #261 contract, not against a helper beside it.
 var serveAppOptions = func(o app.Options) app.Options { return o }
+
+// watchStdin reads in until it ends, then calls onEOF once. It is the
+// supervised server's lifeline: the desktop holds the write end of the pipe
+// that is our stdin, so the pipe closing means the desktop is gone, on every
+// OS and however it died. The goroutine is never joined; at process exit it
+// dies with the process.
+func watchStdin(in io.Reader, onEOF func()) {
+	go func() {
+		_, _ = io.Copy(io.Discard, in)
+		onEOF()
+	}()
+}
+
+// supervisedExit gives a failure of a supervised serve its documented exit
+// code (see ExitSupervisedConfig). Unsupervised, and for any other error, err
+// is returned as is and exits 1.
+func supervisedExit(supervised bool, err error) error {
+	if !supervised || err == nil {
+		return err
+	}
+	var ce *app.ListenerConfigError
+	switch {
+	case errors.Is(err, auth.ErrSocketInUse):
+		return &ExitCodeError{Code: ExitSupervisedHeld, Err: err}
+	case errors.As(err, &ce):
+		return &ExitCodeError{Code: ExitSupervisedConfig, Err: err}
+	}
+	return err
+}
+
+// availabilityOnly reports whether err is an "address already in use" that a
+// supervised serve survives (WARN, serve without that listener). Unsupervised
+// serve keeps its refusal.
+func availabilityOnly(supervised bool, err error) bool {
+	return supervised && app.IsAddrInUse(err)
+}

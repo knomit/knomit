@@ -14,22 +14,6 @@ import (
 	"time"
 )
 
-func TestListenTCP_BindFailureIsAnError(t *testing.T) {
-	busy, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer busy.Close()
-	ln, err := listenTCP(busy.Addr().String())
-	if err == nil {
-		ln.Close()
-		t.Fatal("binding a taken address succeeded")
-	}
-	if !strings.Contains(err.Error(), busy.Addr().String()) {
-		t.Fatalf("error must name the address: %v", err)
-	}
-}
-
 // A listener that fails while serving ends the wait with its error rather
 // than ending the process: serveUntil returns it, so RunE's defers (the crash
 // marker's release among them) still run.

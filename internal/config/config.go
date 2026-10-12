@@ -302,6 +302,13 @@ type Config struct {
 	Home string `toml:"repo"`
 	Host string `toml:"host"`
 	Port string `toml:"port"`
+	// HTTP switches the plaintext TCP listener (host:port). Default true, so
+	// `knomit serve`, Docker and the e2e suite are unchanged; the desktop
+	// writes false on a fresh install, leaving the local socket/pipe as the
+	// only way in (a config with neither is refused by Validate). Set via
+	// `http` in TOML or KNOMIT_HTTP. It does not touch [tls].addr, which has
+	// its own switch (the address), nor the local listener.
+	HTTP bool `toml:"http"`
 	// ExternalAddresses (F10) are the URLs PEERS use to reach this instance,
 	// not what knomit listens on: scheme://host[:port], no path. Behind
 	// `tailscale serve`, knomit may listen on 127.0.0.1:19278 while peers
@@ -543,6 +550,7 @@ func Defaults() Config {
 	return Config{
 		Host:                "localhost",
 		Port:                "19278",
+		HTTP:                true,
 		OntologyRoot:        "kb",
 		MethodologyMinScore: 0.15,
 		ClusterCache: ClusterCacheConfig{
@@ -645,6 +653,9 @@ func Load() (Config, error) {
 	// Overlay env vars.
 	envOr("KNOMIT_HOST", &cfg.Host)
 	envOr("KNOMIT_PORT", &cfg.Port)
+	if err := envBoolOr("KNOMIT_HTTP", &cfg.HTTP); err != nil {
+		return Config{}, err
+	}
 	// KNOMIT_SOCKET is applied in socketFor, below — not here.
 	envOr("KNOMIT_TLS_ADDR", &cfg.TLS.Addr)
 	envOr("KNOMIT_TLS_DIR", &cfg.TLS.Dir)
@@ -802,6 +813,13 @@ func Load() (Config, error) {
 // ontology_root) surfaces at boot rather than later as silently-dropped
 // synthesize outputs.
 func (c Config) Validate() error {
+	// http = false leaves the local socket/pipe as the only listener of the
+	// API. Load always resolves one, so this only refuses a hand-built
+	// config that turned the other off too: serving nothing looks healthy.
+	// (A Config built without Load and with http on may have no socket.)
+	if !c.HTTP && c.Socket == "" {
+		return fmt.Errorf("config: http = false needs a local socket (socket is empty); with both off knomit would serve nothing")
+	}
 	if strings.TrimSpace(c.OntologyRoot) == "" {
 		return fmt.Errorf("config: ontology_root must not be empty")
 	}

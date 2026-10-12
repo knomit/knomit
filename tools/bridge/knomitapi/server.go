@@ -125,8 +125,10 @@ func TransportFor(s Server) string {
 	}
 }
 
-// readLockfileBaseURL returns http://127.0.0.1:<port> from the desktop's
-// lockfile (server.json), or ("", nil) if the file does not exist.
+// readLockfileBaseURL returns the plaintext base URL a server advertises in
+// server.json: the schema 2 "http" field, else http://127.0.0.1:<port> from
+// the schema 1 "port". ("", nil) when the file does not exist or the server
+// has no TCP listener (port 0).
 func readLockfileBaseURL() (string, error) {
 	path, err := lockfilePath()
 	if err != nil {
@@ -140,10 +142,18 @@ func readLockfileBaseURL() (string, error) {
 		return "", err
 	}
 	var info struct {
-		Port int `json:"port"`
+		HTTP string `json:"http"`
+		Port int    `json:"port"`
 	}
 	if err := json.Unmarshal(data, &info); err != nil {
 		return "", fmt.Errorf("parse lockfile %s: %w", path, err)
+	}
+	// v2 names the plaintext listener's full base URL; it wins over "port".
+	// A server with no TCP listener writes "http": "" and "port": 0, which is
+	// the answer "none": the caller falls through to the default address, and
+	// an unnamed address dials the local socket first.
+	if info.HTTP != "" {
+		return info.HTTP, nil
 	}
 	if info.Port <= 0 {
 		return "", nil
