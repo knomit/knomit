@@ -201,10 +201,23 @@ describe('TopBar — the rail toggle', () => {
     expect(onToggleRail).toHaveBeenCalledTimes(1);
   });
 
-  it('stays over the server pages: the rail sits beside them', () => {
-    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
-    expect(screen.getByTestId('rail-toggle')).toBeInTheDocument();
+  it('stays in place over the server pages but is disabled and says why (control: enabled outside them)', () => {
+    const { unmount } = render(bar({ railOpen: true }));
+    expect(screen.getByTestId('rail-toggle')).toBeEnabled();
+    unmount();
+    render(bar({ railOpen: false, server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    const t = screen.getByTestId('rail-toggle');
+    expect(t).toBeDisabled();
+    expect(t).toHaveAttribute('title', 'Repositories and lenses are hidden over the server pages');
+    expect(t).toHaveStyle({ width: '26px', height: '26px', color: '#3d3d3d' });
     expect(screen.getByTestId('server-toggle')).toBeInTheDocument();
+  });
+
+  it('a click on the disabled toggle asks for nothing', () => {
+    const onToggleRail = vi.fn();
+    render(bar({ onToggleRail, server: { page: 'fleet', pages: ['fleet'], onPage: vi.fn(), authCount: null } }));
+    fireEvent.click(screen.getByTestId('rail-toggle'));
+    expect(onToggleRail).not.toHaveBeenCalled();
   });
 });
 
