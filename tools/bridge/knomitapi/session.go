@@ -2,12 +2,18 @@ package knomitapi
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
 const (
-	// maxGlobals bounds the PROJECT PRINCIPLES block.
-	maxGlobals = 7
+	// globalsPageSize is the page size for the global-principles fetch. It
+	// equals the /facts handler's maximum limit (500), so one request covers
+	// any realistic corpus and paging is the exception.
+	globalsPageSize = 500
+	// globalsMaxPages is a runaway guard on the paging loop, not a cap anyone
+	// should reach: 20 pages is 10,000 global principles.
+	globalsMaxPages = 20
 	// maxInvariants bounds the rollout fallback block.
 	maxInvariants = 5
 	// maxRecent is how many "Recent work" lines are shown.
@@ -25,6 +31,28 @@ type Stats struct {
 	SkipReason         string
 }
 
+// fetchGlobalPrinciples returns EVERY global designer principle, ordered by
+// path. Global principles are designer-authored and rare by construction, so
+// the block is deliberately uncapped: a principle written today must load in
+// every later session, not only until N newer writes push it out.
+//
+// The server orders pages by committed_at DESC and offers no sort parameter,
+// so the order is fixed here by path: the block is then stable across sessions
+// and does not reshuffle each time any principle is written or edited.
+func fetchGlobalPrinciples(repo, branch string) []FactSummary {
+	var all []FactSummary
+	for page := 0; page < globalsMaxPages; page++ {
+		got := FetchFacts(GlobalPrinciplesURL(repo, branch, globalsPageSize, page*globalsPageSize))
+		all = append(all, got...)
+		if len(got) < globalsPageSize {
+			break
+		}
+	}
+	globals := FilterGlobalPrinciples(all)
+	sort.SliceStable(globals, func(i, j int) bool { return globals[i].Path < globals[j].Path })
+	return globals
+}
+
 // SessionContext builds the corpus-context block for repo@branch. Returns
 // ("", Stats{SkipReason: "no_facts"}) when there is nothing worth saying, so
 // callers can stay silent rather than emit an empty header.
@@ -34,7 +62,7 @@ type Stats struct {
 // still, so filtering a recent window drops nearly all of them — the block used
 // to under-report by an order of magnitude on a normal corpus.
 func SessionContext(repo, branch string) (string, Stats) {
-	globals := FilterGlobalPrinciples(FetchFacts(GlobalPrinciplesURL(repo, branch, maxGlobals)), maxGlobals)
+	globals := fetchGlobalPrinciples(repo, branch)
 
 	// Rollout fallback: until designers seed global principles, surface
 	// load-bearing invariants so agents don't regress to zero context. Once any

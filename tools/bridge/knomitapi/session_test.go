@@ -1,6 +1,7 @@
 package knomitapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -184,5 +185,75 @@ func TestSessionContext_ShowsExpiry(t *testing.T) {
 	text, _ = SessionContext("r", "b")
 	if !strings.Contains(text, ": P (expired 2026-01-01T00:00:00Z)\n") {
 		t.Errorf("principle line missing the expiry note:\n%s", text)
+	}
+}
+
+// REGRESSION: the block used to carry only the 7 most recently committed global
+// principles (maxGlobals = 7), so older ones never reached a session and a new
+// one dropped out after seven later writes. Every global principle must load,
+// in path order, whatever order the server returns them in.
+func TestSessionContext_AllGlobalPrinciplesInPathOrder(t *testing.T) {
+	// 12 principles, served newest-first as the server does (here: reverse
+	// path order), so the sort is observable. anti-patterns/solution-quality
+	// is the OLDEST: the old cap dropped exactly it.
+	paths := []string{}
+	for i := 0; i < 11; i++ {
+		paths = append(paths, fmt.Sprintf("kb/principles/philosophy/p%02d/x.md", i))
+	}
+	paths = append(paths, "kb/principles/anti-patterns/solution-quality-pre-release/y.md")
+	var items []string
+	for i := len(paths) - 1; i >= 0; i-- { // committed_at DESC ~ reverse path
+		items = append(items, principle(paths[i], fmt.Sprintf("Title %d", i)))
+	}
+	c := &corpusServer{principles: facts(items...), recent: facts()}
+	c.start(t)
+
+	text, stats := SessionContext("r", "b")
+	if stats.Globals != 12 {
+		t.Fatalf("Globals = %d, want 12 (no cap):\n%s", stats.Globals, text)
+	}
+	if !strings.Contains(text, "anti-patterns/solution-quality-pre-release") {
+		t.Errorf("oldest principle dropped:\n%s", text)
+	}
+	// path order: anti-patterns/... sorts before philosophy/p00 ... p10.
+	last := -1
+	for _, p := range []string{"anti-patterns/solution-quality", "philosophy/p00", "philosophy/p05", "philosophy/p10"} {
+		idx := strings.Index(text, p)
+		if idx < 0 || idx < last {
+			t.Fatalf("%q missing or out of path order (idx %d after %d):\n%s", p, idx, last, text)
+		}
+		last = idx
+	}
+}
+
+// More global principles than one page holds must still all arrive: the fetch
+// follows the handler's offset paging.
+func TestSessionContext_GlobalPrinciplesPageBeyondOnePage(t *testing.T) {
+	total := globalsPageSize + 3
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		w.Header().Set("Content-Type", "application/hal+json")
+		if !strings.Contains(q.Get("path"), "kb/principles/") {
+			w.Write([]byte(facts()))
+			return
+		}
+		var off, lim int
+		fmt.Sscan(q.Get("offset"), &off)
+		fmt.Sscan(q.Get("limit"), &lim)
+		var items []string
+		for i := off; i < off+lim && i < total; i++ {
+			items = append(items, principle(fmt.Sprintf("kb/principles/p/%04d.md", i), fmt.Sprintf("T%d", i)))
+		}
+		w.Write([]byte(facts(items...)))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	isolateHome(t)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
+
+	_, stats := SessionContext("r", "b")
+	if stats.Globals != total {
+		t.Errorf("Globals = %d, want %d (second page lost)", stats.Globals, total)
 	}
 }

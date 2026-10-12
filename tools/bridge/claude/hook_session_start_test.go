@@ -3,6 +3,7 @@ package claude
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -268,4 +269,44 @@ func TestSessionStart_MultipleServersLogsTheSkipReason(t *testing.T) {
 	require.Equal(t, true, entry["emitted"])
 	require.Equal(t, float64(0), entry["globals"])
 	require.Equal(t, float64(0), entry["recent"])
+}
+
+// TestSessionStart_EmitsEveryGlobalPrinciple_NotJustSeven: the hook used to cap
+// the PROJECT PRINCIPLES block at 7. With 10 principles served, all 10 must
+// appear, including the ones the old cap dropped, in path order.
+func TestSessionStart_EmitsEveryGlobalPrinciple_NotJustSeven(t *testing.T) {
+	dir := t.TempDir()
+	var items []string
+	for i := 9; i >= 0; i-- { // newest first, i.e. reverse path order
+		items = append(items, fmt.Sprintf(
+			`{"path":"kb/principles/area/s%d/f.md","title":"Principle number %d","domain":["global"],"entities":["designer"]}`, i, i))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/facts") {
+			w.Header().Set("Content-Type", "application/hal+json")
+			// Only the targeted principles query gets the principles; the
+			// "Recent work" query gets none, so a principle can reach the
+			// output only through the PROJECT PRINCIPLES block.
+			if !strings.Contains(r.URL.Query().Get("path"), "kb/principles/") {
+				w.Write([]byte(`{"_embedded":{"facts":[]}}`))
+				return
+			}
+			w.Write([]byte(`{"_embedded":{"facts":[` + strings.Join(items, ",") + `]}}`))
+			return
+		}
+		w.Write([]byte(`{"agent_branch":"machine/test"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
+
+	data, _ := json.Marshal(map[string]interface{}{"cwd": dir, "session_id": "s1", "transcript_path": "/tmp/nope.jsonl"})
+	var out bytes.Buffer
+	require.NoError(t, hookSessionStart(bytes.NewReader(data), &out))
+
+	got := out.String()
+	require.Equal(t, 10, strings.Count(got, "Principle number"), got)
+	require.Contains(t, got, "Principle number 0") // the oldest: first to fall off a cap
+	require.Less(t, strings.Index(got, "area/s0"), strings.Index(got, "area/s9"), "path order")
 }
