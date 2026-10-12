@@ -1,6 +1,6 @@
 # Spike report: Wails asset handler as the API transport (and SSE)
 
-Branch `spike/wails-asset-transport` (from `origin/dev` 6ce780d6). No PR. Evidence log: `.claude/plans/2026-10-12-spike-wails-asset-transport-macos-page.log`.
+Branch `spike/wails-asset-transport` (from `origin/dev` a2439e31). No PR. Evidence log: `.claude/plans/2026-10-12-spike-wails-asset-transport-macos-page.log`.
 
 ## 1. Versions
 - Newest v3 tag: `v3.0.0-beta.28` (2026-10-05). The user was right. Pinned in `go.mod`: `v3.0.0-beta.3` (2026-08-03). 25 betas apart. `go list -m -versions` ends `... beta.27 beta.28`.
