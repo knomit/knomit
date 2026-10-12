@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"knomit/internal/fact"
@@ -421,3 +422,51 @@ func jsonRoundTrip(m map[string]any) map[string]any {
 
 func deref(p *float64) float64 { return *p }
 func derefInt(p *int) int      { return *p }
+
+// CheckGold is the mechanical half of E04 §3's gold validation, run on a
+// loaded world: every fact a question's answer must rest on or cite is live
+// at the head (a retracted fact cannot be gold support), no fact is both
+// required and forbidden, and the answer's topic accepts the context keys an
+// engine answer carries. What it cannot check without the engine — that each
+// distractor is reachable by a legal move, that the gap premise is entailed
+// by nothing — stays with the teacher runs and the judge.
+func CheckGold(ctx context.Context, w *LoadedWorld) error {
+	bad := func(q, format string, a ...any) error {
+		return &ScenarioError{World: w.Spec.ID, Where: "question " + q + " gold", Reason: fmt.Sprintf(format, a...)}
+	}
+	liveAtHead := func(id string) (bool, error) {
+		return w.Svc.Search().FactLiveAtCommit(ctx, w.Branch, w.Paths[id], w.Head)
+	}
+	for _, q := range w.Spec.Questions {
+		need := append([]string{}, q.Support...)
+		if q.Answer != nil {
+			need = append(need, q.Answer.MustCite...)
+			need = append(need, q.Answer.ShouldCite...)
+		}
+		if q.Gap != nil {
+			need = append(need, q.Gap.PartialSupport...)
+		}
+		for _, id := range need {
+			live, err := liveAtHead(id)
+			if err != nil {
+				return err
+			}
+			if !live {
+				return bad(q.ID, "fact %s must be cited but is retracted at the head", id)
+			}
+		}
+		if a := q.Answer; a != nil {
+			for _, id := range a.MustCite {
+				if slices.Contains(a.MustNotCite, id) || slices.Contains(q.Forbidden, id) {
+					return bad(q.ID, "fact %s is both required and forbidden", id)
+				}
+			}
+			probe := fact.NewFact(fact.BuildFactPath("kb", a.Topic, a.Category))
+			probe.Context = map[string]any{"question": "q-" + q.ID}
+			if err := fact.ValidateContext(w.Spec.parsed, strings.Trim(a.Topic+"/"+a.Category, "/"), probe.Context); err != nil {
+				return bad(q.ID, "the answer topic %s does not accept the engine's context key question: %v", a.Topic, err)
+			}
+		}
+	}
+	return nil
+}

@@ -108,6 +108,22 @@ func TestScenarioExample_LoadsThroughWritePath(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, live)
 	require.Equal(t, w.Head, w.RetractedAt["f10"])
+	require.NoError(t, synthesize.CheckGold(ctx, w))
+}
+
+// TestCheckGold_RefusesRetractedSupport: gold that rests on a fact the
+// history retracts is refused. Sabotage: drop the liveness loop.
+func TestCheckGold_RefusesRetractedSupport(t *testing.T) {
+	b, err := os.ReadFile(exampleSpec)
+	require.NoError(t, err)
+	mut := strings.Replace(string(b), "support: [f03, f01, f02, f05]\n    forbidden: [f04, f07, f10]", "support: [f03, f01, f02, f05, f10]\n    forbidden: [f04, f07]", 1)
+	require.NotEqual(t, string(b), mut)
+	s, err := synthesize.ParseScenario([]byte(mut))
+	require.NoError(t, err)
+	w, err := loadSpec(t, s, nil)
+	require.NoError(t, err)
+	err = synthesize.CheckGold(context.Background(), w)
+	require.ErrorContains(t, err, "fact f10 must be cited but is retracted at the head")
 }
 
 // TestScenarioLoad_RefusesOntologyRule: a fact that breaks one of the
@@ -221,6 +237,9 @@ func TestScenarioSpecDir(t *testing.T) {
 		seen[s.ID] = p
 		w, err := loadSpec(t, s, emb)
 		if err != nil {
+			t.Fatalf("INVALID %s: %v", p, err)
+		}
+		if err := synthesize.CheckGold(context.Background(), w); err != nil {
 			t.Fatalf("INVALID %s: %v", p, err)
 		}
 		t.Logf("ok %s: %d facts, %d commits, %d questions", s.ID, len(w.Paths), len(w.StepCommits), len(s.Questions))
