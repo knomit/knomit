@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -229,4 +230,63 @@ func TestReloadCmd_RefusesWhatItCannotVouchFor(t *testing.T) {
 	if err := signalReload(home, 1<<22+12345); err == nil {
 		t.Fatal("signalling a pid that does not exist must fail")
 	}
+}
+
+// `knomit reload` exits non-zero when the reload completed but a listener did
+// not come up, and shows a configuration error instead of timing out.
+func TestReloadCmd_ExitStatusReflectsWhatHappened(t *testing.T) {
+	home := isolateServe(t)
+	port := os.Getenv("KNOMIT_PORT") // env wins over toml, on reload as at boot
+	_ = home
+	h := startServe(t, home)
+	h.waitServing()
+
+	// Bind failure: the generation advances (processed), the status is an error.
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	_, heldPort, _ := net.SplitHostPort(held.Addr().String())
+	t.Setenv("KNOMIT_PORT", heldPort)
+	var out bytes.Buffer
+	err = runReload(context.Background(), &out, 10*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "addr_in_use") {
+		t.Fatalf("a held port must be an error naming it, got %v", err)
+	}
+	if !strings.Contains(out.String(), "reloaded (generation 2)") {
+		t.Fatalf("the outcome must still be printed:\n%s", out.String())
+	}
+	if !httpOK("127.0.0.1:" + port) {
+		t.Fatal("the previous listener must keep serving")
+	}
+
+	// Config error: refused, shown, generation unchanged; twice in a row.
+	t.Setenv("KNOMIT_PORT", port)
+	writeToml(t, home, "http = [nope\n")
+	for i := 0; i < 2; i++ {
+		start := time.Now()
+		err = runReload(context.Background(), io.Discard, 10*time.Second)
+		if err == nil || !strings.Contains(err.Error(), "reload refused") || !strings.Contains(err.Error(), "toml") {
+			t.Fatalf("round %d: a config error must be shown, got %v", i, err)
+		}
+		if time.Since(start) > 4*time.Second {
+			t.Fatalf("round %d took %v: it waited for a timeout instead of the error", i, time.Since(start))
+		}
+		cur, _ := serveraddr.ReadLock(h.lock)
+		if cur.Generation != 2 || cur.ReloadError == "" {
+			t.Fatalf("round %d: server.json %+v", i, cur)
+		}
+	}
+
+	// A good config succeeds (exit 0) and clears the error.
+	writeToml(t, home, "\n")
+	if err := runReload(context.Background(), io.Discard, 10*time.Second); err != nil {
+		t.Fatalf("good reload: %v", err)
+	}
+	if cur, _ := serveraddr.ReadLock(h.lock); cur.Generation != 3 || cur.ReloadError != "" {
+		t.Fatalf("after a good reload: %+v", cur)
+	}
+	h.cancel()
+	_ = h.wait(15 * time.Second)
 }

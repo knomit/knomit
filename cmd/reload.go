@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -92,7 +93,11 @@ func runReload(ctx context.Context, out io.Writer, wait time.Duration) error {
 		cur, rerr := serveraddr.ReadLock(path)
 		if rerr == nil && cur.PID == info.PID && cur.Generation > info.Generation {
 			printReload(out, cur)
-			return nil
+			return reloadOutcome(cur)
+		}
+		if rerr == nil && cur.PID == info.PID && cur.ReloadError != "" && cur.ReloadError != info.ReloadError {
+			// The configuration did not load: nothing changed, generation too.
+			return fmt.Errorf("reload refused, the running configuration is unchanged: %s", cur.ReloadError)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("reload requested, but the server did not acknowledge within %s (generation still %d); "+
@@ -104,6 +109,22 @@ func runReload(ctx context.Context, out io.Writer, wait time.Duration) error {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// reloadOutcome is non-nil when a listener reason says a requested change did
+// not happen ("off" is a state the user asked for, not a failure).
+func reloadOutcome(cur serveraddr.LockInfo) error {
+	var bad []string
+	for n, l := range cur.Listeners {
+		if l.Reason != "" && l.Reason != "off" {
+			bad = append(bad, n+": "+l.Reason)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	sort.Strings(bad)
+	return fmt.Errorf("reloaded, but not every listener is as configured (%s); the previous listener keeps serving where there was one", strings.Join(bad, ", "))
 }
 
 func printReload(out io.Writer, cur serveraddr.LockInfo) {
@@ -128,4 +149,19 @@ func printReload(out io.Writer, cur serveraddr.LockInfo) {
 	if len(cur.RestartNeeded) > 0 {
 		fmt.Fprintf(out, "  needs a restart: %v\n", cur.RestartNeeded)
 	}
+}
+
+// missingEventError is `knomit reload`'s answer on Windows when the reload
+// event does not exist. Local\ objects are per logon session, so if
+// server.json names a pid that is alive the likeliest cause is that the
+// server runs in a different Windows session (a service, another user's
+// session, an RDP session) than this command; only a dead pid means "no
+// server". Spelled here, not in the Windows file, so it is testable anywhere.
+func missingEventError(pid int, alive bool) error {
+	if alive {
+		return fmt.Errorf("the reload event does not exist, but server.json names pid %d, which is running: "+
+			"the server is probably running in a different Windows session (the event is session-local); "+
+			"run knomit reload from that session, or restart the server", pid)
+	}
+	return errors.New("no running knomit serve found for this data root (its reload event does not exist and the pid in server.json is not running)")
 }

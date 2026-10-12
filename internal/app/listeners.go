@@ -154,6 +154,7 @@ type Listeners struct {
 	builtHost     string        // Config.Host when app.New built its middleware
 	generation    int
 	restartNeeded []string
+	reloadError   string // last reload's load/validation error, "" after a good one
 	retired       map[net.Listener]bool
 	reloadable    bool    // a reload trigger is installed (server.json "reload")
 	level         *string //[log].level last applied by a reload; nil = the boot value
@@ -343,6 +344,7 @@ func (l *Listeners) lockInfoLocked() serveraddr.LockInfo {
 		Generation:    l.generation,
 		Reload:        l.reloadable,
 		RestartNeeded: append([]string(nil), l.restartNeeded...),
+		ReloadError:   l.reloadError,
 		Listeners: map[string]serveraddr.LockListener{
 			"http": lockListener(l.HTTPState),
 			"tls":  lockListener(l.TLSState),

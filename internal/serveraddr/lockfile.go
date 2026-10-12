@@ -58,6 +58,11 @@ type LockInfo struct {
 	// or the Windows event). A server written before reload existed lacks it,
 	// and SIGHUP would end it, so `knomit reload` refuses to signal one.
 	Reload bool `json:"reload,omitempty"`
+	// ReloadError is "<RFC3339 time>: <message>" when the last reload request
+	// could not load or validate the configuration (the running configuration
+	// and Generation are unchanged); cleared by the next successful reload.
+	// The time makes a repeated identical error a new value.
+	ReloadError string `json:"reload_error,omitempty"`
 	// RestartNeeded names the config keys whose change the last reload saw
 	// and did NOT apply (socket, [auth].require, ...): the running process
 	// still has the old values until it is restarted. Empty after a boot.

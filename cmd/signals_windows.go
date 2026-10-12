@@ -103,7 +103,7 @@ func signalReload(home string, pid int) error {
 	ev, err := windows.OpenEvent(windows.EVENT_MODIFY_STATE, false, name)
 	if err != nil {
 		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
-			return errors.New("no running knomit serve found for this data root (its reload event does not exist)")
+			return missingEventError(pid, processAlive(pid))
 		}
 		return fmt.Errorf("open the reload event: %w", err)
 	}
@@ -112,4 +112,22 @@ func signalReload(home string, pid int) error {
 		return fmt.Errorf("set the reload event: %w", err)
 	}
 	return nil
+}
+
+// processAlive reports whether pid names a running process this user may query.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		// Access denied still means it exists (another user's process).
+		return errors.Is(err, windows.ERROR_ACCESS_DENIED)
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	if err := windows.GetExitCodeProcess(h, &code); err != nil {
+		return true
+	}
+	return code == 259 // STILL_ACTIVE
 }

@@ -44,6 +44,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -132,7 +133,21 @@ func (l *Listeners) Reload(load func() (config.Config, error)) (ApplyResult, err
 	cfg, err := load()
 	if err != nil {
 		log.Error().Err(err).Msg("reload: configuration not applied; the running configuration is unchanged")
-		return ApplyResult{Generation: l.Snapshot().Generation}, err
+		// Say why in server.json (generation unchanged) so `knomit reload`
+		// can show it. Serialized with Apply; same owner check.
+		l.applyMu.Lock()
+		l.mu.Lock()
+		l.reloadError = time.Now().UTC().Format(time.RFC3339Nano) + ": " + err.Error()
+		info := l.lockInfoLocked()
+		wrote := l.wroteLock
+		l.mu.Unlock()
+		if wrote {
+			if lerr := l.rewriteLock(info); lerr != nil {
+				log.Error().Err(lerr).Msg("reload: server.json not rewritten with the reload error")
+			}
+		}
+		l.applyMu.Unlock()
+		return ApplyResult{Generation: info.Generation}, err
 	}
 	return l.Apply(cfg), nil
 }
@@ -190,6 +205,7 @@ func (l *Listeners) Apply(newCfg config.Config) ApplyResult {
 	l.mu.Lock()
 	l.generation++
 	l.restartNeeded = restart
+	l.reloadError = "" // this reload loaded
 	res.Generation = l.generation
 	res.RestartNeeded = append([]string(nil), restart...)
 	info := l.lockInfoLocked()

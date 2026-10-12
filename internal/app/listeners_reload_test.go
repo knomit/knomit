@@ -515,8 +515,11 @@ func TestReload_GenerationAdvancesOnlyWhenTheConfigLoads(t *testing.T) {
 		t.Fatal("a load error must be returned")
 	}
 	after, _ := os.ReadFile(r.lock)
-	if string(before) != string(after) || r.ls.Snapshot().Generation != 1 {
-		t.Fatalf("a parse error changed server.json or the generation:\n%s\n%s", before, after)
+	if r.ls.Snapshot().Generation != 1 || r.lockInfo(t).Generation != 1 {
+		t.Fatalf("a parse error advanced the generation:\n%s\n%s", before, after)
+	}
+	if !strings.Contains(r.lockInfo(t).ReloadError, "line 3") { // the only change: the recorded reason
+		t.Fatalf("the error is not in server.json:\n%s", after)
 	}
 	if got := get(t, addr); got != "ok" {
 		t.Fatal("a parse error disturbed the running listener")
@@ -636,5 +639,29 @@ func TestApply_DiffReachesEveryConfigField(t *testing.T) {
 	got := changedKeys(a, b)
 	if !slices.Equal(got, []string{"git.port", "log.file"}) {
 		t.Fatalf("changedKeys = %v", got)
+	}
+}
+
+func TestReload_ErrorIsRecordedInServerJSONAndClearedByTheNextGoodReload(t *testing.T) {
+	f := newFixture(t)
+	r := newRig(t, f)
+	if _, err := r.ls.Reload(func() (config.Config, error) { return config.Config{}, errors.New("bad toml") }); err == nil {
+		t.Fatal("want the error")
+	}
+	info := r.lockInfo(t)
+	if info.Generation != 1 || !strings.Contains(info.ReloadError, "bad toml") {
+		t.Fatalf("server.json after a failed load: %+v", info)
+	}
+	first := info.ReloadError
+	time.Sleep(2 * time.Millisecond)
+	_, _ = r.ls.Reload(func() (config.Config, error) { return config.Config{}, errors.New("bad toml") })
+	if again := r.lockInfo(t).ReloadError; again == first {
+		t.Fatal("an identical error must still read as a new one (timestamped)")
+	}
+	if _, err := r.ls.Reload(func() (config.Config, error) { return f.cfg, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if info := r.lockInfo(t); info.Generation != 2 || info.ReloadError != "" {
+		t.Fatalf("after a good reload: %+v", info)
 	}
 }
