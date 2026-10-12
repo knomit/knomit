@@ -665,3 +665,25 @@ func TestReload_ErrorIsRecordedInServerJSONAndClearedByTheNextGoodReload(t *test
 		t.Fatalf("after a good reload: %+v", info)
 	}
 }
+
+// The shipped default bind host is the DNS name "localhost", which the boot
+// allowlist holds. Moving off it to an IP literal (the desktop Settings' "All
+// networks", then back to "This computer only") loses no name, so it is
+// applied live and is NOT listed as needing a restart. A DNS name the
+// allowlist lacks still is.
+func TestApply_LeavingTheDefaultLocalhostNameNeedsNoRestart(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Host = "localhost"
+	r := newRig(t, f)
+	for _, host := range []string{"0.0.0.0", "127.0.0.1", "localhost", "0.0.0.0"} {
+		res := r.ls.Apply(f.next(func(c *config.Config) { c.Host = host }))
+		if slices.Contains(res.RestartNeeded, "host") {
+			t.Fatalf("host -> %q is listed as restart-only: %v", host, res.RestartNeeded)
+		}
+	}
+	// Positive control: a DNS name the boot allowlist does not know.
+	res := r.ls.Apply(f.next(func(c *config.Config) { c.Host = "kb.example" }))
+	if !slices.Contains(res.RestartNeeded, "host") {
+		t.Fatalf("an unknown DNS bind host must still be listed: %v", res.RestartNeeded)
+	}
+}
