@@ -204,12 +204,23 @@ function returnToFrom(s: ViewState, from: BrowseContext): ReturnTo | null {
   return s.draftShown ? s.returnTo : { context: from, pinned: s.pinned, facet: s.facet };
 }
 
+/** Whether the target rail is on screen: the reader's preference, except that
+ *  it is never shown over the server pages (which are not about a target), and
+ *  is forced open while there are no repositories (`noRepos`, not persisted).
+ *  The one place that rule lives: the bar, the shell and the keys read it. */
+export function railShown(s: ViewState, noRepos = false): boolean {
+  return s.server === null && (s.railOpen || noRepos);
+}
+
 export function viewReducer(s: ViewState, a: ViewAction): ViewState {
   switch (a.type) {
+    // railOpen is the reader's PREFERENCE, and the server pages do not touch
+    // it: they hide the rail (railShown) and refuse to change it, so it is
+    // exactly as they found it when they close.
     case 'TOGGLE_RAIL':
-      return { ...s, railOpen: !s.railOpen };
+      return s.server !== null ? s : { ...s, railOpen: !s.railOpen };
     case 'SET_RAIL':
-      return s.railOpen === a.open ? s : { ...s, railOpen: a.open };
+      return s.server !== null || s.railOpen === a.open ? s : { ...s, railOpen: a.open };
     case 'SET_FACET':
       // A deliberate choice of facet supersedes the remembered one: the next
       // target keeps what the reader just picked, not what they had before.

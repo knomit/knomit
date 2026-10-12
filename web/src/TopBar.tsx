@@ -15,7 +15,8 @@ interface Props {
   /** The displayed target's label (facets.ts targetLabelFor). Absent, the
    *  label is the browse context's. */
   label?: TargetLabel;
-  /** Whether the target rail is open; the toggle shows it lit. */
+  /** Whether the target rail is on screen (railShown); the toggle shows it
+   *  lit. Over the server pages it is false and the toggle is disabled. */
   railOpen: boolean;
   /** Opens or closes the target rail (the same thing ⌘B does). */
   onToggleRail: () => void;
@@ -177,14 +178,15 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             data-nodrag
             onClick={onToggleRail}
             onMouseDown={noMouseFocus}
+            disabled={serverOpen}
             aria-pressed={railOpen}
-            aria-label={railOpen ? 'Hide repositories and lenses' : 'Show repositories and lenses'}
-            title={railOpen ? 'Hide repositories and lenses  (⌘B)' : 'Show repositories and lenses  (⌘B)'}
+            aria-label={serverOpen ? RAIL_HIDDEN : railOpen ? 'Hide repositories and lenses' : 'Show repositories and lenses'}
+            title={serverOpen ? RAIL_HIDDEN : railOpen ? 'Hide repositories and lenses  (⌘B)' : 'Show repositories and lenses  (⌘B)'}
             style={{
               width: 26, height: 26, flexShrink: 0, position: 'relative',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              border: 'none', borderRadius: 4, padding: 0, cursor: 'pointer',
-              color: railOpen ? '#dfe9e2' : '#777',
+              border: 'none', borderRadius: 4, padding: 0, cursor: serverOpen ? 'default' : 'pointer',
+              color: serverOpen ? '#3d3d3d' : railOpen ? '#dfe9e2' : '#777',
               background: railOpen ? '#1a231d' : 'transparent',
               ...noDrag,
             }}
@@ -336,6 +338,10 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
     </div>
   );
 });
+
+// The rail is not shown over the server pages, which are not about a target;
+// the toggle stays so the bar does not shift, and says why it is off.
+const RAIL_HIDDEN = 'Repositories and lenses are hidden over the server pages';
 
 const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings' };
 const SERVER_LABEL: Record<ServerPage, string> = { fleet: 'Fleet', logs: 'Logs', auth: 'Authorizations' };
