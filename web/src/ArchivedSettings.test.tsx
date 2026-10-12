@@ -1,180 +1,124 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { RepoManager } from './RepoManager';
-import { api } from './api';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { ArchivedSettings } from './ArchivedSettings';
+import { api, type ArchivedRepo } from './api';
+import { formatBytes } from './utils';
 
-// `api` and the origin-session streams are stubbed; the module's other exports
-// — the description byte caps — pass through from the real module, so a test
-// asserting on a cap is asserting on the value the app actually ships.
+// An archived repo is a target of its own now: pinned from the rail's
+// Archived group, one repo per page, with Settings as its only facet. The page
+// carries what ArchivedRepo carries — the date, the origin, the size on disk
+// and why it was archived — plus Restore, and Purge in its danger zone.
+
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
-  // The connect sub-page's backend. Only the commit-lock test drives these;
-  // everywhere else they exist so the wizard cannot reach the network.
-  createSession: vi.fn(),
-  streamTest: vi.fn(() => () => {}),
-  streamPreview: vi.fn(() => () => {}),
-  streamApply: vi.fn(),
-  streamCommit: vi.fn(),
-  // Resolved, not bare: every caller does deleteSession(...).catch(...), so a
-  // bare vi.fn() fails inside a click handler rather than at an assertion.
-  deleteSession: vi.fn().mockResolvedValue(undefined),
   api: {
-    listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
-    // null = this server has no OAuth issuer (404), so no Authorizations tab.
-    listOAuthPending: vi.fn().mockResolvedValue(null),
-    listArchived: vi.fn().mockResolvedValue([
-      { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
-    ]),
-    listLenses: vi.fn().mockResolvedValue([
-      { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] },
-    ]),
-    getLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] }),
-    createLens: vi.fn().mockResolvedValue({ name: 'newlens', write: { uid: 'uid-core', name: 'core' }, reads: [] }),
-    updateLens: vi.fn().mockResolvedValue({ name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }] }),
-    deleteLens: vi.fn().mockResolvedValue(undefined),
-    renameLens: vi.fn().mockResolvedValue({ name: 'dev' }),
-    listBranchNames: vi.fn().mockResolvedValue([]),
-    getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
-    getRepo: vi.fn().mockResolvedValue({ name: 'core' }),
-    updateRepo: vi.fn().mockResolvedValue({ name: 'core' }),
-    renameRepo: vi.fn().mockResolvedValue({ name: 'core' }),
-    getOrigin: vi.fn().mockResolvedValue(null),
-    deleteOrigin: vi.fn(),
-    cancelIndex: vi.fn().mockResolvedValue({ name: 'core', uid: 'uid-core', index_state: 'error', index_reason: 'indexing cancelled' }),
-    rebuild: vi.fn().mockResolvedValue({ id: 'job1', state: 'running' }),
-    restoreRepo: vi.fn().mockResolvedValue({ name: 'old' }),
+    restoreRepo: vi.fn().mockResolvedValue({ name: 'q3-planning' }),
     purgeRepo: vi.fn().mockResolvedValue(undefined),
-    archiveRepo: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
-const ARCHIVED_FIXTURE = [
-  { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
-];
+const Q3: ArchivedRepo = {
+  id: 'id-q3', name: 'q3-planning', origin: 'git@example.com:me/q3.git',
+  archivedAt: '2026-08-12T10:00:00Z', sizeBytes: 3_145_728,
+  reason: { source: 'user', reason: '', note: 'quarter closed', condition: '', summary: 'Archived by the user: quarter closed' },
+};
 
-describe('RepoManager', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // clearAllMocks clears CALLS, not implementations, so a test that narrows
-    // listArchived would otherwise leak its fixture into every test after it.
-    // Re-assert the default so order cannot matter.
-    vi.mocked(api.listArchived).mockResolvedValue(ARCHIVED_FIXTURE);
-  });
-
-  const baseProps = {
-    open: true as const,
-    repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
-    currentRepo: 'core',
+function renderPage(over: Partial<React.ComponentProps<typeof ArchivedSettings>> = {}) {
+  const props = {
+    info: Q3,
     serverReadOnly: false,
-    hideRemoteConfig: false,
-    onChanged: () => {},
-    onBrowse: () => {},
+    activeNames: new Set(['core-kb']),
+    onRestored: vi.fn(),
+    onPurged: vi.fn(),
+    onError: vi.fn(),
+    ...over,
   };
+  render(<ArchivedSettings {...props} />);
+  return props;
+}
 
-  // An archived repo carries three lines — a date, an origin and two buttons —
-  // so one page holds all of them and the contents rail is the per-repo index.
-  // A rail entry each would have been a click that buys almost nothing.
-  it('puts every archived repo on one page, indexed by the contents rail', async () => {
-    vi.mocked(api.listArchived).mockResolvedValue([
-      { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
-      { id: 'older.2', name: 'older', origin: 'git@example.com:me/older.git', archivedAt: '2026-05-01T00:00:00Z' },
-    ]);
-    render(<RepoManager {...baseProps} />);
-    fireEvent.click(await screen.findByTestId('repomgr-archived'));
+beforeEach(() => { vi.clearAllMocks(); });
+afterEach(() => { cleanup(); });
 
-    // Both on screen at once, each with its own actions.
-    expect(await screen.findByTestId('block-archived-old.1')).toBeInTheDocument();
-    expect(screen.getByTestId('block-archived-older.2')).toBeInTheDocument();
-    expect(screen.getByTestId('archived-restore-old.1')).toBeInTheDocument();
-    expect(screen.getByTestId('archived-purge-older.2')).toBeInTheDocument();
-    // …and the rail indexes them by name.
-    expect(screen.getByTestId('toc-archived-old.1').textContent).toContain('old');
-    expect(screen.getByTestId('toc-archived-older.2').textContent).toContain('older');
+describe('ArchivedSettings — one archived repo', () => {
+  it('has exactly the Archived and Danger zone sections, indexed under "Repository"', () => {
+    renderPage();
+    expect(screen.getByTestId('settings-index-heading')).toHaveTextContent(/^Repository$/);
+    const ids = Array.from(document.querySelectorAll('section[id]')).map(s => s.id);
+    expect(ids).toEqual(['archived', 'danger']);
+    expect(screen.getByTestId('toc-danger')).toHaveTextContent('Danger zone');
   });
 
-  // Purging the last one takes the Archived rail row away with it, so leaving
-  // the selection where it was left you on an "Archived · 0 repositories" page
-  // that nothing in the rail was highlighting.
-  // An archived database keeps its full size on disk under a filename derived
-  // from its uid, so there is no directory a user could open to work out what
-  // archiving is costing them. This figure is the only place it is visible, and
-  // it belongs beside the button that reclaims it.
-  it('shows what purging an archived repo would give back', async () => {
-    vi.mocked(api.listArchived).mockResolvedValue([
-      { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z', sizeBytes: 3_145_728 },
-      { id: 'older.2', name: 'older', origin: '', archivedAt: '2026-05-01T00:00:00Z' },
-    ]);
-    render(<RepoManager {...baseProps} />);
-    fireEvent.click(await screen.findByTestId('repomgr-archived'));
-
-    expect(await screen.findByTestId('archived-size-old.1')).toHaveTextContent('3.0 MB');
-    // An older server sends no size. Nothing is rendered rather than a
-    // confident "0 B", which would read as "purging this frees nothing".
-    expect(screen.queryByTestId('archived-size-older.2')).toBeNull();
+  it('the Archived section shows the size on disk and why it was archived', () => {
+    renderPage();
+    const block = screen.getByTestId('block-archived');
+    expect(block).toHaveTextContent(formatBytes(3_145_728));
+    expect(screen.getByTestId('archived-size-id-q3')).toHaveTextContent('3.0 MB');
+    expect(screen.getByTestId('archived-reason-id-q3')).toHaveTextContent('Archived by the user: quarter closed');
+    expect(block).toHaveTextContent('git@example.com:me/q3.git');
+    // Restore lives here; Purge does not.
+    expect(block).toContainElement(screen.getByTestId('archived-restore-id-q3'));
+    expect(block).not.toContainElement(screen.getByTestId('archived-purge-id-q3'));
+    expect(screen.getByTestId('block-danger')).toContainElement(screen.getByTestId('archived-purge-id-q3'));
   });
 
-  // Each archived repo says why it is there: by the user (with the note), by
-  // knomit (with the why, and that restoring will be refused again), or — for
-  // one archived before reasons were recorded — a neutral "No reason
-  // recorded". An older server sends no reason at all: nothing is rendered.
-  // Sabotage: drop ArchiveReasonLine from ArchivedDetail → red.
-  it('shows why each archived repo was archived', async () => {
-    vi.mocked(api.listArchived).mockResolvedValue([
-      { id: 'u.1', name: 'mine', origin: '', archivedAt: '2026-10-01T00:00:00Z',
-        reason: { source: 'user', reason: '', note: 'moved', condition: '', summary: 'Archived by the user: moved' } },
-      { id: 's.2', name: 'linked', origin: '', archivedAt: '2026-10-02T00:00:00Z',
-        reason: { source: 'system', reason: '.knomit/ontology.yaml is a symlink', note: '', condition: 'unopenable',
-          summary: 'Archived automatically: .knomit/ontology.yaml is a symlink' } },
-      { id: 'l.3', name: 'legacy', origin: '', archivedAt: '2026-01-01T00:00:00Z', reason: null },
-      { id: 'o.4', name: 'olderserver', origin: '', archivedAt: '2026-01-01T00:00:00Z' },
-    ]);
-    render(<RepoManager {...baseProps} />);
-    fireEvent.click(await screen.findByTestId('repomgr-archived'));
-    expect(await screen.findByTestId('archived-reason-u.1')).toHaveTextContent('Archived by the user: moved');
-    expect(screen.queryByTestId('archived-condition-u.1')).toBeNull();
-    const sys = screen.getByTestId('archived-reason-s.2');
-    expect(sys).toHaveTextContent('Archived automatically: .knomit/ontology.yaml is a symlink');
-    expect(sys).toHaveTextContent('Restoring re-runs the check');
-    expect(screen.getByTestId('archived-condition-s.2')).toHaveTextContent('unopenable');
-    expect(screen.getByTestId('archived-reason-l.3')).toHaveTextContent('No reason recorded');
+  it('says nothing about a size or a reason an older server did not send', () => {
+    renderPage({ info: { id: 'o.4', name: 'olderserver', origin: '', archivedAt: '2026-01-01T00:00:00Z' } });
+    // Control: the section itself renders.
+    expect(screen.getByTestId('block-archived')).toBeInTheDocument();
+    expect(screen.queryByTestId('archived-size-o.4')).toBeNull();
     expect(screen.queryByTestId('archived-reason-o.4')).toBeNull();
-    expect(screen.getByTestId('toc-archived-s.2').textContent).toContain('linked');
   });
 
-  it('counts the automatically archived on the Overview', async () => {
-    vi.mocked(api.listArchived).mockResolvedValue([
-      { id: 's.2', name: 'linked', origin: '', archivedAt: '2026-10-02T00:00:00Z',
-        reason: { source: 'system', reason: 'x', note: '', condition: 'unopenable', summary: 'Archived automatically: x' } },
-      { id: 'l.3', name: 'legacy', origin: '', archivedAt: '2026-01-01T00:00:00Z', reason: null },
-    ]);
-    render(<RepoManager {...baseProps} />);
-    expect(await screen.findByTestId('overview-auto-archived')).toHaveTextContent('(1 automatically)');
+  it('explains a system archive, and that restoring re-runs the check', () => {
+    renderPage({ info: { id: 's.2', name: 'linked', origin: '', archivedAt: '2026-10-02T00:00:00Z',
+      reason: { source: 'system', reason: '.knomit/ontology.yaml is a symlink', note: '', condition: 'unopenable',
+        summary: 'Archived automatically: .knomit/ontology.yaml is a symlink' } } });
+    const why = screen.getByTestId('archived-reason-s.2');
+    expect(why).toHaveTextContent('Archived automatically: .knomit/ontology.yaml is a symlink');
+    expect(why).toHaveTextContent('Restoring re-runs the check');
+    expect(screen.getByTestId('archived-condition-s.2')).toHaveTextContent('unopenable');
   });
 
-  it('leaves the archive page when the last archived repo is purged', async () => {
-    render(<RepoManager {...baseProps} />);
-    fireEvent.click(await screen.findByTestId('repomgr-archived'));
-    fireEvent.click(await screen.findByTestId('archived-purge-old.1'));
-
-    fireEvent.change(screen.getByTestId('purge-confirm-input-old.1'), { target: { value: 'old' } });
-    vi.mocked(api.listArchived).mockResolvedValue([]);
-    fireEvent.click(screen.getByTestId('purge-confirm-old.1'));
-
-    await waitFor(() => expect(api.purgeRepo).toHaveBeenCalledWith('old.1'));
-    // The row is gone, and so is the page it opened — we are back on Overview,
-    // the fallback selection.
-    await waitFor(() => expect(screen.queryByTestId('repomgr-archived')).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getByTestId('manage-overview')).toBeInTheDocument());
+  it('Restore calls restoreRepo with the id and then onRestored with the restored name', async () => {
+    const p = renderPage();
+    fireEvent.click(screen.getByTestId('archived-restore-id-q3'));
+    await waitFor(() => expect(p.onRestored).toHaveBeenCalledWith('q3-planning'));
+    expect(api.restoreRepo).toHaveBeenCalledWith('id-q3', '');
   });
 
-  it('restores from the archive page and lands on the restored repo', async () => {
-    const onChanged = vi.fn();
-    vi.mocked(api.restoreRepo).mockResolvedValue({ name: 'old' });
-    render(<RepoManager {...baseProps} onChanged={onChanged} />);
-    fireEvent.click(await screen.findByTestId('repomgr-archived'));
-    fireEvent.click(await screen.findByTestId('archived-restore-old.1'));
+  it('asks for a new name when the name is taken, and restores under it', async () => {
+    vi.mocked(api.restoreRepo).mockResolvedValue({ name: 'q3-again' });
+    const p = renderPage({ activeNames: new Set(['q3-planning']) });
+    fireEvent.click(screen.getByTestId('archived-restore-id-q3'));
+    expect(api.restoreRepo).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId('restore-name-input-id-q3'), { target: { value: 'q3-again' } });
+    fireEvent.click(screen.getByTestId('restore-confirm-id-q3'));
+    await waitFor(() => expect(p.onRestored).toHaveBeenCalledWith('q3-again'));
+    expect(api.restoreRepo).toHaveBeenCalledWith('id-q3', 'q3-again');
+  });
 
-    await waitFor(() => expect(api.restoreRepo).toHaveBeenCalledWith('old.1', ''));
-    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  it('Purge requires the typed name, then calls purgeRepo with the id and onPurged', async () => {
+    const p = renderPage();
+    fireEvent.click(screen.getByTestId('archived-purge-id-q3'));
+    const confirm = screen.getByTestId('purge-confirm-id-q3');
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByTestId('purge-confirm-input-id-q3'), { target: { value: 'q3-plan' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByTestId('purge-confirm-input-id-q3'), { target: { value: 'q3-planning' } });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(p.onPurged).toHaveBeenCalledTimes(1));
+    expect(api.purgeRepo).toHaveBeenCalledWith('id-q3');
+  });
+
+  it('disables Restore and Purge on a read-only server, and enables both otherwise', () => {
+    renderPage();
+    expect(screen.getByTestId('archived-restore-id-q3')).toBeEnabled();
+    expect(screen.getByTestId('archived-purge-id-q3')).toBeEnabled();
+    cleanup();
+    renderPage({ serverReadOnly: true });
+    expect(screen.getByTestId('archived-restore-id-q3')).toBeDisabled();
+    expect(screen.getByTestId('archived-purge-id-q3')).toBeDisabled();
   });
 });

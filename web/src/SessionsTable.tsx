@@ -124,11 +124,10 @@ function TargetName({ kind, uid, name }: { kind: string; uid: string; name: stri
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
       {kind === 'repo' && <BookIcon color="#6a8" size={11} />}
       {kind === 'lens' && <LayersIcon color={LENS.accent} size={11} />}
-      {/* An unscoped session that has not yet called knomit_bind has NO pin:
-          the server's bindingNames.lookup returns empty strings for a value
-          that is not a PinID, so kind, uid and name all arrive empty and
-          `kind:uid` would render a bare ":". */}
-      {name ?? <span style={{ color: '#777' }}>{kind ? `${kind}:${uid}` : '—'}</span>}
+      {/* Every line drawn is the target's own (an unbound session, whose pin
+          arrives empty, never matches a target's binding filter), so kind and
+          uid are always there to fall back to. */}
+      {name ?? <span style={{ color: '#777' }}>{`${kind}:${uid}`}</span>}
     </span>
   );
 }
@@ -161,27 +160,24 @@ function BranchChip({ branch, experiment }: WriteChip) {
 // SessionsTable is the client-session table: one row per session, the
 // binding groups, the per-handle detail and the policy line as its footer. It
 // has no card and no caption: the Activity facet puts the counts in its
-// toolbar, and Manage's Sessions tab (until it goes) wraps it in its card.
+// toolbar.
 //
 // It is a flex column that fills its parent with minHeight 0 and scrolls in
 // its own table wrapper, so it never grows to its rows' min-content height and
 // pushes the footer off the window
 // (kb/gotchas/web/ui/manage-page/flex-min-content-propagation).
 //
-// With a `target`, only that target's binding groups are drawn: the server
-// already filtered the sessions to ones bound to it, and a session bound here
-// AND elsewhere shows just this target's line and handles.
-export function SessionsTable({ rows, policy, error, now, target, padded = false }: {
+// Only the target's binding groups are drawn: the server already filtered the
+// sessions to ones bound to it, and a session bound here AND elsewhere shows
+// just this target's line and handles.
+export function SessionsTable({ rows, policy, error, now, target }: {
   rows: ClientSession[];
   policy: ClientSessionPolicy | null;
   error: string | null;
   now: Date;
-  target: SessionTarget | null;
-  /** Inset the table and footer from the edges (a facet body has no card
-   *  padding around it). */
-  padded?: boolean;
+  target: SessionTarget;
 }) {
-  const targetKey = target ? `${target.kind}:${target.uid}` : null;
+  const targetKey = `${target.kind}:${target.uid}`;
   // Which rows have their per-handle detail open, keyed by session id. Per page
   // load, deliberately not persisted — but keyed by id rather than by index, so
   // a poll that reorders or re-fetches the rows does not close what is open or
@@ -206,8 +202,8 @@ export function SessionsTable({ rows, policy, error, now, target, padded = false
 
   return (
     <div data-testid="sessions-table" style={root}>
-      {error && <p data-testid="session-error" style={errorLine(padded)}>{error}</p>}
-      <div style={tableWrap(padded)}>
+      {error && <p data-testid="session-error" style={errorLine}>{error}</p>}
+      <div style={tableWrap}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             {/* Sticky on the CELLS, not on <thead>: cell-level sticky is the
@@ -234,8 +230,8 @@ export function SessionsTable({ rows, policy, error, now, target, padded = false
               const dead = r.state === 'dead';
               // Filtered to the target: a session bound here AND elsewhere shows
               // only this target's line, because the page is about this target.
-              const lines = targetKey ? targetLines(r).filter(l => l.key === targetKey) : targetLines(r);
-              const bindings = targetKey ? r.bindings.filter(b => `${b.kind}:${b.uid}` === targetKey) : r.bindings;
+              const lines = targetLines(r).filter(l => l.key === targetKey);
+              const bindings = r.bindings.filter(b => `${b.kind}:${b.uid}` === targetKey);
               // The toggle reveals what the grouped line does not carry —
               // and it carries no handle at all, so ONE handle needs it just
               // as much: the handle is what an operator correlating a log
@@ -358,7 +354,7 @@ export function SessionsTable({ rows, policy, error, now, target, padded = false
         </table>
       </div>
       {policy && (
-        <p data-testid="session-policy" style={policyFooter(padded)}>
+        <p data-testid="session-policy" style={policyFooter}>
           live within {Math.round(policy.live_window_s / 60)} min · dead after {Math.round(policy.dead_after_s / 60)} min of silence
           · hidden after {Math.round(policy.hidden_after_s / 3600)} h
           {/* Retention 0 disables the purge entirely — "kept 0 d" would say
@@ -371,23 +367,23 @@ export function SessionsTable({ rows, policy, error, now, target, padded = false
 }
 
 const root: CSSProperties = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
-const errorLine = (padded: boolean): CSSProperties => ({
-  color: '#f87171', fontSize: 12, margin: '6px 0 0', flexShrink: 0, padding: padded ? '0 12px' : 0,
-});
+const errorLine: CSSProperties = {
+  color: '#f87171', fontSize: 12, margin: '6px 0 0', flexShrink: 0, padding: '0 12px',
+};
 // The only thing that gives when the body is short: it takes what is left and
 // scrolls both axes (the table is wider than the body on a narrow window).
-const tableWrap = (padded: boolean): CSSProperties => ({
-  flex: 1, minHeight: 0, overflow: 'auto', marginTop: padded ? 0 : 6, padding: padded ? '0 12px' : 0,
-});
+const tableWrap: CSSProperties = {
+  flex: 1, minHeight: 0, overflow: 'auto', padding: '0 12px',
+};
 const th: React.CSSProperties = {
   position: 'sticky', top: 0, background: '#111',
   boxShadow: 'inset 0 -1px 0 #222', padding: '2px 0',
 };
 // The table's footer. Pinned under the scroller (flexShrink 0), never inside it.
-const policyFooter = (padded: boolean): React.CSSProperties => ({
+const policyFooter: React.CSSProperties = {
   color: '#666', fontSize: 11, flexShrink: 0,
-  ...(padded ? { margin: 0, padding: '8px 12px', borderTop: '1px solid #1c1c1c' } : { margin: '8px 0 0' }),
-});
+  margin: 0, padding: '8px 12px', borderTop: '1px solid #1c1c1c',
+};
 // One line per target, stacked. Each line wraps rather than overflowing: a
 // target with two divergent branch chips is wider than the column on a narrow
 // window, and the table's horizontal scroll is for the table, not for a cell.

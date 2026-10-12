@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { useState } from 'react';
-import { RepoManager } from './RepoManager';
 import { LensSettings } from './LensSettings';
 import type { Lens, RepoInfo } from './api';
 import { api } from './api';
@@ -77,29 +76,13 @@ function LensPage({ repos = [{ name: 'core', uid: 'uid-core' }, { name: 'work', 
   );
 }
 
-describe('RepoManager', () => {
+describe('LensSettings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // clearAllMocks clears CALLS, not implementations, so a test that narrows
     // listArchived would otherwise leak its fixture into every test after it.
     // Re-assert the default so order cannot matter.
     vi.mocked(api.listArchived).mockResolvedValue(ARCHIVED_FIXTURE);
-  });
-
-  const baseProps = {
-    open: true as const,
-    repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
-    currentRepo: 'core',
-    serverReadOnly: false,
-    hideRemoteConfig: false,
-    onChanged: () => {},
-    onBrowse: () => {},
-  };
-
-  it('lists lenses fetched via api.listLenses', async () => {
-    render(<RepoManager {...baseProps} />);
-    await waitFor(() => expect(api.listLenses).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
   });
 
   it('shows a lens detail with write/reads and deletes it', async () => {
@@ -380,25 +363,9 @@ describe('RepoManager', () => {
     });
   });
 
-  it('opens the New lens form from the Lenses section', async () => {
-    render(<RepoManager {...baseProps} />);
-    fireEvent.click(screen.getByTestId('repomgr-new-lens'));
-    expect(screen.getByTestId('lens-name')).toBeInTheDocument();
-  });
-
-  // onChanged is the ONLY hook that refreshes App's lens list feeding the TopBar
-  // switcher — the local refresh() only updates this dialog. All three lens
-  // mutation paths (create/delete/save) must fire it so the switcher stays live.
-  it('fires onChanged on lens create (so the app lens list / TopBar refreshes)', async () => {
-    const onChanged = vi.fn();
-    render(<RepoManager {...baseProps} onChanged={onChanged} />);
-    fireEvent.click(screen.getByTestId('repomgr-new-lens'));
-    fireEvent.change(screen.getByTestId('lens-name'), { target: { value: 'newlens' } });
-    fireEvent.click(screen.getByTestId('lens-create'));
-    await waitFor(() => expect(api.createLens).toHaveBeenCalled());
-    await waitFor(() => expect(onChanged).toHaveBeenCalled());
-  });
-
+  // onChanged is the hook that refreshes App's lists (the rail's Lenses
+  // section). Both mutation paths on this page must fire it. (Creating a lens
+  // is the lens draft's, pinned in App.facets.test.tsx.)
   it('fires onChanged on lens delete', async () => {
     const onChanged = vi.fn();
     render(<LensPage onChanged={onChanged} />);

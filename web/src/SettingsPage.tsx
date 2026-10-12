@@ -40,7 +40,7 @@ export interface Section {
 }
 
 /** The index heading names the kind of target, never "On this page". */
-const HEADINGS = { repo: 'Repository', lens: 'Lens', archived: 'Archived' } as const;
+const HEADINGS = { repo: 'Repository', lens: 'Lens' } as const;
 
 export function SettingsPage({ kind, sections, focus, onFocused, testid }: {
   kind: keyof typeof HEADINGS;
@@ -120,8 +120,11 @@ export function SettingsPage({ kind, sections, focus, onFocused, testid }: {
       const list = ids.split('\u0000').filter(Boolean);
       if (list.length === 0) return;
       // Scrolled to the end: the last block is what you are looking at, even
-      // though it never reaches the top.
-      if (container.scrollHeight - container.scrollTop - container.clientHeight <= 2) {
+      // though it never reaches the top. Only once something has scrolled: a
+      // page short enough to fit (an archived repo's two blocks) is "at the
+      // end" at scrollTop 0, and its first block is the one being read.
+      if (container.scrollTop > 0
+        && container.scrollHeight - container.scrollTop - container.clientHeight <= 2) {
         setSpied(list[list.length - 1]);
         return;
       }

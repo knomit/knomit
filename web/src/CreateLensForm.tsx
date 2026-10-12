@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { api, repoAvailable, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { LENS, repoHue } from './utils';
 import { LayersIcon, GitBranchIcon } from './icons';
+import { FacetColumns } from './FacetColumns';
+import { IndexColumn } from './IndexColumn';
+import type { IndexItem } from './IndexColumn';
 
 // BranchData is the per-repo branch picker state: the existing branch names,
 // the repo's agent branch (shown as the default), and load status.
@@ -24,6 +27,10 @@ const Dot = ({ repo }: { repo: string }) => (
 // any number of read repos (each optionally pinned to a branch). The write repo
 // is implicitly also a read mount on the server, so it renders as a pinned,
 // always-on first row (locked to its agent branch) — never toggled into `reads`.
+//
+// It is the body of the lens DRAFT, the rail's "New lens" row, and is laid out
+// as one: an index column headed "New lens" listing the form's sections, with
+// the Preview pinned under them, and the form as the right column.
 export function CreateLensForm({ repos: listed, lenses = [], onDone, onError, onCancel }: {
   repos: RepoInfo[];
   lenses?: Lens[];
@@ -51,6 +58,8 @@ export function CreateLensForm({ repos: listed, lenses = [], onDone, onError, on
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // The index item last clicked.
+  const [current, setCurrent] = useState('lens-name');
 
   // loadBranches fetches the existing branches and agent branch for a repo, so
   // the dropdown (or the write row's locked label) reflects only real branches.
@@ -182,137 +191,179 @@ export function CreateLensForm({ repos: listed, lenses = [], onDone, onError, on
   const selectedCount = 1 + others.filter(r => r.name in reads).length;
   const readEntries = others.filter(r => r.name in reads);
 
+  // The index: one item per section of the form. Clicking scrolls (the form is
+  // one column of fields, every one already on the page), and the clicked item
+  // is the current one until another is clicked.
+  const jump = (id: string) => {
+    setCurrent(id);
+    document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+  const index: IndexItem[] = [
+    { id: 'lens-name', title: 'Name' },
+    { id: 'lens-description', title: 'Description' },
+    { id: 'lens-write', title: 'Write target' },
+    { id: 'lens-mounts', title: 'Read mounts', tail: <span style={indexCount}>{selectedCount} of {repos.length}</span> },
+  ];
+
+  // Preview: the resolved read union + write target, repo names hue-colored.
+  // It sits under the index in the LEFT column, so it stays in view while the
+  // mount list scrolls on the right.
+  const preview = (
+    <div data-testid="lens-preview" style={previewBox}>
+      <div style={{ color: '#888', textTransform: 'uppercase', fontSize: 10, letterSpacing: 1, marginBottom: 2 }}>Preview</div>
+      <div>
+        Reads union <b style={{ color: repoHue(write) }}>{write || '…'}</b>
+        {readEntries.map(r => (
+          <span key={r.name}>
+            {' + '}
+            <b style={{ color: repoHue(r.name) }}>{r.name}</b>
+            {reads[r.name] && <span style={{ fontFamily: 'var(--k-font-mono)', color: '#888' }}>@{reads[r.name]}</span>}
+          </span>
+        ))}
+        . Writes → <b style={{ color: repoHue(write) }}>{write || '…'}</b>.
+      </div>
+    </div>
+  );
+
   return (
-    <div>
-      <h3 style={{ margin: '0 0 4px', fontSize: 16 }}>New lens</h3>
-      <div style={{ fontSize: 12.5, color: '#777', lineHeight: 1.5, marginBottom: 6 }}>
-        A lens unions several repos for <b style={{ color: '#bbb' }}>reading</b> and points writes at one of them.
-      </div>
+    <FacetColumns
+      testId="create-lens-form"
+      left={<>
+        <IndexColumn heading="New lens" items={index} active={current} onPick={jump} tone="lens" />
+        {preview}
+      </>}
+    >
+    <div style={body}>
+      <section id="lens-name" style={formSection}>
+        <h4 style={sectionTitle}>Name</h4>
+        <div style={sectionHint}>A lens unions several repos for <b style={{ color: '#bbb' }}>reading</b> and points writes at one of them.</div>
+        <div style={{ position: 'relative' }}>
+          <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', display: 'flex' }}>
+            <LayersIcon color={LENS.accent} size={13} />
+          </span>
+          <input data-testid="lens-name" aria-label="Name" style={{ ...input, paddingLeft: 28 }} placeholder="e.g. dev (a–z, 0–9, -, _)"
+            value={name} disabled={busy} onChange={e => setName(e.target.value)} />
+        </div>
+        <div data-testid="lens-name-status" style={{ ...hint, color: nameError ? '#f88' : nameValid ? '#7c9' : '#666', display: 'flex', alignItems: 'center', gap: 5 }}>
+          {nameError
+            ? nameError
+            : nameValid
+              ? <><Check color="#7c9" /> available · a–z, 0–9, -, _</>
+              : 'a–z, 0–9, - and _'}
+        </div>
+      </section>
 
-      <label style={label}>Name</label>
-      <div style={{ position: 'relative' }}>
-        <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', display: 'flex' }}>
-          <LayersIcon color={LENS.accent} size={13} />
-        </span>
-        <input data-testid="lens-name" style={{ ...input, paddingLeft: 28 }} placeholder="e.g. dev (a–z, 0–9, -, _)"
-          value={name} disabled={busy} onChange={e => setName(e.target.value)} />
-      </div>
-      <div data-testid="lens-name-status" style={{ ...hint, color: nameError ? '#f88' : nameValid ? '#7c9' : '#666', display: 'flex', alignItems: 'center', gap: 5 }}>
-        {nameError
-          ? nameError
-          : nameValid
-            ? <><Check color="#7c9" /> available · a–z, 0–9, -, _</>
-            : 'a–z, 0–9, - and _'}
-      </div>
+      <section id="lens-description" style={formSection}>
+        <h4 style={sectionTitle}>Description <span style={{ color: '#555', fontWeight: 400 }}>(optional)</span></h4>
+        <textarea data-testid="lens-description" aria-label="Description" style={{ ...input, minHeight: 44, resize: 'vertical', fontFamily: 'inherit' }}
+          placeholder="What is this lens for?" value={description} disabled={busy}
+          onChange={e => setDescription(e.target.value)} />
+      </section>
 
-      <label style={label}>Description <span style={{ color: '#555' }}>(optional)</span></label>
-      <textarea data-testid="lens-description" style={{ ...input, minHeight: 44, resize: 'vertical', fontFamily: 'inherit' }}
-        placeholder="What is this lens for?" value={description} disabled={busy}
-        onChange={e => setDescription(e.target.value)} />
+      <section id="lens-write" style={formSection}>
+        <h4 style={sectionTitle}>Write target</h4>
+        <div style={sectionHint}>Every new fact written through this lens lands on <b style={{ color: '#bbb' }}>{write || '…'}</b>'s agent branch.</div>
+        <select data-testid="lens-write" aria-label="Write target" style={{ ...input, maxWidth: 320 }} value={write} disabled={busy}
+          onChange={e => changeWrite(e.target.value)}>
+          {repos.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
+        </select>
+      </section>
 
-      <label style={label}>Write target</label>
-      <select data-testid="lens-write" style={input} value={write} disabled={busy}
-        onChange={e => changeWrite(e.target.value)}>
-        {repos.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
-      </select>
-      <div style={hint}>Every new fact written through this lens lands on <b style={{ color: '#bbb' }}>{write || '…'}</b>'s agent branch.</div>
+      <section id="lens-mounts" style={formSection}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h4 style={sectionTitle}>Read mounts</h4>
+          <span style={{ fontSize: 11, color: '#777' }}>
+            {selectedCount} of {repos.length} · <span data-testid="lens-select-all" style={{ color: LENS.accent, cursor: 'pointer' }} onClick={toggleAll}>select all</span>
+          </span>
+        </div>
 
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 16 }}>
-        <label style={{ ...label, marginTop: 0 }}>Read mounts</label>
-        <span style={{ fontSize: 11, color: '#777' }}>
-          {selectedCount} of {repos.length} · <span data-testid="lens-select-all" style={{ color: LENS.accent, cursor: 'pointer' }} onClick={toggleAll}>select all</span>
-        </span>
-      </div>
-
-      {repos.length > 8 && (
-        <input data-testid="lens-read-search" style={{ ...input, marginTop: 4 }} placeholder="Filter repos…"
-          value={search} disabled={busy} onChange={e => setSearch(e.target.value)} />
-      )}
-
-      <div style={{ marginTop: 6 }}>
-        {/* Pinned write-as-read row: always on, locked to the agent branch. */}
-        {write && (
-          <div style={row(true)}>
-            <button type="button" data-testid={`lens-read-${write}`} style={checkbox(true)} disabled aria-label={`${write} (write repo, always read)`}>
-              <Check color={LENS.text} />
-            </button>
-            <Dot repo={write} />
-            <span style={{ fontSize: 13, color: '#eee', minWidth: 76 }}>{write}</span>
-            <span style={writeBadge}>WRITE · always read</span>
-            <div style={{ flex: 1 }} />
-            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#8af' }}>
-              <GitBranchIcon color="#8af" size={12} />
-              <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8af' }}>
-                {branchData[write]?.agent || (branchData[write]?.loading ? '…' : 'agent branch')}
-              </span>
-            </span>
-          </div>
+        {repos.length > 8 && (
+          <input data-testid="lens-read-search" style={input} placeholder="Filter repos…"
+            value={search} disabled={busy} onChange={e => setSearch(e.target.value)} />
         )}
 
-        {/* Toggleable read rows. */}
-        {filteredOthers.map(r => {
-          const on = r.name in reads;
-          const bd = branchData[r.name];
-          const agentLabel = bd?.agent ? `Agent branch — ${bd.agent}` : 'Agent branch';
-          const otherBranches = (bd?.names ?? []).filter(n => n !== bd?.agent);
-          return (
-            <div key={r.name} style={row(on)}>
-              <button type="button" data-testid={`lens-read-${r.name}`} style={checkbox(on)} disabled={busy}
-                onClick={() => toggleRead(r.name)} aria-label={r.name} aria-pressed={on}>
-                {on && <Check color={LENS.text} />}
-              </button>
-              <Dot repo={r.name} />
-              <span style={{ fontSize: 13, color: on ? '#eee' : '#aaa', minWidth: 76 }}>{r.name}</span>
-              <div style={{ flex: 1 }} />
-              {on && (
-                <select data-testid={`lens-branch-${r.name}`} style={{ ...input, width: 'auto', flexShrink: 0, marginTop: 0, maxWidth: 200 }}
-                  value={reads[r.name]} disabled={busy || bd?.loading}
-                  onChange={e => setBranch(r.name, e.target.value)}>
-                  <option value="">{bd?.loading ? 'loading branches…' : `${agentLabel} (default)`}</option>
-                  {otherBranches.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Preview: the resolved read union + write target, repo names hue-colored. */}
-      <div data-testid="lens-preview" style={previewBox}>
-        <div style={{ color: '#888', textTransform: 'uppercase', fontSize: 10, letterSpacing: 1, marginBottom: 2 }}>Preview</div>
         <div>
-          Reads union <b style={{ color: repoHue(write) }}>{write || '…'}</b>
-          {readEntries.map(r => (
-            <span key={r.name}>
-              {' + '}
-              <b style={{ color: repoHue(r.name) }}>{r.name}</b>
-              {reads[r.name] && <span style={{ fontFamily: 'var(--k-font-mono)', color: '#888' }}>@{reads[r.name]}</span>}
-            </span>
-          ))}
-          . Writes → <b style={{ color: repoHue(write) }}>{write || '…'}</b>.
+          {/* Pinned write-as-read row: always on, locked to the agent branch. */}
+          {write && (
+            <div style={row(true)}>
+              <button type="button" data-testid={`lens-read-${write}`} style={checkbox(true)} disabled aria-label={`${write} (write repo, always read)`}>
+                <Check color={LENS.text} />
+              </button>
+              <Dot repo={write} />
+              <span style={{ fontSize: 13, color: '#eee', minWidth: 76 }}>{write}</span>
+              <span style={writeBadge}>WRITE · always read</span>
+              <div style={{ flex: 1 }} />
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#8af' }}>
+                <GitBranchIcon color="#8af" size={12} />
+                <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8af' }}>
+                  {branchData[write]?.agent || (branchData[write]?.loading ? '…' : 'agent branch')}
+                </span>
+              </span>
+            </div>
+          )}
+
+          {/* Toggleable read rows. */}
+          {filteredOthers.map(r => {
+            const on = r.name in reads;
+            const bd = branchData[r.name];
+            const agentLabel = bd?.agent ? `Agent branch — ${bd.agent}` : 'Agent branch';
+            const otherBranches = (bd?.names ?? []).filter(n => n !== bd?.agent);
+            return (
+              <div key={r.name} style={row(on)}>
+                <button type="button" data-testid={`lens-read-${r.name}`} style={checkbox(on)} disabled={busy}
+                  onClick={() => toggleRead(r.name)} aria-label={r.name} aria-pressed={on}>
+                  {on && <Check color={LENS.text} />}
+                </button>
+                <Dot repo={r.name} />
+                <span style={{ fontSize: 13, color: on ? '#eee' : '#aaa', minWidth: 76 }}>{r.name}</span>
+                <div style={{ flex: 1 }} />
+                {on && (
+                  <select data-testid={`lens-branch-${r.name}`} style={{ ...input, width: 'auto', flexShrink: 0, marginTop: 0, maxWidth: 200 }}
+                    value={reads[r.name]} disabled={busy || bd?.loading}
+                    onChange={e => setBranch(r.name, e.target.value)}>
+                    <option value="">{bd?.loading ? 'loading branches…' : `${agentLabel} (default)`}</option>
+                    {otherBranches.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                )}
+              </div>
+            );
+          })}
         </div>
-      </div>
+      </section>
 
       {err && <div style={{ color: '#f88', fontSize: 13, marginTop: 8 }}>{err}</div>}
 
-      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+      <div style={{ display: 'flex', gap: 8, marginTop: 20, paddingTop: 16, borderTop: '1px solid #202020' }}>
         <button type="button" data-testid="lens-create" style={btn(busy || !nameValid || !write, 'primary')}
           disabled={busy || !nameValid || !write} onClick={submit}>
           {busy ? 'Creating…' : 'Create lens'}
         </button>
-        <button type="button" data-testid="lens-cancel" style={btn(busy)} disabled={busy} onClick={() => onCancel?.()}>
-          Cancel
-        </button>
+        {onCancel && (
+          <button type="button" data-testid="lens-cancel" style={btn(busy)} disabled={busy} onClick={onCancel}>
+            Cancel
+          </button>
+        )}
       </div>
     </div>
+    </FacetColumns>
   );
 }
 
-const label: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, marginTop: 12, display: 'block' };
+// The right column: measured like a settings page's blocks.
+const body: React.CSSProperties = { maxWidth: 760, padding: '8px 32px 48px' };
+// A section of the form, ruled like a settings block.
+const formSection: React.CSSProperties = {
+  borderTop: '1px solid #202020', paddingTop: 16, marginTop: 16,
+  display: 'flex', flexDirection: 'column', gap: 8,
+};
+const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 13.5, fontWeight: 650, color: '#e6e6e6' };
+const sectionHint: React.CSSProperties = { fontSize: 12, color: '#777', lineHeight: 1.5 };
+const indexCount: React.CSSProperties = { fontSize: 10.5, color: '#666', fontVariantNumeric: 'tabular-nums' };
+
 const hint: React.CSSProperties = { fontSize: 12, color: '#666', marginTop: 4 };
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#111', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
 const writeBadge: React.CSSProperties = { fontSize: 10, color: '#7c9', background: '#1a2e1a', border: '1px solid #2a4a2a', padding: '1px 6px', borderRadius: 3, letterSpacing: '0.03em' };
-const previewBox: React.CSSProperties = { marginTop: 12, padding: '9px 11px', background: '#0f0f0f', border: '1px solid #242424', borderRadius: 6, fontSize: 12, color: '#aaa', lineHeight: 1.6 };
+const previewBox: React.CSSProperties = { margin: '16px 0 0', padding: '9px 11px', background: '#0f0f0f', border: '1px solid #242424', borderRadius: 6, fontSize: 12, color: '#aaa', lineHeight: 1.6 };
 
 // row: one read-mount row — filled when on, deep/inert when off.
 const row = (on: boolean): React.CSSProperties => ({

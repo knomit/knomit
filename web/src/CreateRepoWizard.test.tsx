@@ -594,9 +594,15 @@ describe('CreateRepoWizard', () => {
   });
 
   // ── Finding 4: the step rail ──
-  it('shows no rail before the probe has said what shape the wizard is', () => {
+  // The rail is the draft's index column now, so it is there from the start —
+  // but before the probe it lists only the step that has been established, and
+  // so promises nothing about the shape of the rest.
+  it('lists only the source step before the probe has said what shape the wizard is', () => {
     render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
-    expect(screen.queryByRole('navigation', { name: /progress/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: /progress/i })).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^wizard-step-\d$/)).toHaveLength(1);
+    expect(screen.getByTestId('wizard-step-1')).toHaveTextContent('Source');
+    expect(screen.getByTestId('settings-index-heading')).toHaveTextContent(/^New repository$/);
   });
 
   it('renders a numbered rail marking the active step, and walks back through completed ones', async () => {

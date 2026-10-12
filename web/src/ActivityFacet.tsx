@@ -40,7 +40,7 @@ export function ActivityFacet({ target }: { target: SessionTarget }) {
           Show hidden
         </label>
       </FacetToolbar>
-      <SessionsTable rows={rows} policy={policy} error={error} now={now} target={target} padded />
+      <SessionsTable rows={rows} policy={policy} error={error} now={now} target={target} />
     </div>
   );
 }
@@ -52,7 +52,7 @@ const title: CSSProperties = { color: '#ddd', fontWeight: 500, fontSize: 12 };
 const counts: CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#888' };
 const truncatedNote: CSSProperties = { color: '#facc15', fontSize: 11 };
 // The gap is the only thing separating the box from its words (App.css resets
-// margins), the same rule ManageSessions' label follows.
+// margins).
 const showHiddenLabel: CSSProperties = {
   marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, color: '#aaa', fontSize: 12,
 };

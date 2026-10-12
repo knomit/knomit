@@ -3,6 +3,8 @@ import { api, isTerminalCreateState, type RepoCreateStatus, type ProbeResult } f
 import { refreshRepoCreates, createRepoIsRegistered } from './useRepoCreates';
 import { wizardReducer, initialWizardState, currentStep, stepsFor, branchCheckBlocked, probeIsCurrent, createBodyFor, authFor, originURL, isValidRepoName, type WizardAction } from './wizardState';
 import { WizardStepRail } from './WizardStepRail';
+import { FacetColumns } from './FacetColumns';
+import { IndexHeading } from './IndexColumn';
 import { StepSource } from './StepSource';
 import { StepAccess } from './StepAccess';
 import { StepBranch } from './StepBranch';
@@ -35,12 +37,15 @@ import type { ProbeFailure } from './StepAccess';
 // dispatch and rendering fields, same contract as CreateRepoForm's value/
 // onChange props.
 //
+// It is the body of the repository DRAFT, the rail's "New repository" row, and
+// is laid out as one: the step rail is the left index column and the step is
+// the right column.
+//
 // onCancel stays optional and is omitted at zero repos: with no
-// repositories the create surface IS the fallback selection, so Cancel
-// would be a button that visibly does nothing (kb/invariants/repos/
-// no-default-repo/1fd5dad8.md — zero repos is a valid steady state, not an
-// edge case). See RepoManager.tsx's `repos.length === 0 ? undefined : …`
-// call site, which this component's prop signature exists to serve.
+// repositories the draft IS the fallback target, so Cancel would be a button
+// that visibly does nothing (kb/invariants/repos/no-default-repo/1fd5dad8.md —
+// zero repos is a valid steady state, not an edge case). See facets.ts's
+// draftCancellable, which this component's prop signature exists to serve.
 export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) => void; onCancel?: () => void }) {
   const [state, dispatch] = useReducer(wizardReducer, initialWizardState);
   const [probing, setProbing] = useState(false);
@@ -446,10 +451,15 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     (step === 'access' && basicMissingUser) ||
     (step === 'ontology' && !ontologyValid);
 
+  // The repository draft's layout: the step rail is the index column (at the
+  // Library's width, with the shared splitter), and the current step and its
+  // footer are the right column.
   return (
-    <div>
-      <h3 style={heading}>New repository</h3>
-      <WizardStepRail state={state} dispatch={navigate} />
+    <FacetColumns
+      testId="create-repo-wizard"
+      left={<><IndexHeading>New repository</IndexHeading><WizardStepRail state={state} dispatch={navigate} /></>}
+    >
+    <div style={body}>
 
       {step === 'source' && (
         <StepSource state={state} dispatch={dispatch} onProbe={handleProbe} onCancelProbe={cancelProbe}
@@ -572,10 +582,12 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
         )}
       </div>
     </div>
+    </FacetColumns>
   );
 }
 
-const heading: React.CSSProperties = { margin: '0 0 14px', fontSize: 16 };
+// The right column: measured like a settings page's blocks, not stretched.
+const body: React.CSSProperties = { maxWidth: 760, padding: '24px 32px 48px' };
 const footer: React.CSSProperties = { display: 'flex', gap: 8, marginTop: 16 };
 const errText: React.CSSProperties = {
   marginTop: 12, padding: '10px 12px', borderRadius: 6,

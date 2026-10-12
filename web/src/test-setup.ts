@@ -32,7 +32,7 @@ if (!Element.prototype.scrollIntoView) {
 }
 
 // jsdom does not implement EventSource. Components that subscribe to a server
-// stream on mount (ManageSessions, RepoManager's session badge, App's branch
+// stream on mount (the Activity facet's sessions reader, App's branch and repo
 // events) would throw on construction otherwise — in EVERY test that renders
 // them, not just the ones about streaming. Installed globally for the same
 // reason as IntersectionObserver above; a test that wants to drive events

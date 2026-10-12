@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { initialWizardState, wizardReducer, stepsFor, createBodyFor, currentStep, authFor, isValidRepoName, transportFor, repoNameFromURL,
-  probeIsCurrent, establishedAnswer } from './wizardState';
+  probeIsCurrent, establishedAnswer, stepSummary } from './wizardState';
 import type { ProbeResult } from './api';
 
 describe('transportFor', () => {
@@ -767,5 +767,34 @@ describe('createBodyFor — from a template', () => {
   it('choosing "From a template" with nothing picked sends no template', () => {
     const s = wizardReducer({ ...initialWizardState, choice: 'local', name: 'm' }, { type: 'SET_USE_TEMPLATE', on: true });
     expect(createBodyFor(s).template).toBeUndefined();
+  });
+});
+
+// stepSummary is the mono line under a DONE step in the wizard's index column:
+// what that step settled, short enough to truncate inside the column.
+describe('stepSummary', () => {
+  const s = (over: Partial<typeof initialWizardState>) => ({ ...initialWizardState, ...over });
+
+  it('source: the remote without its scheme or .git, or the local name', () => {
+    expect(stepSummary(s({ url: 'https://github.com/acme/sales-playbooks.git' }), 'source')).toBe('github.com/acme/sales-playbooks');
+    expect(stepSummary(s({ url: 'git@github.com:acme/kb.git' }), 'source')).toBe('github.com:acme/kb');
+    expect(stepSummary(s({ choice: 'local', name: 'notes' }), 'source')).toBe('local · notes');
+  });
+
+  it('access: the method in words', () => {
+    expect(stepSummary(s({ authMethod: 'token' }), 'access')).toBe('token');
+    expect(stepSummary(s({ authMethod: 'none' }), 'access')).toBe('anonymous');
+    expect(stepSummary(s({ authMethod: '' }), 'access')).toBe('auto-detect');
+  });
+
+  it('branch: the branch; ontology: the template, the preset, or custom', () => {
+    expect(stepSummary(s({ branch: 'main' }), 'branch')).toBe('main');
+    expect(stepSummary(s({ useTemplate: true, template: { repo: 'core-kb', name: 'runbooks' } }), 'ontology')).toBe('template runbooks');
+    expect(stepSummary(s({ preset: 'code' }), 'ontology')).toBe('preset code');
+    expect(stepSummary(s({ preset: '', yaml: 'id: x' }), 'ontology')).toBe('custom');
+  });
+
+  it('review has nothing to summarise', () => {
+    expect(stepSummary(s({}), 'review')).toBe('');
   });
 });

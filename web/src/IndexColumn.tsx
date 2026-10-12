@@ -28,7 +28,7 @@ export function IndexColumn({ heading, items, active, onPick, tone = 'repo' }: {
 }) {
   return (
     <nav aria-label={heading} style={nav}>
-      <div data-testid="settings-index-heading" style={headingStyle}>{heading}</div>
+      <IndexHeading>{heading}</IndexHeading>
       {items.map(it => {
         const on = active === it.id;
         return (
@@ -54,6 +54,13 @@ export function IndexColumn({ heading, items, active, onPick, tone = 'repo' }: {
       })}
     </nav>
   );
+}
+
+/** IndexHeading is an index column's heading: the target's kind, or a draft's
+ *  name ("New repository", "New lens"). Shared by every left column so they
+ *  all read alike. */
+export function IndexHeading({ children }: { children: ReactNode }) {
+  return <div data-testid="settings-index-heading" style={headingStyle}>{children}</div>;
 }
 
 // Sticky: the column scrolls only if the index outgrows the window, and the
