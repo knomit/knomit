@@ -11,10 +11,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test as base, expect, type APIRequestContext } from '@playwright/test';
 import getPort from 'get-port';
+import { onnxEnv, requireBuild } from '../helpers/binary.js';
 import { knomitModelsDir } from '../helpers/appdirs.js';
 import { createRepo, discoverAgentBranch } from './seed.js';
 
-const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
 const STATE_FILE = resolve(import.meta.dirname, '..', '.e2e-state.json');
 
 // ── State types ─────────────────────────────────────────────────
@@ -33,17 +33,6 @@ interface FreshKnomit {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
-
-function getOnnxLibName(): string {
-  switch (process.platform) {
-    case 'darwin':
-      return 'libonnxruntime.dylib';
-    case 'win32':
-      return 'onnxruntime.dll';
-    default:
-      return 'libonnxruntime.so';
-  }
-}
 
 function readState(): E2EState {
   if (!existsSync(STATE_FILE)) {
@@ -98,10 +87,7 @@ export const test = base.extend<{
    * Use for tests that need isolated, mutable state.
    */
   freshKnomit: async ({ playwright }, use) => {
-    const binaryPath = join(PROJECT_ROOT, 'dist', 'knomit');
-    if (!existsSync(binaryPath)) {
-      throw new Error(`Binary not found at ${binaryPath}. Run 'make dist' first.`);
-    }
+    const binaryPath = requireBuild();
 
     const port = await getPort();
     const knomitHome = mkdtempSync(join(tmpdir(), 'knomit-e2e-fresh-'));
@@ -113,12 +99,11 @@ export const test = base.extend<{
       cpSync(userModelsDir, targetModelsDir, { recursive: true });
     }
 
-    const onnxLib = join(PROJECT_ROOT, 'dist', 'lib', getOnnxLibName());
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       KNOMIT_HOME: knomitHome,
       KNOMIT_PORT: String(port),
-      ONNXRUNTIME_SHARED_LIBRARY: onnxLib,
+      ...onnxEnv(),
     };
 
     const child: ChildProcess = spawn(binaryPath, ['serve'], {
