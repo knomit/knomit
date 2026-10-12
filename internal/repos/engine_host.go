@@ -228,8 +228,22 @@ func (h *engineHost) engExplain(args []any) (any, error) {
 	return out, err
 }
 
+// engLearn is the script host's learn behind two engine-only guards: it
+// writes ONLY inside an experiment this run opened (never onto the asker's
+// world), and it refuses opts.retract, so the tier cannot delete facts by the
+// move form either — it has no update or retract, and only ADDS answer facts.
 func (h *engineHost) engLearn(args []any) (any, error) {
 	args, l := withLogOpts(args, 1)
+	if h.experiment == "" || !h.opened[h.experiment] {
+		err := errors.New("knomit.learn: the engine writes only inside an experiment this run opened; call knomit.experiment({action: \"open\", name}) first")
+		h.stepLine(l, "learn", "", "", nil, 0, err)
+		return nil, err
+	}
+	if _, has := objectArg(args, 1)["retract"]; has {
+		err := errors.New("knomit.learn: opts.retract is refused: the engine tier only adds facts, it never deletes them")
+		h.stepLine(l, "learn", "", "", nil, 0, err)
+		return nil, err
+	}
 	out, err := h.learn(args)
 	files := resultPaths(out, "file", "commits")
 	if err == nil {

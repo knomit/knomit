@@ -333,3 +333,40 @@ func TestEngine_Incoming_IsTheStoresIncomingAtCommit(t *testing.T) {
 	require.Equal(t, want[0].Commit, r["commit"])
 	require.Equal(t, want[0].Title, r["title"])
 }
+
+// The engine's learn writes ONLY inside an experiment this run opened: a
+// learn before experiment open is refused (Warn line with the run key) and
+// the agent branch does not move; a learn carrying opts.retract is refused
+// even inside the experiment, and the fact it names survives. Sabotage: drop
+// either guard in engLearn (red: the first lands on agent/test, the second
+// deletes the fact).
+func TestEngine_Learn_OnlyInsideItsExperimentAndNeverRetracts(t *testing.T) {
+	buf := captureEngineLog(t)
+	ri := newEngineTestRepo(t)
+	tools := &stubTools{ri: ri}
+	e := NewEngine(EngineConfig{Tools: tools})
+	victim := "kb/architecture/engine/victim.md"
+	writeOn(t, ri, "agent/test", victim)
+	agentBefore := headOn(t, ri, "agent/test")
+
+	out, h, err := runProbe(t, e, ri, `
+		var before; try { knomit.learn({topic: "architecture", category: "engine/probe", title: "Early", body: "b"}); before = "written" }
+		catch (e) { before = e.message }
+		knomit.experiment({action: "open", name: "reason-guard"});
+		var rt; try { knomit.learn([], {retract: ["`+victim+`"]}); rt = "retracted" } catch (e) { rt = e.message }
+		({before: before, retract: rt})`)
+	require.NoError(t, err)
+	m := out.(map[string]any)
+	require.Contains(t, m["before"], "writes only inside an experiment this run opened")
+	require.Contains(t, m["retract"], "opts.retract is refused")
+	require.Equal(t, agentBefore, headOn(t, ri, "agent/test"), "the agent branch did not move")
+	require.Empty(t, h.written)
+	for _, c := range tools.recorded() {
+		require.NotEqual(t, "learn", c.Tool, "no learn reached the tools: %v", c.Args)
+	}
+	exists, err := testService(t, ri).Facts().FactExists(context.Background(), "exp/reason-guard", victim)
+	require.NoError(t, err)
+	require.True(t, exists, "the fact named in retract survives on the experiment")
+	require.True(t, hasWarn(buf.lines(t), "reason-0000abcd", "writes only inside an experiment"))
+	require.True(t, hasWarn(buf.lines(t), "reason-0000abcd", "opts.retract is refused"))
+}

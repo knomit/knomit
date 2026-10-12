@@ -415,3 +415,45 @@ func TestReason_Registration(t *testing.T) {
 	}
 	t.Fatal("knomit_reason is not registered")
 }
+
+// deadlineTools records the deadline each tool call's ctx carries.
+type deadlineTools struct {
+	inner repos.ScriptTools
+	mu    sync.Mutex
+	seen  []time.Duration // deadline minus the time of the call
+}
+
+func (d *deadlineTools) Call(ctx context.Context, tool string, args map[string]any) (string, bool, error) {
+	if dl, ok := ctx.Deadline(); ok {
+		d.mu.Lock()
+		d.seen = append(d.seen, time.Until(dl))
+		d.mu.Unlock()
+	} else {
+		d.mu.Lock()
+		d.seen = append(d.seen, -1)
+		d.mu.Unlock()
+	}
+	return d.inner.Call(ctx, tool, args)
+}
+
+// The deadline comes ONLY from budget: with budget 600 s, the first tool
+// call (the gather's query) sees a deadline about 600 s away — so any
+// handler-side WithTimeout shorter than the budget fails this. The handler
+// adds its own deadline to the tool ctx only through the budget. Sabotage: wrap
+// ReasonHandler's ctx in context.WithTimeout(ctx, time.Second) (red: ~1 s).
+func TestReason_DeadlineIsExactlyTheBudget(t *testing.T) {
+	f := newReasonFixture(t, reasonOntologyYAML)
+	rec := &deadlineTools{inner: NewScriptTools(reasonEmbedder{})}
+	f.eng = repos.NewEngine(repos.EngineConfig{
+		Model: config.EngineConfig{ModelURL: f.model.URL + "/v1", Model: "lfm-test"},
+		Tools: rec, Home: t.TempDir(),
+	})
+	res := f.call(t, map[string]any{"question": "Does alpha match-target hold?", "budget": 600})
+	require.False(t, res.IsError, resultText(t, res))
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	require.NotEmpty(t, rec.seen)
+	first := rec.seen[0]
+	require.Greater(t, first, 590*time.Second, "the tool ctx deadline is the budget's, got %s", first)
+	require.LessOrEqual(t, first, 600*time.Second)
+}
