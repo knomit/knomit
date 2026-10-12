@@ -83,16 +83,6 @@ export const GearIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
-// ServerIcon labels the server pages behind the gear: two stacked rack units.
-export const ServerIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4" width="18" height="7" rx="1.5"/>
-    <rect x="3" y="13" width="18" height="7" rx="1.5"/>
-    <line x1="7" y1="7.5" x2="7.01" y2="7.5"/>
-    <line x1="7" y1="16.5" x2="7.01" y2="16.5"/>
-  </svg>
-);
-
 export const RefreshIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="23 4 23 10 17 10"/>
