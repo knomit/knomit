@@ -49,6 +49,11 @@ func TestBootServer_OpensLocalSocketWithPeerCreds(t *testing.T) {
 	if st.Mode().Perm() != 0o600 {
 		t.Errorf("socket mode = %o, want 0600", st.Mode().Perm())
 	}
+	// The webview's API traffic dials THIS path (uiUpstream), so the server
+	// must report the path it bound.
+	if srv.local != sock {
+		t.Errorf("server local = %q, want the bound socket %q", srv.local, sock)
+	}
 	// Port 1: nothing listens there, so ONLY the socket can answer this.
 	want := wantOwnPeer(t)
 	if got := getBody(t, localClient(sock), "http://localhost:1/x"); got != want {
@@ -99,6 +104,11 @@ func TestBootServer_SocketInUseServesTCPOnly(t *testing.T) {
 	// this server's TCP port, never to it.
 	if want := fmt.Sprintf("http://127.0.0.1:%d", port); srv.address != want {
 		t.Errorf("server address = %q, want %q (the socket belongs to another instance)", srv.address, want)
+	}
+	// The held socket is another process's: the webview must NOT be pointed
+	// at it, or the UI would talk to a foreign server.
+	if srv.local != "" {
+		t.Errorf("server local = %q for a socket another instance holds; the UI path would dial a foreign listener", srv.local)
 	}
 	srv.shutdown() // its socket cleanup is the noop: must not touch the owner's file
 	after, err := os.Stat(sock)

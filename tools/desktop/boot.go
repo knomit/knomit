@@ -33,6 +33,10 @@ type server struct {
 	cancel      context.CancelFunc
 	lockPath    string
 	closeSocket func() // from auth.ListenLocal; a noop when no socket was opened
+	// local is the path of the local listener THIS server bound; empty when it
+	// did not (held by another process, path unusable). The webview's API
+	// traffic dials it, so it must never be a path someone else holds.
+	local string
 	// address is this server's own address in KNOMIT_SERVER's spelling: its
 	// local listener when that bound, else its TCP port. app.go hands it to
 	// the repos Manager for the processes recipes start.
@@ -222,11 +226,13 @@ func bootServer(parent context.Context, handler http.Handler, lockPath, version 
 	// KNOMIT_SERVER: the local listener only if it BOUND here — a held one
 	// (ErrSocketInUse) belongs to another instance — else the TCP port.
 	address := serveraddr.ForTCP(ln.Addr().String())
+	boundLocal := ""
 	if ul != nil {
 		address = serveraddr.ForLocal(local.Path)
+		boundLocal = local.Path
 	}
 	return &server{http: srv, tls: tlsSrv, tlsAddr: tlsAddr, tlsState: tstate, closeTLS: closeTLS, cancel: cancel,
-		lockPath: lockPath, closeSocket: closeSocket, address: address}, port, nil
+		lockPath: lockPath, closeSocket: closeSocket, local: boundLocal, address: address}, port, nil
 }
 
 // localListener is WHERE the local authenticated listener goes and WHETHER
