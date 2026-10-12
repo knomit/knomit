@@ -1,12 +1,10 @@
-import { memo, useMemo } from 'react';
+import { memo } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { AppState } from './state';
 import { isLensContext } from './state';
-import { apiUrl } from './api';
 import type { RepoInfo } from './api';
 import { BookIcon, GearIcon, LayersIcon } from './icons';
 import { noMouseFocus } from './utils';
-import { RAIL_WIDTH } from './TargetRail';
 import { otherRepoFailing } from './facets';
 import type { Facet, ServerPage, TargetLabel } from './facets';
 
@@ -38,8 +36,8 @@ interface Props {
    *  anchor — a way out that appears somewhere else makes the reader hunt for
    *  a control they just clicked. */
   onGear: () => void;
-  /** The server pages, while they are on screen. The label then reads
-   *  "Server" and the host, the tabs are the server's, and the gear is lit. */
+  /** The server pages, while they are on screen. The target crumb is then
+   *  gone, the tabs are the server's, and the gear is lit. */
   server?: ServerBar | null;
 }
 
@@ -55,8 +53,8 @@ export interface ServerBar {
 }
 
 // The top bar is the first of the shell's three levels, and it never changes
-// with what is below it: [rail toggle][mark] host / target │ tabs ······ [gear], the breadcrumb
-// reading the way a repo header does. Over the server pages it is host │ tabs.
+// with what is below it: [rail toggle][mark knomit] / target │ tabs ······ [gear], the breadcrumb
+// reading the way a repo header does. Over the server pages it is knomit │ tabs.
 //
 // The label is STATIC. Picking a repository or lens is the rail's job now, so
 // the dropdown that used to hang off the name is gone; the branch picker and
@@ -65,9 +63,6 @@ export interface ServerBar {
 export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onGear, server = null }: Props) {
   const lensCtx = isLensContext(state);
   const serverOpen = server !== null;
-  // The host the server pages are about: the API's own, which in the desktop
-  // app is not the page's.
-  const host = useMemo(() => serverHost(), []);
   // Held while a connect commit runs in the Settings facet: opening the server
   // pages would unmount the page it reports to. (The server pages host nothing
   // that locks, and the lock cannot be raised while they are open.)
@@ -132,13 +127,9 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
     padding: '0 12px 0 0', fontSize: 12,
   };
 
-  // The lead cell is the rail's width while the rail is open, so the first
-  // crumb starts at the content column's left edge (plus the 12px every
-  // facet toolbar pads its first control by). Closed, there is no column to
-  // line up with and the crumb simply follows the mark.
+  // The lead cell is the rail toggle and the word mark; the crumb follows it.
   const leadStyle: CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, boxSizing: 'border-box', flexShrink: 0,
-    ...(railOpen ? { width: RAIL_WIDTH } : { paddingRight: 8 }),
+    display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, flexShrink: 0,
   };
 
   // The label names the DISPLAYED target, which is the browse context unless a
@@ -206,7 +197,8 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
               }} />
             )}
           </button>
-            <svg role="img" aria-label="knomit" width="16" height="16" viewBox="0 0 80 80" style={{ display: 'block', flexShrink: 0 }}>
+          <span data-testid="bar-brand" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 80 80" style={{ display: 'block', flexShrink: 0 }}>
               <rect x="12" y="12" width="56" height="56" rx="10" transform="rotate(45 40 40)" fill="#7c9"/>
               <line x1="30" y1="24" x2="30" y2="56" stroke="#111" strokeWidth="4" strokeLinecap="round"/>
               <path d="M30 40 Q38 36 50 24" stroke="#111" strokeWidth="4" fill="none" strokeLinecap="round"/>
@@ -217,21 +209,17 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
               <circle cx="50" cy="56" r="3.5" fill="#111"/>
               <circle cx="30" cy="40" r="3.5" fill="#111"/>
             </svg>
+            <span style={{ color: '#7c9', fontWeight: 'bold', fontSize: 15, whiteSpace: 'nowrap' }}>knomit</span>
+          </span>
         </div>
 
-        {/* ── Breadcrumb: host / target ──
-            Both are labels, not controls: nothing here opens anything, so
-            they stay part of the drag region. The host is the server the
-            page is about; the target is what the page below shows. Over the
-            server pages the host stands alone. */}
-        <span data-testid="server-host" style={{
-          display: 'flex', alignItems: 'center', minWidth: 0, paddingLeft: 12,
-          fontFamily: 'var(--k-font-mono)', fontSize: 13, fontWeight: 400, color: '#888', whiteSpace: 'nowrap',
-          overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>{host}</span>
+        {/* ── Breadcrumb: knomit / target ──
+            Labels, not controls: nothing here opens anything, so they stay
+            part of the drag region. The target is what the page below shows;
+            over the server pages the word mark stands alone. */}
         {!serverOpen && (
           <>
-            <span data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
+            <span data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
             <span data-testid="target-label" style={{
               display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
               fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
@@ -351,16 +339,6 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
 const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings' };
 const SERVER_LABEL: Record<ServerPage, string> = { fleet: 'Fleet', logs: 'Logs', auth: 'Authorizations' };
-
-/** serverHost: the host:port the API is served from, resolved against the
- *  page (a relative base is this page's own host). */
-function serverHost(): string {
-  try {
-    return new URL(apiUrl('/'), window.location.href).host;
-  } catch {
-    return '';
-  }
-}
 
 // The Authorizations tab's waiting count: the green badge it carried in Manage.
 const tabBadge: CSSProperties = {

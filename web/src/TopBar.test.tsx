@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { TopBar } from './TopBar';
-import { RAIL_WIDTH } from './TargetRail';
 import { init } from './state';
 import type { AppState } from './state';
 import type { RepoInfo, Lens } from './api';
@@ -112,41 +111,36 @@ describe('TopBar — the target label', () => {
     expect(screen.queryByTestId('toknomitr-search')).toBeNull();
   });
 
-  it('reads host / target │ tabs, in that order, on one row', () => {
+  it('reads knomit / target │ tabs, in that order, on one row', () => {
     render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
     const row = screen.getByTestId('toknomitr-bar');
     const text = (id: string) => screen.getByTestId(id);
-    const order = ['server-host', 'crumb-sep', 'target-label', 'bar-divider', 'facet-tabs'].map(text);
+    const order = ['bar-brand', 'crumb-sep', 'target-label', 'bar-divider', 'facet-tabs'].map(text);
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
-    expect(text('server-host')).toHaveTextContent(/^localhost:3000$/);
+    expect(text('bar-brand')).toHaveTextContent(/^knomit$/);
     expect(text('crumb-sep')).toHaveTextContent('/');
     expect(text('target-label')).toHaveTextContent(/^alpha$/);
-    // The crumbs as the reader sees them, host first.
-    expect(row.textContent).toMatch(/^localhost:3000\/alpha.*BrowseActivitySettings$/);
+    // The crumbs as the reader sees them, the word mark first.
+    expect(row.textContent).toBe('knomit/alphaBrowseActivitySettings');
+    // No host anywhere in the bar.
+    expect(row.textContent).not.toContain('localhost');
+    expect(screen.queryByTestId('server-host')).toBeNull();
   });
 
-  it('styles the host crumb muted and the separator #555; the divider is a 1px #1e1e1e hairline', () => {
+  it('styles the word mark green/bold/15px and the separator #555; the divider is a 1px #1e1e1e hairline', () => {
     render(bar({ facets: ['browse'], facet: 'browse' }));
-    expect(screen.getByTestId('server-host')).toHaveStyle({ color: '#888', fontSize: '13px', fontWeight: '400' });
+    expect(screen.getByTestId('bar-brand').lastElementChild).toHaveStyle({ color: '#7c9', fontSize: '15px', fontWeight: 'bold' });
     expect(screen.getByTestId('crumb-sep')).toHaveStyle({ color: '#555' });
     expect(screen.getByTestId('bar-divider')).toHaveStyle({ width: '1px', height: '18px', background: '#1e1e1e' });
   });
 
-  it('the mark carries no wordmark', () => {
+  it('the mark is followed by the word "knomit", and the bar names no host', () => {
     render(bar());
-    const row = screen.getByTestId('toknomitr-bar');
-    expect(row.querySelector('svg[aria-label="knomit"]')).not.toBeNull();
-    expect(row.textContent).not.toContain('knomit');
-  });
-
-  it('the logo cell is the rail width while the rail is open, so the crumb starts on the content column', () => {
-    const { unmount } = render(bar({ railOpen: true }));
-    expect(screen.getByTestId('bar-lead')).toHaveStyle({ width: `${RAIL_WIDTH}px` });
-    unmount();
-    render(bar({ railOpen: false }));
-    expect(screen.getByTestId('bar-lead').style.width).toBe('');
+    const brand = screen.getByTestId('bar-brand');
+    expect(brand.querySelector('svg')).not.toBeNull();
+    expect(brand.textContent).toBe('knomit');
   });
 
   it('keeps the chip inside the target crumb', () => {
@@ -155,7 +149,7 @@ describe('TopBar — the target label', () => {
     expect(screen.getByTestId('target-label')).toHaveTextContent(/^q3archived$/);
   });
 
-  it('over the server pages reads host │ tabs: no second crumb, no "Server" word (control: the target outside them)', () => {
+  it('over the server pages reads knomit │ tabs: no second crumb, no "Server" word (control: the target outside them)', () => {
     const { unmount } = render(bar({ facets: ['browse'], facet: 'browse' }));
     expect(screen.getByTestId('target-label')).toHaveTextContent('alpha');
     expect(screen.getByTestId('crumb-sep')).toBeInTheDocument();
@@ -164,9 +158,9 @@ describe('TopBar — the target label', () => {
     expect(screen.queryByTestId('target-label')).toBeNull();
     expect(screen.queryByTestId('crumb-sep')).toBeNull();
     const row = screen.getByTestId('toknomitr-bar');
-    expect(row.textContent).toBe('localhost:3000FleetLogsAuthorizations');
-    // The jsdom page's own host: the API base is relative here.
-    const order = ['server-host', 'bar-divider', 'server-tabs'].map(i => screen.getByTestId(i));
+    expect(row.textContent).toBe('knomitFleetLogsAuthorizations');
+    expect(row.textContent).not.toContain('localhost');
+    const order = ['bar-brand', 'bar-divider', 'server-tabs'].map(i => screen.getByTestId(i));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
