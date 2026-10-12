@@ -403,4 +403,4 @@ func jsonRoundTrip(m map[string]any) map[string]any {
 }
 
 func deref(p *float64) float64 { return *p }
-func derefInt(p *int) int       { return *p }
+func derefInt(p *int) int      { return *p }
