@@ -83,16 +83,13 @@ export const GearIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
-// ExitIcon is the "leave this mode" glyph: an arrow stepping OUT of a frame,
-// mirrored from the usual log-out direction so it points back into the app.
-// Deliberately not a plain left arrow — knomit already has a back (the history
-// trail), and an arrow in the chrome would promise "go back one step" instead
-// of "leave Manage".
-export const ExitIcon = ({ color, size = 14 }: IconProps) => (
+// ServerIcon labels the server pages behind the gear: two stacked rack units.
+export const ServerIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M15 21h4a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-4"/>
-    <polyline points="8 17 3 12 8 7"/>
-    <line x1="3" y1="12" x2="15" y2="12"/>
+    <rect x="3" y="4" width="18" height="7" rx="1.5"/>
+    <rect x="3" y="13" width="18" height="7" rx="1.5"/>
+    <line x1="7" y1="7.5" x2="7.01" y2="7.5"/>
+    <line x1="7" y1="16.5" x2="7.01" y2="16.5"/>
   </svg>
 );
 
@@ -218,19 +215,6 @@ export const BroadcastIcon = ({ color, size = 14 }: IconProps) => (
     <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>
   </svg>
 );
-
-// ScrollIcon marks the Manage Logs tab: ruled lines of output, deliberately
-// uneven so it reads as text rather than as a list or a table.
-export const ScrollIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4" width="18" height="16" rx="2"/>
-    <path d="M7 9h6"/>
-    <path d="M7 13h10"/>
-    <path d="M7 16h4"/>
-  </svg>
-);
-
-// ---------- Fact type icons ----------
 
 export const ObservationIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

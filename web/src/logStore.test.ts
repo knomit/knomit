@@ -129,7 +129,7 @@ describe('logStore over SSE', () => {
     expect(getLines()).toEqual(['a', 'b', 'c']);
   });
 
-  // Switching to another Manage tab unmounts the page and closes the stream;
+  // Switching to another server page unmounts the log and closes the stream;
   // coming back opens a new one. The store is module-level and still holds the
   // old scrollback, and the server replays the same ring — so a connect that
   // APPENDED its backlog would double every line each time the user looked

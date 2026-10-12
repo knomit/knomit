@@ -12,8 +12,8 @@ export interface FacetLayout {
   onSplitterDown?: (e: ReactMouseEvent) => void;
 }
 
-// Outside the facet shell (Manage still mounts these pages until the next PR)
-// there is no Library to line up with: a fixed index and no splitter.
+// Outside the facet shell (a page mounted alone, as in a unit test) there is
+// no Library to line up with: a fixed index and no splitter.
 const FacetLayoutContext = createContext<FacetLayout>({ width: 200 });
 
 export const FacetLayoutProvider = FacetLayoutContext.Provider;

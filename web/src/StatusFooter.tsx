@@ -24,8 +24,8 @@ interface Props {
    *  visible happens. It was advertised unconditionally, which made the one
    *  shortcut on screen appear broken for everyone not time-travelling.
    *
-   *  Both are false in Manage, which has no time axis to leave and no filter
-   *  field to focus. */
+   *  Both are false off the Browse facet (Activity, Settings, the server
+   *  pages), which has no time axis to leave and no filter field to focus. */
   historyKey?: boolean;
   /** Opens the manage surface, where the flagged rows are. */
   onOpenCreates?: () => void;

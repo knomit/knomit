@@ -14,15 +14,16 @@ import { BootScreen } from './BootScreen';
 import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
-import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable } from './facets';
-import type { Facet, PinnedTarget, DraftKind } from './facets';
+import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor } from './facets';
+import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
 import { TargetRail } from './TargetRail';
 import { BrowseFacet } from './BrowseFacet';
 import { ActivityFacet } from './ActivityFacet';
 import { SettingsFacet } from './SettingsFacet';
 import { FacetLayoutProvider } from './facetLayout';
-import { RepoManager } from './RepoManager';
+import { ServerPages } from './ServerPages';
+import { useOAuthAvailability } from './useOAuthAvailability';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { CreateLensForm } from './CreateLensForm';
 import { CreateBlocked } from './CreateBlocked';
@@ -186,7 +187,7 @@ export async function refreshContextAfterChange(
   // it would render a repo whose content is a stack of errors. This is the same
   // rule pickRepo applies; it lives in both because this path never calls that
   // one. `repoList` is still what the function RETURNS: the caller's list is a
-  // list, and Manage has to keep showing what is registered.
+  // list, and the rail has to keep showing what is registered.
   const readable = repoList.filter(repoAvailable);
   if (readable.length === 0) {
     // Nothing left to browse. Clearing the repo is not cosmetic: state.repo and
@@ -204,7 +205,7 @@ export async function refreshContextAfterChange(
     // (I5, mirrored from the repo-rename handling below). Only SET_CONTEXT is
     // dispatched here — resolution is owned by the lensResolutionPending
     // effect, the same "single owner" rule every other lens-context entry
-    // follows (TopBar switcher, manager Browse, bootstrap restore); entering
+    // follows (a rail pick, a Mounted-in link, bootstrap restore); entering
     // the new context clears state.lens, which is what makes that effect fire.
     if (renamed && renamed.from === context.name && lenses.some(l => l.name === renamed.to)) {
       dispatch({ type: 'SET_CONTEXT', context: { kind: 'lens', name: renamed.to } });
@@ -291,7 +292,7 @@ export default function App() {
   const [view, dispatchView] = useViewState();
   // Raised by ⌘K to ask the rail's search for focus, and cleared by the rail
   // once it has focused — so a rail that mounts BECAUSE of the ⌘K focuses on
-  // arrival, and one that mounts later (toggle, ⌘B, leaving Manage) does not
+  // arrival, and one that mounts later (the toggle, ⌘B) does not
   // re-serve a request that was already handled.
   const [railFocusRequest, setRailFocusRequest] = useState(0);
   const clearRailFocusRequest = useCallback(() => setRailFocusRequest(0), []);
@@ -353,15 +354,6 @@ export default function App() {
     retryBoot();
     setBootNonce(n => n + 1);
   }, [retryBoot]);
-  // Manage is a MODE, not a dialog: it replaces the browse surface rather than
-  // floating over it. It lives here as component state and NOT on AppState,
-  // deliberately — state.navStack is both the back stack and the time-travel
-  // trail's source, and a NavEntry is defined as capturing a "way of looking" at
-  // facts. A mode is neither, so pushing it would corrupt the trail breadcrumb.
-  //
-  // It is also not persisted: a reload landing in a settings screen is the wrong
-  // default for a knowledge browser, and the gear is one click away.
-  const [manageOpen, setManageOpen] = useState(false);
   // The create still working on the repo being browsed, if any.
   //
   // A create's repo becomes listable and browsable at m.Add, well before the
@@ -547,7 +539,7 @@ export default function App() {
   }, [state.branch, dispatchBoot]);
 
   // Lens resolution — single owner. Every surface that enters a lens context
-  // (TopBar switcher, manager Browse, bootstrap restore) only dispatches
+  // (a rail pick, a Mounted-in link, bootstrap restore) only dispatches
   // SET_CONTEXT; this effect notices a context whose lens doc isn't resolved
   // yet (lensResolutionPending) and fetches it, falling back to a repo if the
   // lens is gone. Gated on reposLoaded so the fallback list is real; the
@@ -963,8 +955,8 @@ export default function App() {
   }, [state.repo, syncRemoteError]);
 
   // While the banner is UP, re-check on a timer. Every other way it comes down
-  // is edge-triggered — a remote event, a reconnect, a repo switch, a manager
-  // close — and none of those fire for a stream that stalls SILENTLY (a slept
+  // is edge-triggered — a remote event, a reconnect, a repo switch, leaving
+  // Settings — and none of those fire for a stream that stalls SILENTLY (a slept
   // laptop, a half-open proxy connection): the browser reports no 'error' and
   // no 'open', so nothing prompts a re-read. Sync and push events also have no
   // reconnect replay — TaskHub.Subscribe's snapshot carries task events only —
@@ -997,7 +989,7 @@ export default function App() {
   // no facet.
   const facets = useMemo(() => facetsFor(displayed, repos, lenses, creates), [displayed, repos, lenses, creates]);
   const shownFacet: Facet | null = displayed.kind === 'draft' ? null : facets.includes(view.facet) ? view.facet : 'settings';
-  const browseShown = onContext && shownFacet === 'browse';
+  const browseShown = view.server === null && onContext && shownFacet === 'browse';
   const targetLabel = useMemo(() => targetLabelFor(displayed, repos, archived, creates), [displayed, repos, archived, creates]);
   // The Settings tab's dot: the current repo's remote is failing, by the
   // banner's source OR by the listing. Only for a repo context — a lens's
@@ -1032,7 +1024,8 @@ export default function App() {
   // A pinned target that no longer exists is unpinned: an archived repo purged
   // elsewhere, a repo with no store that came back (or went), a broken lens
   // that was deleted. The reader lands on the context's facet, as when leaving
-  // any pinned target.
+  // any pinned target. Both corrections happen to the target UNDER the
+  // server pages if they are open (keepServer): nobody is taken off them.
   //
   // A broken lens that was REPAIRED (its missing mount removed, or the store
   // back) is readable again, so it becomes what a readable lens is: the
@@ -1044,8 +1037,8 @@ export default function App() {
       const lens = lenses.find(l => l.name === p.name);
       if (lens && brokenLensMember(lens, repos) === null) {
         const ctx: BrowseContext = { kind: 'lens', name: p.name };
-        dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(ctx, repos, lenses, creates) });
-        dispatchView({ type: 'SET_FACET', facet: 'settings' });
+        dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(ctx, repos, lenses, creates), keepServer: true });
+        dispatchView({ type: 'SET_FACET', facet: 'settings', keepServer: true });
         dispatch({ type: 'SET_CONTEXT', context: ctx });
         return;
       }
@@ -1053,24 +1046,34 @@ export default function App() {
     const gone = (p.kind === 'archived' && archivedLoaded && !archived.some(a => a.id === p.id))
       || (p.kind === 'unavailable' && reposLoaded && !repos.some(r => r.name === p.repo && !repoAvailable(r)))
       || (p.kind === 'brokenLens' && reposLoaded && !lenses.some(l => l.name === p.name));
-    if (gone) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(state.context, repos, lenses, creates) });
+    if (gone) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(state.context, repos, lenses, creates), keepServer: true });
   }, [view.pinned, archived, archivedLoaded, repos, reposLoaded, lenses, creates, state.context, dispatch, dispatchView]);
 
-  // Manage mode entry/exit. Defined ABOVE the keyboard effect because that
-  // effect's dependency array is evaluated during render — a const declared
-  // further down would still be in its temporal dead zone.
-  const openRepoMgr = useCallback(() => setManageOpen(true), []);
-  const closeRepoMgr = useCallback(() => {
-    setManageOpen(false);
-    // Leaving the server pages lands back on a target whose remote may have
-    // changed meanwhile; re-read it rather than leave the banner stale.
-    syncRemoteError(stateRef.current.repo);
-  }, [syncRemoteError]);
-  // Leaving the Settings facet (for another facet, another target, or Manage)
-  // re-reads the remote: Settings is where a remote is repaired, and the
-  // banner must not outlive the fix. Switching TARGET while on Settings needs
-  // nothing here — the repo change re-reads it already.
-  const settingsShown = !manageOpen && onContext && shownFacet === 'settings';
+  // The server pages, behind the gear. They show OVER the displayed target,
+  // which stays exactly as it was, so the gear again (or any rail pick) is the
+  // way back to it. Which pages exist: Fleet always; Logs and Authorizations
+  // never on a read-only server; Authorizations only with an OAuth issuer,
+  // probed while the pages are open (useOAuthAvailability). A page whose tab
+  // is gone falls back to Fleet.
+  const serverOpen = view.server !== null;
+  const oauth = useOAuthAvailability({ enabled: serverOpen && !state.serverReadOnly, pageOpen: view.server === 'auth' });
+  const serverPages = useMemo(() => serverPagesFor(state.serverReadOnly, oauth.available), [state.serverReadOnly, oauth.available]);
+  const serverPage: ServerPage | null = view.server === null ? null : serverPages.includes(view.server) ? view.server : 'fleet';
+  const onServerPage = useCallback((p: ServerPage) => dispatchView({ type: 'SET_SERVER_PAGE', page: p }), [dispatchView]);
+  // The gear refuses while a connect commit runs in the Settings facet:
+  // opening the server pages over it would unmount the wizard.
+  const onGear = useCallback(() => {
+    if (view.locked) return;
+    dispatchView({ type: 'TOGGLE_SERVER' });
+  }, [view.locked, dispatchView]);
+  const serverBar = useMemo(() => serverPage === null ? null : ({
+    page: serverPage, pages: serverPages, onPage: onServerPage, authCount: oauth.count,
+  }), [serverPage, serverPages, onServerPage, oauth.count]);
+  // Leaving the Settings facet (for another facet, another target, or the
+  // server pages) re-reads the remote: Settings is where a remote is repaired,
+  // and the banner must not outlive the fix. Switching TARGET while on
+  // Settings needs nothing here — the repo change re-reads it already.
+  const settingsShown = !serverOpen && onContext && shownFacet === 'settings';
   const wasSettingsShown = useRef(settingsShown);
   useEffect(() => {
     if (wasSettingsShown.current && !settingsShown) syncRemoteError(stateRef.current.repo);
@@ -1083,15 +1086,6 @@ export default function App() {
   }, [view.locked, dispatchView]);
   const clearFocus = useCallback(() => dispatchView({ type: 'CLEAR_FOCUS' }), [dispatchView]);
 
-  // The gear is one control at one anchor: it opens Manage (the server pages)
-  // and leaves it from inside. It refuses while a connect commit runs in the
-  // Settings facet: opening Manage over it would unmount the wizard.
-  const toggleRepoMgr = useCallback(() => {
-    if (view.locked) return;
-    if (manageOpen) closeRepoMgr();
-    else openRepoMgr();
-  }, [manageOpen, view.locked, openRepoMgr, closeRepoMgr]);
-
   // Keyboard shortcuts.
   //
   // A LAYOUT effect, not a passive one, because this handler closes over state
@@ -1099,10 +1093,10 @@ export default function App() {
   // passive-effect flush in separate tasks for any such update, so a passive
   // registration leaves a window where the handler contradicts the screen.
   //
-  // NOT for `manageOpen`: every route that opens Manage is a click, and React
-  // flushes passive effects before the next discrete event, so that flag is
-  // never stale. The path that IS reachable is `state.asOf`. returnToNow
-  // dispatches APPLY_NAV with asOf live only AFTER an await
+  // NOT for the view (the facet, the server pages): every route that changes
+  // it is a click, and React flushes passive effects before the next discrete
+  // event, so it is never stale. The path that IS reachable is `state.asOf`.
+  // returnToNow dispatches APPLY_NAV with asOf live only AFTER an await
   // (useTimeTravel.ts), so the return to live lands in a promise continuation;
   // in the window after it paints, a passive handler still reads
   // !isLive(state) and answers Escape with a redundant returnToNow instead of
@@ -1114,16 +1108,6 @@ export default function App() {
   // of the handler never describing a screen the user is not looking at.
   useLayoutEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Manage owns the window, so it owns the keyboard too. Every shortcut
-      // below drives a TARGET — back, return-to-now, focus the filter, the
-      // rail — and none of them has a visible effect from in here. Escape is
-      // the one key it answers: dismissing the thing on top is unambiguous
-      // when the thing on top is the whole window.
-      if (manageOpen) {
-        if (e.key === 'Escape') { closeRepoMgr(); }
-        return;
-      }
-
       // The rail. Window-level like Back, so checked before the input guard:
       // ⌘K is how you get to the rail's search from inside the filter box, and
       // neither key types anything. ⌘B toggles; ⌘K opens if needed and asks
@@ -1143,8 +1127,9 @@ export default function App() {
 
       // Everything below is a BROWSE shortcut: it acts on the facts being
       // read. Off the Browse facet of the context — on Activity, on Settings,
-      // on a pinned target, on a draft — there are none on screen, so the keys
-      // are no-ops, Escape included: nothing at this level is "exited" by it.
+      // on a pinned target, on a draft, on the server pages — there are none
+      // on screen, so the keys are no-ops, Escape included: nothing at this
+      // level is "exited" by it, the server pages neither (the gear is).
       //
       // Back is a WINDOW-level command, so it is checked BEFORE the input
       // guard below: nothing types ⌘[ / Alt+←, and going back from a focused
@@ -1190,7 +1175,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, state, tt, manageOpen, closeRepoMgr, browseShown, dispatchView]);
+  }, [navigate, state, tt, browseShown, dispatchView]);
 
   // A finished task is news for a moment, not for the session. Nothing used to
   // return a task to idle, so the footer kept the LAST terminal result forever
@@ -1280,7 +1265,7 @@ export default function App() {
     const same = (ctx.kind === 'repo' && cur.kind === 'repo' && cur.repo === ctx.repo)
       || (ctx.kind === 'lens' && cur.kind === 'lens' && cur.name === ctx.name);
     const v = viewRef.current;
-    if (same && v.pinned === null && !v.draftShown) return;
+    if (same && v.pinned === null && !v.draftShown && v.server === null) return;
     dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(ctx, repos, lenses, creates) });
     if (!same) dispatch({ type: 'SET_CONTEXT', context: ctx });
   }, [dispatch, dispatchView, repos, lenses, creates]);
@@ -1395,10 +1380,10 @@ export default function App() {
   // The banner's Reconnect lands on the failing repo's Settings, on its
   // Remote block. In a lens context the failing repo is the lens's write repo
   // (state.repo), so it becomes the target: the lens's own Settings has no
-  // Remote block to land on. A pinned target or the draft gives way to it.
+  // Remote block to land on. A pinned target, the draft or the server pages
+  // give way to it (SET_FACET leaves the server pages).
   const onReconnect = useCallback(() => {
     dispatch({ type: 'CLEAR_REMOTE_ERRORS' });
-    if (manageOpen) closeRepoMgr();
     const cur = stateRef.current;
     if (cur.context.kind === 'lens' && cur.repo) {
       dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: cur.repo } });
@@ -1406,7 +1391,7 @@ export default function App() {
     const v = viewRef.current;
     if (v.pinned || v.draftShown) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: ['settings'] });
     dispatchView({ type: 'SET_FACET', facet: 'settings', focus: 'remote' });
-  }, [dispatch, dispatchView, manageOpen, closeRepoMgr]);
+  }, [dispatch, dispatchView]);
 
   // A settings mutation: re-sync the lists and the context, then re-read the
   // remote, which a connect or disconnect changed.
@@ -1428,11 +1413,12 @@ export default function App() {
     onSelectTarget({ kind: 'lens', name });
   }, [lenses, repos, onPin, onSelectTarget]);
   // The status footer's "N repositories being created": the creates are rows
-  // in the rail, each with its chip, so the count opens the rail.
+  // in the rail, each with its chip, so the count opens the rail. Over the
+  // server pages too: the rail sits beside them, and a row picked there
+  // leaves them.
   const onOpenCreates = useCallback(() => {
-    if (manageOpen) closeRepoMgr();
     dispatchView({ type: 'SET_RAIL', open: true });
-  }, [manageOpen, closeRepoMgr, dispatchView]);
+  }, [dispatchView]);
 
   // Before repo AND branch are known there is nothing to render, but the user
   // is owed an account of what is happening — which phase, how long, which
@@ -1453,14 +1439,13 @@ export default function App() {
 
   // The shell has three levels: the top bar, then a row of [rail | column],
   // then the status footer. The rail is a COLUMN of that row, so opening it
-  // pushes everything beside it right instead of covering it.
+  // pushes everything beside it right instead of covering it. It stays beside
+  // the server pages, where picking any row is the way back to a target.
   //
-  // While Manage owns the window the rail is not rendered: the server pages
-  // are not about a target. That bridge goes when the server pages join the
-  // shell. With no repositories the rail is forced open (not persisted): the
-  // draft is the only row, and a row nobody can see would leave the reader
-  // with no idea what they are creating or where it will appear.
-  const showRail = (view.railOpen || noRepos) && !manageOpen;
+  // With no repositories the rail is forced open (not persisted): the draft is
+  // the only row, and a row nobody can see would leave the reader with no
+  // idea what they are creating or where it will appear.
+  const showRail = view.railOpen || noRepos;
   const pinnedOrContext = displayed.kind === 'draft' ? null : displayed;
   const draftShownKind = displayed.kind === 'draft' ? displayed.draft : null;
   return (
@@ -1471,7 +1456,7 @@ export default function App() {
         <TopBar state={state} repos={repos} label={targetLabel}
           railOpen={view.railOpen || noRepos} onToggleRail={toggleRail}
           facets={facets} facet={shownFacet ?? undefined} onFacet={onFacet} settingsDot={settingsDot} locked={view.locked}
-          onManageRepos={toggleRepoMgr} manageOpen={manageOpen} />
+          onGear={onGear} server={serverBar} />
       </ErrorBoundary>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         {showRail && (
@@ -1485,10 +1470,13 @@ export default function App() {
               serverReadOnly={state.serverReadOnly}
               onSelect={onSelectTarget}
               archived={archived}
-              pinned={displayed.kind === 'draft' ? null : view.pinned}
+              // Over the server pages no row is selected: none of them is
+              // what the body shows.
+              pinned={displayed.kind === 'draft' || serverOpen ? null : view.pinned}
               onPin={onPin}
               drafts={drafts}
-              draftShown={draftShownKind}
+              draftShown={serverOpen ? null : draftShownKind}
+              noneSelected={serverOpen}
               onNewDraft={onNewDraft}
               onPickDraft={onPickDraft}
               focusRequest={railFocusRequest}
@@ -1533,111 +1521,109 @@ export default function App() {
               </button>
             </div>
           )}
-          {/* Manage REPLACES the target's page rather than floating over it:
-              the status footer below stays put in both modes, because it is
-              the app's readout rail and not part of any page. */}
-          {manageOpen ? (
-            <ErrorBoundary variant="inline" label="Manage hit an error" onReset={closeRepoMgr}>
-              <RepoManager open serverReadOnly={state.serverReadOnly} />
-            </ErrorBoundary>
-          ) : (
-            // The facet column is the only body: the displayed target's facet,
-            // or its draft.
-            <FacetLayoutProvider value={facetLayout}>
-              {/* The drafts stay MOUNTED while another target is shown, hidden
-                  rather than unmounted, so a half-filled form and a probe or a
-                  create in flight survive a detour through the rail. */}
-              {drafts.repo && (
-                <div data-testid="draft-repo" style={draftBody(draftShownKind === 'repo')}>
-                  <ErrorBoundary variant="inline" label="New repository hit an error">
-                    {state.serverReadOnly ? <CreateBlocked what="repository" /> : (
-                      <CreateRepoWizard
-                        // Fires the moment the repo EXISTS, not when the job
-                        // ends — see maybeEnterRepo.
-                        onDone={onRepoDraftRegistered}
-                        onCancel={draftCancellable('repo', repos) ? onCancelDraft : undefined}
-                      />
-                    )}
-                  </ErrorBoundary>
-                </div>
-              )}
-              {drafts.lens && (
-                <div data-testid="draft-lens" style={draftBody(draftShownKind === 'lens')}>
-                  <ErrorBoundary variant="inline" label="New lens hit an error">
-                    {state.serverReadOnly ? <CreateBlocked what="lens" /> : (
-                      <CreateLensForm
-                        repos={repos}
-                        lenses={lenses}
-                        onDone={onLensDraftCreated}
-                        onCancel={draftCancellable('lens', repos) ? onCancelDraft : undefined}
-                        onError={() => { /* the form shows its own error */ }}
-                      />
-                    )}
-                  </ErrorBoundary>
-                </div>
-              )}
-              {pinnedOrContext && shownFacet === 'browse' && (
-                <BrowseFacet
-                  state={state}
-                  dispatch={dispatch}
-                  navigate={navigate}
-                  tt={tt}
-                  edges={edges}
-                  repoNames={repoNames}
-                  leftPanelWidth={leftPanelWidth}
-                  libraryNarrow={libraryNarrow}
-                  onSplitterDown={startSplitterDrag}
-                  onJumpTrail={jumpTrail}
-                  onEnterBranch={enterBranch}
+          {/* The body: the displayed target's facet, or its draft — or, over
+              them, the server pages. The drafts stay mounted under the server
+              pages (hidden, as under another target), so nothing typed into
+              one is lost by a look at the log. */}
+          <FacetLayoutProvider value={facetLayout}>
+            {serverPage !== null && (
+              <ErrorBoundary variant="inline" label="The server pages hit an error">
+                <ServerPages page={serverPage} onAuthCount={oauth.setCount} />
+              </ErrorBoundary>
+            )}
+            {/* The drafts stay MOUNTED while another target is shown, hidden
+                rather than unmounted, so a half-filled form and a probe or a
+                create in flight survive a detour through the rail. */}
+            {drafts.repo && (
+              <div data-testid="draft-repo" style={draftBody(!serverOpen && draftShownKind === 'repo')}>
+                <ErrorBoundary variant="inline" label="New repository hit an error">
+                  {state.serverReadOnly ? <CreateBlocked what="repository" /> : (
+                    <CreateRepoWizard
+                      // Fires the moment the repo EXISTS, not when the job
+                      // ends — see maybeEnterRepo.
+                      onDone={onRepoDraftRegistered}
+                      onCancel={draftCancellable('repo', repos) ? onCancelDraft : undefined}
+                    />
+                  )}
+                </ErrorBoundary>
+              </div>
+            )}
+            {drafts.lens && (
+              <div data-testid="draft-lens" style={draftBody(!serverOpen && draftShownKind === 'lens')}>
+                <ErrorBoundary variant="inline" label="New lens hit an error">
+                  {state.serverReadOnly ? <CreateBlocked what="lens" /> : (
+                    <CreateLensForm
+                      repos={repos}
+                      lenses={lenses}
+                      onDone={onLensDraftCreated}
+                      onCancel={draftCancellable('lens', repos) ? onCancelDraft : undefined}
+                      onError={() => { /* the form shows its own error */ }}
+                    />
+                  )}
+                </ErrorBoundary>
+              </div>
+            )}
+            {!serverOpen && pinnedOrContext && shownFacet === 'browse' && (
+              <BrowseFacet
+                state={state}
+                dispatch={dispatch}
+                navigate={navigate}
+                tt={tt}
+                edges={edges}
+                repoNames={repoNames}
+                leftPanelWidth={leftPanelWidth}
+                libraryNarrow={libraryNarrow}
+                onSplitterDown={startSplitterDrag}
+                onJumpTrail={jumpTrail}
+                onEnterBranch={enterBranch}
+              />
+            )}
+            {!serverOpen && pinnedOrContext && shownFacet === 'activity' && (
+              <ErrorBoundary variant="inline" label="Activity hit an error">
+                <ActivityFacet
+                  // Keyed on the target so a switch starts a fresh read
+                  // rather than showing the last target's rows meanwhile.
+                  key={state.context.kind === 'repo' ? `repo:${state.context.repo}` : `lens:${state.context.name}`}
+                  target={state.context.kind === 'repo'
+                    ? { kind: 'repo', uid: currentRepoInfo?.uid ?? '' }
+                    : { kind: 'lens', uid: lenses.find(l => l.name === (state.context.kind === 'lens' ? state.context.name : ''))?.uid ?? '' }}
                 />
-              )}
-              {pinnedOrContext && shownFacet === 'activity' && (
-                <ErrorBoundary variant="inline" label="Activity hit an error">
-                  <ActivityFacet
-                    // Keyed on the target so a switch starts a fresh read
-                    // rather than showing the last target's rows meanwhile.
-                    key={state.context.kind === 'repo' ? `repo:${state.context.repo}` : `lens:${state.context.name}`}
-                    target={state.context.kind === 'repo'
-                      ? { kind: 'repo', uid: currentRepoInfo?.uid ?? '' }
-                      : { kind: 'lens', uid: lenses.find(l => l.name === (state.context.kind === 'lens' ? state.context.name : ''))?.uid ?? '' }}
-                  />
-                </ErrorBoundary>
-              )}
-              {pinnedOrContext && shownFacet === 'settings' && (
-                <ErrorBoundary variant="inline" label="Settings hit an error">
-                  <SettingsFacet
-                    target={pinnedOrContext}
-                    repos={repos}
-                    lenses={lenses}
-                    archived={archived}
-                    serverReadOnly={state.serverReadOnly}
-                    createJob={repoCreate ?? null}
-                    onCancelCreate={onCancelCreate}
-                    focus={view.focus}
-                    onFocused={clearFocus}
-                    onChanged={onSettingsChanged}
-                    onSelectLens={onSettingsSelectLens}
-                    onEnterBranch={enterBranch}
-                    currentBranch={state.branch}
-                    onBusyChange={setLocked}
-                    onRestored={onRestored}
-                    onPurged={onPurged}
-                    onUnavailableArchived={onUnavailableArchived}
-                    onCreateClosed={unpin}
-                    onCreateRegistered={onCreateRegistered}
-                  />
-                </ErrorBoundary>
-              )}
-            </FacetLayoutProvider>
-          )}
+              </ErrorBoundary>
+            )}
+            {!serverOpen && pinnedOrContext && shownFacet === 'settings' && (
+              <ErrorBoundary variant="inline" label="Settings hit an error">
+                <SettingsFacet
+                  target={pinnedOrContext}
+                  repos={repos}
+                  lenses={lenses}
+                  archived={archived}
+                  serverReadOnly={state.serverReadOnly}
+                  createJob={repoCreate ?? null}
+                  onCancelCreate={onCancelCreate}
+                  focus={view.focus}
+                  onFocused={clearFocus}
+                  onChanged={onSettingsChanged}
+                  onSelectLens={onSettingsSelectLens}
+                  onEnterBranch={enterBranch}
+                  currentBranch={state.branch}
+                  onBusyChange={setLocked}
+                  onRestored={onRestored}
+                  onPurged={onPurged}
+                  onUnavailableArchived={onUnavailableArchived}
+                  onCreateClosed={unpin}
+                  onCreateRegistered={onCreateRegistered}
+                />
+              </ErrorBoundary>
+            )}
+          </FacetLayoutProvider>
         </div>
       </div>
       <ErrorBoundary variant="inline" label="The status footer hit an error">
         {/* Neither hint applies off the Browse facet: nothing else has a time
             axis to return from or a filter field to focus. */}
         <StatusFooter state={state} version={version}
-          searchKey={isLive(state) && !manageOpen && browseShown}
-          historyKey={!isLive(state) && !manageOpen && browseShown}
+          searchKey={isLive(state) && browseShown}
+          historyKey={!isLive(state) && browseShown}
           onOpenCreates={onOpenCreates} />
       </ErrorBoundary>
     </div>

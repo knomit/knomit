@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type OAuthApproval, type OAuthPending } from './api';
-import { btn, card, cardLabel } from './manageStyles';
+import { btn, cardLabel } from './manageStyles';
+import { SettingsPage, type Section } from './SettingsPage';
 
-// ManageOAuth is the operator's side of an OAuth login (F19 phase 3b): a
+// The Authorizations server page is the operator's side of an OAuth login (F19 phase 3b): a
 // client such as Claude Code parked an authorization request on this
 // instance's OAuth listener, and the operator approves or denies it here
 // instead of with `knomit oauth approve` in a terminal. The tab exists only
 // when the server has an OAuth issuer (the list call answers 404 otherwise,
-// which RepoManager reads as "no tab").
+// which useOAuthAvailability reads as "no tab").
 //
 // What a row shows is what the operator judges by, and where it comes from
 // matters:
@@ -81,7 +82,7 @@ function PendingRow({ p, onDone, onApproved }: { p: OAuthPending; onDone: () => 
 
   const canApprove = !busy && subject.trim() !== '' && scopes.length > 0;
   return (
-    <div data-testid="oauth-row" style={card}>
+    <div data-testid="oauth-row">
       <div style={cardLabel}>Code goes to</div>
       <div data-testid="oauth-redirect-host" style={{ fontSize: 16, fontWeight: 600, color: '#eee' }}>{redirectHost(p.redirect_uri)}</div>
       <div style={mono}>{p.redirect_uri}</div>
@@ -134,7 +135,9 @@ function PendingRow({ p, onDone, onApproved }: { p: OAuthPending; onDone: () => 
   );
 }
 
-export function ManageOAuth({ onCount }: { onCount?: (n: number) => void }) {
+// AuthPage is the Authorizations server page: one block per waiting request,
+// titled by the client as it names itself, or a single "Nothing waiting".
+export function AuthPage({ onCount }: { onCount?: (n: number) => void }) {
   const [rows, setRows] = useState<OAuthPending[] | null>(null);
   const [err, setErr] = useState('');
   // The last approval that left a known subject's grants alone: the row is
@@ -157,26 +160,47 @@ export function ManageOAuth({ onCount }: { onCount?: (n: number) => void }) {
     return () => clearInterval(t);
   }, [load]);
 
-  return (
-    <div style={{ padding: '4px 2px' }}>
+  // What the page says above its first block's content: what approving
+  // means, why the list could not be read, and the note an approval left.
+  const preface = (
+    <>
       <div style={dim}>
         Clients waiting for permission to use this instance. Approving issues a token that acts as the subject you name,
         limited to the scopes you check.
       </div>
       {err && <div role="alert" style={errText}>{err}</div>}
-      {rows !== null && rows.length === 0 && !err && (
-        <div style={{ ...dim, marginTop: 14 }}>No authorization requests are waiting.</div>
-      )}
       {unchanged && (
-        <div data-testid="oauth-grants-unchanged" style={{ ...dim, marginTop: 10 }}>
+        <div data-testid="oauth-grants-unchanged" style={dim}>
           Approved. host:{unchanged}@token had been granted before, so its grants were left as they are and may cap
           this token below the scopes you checked. Widen them with{' '}
           <span style={mono}>knomit grants add host:{unchanged}@token &lt;perm&gt;</span>.
         </div>
       )}
-      {rows?.map(p => (
-        <PendingRow key={p.id} p={p} onDone={load} onApproved={a => setUnchanged(a.grantsUnchanged ? a.subject : '')} />
-      ))}
-    </div>
+    </>
   );
+
+  const sections: Section[] = rows !== null && rows.length > 0
+    ? rows.map((p, i) => ({
+      id: `request-${p.id}`,
+      title: p.client_name || p.client_id,
+      body: (
+        <>
+          {i === 0 && preface}
+          <PendingRow p={p} onDone={load} onApproved={a => setUnchanged(a.grantsUnchanged ? a.subject : '')} />
+        </>
+      ),
+    }))
+    : [{
+      id: 'none',
+      title: 'Nothing waiting',
+      body: (
+        <>
+          {preface}
+          {rows !== null && !err && <div style={dim}>No authorization requests are waiting.</div>}
+          {rows === null && !err && <div style={dim}>Loading…</div>}
+        </>
+      ),
+    }];
+
+  return <SettingsPage kind="auth" sections={sections} testid="auth-page" />;
 }

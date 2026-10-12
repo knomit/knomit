@@ -153,8 +153,8 @@ describe('StatusFooter — the history key', () => {
     expect(footer().textContent).not.toContain('now');
   });
 
-  it('offers neither key when both are withheld, as in Manage', () => {
-    // Manage has no time axis to return from and no filter field to focus.
+  it('offers neither key when both are withheld, as off the Browse facet', () => {
+    // Settings or a server page has no time axis to return from and no filter field to focus.
     render(<StatusFooter state={repoState} searchKey={false} historyKey={false} />);
     expect(footer().textContent).not.toContain('now');
     expect(footer().textContent).not.toContain('search');

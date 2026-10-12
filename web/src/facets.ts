@@ -9,7 +9,7 @@
 // with it.
 //
 // It holds the rail, the facet, the connect lock, the pinned settings-only
-// targets and the draft. The server pages join it when they leave Manage.
+// targets, the draft and the server pages behind the gear.
 
 import { useEffect, useReducer } from 'react';
 import type { Dispatch } from 'react';
@@ -54,6 +54,10 @@ export type PinnedTarget =
   | { kind: 'brokenLens'; name: string };
 
 export type DraftKind = 'repo' | 'lens';
+
+/** A server page behind the gear. Not a target: nothing on it belongs to a
+ *  repository or a lens. */
+export type ServerPage = 'fleet' | 'logs' | 'auth';
 
 /** Anything the rail can select: a normal target (the browse context), a
  *  pinned one, or a draft. */
@@ -135,15 +139,20 @@ export interface ViewState {
   draftShown: boolean;
   /** Where Cancel on the draft goes back to: what was shown before it. */
   returnTo: ReturnTo | null;
+  /** The server page on screen, or null. While set it is what the body shows,
+   *  OVER the displayed target, which is left exactly as it was: closing it
+   *  (the gear again) is the way back to that target and facet. Never
+   *  persisted: a reload lands on the remembered target. */
+  server: ServerPage | null;
 }
 
 export type ViewAction =
   | { type: 'TOGGLE_RAIL' }
   | { type: 'SET_RAIL'; open: boolean }
   /** A tab click (or a route that means one: Reconnect, entering a branch). */
-  | { type: 'SET_FACET'; facet: Facet; focus?: string }
+  | { type: 'SET_FACET'; facet: Facet; focus?: string; keepServer?: boolean }
   /** A normal target was picked; `available` is facetsFor(that target). */
-  | { type: 'SELECT_CONTEXT_TARGET'; available: Facet[] }
+  | { type: 'SELECT_CONTEXT_TARGET'; available: Facet[]; keepServer?: boolean }
   | { type: 'SET_FOCUS'; focus: string }
   | { type: 'CLEAR_FOCUS' }
   | { type: 'SET_LOCKED'; locked: boolean }
@@ -163,13 +172,17 @@ export type ViewAction =
    *  if it was hidden, they are left where they are. `kind` is the draft that
    *  registered: a late result for a draft whose slot the other kind has
    *  since taken retires nothing. */
-  | { type: 'DRAFT_REGISTERED'; kind: DraftKind; facet: Facet };
+  | { type: 'DRAFT_REGISTERED'; kind: DraftKind; facet: Facet }
+  /** The gear: open the server pages on `page`, or close them. */
+  | { type: 'TOGGLE_SERVER' }
+  /** A server tab click. */
+  | { type: 'SET_SERVER_PAGE'; page: ServerPage };
 
 /** initView reads the persisted parts of the view. Used as useReducer's init. */
 export function initView(): ViewState {
   return {
     railOpen: loadRailOpen(), facet: loadLastFacet(), lastFacet: null, focus: null, locked: false,
-    pinned: null, draft: null, draftShown: false, returnTo: null,
+    pinned: null, draft: null, draftShown: false, returnTo: null, server: null,
   };
 }
 
@@ -200,21 +213,30 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
     case 'SET_FACET':
       // A deliberate choice of facet supersedes the remembered one: the next
       // target keeps what the reader just picked, not what they had before.
-      return { ...s, facet: a.facet, lastFacet: null, focus: a.focus ?? null };
+      // It is also a way back from the server pages (the banner's Reconnect):
+      // a facet is a page of a target, so the target comes back on it.
+      // `keepServer` is for the app's own corrections (a pin that vanished or
+      // healed under the server pages): they fix the target underneath, and
+      // nobody is taken off the page they chose.
+      return { ...s, facet: a.facet, lastFacet: null, focus: a.focus ?? null, server: a.keepServer ? s.server : null };
     case 'SELECT_CONTEXT_TARGET': {
       // A normal target IS the context: whatever was pinned over it goes, and
       // a shown draft is hidden (kept, so its row can be picked again).
-      const base = s.pinned === null && !s.draftShown ? s : { ...s, pinned: null, draftShown: false };
+      // Picking any row is also the way off the server pages (but not an
+      // automatic unpin: `keepServer`).
+      const server = a.keepServer ? s.server : null;
+      const base = s.pinned === null && !s.draftShown && s.server === server ? s : { ...s, pinned: null, draftShown: false, server };
       return applyFacetRule(base, a.available);
     }
     case 'SELECT_PINNED':
-      return applyFacetRule({ ...s, pinned: a.target, draftShown: false }, ['settings']);
+      return applyFacetRule({ ...s, pinned: a.target, draftShown: false, server: null }, ['settings']);
     case 'OPEN_DRAFT':
-      if (s.draft === a.kind && s.draftShown) return s;
-      return { ...s, draft: a.kind, draftShown: true, returnTo: returnToFrom(s, a.from) };
+      if (s.draft === a.kind && s.draftShown) return s.server === null ? s : { ...s, server: null };
+      return { ...s, draft: a.kind, draftShown: true, returnTo: returnToFrom(s, a.from), server: null };
     case 'SHOW_DRAFT':
-      if (!s.draft || s.draftShown) return s;
-      return { ...s, draftShown: true, returnTo: returnToFrom(s, a.from) };
+      if (!s.draft) return s;
+      if (s.draftShown) return s.server === null ? s : { ...s, server: null };
+      return { ...s, draftShown: true, returnTo: returnToFrom(s, a.from), server: null };
     case 'CANCEL_DRAFT': {
       if (!s.draft) return s;
       const r = s.returnTo;
@@ -240,6 +262,12 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       if (s.facet === 'settings') return landed;
       return { ...landed, facet: 'settings', lastFacet: s.lastFacet ?? s.facet };
     }
+    case 'TOGGLE_SERVER':
+      // Opening lands on Fleet, the page every server has. Closing changes
+      // nothing else: the target and its facet were never left.
+      return { ...s, server: s.server === null ? 'fleet' : null };
+    case 'SET_SERVER_PAGE':
+      return s.server === a.page ? s : { ...s, server: a.page };
     case 'SET_FOCUS':
       return { ...s, focus: a.focus };
     case 'CLEAR_FOCUS':
@@ -249,6 +277,17 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
     default:
       return s;
   }
+}
+
+/**
+ * serverPagesFor: the server tabs, in order. Fleet always. Logs and
+ * Authorizations are OMITTED on a read-only server, whose endpoints answer
+ * 403 for both, so a tab would be a control that cannot work; Authorizations
+ * also needs an OAuth issuer (useOAuthAvailability).
+ */
+export function serverPagesFor(serverReadOnly: boolean, oauthAvailable: boolean): ServerPage[] {
+  if (serverReadOnly) return ['fleet'];
+  return oauthAvailable ? ['fleet', 'logs', 'auth'] : ['fleet', 'logs'];
 }
 
 /** draftCancellable: whether the draft offers Cancel. A repository draft with

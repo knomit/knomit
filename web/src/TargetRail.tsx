@@ -47,8 +47,8 @@ interface Props {
   onPickDraft?: (kind: DraftKind) => void;
   /** Non-zero while the app is asking for the search to take focus (⌘K). The
    *  rail focuses once and reports it through onFocusHandled, and the app
-   *  clears the request — so a rail that mounts LATER (the toggle, ⌘B, leaving
-   *  Manage) does not steal the keyboard for a ⌘K that was already served. */
+   *  clears the request — so a rail that mounts LATER (the toggle, ⌘B) does
+   *  not steal the keyboard for a ⌘K that was already served. */
   focusRequest?: number;
   onFocusHandled?: () => void;
   /** A connect commit is in flight: every row and `+` refuses (and the list
@@ -56,11 +56,15 @@ interface Props {
    *  reports to. The search stays usable — it changes nothing on screen but
    *  the list. */
   locked?: boolean;
+  /** The body shows something that is no row's target (the server pages):
+   *  no row is selected. Picking any row, the context's included, is the way
+   *  back to a target. */
+  noneSelected?: boolean;
 }
 
 // TargetRail is the shell's left column: every repository and lens, one flat
-// list each, and the way to switch between them — and, since Manage lost its
-// own rail, the only one. It replaced the top bar's repo/lens dropdown.
+// list each, and the way to switch between them. It replaced the top bar's
+// repo/lens dropdown and the rail Manage used to have.
 //
 // It PUSHES the content — App renders it as the first column of the body row,
 // never as an overlay — and when collapsed it is not rendered at all, so a
@@ -78,7 +82,7 @@ interface Props {
 export function TargetRail({
   repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect,
   archived = [], pinned = null, onPin, drafts = { repo: false, lens: false }, draftShown = null,
-  onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false,
+  onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false, noneSelected = false,
 }: Props) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -131,8 +135,8 @@ export function TargetRail({
   const archivedRowsShown = archivedOpen || (q !== '' && shownArchived.length > 0);
 
   // Exactly one row is selected: the draft if it is on screen, else the
-  // pinned target, else the context.
-  const onContext = draftShown === null && pinned === null;
+  // pinned target, else the context. None over the server pages.
+  const onContext = !noneSelected && draftShown === null && pinned === null;
 
   return (
     <nav data-testid="target-rail" aria-label="Repositories and lenses" style={rail}>

@@ -279,7 +279,7 @@ export const EDGE_ERROR = '#f66';
  * ring, which is the case the ring exists for.
  *
  * For SELECTION controls specifically — rail rows, contents-rail entries, the
- * Manage toggle — the selected state is already drawn, so a focus ring on top
+ * gear — the selected state is already drawn, so a focus ring on top
  * of it says nothing the highlight has not.
  */
 export const noMouseFocus = (e: React.MouseEvent) => e.preventDefault();
