@@ -116,8 +116,11 @@ func TestResolveLogFileSplitsServerAndDesktop(t *testing.T) {
 // applyLogConfig writes the desktop's own file even when [log] file names the
 // server's: a configured file must not get two writers.
 func TestApplyLogConfigNeverWritesTheServersFile(t *testing.T) {
-	t.Cleanup(func() { _ = applyLogConfig(config.LogConfig{Level: "info"}, "") })
+	// TempDir FIRST: cleanups run LIFO, so the logger reset below (which closes
+	// the open log file) must run before the directory is removed — Windows
+	// cannot delete a directory holding an open file.
 	dir := t.TempDir()
+	t.Cleanup(func() { _ = applyLogConfig(config.LogConfig{Level: "info"}, "") })
 	serverFile := filepath.Join(dir, "server.log")
 	desktopFile := filepath.Join(dir, "knomit-desktop.log")
 	prev := log.Logger
