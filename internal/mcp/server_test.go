@@ -24,9 +24,9 @@ func TestEnabledTools_ReadOnly_OmitsWriteTools(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
-func TestEnabledTools_Writable_IncludesAllTwelve(t *testing.T) {
-	if n := len(enabledTools(toolRegistrations(nil), false)); n != 12 {
-		t.Fatalf("writable tool count = %d, want 12", n)
+func TestEnabledTools_Writable_IncludesAllThirteen(t *testing.T) {
+	if n := len(enabledTools(toolRegistrations(nil), false)); n != 13 {
+		t.Fatalf("writable tool count = %d, want 13", n)
 	}
 }
 

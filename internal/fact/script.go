@@ -67,6 +67,25 @@ func RunScript(ctx context.Context, prog *goja.Program, name string, globals map
 	return err
 }
 
+// RunScriptResult runs prog in the same sandbox as RunScript and returns the
+// program's completion value as a JSON-shaped Go value (map[string]any,
+// []any, float64, string, bool, nil). It is the reasoning engine's entry onto
+// the sandbox (internal/repos/engine.go): a script on the same runtime, with
+// the same frozen globals, interrupt and host binding as a trigger script,
+// whose result — unlike a trigger script's — is the point of running it. who
+// names the program in errors ("engine reason.js").
+func RunScriptResult(ctx context.Context, prog *goja.Program, who string, globals map[string]any, host ScriptHost, now time.Time) (any, error) {
+	v, err := runSandboxed(ctx, prog, who, globals, host, now)
+	if err != nil {
+		return nil, err
+	}
+	out, err := plainValue(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid result: %w", who, err)
+	}
+	return out, nil
+}
+
 // runSandboxed is RunScript's body, returning the program's completion value
 // (a script ignores it; a recipe's result is it). who names the program in
 // errors ("script x", "recipe y").
