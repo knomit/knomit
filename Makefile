@@ -1,4 +1,4 @@
-.PHONY: build web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-winres desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop desktop-notarize print-version print-semver
+.PHONY: e2e-clean build web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-winres desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop desktop-notarize print-version print-semver
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -367,11 +367,19 @@ clean:
 e2e-setup:
 	cd e2e && npm ci && npx playwright install
 
-e2e: dist
+# The e2e harness does NOT build. It needs dist/knomit and web/dist/index.html
+# already in place (see e2e/README.md); `make dist` runs `npm ci` in web/, which
+# empties a symlinked node_modules in a worktree. Opt in with `E2E_BUILD=1 make e2e`.
+e2e:
 	cd e2e && npx playwright test
 
-e2e-ui: dist
+e2e-ui:
 	cd e2e && npx playwright test --headed
+
+# Kill leaked `knomit serve` processes started from this checkout's binary and
+# delete knomit-e2e-* / knomit-remote-* temp homes. Never touches other instances.
+e2e-clean:
+	node e2e/clean.mjs
 
 e2e-report:
 	cd e2e && npx playwright show-report playwright-report

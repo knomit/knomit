@@ -1,4 +1,5 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { clearFilters, enterChrono, exitChrono, filterByEntity } from '../../helpers/nav.js';
 import { FactPanel } from '../../pages/fact-panel.page.js';
 
 test.describe('Search in Chrono View', () => {
@@ -9,11 +10,7 @@ test.describe('Search in Chrono View', () => {
     factPanel = new FactPanel(page);
     await page.waitForLoadState('domcontentloaded');
     // Enter chrono view
-    await page.keyboard.press('2');
-    const chronoList = page.getByTestId('chrono-list');
-    await expect(chronoList).toBeVisible();
-    // Wait for items to load
-    await page.getByTestId('chrono-item').first().waitFor({ timeout: 10_000 });
+    await enterChrono(page);
   });
 
   test('chrono view shows facts and selecting one opens it in the right panel', async ({ page }) => {
@@ -54,12 +51,8 @@ test.describe('Search in Chrono View', () => {
     const initialCount = await items.count();
     expect(initialCount).toBeGreaterThan(0);
 
-    // Type in the filter bar to set free text
-    const filterInput = page.locator('#filter-input');
-    await filterInput.fill('postgresql');
-    // Wait for debounce + API response
-    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
-    await page.waitForTimeout(500);
+    // Narrow with an entity chip (free text switches to a relevance search)
+    await filterByEntity(page, 'PostgreSQL');
 
     const filteredCount = await items.count();
     expect(filteredCount).toBeLessThan(initialCount);
@@ -71,10 +64,7 @@ test.describe('Search in Chrono View', () => {
   });
 
   test('selecting a filtered chrono item opens the correct fact', async ({ page }) => {
-    const filterInput = page.locator('#filter-input');
-    await filterInput.fill('postgresql');
-    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
-    await page.waitForTimeout(500);
+    await filterByEntity(page, 'PostgreSQL');
 
     const items = page.getByTestId('chrono-item');
     await items.first().waitFor({ timeout: 5_000 });
@@ -114,7 +104,7 @@ test.describe('Search in Chrono View', () => {
 
   test('switching to tree view then searching works end-to-end', async ({ page }) => {
     // From chrono view, switch to tree view
-    await page.keyboard.press('1');
+    await exitChrono(page);
     const filterInput = page.locator('#filter-input');
     await expect(filterInput).toBeVisible();
 
@@ -135,19 +125,12 @@ test.describe('Search in Chrono View', () => {
     const items = page.getByTestId('chrono-item');
     const initialCount = await items.count();
 
-    // Filter
-    const filterInput = page.locator('#filter-input');
-    await filterInput.fill('postgresql');
-    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
-    await page.waitForTimeout(500);
+    await filterByEntity(page, 'PostgreSQL');
     const filteredCount = await items.count();
     expect(filteredCount).toBeLessThan(initialCount);
 
-    // Clear filter input
-    await filterInput.clear();
-    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
-    await page.waitForTimeout(500);
-
+    // Clear the chip
+    await clearFilters(page);
     const resetCount = await items.count();
     expect(resetCount).toBeGreaterThan(filteredCount);
   });

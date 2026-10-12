@@ -1,4 +1,5 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { clearFilters, enterChrono, exitChrono, filterByEntity } from '../../helpers/nav.js';
 
 test.describe('Chrono View (Recent)', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
@@ -6,23 +7,19 @@ test.describe('Chrono View (Recent)', () => {
     await page.waitForLoadState('domcontentloaded');
   });
 
-  test('pressing "2" enters chrono view and shows recently modified facts', async ({ page }) => {
-    // Press '2' to switch to chrono view (keyboard shortcut from App.tsx)
-    await page.keyboard.press('2');
-    const chronoList = page.getByTestId('chrono-list');
-    await expect(chronoList).toBeVisible();
+  test('Sort by Recent enters chrono view and shows recently modified facts', async ({ page }) => {
+    // Sort by Recent switches the library to the chrono list
+    await enterChrono(page);
 
     // Should show chrono items with data-testid="chrono-item"
     const items = page.getByTestId('chrono-item');
-    await items.first().waitFor({ timeout: 10_000 });
     const count = await items.count();
     expect(count).toBeGreaterThan(0);
   });
 
   test('chrono items have data-path attribute', async ({ page }) => {
-    await page.keyboard.press('2');
+    await enterChrono(page);
     const items = page.getByTestId('chrono-item');
-    await items.first().waitFor({ timeout: 10_000 });
 
     const firstPath = await items.first().getAttribute('data-path');
     expect(firstPath).toBeTruthy();
@@ -30,59 +27,42 @@ test.describe('Chrono View (Recent)', () => {
   });
 
   test('filter via filter bar narrows the chrono list', async ({ page }) => {
-    await page.keyboard.press('2');
+    await enterChrono(page);
     const items = page.getByTestId('chrono-item');
-    await items.first().waitFor({ timeout: 10_000 });
     const initialCount = await items.count();
 
-    // Type in the filter bar to set free text
-    const filterInput = page.locator('#filter-input');
-    await filterInput.fill('postgresql');
-    // Wait for debounce (300ms) + response
-    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
-    // Wait for DOM to settle
-    await page.waitForTimeout(500);
+    // Narrow with an entity chip (free text switches to a relevance search)
+    await filterByEntity(page, 'PostgreSQL');
 
     const filteredCount = await items.count();
     expect(filteredCount).toBeLessThan(initialCount);
-    expect(filteredCount).toBeGreaterThan(0);
+    // the seed has exactly four PostgreSQL facts
+    expect(filteredCount).toBe(4);
   });
 
   test('clearing filter resets the chrono list', async ({ page }) => {
-    await page.keyboard.press('2');
+    await enterChrono(page);
     const items = page.getByTestId('chrono-item');
-    await items.first().waitFor({ timeout: 10_000 });
 
-    // Type a filter
-    const filterInput = page.locator('#filter-input');
-    await filterInput.fill('postgresql');
-    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
-    await page.waitForTimeout(500);
+    await filterByEntity(page, 'PostgreSQL');
     const filteredCount = await items.count();
 
-    // Clear filter input
-    await filterInput.clear();
-
-    // Wait for unfiltered results
-    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
-    await page.waitForTimeout(500);
-
+    // Clear the chip
+    await clearFilters(page);
     const resetCount = await items.count();
     expect(resetCount).toBeGreaterThan(filteredCount);
   });
 
-  test('pressing "1" exits chrono view back to tree', async ({ page }) => {
-    await page.keyboard.press('2');
-    await expect(page.getByTestId('chrono-list')).toBeVisible();
+  test('Sort by Path exits chrono view back to tree', async ({ page }) => {
+    await enterChrono(page);
 
-    await page.keyboard.press('1');
+    await exitChrono(page);
     await expect(page.getByTestId('left-panel')).toBeVisible();
   });
 
   test('type filter chip narrows chrono results', async ({ page }) => {
-    await page.keyboard.press('2');
+    await enterChrono(page);
     const items = page.getByTestId('chrono-item');
-    await items.first().waitFor({ timeout: 10_000 });
 
     // Register response listener before the action that triggers the API call
     const responsePromise = page.waitForResponse(resp =>

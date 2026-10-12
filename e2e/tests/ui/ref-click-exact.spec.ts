@@ -9,6 +9,7 @@
  * NO fuzzy waits. NO "any fact is fine". Exact titles, exact modes.
  */
 import { test, expect } from '../../fixtures/knomit.js';
+import { firstLocalRef } from '../../helpers/nav.js';
 
 test.describe('Ref Click Exact Flow', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
@@ -40,17 +41,17 @@ test.describe('Ref Click Exact Flow', () => {
     expect(originalTitle).toContain('Query Planning');
 
     // Verify NOT in history mode
-    expect(await page.getByTestId('history-timeline').isVisible().catch(() => false)).toBe(false);
+    expect(await page.getByTestId('timeline-nav').isVisible().catch(() => false)).toBe(false);
 
     // ── Step 3: Click local ref ──
-    const localRef = page.locator('span').filter({ hasText: /^→/ }).first();
+    const localRef = firstLocalRef(page);
     await expect(localRef).toBeVisible({ timeout: 5_000 });
     const refText = (await localRef.textContent())?.replace(/^→\s*/, '').trim();
     console.log(`STEP 3: clicking ref → "${refText}"`);
     await localRef.click();
 
     // Wait for history mode to fully load
-    await expect(page.getByTestId('history-timeline')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('timeline-nav')).toBeVisible({ timeout: 10_000 });
 
     // Wait for the fact title to change from original
     await expect(page.getByTestId('fact-title')).toBeVisible({ timeout: 10_000 });
@@ -67,7 +68,7 @@ test.describe('Ref Click Exact Flow', () => {
     expect(historyTitle).not.toBe('');
 
     // Must be in history mode
-    expect(await page.getByTestId('history-timeline').isVisible()).toBe(true);
+    expect(await page.getByTestId('timeline-nav').isVisible()).toBe(true);
 
     // ── Step 4: Back → must return to EXACT step 2 state ──
     await page.locator('body').click();
@@ -77,7 +78,7 @@ test.describe('Ref Click Exact Flow', () => {
     // Wait for history to disappear and fact to load
     await page.waitForTimeout(2000);
 
-    const afterBack1InHistory = await page.getByTestId('history-timeline').isVisible().catch(() => false);
+    const afterBack1InHistory = await page.getByTestId('timeline-nav').isVisible().catch(() => false);
     const afterBack1Title = await page.getByTestId('fact-title').textContent({ timeout: 5_000 }).catch(() => 'NOT_VISIBLE');
     console.log(`STEP 4: after first back: inHistory=${afterBack1InHistory}, title="${afterBack1Title}"`);
 

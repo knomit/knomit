@@ -70,11 +70,13 @@ test.describe('Search', () => {
     const filterInput = page.locator('#filter-input');
     await filterInput.fill('entity:"supply chain security"');
     await filterInput.press('Enter');
-    // Wait for search to fire
-    await page.waitForTimeout(1000);
-    const results = page.getByTestId('dir-entry');
-    const count = await results.count();
-    expect(count).toBeGreaterThan(0);
+    // A chip is a content filter: the library lists the matches recent-first
+    // (chrono rows), not as path-tree entries.
+    const results = page.getByTestId('chrono-item');
+    await results.first().waitFor({ timeout: 10_000 });
+    const paths = await results.evaluateAll(els => els.map(e => e.getAttribute('data-path') || ''));
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.some(p => p.includes('supply-chain'))).toBe(true);
   });
 
   test('clicking entity tag adds a filter chip', async ({ page }) => {

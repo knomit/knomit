@@ -1,4 +1,5 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { enterChrono, openFirstFact, openHistory } from '../../helpers/nav.js';
 import { FactPanel } from '../../pages/fact-panel.page.js';
 
 test.describe('Keyboard Navigation Across Views', () => {
@@ -12,47 +13,32 @@ test.describe('Keyboard Navigation Across Views', () => {
     await page.getByTestId('dir-entry').first().waitFor({ timeout: 10_000 });
   });
 
-  test('history view: selecting a commit shows files in right panel, clicking a file shows fact', async ({ page }) => {
-    // Enter history view
-    await page.keyboard.press('3');
-    const timeline = page.getByTestId('history-timeline');
-    await expect(timeline).toBeVisible();
+  test('history: the active version expands to its files and the open fact is marked "here"', async ({ page }) => {
+    await openFirstFact(page);
+    const openTitle = await factPanel.getTitle();
 
-    // Wait for commits to load
-    const commits = page.getByTestId('history-commit');
-    await commits.first().waitFor({ timeout: 10_000 });
-    const count = await commits.count();
-    expect(count).toBeGreaterThan(1);
+    // Open the version timeline of the open fact
+    await openHistory(page);
+    await expect(page.getByTestId('timeline-row').first()).toBeVisible();
 
-    // Select the second commit (first is auto-selected on load; clicking it
-    // again clears rightSelection without re-triggering auto-select)
-    await commits.nth(1).click();
-    await page.waitForTimeout(1000);
+    // The active row discloses the commit's files when clicked
+    await expect(page.getByTestId('timeline-file-row')).toHaveCount(0);
+    await page.getByTestId('timeline-row').first().click();
+    const files = page.getByTestId('timeline-file-row');
+    await files.first().waitFor({ timeout: 10_000 });
+    expect(await files.count()).toBeGreaterThan(0);
 
-    // Files are listed in the right panel as commit-file entries
-    const commitFiles = page.getByTestId('commit-file');
-    await commitFiles.first().waitFor({ timeout: 10_000 });
-    const fileCount = await commitFiles.count();
-    expect(fileCount).toBeGreaterThan(0);
-
-    // Click the first file to load the fact
-    await commitFiles.first().click();
-
-    // Right panel should show the fact
-    await expect(factPanel.title).toBeVisible({ timeout: 10_000 });
-    const firstTitle = await factPanel.getTitle();
-    expect(firstTitle.length).toBeGreaterThan(0);
+    // The fact being viewed is the one marked "here"
+    await expect(page.locator('[data-testid="timeline-file-row"][data-self="true"]')).toHaveCount(1);
+    await expect(page.getByTestId('timeline-here-marker')).toBeVisible();
+    await expect(factPanel.title).toHaveText(openTitle);
   });
 
   test('chrono view: down key selects next item and right panel updates', async ({ page }) => {
     // Switch to chrono view
-    await page.keyboard.press('2');
-    const chronoList = page.getByTestId('chrono-list');
-    await expect(chronoList).toBeVisible();
+    await enterChrono(page);
 
-    // Wait for chrono items to load
     const items = page.getByTestId('chrono-item');
-    await items.first().waitFor({ timeout: 10_000 });
     const count = await items.count();
     expect(count).toBeGreaterThan(1);
 

@@ -1,66 +1,32 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { openConnectRemote } from '../../helpers/nav.js';
 
 test.describe('Remote Setup', () => {
-  test('open connect remote modal → enter URL → verify UI flow', async ({ freshKnomit, page }) => {
-    // Seed a fact so the repo exists
-    const seedRes = await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/remote-setup-seed.md`,
-      {
-        data: {
-          content: `---
-type: observation
-domain: [testing]
-confidence: 0.9
-sources: 1
-entities: [remote-setup]
-refs: []
----
-# Remote Setup Seed
-
-Seed fact so the repo exists.`,
-        },
-      },
-    );
-    expect(seedRes.ok()).toBeTruthy();
-
+  test('open connect remote → enter URL → verify UI flow', async ({ freshKnomit, page }) => {
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
 
-    // Open the menu
-    const menuBtn = page.getByTestId('toknomitr-menu-btn');
-    await menuBtn.click();
+    const wizard = await openConnectRemote(page);
 
-    // Click Origin item
-    const originItem = page.getByTestId('menu-origin');
-    await expect(originItem).toBeVisible();
-    await originItem.click();
-
-    // Connect Remote modal appears
-    const modal = page.getByTestId('connect-remote-modal');
-    await expect(modal).toBeVisible();
-
-    // Verify modal title
-    await expect(modal.locator('h2')).toContainText('Connect Remote');
+    // Verify the page title
+    await expect(wizard.locator('h3')).toContainText('Connect remote');
 
     // Enter a remote URL
-    const urlInput = page.getByTestId('connect-remote-url-input');
-    await urlInput.fill('git@github.com:test/remote-setup-test.git');
+    await page.getByTestId('wizard-url').fill('git@github.com:test/remote-setup-test.git');
 
     // Auth method selector should be visible
-    const authSelect = modal.locator('select');
-    await expect(authSelect).toBeVisible();
+    await expect(wizard.locator('select').first()).toBeVisible();
 
-    // Test Connection button should be enabled
-    const testBtn = page.getByTestId('connect-remote-test-btn');
-    await expect(testBtn).toBeEnabled();
+    // Test connection should be enabled
+    await expect(page.getByTestId('wizard-test')).toBeEnabled();
 
-    // Cancel button should be visible
-    const cancelBtn = page.getByTestId('connect-remote-cancel-btn');
+    // Cancel is offered
+    const cancelBtn = wizard.getByRole('button', { name: 'Cancel' });
     await expect(cancelBtn).toBeVisible();
 
-    // Close via cancel
+    // Leave without completing the flow
     await cancelBtn.click();
-    await expect(modal).not.toBeVisible();
+    await expect(wizard).not.toBeVisible();
 
     // No origin should be configured (we didn't complete the flow)
     const originRes = await freshKnomit.api.get(`${freshKnomit.baseURL}/api/v1/repos/knomit/origin`);

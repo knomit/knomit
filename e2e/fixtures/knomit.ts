@@ -11,10 +11,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test as base, expect, type APIRequestContext } from '@playwright/test';
 import getPort from 'get-port';
+import { onnxEnv, requireBuild } from '../helpers/binary.js';
 import { knomitModelsDir } from '../helpers/appdirs.js';
 import { createRepo, discoverAgentBranch } from './seed.js';
 
-const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
 const STATE_FILE = resolve(import.meta.dirname, '..', '.e2e-state.json');
 
 // ── State types ─────────────────────────────────────────────────
@@ -33,17 +33,6 @@ interface FreshKnomit {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
-
-function getOnnxLibName(): string {
-  switch (process.platform) {
-    case 'darwin':
-      return 'libonnxruntime.dylib';
-    case 'win32':
-      return 'onnxruntime.dll';
-    default:
-      return 'libonnxruntime.so';
-  }
-}
 
 function readState(): E2EState {
   if (!existsSync(STATE_FILE)) {
@@ -98,10 +87,7 @@ export const test = base.extend<{
    * Use for tests that need isolated, mutable state.
    */
   freshKnomit: async ({ playwright }, use) => {
-    const binaryPath = join(PROJECT_ROOT, 'dist', 'knomit');
-    if (!existsSync(binaryPath)) {
-      throw new Error(`Binary not found at ${binaryPath}. Run 'make dist' first.`);
-    }
+    const binaryPath = requireBuild();
 
     const port = await getPort();
     const knomitHome = mkdtempSync(join(tmpdir(), 'knomit-e2e-fresh-'));
@@ -113,12 +99,11 @@ export const test = base.extend<{
       cpSync(userModelsDir, targetModelsDir, { recursive: true });
     }
 
-    const onnxLib = join(PROJECT_ROOT, 'dist', 'lib', getOnnxLibName());
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       KNOMIT_HOME: knomitHome,
       KNOMIT_PORT: String(port),
-      ONNXRUNTIME_SHARED_LIBRARY: onnxLib,
+      ...onnxEnv(),
     };
 
     const child: ChildProcess = spawn(binaryPath, ['serve'], {
@@ -143,17 +128,20 @@ export const test = base.extend<{
     if (!pid) throw new Error('Failed to start fresh knomit process');
 
     const baseURL = `http://localhost:${port}`;
-    await waitForHealthy(baseURL);
+    let api: APIRequestContext | undefined;
 
-    // A fresh server has no repos, so make the one the tests write to.
-    await createRepo(baseURL);
-    const branch = await discoverAgentBranch(baseURL);
-    const api = await playwright.request.newContext({ baseURL });
-
+    // From here on the server and home exist: every exit path, including a
+    // failed health wait or repo create, must kill and remove them.
     try {
+      await waitForHealthy(baseURL);
+
+      // A fresh server has no repos, so make the one the tests write to.
+      await createRepo(baseURL);
+      const branch = await discoverAgentBranch(baseURL);
+      api = await playwright.request.newContext({ baseURL });
       await use({ baseURL, branch, api });
     } finally {
-      await api.dispose();
+      await api?.dispose();
 
       // Kill process
       try { process.kill(-pid, 'SIGTERM'); } catch {

@@ -1,35 +1,38 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { openFirstFact, openHistory } from '../../helpers/nav.js';
 
-test.describe('Status Bar (Console)', () => {
+// The status footer is the app's bottom rail: where you are in time, which
+// build is serving. It replaced the old expandable console; it is not a button.
+test.describe('Status footer', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
     await page.waitForLoadState('domcontentloaded');
   });
 
-  test('console bar is visible at the bottom of the page', async ({ page }) => {
-    // The Console component serves as the status bar (data-testid="console")
-    const console = page.getByTestId('console');
-    await expect(console).toBeVisible();
+  test('the footer is visible at the bottom of the page', async ({ page }) => {
+    const footer = page.getByTestId('status-footer');
+    await expect(footer).toBeVisible();
+
+    const box = await footer.boundingBox();
+    const viewport = page.viewportSize();
+    expect(box).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(Math.abs(box!.y + box!.height - viewport!.height)).toBeLessThanOrEqual(2);
   });
 
-  test('console bar contains status information text', async ({ page }) => {
-    const console = page.getByTestId('console');
-    await expect(console).toBeVisible();
-
-    // The collapsed console shows "Console" label and entry counts
-    const text = await console.textContent();
-    expect(text).toContain('Console');
+  test('live: the footer shows the LIVE dot, HEAD and the build version', async ({ page }) => {
+    const footer = page.getByTestId('status-footer');
+    await expect(footer.getByRole('img', { name: 'LIVE' })).toBeVisible();
+    await expect(footer).toContainText('HEAD');
+    await expect(footer.getByTestId('version-badge')).toHaveText(/^v\S+/);
   });
 
-  test('clicking the console bar toggles it open', async ({ page }) => {
-    const console = page.getByTestId('console');
-    await expect(console).toBeVisible();
+  test('in history the footer shows the HISTORY dot instead of LIVE', async ({ page }) => {
+    await openFirstFact(page);
+    await openHistory(page);
 
-    // Click to expand
-    await console.click();
-
-    // When expanded, the console-toggle button is still present
-    const toggle = page.getByTestId('console-toggle');
-    await expect(toggle).toBeVisible();
+    const footer = page.getByTestId('status-footer');
+    await expect(footer.getByRole('img', { name: 'HISTORY' })).toBeVisible();
+    await expect(footer.getByRole('img', { name: 'LIVE' })).toHaveCount(0);
   });
 });
