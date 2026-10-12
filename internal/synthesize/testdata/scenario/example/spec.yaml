@@ -1,0 +1,289 @@
+# The reference example of format knomit-scenario/v1 (internal/synthesize/scenario.go).
+# Small on purpose: the loader tests build it on every run. Every subject is invented.
+format: knomit-scenario/v1
+id: example-orchard-cellar
+families: [F6, F11]
+ontology_shape: general
+description: >-
+  A fruit cooperative's storage knowledge. The belief about WHY one pear keeps
+  in one cellar is rewritten in place once a second site isolates the cause
+  (F6: what we know now versus why we believed it). A second question asks
+  about a fruit nobody has stored there (F11: the honest output is a gap).
+ontology: |
+  id: orchard-example
+  name: Orchard Cooperative
+  description: Storage, grading and house rules of an invented fruit cooperative.
+  validations:
+    - name: domain-non-empty
+      message: every fact names at least one domain
+      rule: "fact.domain.length > 0"
+  topics:
+    practice:
+      description: How the cooperative grows, grades and stores fruit
+      context:
+        question: {type: string, pattern: "^q-[a-z0-9-]{1,40}$"}
+      children:
+        storage:
+          description: Cellars, sheds and how long fruit keeps in them
+        grading:
+          description: How fruit is sorted and when it is picked
+    rules:
+      description: Rules members must follow
+      validations:
+        - name: rule-is-policy
+          message: a rule is a pragmatic policy
+          rule: "fact.kind === 'pragmatic' && fact.type === 'policy'"
+    meta:
+      description: Knowledge about this knowledge base
+      children:
+        reasoning:
+          description: Lessons on how to weigh evidence here
+external_sources:
+  - https://records.orchard.invalid/cellar-log-2024
+  - https://records.orchard.invalid/brask-trial
+
+facts:
+  - id: f01
+    topic: practice
+    category: storage
+    type: observation
+    title: Velmora pears kept in the Hollin cellar stay sound for eleven weeks
+    body: >-
+      Velmora pears picked at the usual firmness and kept in the Hollin cellar
+      stayed sound for eleven weeks across the three seasons the cooperative
+      logged; losses rose sharply in the twelfth week.
+    confidence: 0.9
+    sources: 3
+    domain: [storage, pears]
+    entities: [Velmora pear, Hollin cellar]
+    motifs: [one-condition-sets-limit]
+    refs: [https://records.orchard.invalid/cellar-log-2024]
+    role: support
+  - id: f02
+    topic: practice
+    category: storage
+    type: reference
+    title: The Hollin cellar holds 4 °C and 92% relative humidity from October to March
+    body: >-
+      Logged conditions in the Hollin cellar from October to March: air
+      temperature 4 °C (range 3-5 °C) and relative humidity 92% (range
+      90-94%). Outside that window the cellar is not used for fruit.
+    confidence: 0.95
+    sources: 2
+    domain: [storage, climate]
+    entities: [Hollin cellar]
+    refs: [https://records.orchard.invalid/cellar-log-2024]
+    role: support
+  - id: f04
+    topic: practice
+    category: grading
+    type: observation
+    title: Velmora pears are graded by stem length at the Orrin packhouse
+    body: >-
+      At the Orrin packhouse, Velmora pears are sorted into three grades by
+      stem length; a pear with a broken stem goes to juice whatever its size.
+    confidence: 0.8
+    sources: 1
+    domain: [grading, pears]
+    entities: [Velmora pear, Orrin packhouse]
+    role: distractor
+  - id: f06
+    topic: rules
+    category: storage
+    kind: pragmatic
+    type: policy
+    title: Members log cellar temperature and humidity every morning before moving fruit
+    body: >-
+      Every member who moves fruit into or out of a cellar logs that cellar's
+      temperature and relative humidity first, each morning. A move without a
+      log entry that morning is not allowed, even for a single crate.
+    confidence: 1
+    sources: 1
+    domain: [storage, house-rules]
+    entities: [cellar log]
+    role: policy
+  - id: f09
+    topic: practice
+    category: grading
+    type: observation
+    title: Corrigan plums are picked about two weeks after Velmora pears
+    body: >-
+      In the cooperative's orchards the Corrigan plum harvest starts about two
+      weeks after the Velmora pear harvest ends.
+    confidence: 0.85
+    sources: 2
+    domain: [harvest, plums]
+    entities: [Corrigan plum, Velmora pear]
+    role: background
+  - id: f10
+    topic: practice
+    category: storage
+    type: observation
+    title: The Hollin cellar was rebuilt with stone walls in 2019
+    body: >-
+      The Hollin cellar's timber walls were replaced with stone in 2019.
+    confidence: 0.5
+    sources: 1
+    domain: [storage, buildings]
+    entities: [Hollin cellar]
+    role: superseded
+  - id: f03
+    topic: practice
+    category: storage
+    type: synthesis
+    title: Velmora pears keep eleven weeks in the Hollin cellar because the cellar is cold
+    body: >-
+      The eleven-week storage life of Velmora pears in the Hollin cellar comes
+      from its 4 °C temperature, which slows ripening; the cellar's other
+      conditions are not what sets the limit.
+    confidence: 0.7
+    sources: 1
+    domain: [storage, pears]
+    entities: [Velmora pear, Hollin cellar]
+    motifs: [one-condition-sets-limit]
+    refs: ["fact:f01", "fact:f02"]
+    role: support
+  - id: f05
+    topic: practice
+    category: storage
+    type: observation
+    title: Velmora pears in the Brask shed at 4 °C and 70% humidity shrivelled within four weeks
+    body: >-
+      In a trial, Velmora pears from the same picking were kept in the Brask
+      shed at 4 °C, the same temperature as the Hollin cellar, but at 70%
+      relative humidity. They lost water and shrivelled within four weeks.
+    confidence: 0.85
+    sources: 1
+    domain: [storage, pears]
+    entities: [Velmora pear, Brask shed]
+    motifs: [one-condition-sets-limit]
+    refs: [https://records.orchard.invalid/brask-trial]
+    distinct_from: [f01, f03]
+    role: support
+  - id: f07
+    topic: practice
+    category: storage
+    type: hypothesis
+    title: Raising the Brask shed to 90% humidity would let Velmora pears keep about ten weeks there
+    body: >-
+      If the Brask shed's relative humidity were raised to 90% at its current
+      4 °C, Velmora pears would keep about ten weeks there. Settled by a trial
+      season with the shed humidified and losses logged weekly.
+    confidence: 0.5
+    sources: 1
+    domain: [storage, pears]
+    entities: [Velmora pear, Brask shed]
+    refs: ["fact:f05"]
+    distinct_from: [f05, f03]
+    role: hypothesis
+  - id: f08
+    topic: meta
+    category: reasoning
+    type: methodology
+    title: When two stores differ in one condition only, attribute the storage-life difference to that condition
+    body: >-
+      Compare storage sites pairwise. When two stores held the same fruit and
+      differ in exactly one logged condition, attribute the difference in
+      storage life to that condition, and prefer that over an explanation
+      written before the comparison existed.
+    confidence: 0.8
+    sources: 1
+    domain: [reasoning, storage]
+    entities: [storage comparison]
+    role: methodology
+
+history:
+  - moment: cellar records and house rules
+    learn: [f01, f02, f04, f06, f09, f10]
+  - moment: why the cellar works
+    learn: [f03]
+  - moment: brask shed trial
+    learn: [f05]
+  - moment: the trial isolates humidity
+    update: f03
+    set:
+      title: Velmora pears keep eleven weeks in the Hollin cellar because its air is humid, not because it is cold
+      body: >-
+        The eleven-week storage life of Velmora pears in the Hollin cellar
+        comes from its 92% relative humidity, which stops the fruit losing
+        water. Temperature alone does not explain it: at the same 4 °C and 70%
+        humidity in the Brask shed the same pears shrivelled within four weeks.
+      confidence: 0.85
+      refs: ["fact:f01", "fact:f02", "fact:f05"]
+  - moment: what to try next and how to judge it
+    learn: [f07, f08]
+  - moment: the rebuild record was wrong
+    retract: f10
+
+questions:
+  - id: q1
+    family: F6
+    text: Why do Velmora pears keep for eleven weeks in the Hollin cellar?
+    outcome: answer
+    assess: answers
+    support: [f03, f01, f02, f05]
+    forbidden: [f04, f07, f10]
+    chain:
+      - id: s1
+        moves:
+          - {move: neighbours, arg: question}
+          - {move: entity, arg: Velmora pear}
+        surfaces: [f03, f01, f04]
+        relevant: {f03: "yes", f01: "yes", f04: "no"}
+      - id: s2
+        requires: [s1]
+        moves:
+          - {move: refs_out, from: f03}
+        surfaces: [f01, f02, f05]
+        support: {f01: supports, f02: supports, f05: supports}
+      - id: s3
+        requires: [s1]
+        optional: true
+        moves:
+          - {move: history, from: f03}
+        surfaces: [f03]
+      - id: s4
+        requires: [s2]
+        optional: true
+        moves:
+          - {move: kind_type, arg: methodology}
+          - {move: ontology, arg: kb/meta/reasoning}
+        surfaces: [f08]
+    answer:
+      claim: >-
+        Velmora pears keep eleven weeks in the Hollin cellar because of its
+        92% relative humidity; the Brask shed trial at the same 4 °C but 70%
+        humidity rules out temperature as the cause. The cooperative first
+        believed it was the cold, and revised that once the trial existed.
+      types: [synthesis, insight]
+      topic: practice
+      category: storage
+      must_cite: [f03, f05]
+      should_cite: [f08]
+      must_not_cite: [f04, f07, f10]
+      confidence: [0.6, 0.95]
+      entities: [Velmora pear, Hollin cellar]
+  - id: q2
+    family: F11
+    text: How long do Corrigan plums keep in the Hollin cellar?
+    outcome: gap
+    assess: not
+    support: []
+    forbidden: [f01, f03]
+    chain:
+      - id: s1
+        moves:
+          - {move: neighbours, arg: question}
+          - {move: entity, arg: Corrigan plum}
+        surfaces: [f09]
+        relevant: {f09: "no"}
+      - id: s2
+        requires: [s1]
+        moves:
+          - {move: entity, arg: Hollin cellar}
+        surfaces: [f01, f02, f03]
+        relevant: {f02: "yes", f01: "no"}
+    gap:
+      missing_premise: Corrigan plums have been stored in the Hollin cellar and their storage life recorded.
+      settlement: A cellar log entry recording Corrigan plums kept in the Hollin cellar and the week losses began.
+      partial_support: [f02]
