@@ -377,8 +377,11 @@ const LENS_ACCENT = '#b9a6f0';
 // The draft's blue: the creating tone (#8ab6d6 on #131d26) and its selected row.
 const DRAFT_BLUE = '#8ab6d6';
 
+/** The rail's width. The top bar's logo cell takes it while the rail is open,
+ *  so the breadcrumb starts on the content column's left edge. */
+export const RAIL_WIDTH = 236;
 const rail: CSSProperties = {
-  width: 236, flexShrink: 0, minHeight: 0,
+  width: RAIL_WIDTH, flexShrink: 0, minHeight: 0,
   display: 'flex', flexDirection: 'column',
   background: '#0e0e0e', borderRight: '1px solid #222',
 };

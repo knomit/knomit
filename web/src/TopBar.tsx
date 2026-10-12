@@ -4,8 +4,9 @@ import type { AppState } from './state';
 import { isLensContext } from './state';
 import { apiUrl } from './api';
 import type { RepoInfo } from './api';
-import { BookIcon, GearIcon, LayersIcon, ServerIcon } from './icons';
+import { BookIcon, GearIcon, LayersIcon } from './icons';
 import { noMouseFocus } from './utils';
+import { RAIL_WIDTH } from './TargetRail';
 import { otherRepoFailing } from './facets';
 import type { Facet, ServerPage, TargetLabel } from './facets';
 
@@ -54,7 +55,8 @@ export interface ServerBar {
 }
 
 // The top bar is the first of the shell's three levels, and it never changes
-// with what is below it: [rail toggle][logo] │ [target label] ······ [gear].
+// with what is below it: [rail toggle][mark] host / target │ tabs ······ [gear], the breadcrumb
+// reading the way a repo header does. Over the server pages it is host │ tabs.
 //
 // The label is STATIC. Picking a repository or lens is the rail's job now, so
 // the dropdown that used to hang off the name is gone; the branch picker and
@@ -125,13 +127,18 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
   // Toolbar row. Stretch, so the label's left rule (and, later, the facet
   // tabs' underline) runs the full height of the bar.
   const rowStyle: CSSProperties = {
-    height: 40, borderBottom: '1px solid #1c1c1c',
+    height: 40, borderBottom: '1px solid #1e1e1e',
     display: 'flex', alignItems: 'stretch', flexShrink: 0,
-    padding: '0 12px 0 8px', fontSize: 12,
+    padding: '0 12px 0 0', fontSize: 12,
   };
 
+  // The lead cell is the rail's width while the rail is open, so the first
+  // crumb starts at the content column's left edge (plus the 12px every
+  // facet toolbar pads its first control by). Closed, there is no column to
+  // line up with and the crumb simply follows the mark.
   const leadStyle: CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: 8, paddingRight: 16, flexShrink: 0,
+    display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, boxSizing: 'border-box', flexShrink: 0,
+    ...(railOpen ? { width: RAIL_WIDTH } : { paddingRight: 8 }),
   };
 
   // The label names the DISPLAYED target, which is the browse context unless a
@@ -152,12 +159,17 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
   const tabStyle = (on: boolean, disabled: boolean): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '0 11px', fontSize: 12, border: 'none', borderRadius: 0, background: 'none',
-    color: on ? '#eee' : '#7a7a7a',
+    color: on ? '#eee' : '#888',
     boxShadow: on ? 'inset 0 -2px 0 #7c9' : 'none',
     cursor: disabled ? 'default' : 'pointer',
     opacity: disabled && !on ? 0.5 : 1,
     ...noDrag,
   });
+  // Hover lifts an inactive, enabled tab; the active one is already #eee.
+  const tabHover = (on: boolean, disabled: boolean) => disabled || on ? {} : {
+    onMouseEnter: (e: ReactMouseEvent<HTMLButtonElement>) => { e.currentTarget.style.color = '#ccc'; },
+    onMouseLeave: (e: ReactMouseEvent<HTMLButtonElement>) => { e.currentTarget.style.color = '#888'; },
+  };
 
   return (
     <div style={outerStyle} onMouseDown={startWindowDrag}>
@@ -167,7 +179,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
       {/* ── Toolbar row ── */}
       <div data-testid="toknomitr-bar" style={rowStyle}>
         {/* ── Lead: rail toggle · knomit identity ── */}
-        <div style={leadStyle}>
+        <div data-testid="bar-lead" style={leadStyle}>
           <button
             type="button"
             data-testid="rail-toggle"
@@ -194,8 +206,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
               }} />
             )}
           </button>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <svg width="16" height="16" viewBox="0 0 80 80" style={{ display: 'block', flexShrink: 0 }}>
+            <svg role="img" aria-label="knomit" width="16" height="16" viewBox="0 0 80 80" style={{ display: 'block', flexShrink: 0 }}>
               <rect x="12" y="12" width="56" height="56" rx="10" transform="rotate(45 40 40)" fill="#7c9"/>
               <line x1="30" y1="24" x2="30" y2="56" stroke="#111" strokeWidth="4" strokeLinecap="round"/>
               <path d="M30 40 Q38 36 50 24" stroke="#111" strokeWidth="4" fill="none" strokeLinecap="round"/>
@@ -206,41 +217,40 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
               <circle cx="50" cy="56" r="3.5" fill="#111"/>
               <circle cx="30" cy="40" r="3.5" fill="#111"/>
             </svg>
-            <span style={{ color: '#7c9', fontWeight: 'bold', fontSize: 15, whiteSpace: 'nowrap' }}>knomit</span>
-          </span>
         </div>
 
-        {/* ── Target label: what the page below is about ──
-            A label, not a control: nothing here opens anything, so it stays
-            part of the drag region. Over the server pages it names the
-            server, by its host. */}
-        {serverOpen ? (
-          <span data-testid="target-label" style={{
-            display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
-            padding: '0 14px', borderLeft: '1px solid #1e1e1e',
-            fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', color: '#ddd',
-          }}>
-            <ServerIcon color="currentColor" size={13} />
-            <span>Server</span>
-            <span data-testid="server-host" style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11, fontWeight: 400, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis' }}>{host}</span>
-          </span>
-        ) : (
-          <span data-testid="target-label" style={{
-            display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
-            padding: '0 14px', borderLeft: '1px solid #1e1e1e',
-            fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
-            color: label.color,
-          }}>
-            {label.icon}
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
-            {/* A target with only Settings says why: archived, its store
-                missing, or still being created. */}
-            {target.chip && (
-              <span data-testid="target-label-chip" data-tone={target.chip.tone} style={{ ...chipBase, ...CHIP_TONE[target.chip.tone] }}>
-                {target.chip.text}
-              </span>
-            )}
-          </span>
+        {/* ── Breadcrumb: host / target ──
+            Both are labels, not controls: nothing here opens anything, so
+            they stay part of the drag region. The host is the server the
+            page is about; the target is what the page below shows. Over the
+            server pages the host stands alone. */}
+        <span data-testid="server-host" style={{
+          display: 'flex', alignItems: 'center', minWidth: 0, paddingLeft: 12,
+          fontFamily: 'var(--k-font-mono)', fontSize: 13, fontWeight: 400, color: '#888', whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{host}</span>
+        {!serverOpen && (
+          <>
+            <span data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
+            <span data-testid="target-label" style={{
+              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
+              fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+              color: label.color,
+            }}>
+              {label.icon}
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
+              {/* A target with only Settings says why: archived, its store
+                  missing, or still being created. */}
+              {target.chip && (
+                <span data-testid="target-label-chip" data-tone={target.chip.tone} style={{ ...chipBase, ...CHIP_TONE[target.chip.tone] }}>
+                  {target.chip.text}
+                </span>
+              )}
+            </span>
+          </>
+        )}
+        {(server ? server.pages.length > 0 : facets.length > 0) && (
+          <span data-testid="bar-divider" aria-hidden="true" style={{ alignSelf: 'center', width: 1, height: 18, margin: '0 14px', background: '#1e1e1e', flexShrink: 0 }} />
         )}
 
         {/* ── Facet tabs: the pages of the target named on the left ──
@@ -261,6 +271,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
                   onMouseDown={noMouseFocus}
                   onClick={() => server.onPage(p)}
                   style={tabStyle(on, false)}
+                  {...tabHover(on, false)}
                 >
                   <span>{SERVER_LABEL[p]}</span>
                   {p === 'auth' && server.authCount !== null && server.authCount > 0 && (
@@ -288,6 +299,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
                   onMouseDown={noMouseFocus}
                   onClick={() => onFacet?.(f)}
                   style={tabStyle(on, locked)}
+                  {...tabHover(on, locked)}
                 >
                   <span>{FACET_LABEL[f]}</span>
                   {f === 'settings' && settingsDot && (

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { TopBar } from './TopBar';
+import { RAIL_WIDTH } from './TargetRail';
 import { init } from './state';
 import type { AppState } from './state';
 import type { RepoInfo, Lens } from './api';
@@ -94,14 +95,12 @@ describe('TopBar — the target label', () => {
     expect(screen.queryByTestId('toknomitr-lens-select')).toBeNull();
   });
 
-  it('is ruled off from the logo: 1px #1e1e1e left border, padding 0 14px, 13px/500', () => {
+  it('is the second crumb: 13px/600, no left rule of its own (the divider follows it)', () => {
     render(bar());
-    expect(screen.getByTestId('target-label')).toHaveStyle({
-      borderLeft: '1px solid #1e1e1e',
-      padding: '0px 14px',
-      fontSize: '13px',
-      fontWeight: '500',
-    });
+    const l = screen.getByTestId('target-label');
+    expect(l).toHaveStyle({ fontSize: '13px', fontWeight: '600' });
+    expect(l.style.borderLeft).toBe('');
+    expect(l.style.padding).toBe('');
   });
 
   it('holds neither the branch picker nor the filter: both moved to the Browse toolbar', () => {
@@ -113,18 +112,69 @@ describe('TopBar — the target label', () => {
     expect(screen.queryByTestId('toknomitr-search')).toBeNull();
   });
 
-  it('names the server, by its host, over the server pages (control: the target outside them)', () => {
-    const { unmount } = render(bar());
+  it('reads host / target │ tabs, in that order, on one row', () => {
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
+    const row = screen.getByTestId('toknomitr-bar');
+    const text = (id: string) => screen.getByTestId(id);
+    const order = ['server-host', 'crumb-sep', 'target-label', 'bar-divider', 'facet-tabs'].map(text);
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(text('server-host')).toHaveTextContent(/^localhost:3000$/);
+    expect(text('crumb-sep')).toHaveTextContent('/');
+    expect(text('target-label')).toHaveTextContent(/^alpha$/);
+    // The crumbs as the reader sees them, host first.
+    expect(row.textContent).toMatch(/^localhost:3000\/alpha.*BrowseActivitySettings$/);
+  });
+
+  it('styles the host crumb muted and the separator #555; the divider is a 1px #1e1e1e hairline', () => {
+    render(bar({ facets: ['browse'], facet: 'browse' }));
+    expect(screen.getByTestId('server-host')).toHaveStyle({ color: '#888', fontSize: '13px', fontWeight: '400' });
+    expect(screen.getByTestId('crumb-sep')).toHaveStyle({ color: '#555' });
+    expect(screen.getByTestId('bar-divider')).toHaveStyle({ width: '1px', height: '18px', background: '#1e1e1e' });
+  });
+
+  it('the mark carries no wordmark', () => {
+    render(bar());
+    const row = screen.getByTestId('toknomitr-bar');
+    expect(row.querySelector('svg[aria-label="knomit"]')).not.toBeNull();
+    expect(row.textContent).not.toContain('knomit');
+  });
+
+  it('the logo cell is the rail width while the rail is open, so the crumb starts on the content column', () => {
+    const { unmount } = render(bar({ railOpen: true }));
+    expect(screen.getByTestId('bar-lead')).toHaveStyle({ width: `${RAIL_WIDTH}px` });
+    unmount();
+    render(bar({ railOpen: false }));
+    expect(screen.getByTestId('bar-lead').style.width).toBe('');
+  });
+
+  it('keeps the chip inside the target crumb', () => {
+    render(bar({ label: { kind: 'repo', name: 'q3', chip: { text: 'archived', tone: 'archived' } } }));
+    expect(screen.getByTestId('target-label')).toContainElement(screen.getByTestId('target-label-chip'));
+    expect(screen.getByTestId('target-label')).toHaveTextContent(/^q3archived$/);
+  });
+
+  it('over the server pages reads host │ tabs: no second crumb, no "Server" word (control: the target outside them)', () => {
+    const { unmount } = render(bar({ facets: ['browse'], facet: 'browse' }));
     expect(screen.getByTestId('target-label')).toHaveTextContent('alpha');
-    expect(screen.queryByTestId('server-host')).toBeNull();
+    expect(screen.getByTestId('crumb-sep')).toBeInTheDocument();
     unmount();
     render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
-    const label = screen.getByTestId('target-label');
-    expect(label).toHaveTextContent(/^Server/);
-    expect(label).not.toHaveTextContent('alpha');
+    expect(screen.queryByTestId('target-label')).toBeNull();
+    expect(screen.queryByTestId('crumb-sep')).toBeNull();
+    const row = screen.getByTestId('toknomitr-bar');
+    expect(row.textContent).toBe('localhost:3000FleetLogsAuthorizations');
     // The jsdom page's own host: the API base is relative here.
-    expect(screen.getByTestId('server-host')).toHaveTextContent(/^localhost:3000$/);
-    expect(screen.getByTestId('server-host')).toHaveStyle({ fontSize: '11px', color: '#666' });
+    const order = ['server-host', 'bar-divider', 'server-tabs'].map(i => screen.getByTestId(i));
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it('draws no divider when there are no tabs to divide from', () => {
+    render(bar());
+    expect(screen.queryByTestId('bar-divider')).toBeNull();
   });
 });
 
@@ -253,6 +303,7 @@ describe('TopBar — the gear', () => {
   });
 });
 
+
 describe('TopBar — facet tabs', () => {
   it('draws exactly the facets it is given, in order, after the label', () => {
     render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
@@ -267,7 +318,7 @@ describe('TopBar — facet tabs', () => {
     expect(screen.queryByTestId('facet-tab-browse')).toBeNull();
   });
 
-  it('marks the active tab #eee with the green underline, the others #7a7a7a', () => {
+  it('marks the active tab #eee with the green underline, the others #888', () => {
     render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'activity' }));
     const on = screen.getByTestId('facet-tab-activity');
     expect(on).toHaveAttribute('aria-selected', 'true');
@@ -275,7 +326,7 @@ describe('TopBar — facet tabs', () => {
     expect(on.style.boxShadow).toBe('inset 0 -2px 0 #7c9');
     const off = screen.getByTestId('facet-tab-browse');
     expect(off).toHaveAttribute('aria-selected', 'false');
-    expect(off.style.color).toBe('rgb(122, 122, 122)');
+    expect(off.style.color).toBe('rgb(136, 136, 136)');
     expect(off.style.fontSize).toBe('12px');
     expect(off.style.padding).toBe('0px 11px');
   });

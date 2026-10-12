@@ -114,16 +114,16 @@ afterEach(() => {
 });
 
 describe('the gear opens the server pages', () => {
-  it('labels the bar "Server" with this host, and has Fleet, Logs and Authorizations when there is an issuer', async () => {
+  it('reads the bar as this host │ the server tabs (no target crumb), and has Fleet, Logs and Authorizations when there is an issuer', async () => {
     await primeApi({ oauth: [] });
     await mountApp();
     // Control: on a target the label names it.
     expect(screen.getByTestId('target-label')).toHaveTextContent('ops-kb');
     await openServer();
 
-    const label = screen.getByTestId('target-label');
-    expect(label).toHaveTextContent(/^Server/);
-    expect(label).not.toHaveTextContent('ops-kb');
+    expect(screen.queryByTestId('target-label')).toBeNull();
+    expect(screen.getByTestId('toknomitr-bar')).not.toHaveTextContent('ops-kb');
+    expect(screen.getByTestId('toknomitr-bar')).not.toHaveTextContent('Server');
     expect(screen.getByTestId('server-host')).toHaveTextContent(/^localhost:3000$/);
     await waitFor(() => expect(tabNames()).toEqual(['Fleet', 'Logs', 'Authorizations']));
     expect(screen.getByRole('tablist', { name: 'Server pages' })).toBeInTheDocument();
