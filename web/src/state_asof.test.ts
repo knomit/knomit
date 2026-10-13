@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { init, reducer, selectAnchorCommit, isLive, isReadOnly } from './state';
+import { init, reducer, selectAnchorCommit, selectTrail, isLive, isReadOnly } from './state';
 
 describe('AsOf selectors', () => {
   it('selectAnchorCommit returns null in live mode', () => {
@@ -56,9 +56,55 @@ describe('reducer — SET_AS_OF', () => {
     expect(next.asOf).toEqual({ mode: 'diff', from: 'a', to: 'b' });
   });
 
-  it('does not push navStack', () => {
+  it('does not push navStack when no fact is open', () => {
     const next = reducer(init, { type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'abc1234' } });
     expect(next.navStack.length).toBe(init.navStack.length);
+  });
+});
+
+// knomit#486: opening a fact's timeline is a drill-down, so Back (Backspace,
+// the header arrow and the timeline arrow all dispatch NAV_BACK) must return to
+// the fact. Only the live -> non-live ENTRY pushes; scrubbing and leaving a
+// diff stay in place so they do not grow the trail.
+describe('reducer — timeline entry is a navigation step (#486)', () => {
+  const open = (factPath: string) =>
+    reducer(init, { type: 'APPLY_NAV', view: 'library', factPath, asOf: { mode: 'live' } });
+  const enter = (s: typeof init, commit = 'c3') =>
+    reducer(s, { type: 'SET_AS_OF', asOf: { mode: 'history', commit } });
+
+  it('NAV_BACK from the timeline returns to the open fact, live, timeline closed', () => {
+    const opened = open('kb/a.md');
+    const inTimeline = enter(opened);
+    expect(inTimeline.asOf).toEqual({ mode: 'history', commit: 'c3' });
+    const back = reducer(inTimeline, { type: 'NAV_BACK' });
+    expect(back.factPath).toBe('kb/a.md');
+    expect(back.asOf).toEqual({ mode: 'live' });
+    expect(back.navStack).toEqual(opened.navStack);
+    // A second Back is the pre-existing step: the fact is closed.
+    expect(reducer(back, { type: 'NAV_BACK' }).factPath).toBeNull();
+  });
+
+  it('scrubbing between versions and leaving a diff push nothing', () => {
+    const inTimeline = enter(open('kb/a.md'));
+    const depth = inTimeline.navStack.length;
+    const scrubbed = enter(inTimeline, 'c2');
+    expect(scrubbed.navStack.length).toBe(depth);
+    const diff = reducer(scrubbed, { type: 'SET_AS_OF', asOf: { mode: 'diff', from: 'c1', to: 'c2' } });
+    expect(diff.navStack.length).toBe(depth);
+    expect(reducer(diff, { type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'c2' } }).navStack.length).toBe(depth);
+  });
+
+  it('keeps the trail one crumb per fact and each crumb jumpable by its pop count', () => {
+    let s = enter(open('kb/a.md'));
+    expect(selectTrail(s).map(c => c.factPath)).toEqual(['kb/a.md']);
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/b.md', asOf: { mode: 'history', commit: 'c9' }, hop: true });
+    const trail = selectTrail(s);
+    expect(trail.map(c => c.factPath)).toEqual(['kb/a.md', 'kb/b.md']);
+    // Jumping to crumb 0 = the recorded pops, and lands on A live.
+    let j = s;
+    for (let k = 0; k < trail[0].pops!; k++) j = reducer(j, { type: 'NAV_BACK' });
+    expect(j.factPath).toBe('kb/a.md');
+    expect(j.asOf).toEqual({ mode: 'live' });
   });
 });
 

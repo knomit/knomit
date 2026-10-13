@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, readOnlyTitle, READ_ONLY_TITLE, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
 import type { AppState, FilterChip } from './state';
+
+// Crumb identity without the pop count (asserted separately in state_asof.test.ts).
+const bare = (t: { factPath: string; asOf: unknown }[]) => t.map(({ factPath, asOf }) => ({ factPath, asOf }));
 import type { Lens, LensSource } from './api';
 
 describe('reducer — cycle-collapse on hop (APPLY_NAV hop:true)', () => {
@@ -1149,13 +1152,13 @@ function hop(s: typeof init, path: string, commit: string) {
 describe('selectTrail', () => {
   it('a live view is a single crumb', () => {
     const s = liveSelect(init, 'kb/a.md');
-    expect(selectTrail(s)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
+    expect(bare(selectTrail(s))).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
   });
   it('hops build [liveRoot, ...hops, current]', () => {
     let s = liveSelect(init, 'kb/a.md');     // A live (current)
     s = hop(s, 'kb/b.md', 'bbb1111');         // hop A->B (pushes A live)
     s = hop(s, 'kb/c.md', 'ccc2222');         // hop B->C (pushes B history)
-    expect(selectTrail(s)).toEqual([
+    expect(bare(selectTrail(s))).toEqual([
       { factPath: 'kb/a.md', asOf: { mode: 'live' } },
       { factPath: 'kb/b.md', asOf: { mode: 'history', commit: 'bbb1111' } },
       { factPath: 'kb/c.md', asOf: { mode: 'history', commit: 'ccc2222' } },
@@ -1174,13 +1177,13 @@ describe('selectTrail', () => {
     };
     // jump to crumb 1 (b): depth - i = 2 - 1 = 1 back
     const atB = back(s, 1);
-    expect(selectTrail(atB)).toEqual([
+    expect(bare(selectTrail(atB))).toEqual([
       { factPath: 'kb/a.md', asOf: { mode: 'live' } },
       { factPath: 'kb/b.md', asOf: { mode: 'history', commit: 'bbb1111' } },
     ]);
     // jump to crumb 0 (live root a): depth - i = 2 - 0 = 2 backs
     const atA = back(s, 2);
-    expect(selectTrail(atA)).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
+    expect(bare(selectTrail(atA))).toEqual([{ factPath: 'kb/a.md', asOf: { mode: 'live' } }]);
   });
 });
 
