@@ -8,11 +8,11 @@ The suite needs two build outputs and fails fast, naming these commands, when ei
 
 ```
 cd web && npx tsc -b && npx vite build        # web/dist/index.html (embedded in the binary)
-CGO_ENABLED=1 go build -o dist/knomit .       # or: make build
+CGO_ENABLED=1 go build -o dist/knomit .       # or: make server
 cd e2e && npm ci && npx playwright install chromium   # once (make e2e-setup)
 ```
 
-The harness used to run `make dist`, whose `npm ci` in `web/` empties a symlinked `web/node_modules` in a worktree.
+The harness used to run `make dist` (`E2E_BUILD=1` now runs `make server`, since `dist` also builds the desktop app), whose `npm ci` in `web/` empties a symlinked `web/node_modules` in a worktree.
 `E2E_BUILD=1 make e2e` restores that behaviour. `E2E_BINARY=<path>` launches a binary other than `dist/knomit`
 (the ONNX runtime is looked up in `lib/` next to the resolved binary).
 

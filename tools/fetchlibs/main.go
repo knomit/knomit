@@ -139,7 +139,7 @@ const TokenizersSrcEnv = "KNOMIT_TOKENIZERS_SRC"
 // gated behind a platform that has no alternative — see tokenizersSpec. The
 // tool checks for cargo and git UP FRONT rather than letting exec fail midway,
 // because "exec: cargo: executable file not found in %PATH%" halfway through a
-// `make build` does not tell anyone to install Rust.
+// `make server` does not tell anyone to install Rust.
 func buildWithCargo(spec libSpec, destPath string) error {
 	for _, tool := range []string{"git", "cargo"} {
 		if _, err := exec.LookPath(tool); err != nil {

@@ -97,7 +97,7 @@ func TestTokenizersSpec(t *testing.T) {
 
 // daulet/tokenizers publishes no Windows artifact (darwin/linux only through
 // v1.27.0). Rather than fetching a 404 or refusing outright — which aborted
-// `make build` and `make test` on Windows in their very first prerequisite,
+// `make server` and `make test` on Windows in their very first prerequisite,
 // before anything else could run — the spec builds the crate from source.
 func TestTokenizersSpecWindowsBuildsFromSource(t *testing.T) {
 	spec, err := tokenizersSpec("windows", "amd64")

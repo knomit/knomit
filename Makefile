@@ -1,4 +1,4 @@
-.PHONY: e2e-clean build web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-winres desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop desktop-notarize print-version print-semver
+.PHONY: e2e-clean build server web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-winres desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop desktop-notarize print-version print-semver
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -7,7 +7,7 @@
 # libs. Wails (CGO + the OS-native webview toolkit) cannot cross-compile, so each
 # platform is built in its own native environment; this layout keeps the outputs
 # separate. For consumers that need a stable, platform-independent path (e.g.
-# .mcp.json, the e2e harness), `build`/`desktop` also drop top-level entries
+# .mcp.json, the e2e harness), `server`/`desktop` also drop top-level entries
 # dist/<tool> -> <platform>/<tool>: symlinks on Unix, copies on Windows (see
 # symlink_tool for why).
 GOOS    := $(shell go env GOOS)
@@ -273,8 +273,12 @@ tokenizers-lib:
 
 # tokenizers-lib is linked statically at build time; ort is the
 # shared libs the built binary dlopens at RUN time, so fetch them too — otherwise
-# a fresh `make build && ./dist/<platform>/knomit serve` fails to load them.
-build: web tokenizers-lib download-ort
+# a fresh `make server && ./dist/<platform>/knomit serve` fails to load them.
+#
+# `server` is the server build: web UI, native libs, then knomit, kb and
+# knomit-okf into $(DIST). `build` is kept as an alias. `desktop` builds the
+# desktop app on top of it; `dist` (below) is both, end to end.
+server: web tokenizers-lib download-ort
 	mkdir -p $(DIST)
 	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit$(EXE) .
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/kb$(EXE) ./tools/bridge/
@@ -335,8 +339,20 @@ endif
 test: tokenizers-lib
 	CGO_ENABLED=1 go test $(GOFLAGS) -timeout $(GOTEST_TIMEOUT) ./...
 
-dist: download-ort tokenizers-lib build
-	@echo "Distribution package ready in $(DIST)/"
+# Alias kept for compatibility: `build` is `server`.
+build: server
+
+# Everything end to end: web UI, server binaries (`server`), then the desktop
+# app (`desktop`, which reuses the one $(DIST)/knomit `server` produced). Use
+# `make server` or `make desktop` for just one of them. Like `desktop`, this
+# needs the native desktop toolchain on every platform (GTK4/WebKitGTK on
+# Linux: `make desktop-deps`).
+dist: server desktop
+ifeq ($(GOOS),darwin)
+	@echo "Distribution ready in $(DIST)/: knomit, kb, knomit-okf and $(APP)"
+else
+	@echo "Distribution ready in $(DIST)/: knomit, kb, knomit-okf and knomit-desktop"
+endif
 
 # Build the cloud HTTP server as a fully self-contained Docker image (CGO +
 # bundled ONNX native libs + embedding model baked at build time;
@@ -368,7 +384,7 @@ e2e-setup:
 	cd e2e && npm ci && npx playwright install
 
 # The e2e harness does NOT build. It needs dist/knomit and web/dist/index.html
-# already in place (see e2e/README.md); `make dist` runs `npm ci` in web/, which
+# already in place (see e2e/README.md); `make server` runs `npm ci` in web/, which
 # empties a symlinked node_modules in a worktree. Opt in with `E2E_BUILD=1 make e2e`.
 e2e:
 	cd e2e && npx playwright test
@@ -432,7 +448,7 @@ else
 endif
 
 # Build the native desktop app (Wails v3, CGO). It hosts the UI and supervises
-# the bundled `knomit serve --supervised` (the one $(DIST)/knomit `build`
+# the bundled `knomit serve --supervised` (the one $(DIST)/knomit `server`
 # produced), talking to it over the local socket/pipe. Wails cannot
 # cross-compile, so this builds for the host platform only.
 #   - macOS:        ONLY a real $(DIST)/Knomit.app bundle (the binary is built
@@ -445,12 +461,12 @@ endif
 #
 # The bundle also carries the knomit SERVER binary beside knomit-desktop
 # (tools/desktop/serverbin.go finds it there). It is the ONE `knomit` that
-# `build` produces, copied in, never compiled a second time — hence `build` (which
+# `server` produces, copied in, never compiled a second time — hence `server` (which
 # itself runs web, tokenizers-lib and download-ort) as a prerequisite rather
-# than those three. On Windows and Linux-standalone `build` already leaves
+# than those three. On Windows and Linux-standalone `server` already leaves
 # knomit$(EXE) in $(DIST) beside knomit-desktop$(EXE) and lib/, which is the
 # layout the desktop expects, so nothing is copied there.
-desktop: build desktop-ui
+desktop: server desktop-ui
 ifeq ($(GOOS),darwin)
 	@$(MAKE) --no-print-directory desktop-app-macos
 	@echo "Built $(APP) — launch with: open $(APP)"
@@ -469,11 +485,11 @@ endif
 # so they are copied there. libtokenizers.a is linked statically (no runtime
 # lib). The bundle lives only at $(APP) (no top-level symlink — nothing
 # references it by a fixed path; launch it with `open $(APP)`). Assumes the
-# desktop target's prerequisites (`build` for the server binary, web build,
+# desktop target's prerequisites (`server` for the server binary, web build,
 # native libs) have already run.
 APP := $(DIST)/Knomit.app
 desktop-app-macos:
-	@test -x $(DIST)/knomit || { echo "$(DIST)/knomit missing: run 'make build' (or 'make desktop') first; the bundle ships that one server binary"; exit 1; }
+	@test -x $(DIST)/knomit || { echo "$(DIST)/knomit missing: run 'make server' (or 'make desktop') first; the bundle ships that one server binary"; exit 1; }
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS/lib $(APP)/Contents/Resources
 	$(DESKTOP_BUILD) -o $(APP)/Contents/MacOS/knomit-desktop ./tools/desktop
@@ -486,7 +502,7 @@ desktop-app-macos:
 	# /Applications/Knomit.app/Contents/MacOS/knomit-okf is one nobody runs.
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-okf ./tools/okf
 	# knomit: the server the desktop supervises as a child process. NOT built
-	# here: the one `knomit` that `build` produced is copied in, so the server
+	# here: the one `knomit` that `server` produced is copied in, so the server
 	# tarball and the bundle carry the same build. It resolves libonnxruntime
 	# from <exe>/lib, i.e. the lib/ directly below. What arrives is the
 	# linker's own ad-hoc signature, so the codesign step below re-signs it
@@ -681,7 +697,7 @@ endif
 # cross-compile, so each runner packages ONLY its own platform's artifacts;
 # the GitHub release job collects the per-platform outputs. Filenames carry the
 # BARE semver + PLATFORM — PLATFORM is what keeps one runner's outputs from
-# colliding with another's. Every target builds its prerequisite (`build` /
+# colliding with another's. Every target builds its prerequisite (`server` /
 # `desktop`) first, so `make release` on a clean checkout produces that
 # platform's downloads end to end.
 #
@@ -741,7 +757,7 @@ print-semver:
 # is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.
 # knomit-okf ships too: it is the only OKF export path, and a tool nobody can
 # install is a tool nobody uses. Pure Go, so it needs nothing from lib/.
-release-server: build
+release-server: server
 	mkdir -p $(RELEASE_DIR)
 	rm -rf $(DIST)/$(SERVER_PKG)
 	mkdir -p $(DIST)/$(SERVER_PKG)/lib

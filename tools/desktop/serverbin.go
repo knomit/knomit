@@ -16,7 +16,7 @@ import (
 // serverExecName is the knomit server binary the bundle carries next to
 // knomit-desktop (Contents/MacOS/knomit, usr/bin/knomit in the AppImage,
 // knomit.exe beside knomit-desktop.exe on Windows). The Makefile copies the ONE
-// `knomit` that `make build` produces; it is never compiled a second time.
+// `knomit` that `make server` produces; it is never compiled a second time.
 const serverExecName = "knomit"
 
 // ServerBinaryMissingError reports that the bundled server binary is not where

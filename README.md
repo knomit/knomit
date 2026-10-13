@@ -103,7 +103,8 @@ cd knomit
 make setup    # one-time: fetch native libs (on Windows this also builds
               # libtokenizers.a from source, which needs Rust/cargo plus
               # `rustup target add x86_64-pc-windows-gnu`)
-make build    # build the web frontend, then the Go binaries
+make server   # build the web frontend, then the Go binaries (alias: make build)
+              # also: make desktop (desktop app), make dist (server + desktop)
 make run      # start the server on http://localhost:19278
 ```
 

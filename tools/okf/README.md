@@ -60,11 +60,11 @@ the whole reason one directory can be both the export and its own source.
 
 ## Install
 
-`knomit-okf` is built by the top-level `make build` and ships in the server
+`knomit-okf` is built by the top-level `make server` and ships in the server
 tarball and the desktop bundles:
 
 ```sh
-make build            # → dist/<platform>/knomit-okf
+make server           # → dist/<platform>/knomit-okf
 ```
 
 Or on its own — it is pure Go, no CGO, no native libraries:
