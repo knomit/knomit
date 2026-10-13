@@ -1,6 +1,6 @@
 //go:build unix
 
-package cmd
+package serveraddr
 
 import (
 	"errors"
@@ -8,9 +8,9 @@ import (
 	"syscall"
 )
 
-// signalReload sends SIGHUP to the server whose server.json named pid. home
+// SignalReload sends SIGHUP to the server whose server.json named pid. home
 // is the Windows event's key and unused here.
-func signalReload(home string, pid int) error {
+func SignalReload(home string, pid int) error {
 	if pid <= 1 {
 		return fmt.Errorf("server.json names pid %d, which is not a server", pid)
 	}

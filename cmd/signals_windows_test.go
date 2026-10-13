@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"knomit/internal/serveraddr"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,7 +32,7 @@ func TestReloadEvent_RunsTheCallbackOncePerSet(t *testing.T) {
 		t.Fatalf("the callback ran %d times without a signal", n.Load())
 	}
 	for i := 1; i <= 3; i++ {
-		if err := signalReload(home, 0); err != nil {
+		if err := serveraddr.SignalReload(home, 0); err != nil {
 			t.Fatalf("set %d: %v", i, err)
 		}
 		select {
@@ -64,7 +65,7 @@ func TestReloadEvent_IsKeyedByHomeAndNotShared(t *testing.T) {
 	if _, err := installReloadSignal(a, func() {}); err == nil || !strings.Contains(err.Error(), "held by another process") {
 		t.Fatalf("a second installer for the same home: %v", err)
 	}
-	if err := signalReload(a, 0); err != nil {
+	if err := serveraddr.SignalReload(a, 0); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -78,7 +79,7 @@ func TestReloadEvent_IsKeyedByHomeAndNotShared(t *testing.T) {
 }
 
 func TestReloadEvent_NoServerIsAnError(t *testing.T) {
-	if err := signalReload(t.TempDir(), 0); err == nil || !strings.Contains(err.Error(), "no running knomit serve") {
+	if err := serveraddr.SignalReload(t.TempDir(), 0); err == nil || !strings.Contains(err.Error(), "no running knomit serve") {
 		t.Fatalf("signalling a home with no server: %v", err)
 	}
 }

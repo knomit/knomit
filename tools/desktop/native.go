@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -115,8 +116,30 @@ type NativeService struct {
 	revealInFileManager func(string) error
 	// restartServer stops the server the desktop spawned and waits for its
 	// replacement (supervisor.restartServer). Wired in app.go; nil in tests
-	// that do not exercise RestartApp.
+	// that do not exercise RestartServer.
 	restartServer func(context.Context) error
+	// isAttached reports whether the server was started outside the app
+	// (supervisor.isAttached). Wired in app.go; nil reads as "ours".
+	isAttached func() bool
+	// desktopVersion is version.String() of this build, shown beside the
+	// server's when they differ.
+	desktopVersion string
+
+	// requestReload asks the running server to re-read knomit.toml and waits
+	// for its acknowledgement. Defaults to serveraddr.RequestReload, the very
+	// function `knomit reload` runs: a signal (SIGHUP, or the Windows event)
+	// and a read of server.json, never an HTTP route (kb invariant
+	// desktop/fleet/install-surface).
+	requestReload func(ctx context.Context, home string, wait time.Duration) (serveraddr.LockInfo, error)
+	// reloadWait is how long SaveSettings waits for that acknowledgement.
+	reloadWait time.Duration
+	// restartWait bounds RestartServer, so a replacement that never answers is
+	// an error the Settings window can show rather than a button that waits
+	// forever.
+	restartWait time.Duration
+	// saveMu serialises SaveSettings: write, then reload, then ack must not
+	// interleave with another save's.
+	saveMu sync.Mutex
 }
 
 // newNativeService builds the service. configPath is <home>/knomit.toml, from
@@ -131,6 +154,9 @@ func newNativeService(configPath, logPath string, tog autostart.Toggler) *Native
 		lockPath:            config.LockfilePathFor(filepath.Dir(configPath)),
 		autostart:           tog,
 		revealInFileManager: revealInFileManager,
+		requestReload:       serveraddr.RequestReload,
+		reloadWait:          5 * time.Second,
+		restartWait:         75 * time.Second,
 	}
 }
 
@@ -149,22 +175,86 @@ func (n *NativeService) WriteFile(name, contents string) (string, error) {
 	return writeFile(name, contents)
 }
 
+// ServerState is what the running server (or the lack of one) says about
+// itself, for the Settings window. Everything comes from the server's own
+// server.json and the supervisor; nothing is guessed from knomit.toml.
+type ServerState struct {
+	// Running: a server.json exists for this home. False while the server is
+	// still starting, or has failed.
+	Running bool `json:"running"`
+	PID     int  `json:"pid"`
+	// Attached: the server was started outside the app (knomit serve in a
+	// terminal, a service). The app neither stops nor restarts it.
+	Attached bool `json:"attached"`
+	// CanRestart: Restart server is available (a server the app spawned).
+	CanRestart bool `json:"canRestart"`
+	// CanReload: the server listens for a reload request, which is how a
+	// save reaches a running server.
+	CanReload      bool   `json:"canReload"`
+	Version        string `json:"version"`
+	DesktopVersion string `json:"desktopVersion"`
+	// VersionSkew: the server and this app differ in major.minor (only
+	// possible when attached: a spawned server is this build's own).
+	VersionSkew bool `json:"versionSkew"`
+	// HTTPURL is the plaintext listener's base URL, "" when it is off.
+	HTTPURL    string `json:"httpUrl"`
+	HTTPReason string `json:"httpReason"`
+	// TLSListening is the fleet listener's bound address, "" when not listening.
+	TLSListening string `json:"tlsListening"`
+	TLSReason    string `json:"tlsReason"`
+	Generation   int    `json:"generation"`
+	// RestartNeeded names the keys a reload saw change and could not apply.
+	RestartNeeded []string `json:"restartNeeded"`
+	// ReloadError is the last refused reload ("<time>: <message>"), "" when none.
+	ReloadError string `json:"reloadError"`
+}
+
+// serverState reads the running server's account of itself.
+func (n *NativeService) serverState() ServerState {
+	st := ServerState{DesktopVersion: n.desktopVersion, RestartNeeded: []string{}}
+	info, ok := n.serverLock()
+	if !ok {
+		return st
+	}
+	st.Running = true
+	st.PID = info.PID
+	st.Version = info.Version
+	st.CanReload = info.Reload
+	st.HTTPURL = info.HTTP
+	st.Generation = info.Generation
+	st.ReloadError = info.ReloadError
+	if info.RestartNeeded != nil {
+		st.RestartNeeded = info.RestartNeeded
+	}
+	if l, ok := info.Listeners["http"]; ok && l.Reason != "off" {
+		st.HTTPReason = l.Reason
+	}
+	st.TLSListening = info.TLS
+	if l, ok := info.Listeners["tls"]; ok && l.Reason != "off" {
+		st.TLSReason = l.Reason
+	}
+	st.Attached = n.isAttached != nil && n.isAttached()
+	st.CanRestart = n.restartServer != nil && !st.Attached
+	st.VersionSkew = st.Attached && n.desktopVersion != "" && info.Version != "" &&
+		versionSkew(n.desktopVersion, info.Version)
+	return st
+}
+
 // GetSettings returns the current settings plus the context the form needs:
-// which environment variables are overriding the file, and what port is
-// actually bound.
+// which environment variables are overriding the file, and what the running
+// server says it is listening on.
 //
 // The values come from config.Load, i.e. AFTER the env layer, so an exported
 // KNOMIT_PORT is what the form shows — matched by OverriddenByEnv telling it
-// that field cannot be changed by saving. The bound port is the running
-// server's own record (server.json `port`, 0 while none is up or when it has
-// no TCP listener).
+// that field cannot be changed by saving. What is actually bound is the
+// running server's own record (server.json), in Server.
 func (n *NativeService) GetSettings() (Settings, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return Settings{}, fmt.Errorf("load config: %w", err)
 	}
 	// A toggler that cannot answer is reported as "off" rather than failing the
-	// whole dialog: the other five fields are still worth showing.
+	// whole dialog: the other fields are still worth showing.
 	on, terr := n.autostart.Enabled()
 	if terr != nil {
 		log.Warn().Err(terr).Msg("start at login: current state unknown")
@@ -181,6 +271,8 @@ func (n *NativeService) GetSettings() (Settings, error) {
 		LogFormat:       resolved.Format,
 		StartAtLogin:    on,
 		TLSAddr:         cfg.TLS.Addr,
+		HTTPScope:       scopeOf(cfg.HTTP, cfg.Host),
+		Server:          n.serverState(),
 		EffectivePort:   effective,
 		ConfigPath:      n.configPath,
 		LogFilePath:     resolved.File,
@@ -188,19 +280,47 @@ func (n *NativeService) GetSettings() (Settings, error) {
 	}, nil
 }
 
-// SaveSettings persists the settings and applies what the desktop itself can
-// apply: the desktop shell's own log level and format. The SERVER picks up
-// the file on its next start or reload (applying it live from Settings is the
-// next PR's); the UI tells the user a restart is needed for the port.
+// SaveAck is SaveSettings' answer: the file is written whatever it says (a
+// save that could not be written is an error, not an ack); Outcome says what
+// became of the running server.
+type SaveAck struct {
+	// Outcome is one of:
+	//   applied         the server reloaded and every listener is as configured
+	//   restart_needed  reloaded, but RestartNeeded keys wait for a restart
+	//   listener_failed reloaded, but a listener could not bind (Error says
+	//                   why); the previous listener keeps serving
+	//   refused         the server could not load the file and kept its running
+	//                   configuration (Error is its reason)
+	//   timeout         the signal was sent, no acknowledgement arrived
+	//   not_running     no server to tell: it applies when the server starts
+	//   unavailable     the server cannot be told (it does not listen for
+	//                   reload, or runs in another session); Error says why
+	Outcome       string   `json:"outcome"`
+	Generation    int      `json:"generation"`
+	HTTPURL       string   `json:"httpUrl"`
+	HTTPReason    string   `json:"httpReason"`
+	TLSListening  string   `json:"tlsListening"`
+	TLSReason     string   `json:"tlsReason"`
+	RestartNeeded []string `json:"restartNeeded"`
+	Error         string   `json:"error"`
+}
+
+// SaveSettings persists the settings, applies what the desktop itself applies
+// (the shell's own log level and format) and then tells the running server to
+// re-read knomit.toml, waiting for its acknowledgement: the listeners it now
+// has, the keys that need a restart, or why it could not.
 //
-// Gated to the Settings window: a save can set [tls].addr, which opens a
-// network port (see callerIsSettings).
-func (n *NativeService) SaveSettings(ctx context.Context, s Settings) error {
+// Gated to the Settings window: a save can set http, host and [tls].addr, which
+// open network ports (see callerIsSettings). The reload is the same call
+// `knomit reload` makes, not a route: invariant desktop/fleet/install-surface.
+func (n *NativeService) SaveSettings(ctx context.Context, s Settings) (SaveAck, error) {
 	if !callerIsSettings(ctx) {
-		return errNotSettingsWindow
+		return SaveAck{}, errNotSettingsWindow
 	}
+	n.saveMu.Lock()
+	defer n.saveMu.Unlock()
 	if err := applySettings(s, n.configPath, n.autostart, envOverrides(os.Getenv)); err != nil {
-		return err
+		return SaveAck{}, err
 	}
 	// Rebuilt from a FRESH config.Load rather than from s, so the logger ends
 	// up exactly as the next launch would have it: the rotation keys the
@@ -215,27 +335,84 @@ func (n *NativeService) SaveSettings(ctx context.Context, s Settings) error {
 	if err := applyLogConfig(lc, n.desktopLogPath); err != nil {
 		log.Warn().Err(err).Msg("settings saved but the logger was not rebuilt")
 	}
-	return nil
+	return n.reloadServer(ctx), nil
 }
 
-// RestartApp restarts the knomit SERVER the desktop spawned — not the app:
+// reloadServer tells the running server to re-read the file and turns the
+// answer into an ack. It runs after EVERY save, not only after one that
+// changed a listener: a retry after a held port was freed writes the same
+// file and still has to reach the server.
+func (n *NativeService) reloadServer(ctx context.Context) SaveAck {
+	if _, running := n.serverLock(); !running {
+		return SaveAck{Outcome: "not_running", RestartNeeded: []string{}}
+	}
+	home := filepath.Dir(n.configPath)
+	cur, err := n.requestReload(ctx, home, n.reloadWait)
+	ack := SaveAck{
+		Generation:    cur.Generation,
+		HTTPURL:       cur.HTTP,
+		TLSListening:  cur.TLS,
+		RestartNeeded: []string{},
+	}
+	if cur.RestartNeeded != nil {
+		ack.RestartNeeded = cur.RestartNeeded
+	}
+	if l, ok := cur.Listeners["http"]; ok && l.Reason != "off" {
+		ack.HTTPReason = l.Reason
+	}
+	if l, ok := cur.Listeners["tls"]; ok && l.Reason != "off" {
+		ack.TLSReason = l.Reason
+	}
+	var (
+		failed  *serveraddr.ReloadListenerError
+		refused *serveraddr.ReloadRefusedError
+		timeout *serveraddr.ReloadTimeoutError
+	)
+	switch {
+	case err == nil && len(ack.RestartNeeded) > 0:
+		ack.Outcome = "restart_needed"
+	case err == nil:
+		ack.Outcome = "applied"
+	case errors.As(err, &failed):
+		ack.Outcome = "listener_failed"
+		ack.Error = err.Error()
+	case errors.As(err, &refused):
+		ack.Outcome = "refused"
+		ack.Error = refused.Message
+	case errors.As(err, &timeout):
+		ack.Outcome = "timeout"
+		ack.Error = err.Error()
+	default:
+		ack.Outcome = "unavailable"
+		ack.Error = err.Error()
+	}
+	if ack.Outcome != "applied" && ack.Outcome != "restart_needed" {
+		log.Warn().Str("outcome", ack.Outcome).Str("error", ack.Error).Msg("settings saved; the server did not apply them as a whole")
+	}
+	return ack
+}
+
+// RestartServer restarts the knomit SERVER the desktop spawned — not the app:
 // the desktop keeps running and its window reconnects once the replacement
-// answers. It returns when the new server answers (or with the reason it did
-// not). Refused for a server started outside the app (attach mode: it is not
-// ours to stop), named "started outside the app (pid N)".
-//
-// The binding keeps its name so the Settings window's Call.ByName string is
-// unchanged; the Settings UI that says "Restart server" is the next PR's.
+// answers. It returns when the new server answers, or with the reason it did
+// not (including after restartWait). Refused for a server started outside the
+// app (attach mode: it is not ours to stop), named "started outside the app
+// (pid N)".
 //
 // Gated to the Settings window, like everything that changes what the server
 // listens on (kb invariant desktop/fleet/install-surface): a restart applies
-// a [tls].addr or port the Settings window wrote.
-func (n *NativeService) RestartApp(ctx context.Context) error {
+// a key a reload could not.
+func (n *NativeService) RestartServer(ctx context.Context) error {
 	if !callerIsSettings(ctx) {
 		return errNotSettingsWindow
 	}
 	if n.restartServer == nil {
 		return errors.New("no server to restart")
+	}
+	if n.restartWait > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, n.restartWait)
+		defer cancel()
 	}
 	return n.restartServer(ctx)
 }

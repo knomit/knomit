@@ -73,6 +73,12 @@ server that runs the recipe, and Claude Code passes its environment to the
 stdio MCP servers it starts, so a `kb` inside a recipe's session reaches that
 server without any configuration.
 
+A fresh desktop install opens no TCP port at all (`http = false`): `kb` and the
+app use the local socket. An install that predates this keeps its port. The
+desktop's **Settings → HTTP port** turns it on for this computer only or for all
+networks, and tells the running server to reload, so no restart is needed; `kb`
+keeps preferring the socket either way.
+
 The target is resolved once at startup. If the server later quits or relaunches
 on a new port, restart the MCP client so the bridge re-resolves `server.json`.
 

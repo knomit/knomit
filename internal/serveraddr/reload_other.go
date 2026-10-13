@@ -1,10 +1,10 @@
 //go:build !unix && !windows
 
-package cmd
+package serveraddr
 
 import "errors"
 
-// signalReload: no reload trigger exists on this platform.
-func signalReload(home string, pid int) error {
+// SignalReload: no reload trigger exists on this platform.
+func SignalReload(home string, pid int) error {
 	return errors.New("reloading a running server is not supported on this platform; restart it")
 }

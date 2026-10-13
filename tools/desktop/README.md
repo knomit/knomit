@@ -265,6 +265,28 @@ clients you configure by hand.)
 Running `knomit serve` on the same home as the app is fine: the app finds it
 answering on the socket and attaches to it (one server, one `server.json`).
 
+## HTTP port (Settings)
+
+The app and `kb` use the server's local socket, so the plaintext HTTP port is
+optional. **Settings → HTTP port** chooses **Off**, **This computer only**
+(loopback: over the default or any loopback host no `host` key is written; only
+a move back from All networks writes `host = "127.0.0.1"`) or **All networks** (`host = "0.0.0.0"`), plus
+the port. Save writes only the keys that change (`http`, `host`, `port`) to
+`knomit.toml` and asks the running server to reload (the same thing as
+`knomit reload`, never an HTTP route); the window shows what the server then
+listens on, any key that needs a restart (`[auth].require`, for one), or why a
+port could not be opened. **All networks** lets anyone who can reach the
+computer READ every knowledge base and clone it, without signing in; they
+cannot change anything. To work with other machines securely, enrol in a fleet
+and use the Fleet port.
+
+A fresh install (no `knomit.toml` and no `control.db` in the data root) starts
+with `http = false`; an existing install keeps its port. A server you started
+yourself with `knomit serve` shows a banner (its pid and both versions, with a
+warning when major.minor differ): Save still reloads it, but **Restart
+server** is unavailable. `KNOMIT_HTTP`/`KNOMIT_HOST` in the environment beat
+`knomit.toml` and make the choice read-only.
+
 ## Fleet peer
 
 The app can join a knomit fleet as an enrolled instance (knomit#256), without
@@ -277,9 +299,11 @@ the `knomit` CLI. In **Settings → Fleet identity**:
    verifies, the CRL is not older than the one held. A bundle from a
    *different* fleet root is refused until you confirm the move, and the
    confirmation names both roots' fingerprints.
-3. Set **Fleet listener** (`[tls].addr`, e.g. `0.0.0.0:19279`) and restart when
-   offered. The mTLS listener opens only when an address is set **and** a
-   certificate is installed. The plaintext port stays loopback-only.
+3. Set **Fleet listener** (`[tls].addr`, e.g. `0.0.0.0:19279`) and Save: the
+   running server reloads and opens it. (A first enrolment whose listener was
+   off for lack of a certificate still offers **Restart server**.) The mTLS
+   listener opens only when an address is set **and** a certificate is
+   installed. The plaintext HTTP port is a separate choice, below.
 
 Trust material is installed only from the Settings window, never over HTTP.
 CRL updates are manual: a new bundle, or a fresh `crl.pem` dropped into

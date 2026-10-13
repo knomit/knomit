@@ -365,8 +365,9 @@ func (s *supervisor) attach(ctx context.Context, ver string) {
 }
 
 // versionSkew reports whether two build versions differ in major.minor.
-// "0.5.3.6ce780d" and "0.5.4.abc" do not; "0.5.3" and "0.6.0" do. An
-// unparsable version counts as skew, since nothing can be said about it.
+// "0.5.3.6ce780d" and "0.5.4.abc" do not; "0.5.3" and "0.6.0" do. Identical
+// strings are never skew, and a pair where either side is unparsable and they
+// differ is "unknown": no warning (the UI shows both versions).
 func versionSkew(a, b string) bool {
 	mm := func(v string) (string, bool) {
 		parts := strings.SplitN(strings.TrimPrefix(v, "v"), ".", 3)
@@ -375,9 +376,15 @@ func versionSkew(a, b string) bool {
 		}
 		return parts[0] + "." + parts[1], true
 	}
+	if a == b {
+		return false // the same build, parsable or not (a dev build against itself)
+	}
 	ma, oka := mm(a)
 	mb, okb := mm(b)
-	return !oka || !okb || ma != mb
+	if !oka || !okb {
+		return false // different and unparsable: unknown, which is not a warning
+	}
+	return ma != mb
 }
 
 // childExit is how one spawned server ended.

@@ -328,3 +328,26 @@ addr = "not the tls one"
 		}
 	}
 }
+
+// A boolean is written bare, not quoted, in place when the key exists (comment
+// kept) and before the first table when it does not.
+func TestSetBoolWritesABareBoolean(t *testing.T) {
+	out, err := tomledit.SetBool([]byte("# top\nhttp = true  # on\n[log]\nlevel = \"info\"\n"), "", "http", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "# top\nhttp = false  # on\n[log]\nlevel = \"info\"\n"; string(out) != want {
+		t.Fatalf("got\n%s\nwant\n%s", out, want)
+	}
+	out, err = tomledit.SetBool([]byte("[log]\nlevel = \"info\"\n"), "", "http", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if _, err := toml.Decode(string(out), &m); err != nil || m["http"] != true {
+		t.Fatalf("decoded %v (%v) from\n%s", m["http"], err, out)
+	}
+	if strings.Index(string(out), "http") > strings.Index(string(out), "[log]") {
+		t.Fatalf("a root key landed inside a table:\n%s", out)
+	}
+}

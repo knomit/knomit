@@ -475,7 +475,7 @@ func TestGetSettingsReadsBackWhatSaveSettingsWrote(t *testing.T) {
 	n := newNativeService(path, filepath.Join(home, "desktop.log"), tog)
 
 	want := Settings{Port: "20001", LogLevel: "warn", LogFormat: "json", StartAtLogin: true}
-	if err := n.SaveSettings(fromSettings, want); err != nil {
+	if _, err := n.SaveSettings(fromSettings, want); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
 
@@ -581,7 +581,7 @@ func TestSaveSettingsDoesNotPersistAnEnvOverriddenValue(t *testing.T) {
 		t.Fatalf("precondition: Port = %q, want the environment's 30000", got.Port)
 	}
 	got.LogLevel = "warn"
-	if err := n.SaveSettings(fromSettings, got); err != nil {
+	if _, err := n.SaveSettings(fromSettings, got); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
 
@@ -627,7 +627,7 @@ func TestGetSettingsHandsBackALevelSaveSettingsAccepts(t *testing.T) {
 		t.Error("GetSettings returned an empty log level; the form has nothing to show and Save would reject it")
 	}
 	// The round trip the user performs: open, press Save, change nothing.
-	if err := n.SaveSettings(fromSettings, got); err != nil {
+	if _, err := n.SaveSettings(fromSettings, got); err != nil {
 		t.Fatalf("SaveSettings rejected what GetSettings returned: %v", err)
 	}
 }
@@ -643,7 +643,7 @@ func TestSaveSettingsRefusesToWriteAnUnstartableConfig(t *testing.T) {
 	}
 	n := newNativeService(path, filepath.Join(home, "desktop.log"), &stubToggler{})
 
-	if err := n.SaveSettings(fromSettings, Settings{Port: "19278", LogLevel: "loud", LogFormat: "console"}); err == nil {
+	if _, err := n.SaveSettings(fromSettings, Settings{Port: "19278", LogLevel: "loud", LogFormat: "console"}); err == nil {
 		t.Fatal("SaveSettings accepted an invalid log level")
 	}
 	b, _ := os.ReadFile(path)

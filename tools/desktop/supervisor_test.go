@@ -403,7 +403,11 @@ func TestVersionSkewIsMajorMinor(t *testing.T) {
 		{"0.5.3.6ce780d", "0.5.3.6ce780d", false},
 		{"0.5.3", "0.6.0", true},
 		{"1.5.3", "0.5.3", true},
-		{"0.5.3", "dev", true},
+		{"dev", "dev", false},   // identical unparsable: the same build
+		{"0.5.3", "dev", false}, // different and unparsable: unknown, no warning
+		{"dev", "0.5.3", false},
+		{"", "0.5.3", false},
+		{"v0.5.3", "0.5.9", false},
 	} {
 		if got := versionSkew(c.a, c.b); got != c.skew {
 			t.Errorf("versionSkew(%q, %q) = %v, want %v", c.a, c.b, got, c.skew)

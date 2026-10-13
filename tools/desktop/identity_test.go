@@ -152,7 +152,7 @@ func TestFleetIdentity_BindingsRefuseAnyCallerButTheSettingsWindow(t *testing.T)
 			if _, err := n.PublicKeyLine(c.ctx); !errors.Is(err, errNotSettingsWindow) {
 				t.Fatalf("PublicKeyLine: %v", err)
 			}
-			if err := n.SaveSettings(c.ctx, Settings{Port: "20001", LogLevel: "info", LogFormat: "console"}); !errors.Is(err, errNotSettingsWindow) {
+			if _, err := n.SaveSettings(c.ctx, Settings{Port: "20001", LogLevel: "info", LogFormat: "console"}); !errors.Is(err, errNotSettingsWindow) {
 				t.Fatalf("SaveSettings: %v", err)
 			}
 			for _, p := range []string{pkiDir, toml} {
@@ -170,7 +170,7 @@ func TestFleetIdentity_BindingsRefuseAnyCallerButTheSettingsWindow(t *testing.T)
 	if line, err := n.PublicKeyLine(fromSettings); err != nil || !strings.HasPrefix(line, "ssh-ed25519 ") {
 		t.Fatalf("PublicKeyLine from Settings: %q %v", line, err)
 	}
-	if err := n.SaveSettings(fromSettings, Settings{Port: "20001", LogLevel: "info", LogFormat: "console"}); err != nil {
+	if _, err := n.SaveSettings(fromSettings, Settings{Port: "20001", LogLevel: "info", LogFormat: "console"}); err != nil {
 		t.Fatalf("SaveSettings from Settings: %v", err)
 	}
 }
@@ -540,7 +540,7 @@ func TestFleetIdentity_WireKeysMatchTheUIFixture(t *testing.T) {
 func TestFleetIdentity_NativeServiceMethodSetIsPinned(t *testing.T) {
 	want := []string{
 		"GetIdentity", "GetSettings", "InstallBundle", "PublicKeyLine",
-		"RestartApp", "RevealLogFile", "SaveSettings", "WriteFile",
+		"RestartServer", "RevealLogFile", "SaveSettings", "WriteFile",
 	}
 	var got []string
 	ty := reflect.TypeOf(&NativeService{})

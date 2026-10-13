@@ -227,7 +227,7 @@ func TestReloadCmd_RefusesWhatItCannotVouchFor(t *testing.T) {
 	}
 
 	// Positive control for the unix sender: a dead pid is refused, not signalled.
-	if err := signalReload(home, 1<<22+12345); err == nil {
+	if err := serveraddr.SignalReload(home, 1<<22+12345); err == nil {
 		t.Fatal("signalling a pid that does not exist must fail")
 	}
 }

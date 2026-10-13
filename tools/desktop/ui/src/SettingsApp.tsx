@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Call, Clipboard, Window } from '@wailsio/runtime'
-import { SettingsForm, type FleetProps, type Settings } from './SettingsForm.tsx'
+import { SettingsForm, type FleetProps, type SaveAck, type Settings } from './SettingsForm.tsx'
 import type { FleetIdentity, InstallResult } from './fleet.ts'
 import './App.css'
 
@@ -13,7 +13,7 @@ import './App.css'
 // SettingsApp.test.tsx pins them.
 const GET = 'main.NativeService.GetSettings'
 const SAVE = 'main.NativeService.SaveSettings'
-const RESTART = 'main.NativeService.RestartApp'
+const RESTART = 'main.NativeService.RestartServer'
 const REVEAL = 'main.NativeService.RevealLogFile'
 // Fleet identity (knomit#256). INSTALL, PUBKEY and SAVE are refused by Go
 // unless they come from THIS window (callerIsSettings in identity.go).
@@ -72,12 +72,14 @@ export function SettingsApp() {
   return (
     <SettingsForm
       initial={initial}
-      onSave={(s) => Call.ByName(SAVE, s)}
-      // Handed straight through, unawaited by design: RestartApp's promise
-      // never settles on success, because the process is gone before the
-      // transport can answer. SettingsForm.restart() carries the full
-      // reasoning — read it before changing anything here.
+      // The ack says what became of the running server (reloaded, restart
+      // needed, a port that would not bind, ...); the file is saved either way.
+      onSave={(s) => Call.ByName(SAVE, s) as Promise<SaveAck>}
+      // Resolves when the replacement server answers, rejects with the reason
+      // it did not (an attached server is refused by name). SettingsForm
+      // bounds the wait itself: see restart() there.
       onRestart={() => Call.ByName(RESTART)}
+      onRefresh={() => Call.ByName(GET) as Promise<Settings>}
       onRevealLog={() => Call.ByName(REVEAL)}
       // Cancel discards by closing: SettingsForm holds every edit in local
       // state and writes nothing until Save, so destroying the window IS the

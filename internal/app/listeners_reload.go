@@ -267,7 +267,17 @@ func (l *Listeners) hostNeedsRestart(newCfg config.Config) bool {
 	if newCfg.Host == l.builtHost {
 		return false
 	}
-	return !slices.Equal(l.cfg.Auth.EffectiveLoopbackHosts(newCfg.Host), l.cfg.Auth.EffectiveLoopbackHosts(l.builtHost))
+	// A restart is owed only for a name the boot allowlist LACKS. Moving off a
+	// DNS name (the default "localhost") to an IP literal loses nothing: the
+	// built allowlist still holds the old name, which stays accepted, so
+	// "localhost" -> "0.0.0.0" (Settings' "All networks") and back are live.
+	built := l.cfg.Auth.EffectiveLoopbackHosts(l.builtHost)
+	for _, name := range l.cfg.Auth.EffectiveLoopbackHosts(newCfg.Host) {
+		if !slices.Contains(built, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // changedKeys lists the toml-spelled keys at which a and b differ, skipping

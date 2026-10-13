@@ -9,13 +9,75 @@ export interface Settings {
   logLevel: string
   logFormat: string
   startAtLogin: boolean
-  /** [tls].addr: the fleet listener, "" = off. Bound at boot, like port. */
+  /** [tls].addr: the fleet listener, "" = off. Applied by a reload. */
   tlsAddr: string
+  /**
+   * Who may reach the plaintext HTTP port. 'other' is a knomit.toml that binds
+   * some other address: Settings leaves it alone and a save of 'other' writes
+   * nothing.
+   */
+  httpScope: HttpScope
+  /** The running server's own account of itself (server.json + supervisor). */
+  server: ServerState
   effectivePort: number
   configPath: string
   logFilePath: string
   overriddenByEnv: string[]
 }
+
+export type HttpScope = 'off' | 'local' | 'all' | 'other'
+
+/** Mirrors ServerState in tools/desktop/native.go field for field. */
+export interface ServerState {
+  running: boolean
+  pid: number
+  /** Started outside the app: it is neither stopped nor restarted by it. */
+  attached: boolean
+  canRestart: boolean
+  canReload: boolean
+  version: string
+  desktopVersion: string
+  /** Attached server and app differ in major.minor. */
+  versionSkew: boolean
+  /** The plaintext listener's base URL, "" when it is off. */
+  httpUrl: string
+  httpReason: string
+  /** The fleet listener's bound address, "" when it is not listening. */
+  tlsListening: string
+  tlsReason: string
+  generation: number
+  /** Keys a reload saw change and could not apply: they wait for a restart. */
+  restartNeeded: string[]
+  reloadError: string
+}
+
+/** Mirrors SaveAck in tools/desktop/native.go: what became of the running server. */
+export interface SaveAck {
+  outcome:
+    | 'applied'
+    | 'restart_needed'
+    | 'listener_failed'
+    | 'refused'
+    | 'timeout'
+    | 'not_running'
+    | 'unavailable'
+  generation: number
+  httpUrl: string
+  httpReason: string
+  tlsListening: string
+  tlsReason: string
+  restartNeeded: string[]
+  error: string
+}
+
+/**
+ * Shown next to "All networks", verbatim from the design (Q5): the policy is
+ * that a plaintext peer that is not on this computer reads but never writes.
+ */
+export const ALL_NETWORKS_WARNING =
+  'Anyone who can reach this computer can READ every knowledge base and clone it, without signing in. ' +
+  'They cannot change anything. To let other machines work with this one securely, enrol it in a fleet ' +
+  'and use the Fleet port.'
 
 /** What the Fleet identity section needs; omitted, the section is not shown. */
 export interface FleetProps {
@@ -27,13 +89,24 @@ export interface FleetProps {
 
 interface Props {
   initial: Settings
-  onSave: (s: Settings) => Promise<void>
-  // Fired, deliberately NOT awaited for success — see restart() below.
+  onSave: (s: Settings) => Promise<SaveAck>
+  // Resolves when the replacement server answers; rejects with the reason it
+  // did not — see restart() below.
   onRestart: () => Promise<void>
   onRevealLog: () => Promise<void>
   /** Discards edits and closes the window, the way a dialog's Cancel does. */
   onCancel: () => void
+  /**
+   * Reads the settings again, for the server's state after a save or a
+   * restart. Only `server` and `effectivePort` are taken from it: the form's
+   * own edits are never overwritten.
+   */
+  onRefresh?: () => Promise<Settings>
   fleet?: FleetProps
+  /** How long a restart may take before the window gives up waiting. */
+  restartTimeoutMs?: number
+  /** Gap between the reads that wait for the new server's record. */
+  pollMs?: number
 }
 
 /**
@@ -49,6 +122,19 @@ const ENV_FOR: Record<string, string | undefined> = {
   logFormat: 'KNOMIT_LOG_FORMAT',
   tlsAddr: 'KNOMIT_TLS_ADDR',
 }
+
+/**
+ * The two variables that own the HTTP scope (settings.go configKeys, scope:
+ * true): either one set makes the whole choice read-only, because half a scope
+ * written under the other's override would be a surprise.
+ */
+const SCOPE_ENV = ['KNOMIT_HTTP', 'KNOMIT_HOST']
+
+const SCOPES: { value: Exclude<HttpScope, 'other'>; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'local', label: 'This computer only' },
+  { value: 'all', label: 'All networks' },
+]
 
 /** The zerolog levels config.Validate accepts, quietest first. */
 const LEVELS = ['trace', 'debug', 'info', 'warn', 'error']
@@ -116,24 +202,37 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel, fleet }: Props) {
+export function SettingsForm({
+  initial,
+  onSave,
+  onRestart,
+  onRevealLog,
+  onCancel,
+  onRefresh,
+  fleet,
+  restartTimeoutMs = 90_000,
+  pollMs = 500,
+}: Props) {
   const [s, setS] = useState(initial)
   // Shown beside the buttons. Reserved for failures that belong to the WINDOW
-  // rather than to one control: a save the backend refused, a relaunch that
-  // could not resolve its bundle. Field problems never come here — they mark
-  // the field instead.
+  // rather than to one control: a save the backend refused, a restart that
+  // failed or timed out. Field problems never come here — they mark the field
+  // instead.
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
-  const [saved, setSaved] = useState(false)
+  const [saved, setSaved] = useState('')
   const [restarting, setRestarting] = useState(false)
-  // The port as of the last save that actually succeeded, so the restart offer
-  // reflects what is ON DISK rather than what is in the form. Deriving it this
-  // way — rather than keeping a needsRestart flag that each save recomputes —
-  // is what stops a LATER failed save from retracting a restart that an
-  // earlier successful one genuinely owes.
+  // The server as the window last saw it: from the window's load, then from
+  // every refresh after a save or a restart.
+  const [server, setServer] = useState<ServerState>(initial.server)
+  const [effectivePort, setEffectivePort] = useState(initial.effectivePort)
+  // The port as of the last save that reached the file, so "configured port
+  // was busy" compares what is ON DISK with what the server bound, not what is
+  // half-typed in the form.
   const [savedPort, setSavedPort] = useState(initial.port)
-  // The same, for [tls].addr: bound once at boot like the port.
-  const [savedTLS, setSavedTLS] = useState(initial.tlsAddr)
+  // What the last save's reload reported. Its restartNeeded is fresher than
+  // the server record until the next refresh, and a restart clears it.
+  const [ack, setAck] = useState<SaveAck | null>(null)
   // The section's identity: the one loaded with the window, then whatever an
   // install hands back, so the rows show what was just installed.
   const [identity, setIdentity] = useState<FleetIdentity | null>(fleet?.identity ?? null)
@@ -147,20 +246,24 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
   // user their unsaved changes are on disk.
   useEffect(() => {
     if (!saved) return
-    const t = setTimeout(() => setSaved(false), 2600)
+    const t = setTimeout(() => setSaved(''), 2600)
     return () => clearTimeout(t)
   }, [saved])
-  // The port and [tls].addr need a restart: each is bound once at boot. Level
-  // and format are applied live by SaveSettings. A first enrolment needs one
-  // too when a listener is wanted but not running: installing starts nothing.
-  const portRestart = savedPort !== initial.port
-  const tlsRestart = savedTLS !== initial.tlsAddr
-  const needsRestart = portRestart || tlsRestart || installRestart
+  // The port, the scope and [tls].addr are applied by the reload a save
+  // triggers. What waits for a restart is what the SERVER says it could not
+  // apply (auth.require, ...), plus a first enrolment whose listener is wanted
+  // but not running.
+  const restartKeys = ack ? ack.restartNeeded : server.restartNeeded
+  const needsRestart = restartKeys.length > 0 || installRestart
 
   // envOverrides returns a NIL slice when nothing is set, and encoding/json
   // renders that as `null` rather than `[]`. That is the ordinary case, so
   // defaulting here is what keeps the window from coming up blank.
   const overriddenBy = initial.overriddenByEnv ?? []
+  // The server bound a different port than the one on disk (the configured one
+  // was held), unless the scope says there should be no port at all.
+  const portBusy = effectivePort > 0 && String(effectivePort) !== savedPort && s.httpScope !== 'off'
+  const scopeEnv = SCOPE_ENV.filter((k) => overriddenBy.includes(k))
   const overridden = (field: string) => {
     const key = ENV_FOR[field]
     return key !== undefined && overriddenBy.includes(key)
@@ -169,7 +272,7 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
   function edit(patch: Partial<Settings>) {
     const next = { ...s, ...patch }
     setS(next)
-    setSaved(false)
+    setSaved('')
     // Clear a mark the moment the value stops being wrong, rather than making
     // the user press Save again to find out. Only re-validates fields that are
     // already marked, so typing into a clean form never raises an error
@@ -182,9 +285,23 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
     }
   }
 
+  /** The server's record again, for the header, the restart notice and the versions. */
+  async function refresh(): Promise<Settings | null> {
+    if (!onRefresh) return null
+    try {
+      const fresh = await onRefresh()
+      setServer(fresh.server)
+      setEffectivePort(fresh.effectivePort)
+      return fresh
+    } catch {
+      // The header keeps what it had; the next save or restart reads again.
+      return null
+    }
+  }
+
   async function save() {
     setError('')
-    setSaved(false)
+    setSaved('')
     const invalid = validate(s)
     setFieldErrors(invalid)
     if (Object.keys(invalid).length > 0) {
@@ -192,57 +309,79 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
       // nothing to choose between: every refusal is on screen at once.
       return
     }
+    let result: SaveAck
     try {
-      await onSave(s)
+      result = await onSave(s)
     } catch (e) {
       // applySettings validates before touching either backend, so a rejected
-      // save changed nothing on disk — savedPort deliberately stays put.
+      // save changed nothing on disk and the server was not told.
       setError(message(e))
       return
     }
-    // "Saved." is suppressed only on the save that OWES the restart, where the
-    // warning below is the stronger message and a cheerful "Saved." beside it
-    // reads as "and you are done". Every later save still gets its
-    // confirmation, including while that warning is still standing — otherwise
-    // one port change would silence the feedback on every save after it.
-    const changedPort = s.port !== savedPort
-    const changedTLS = s.tlsAddr !== savedTLS
-    setSaved(!((changedPort && s.port !== initial.port) || (changedTLS && s.tlsAddr !== initial.tlsAddr)))
+    // The file is saved whatever the ack says; the ack says what became of the
+    // RUNNING server. A failure to apply is shown as the failure it is, not
+    // behind a cheerful "Saved.".
+    setAck(result)
     setSavedPort(s.port)
-    setSavedTLS(s.tlsAddr)
+    const line = ackLine(result, s)
+    if (line.ok) setSaved(line.text)
+    else setError(line.text)
+    void refresh()
   }
 
   /**
-   * Fires RestartApp and commits to a terminal state. Read this before
-   * "fixing" it into an `await`.
+   * Restarts the server the app spawned and commits to a terminal state: the
+   * button leaves "Restarting…" on success, on failure and on timeout, never
+   * on a promise that might not settle.
    *
-   * RestartApp NEVER RETURNS on the success path. Its last step is
-   * onRestart -> wapp.Quit(), which is InvokeSync(destroy) -> NSApp terminate:
-   * the process is gone before the Go function reaches `return nil`, so the
-   * Wails transport never writes a response and THIS PROMISE NEVER SETTLES.
-   * That was confirmed empirically in Task 9 — the harness's post-call log line
-   * never printed. A promise that never settles is the SUCCESS signal here.
+   * RestartServer resolves when the replacement answers on its socket, and
+   * rejects with the reason it did not (a server started outside the app is
+   * refused by name). The window does not trust it to settle: it gives up after
+   * restartTimeoutMs with a message, because a button stuck on "Restarting…"
+   * gives the user nothing to act on (it was exactly that, in the first build:
+   * a promise that never settled because the whole app quit).
    *
-   * So there is nothing to await and no spinner to clear: the button enters
-   * "Restarting…" and stays there until the window it lives in is destroyed.
-   * Measured at ~60ms, so treat it as a flash, not a progress indication: once
-   * the server is up, serverBoot.stop's select returns immediately on a closed
-   * b.done (serverboot.go), and the multi-second stopGrace path only applies to
-   * a boot still in flight. Do not build anything that assumes the state is
-   * on screen long enough to read.
-   *
-   * A REJECTION, however, is real and must be shown: RestartApp returns an
-   * error when the relaunch target cannot be resolved or the spawn fails —
-   * which is every time in a dev build, since bundlePathFor needs a .app. The
-   * app is still running in that case, so the button comes back.
+   * After a success the new server's record is read until it names a new pid
+   * (it writes server.json just after it starts answering), so the header and
+   * the restart notice describe the server that is running now.
    */
-  function restart() {
+  async function restart() {
     setError('')
+    setSaved('')
     setRestarting(true)
-    onRestart().catch((e: unknown) => {
+    const oldPid = server.pid
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `The server did not come back within ${Math.round(restartTimeoutMs / 1000)} s. ` +
+                'Its log file says why; quit and reopen Knomit if it stays down.',
+            ),
+          ),
+        restartTimeoutMs,
+      )
+    })
+    try {
+      await Promise.race([onRestart(), timeout])
+    } catch (e) {
+      clearTimeout(timer)
       setRestarting(false)
       setError(message(e))
-    })
+      void refresh()
+      return
+    }
+    clearTimeout(timer)
+    for (let i = 0; onRefresh && i < 20; i++) {
+      const fresh = await refresh()
+      if (fresh && fresh.server.running && fresh.server.pid !== oldPid) break
+      await new Promise((r) => setTimeout(r, pollMs))
+    }
+    setAck(null)
+    setInstallRestart(false)
+    setRestarting(false)
+    setSaved('Server restarted.')
   }
 
   function reveal() {
@@ -299,19 +438,17 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
     // buttons are always where the user left them.
     <div className="ps">
       <header className="ps-status">
-        {initial.effectivePort > 0 ? (
+        {server.running || effectivePort > 0 ? (
           <>
             <span
               className={
-                String(initial.effectivePort) === initial.port
-                  ? 'pip is-ok'
-                  : 'pip is-warn'
+                portBusy ? 'pip is-warn' : 'pip is-ok'
               }
               aria-hidden="true"
             />
             <span className="ps-state">Running</span>
-            <code className="ps-addr">127.0.0.1:{initial.effectivePort}</code>
-            {String(initial.effectivePort) !== initial.port && (
+            <code className="ps-addr">{listeningAddress(server, effectivePort)}</code>
+            {portBusy && (
               // Replaces the old sentence under the port field. The number that
               // matters is the one it is actually listening on, and this is
               // where someone looks to find it.
@@ -328,12 +465,80 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
       </header>
 
       <div className="ps-body">
+        {server.attached && (
+          <div className="banner" role="note">
+            <p>
+              The server was started outside the app{server.pid > 0 ? ` (pid ${server.pid})` : ''}; restart is
+              not available, changes apply on reload.
+            </p>
+            {server.version && (
+              <p className="sub">
+                Server <code>{server.version}</code> · App <code>{server.desktopVersion}</code>
+              </p>
+            )}
+            {server.versionSkew && (
+              <p className="sub warn" role="note">
+                The server and the app are different versions ({majorMinor(server.version)} and{' '}
+                {majorMinor(server.desktopVersion)}): this window may not match the server&apos;s API.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* One grouped list, not four icon-headed sections. Five controls did
             not need four eyebrows and four hand-drawn glyphs — the scaffolding
             outweighed the content and the eye counted headings instead of
             settings. Card and hairlines is also the vocabulary the Manage pane
             already uses. */}
         <div className="list">
+          <div className="row scope">
+            <div className="rowlabel" id="httpScopeLabel">
+              HTTP port
+            </div>
+            <div className="control scopes" role="radiogroup" aria-labelledby="httpScopeLabel">
+              {SCOPES.map((o) => (
+                <label key={o.value} className="radio">
+                  <input
+                    type="radio"
+                    name="httpScope"
+                    value={o.value}
+                    checked={s.httpScope === o.value}
+                    disabled={scopeEnv.length > 0}
+                    onChange={() => edit({ httpScope: o.value })}
+                  />
+                  {o.label}
+                </label>
+              ))}
+              {scopeEnv.length > 0 && <span className="chip">env</span>}
+            </div>
+            {s.httpScope === 'off' && (
+              <p className="sub">
+                No TCP port is open. This app and the kb tool use the local socket; browsers and MCP
+                clients that connect to http://127.0.0.1 cannot.
+              </p>
+            )}
+            {s.httpScope === 'local' && (
+              <p className="sub">
+                Only programs on this computer can connect, on <code>http://127.0.0.1:{s.port}</code>.
+              </p>
+            )}
+            {s.httpScope === 'all' && (
+              <p className="sub warn" role="note">
+                {ALL_NETWORKS_WARNING}
+              </p>
+            )}
+            {s.httpScope === 'other' && (
+              <p className="sub">
+                knomit.toml binds a specific address. Settings leaves it alone; edit the file to change it.
+              </p>
+            )}
+            {scopeEnv.length > 0 && (
+              <p className="sub env">
+                Set by <code>{scopeEnv.join(' and ')}</code>, which beats knomit.toml — saving cannot change this.
+              </p>
+            )}
+          </div>
+
           <div className="row">
             <label htmlFor="port">Port</label>
             <div className="control">
@@ -348,7 +553,9 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
               {overridden('port') ? (
                 <span className="chip">env</span>
               ) : (
-                <span className="hint">1024–65535</span>
+                <span className="hint">
+                  {s.httpScope === 'off' ? 'used when the HTTP port is on' : '1024–65535'}
+                </span>
               )}
             </div>
             {errFor('port')}
@@ -371,7 +578,7 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
               {overridden('tlsAddr') ? (
                 <span className="chip">env</span>
               ) : (
-                <span className="hint">host:port for enrolled peers</span>
+                <span className="hint">Fleet port, host:port for enrolled peers</span>
               )}
             </div>
             {errFor('tlsAddr')}
@@ -493,17 +700,18 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
         {needsRestart && (
           <div className="restartbar">
             <p>
-              {restartReason(portRestart, tlsRestart, installRestart)}
-              {portRestart &&
-                ' Connected MCP clients (Claude Code and anything else using the bridge) will need restarting to reconnect.'}
+              {restartReason(restartKeys, installRestart)}
+              {server.attached &&
+                ` The server was started outside the app${server.pid > 0 ? ` (pid ${server.pid})` : ''}: restart it where it was started.`}
             </p>
             <button
               type="button"
               className="k-btn"
               onClick={restart}
-              disabled={restarting}
+              disabled={restarting || !server.canRestart}
+              title={server.canRestart ? undefined : 'Only a server the app started can be restarted here.'}
             >
-              {restarting ? 'Restarting…' : 'Restart Now'}
+              {restarting ? 'Restarting…' : 'Restart server'}
             </button>
           </div>
         )}
@@ -514,8 +722,8 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
               {error}
             </p>
           ) : saved ? (
-            <p role="status" className="outcome is-ok" title="Saved.">
-              Saved.
+            <p role="status" className="outcome is-ok" title={saved}>
+              {saved}
             </p>
           ) : (
             <span className="outcome" aria-hidden="true" />
@@ -536,11 +744,57 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
  * One restart offer whatever owes it — not one bar per cause — saying what
  * the restart will apply.
  */
-function restartReason(port: boolean, tls: boolean, install: boolean): string {
-  const what = [port && 'port change', tls && 'fleet listener change'].filter(Boolean)
-  if (what.length > 0) {
-    const s = what.join(' and ')
-    return `The ${s} takes effect after a restart.${install ? ' So does the fleet listener for the bundle just installed.' : ''}`
+function restartReason(keys: string[], install: boolean): string {
+  const parts: string[] = []
+  if (keys.length > 0) {
+    parts.push(`These settings take effect after a restart of the server: ${keys.join(', ')}.`)
   }
-  return 'The fleet listener starts after a restart: installing a bundle does not start it in a running Knomit.'
+  if (install) {
+    parts.push(
+      'The fleet listener starts after a restart: installing a bundle does not start it in a running Knomit.',
+    )
+  }
+  return parts.join(' ')
+}
+
+/** What the header calls the running server's address. */
+function listeningAddress(server: ServerState, effectivePort: number): string {
+  if (server.httpUrl) return server.httpUrl.replace(/^https?:\/\//, '')
+  if (effectivePort > 0) return `127.0.0.1:${effectivePort}`
+  return 'local socket only'
+}
+
+/** "0.5" from "0.5.3.6ce780d": the part a skew warning is about. */
+function majorMinor(v: string): string {
+  return v.replace(/^v/, '').split('.').slice(0, 2).join('.') || v
+}
+
+/**
+ * What a save's ack tells the user. ok lines are confirmations; the others
+ * are a save that reached the file but not (all of) the running server.
+ */
+function ackLine(a: SaveAck, s: Settings): { ok: boolean; text: string } {
+  switch (a.outcome) {
+    case 'applied': {
+      const http = a.httpUrl
+        ? ` HTTP port on ${a.httpUrl.replace(/^https?:\/\//, '')}.`
+        : s.httpScope === 'off'
+          ? ' HTTP port is off.'
+          : ''
+      const fleet = a.tlsListening ? ` Fleet port on ${a.tlsListening}.` : ''
+      return { ok: true, text: `Saved and applied.${http}${fleet}` }
+    }
+    case 'restart_needed':
+      return { ok: true, text: 'Saved. Listener changes are applied; the rest waits for a restart.' }
+    case 'not_running':
+      return { ok: true, text: 'Saved. The server is not running; the changes apply when it starts.' }
+    case 'listener_failed':
+      return { ok: false, text: `Saved, but a port could not be opened: ${a.error}` }
+    case 'refused':
+      return { ok: false, text: `Saved, but the server could not load it and kept its running settings: ${a.error}` }
+    case 'timeout':
+      return { ok: false, text: `Saved, but the server did not confirm: ${a.error}` }
+    default:
+      return { ok: false, text: `Saved, but the server could not be told: ${a.error}` }
+  }
 }
