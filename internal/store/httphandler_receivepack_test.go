@@ -150,17 +150,26 @@ func (p *peer) files(c *object.Commit) map[string]string {
 // authored as the peer agent, signed by signer when non-nil.
 func (p *peer) commit(parent *object.Commit, signer ssh.Signer, kv ...string) *object.Commit {
 	p.t.Helper()
+	return p.commitAs("peer-abcd1234", []*object.Commit{parent}, signer, with(p.files(parent), kv...))
+}
+
+// commitAs makes a commit with the given parents and exactly files as its
+// tree, authored as agent, signed by signer when non-nil.
+func (p *peer) commitAs(agent string, parents []*object.Commit, signer ssh.Signer, files map[string]string) *object.Commit {
+	p.t.Helper()
 	p.n++
-	files := with(p.files(parent), kv...)
 	st := p.repo.Storer
-	when := parent.Committer.When.Add(time.Hour + time.Duration(p.n)*time.Second).UTC()
-	email := "peer-abcd1234+learn@agents.knomit.io"
+	when := parents[0].Committer.When.Add(time.Hour + time.Duration(p.n)*time.Second).UTC()
+	var ph []plumbing.Hash
+	for _, c := range parents {
+		ph = append(ph, c.Hash)
+	}
 	c := &object.Commit{
-		Author:       object.Signature{Name: "peer-abcd1234", Email: email, When: when},
-		Committer:    object.Signature{Name: "peer-abcd1234", Email: "peer-abcd1234@agents.knomit.io", When: when},
+		Author:       object.Signature{Name: agent, Email: agent + "+learn@agents.knomit.io", When: when},
+		Committer:    object.Signature{Name: agent, Email: agent + "@agents.knomit.io", When: when},
 		Message:      fmt.Sprintf("learn: %d", p.n),
 		TreeHash:     repoOn(p.t, st).tree(files),
-		ParentHashes: []plumbing.Hash{parent.Hash},
+		ParentHashes: ph,
 	}
 	if signer != nil {
 		c = signed(p.t, c, signer)
@@ -350,15 +359,16 @@ func TestReceivePack_RefusesStaleOldHash(t *testing.T) {
 }
 
 // T3: under enforce at the HOST's main, a commit whose key has no member
-// record refuses the push — even though the pushed branch itself turns
-// verification off in its own ontology (review M4: the mode is read at the
-// host's upstream, never at the pushed tip).
+// record refuses the push (review M4: the mode is read at the host's
+// upstream, never at the pushed tip; a pushed ontology turning verification
+// off is now refused earlier still, by the content closure —
+// TestReceivePack_ClosureRefusesKnomitChange).
 func TestReceivePack_EnforceRefusesUnacceptedSigner(t *testing.T) {
 	h := newPushHost(t, VerifyEnforce, 1)
 	h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Members: h.members([]FleetMember{}, nil)})
 	p := newPeer(t, h.srv.URL)
 	k := newTestSigner(t)
-	c1 := p.commit(p.head(), k, fact.OntologyFile, kbOntology(VerifyOff))
+	c1 := p.commit(p.head(), k, "kb/notes/w.md", testFactBody("w", 0.9, nil))
 	c2 := p.commit(c1, k, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	p.setBranch("work", c2)
 	objs := h.objects()
@@ -377,12 +387,13 @@ func TestReceivePack_EnforceAcceptsMemberKey(t *testing.T) {
 	h := newPushHost(t, VerifyEnforce, 1)
 	k := newTestSigner(t)
 	m := FleetMember{Member: fact.Member{Agent: "peer-abcd1234", State: fact.MemberActive, Key: k.PublicKey()}}
-	h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Members: h.members([]FleetMember{m}, nil)})
+	fp, branch := pusherOf(t, k)
+	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Members: h.members([]FleetMember{m}, nil)})
 	p := newPeer(t, h.srv.URL)
 	c := p.commit(p.head(), k, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	p.setBranch("work", c)
-	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch))
-	require.Equal(t, c.Hash, h.ref(peerBranch))
+	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+branch))
+	require.Equal(t, c.Hash, h.ref(branch))
 }
 
 // T4: off never touches the fleet; log judges, logs and accepts.
