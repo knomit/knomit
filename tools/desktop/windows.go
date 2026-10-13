@@ -38,27 +38,28 @@ func newAuxWindows(app *application.App) *auxWindows {
 	return &auxWindows{app: app}
 }
 
-// settingsWindowOptions describes the Settings dialog. Fixed size: the form is
-// a single column of controls, and a resizable window only offers the user ways
-// to make it look broken.
+// settingsWindowOptions describes the Settings dialog. Fixed size: a sidebar
+// of four pages beside one pane, and a resizable window only offers the user
+// ways to make it look broken.
 func settingsWindowOptions() application.WebviewWindowOptions {
 	return application.WebviewWindowOptions{
 		// The name is what gates the trust-changing bindings to this window
-		// (callerIsSettings): Wails reports the calling window by name.
+		// (callerIsSettings): Wails reports the calling window by name. The
+		// sidebar redesign kept it on purpose; renaming the window would make
+		// Save, Restart, PublicKeyLine and InstallBundle refuse their own UI.
 		Name:  settingsWindowName,
 		Title: "Knomit Settings",
 		URL:   settingsURL,
-		Width: 520,
-		// Sized for the LOUDEST state, not the everyday one: an environment note
-		// under all three config fields, a refused value under one of them, and
-		// the restart offer standing. 380 predated the notes and the callout and
-		// put Save below the fold in that state — with DisableResize and, before
-		// the footer was pinned, no way to reach it.
-		//
-		// The footer is pinned now (.ps-foot in App.css), so the buttons cannot
-		// leave the window whatever the body does. This height is what stops the
-		// body needing to scroll in the states people actually hit.
-		Height:        470,
+		// 172px of sidebar (General, Network, Fleet, Logs, and the server
+		// status at its foot) beside a pane wide enough for the HTTP scope's
+		// three-way segmented control on one line.
+		Width: 680,
+		// Only the page scrolls: the sidebar and the footer (restart offer,
+		// outcome, Cancel and Save) are pinned in App.css, so the buttons
+		// cannot leave the window whatever a page holds. This height is what
+		// lets the everyday pages fit without scrolling, with the restart
+		// offer standing.
+		Height:        500,
 		Hidden:        true,
 		DisableResize: true,
 	}

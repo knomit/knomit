@@ -30,6 +30,146 @@ interface Handlers {
 
 const save = () => fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
+// The sidebar. Its items are buttons named by the page (plus "has an error"
+// when the page holds one), so a name match is what a person would click.
+const nav = () => screen.getByRole('navigation', { name: /settings sections/i })
+const navItem = (page: RegExp) => within(nav()).getByRole('button', { name: page })
+const goTo = (page: RegExp) => fireEvent.click(navItem(page))
+const fleetProps = {
+  identity: notEnrolled,
+  onCopyPublicKey: vi.fn().mockResolvedValue(undefined),
+  onReadClipboard: vi.fn().mockResolvedValue(''),
+  onInstall: vi.fn(),
+}
+
+describe('SettingsForm sidebar', () => {
+  it('lists General, Network, Fleet and Logs, in that order, and opens on General', () => {
+    render(
+      <SettingsForm
+        initial={base}
+        onSave={vi.fn()}
+        onRestart={vi.fn()}
+        onRevealLog={vi.fn()}
+        onCancel={vi.fn()}
+        fleet={fleetProps}
+      />,
+    )
+    expect(within(nav()).getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'General',
+      'Network',
+      'Fleet',
+      'Logs',
+    ])
+    expect(navItem(/general/i)).toHaveAttribute('aria-current', 'page')
+    expect(navItem(/network/i)).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('heading', { level: 2, name: 'General' })).toBeVisible()
+  })
+
+  // A missing section is omitted, never shown disabled.
+  it('has no Fleet item when the window has no fleet section', () => {
+    renderForm()
+    expect(within(nav()).getAllByRole('button').map((b) => b.textContent)).toEqual(['General', 'Network', 'Logs'])
+  })
+
+  it('shows one page at a time and moves the selection with it', () => {
+    renderForm()
+    expect(screen.getByLabelText(/start at login/i)).toBeVisible()
+    expect(screen.getByLabelText(/^port$/i)).not.toBeVisible()
+
+    goTo(/network/i)
+    expect(navItem(/network/i)).toHaveAttribute('aria-current', 'page')
+    expect(navItem(/general/i)).not.toHaveAttribute('aria-current')
+    expect(screen.getByLabelText(/^port$/i)).toBeVisible()
+    expect(screen.getByLabelText(/start at login/i)).not.toBeVisible()
+    expect(screen.getByLabelText(/log level/i)).not.toBeVisible()
+
+    goTo(/logs/i)
+    expect(screen.getByLabelText(/log level/i)).toBeVisible()
+    expect(screen.getByLabelText(/^port$/i)).not.toBeVisible()
+  })
+
+  // One transaction across every page: Save sends what was edited on pages
+  // that are no longer in view.
+  it('keeps edits made on other pages and saves them together', async () => {
+    const { onSave } = renderForm()
+    goTo(/network/i)
+    fireEvent.change(screen.getByLabelText(/^port$/i), { target: { value: '20000' } })
+    goTo(/logs/i)
+    fireEvent.change(screen.getByLabelText(/log level/i), { target: { value: 'debug' } })
+    goTo(/general/i)
+    fireEvent.click(screen.getByLabelText(/start at login/i))
+    save()
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(onSave).mock.calls[0][0]).toEqual({
+      ...base,
+      port: '20000',
+      logLevel: 'debug',
+      startAtLogin: true,
+    })
+  })
+
+  // The status sits at the foot of the sidebar, on every page.
+  it('shows the server state at the foot of the sidebar on every page', () => {
+    renderForm({ server: attachedServer })
+    for (const p of [/general/i, /network/i, /logs/i]) {
+      goTo(p)
+      expect(screen.getByText('Running')).toBeVisible()
+      expect(screen.getByText('127.0.0.1:19278')).toBeVisible()
+      expect(screen.getByText(/· attached/)).toBeVisible()
+    }
+  })
+})
+
+describe('SettingsForm: an error on a page that is not in view', () => {
+  it('switches to the page that holds the refused field and marks it in the sidebar', async () => {
+    const { onSave } = renderForm()
+    goTo(/network/i)
+    fireEvent.change(screen.getByLabelText(/^port$/i), { target: { value: '80' } })
+    goTo(/logs/i)
+    save()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Port must be between 1024 and 65535, got 80.')
+    expect(alert).toBeVisible()
+    expect(navItem(/network/i)).toHaveAttribute('aria-current', 'page')
+    expect(navItem(/network/i)).toHaveAccessibleName('Network has an error')
+    expect(navItem(/logs/i)).toHaveAccessibleName('Logs')
+    expect(navItem(/general/i)).toHaveAccessibleName('General')
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('keeps the mark while you look elsewhere, and drops it once the value is fixed', async () => {
+    renderForm()
+    goTo(/network/i)
+    fireEvent.change(screen.getByLabelText(/fleet listener/i), { target: { value: '0.0.0.0' } })
+    save()
+    await screen.findByRole('alert')
+
+    goTo(/general/i)
+    expect(navItem(/network/i)).toHaveAccessibleName('Network has an error')
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    goTo(/network/i)
+    fireEvent.change(screen.getByLabelText(/fleet listener/i), { target: { value: '0.0.0.0:19279' } })
+    expect(navItem(/network/i)).toHaveAccessibleName('Network')
+  })
+
+  // Two pages hold errors and the one in view is the LATER of them: a Save
+  // that always jumped to the first error page would land on Network.
+  it('stays on the page in view when that page holds an error, and still marks the other', async () => {
+    renderForm({ logLevel: 'verbose' })
+    goTo(/network/i)
+    fireEvent.change(screen.getByLabelText(/^port$/i), { target: { value: '80' } })
+    goTo(/logs/i)
+    save()
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Log level must be one of .*got "verbose"/)
+    expect(navItem(/logs/i)).toHaveAttribute('aria-current', 'page')
+    expect(navItem(/logs/i)).toHaveAccessibleName('Logs has an error')
+    expect(navItem(/network/i)).not.toHaveAttribute('aria-current')
+    expect(navItem(/network/i)).toHaveAccessibleName('Network has an error')
+  })
+})
+
 describe('SettingsForm', () => {
   // Strengthened from the brief, which only asserted `.port`. A form that sent
   // ONLY the edited field would have passed that: SaveSettings takes the whole
@@ -175,6 +315,7 @@ describe('SettingsForm', () => {
   // printed.
   it('reveals the log file', async () => {
     const { onRevealLog } = renderForm()
+    goTo(/logs/i)
     fireEvent.click(screen.getByRole('button', { name: /reveal/i }))
     await waitFor(() => expect(onRevealLog).toHaveBeenCalledTimes(1))
   })
@@ -217,9 +358,15 @@ describe('SettingsForm', () => {
 
 describe('SettingsForm HTTP port scope', () => {
   const radio = (name: RegExp) => screen.getByRole('radio', { name })
+  // The scope lives on the Network page.
+  const renderNet = (...args: Parameters<typeof renderForm>) => {
+    const h = renderForm(...args)
+    goTo(/network/i)
+    return h
+  }
 
   it('offers the three scopes and checks the one the config means', () => {
-    renderForm({ httpScope: 'off' })
+    renderNet({ httpScope: 'off' })
     const group = screen.getByRole('radiogroup')
     expect(within(group).getAllByRole('radio').map((r) => r.closest('label')?.textContent)).toEqual([
       'Off',
@@ -231,12 +378,30 @@ describe('SettingsForm HTTP port scope', () => {
     expect(radio(/all networks/i)).not.toBeChecked()
   })
 
+  // The selected segment is styled by a class from state, not by :has(),
+  // which WebKit before Safari 15.4 (macOS 11's) does not support.
+  it('marks the selected segment with is-on, and moves it with the choice', () => {
+    renderNet({ httpScope: 'off' })
+    const opt = (name: RegExp) => radio(name).closest('label')
+    expect(opt(/^off$/i)).toHaveClass('is-on')
+    expect(opt(/this computer only/i)).not.toHaveClass('is-on')
+    expect(opt(/all networks/i)).not.toHaveClass('is-on')
+    fireEvent.click(radio(/all networks/i))
+    expect(opt(/all networks/i)).toHaveClass('is-on')
+    expect(opt(/^off$/i)).not.toHaveClass('is-on')
+  })
+
+  it('marks no segment when the config binds some other host', () => {
+    renderNet({ httpScope: 'other' })
+    for (const r of screen.getAllByRole('radio')) expect(r.closest('label')).not.toHaveClass('is-on')
+  })
+
   it.each([
     ['off', /No TCP port is open/i],
     ['local', /Only programs on this computer can connect/i],
     ['all', /Anyone who can reach this computer can READ/],
   ] as const)('%s shows its own copy', (scope, text) => {
-    renderForm({ httpScope: scope })
+    renderNet({ httpScope: scope })
     expect(screen.getByText(text)).toBeInTheDocument()
     // ...and only its own: the other scopes' copy is not on screen.
     const others = (['off', 'local', 'all'] as const).filter((x) => x !== scope)
@@ -247,7 +412,7 @@ describe('SettingsForm HTTP port scope', () => {
   // The consequence of "All networks", verbatim from the design (Q5). A reworded
   // warning is a different promise.
   it('states the All networks consequence verbatim', () => {
-    renderForm({ httpScope: 'all' })
+    renderNet({ httpScope: 'all' })
     expect(ALL_NETWORKS_WARNING).toBe(
       'Anyone who can reach this computer can READ every knowledge base and clone it, without signing in. ' +
         'They cannot change anything. To let other machines work with this one securely, enrol it in a fleet ' +
@@ -257,14 +422,14 @@ describe('SettingsForm HTTP port scope', () => {
   })
 
   it('shows the warning as soon as All networks is chosen, before saving', () => {
-    renderForm({ httpScope: 'local' })
+    renderNet({ httpScope: 'local' })
     expect(screen.queryByText(ALL_NETWORKS_WARNING)).toBeNull()
     fireEvent.click(radio(/all networks/i))
     expect(screen.getByText(ALL_NETWORKS_WARNING)).toBeInTheDocument()
   })
 
   it('sends the chosen scope with the rest of the settings', async () => {
-    const { onSave } = renderForm({ httpScope: 'off' })
+    const { onSave } = renderNet({ httpScope: 'off' })
     fireEvent.click(radio(/this computer only/i))
     save()
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
@@ -272,15 +437,37 @@ describe('SettingsForm HTTP port scope', () => {
   })
 
   it('leaves a host Settings does not edit alone: nothing checked, and it says so', () => {
-    renderForm({ httpScope: 'other' })
+    renderNet({ httpScope: 'other' })
     for (const r of screen.getAllByRole('radio')) expect(r).not.toBeChecked()
     expect(screen.getByText(/binds a specific address/i)).toBeInTheDocument()
   })
 
   it.each(['KNOMIT_HTTP', 'KNOMIT_HOST'])('is read-only and names the variable when %s owns it', (v) => {
-    renderForm({ overriddenByEnv: [v] })
+    renderNet({ overriddenByEnv: [v] })
     for (const r of screen.getAllByRole('radio')) expect(r).toBeDisabled()
-    expect(screen.getByText(new RegExp(v))).toBeInTheDocument()
+    expect(screen.getByText(new RegExp(v))).toBeVisible()
+  })
+
+  // The same amber "env" chip the Port and Log level rows carry, on the scope
+  // row itself, and the choice cannot move: a save sends the scope it loaded.
+  it('carries the env chip on the scope row and keeps the loaded scope through a save', async () => {
+    const { onSave } = renderNet({ overriddenByEnv: ['KNOMIT_HTTP'], httpScope: 'local' })
+    const group = screen.getByRole('radiogroup', { name: /http port/i })
+    const row = group.closest('.row') as HTMLElement
+    expect(within(row).getByText('env')).toHaveClass('chip')
+    expect(within(row).getByText(/KNOMIT_HTTP/).closest('p')).toHaveClass('env')
+    // The Port row has no chip of its own: only KNOMIT_HTTP is set.
+    const portRow = screen.getByLabelText(/^port$/i).closest('.row') as HTMLElement
+    expect(within(portRow).queryByText('env')).toBeNull()
+
+    // Disabled, so no click can move it (jsdom toggles a disabled radio's
+    // `checked` on a synthetic click, which a webview does not, so the
+    // assertion is on the disabled state and on what Save sends).
+    for (const r of within(group).getAllByRole('radio')) expect(r).toBeDisabled()
+    expect(radio(/this computer only/i)).toBeChecked()
+    save()
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(onSave).mock.calls[0][0].httpScope).toBe('local')
   })
 })
 
@@ -527,6 +714,7 @@ describe('SettingsForm restart after an install', () => {
     )
   }
   async function install() {
+    goTo(/fleet/i)
     fireEvent.click(screen.getByRole('button', { name: /paste from clipboard/i }))
     await screen.findByText(/bundle loaded/i)
     fireEvent.click(screen.getByRole('button', { name: /^install$/i }))
