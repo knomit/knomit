@@ -1,13 +1,15 @@
 // Merging a peer's pushed branch into this instance's agent branch (F11 UI
 // merge). A peer pushes its own agent branch to this host over /git (F11);
-// here the host's operator merges it, from the web UI, into the host's own
-// agent branch, and the host's ordinary sync carries it upstream.
+// here it is merged into the host's own agent branch — by the operator from
+// the web UI, or by the consensus merger under `consensus: auto` — and the
+// upstream follows that branch.
 package store
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +27,60 @@ var ErrBranchMoved = errors.New("branch moved since it was reviewed")
 // ErrUnrelatedHistories: the two branches share no commit, so there is no
 // merge base to merge from.
 var ErrUnrelatedHistories = errors.New("unrelated histories")
+
+// ErrPrivatePathMerge: merging a pushed branch would change a private path
+// (fact.IsPrivatePath — .knomit/, any dot segment) of the host's agent branch.
+// Match with errors.Is; errors.As a *PrivatePathMergeError for the paths.
+var ErrPrivatePathMerge = errors.New("the merge would change private paths")
+
+// PrivatePathMergeError is MergePushed's and MergeConsensus's refusal when the
+// merge RESULT's private paths differ from dst's. Nothing was written.
+//
+// This is the authority for "a peer never changes the host's .knomit/": it
+// judges the state the merge would produce, so it covers every way a pushed
+// branch can carry a dot change — a commit receive-pack did not judge (a tip
+// the host already held, a branch pushed before the push-time closure) as
+// well as one it did. It judges current state, not history: a branch that
+// merges the newest upstream passes on the next round.
+type PrivatePathMergeError struct {
+	Src, Dst, SrcTip string
+	Paths            []string
+}
+
+func (e *PrivatePathMergeError) Error() string {
+	return fmt.Sprintf("%s: merging %s at %s into %s would change %s", ErrPrivatePathMerge.Error(), e.Src, e.SrcTip, e.Dst, strings.Join(e.Paths, ", "))
+}
+
+func (e *PrivatePathMergeError) Is(target error) bool { return target == ErrPrivatePathMerge }
+
+// privatePathsChanged lists, sorted, the private paths whose content differs
+// between two trees.
+func (rh *repoHandler) privatePathsChanged(from, to plumbing.Hash) ([]string, error) {
+	ft, err := object.GetTree(rh.gits, from)
+	if err != nil {
+		return nil, err
+	}
+	tt, err := object.GetTree(rh.gits, to)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := object.DiffTree(ft, tt)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, ch := range changes {
+		for _, name := range []string{ch.From.Name, ch.To.Name} {
+			if name != "" && fact.IsPrivatePath(name) && !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
 
 // BranchMovedError is MergePushed's refusal when src is not at srcTip. Nothing
 // was written: the caller shows the new tip and asks again.
@@ -60,6 +116,10 @@ func (e *BranchMovedError) Is(target error) bool { return target == ErrBranchMov
 // setting says — the host's own branch is the consensus side — and only what a
 // key set to off leaves is refused. An explicit side is a human's whole-set
 // choice and is never overridden by the setting.
+//
+// A merge whose RESULT would change any private path of dst (.knomit/, any
+// dot segment) is refused with *PrivatePathMergeError, whatever side or
+// setting settled the conflicts (guardPrivate).
 func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumbing.Hash, side ResolutionSide) (AgentReconcileResult, error) {
 	if srcTip.IsZero() {
 		return AgentReconcileResult{}, fmt.Errorf("MergePushed: the reviewed tip of %s is required", src)
@@ -72,7 +132,7 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 	rh := s.rh
 	unlock := rh.lockBranch(dst)
 	defer unlock()
-	o := mergeOpts{srcTip: srcTip, record: true, side: side}
+	o := mergeOpts{srcTip: srcTip, record: true, side: side, guardPrivate: true}
 	strategy := StrategyRefuse
 	if side == "" {
 		strategy = s.hostConflictStrategy(ctx, &o)
@@ -111,6 +171,10 @@ func (s *Service) hostConflictStrategy(ctx context.Context, o *mergeOpts) Confli
 // auto` it defaults to facts: merge / state: consensus — settles a conflict
 // exactly as for MergePushed with no side; what a key set to off leaves is
 // still refused and left for a human.
+//
+// Like MergePushed, a merge whose result would change a private path of dst
+// is refused (*PrivatePathMergeError); the consensus merger remembers the
+// refused tip and retries the branch once it moves.
 func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip plumbing.Hash) (AgentReconcileResult, error) {
 	if srcTip.IsZero() {
 		return AgentReconcileResult{}, fmt.Errorf("MergeConsensus: the tip of %s is required", src)
@@ -118,7 +182,7 @@ func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip pl
 	rh := s.rh
 	unlock := rh.lockBranch(dst)
 	defer unlock()
-	o := mergeOpts{srcTip: srcTip, record: true, skipMergeOnly: true}
+	o := mergeOpts{srcTip: srcTip, record: true, skipMergeOnly: true, guardPrivate: true}
 	strategy := s.hostConflictStrategy(ctx, &o)
 	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
 }

@@ -404,19 +404,23 @@ func signerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
 // privatePathClosure refuses a push whose new commits change a private path
 // (fact.IsPrivatePath: any segment beginning with "."; .knomit/ is the
 // system — ontology, triggers, recipes, skills). It runs in every
-// verify_signatures mode: what a peer may push is knowledge, never the
-// configuration the host and the merge paths (MergePushed, consensus: auto)
-// would then run, and neither merge path inspects content.
+// verify_signatures mode.
 //
-// The rule: every new commit carries exactly the private state of its merge
-// base with the host's upstream — "a pushed branch carries the .knomit/ of
-// where it forked off the upstream". It accepts a branch that never merged
-// the upstream (its base is its own fork point) and one that merged it (the
-// base is the upstream commit it merged), and refuses an evil merge and a
-// merge that takes an OLDER .knomit/ from a parent the host already holds.
-// That last case is why "differs from every parent" is NOT enough: the old
-// version equals one parent, yet a three-way merge into the upstream applies
-// it as a revert of the newer state.
+// It is EARLY FEEDBACK, not the authority. It judges only the commits a push
+// sends: a tip the host already holds brings none and passes untouched. The
+// authority is the merge-time guard in MergePushed and MergeConsensus (the
+// only routes from a pushed branch into the host's agent branch, which the
+// upstream follows), which judges the merge result.
+//
+// The rule: every new commit carries the private state of its merge base
+// with the host's upstream — "a pushed branch carries the .knomit/ of where
+// it forked off the upstream". It accepts a branch that never merged the
+// upstream (its base is its own fork point) and one that merged it (the base
+// is the upstream commit it merged), and refuses an evil merge and a merge
+// that takes an OLDER .knomit/ from a parent the host already holds. That
+// last case is why "differs from every parent" is NOT enough: the old version
+// equals one parent, yet a three-way merge into the agent branch applies it
+// as a revert of the newer state.
 //
 // No merge base (unrelated history) compares against the empty tree: such a
 // commit may carry no private path at all. A missing upstream never gets
@@ -447,8 +451,15 @@ func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, co
 }
 
 // privateChangeFromBase returns the first private path (sorted) whose content
-// in c differs from that at a merge base of c and up, or "". With several
-// best bases (a criss-cross) c must match each.
+// in c differs from that at the merge base of c and up, or "". With several
+// best bases (a criss-cross) matching ANY of them is enough. On its own that
+// would be unsafe — the merge machinery picks one base, and a commit matching
+// only the other could revert through it — but push time is only a fast
+// fail: the authority is the merge-time guard (guardPrivate in MergePushed
+// and MergeConsensus), which refuses any merge whose result changes the host
+// agent branch's private paths. Requiring EVERY base instead wedged a member
+// branch for good on a benign criss-cross (its merge stays new on every later
+// push).
 func privateChangeFromBase(c, up *object.Commit) (string, error) {
 	tree, err := c.Tree()
 	if err != nil {
@@ -469,12 +480,13 @@ func privateChangeFromBase(c, up *object.Commit) (string, error) {
 			baseTrees = append(baseTrees, bt)
 		}
 	}
-	out := ""
-	for _, bt := range baseTrees {
+	first := ""
+	for i, bt := range baseTrees {
 		changes, err := object.DiffTree(bt, tree)
 		if err != nil {
 			return "", err
 		}
+		out := ""
 		for _, ch := range changes {
 			for _, name := range []string{ch.From.Name, ch.To.Name} {
 				if name != "" && fact.IsPrivatePath(name) && (out == "" || name < out) {
@@ -482,8 +494,14 @@ func privateChangeFromBase(c, up *object.Commit) (string, error) {
 				}
 			}
 		}
+		if out == "" {
+			return "", nil // matches this base
+		}
+		if i == 0 {
+			first = out
+		}
 	}
-	return out, nil
+	return first, nil
 }
 
 // register makes the pushed tip the branch's tip on this host, through the

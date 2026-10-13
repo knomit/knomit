@@ -141,6 +141,12 @@ type mergeOpts struct {
 	// setting left, so a retry naming just those paths would turn the setting
 	// off and be refused again for paths it had already settled.
 	overlayResolutions bool
+	// guardPrivate refuses the merge (*PrivatePathMergeError) when its RESULT
+	// would change any private path (fact.IsPrivatePath) of dst. ONLY the two
+	// routes from a pushed branch into the host's agent branch set it —
+	// MergePushed and MergeConsensus — which makes them, not receive-pack,
+	// the authority for "a peer never changes the host's .knomit/".
+	guardPrivate bool
 }
 
 func (o mergeOpts) factMerge(p conflictsPolicy) factMerge {
@@ -353,6 +359,18 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 			return AgentReconcileResult{}, conflict
 		}
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: three-way merge: %w", err)
+	}
+
+	if o.guardPrivate && mergedTreeHash != dstCommit.TreeHash {
+		paths, perr := rh.privatePathsChanged(dstCommit.TreeHash, mergedTreeHash)
+		if perr != nil {
+			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: private paths: %w", perr)
+		}
+		if len(paths) > 0 {
+			log.Info().Str("src", src).Str("dst", dst).Str("src_tip", srcHash.String()).
+				Strs("paths", paths).Msg("mergeIntoBranch: refused (the merge would change private paths of dst)")
+			return AgentReconcileResult{}, &PrivatePathMergeError{Src: src, Dst: dst, SrcTip: srcHash.String(), Paths: paths}
+		}
 	}
 
 	if mergedTreeHash == dstCommit.TreeHash && !o.record {

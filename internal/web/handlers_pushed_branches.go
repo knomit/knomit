@@ -216,7 +216,12 @@ func handlePushedMerge() http.HandlerFunc {
 func writePushedMergeError(w http.ResponseWriter, r *http.Request, err error) {
 	var conflict *store.MergeConflictError
 	var moved *store.BranchMovedError
+	var private *store.PrivatePathMergeError
 	switch {
+	case errors.As(err, &private):
+		hal.WriteProblemWithExtra(w, http.StatusConflict, "Merge would change system files",
+			`merging the pushed branch would change paths a pushed branch may never change (.knomit/ and any other path with a segment beginning with "."); nothing was merged and nothing changed`,
+			r.URL.Path, map[string]any{"private_paths": private.Paths, "peer_commit": private.SrcTip})
 	case errors.As(err, &conflict):
 		hal.WriteProblemWithExtra(w, http.StatusConflict, "Merge has conflicting changes",
 			"this host and the pushed branch changed the same fact(s); nothing was merged and nothing changed. "+

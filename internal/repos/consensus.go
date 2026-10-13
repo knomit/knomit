@@ -281,6 +281,7 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 
 	res, err := svc.MergeConsensus(ctx, branch, m.agentBranch, tip)
 	var conflict *store.MergeConflictError
+	var private *store.PrivatePathMergeError
 	switch {
 	case err == nil:
 		m.mu.Lock()
@@ -301,6 +302,13 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 		m.refuse(branch, tip, fmt.Sprintf(
 			"consensus: auto-merge of %s at %s into %s refused: conflicting paths %s; left for a human merge (Pushed branches)",
 			branch, shortHash(tipStr), m.agentBranch, strings.Join(conflict.Paths, ", ")))
+	case errors.As(err, &private):
+		// Remembered per tip like a conflict: the branch is retried as soon as
+		// it moves (a member that merges the newest upstream passes), and it
+		// never stops the other branches of this round.
+		m.refuse(branch, tip, fmt.Sprintf(
+			"consensus: auto-merge of %s at %s into %s refused: it would change %s, which a pushed branch may never change; left for the member to merge the newest upstream",
+			branch, shortHash(tipStr), m.agentBranch, strings.Join(private.Paths, ", ")))
 	case errors.Is(err, store.ErrUnrelatedHistories), errors.Is(err, store.ErrNoSigner):
 		m.refuse(branch, tip, fmt.Sprintf(
 			"consensus: auto-merge of %s at %s into %s refused: %v; left for a human", branch, shortHash(tipStr), m.agentBranch, err))
