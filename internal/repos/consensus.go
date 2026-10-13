@@ -304,10 +304,12 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 			branch, shortHash(tipStr), m.agentBranch, strings.Join(conflict.Paths, ", ")))
 	case errors.As(err, &private):
 		// Remembered per tip like a conflict: the branch is retried as soon as
-		// it moves (a member that merges the newest upstream passes), and it
-		// never stops the other branches of this round.
+		// it moves, and it never stops the other branches of this round. Only
+		// a branch that merely LAGS behind gets through by merging the newest
+		// upstream; one whose own history changed a dot path keeps that change
+		// through any merge and must revert it.
 		m.refuse(branch, tip, fmt.Sprintf(
-			"consensus: auto-merge of %s at %s into %s refused: it would change %s, which a pushed branch may never change; left for the member to merge the newest upstream",
+			"consensus: auto-merge of %s at %s into %s refused: it would change %s, which a pushed branch may never change; the member must revert that change on its branch, or merge the newest upstream if its branch only lags behind",
 			branch, shortHash(tipStr), m.agentBranch, strings.Join(private.Paths, ", ")))
 	case errors.Is(err, store.ErrUnrelatedHistories), errors.Is(err, store.ErrNoSigner):
 		m.refuse(branch, tip, fmt.Sprintf(

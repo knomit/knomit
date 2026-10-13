@@ -41,7 +41,9 @@ var ErrPrivatePathMerge = errors.New("the merge would change private paths")
 // branch can carry a dot change — a commit receive-pack did not judge (a tip
 // the host already held, a branch pushed before the push-time closure) as
 // well as one it did. It judges current state, not history: a branch that
-// merges the newest upstream passes on the next round.
+// only LAGS behind passes once it merges the newest upstream; a branch whose
+// own history changed a dot path keeps that change through any merge and
+// passes only once it reverts it.
 type PrivatePathMergeError struct {
 	Src, Dst, SrcTip string
 	Paths            []string
