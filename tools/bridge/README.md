@@ -370,6 +370,6 @@ Each stdin message, outgoing HTTP request, response status, session ID capture, 
 ## Building
 
 ```
-make build        # produces dist/kb
+make server       # produces dist/kb (alias: make build)
 go build -o dist/kb ./tools/bridge/
 ```

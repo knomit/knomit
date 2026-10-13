@@ -51,7 +51,9 @@ and leaves an attached one running.
 ```sh
 make desktop-deps # Linux only: install the GTK4 + WebKitGTK build deps (once, sudo)
 make setup        # fetch native libs into dist/<platform>/lib (once)
-make desktop      # macOS: dist/<platform>/Knomit.app  ·  Linux: dist/<platform>/knomit-desktop  ·  Windows: knomit-desktop.exe
+make dist         # everything end to end: server, then desktop
+make server       # server only: web UI + knomit, kb, knomit-okf in dist/<platform> (alias: make build)
+make desktop      # server (as a prerequisite) + desktop; macOS: dist/<platform>/Knomit.app  ·  Linux: dist/<platform>/knomit-desktop  ·  Windows: knomit-desktop.exe
 make desktop-run  # macOS: open the .app               ·  else: run the binary
 make desktop-install # Linux only: install the .desktop launcher + app icon into ~/.local
 ```
@@ -198,7 +200,7 @@ committed (the binary `//go:embed`s them; regen only when a logo changes):
 Stdio-only MCP clients (Claude Code/Desktop, VS Code) launch `kb` as
 a subprocess; it discovers the running server via `server.json` and proxies MCP
 over the looknomitck port. The app ships that binary so the integration works
-without a separate `make build`:
+without a separate `make server`:
 
 - `make desktop` builds `kb` into the bundle —
   `Knomit.app/Contents/MacOS/kb` on macOS, next to the binary in
