@@ -32,23 +32,32 @@ type Revoked struct {
 	Reason string    `json:"reason,omitempty"`
 }
 
-// IssueCRL signs a CRL listing revoked, with the given Number and NextUpdate,
-// and writes it to <dir>/crl.pem atomically. The PEM is returned too.
-func IssueCRL(dir string, root Root, revoked []Revoked, number *big.Int, next time.Time) ([]byte, error) {
+// SignCRL signs a CRL listing revoked, with the given Number, ThisUpdate and
+// NextUpdate, and returns its PEM. It writes nothing.
+func SignCRL(root Root, revoked []Revoked, number *big.Int, thisUpdate, next time.Time) ([]byte, error) {
 	entries := make([]x509.RevocationListEntry, 0, len(revoked))
 	for _, r := range revoked {
 		entries = append(entries, x509.RevocationListEntry{SerialNumber: r.Serial, RevocationTime: r.At})
 	}
 	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 		Number:                    number,
-		ThisUpdate:                time.Now(),
+		ThisUpdate:                thisUpdate,
 		NextUpdate:                next,
 		RevokedCertificateEntries: entries,
 	}, root.Cert, root.Signer)
 	if err != nil {
 		return nil, fmt.Errorf("pki: sign CRL: %w", err)
 	}
-	out := crlPEM(der)
+	return crlPEM(der), nil
+}
+
+// IssueCRL is SignCRL as of time.Now() that also writes <dir>/crl.pem
+// atomically. The PEM is returned too.
+func IssueCRL(dir string, root Root, revoked []Revoked, number *big.Int, next time.Time) ([]byte, error) {
+	out, err := SignCRL(root, revoked, number, time.Now(), next)
+	if err != nil {
+		return nil, err
+	}
 	if err := writeFileAtomic(filepath.Join(dir, CRLFile), out, 0o644); err != nil {
 		return nil, err
 	}
@@ -59,46 +68,93 @@ func crlPEM(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
 }
 
-// Revoke appends r to <dir>/revoked.jsonl and reissues <dir>/crl.pem from the
-// WHOLE log with a Number one higher than the current crl.pem's (1 if none).
-// The log is the master's revocation list; the CRL is a projection of it, so
-// a reissue can never drop an earlier revocation.
-func Revoke(dir string, root Root, r Revoked, next time.Time) (*big.Int, error) {
+// Revocation is one revocation as bytes: the ledger line to append and the
+// CRL that replaces the current one. The caller places both.
+type Revocation struct {
+	// Line is the revoked.jsonl line for r: JSON and a trailing newline.
+	Line   []byte
+	CRLPEM []byte
+	Number *big.Int
+}
+
+// RevokeSerial records r against the revocation ledger so far (prior, as
+// ParseRevokedLedger reads it) and signs the CRL that lists prior AND r,
+// numbered one above current — the Number of the CRL now published, nil
+// when there is none (the new CRL is then #1). It writes nothing. The CRL is
+// a projection of the whole ledger, so a reissue can never drop an earlier
+// revocation.
+func RevokeSerial(root Root, prior []Revoked, current *big.Int, r Revoked, thisUpdate, next time.Time) (Revocation, error) {
 	if r.Serial == nil || r.Serial.Sign() <= 0 {
-		return nil, errors.New("pki: revoke needs a positive serial")
+		return Revocation{}, errors.New("pki: revoke needs a positive serial")
 	}
 	number := big.NewInt(1)
+	if current != nil {
+		number = new(big.Int).Add(current, big.NewInt(1))
+	}
+	line, err := json.Marshal(r)
+	if err != nil {
+		return Revocation{}, err
+	}
+	// The entry is listed as the ledger will read it back, so the CRL a
+	// later reissue signs from the ledger lists the same time.
+	var back Revoked
+	if err := json.Unmarshal(line, &back); err != nil {
+		return Revocation{}, err
+	}
+	all := append(append(make([]Revoked, 0, len(prior)+1), prior...), back)
+	crl, err := SignCRL(root, all, number, thisUpdate, next)
+	if err != nil {
+		return Revocation{}, err
+	}
+	return Revocation{Line: append(line, '\n'), CRLPEM: crl, Number: number}, nil
+}
+
+// Revoke is RevokeSerial against the master directory: it appends r to
+// <dir>/revoked.jsonl and reissues <dir>/crl.pem from the WHOLE log with a
+// Number one higher than the current crl.pem's (1 if none).
+func Revoke(dir string, root Root, r Revoked, next time.Time) (*big.Int, error) {
+	var current *big.Int
 	switch cur, err := LoadCRL(filepath.Join(dir, CRLFile)); {
 	case err == nil:
-		number = new(big.Int).Add(cur.Number, big.NewInt(1))
+		current = cur.Number
 	case !errors.Is(err, ErrCRLMissing):
 		return nil, fmt.Errorf("pki: current CRL unreadable, refusing to guess its Number: %w", err)
 	}
-	if err := appendJSONLine(filepath.Join(dir, RevokedLogFile), r); err != nil {
-		return nil, fmt.Errorf("pki: revocation log: %w", err)
-	}
-	all, err := LoadRevoked(dir)
+	prior, err := LoadRevoked(dir)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := IssueCRL(dir, root, all, number, next); err != nil {
+	rv, err := RevokeSerial(root, prior, current, r, time.Now(), next)
+	if err != nil {
 		return nil, err
 	}
-	return number, nil
+	if err := appendLine(filepath.Join(dir, RevokedLogFile), rv.Line); err != nil {
+		return nil, fmt.Errorf("pki: revocation log: %w", err)
+	}
+	if err := writeFileAtomic(filepath.Join(dir, CRLFile), rv.CRLPEM, 0o644); err != nil {
+		return nil, err
+	}
+	return rv.Number, nil
 }
 
 // LoadRevoked reads the master's revocation log. An absent log is empty.
 func LoadRevoked(dir string) ([]Revoked, error) {
-	f, err := os.Open(filepath.Join(dir, RevokedLogFile))
+	raw, err := os.ReadFile(filepath.Join(dir, RevokedLogFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	return ParseRevokedLedger(raw)
+}
+
+// ParseRevokedLedger reads revocation ledger bytes (revoked.jsonl), from a
+// file or from the fleet repo. Blank lines are skipped; any other line that
+// is not a Revoked is an error.
+func ParseRevokedLedger(raw []byte) ([]Revoked, error) {
 	var out []Revoked
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(bytes.NewReader(raw))
 	for sc.Scan() {
 		if len(bytes.TrimSpace(sc.Bytes())) == 0 {
 			continue

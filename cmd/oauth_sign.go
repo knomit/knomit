@@ -45,9 +45,11 @@ var fingerprintArgRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	ctx := cmd.Context()
 	errOut := cmd.ErrOrStderr()
-	if o.dir == "" {
-		return errors.New("--dir (the master directory) is required with --sign")
+	dir, err := resolveMasterDir(o.dir)
+	if err != nil {
+		return err
 	}
+	o.dir = dir
 	if !fingerprintArgRE.MatchString(o.instance) {
 		return errors.New("--instance must be the instance's full fingerprint (64 lowercase hex, as `knomit identity show` prints it)")
 	}
@@ -58,7 +60,11 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	if err != nil {
 		return err
 	}
-	if o.passFile != "-" && !o.yes {
+	// A passphrase FILE answers no question, so it signs unattended and needs
+	// --yes. Without one, the confirmation comes after the printout: the
+	// typed passphrase (--passphrase-file -, key in root.key) or a y/N answer
+	// (key in the OS keychain, where no passphrase guards it).
+	if !o.yes && o.passFile != "" && o.passFile != "-" {
 		return errors.New("refusing to sign unattended: with --passphrase-file <file> add --yes, or use --passphrase-file - so that typing the passphrase after reading the request is the confirmation")
 	}
 	issuer := strings.TrimSuffix(o.issuer, "/")
@@ -89,16 +95,27 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	}
 	printDescription(errOut, d, stmt, host)
 
-	if o.passFile == "-" {
-		fmt.Fprintln(errOut, "Type the master passphrase to sign this, or interrupt to abort:")
+	// The passphrase is asked only when the key is in root.key: a keychain-held
+	// key opens without one, and a prompt for it would guard nothing.
+	askPass := func() ([]byte, error) {
+		if o.passFile == "-" {
+			fmt.Fprintln(errOut, "Type the master passphrase to sign this, or interrupt to abort:")
+		}
+		return readPassphrase(cmd, o.passFile)
 	}
-	pass, err := readPassphrase(cmd, o.passFile)
+	root, src, err := pki.OpenRoot(o.dir, rootKeychain, askPass)
 	if err != nil {
 		return err
 	}
-	root, err := pki.LoadRoot(o.dir, pass)
-	if err != nil {
-		return err
+	if src == pki.RootFromKeychain && !o.yes {
+		fmt.Fprint(errOut, "The fleet root key is in the OS keychain (no passphrase is asked). Sign this statement? [y/N] ")
+		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+			return errors.New("not confirmed; nothing was signed")
+		}
 	}
 	key, ok := root.Signer.(ed25519.PrivateKey)
 	if !ok {

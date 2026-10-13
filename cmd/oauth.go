@@ -115,10 +115,10 @@ func oauthCmd() *cobra.Command {
 // and deny.
 func signFlags(c *cobra.Command, o *signOpts) {
 	c.Flags().StringVar(&o.issuer, "sign", "", "sign with the fleet master key instead, for the instance at this issuer URL (run on the master's machine)")
-	c.Flags().StringVar(&o.dir, "dir", "", "with --sign: the master directory (root.key, issued.jsonl)")
+	c.Flags().StringVar(&o.dir, "dir", "", "with --sign: the master directory (root.crt, issued.jsonl; default <home>/master)")
 	c.Flags().StringVar(&o.instance, "instance", "", "with --sign: the instance's full fingerprint; it must be issued by this master and not revoked")
-	c.Flags().StringVar(&o.passFile, "passphrase-file", "", "with --sign: file holding the master passphrase (- = stdin, read AFTER the request is shown)")
-	c.Flags().BoolVar(&o.yes, "yes", false, "with --sign and a passphrase FILE: sign without a confirmation")
+	c.Flags().StringVar(&o.passFile, "passphrase-file", "", "with --sign: file holding the master passphrase, used only when the key is in root.key (- = stdin, read AFTER the request is shown)")
+	c.Flags().BoolVar(&o.yes, "yes", false, "with --sign: sign without a confirmation (required with a passphrase FILE)")
 }
 
 // localAPIBase is the URL the local API client addresses. The host is never
