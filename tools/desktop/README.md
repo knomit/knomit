@@ -269,8 +269,9 @@ answering on the socket and attaches to it (one server, one `server.json`).
 
 The app and `kb` use the server's local socket, so the plaintext HTTP port is
 optional. **Settings → HTTP port** chooses **Off**, **This computer only**
-(`host = "127.0.0.1"`) or **All networks** (`host = "0.0.0.0"`), plus the
-port. Save writes only the keys that change (`http`, `host`, `port`) to
+(loopback: over the default or any loopback host no `host` key is written; only
+a move back from All networks writes `host = "127.0.0.1"`) or **All networks** (`host = "0.0.0.0"`), plus
+the port. Save writes only the keys that change (`http`, `host`, `port`) to
 `knomit.toml` and asks the running server to reload (the same thing as
 `knomit reload`, never an HTTP route); the window shows what the server then
 listens on, any key that needs a restart (`[auth].require`, for one), or why a
