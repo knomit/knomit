@@ -154,13 +154,19 @@ describe('SettingsForm: an error on a page that is not in view', () => {
     expect(navItem(/network/i)).toHaveAccessibleName('Network')
   })
 
-  it('stays on the page in view when that page holds the error', async () => {
-    renderForm()
+  // Two pages hold errors and the one in view is the LATER of them: a Save
+  // that always jumped to the first error page would land on Network.
+  it('stays on the page in view when that page holds an error, and still marks the other', async () => {
+    renderForm({ logLevel: 'verbose' })
     goTo(/network/i)
-    fireEvent.change(screen.getByLabelText(/^port$/i), { target: { value: 'nineteen' } })
+    fireEvent.change(screen.getByLabelText(/^port$/i), { target: { value: '80' } })
+    goTo(/logs/i)
     save()
-    await screen.findByRole('alert')
-    expect(navItem(/network/i)).toHaveAttribute('aria-current', 'page')
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Log level must be one of .*got "verbose"/)
+    expect(navItem(/logs/i)).toHaveAttribute('aria-current', 'page')
+    expect(navItem(/logs/i)).toHaveAccessibleName('Logs has an error')
+    expect(navItem(/network/i)).not.toHaveAttribute('aria-current')
+    expect(navItem(/network/i)).toHaveAccessibleName('Network has an error')
   })
 })
 
@@ -370,6 +376,24 @@ describe('SettingsForm HTTP port scope', () => {
     expect(radio(/^off$/i)).toBeChecked()
     expect(radio(/this computer only/i)).not.toBeChecked()
     expect(radio(/all networks/i)).not.toBeChecked()
+  })
+
+  // The selected segment is styled by a class from state, not by :has(),
+  // which WebKit before Safari 15.4 (macOS 11's) does not support.
+  it('marks the selected segment with is-on, and moves it with the choice', () => {
+    renderNet({ httpScope: 'off' })
+    const opt = (name: RegExp) => radio(name).closest('label')
+    expect(opt(/^off$/i)).toHaveClass('is-on')
+    expect(opt(/this computer only/i)).not.toHaveClass('is-on')
+    expect(opt(/all networks/i)).not.toHaveClass('is-on')
+    fireEvent.click(radio(/all networks/i))
+    expect(opt(/all networks/i)).toHaveClass('is-on')
+    expect(opt(/^off$/i)).not.toHaveClass('is-on')
+  })
+
+  it('marks no segment when the config binds some other host', () => {
+    renderNet({ httpScope: 'other' })
+    for (const r of screen.getAllByRole('radio')) expect(r.closest('label')).not.toHaveClass('is-on')
   })
 
   it.each([

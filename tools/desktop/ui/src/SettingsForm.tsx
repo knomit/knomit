@@ -604,7 +604,12 @@ export function SettingsForm({
                       aria-labelledby="httpScopeLabel"
                     >
                       {SCOPES.map((o) => (
-                        <label key={o.value} className="seg-opt">
+                        // The selected look is a class from state, not
+                        // :has(input:checked): macOS 11's WebKit (before
+                        // Safari 15.4) has no :has(). Focus uses the sibling
+                        // selector `input:focus-visible + span` for the same
+                        // reason.
+                        <label key={o.value} className={s.httpScope === o.value ? 'seg-opt is-on' : 'seg-opt'}>
                           <input
                             type="radio"
                             name="httpScope"
@@ -613,7 +618,7 @@ export function SettingsForm({
                             disabled={scopeEnv.length > 0}
                             onChange={() => edit({ httpScope: o.value })}
                           />
-                          {o.label}
+                          <span>{o.label}</span>
                         </label>
                       ))}
                     </div>
