@@ -235,6 +235,30 @@ func TestPushedMerge_ConflictAndResolution(t *testing.T) {
 	}
 }
 
+// A pushed branch that changes a dot path (.knomit/ontology.yaml) is refused
+// by the merge-time guard: 409 "Merge would change system files" naming the
+// path in private_paths and the peer tip, and the agent branch does not move.
+func TestPushedMerge_PrivatePathRefused(t *testing.T) {
+	h, m := pushedServer(t, &Server{})
+	var peerTip plumbing.Hash
+	require.NoError(t, m.Get(pbRepo).WithRead(func(svc *store.Service) {
+		ont := "id: x\nname: X\ntopics:\n  architecture:\n    description: d\n"
+		res, err := svc.Facts().WriteFact(context.Background(), pbPeer, repos.OntologyPath, ont, "ontology", "update")
+		require.NoError(t, err)
+		peerTip = plumbing.NewHash(res.CommitHash)
+	}))
+	hostBefore := pbHead(t, m, pbAgent)
+
+	rr := pbPost(t, h, pbPeer, expect(peerTip.String()))
+	require.Equal(t, http.StatusConflict, rr.Code, rr.Body.String())
+	var prob map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &prob))
+	require.Equal(t, "Merge would change system files", prob["title"])
+	require.Equal(t, []any{repos.OntologyPath}, prob["private_paths"])
+	require.Equal(t, peerTip.String(), prob["peer_commit"])
+	require.Equal(t, hostBefore, pbHead(t, m, pbAgent), "a refused merge moves nothing")
+}
+
 // A subscription has no agent branch: nothing is listed and nothing merges.
 func TestPushedBranches_Subscription(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"}})

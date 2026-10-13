@@ -37,6 +37,9 @@ const (
 	RuleDuplicateKey = "duplicate-key" // the signing key is the current key of more than one record
 	RuleInactive     = "inactive"      // the record's state is not active
 	RuleMerge        = "merge"         // an unsigned merge that fails M3
+	// RuleNotPusher: receive-pack only — a new commit signed by a key other
+	// than the pushing instance's certificate key. CheckRange has no pusher.
+	RuleNotPusher = "not-pusher"
 )
 
 // walkHistory visits every commit reachable from start and not from stop,

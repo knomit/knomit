@@ -77,8 +77,10 @@ const errNoPushPolicy = "knomit: pushing is not available here: no verified push
 //     alone — all or nothing, so a push naming the own branch and anything
 //     else promotes nothing;
 //  2. the pack into a quarantine (memory; host reads for thin-pack bases);
-//  3. the new commits (a walk that stops at the host's commits) judged when
-//     verify_signatures at the host's upstream says so;
+//  3. the new commits (a walk that stops at the host's commits): refused in
+//     every mode when one's private paths differ from its merge base with
+//     the upstream (privatePathClosure), then
+//     judged when verify_signatures at the host's upstream says so;
 //  4. under the branch lock, on a context that cannot be cancelled: the
 //     old-hash check, ONE transaction promoting the new objects, then the
 //     branch seeded from the upstream (first push) and moved through
@@ -243,6 +245,10 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(fmt.Sprintf("knomit: the push is incomplete: %v", err))
 		return
 	}
+	if msg := rp.privatePathClosure(r.Context(), q, commits); msg != "" {
+		refuse(msg)
+		return
+	}
 	if msg := rp.verify(r.Context(), pol, commits, lg); msg != "" {
 		refuse(msg)
 		return
@@ -327,6 +333,13 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 // refuses the push. The mode is read at the host's upstream, as CheckRange
 // reads it at Main: a pushed ontology cannot choose its own check. Returns
 // the refusal text, or "".
+//
+// Beyond judgeCommit (the rules CheckRange shares), a signed new commit must
+// be signed by the PUSHER (signerIsPusher): a member pushes only what its own
+// key signed, never another active member's commits. The rule rides the mode
+// like every other judgement here: enforce refuses, log logs, off checks
+// nothing — under off and log an unsigned commit is accepted anyway, so a
+// signer rule there would stop nobody.
 func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*object.Commit, lg zerolog.Logger) string {
 	upstream := rp.upstream()
 	mode, err := rp.rh.verifyModeAt(ctx, upstream)
@@ -353,6 +366,9 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 	for _, c := range commits {
 		ref, ok := idx.judgeCommit(c)
 		if ok {
+			ref, ok = signerIsPusher(c, pol.Pusher)
+		}
+		if ok {
 			continue
 		}
 		if mode == VerifyEnforce {
@@ -362,6 +378,130 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 			Msg("receive-pack: commit would be refused (verify_signatures=log)")
 	}
 	return ""
+}
+
+// signerIsPusher refuses a signed commit whose SSHSIG key is not the pusher's
+// certificate key. Called only for a commit judgeCommit accepted, so a commit
+// without a verifiable signature here is an unsigned merge that passed M3
+// (it adds nothing beyond its parents) and has no signer to compare.
+//
+// Only NEW commits reach this (newCommits stops at commits the host holds):
+// a member merging the host's main into its branch pushes other members'
+// commits, but the host holds those, so only the member's own merge commit is
+// judged.
+func signerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
+	s, err := verifyCommitSignature(c)
+	if err != nil {
+		return Refusal{}, true
+	}
+	if !strings.EqualFold(s.Fingerprint, pusher) {
+		return Refusal{Commit: c.Hash.String(), Rule: RuleNotPusher, SignerFP: s.Fingerprint,
+			Reason: fmt.Sprintf("signed by %s, not by the pusher %s", pki.Short(s.Fingerprint), pki.Short(pusher))}, false
+	}
+	return Refusal{}, true
+}
+
+// privatePathClosure refuses a push whose new commits change a private path
+// (fact.IsPrivatePath: any segment beginning with "."; .knomit/ is the
+// system — ontology, triggers, recipes, skills). It runs in every
+// verify_signatures mode.
+//
+// It is EARLY FEEDBACK, not the authority. It judges only the commits a push
+// sends: a tip the host already holds brings none and passes untouched. The
+// authority is the merge-time guard in MergePushed and MergeConsensus (the
+// only routes from a pushed branch into the host's agent branch, which the
+// upstream follows), which judges the merge result.
+//
+// The rule: every new commit carries the private state of its merge base
+// with the host's upstream — "a pushed branch carries the .knomit/ of where
+// it forked off the upstream". It accepts a branch that never merged the
+// upstream (its base is its own fork point) and one that merged it (the base
+// is the upstream commit it merged), and refuses an evil merge and a merge
+// that takes an OLDER .knomit/ from a parent the host already holds. That
+// last case is why "differs from every parent" is NOT enough: the old version
+// equals one parent, yet a three-way merge into the agent branch applies it
+// as a revert of the newer state.
+//
+// No merge base (unrelated history) compares against the empty tree: such a
+// commit may carry no private path at all. A missing upstream never gets
+// here: judgeRequest refuses the push first.
+func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, commits []*object.Commit) string {
+	if len(commits) == 0 {
+		return ""
+	}
+	upstream := rp.upstream()
+	uh, err := rp.rh.resolveRef(ctx, upstream)
+	if err != nil {
+		return fmt.Sprintf("knomit: %s could not be read: %v", upstream, err)
+	}
+	up, err := object.GetCommit(q, uh)
+	if err != nil {
+		return fmt.Sprintf("knomit: %s could not be read: %v", upstream, err)
+	}
+	for _, c := range commits {
+		p, err := privateChangeFromBase(c, up)
+		if err != nil {
+			return fmt.Sprintf("knomit: commit %s could not be compared with %s: %v", c.Hash, upstream, err)
+		}
+		if p != "" {
+			return fmt.Sprintf("knomit: commit %s changes %s relative to %s; paths with a segment beginning with \".\" (such as %s/) cannot be pushed", c.Hash, p, upstream, fact.PrivateRoot)
+		}
+	}
+	return ""
+}
+
+// privateChangeFromBase returns the first private path (sorted) whose content
+// in c differs from that at the merge base of c and up, or "". With several
+// best bases (a criss-cross) matching ANY of them is enough. On its own that
+// would be unsafe — the merge machinery picks one base, and a commit matching
+// only the other could revert through it — but push time is only a fast
+// fail: the authority is the merge-time guard (guardPrivate in MergePushed
+// and MergeConsensus), which refuses any merge whose result changes the host
+// agent branch's private paths. Requiring EVERY base instead wedged a member
+// branch for good on a benign criss-cross (its merge stays new on every later
+// push).
+func privateChangeFromBase(c, up *object.Commit) (string, error) {
+	tree, err := c.Tree()
+	if err != nil {
+		return "", err
+	}
+	bases, err := c.MergeBase(up)
+	if err != nil {
+		return "", err
+	}
+	baseTrees := []*object.Tree{nil} // no merge base: the empty tree
+	if len(bases) > 0 {
+		baseTrees = baseTrees[:0]
+		for _, b := range bases {
+			bt, err := b.Tree()
+			if err != nil {
+				return "", err
+			}
+			baseTrees = append(baseTrees, bt)
+		}
+	}
+	first := ""
+	for i, bt := range baseTrees {
+		changes, err := object.DiffTree(bt, tree)
+		if err != nil {
+			return "", err
+		}
+		out := ""
+		for _, ch := range changes {
+			for _, name := range []string{ch.From.Name, ch.To.Name} {
+				if name != "" && fact.IsPrivatePath(name) && (out == "" || name < out) {
+					out = name
+				}
+			}
+		}
+		if out == "" {
+			return "", nil // matches this base
+		}
+		if i == 0 {
+			first = out
+		}
+	}
+	return first, nil
 }
 
 // register makes the pushed tip the branch's tip on this host, through the
