@@ -64,7 +64,9 @@ func TestReceivePack_ClosureRefusesKnomitChange(t *testing.T) {
 
 	err := p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+branch)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "knomit: commit "+c2.Hash.String()+" changes .knomit/ontology.yaml")
+	// c2 makes the change and c3 still carries it; commits are judged tip
+	// first, so the ERR names c3.
+	require.Contains(t, err.Error(), "knomit: commit "+c3.Hash.String()+" changes .knomit/ontology.yaml relative to main")
 	require.Equal(t, plumbing.ZeroHash, h.ref(branch), "the branch must not be created")
 	require.Equal(t, objs, h.objects(), "no object of a refused push reaches the host")
 	require.Equal(t, int32(0), h.membersCalls.Load(), "the closure refuses before the signature judge runs")
@@ -131,6 +133,67 @@ func TestReceivePack_MergeOfMainWithKnomitChangeAccepted(t *testing.T) {
 	require.Equal(t, merge.Hash, h.ref(branch))
 	require.Equal(t, changed, h.branchFiles(branch)[fact.OntologyFile])
 	require.Equal(t, int32(1), h.membersCalls.Load(), "the signature judge ran")
+}
+
+// hostEditsOntology commits a .knomit/ontology.yaml change on the host's main
+// and returns the new content.
+func (h *pushHost) hostEditsOntology(mode string) string {
+	h.t.Helper()
+	changed := kbOntology(mode) + "# host edit\n"
+	_, _, err := h.svc.Facts().(*factIndex).writeFileExact(context.Background(), "main", fact.OntologyFile, changed, "ontology", "edit", "")
+	require.NoError(h.t, err)
+	return changed
+}
+
+// P1/D10 security review: a merge of the newer main that keeps the OLDER
+// .knomit/ontology.yaml of its other parent (a commit the host already holds)
+// equals one parent, so "differs from every parent" passed it — and a
+// three-way merge into main would then apply it as a revert. Its merge base
+// with main is main's tip, whose ontology it does not carry: refused.
+func TestReceivePack_ClosureRefusesRevertMerge(t *testing.T) {
+	h := newPushHost(t, VerifyOff, 1)
+	fp, branch := pusherOf(t, newTestSigner(t))
+	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch})
+	p := newPeer(t, h.srv.URL)
+	old := p.head()
+	own := p.commit(old, nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
+	changed := h.hostEditsOntology(VerifyOff)
+	require.NoError(t, p.repo.Fetch(&gogit.FetchOptions{RemoteName: "origin"}))
+	main := p.head()
+	require.Equal(t, changed, p.files(main)[fact.OntologyFile])
+
+	files := with(p.files(main), "kb/notes/x.md", testFactBody("x", 0.9, nil),
+		fact.OntologyFile, p.files(old)[fact.OntologyFile])
+	revert := p.commitAs("peer-abcd1234", []*object.Commit{own, main}, nil, files)
+	require.Equal(t, p.files(own)[fact.OntologyFile], files[fact.OntologyFile], "the merge equals one parent at the path")
+	p.setBranch("work", revert)
+	objs := h.objects()
+
+	err := p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+branch)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "knomit: commit "+revert.Hash.String()+" changes .knomit/ontology.yaml relative to main")
+	require.Equal(t, plumbing.ZeroHash, h.ref(branch))
+	require.Equal(t, objs, h.objects())
+}
+
+// P1/D10: a branch that forked before main's .knomit change and never merged
+// main adds a kb/ fact and is accepted: its merge base is its own fork point,
+// whose .knomit/ it carries unchanged.
+func TestReceivePack_ClosureAcceptsOldUnmergedBranch(t *testing.T) {
+	h := newPushHost(t, VerifyOff, 1)
+	fp, branch := pusherOf(t, newTestSigner(t))
+	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch})
+	p := newPeer(t, h.srv.URL)
+	old := p.head()
+	c := p.commit(old, nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
+	changed := h.hostEditsOntology(VerifyOff)
+	p.setBranch("work", c)
+
+	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+branch))
+	require.Equal(t, c.Hash, h.ref(branch))
+	got := h.branchFiles(branch)
+	require.Equal(t, p.files(old)[fact.OntologyFile], got[fact.OntologyFile])
+	require.NotEqual(t, changed, got[fact.OntologyFile], "the branch carries its fork point's ontology, not main's")
 }
 
 // P1/D10 signer = pusher: commits authored and signed by ANOTHER active

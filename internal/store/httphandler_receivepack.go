@@ -78,7 +78,8 @@ const errNoPushPolicy = "knomit: pushing is not available here: no verified push
 //     else promotes nothing;
 //  2. the pack into a quarantine (memory; host reads for thin-pack bases);
 //  3. the new commits (a walk that stops at the host's commits): refused in
-//     every mode when one changes a private path (privatePathClosure), then
+//     every mode when one's private paths differ from its merge base with
+//     the upstream (privatePathClosure), then
 //     judged when verify_signatures at the host's upstream says so;
 //  4. under the branch lock, on a context that cannot be cancelled: the
 //     old-hash check, ONE transaction promoting the new objects, then the
@@ -244,7 +245,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(fmt.Sprintf("knomit: the push is incomplete: %v", err))
 		return
 	}
-	if msg := q.privatePathClosure(commits); msg != "" {
+	if msg := rp.privatePathClosure(r.Context(), q, commits); msg != "" {
 		refuse(msg)
 		return
 	}
@@ -407,69 +408,79 @@ func signerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
 // configuration the host and the merge paths (MergePushed, consensus: auto)
 // would then run, and neither merge path inspects content.
 //
-// A commit's changes are the paths that differ from EVERY parent (git's
-// combined-diff rule; a root commit against the empty tree): a merge that
-// brings in a .knomit change already present in one parent introduces
-// nothing, while an evil merge whose file differs from all parents does.
-// Files, not directories: each side's own .knomit change is judged in the
-// commit that made it, here or when the host received it.
-func (q *quarantine) privatePathClosure(commits []*object.Commit) string {
+// The rule: every new commit carries exactly the private state of its merge
+// base with the host's upstream — "a pushed branch carries the .knomit/ of
+// where it forked off the upstream". It accepts a branch that never merged
+// the upstream (its base is its own fork point) and one that merged it (the
+// base is the upstream commit it merged), and refuses an evil merge and a
+// merge that takes an OLDER .knomit/ from a parent the host already holds.
+// That last case is why "differs from every parent" is NOT enough: the old
+// version equals one parent, yet a three-way merge into the upstream applies
+// it as a revert of the newer state.
+//
+// No merge base (unrelated history) compares against the empty tree: such a
+// commit may carry no private path at all. A missing upstream never gets
+// here: judgeRequest refuses the push first.
+func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, commits []*object.Commit) string {
+	if len(commits) == 0 {
+		return ""
+	}
+	upstream := rp.upstream()
+	uh, err := rp.rh.resolveRef(ctx, upstream)
+	if err != nil {
+		return fmt.Sprintf("knomit: %s could not be read: %v", upstream, err)
+	}
+	up, err := object.GetCommit(q, uh)
+	if err != nil {
+		return fmt.Sprintf("knomit: %s could not be read: %v", upstream, err)
+	}
 	for _, c := range commits {
-		p, err := q.privateChange(c)
+		p, err := privateChangeFromBase(c, up)
 		if err != nil {
-			return fmt.Sprintf("knomit: commit %s could not be diffed: %v", c.Hash, err)
+			return fmt.Sprintf("knomit: commit %s could not be compared with %s: %v", c.Hash, upstream, err)
 		}
 		if p != "" {
-			return fmt.Sprintf("knomit: commit %s changes %s; paths with a segment beginning with \".\" (such as %s/) cannot be pushed", c.Hash, p, fact.PrivateRoot)
+			return fmt.Sprintf("knomit: commit %s changes %s relative to %s; paths with a segment beginning with \".\" (such as %s/) cannot be pushed", c.Hash, p, upstream, fact.PrivateRoot)
 		}
 	}
 	return ""
 }
 
-// privateChange returns the first private path (sorted) that c changes
-// relative to every parent, or "".
-func (q *quarantine) privateChange(c *object.Commit) (string, error) {
-	tree, err := object.GetTree(q, c.TreeHash)
+// privateChangeFromBase returns the first private path (sorted) whose content
+// in c differs from that at a merge base of c and up, or "". With several
+// best bases (a criss-cross) c must match each.
+func privateChangeFromBase(c, up *object.Commit) (string, error) {
+	tree, err := c.Tree()
 	if err != nil {
 		return "", err
 	}
-	parents := c.ParentHashes
-	if len(parents) == 0 {
-		parents = []plumbing.Hash{plumbing.ZeroHash}
+	bases, err := c.MergeBase(up)
+	if err != nil {
+		return "", err
 	}
-	var common map[string]bool
-	for _, ph := range parents {
-		var pt *object.Tree
-		if !ph.IsZero() {
-			pc, err := object.GetCommit(q, ph)
+	baseTrees := []*object.Tree{nil} // no merge base: the empty tree
+	if len(bases) > 0 {
+		baseTrees = baseTrees[:0]
+		for _, b := range bases {
+			bt, err := b.Tree()
 			if err != nil {
 				return "", err
 			}
-			if pt, err = object.GetTree(q, pc.TreeHash); err != nil {
-				return "", err
-			}
-		}
-		changes, err := object.DiffTree(pt, tree)
-		if err != nil {
-			return "", err
-		}
-		here := map[string]bool{}
-		for _, ch := range changes {
-			for _, name := range []string{ch.From.Name, ch.To.Name} {
-				if name != "" && fact.IsPrivatePath(name) && (common == nil || common[name]) {
-					here[name] = true
-				}
-			}
-		}
-		common = here
-		if len(common) == 0 {
-			return "", nil
+			baseTrees = append(baseTrees, bt)
 		}
 	}
 	out := ""
-	for p := range common {
-		if out == "" || p < out {
-			out = p
+	for _, bt := range baseTrees {
+		changes, err := object.DiffTree(bt, tree)
+		if err != nil {
+			return "", err
+		}
+		for _, ch := range changes {
+			for _, name := range []string{ch.From.Name, ch.To.Name} {
+				if name != "" && fact.IsPrivatePath(name) && (out == "" || name < out) {
+					out = name
+				}
+			}
 		}
 	}
 	return out, nil
