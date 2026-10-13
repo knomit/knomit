@@ -1208,11 +1208,13 @@ export default function App() {
   // inert — the panels would re-render on every splitter drag frame and every
   // repos/lenses refresh even though nothing they display changed.
   const jumpTrail = useCallback((i: number) => {
-    // Crumbs map 1:1 to navStack hops since the live root, so jumping to crumb i
-    // means unwinding (depth - i) entries — pop, don't push. Reads the CURRENT
+    // A crumb records how many navStack entries lie between it and the current
+    // view (one crumb can stand for a fact's live and timeline entries), so
+    // jumping to crumb i means unwinding that many entries — pop, don't push. Reads the CURRENT
     // state through the ref so the callback identity can stay stable.
-    const depth = selectTrail(stateRef.current).length - 1; // index of the current crumb
-    for (let k = 0; k < depth - i; k++) dispatch({ type: 'NAV_BACK' });
+    const trail = selectTrail(stateRef.current);
+    const pops = trail[i]?.pops ?? trail.length - 1 - i;
+    for (let k = 0; k < pops; k++) dispatch({ type: 'NAV_BACK' });
   }, [dispatch]);
   // Re-sync after a repo/lens mutation. In a lens context this re-resolves the
   // browsed lens (so edited mounts refresh state.lens) or falls back with a

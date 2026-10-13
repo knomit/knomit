@@ -55,19 +55,35 @@ test.describe('History (per-fact timeline)', () => {
     await expect(page.getByTestId('left-panel')).toBeVisible();
   });
 
-  test('Backspace from history leaves the timeline', async ({ page }) => {
+  // Opening the timeline is a navigation step (#486): every Back control
+  // (Backspace, the timeline's own arrow) returns to the fact that was open,
+  // live, with the timeline closed.
+  test('Backspace from history returns to the open fact', async ({ page }) => {
     await openFirstFact(page);
+    const title = await new FactPanel(page).getTitle();
     await openHistory(page);
 
     await page.locator('body').click({ position: { x: 5, y: 5 } });
     await page.keyboard.press('Backspace');
 
-    // Opening the timeline is not a navigation step (SET_AS_OF does not push
-    // the back stack), so Back pops the step BEFORE the fact was opened. Only
-    // the exit from history is asserted; the fact is not on screen afterwards.
     await expect(page.getByTestId('timeline-nav')).toHaveCount(0);
     await expect(page.getByTestId('left-panel')).toBeVisible();
     await expect(page.getByRole('img', { name: 'LIVE' })).toBeVisible();
+    await expect(page.getByTestId('fact-title')).toBeVisible();
+    expect(await new FactPanel(page).getTitle()).toBe(title);
+  });
+
+  test('the timeline back arrow returns to the open fact', async ({ page }) => {
+    await openFirstFact(page);
+    const title = await new FactPanel(page).getTitle();
+    await openHistory(page);
+
+    await page.getByTestId('timeline-back').click();
+
+    await expect(page.getByTestId('timeline-nav')).toHaveCount(0);
+    await expect(page.getByRole('img', { name: 'LIVE' })).toBeVisible();
+    await expect(page.getByTestId('fact-title')).toBeVisible();
+    expect(await new FactPanel(page).getTitle()).toBe(title);
   });
 });
 

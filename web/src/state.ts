@@ -629,8 +629,16 @@ function applyAction(s: AppState, a: Action): AppState {
       return { ...s, rightPanelFocused: true };
     case 'BLUR_RIGHT_PANEL':
       return { ...s, rightPanelFocused: false };
-    case 'SET_AS_OF':
-      return { ...s, asOf: a.asOf };
+    case 'SET_AS_OF': {
+      // Opening a fact's timeline (live -> non-live with a fact open) is a
+      // drill-down like any other, so it records the departure state and Back
+      // returns to the fact (#486). Only the ENTRY pushes: scrubbing between
+      // versions, leaving a diff and returning to live stay in place, so a
+      // scrub does not grow the stack and the trail. selectTrail collapses the
+      // fact's live entry and its history entry into one crumb.
+      const entering = s.factPath != null && s.asOf.mode === 'live' && a.asOf.mode !== 'live';
+      return { ...s, asOf: a.asOf, ...(entering ? { navStack: pushNav(s) } : {}) };
+    }
     case 'SET_LIBRARY_SORT':
       // Switching sort clears the selected fact so the right panel doesn't
       // strand a previous selection in the new view. Recent/Relevance modes
@@ -820,23 +828,41 @@ export function readOnlyTitle(s: AppState): string {
 export interface TrailCrumb {
   factPath: string;
   asOf: AsOf;
+  // NAV_BACK pops that land on this crumb from the current view. Not the
+  // crumb's index distance: one crumb can stand for several stack entries (a
+  // fact's live entry and its timeline entry). Absent = index distance.
+  pops?: number;
 }
 
 // The current view is the last crumb. In a history excursion the trail also
 // includes the prior subject hops back to the live root (the most recent
-// fact-bearing entry that was live). Pure time-scrubs (SET_AS_OF, no navStack
-// push) don't add crumbs — only subject hops (APPLY_NAV with a factPath) do.
+// fact-bearing entry that was live). Pure time-scrubs (SET_AS_OF within a
+// timeline, no navStack push) don't add crumbs — only subject hops (APPLY_NAV
+// with a factPath) do. Entering a fact's timeline pushes the fact's live entry
+// (#486); adjacent entries for the SAME fact collapse into one crumb, so the
+// trail never lists a fact twice. A run that includes the current view keeps
+// the current view; any other run keeps its oldest entry (jumping there pops
+// the whole run).
 export function selectTrail(s: AppState): TrailCrumb[] {
-  const current: TrailCrumb = { factPath: s.factPath ?? '', asOf: s.asOf };
+  const current: TrailCrumb = { factPath: s.factPath ?? '', asOf: s.asOf, pops: 0 };
   if (isLive(s)) return [current];
   const prefix: TrailCrumb[] = [];
   for (let i = s.navStack.length - 1; i >= 0; i--) {
     const e = s.navStack[i];
     if (e.factPath == null) continue;
-    prefix.unshift({ factPath: e.factPath, asOf: e.asOf });
+    prefix.unshift({ factPath: e.factPath, asOf: e.asOf, pops: s.navStack.length - i });
     if (e.asOf.mode === 'live') break;
   }
-  return [...prefix, current];
+  const out: TrailCrumb[] = [];
+  for (const c of [...prefix, current]) {
+    const last = out[out.length - 1];
+    if (last && last.factPath === c.factPath) {
+      if (c === current) out[out.length - 1] = c;
+      continue;
+    }
+    out.push(c);
+  }
+  return out;
 }
 
 /**
@@ -855,6 +881,6 @@ export function planTrailHop(
 ): { kind: 'unwind'; steps: number } | { kind: 'push' } {
   const depth = trail.length - 1;
   const i = trail.findIndex(c => c.factPath === targetPath);
-  if (i >= 0) return { kind: 'unwind', steps: depth - i };
+  if (i >= 0) return { kind: 'unwind', steps: trail[i].pops ?? depth - i };
   return { kind: 'push' };
 }
