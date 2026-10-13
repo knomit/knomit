@@ -96,7 +96,10 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	if err != nil {
 		return err
 	}
-	root, err := pki.LoadRoot(o.dir, pass)
+	// The passphrase above is read whatever the custody: typing it after
+	// reading the request is the confirmation. It opens root.key only when
+	// the key is not in the OS keychain.
+	root, _, err := pki.OpenRoot(o.dir, rootKeychain, func() ([]byte, error) { return pass, nil })
 	if err != nil {
 		return err
 	}

@@ -76,30 +76,45 @@ type Issued struct {
 	IssuedAt    time.Time `json:"issued_at"`
 }
 
-// IssueInstance signs pub — the instance's EXISTING key; the master never
+// Issuance is one signed leaf as bytes: what IssueLeaf returns and the
+// caller places (a file in the master directory, or an artifact in the
+// fleet repo).
+type Issuance struct {
+	CertPEM []byte
+	Record  Issued
+	// Line is Record as one ledger line: JSON and a trailing newline, the
+	// exact bytes IssueInstance appends to issued.jsonl.
+	Line []byte
+}
+
+// newSerial is the serial source. A variable only so a test can pin it to
+// compare two issuances field by field; production never reassigns it.
+var newSerial = randomSerial
+
+// IssueLeaf signs pub — the instance's EXISTING key; the master never
 // generates instance keys — into a leaf certificate usable for both client
-// and server authentication, and appends the issuance to <dir>/issued.jsonl.
-// There is no CSR: the operator hands over the public key.
-func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, role Role, validity time.Duration) ([]byte, Issued, error) {
+// and server authentication, valid from now, and returns it with its ledger
+// line. It writes nothing. There is no CSR: the operator hands over the
+// public key. The SAN's fp8 is computed from pub, never read from a name.
+func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validity time.Duration, now time.Time) (Issuance, error) {
 	if !role.known() {
-		return nil, Issued{}, fmt.Errorf("pki: unknown role %q", role)
+		return Issuance{}, fmt.Errorf("pki: unknown role %q", role)
 	}
 	if !validHost(host) {
-		return nil, Issued{}, fmt.Errorf("pki: host %q must be non-empty and use only [A-Za-z0-9._-]", host)
+		return Issuance{}, fmt.Errorf("pki: host %q must be non-empty and use only [A-Za-z0-9._-]", host)
 	}
 	if len(pub) != ed25519.PublicKeySize {
-		return nil, Issued{}, fmt.Errorf("pki: public key is %d bytes, want %d", len(pub), ed25519.PublicKeySize)
+		return Issuance{}, fmt.Errorf("pki: public key is %d bytes, want %d", len(pub), ed25519.PublicKeySize)
 	}
 	fp := Fingerprint(pub)
 	san, err := url.Parse(SAN(role, host, fp))
 	if err != nil {
-		return nil, Issued{}, fmt.Errorf("pki: SAN: %w", err)
+		return Issuance{}, fmt.Errorf("pki: SAN: %w", err)
 	}
-	serial, err := randomSerial()
+	serial, err := newSerial()
 	if err != nil {
-		return nil, Issued{}, err
+		return Issuance{}, err
 	}
-	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: host + "-" + Short(fp)},
@@ -113,11 +128,11 @@ func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, ro
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, root.Cert, pub, root.Signer)
 	if err != nil {
-		return nil, Issued{}, fmt.Errorf("pki: sign instance certificate: %w", err)
+		return Issuance{}, fmt.Errorf("pki: sign instance certificate: %w", err)
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return nil, Issued{}, err
+		return Issuance{}, err
 	}
 	rec := Issued{
 		Serial:      cert.SerialNumber.Text(16),
@@ -126,24 +141,36 @@ func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, ro
 		NotAfter:    cert.NotAfter,
 		IssuedAt:    now.UTC(),
 	}
-	if err := appendJSONLine(filepath.Join(dir, IssuedLogFile), rec); err != nil {
-		return nil, Issued{}, fmt.Errorf("pki: issuance log (certificate discarded, since it could never be revoked by serial): %w", err)
+	line, err := json.Marshal(rec)
+	if err != nil {
+		return Issuance{}, err
 	}
-	return certPEM(der), rec, nil
+	return Issuance{CertPEM: certPEM(der), Record: rec, Line: append(line, '\n')}, nil
 }
 
-// appendJSONLine appends one JSON document and a newline, 0600. The master's
-// logs are append-only files; history is the audit trail.
-func appendJSONLine(path string, v any) error {
-	line, err := json.Marshal(v)
+// IssueInstance is IssueLeaf as of time.Now() that also appends the ledger
+// line to <dir>/issued.jsonl: the master-directory form `identity enroll`
+// uses. A certificate whose line could not be logged is not returned, since
+// revocation finds serials in that log.
+func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, role Role, validity time.Duration) ([]byte, Issued, error) {
+	is, err := IssueLeaf(root, pub, host, role, validity, time.Now())
 	if err != nil {
-		return err
+		return nil, Issued{}, err
 	}
+	if err := appendLine(filepath.Join(dir, IssuedLogFile), is.Line); err != nil {
+		return nil, Issued{}, fmt.Errorf("pki: issuance log (certificate discarded, since it could never be revoked by serial): %w", err)
+	}
+	return is.CertPEM, is.Record, nil
+}
+
+// appendLine appends one ledger line (already newline-terminated), 0600.
+// The master's logs are append-only files; history is the audit trail.
+func appendLine(path string, line []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(append(line, '\n')); err != nil {
+	if _, err := f.Write(line); err != nil {
 		f.Close()
 		return err
 	}

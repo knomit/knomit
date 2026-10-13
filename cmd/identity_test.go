@@ -420,8 +420,14 @@ func TestIdentity_DesktopPublicKeyLineRoundTripsThroughEnroll(t *testing.T) {
 	}
 }
 
+// With no usable keychain the root key is in the passphrase-encrypted
+// root.key, and enroll needs the right passphrase to open it.
 func TestIdentity_EnrollNeedsAPassphraseAndTheRightOne(t *testing.T) {
+	useKeychain(t, &cliKeychain{items: map[string]string{}, setErr: errors.New("no Secret Service")})
 	dir, _ := master(t)
+	if _, err := os.Stat(filepath.Join(dir, pki.RootKeyFile)); err != nil {
+		t.Fatalf("init-master without a keychain wrote no root.key: %v", err)
+	}
 	_, _, pubPath := instanceHome(t, "laptop")
 	if _, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath); err == nil {
 		t.Fatal("enroll without --passphrase-file succeeded")

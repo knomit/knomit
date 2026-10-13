@@ -239,6 +239,67 @@ func InstallBundle(dir, keyPath string, raw []byte, opts InstallOptions) (Identi
 	return id, nil
 }
 
+// InstallCRL installs a CRL on its own (fleet design D13), for a member that
+// finds a newer one in the fleet repo: no leaf, no root change. Under the
+// same cross-process lock as InstallBundle it checks that rootCert is the
+// root INSTALLED in dir (a RootDiffersError otherwise: a CRL never moves an
+// instance to another fleet), that raw is one CRL signed by that root, and
+// that its Number is ABOVE the root's watermark (AcceptedNumber). A Number
+// at or below it is refused with ErrCRLRollback — an equal one too: it is
+// either the CRL already held or a different list under a reused Number,
+// and neither should replace crl.pem. Only then is crl.pem written and the
+// watermark raised. It returns the installed Number.
+func InstallCRL(dir string, rootCert *x509.Certificate, raw []byte) (*big.Int, error) {
+	blk, rest := pem.Decode(raw)
+	if blk == nil || blk.Type != "X509 CRL" {
+		return nil, fmt.Errorf("%w: no X509 CRL PEM block", ErrCRLInvalid)
+	}
+	if extra, _ := pem.Decode(rest); extra != nil {
+		return nil, fmt.Errorf("%w: more than one PEM block (found %q after the CRL)", ErrCRLInvalid, extra.Type)
+	}
+	crl, err := x509.ParseRevocationList(blk.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCRLInvalid, err)
+	}
+	want, err := RootID(rootCert)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := lockInstall(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	installed, err := InstalledRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	if installed.Fingerprint != want {
+		return nil, &RootDiffersError{Installed: installed, Bundle: rootInfo(rootCert)}
+	}
+	last, err := AcceptedNumber(dir, rootCert)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := CheckCRL(crl, rootCert, last); err != nil {
+		if last != nil && crl.Number != nil && crl.Number.Cmp(last) < 0 {
+			return nil, &classified{class: ErrCRLRollback, err: err, msg: err.Error()}
+		}
+		return nil, err
+	}
+	if last != nil && crl.Number.Cmp(last) == 0 {
+		return nil, &classified{class: ErrCRLRollback,
+			msg: fmt.Sprintf("pki: CRL Number %v is not above the %v already accepted for this root", crl.Number, last)}
+	}
+	if err := writeFileAtomic(filepath.Join(dir, CRLFile), crlPEM(crl.Raw), 0o600); err != nil {
+		return nil, err
+	}
+	if err := RecordAcceptedNumber(dir, rootCert, crl.Number); err != nil {
+		return nil, err
+	}
+	return crl.Number, nil
+}
+
 // checkBundle runs the checks that read only the bundle and the key: its
 // shape, that its certificate is for this instance's key, and that the
 // certificate chains to the bundle's own root under its own CRL.
