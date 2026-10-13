@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { CLASS_TEXT, listenerStatus, type FleetIdentity, type InstallResult } from './fleet.ts'
+import { CopyIcon } from './icons.tsx'
+import { Row } from './Row.tsx'
 
 interface Props {
   /** null while GetIdentity is in flight. */
@@ -147,9 +149,9 @@ export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboar
   if (!identity) {
     return (
       <section className="fleet" aria-labelledby="fleet-h">
-        <h2 id="fleet-h" className="k-eyebrow fleet-h">
+        <h3 id="fleet-h" className="gh">
           Fleet identity
-        </h2>
+        </h3>
         <p className="fleet-note">Loading…</p>
       </section>
     )
@@ -160,14 +162,14 @@ export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboar
 
   return (
     <section className="fleet" aria-labelledby="fleet-h">
-      <h2 id="fleet-h" className="k-eyebrow fleet-h">
+      <h3 id="fleet-h" className="gh">
         Fleet identity
-      </h2>
-      <div className="list">
-        <div className="row">
-          <span className="row-label">This instance</span>
-          <div className="control">
-            {noKey ? (
+      </h3>
+      <div className="card">
+        <Row
+          label="This instance"
+          control={
+            noKey ? (
               <span className="fleet-note">The key is created once Knomit has started.</span>
             ) : (
               <>
@@ -175,6 +177,7 @@ export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboar
                   {identity.keyFingerprint.slice(0, 8)}
                 </code>
                 <button type="button" className="linkbtn" onClick={copy}>
+                  <CopyIcon color="currentColor" size={12} />
                   Copy public key
                 </button>
                 {copied && (
@@ -183,26 +186,25 @@ export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboar
                   </span>
                 )}
               </>
-            )}
-          </div>
-        </div>
+            )
+          }
+        />
 
-        <div className="row">
-          <span className="row-label">Enrollment</span>
-          <div className="control fleet-facts">
-            {identity.certificate === 'ok' ? (
-              <>
-                <code className="fleet-san">{identity.san}</code>
-                <span className="hint">until {day(identity.notAfter)}</span>
-              </>
+        <Row
+          label="Enrollment"
+          sub={identity.certificate === 'ok' ? `until ${day(identity.notAfter)}` : undefined}
+          control={
+            identity.certificate === 'ok' ? (
+              <code className="fleet-san">{identity.san}</code>
             ) : identity.certificate === 'unreadable' ? (
               <span className="fleet-bad">The installed certificate is unreadable.</span>
             ) : (
               <span className="fleet-note">Not enrolled</span>
-            )}
-          </div>
+            )
+          }
+        >
           {identity.enrolled && identity.rootFingerprint && (
-            <p className="sub fleet-sub">
+            <p className="rnote fleet-sub">
               root <code title={identity.rootFingerprint}>{identity.rootFingerprint.slice(0, 16)}…</code>
               {identity.crlNumber && (
                 <>
@@ -217,56 +219,60 @@ export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboar
               )}
             </p>
           )}
-        </div>
+        </Row>
 
-        <div className="row">
-          <span className="row-label">Listener</span>
-          <p data-testid="fleet-listener" className={`fleet-listener is-${listener.tone}`}>
+        <Row label="Listener" layout="stack">
+          <p data-testid="fleet-listener" className={`rnote fleet-listener is-${listener.tone}`}>
+            {listener.tone === 'ok' && <span className="pip is-ok" aria-hidden="true" />}
             {listener.text}
           </p>
-        </div>
+        </Row>
 
-        <div className="row">
-          <span className="row-label">Install bundle</span>
-          <div className="control fleet-install">
-            <button type="button" className="k-btn" onClick={paste} disabled={busy}>
-              Paste from clipboard
-            </button>
-            <label className="k-btn fleet-file">
-              Choose file…
-              <input
-                ref={fileInput}
-                type="file"
-                accept=".pem,.crt,.txt,application/x-pem-file,text/plain"
-                onChange={(e) => pick(e.target.files)}
-                disabled={busy}
-              />
-            </label>
-            <button
-              type="button"
-              className="k-btn is-primary"
-              onClick={() => install()}
-              disabled={!loaded || busy || confirm !== null}
-            >
-              {busy ? 'Installing…' : 'Install'}
-            </button>
-          </div>
+        <Row
+          label="Install bundle"
+          layout="stack"
+          control={
+            <>
+              <button type="button" className="k-btn" onClick={paste} disabled={busy}>
+                Paste from clipboard
+              </button>
+              <label className="k-btn fleet-file">
+                Choose file…
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".pem,.crt,.txt,application/x-pem-file,text/plain"
+                  onChange={(e) => pick(e.target.files)}
+                  disabled={busy}
+                />
+              </label>
+              <button
+                type="button"
+                className="k-btn is-primary fleet-install-go"
+                onClick={() => install()}
+                disabled={!loaded || busy || confirm !== null}
+              >
+                {busy ? 'Installing…' : 'Install'}
+              </button>
+            </>
+          }
+        >
           {loaded && (
-            <p className="sub fleet-note">
+            <p className="rnote">
               Bundle loaded from {loaded.source === 'clipboard' ? 'the clipboard' : loaded.source}.
             </p>
           )}
           {outcome &&
             (outcome.kind === 'ok' ? (
-              <p role="status" className="sub fleet-ok">
+              <p role="status" className="rnote fleet-ok">
                 {outcome.text}
               </p>
             ) : (
-              <p role="alert" className="sub err">
+              <p role="alert" className="rnote err">
                 {outcome.text}
               </p>
             ))}
-        </div>
+        </Row>
       </div>
 
       {confirm && (() => {

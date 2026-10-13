@@ -32,6 +32,10 @@ function respond(overrides: Record<string, unknown> = {}) {
   })
 }
 
+// The sidebar: Reveal lives on Logs, the fleet identity on Fleet.
+const goTo = async (page: RegExp) =>
+  fireEvent.click(await screen.findByRole('button', { name: page }))
+
 const BUNDLE = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
 
 beforeEach(() => {
@@ -110,6 +114,7 @@ describe('SettingsApp', () => {
     render(<SettingsApp />)
     await screen.findByLabelText(/^port$/i)
 
+    await goTo(/^logs$/i)
     fireEvent.click(screen.getByRole('button', { name: /reveal/i }))
     await waitFor(() =>
       expect(byName).toHaveBeenCalledWith('main.NativeService.RevealLogFile'),
@@ -127,6 +132,7 @@ describe('SettingsApp fleet identity', () => {
   it('copies the line PublicKeyLine returns through the Wails clipboard', async () => {
     respond({ 'main.NativeService.PublicKeyLine': Promise.resolve('ssh-ed25519 AAAA knomit@laptop') })
     render(<SettingsApp />)
+    await goTo(/^fleet$/i)
     fireEvent.click(await screen.findByRole('button', { name: /copy public key/i }))
     await waitFor(() => expect(setText).toHaveBeenCalledWith('ssh-ed25519 AAAA knomit@laptop'))
     expect(byName).toHaveBeenCalledWith('main.NativeService.PublicKeyLine')
@@ -146,6 +152,7 @@ describe('SettingsApp fleet identity', () => {
       return Promise.resolve(undefined)
     })
     render(<SettingsApp />)
+    await goTo(/^fleet$/i)
     fireEvent.click(await screen.findByRole('button', { name: /paste from clipboard/i }))
     await screen.findByText(/bundle loaded/i)
     expect(getText).toHaveBeenCalledTimes(1)

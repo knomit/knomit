@@ -12,47 +12,127 @@
 
 /* ===== Settings =========================================================== */
 
-/* Three regions. The window is DisableResize, so a form that grows — an env
-   note under all three fields, or a restart offer — used to push Save past the
-   bottom edge with no way to reach it. Only the body scrolls; the status header
-   and the footer are pinned, so the buttons never move. */
+/* Sidebar and pane. The window is DisableResize (680x500, windows.go), so a
+   page that grows — an env note under every field, a restart offer — must not
+   push Save past the bottom edge. Only .content scrolls; the sidebar and the
+   footer are pinned. */
 .ps {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 172px 1fr;
   height: 100vh;
 }
 
-.ps-status {
-  flex: 0 0 auto;
+[hidden] {
+  display: none !important;
+}
+
+/* ---- sidebar ------------------------------------------------------------- */
+
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 10px 8px;
+  background: var(--k-inset);
+  border-right: 1px solid var(--k-line-soft);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav button {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.6rem 0.9rem;
-  border-bottom: 1px solid var(--k-line);
-  background: var(--k-surface);
+  gap: 9px;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--k-text-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav button:hover {
+  background: #1c1c1c;
+}
+
+/* The selection is a neutral pill, not an accent: no hue here claims anything
+   about the settings. */
+.nav button[aria-current='page'] {
+  background: #2c2c2c;
+  color: var(--k-text);
+}
+
+.nav button:focus-visible {
+  outline: 2px solid var(--k-blue);
+  outline-offset: 1px;
+}
+
+.nav-ic {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--k-label);
+}
+
+.nav button[aria-current='page'] .nav-ic {
+  color: var(--k-text);
+}
+
+/* A page holding a refused value. Red because red means error in this window;
+   the page's own row says which field and why. */
+.nav-err {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--k-red);
+  flex: 0 0 auto;
+}
+
+/* The running server, at the foot of the sidebar on every page. */
+.sstat {
+  margin-top: auto;
+  padding: 9px 9px 2px;
+  border-top: 1px solid var(--k-line-soft);
   font-size: 12px;
 }
 
-.ps-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0.85rem 0.9rem;
-}
-
-.ps-foot {
-  flex: 0 0 auto;
+.sstat .l1 {
   display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.6rem 0.9rem;
-  border-top: 1px solid var(--k-line);
-  background: var(--k-surface);
+  align-items: center;
+  gap: 7px;
 }
 
-/* ---- status header ------------------------------------------------------- */
+.sstat .addr {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--k-font-mono);
+  font-size: 11px;
+  color: var(--k-text-2);
+}
+
+.sstat .att {
+  color: var(--k-label);
+}
+
+.sstat .aside {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--k-label);
+}
 
 .pip {
+  display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -62,124 +142,217 @@
 
 .pip.is-ok {
   background: var(--k-green);
+  box-shadow: 0 0 0 3px rgba(119, 204, 153, 0.14);
 }
 
 /* Bound, but not to the port that was asked for. */
 .pip.is-warn {
   background: var(--k-amber);
+  box-shadow: 0 0 0 3px rgba(229, 162, 60, 0.14);
 }
 
 .ps-state {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--k-text);
 }
 
 .ps-state.is-muted {
   font-weight: 400;
-  color: var(--k-muted);
+  color: var(--k-label);
 }
 
-.ps-addr {
-  font-family: var(--k-font-mono);
-  font-size: 11.5px;
+/* ---- pane ---------------------------------------------------------------- */
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 18px;
+}
+
+.content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.content::-webkit-scrollbar-thumb {
+  background: #2e2e2e;
+  border-radius: 4px;
+}
+
+.ptitle {
+  margin: 0 0 14px;
+  font-family: var(--k-font-display);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+/* Bold group headers, not caps eyebrows: one level under the page title. */
+.gh {
+  margin: 16px 2px 6px;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--k-text-2);
 }
 
-.ps-aside {
-  color: var(--k-amber);
-  font-size: 11.5px;
+.ptitle + .gh,
+.ptitle + .fleet > .gh {
+  margin-top: 0;
 }
 
-/* ---- the grouped list ---------------------------------------------------- */
-
-/* One card of hairline-separated rows — the macOS grouped-list idiom, and the
-   same card-and-hairline vocabulary the Manage pane uses. It replaced four
-   eyebrow-and-glyph sections that outweighed the five controls they headed. */
-.list {
-  background: var(--k-surface);
-  border: 1px solid var(--k-line);
+.card {
+  background: var(--k-raised);
+  border: 1px solid var(--k-line-soft);
   border-radius: var(--k-r-panel);
 }
 
+/* Label and sublabel on the left, the control right-aligned, notes under the
+   whole row. */
 .row {
   display: grid;
-  grid-template-columns: 8.25rem 1fr;
+  grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 0.4rem 0.5rem;
-  padding: 0.55rem 0.7rem;
+  column-gap: 14px;
+  min-height: 44px;
+  padding: 9px 12px;
   border-top: 1px solid var(--k-line-soft);
 }
 
-.row:first-child {
+.card > .row:first-child {
   border-top: none;
 }
 
-.row > label {
-  font-size: 12.5px;
-  color: var(--k-text);
-}
-
-.control {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.lab {
   min-width: 0;
 }
 
-/* Sized to their VALUES, not stretched to the column. A five-digit port in a
-   380px box, beside a select of the same width, made three unrelated values
-   read as one column of mostly-empty boxes. */
-.k-input.port {
-  width: 84px;
-  flex: 0 0 auto;
+.lab > .t {
+  display: block;
+  font-size: 13px;
+  color: var(--k-text);
+}
+
+/* --k-label, not --k-muted or --k-faint: #9a9a9a is the muted tier that keeps
+   AA contrast on the card (#777 and #555 do not). */
+.lab > .s {
+  display: block;
+  margin-top: 1px;
+  font-size: 11.5px;
+  color: var(--k-label);
+}
+
+/* Ellipsis rather than wrap: a long path must not widen a fixed window. The
+   full value is on the title attribute. */
+.lab > .s.is-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--k-font-mono);
+  font-size: 11px;
 }
 
-.control > .k-select {
-  width: auto;
-  flex: 0 0 auto;
+.lab > .s code {
+  font-family: var(--k-font-mono);
+  font-size: 11px;
 }
 
-/* The space the controls no longer take is where the constraint or the gloss
-   goes — it explains the field without costing a line. */
-.hint {
-  color: var(--k-faint);
+.ctl {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* A wide control (the install buttons) or a sentence (the listener's state)
+   goes under the label instead of beside it. */
+.row.is-stack {
+  grid-template-columns: 1fr;
+}
+
+.row.is-stack > .ctl {
+  justify-content: flex-start;
+  margin-top: 7px;
+}
+
+/* A line under the whole row: scope copy, an env note, a refusal. */
+.rnote {
+  grid-column: 1 / -1;
+  margin: 6px 0 0;
   font-size: 11.5px;
+  color: var(--k-label);
 }
 
-/* Something other than this form owns the value. */
-.chip {
-  padding: 1px 6px;
-  border: 1px solid var(--k-amber);
-  border-radius: 999px;
-  color: var(--k-amber);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.rnote code {
+  font-family: var(--k-font-mono);
+  font-size: 10.5px;
 }
 
-/* A line under a control, tied to it by sitting in the control's grid column
-   rather than the label's. */
-.sub {
-  grid-column: 2;
-  margin: 0;
-  font-size: 11.5px;
-}
-
-/* Inline, not a bubble behind a button: the pinned footer means an extra line
-   can no longer push Save out of reach, which is the only reason the reason
-   for a refusal was ever hidden. */
-.sub.err {
+.rnote.err {
   color: var(--k-red);
 }
 
-.sub.env {
+/* Something other than this form owns the value. */
+.rnote.env {
   color: var(--k-amber);
 }
 
-.sub code {
+/* The consequence of "All networks": amber, because nothing has failed, but it
+   is not what a hurried reader assumes. */
+.rnote.warn {
+  padding: 6px 9px;
+  border-left: 3px solid var(--k-amber);
+  border-radius: 0 4px 4px 0;
+  background: rgba(229, 162, 60, 0.07);
+  color: #eac58b;
+}
+
+/* ---- controls ------------------------------------------------------------ */
+
+/* Sized to their VALUES, not stretched. */
+.k-input.port {
+  width: 72px;
+  flex: 0 0 auto;
   font-family: var(--k-font-mono);
-  font-size: 11px;
+  font-size: 12px;
+  text-align: right;
+}
+
+.k-input.addr {
+  width: 150px;
+  flex: 0 0 auto;
+  font-family: var(--k-font-mono);
+  font-size: 12px;
+}
+
+.ctl .k-input,
+.ctl .k-select {
+  padding: 4px 7px;
+  font-size: 12.5px;
+}
+
+.ctl > .k-select {
+  width: auto;
+  min-width: 96px;
+  flex: 0 0 auto;
+  padding-right: 22px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23bbb' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+}
+
+.k-input::placeholder {
+  color: var(--k-label);
 }
 
 .k-input[aria-invalid='true'],
@@ -190,24 +363,98 @@
 /* Owned elsewhere, not unavailable: keep it legible and selectable. */
 .k-input[readonly] {
   color: var(--k-text-2);
-  background: var(--k-inset);
+  background: #0e0e0e;
   cursor: default;
+}
+
+.ctl > .k-select:disabled {
+  color: var(--k-text-2);
+  background-color: #0e0e0e;
+}
+
+.ctl .k-btn {
+  padding: 4px 11px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+/* Something other than this form owns the value. */
+.chip {
+  padding: 0 6px;
+  border: 1px solid rgba(229, 162, 60, 0.55);
+  border-radius: 999px;
+  color: var(--k-amber);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 15px;
+}
+
+/* Native radios drawn as a segmented control. The inputs stay real (and
+   focusable): only their dots are hidden. */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--k-inset);
+  border: 1px solid var(--k-line);
+  border-radius: var(--k-r-control);
+}
+
+.seg-opt {
+  position: relative;
+  padding: 3px 9px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--k-text-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.seg-opt input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.seg-opt:has(input:checked) {
+  background: #2e2e2e;
+  color: var(--k-text);
+  box-shadow: inset 0 0 0 1px #444;
+}
+
+.seg-opt:has(input:focus-visible) {
+  outline: 2px solid var(--k-blue);
+  outline-offset: 1px;
+}
+
+/* Read-only (KNOMIT_HTTP / KNOMIT_HOST): the value stays legible. */
+.seg.is-ro .seg-opt {
+  cursor: default;
+}
+
+.seg.is-ro .seg-opt:has(input:checked) {
+  background: #222;
+  color: var(--k-text-2);
 }
 
 /* ---- the switch ---------------------------------------------------------- */
 
 /* A real checkbox with a switch painted on it — keyboard, form semantics and
-   the accessibility tree all come free. A 15px native box floating in a wide
-   column read as an unfinished control. */
+   the accessibility tree all come free. */
 .sw {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
+  flex: 0 0 auto;
   width: 34px;
   height: 20px;
   margin: 0;
   border-radius: 999px;
-  background: #2a2a2a;
+  background: var(--k-inset);
   border: 1px solid var(--k-line);
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease;
@@ -240,55 +487,10 @@
   outline-offset: 2px;
 }
 
-/* ---- locations ----------------------------------------------------------- */
-
-/* A footnote, not a peer of Port. */
-.ps-paths {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  align-items: baseline;
-  gap: 0.2rem 0.7rem;
-  margin: 0.75rem 0 0;
-  padding: 0 0.15rem;
-  font-size: 11px;
-}
-
-.ps-paths dt {
-  color: var(--k-faint);
-}
-
-.ps-paths dd {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  min-width: 0;
-  margin: 0;
-  font-family: var(--k-font-mono);
-  font-size: 10.5px;
-  color: var(--k-muted);
-}
-
-/* The no-log-file state. Body font, not mono: it is a sentence, not a path.
-   Selected as `.ps-paths dd.ps-nofile` rather than `.ps-nofile` alone — the
-   rule above is `.ps-paths dd`, which would otherwise out-specify a lone class
-   and keep the mono face. */
-.ps-paths dd.ps-nofile {
-  font-family: var(--k-font-body);
-  color: var(--k-faint);
-}
-
-.ps-paths dd.ps-nofile code {
-  font-family: var(--k-font-mono);
-}
-
-/* Ellipsis rather than wrap: a long path must not widen a fixed window. */
-.ps-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .linkbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
   padding: 0;
   border: none;
@@ -296,6 +498,7 @@
   color: var(--k-blue);
   font: inherit;
   font-family: var(--k-font-body);
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -309,19 +512,54 @@
   border-radius: 2px;
 }
 
-/* ---- footer -------------------------------------------------------------- */
+/* ---- banners and the footer ---------------------------------------------- */
 
-/* Restart is an outcome of Save, so it sits with Save. It used to render
-   mid-form, where accepting a port change shoved the buttons down at the moment
-   the user was reaching for them. */
+/* The server is not the app's own. */
+.banner {
+  margin: 0 0 14px;
+  padding: 8px 11px;
+  border-left: 3px solid var(--k-blue);
+  border-radius: 0 6px 6px 0;
+  background: rgba(136, 170, 255, 0.06);
+  color: var(--k-text-2);
+  font-size: 12px;
+}
+
+.banner p {
+  margin: 0;
+}
+
+.banner p + p {
+  margin-top: 3px;
+}
+
+.banner code {
+  font-family: var(--k-font-mono);
+  font-size: 11.5px;
+}
+
+.banner .warn {
+  color: var(--k-amber);
+}
+
+.foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--k-line-soft);
+  background: var(--k-surface);
+}
+
+/* Restart is an outcome of Save, so it sits with Save, under every page. */
 .restartbar {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.45rem 0.55rem;
-  border: 1px solid var(--k-line);
+  gap: 12px;
+  padding: 7px 10px;
   border-left: 3px solid var(--k-amber);
-  border-radius: var(--k-r-control);
+  border-radius: 0 6px 6px 0;
   background: rgba(229, 162, 60, 0.07);
 }
 
@@ -329,31 +567,44 @@
   flex: 1;
   min-width: 0;
   margin: 0;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--k-text-2);
 }
 
 .restartbar .k-btn {
   flex: 0 0 auto;
+  padding: 4px 11px;
+  font-size: 12.5px;
 }
 
 .actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 8px;
+}
+
+.actions .k-btn {
+  padding: 4px 11px;
+  font-size: 12.5px;
 }
 
 /* Takes the slack to the left of the buttons whether or not it has anything to
-   say, so the buttons hold their position. One line, clipped: a wrapped Go
-   error would grow the row. Full text on the title attribute. */
+   say, so the buttons hold their position. It WRAPS, up to three lines: a
+   one-line clip cut "Fleet port on 0.0.0.0:19279." to "Fleet por…", hiding the
+   very address the line exists to report. The full text stays on title for
+   the rare Go error longer than that. */
 .outcome {
   flex: 1;
   min-width: 0;
   margin: 0;
   font-size: 12px;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .outcome.is-ok {
@@ -367,35 +618,11 @@
 
 /* ---- fleet identity (knomit#256) ------------------------------------------ */
 
-/* The listener address holds a host:port, wider than the port box and still
-   sized to its value. */
-.k-input.addr {
-  width: 150px;
-  flex: 0 0 auto;
-  font-family: var(--k-font-mono);
-}
-
-.fleet {
-  margin-top: 0.85rem;
-}
-
-.fleet-h {
-  margin: 0 0 0.35rem 0.15rem;
-}
-
-/* The same label column as a <label>, for rows whose control is not an input. */
-.row > .row-label {
-  font-size: 12.5px;
-  color: var(--k-text);
-}
-
 .fp,
-.fleet-san,
-.fleet-sub code,
-.fleet-roots code {
+.fleet-san {
   font-family: var(--k-font-mono);
-  font-size: 11px;
-  color: var(--k-text-2);
+  font-size: 11.5px;
+  color: var(--k-text);
 }
 
 .fleet-san {
@@ -405,18 +632,17 @@
   min-width: 0;
 }
 
-.fleet-facts {
-  flex-wrap: wrap;
-}
-
-.fleet-sub {
-  color: var(--k-muted);
+.fleet-sub code,
+.fleet-roots code {
+  font-family: var(--k-font-mono);
+  font-size: 11px;
+  color: var(--k-text-2);
 }
 
 .fleet-note {
   margin: 0;
-  color: var(--k-muted);
-  font-size: 11.5px;
+  color: var(--k-label);
+  font-size: 12.5px;
 }
 
 .fleet-ok {
@@ -430,16 +656,20 @@
 
 .fleet-bad {
   color: var(--k-red);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .fleet-listener {
-  margin: 0;
-  font-size: 11.5px;
+  margin-top: 0;
+}
+
+.fleet-listener .pip {
+  margin-right: 7px;
+  vertical-align: 1px;
 }
 
 .fleet-listener.is-ok {
-  color: var(--k-green);
+  color: var(--k-text-2);
 }
 
 .fleet-listener.is-warn {
@@ -447,11 +677,12 @@
 }
 
 .fleet-listener.is-muted {
-  color: var(--k-muted);
+  color: var(--k-label);
 }
 
-.fleet-install {
-  flex-wrap: wrap;
+/* Install is the step that acts; it stands apart from the two loaders. */
+.fleet-install-go {
+  margin-left: auto;
 }
 
 /* A real file input, hidden inside its button-styled label: keyboard and the
@@ -469,12 +700,16 @@
 }
 
 .fleet-confirm {
-  margin-top: 0.6rem;
-  font-size: 11.5px;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: none;
+  border-left: 3px solid var(--k-amber);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
 }
 
 .fleet-confirm p {
-  margin: 0 0 0.4rem;
+  margin: 0 0 6px;
 }
 
 /* Fingerprints in full: the point of the question is that they can be
@@ -482,12 +717,12 @@
 .fleet-roots {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 0.2rem 0.6rem;
-  margin: 0 0 0.5rem;
+  gap: 3px 10px;
+  margin: 0 0 8px;
 }
 
 .fleet-roots dt {
-  color: var(--k-muted);
+  color: var(--k-label);
 }
 
 .fleet-roots dd {
@@ -496,10 +731,19 @@
   overflow-wrap: anywhere;
 }
 
+.fleet-roots dd code {
+  color: var(--k-text);
+}
+
 .fleet-confirm-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 0.5rem;
+  gap: 8px;
+}
+
+.fleet-confirm-actions .k-btn {
+  padding: 4px 11px;
+  font-size: 12.5px;
 }
 
 /* The one destructive action in the window: an outline in the red accent,
@@ -507,63 +751,10 @@
 .k-btn.is-danger {
   color: var(--k-red);
   border-color: var(--k-red);
+  background: transparent;
 }
 
 .k-btn.is-danger:hover:not(:disabled) {
   background: rgba(255, 136, 136, 0.08);
   border-color: var(--k-red);
-}
-
-/* Buttons in the install row are secondary controls in a list row. */
-.fleet-install .k-btn {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-
-/* ---- HTTP port scope, attach banner -------------------------------------- */
-
-.rowlabel {
-  font-size: 12.5px;
-  color: var(--k-text);
-}
-
-.control.scopes {
-  flex-wrap: wrap;
-  gap: 0.35rem 0.9rem;
-}
-
-.radio {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 12.5px;
-  color: var(--k-text);
-  cursor: pointer;
-}
-
-/* The consequence of "All networks": amber like the env note, because nothing
-   has failed, but it is not what a hurried reader assumes. */
-.sub.warn {
-  color: var(--k-amber);
-}
-
-/* The server is not the app's own: same left-bar vocabulary as the restart bar. */
-.banner {
-  margin: 0 0 0.7rem;
-  padding: 0.5rem 0.7rem;
-  border: 1px solid var(--k-line);
-  border-left: 3px solid var(--k-blue);
-  border-radius: var(--k-r-control);
-  background: var(--k-raised);
-  color: var(--k-text-2);
-  font-size: 12px;
-}
-
-.banner p {
-  margin: 0;
-}
-
-.banner .sub {
-  grid-column: auto;
-  margin-top: 0.25rem;
 }

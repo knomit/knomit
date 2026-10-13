@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ComponentType } from 'react'
 import { FleetIdentitySection } from './FleetIdentity.tsx'
 import { installNeedsRestart, type FleetIdentity, type InstallResult } from './fleet.ts'
+import { BroadcastIcon, FolderIcon, GearIcon, GlobeIcon } from './icons.tsx'
+import { Row } from './Row.tsx'
 
 // Mirrors the Settings struct in tools/desktop/settings.go field for field.
 // The json tags there are the wire names; these must match them exactly.
@@ -136,6 +138,31 @@ const SCOPES: { value: Exclude<HttpScope, 'other'>; label: string }[] = [
   { value: 'all', label: 'All networks' },
 ]
 
+/**
+ * The sidebar's pages, in order. Every page edits the same Settings and one
+ * Save sends them all: the pages divide the window, not the transaction.
+ */
+type Page = 'general' | 'network' | 'fleet' | 'logs'
+
+const PAGES: { id: Page; label: string; Icon: ComponentType<{ color: string; size?: number }> }[] = [
+  { id: 'general', label: 'General', Icon: GearIcon },
+  { id: 'network', label: 'Network', Icon: GlobeIcon },
+  { id: 'fleet', label: 'Fleet', Icon: BroadcastIcon },
+  { id: 'logs', label: 'Logs', Icon: FolderIcon },
+]
+
+/**
+ * The page each validated field lives on. A refused field on a page that is
+ * not in view would otherwise be an error nobody can see: Save switches to its
+ * page and the sidebar marks it (see save()).
+ */
+const PAGE_OF: Record<string, Page> = {
+  port: 'network',
+  tlsAddr: 'network',
+  logLevel: 'logs',
+  logFormat: 'logs',
+}
+
 /** The zerolog levels config.Validate accepts, quietest first. */
 const LEVELS = ['trace', 'debug', 'info', 'warn', 'error']
 
@@ -214,6 +241,7 @@ export function SettingsForm({
   pollMs = 500,
 }: Props) {
   const [s, setS] = useState(initial)
+  const [page, setPage] = useState<Page>('general')
   // Shown beside the buttons. Reserved for failures that belong to the WINDOW
   // rather than to one control: a save the backend refused, a restart that
   // failed or timed out. Field problems never come here — they mark the field
@@ -305,8 +333,12 @@ export function SettingsForm({
     const invalid = validate(s)
     setFieldErrors(invalid)
     if (Object.keys(invalid).length > 0) {
-      // The messages render inline under their fields. Nothing to open, and
-      // nothing to choose between: every refusal is on screen at once.
+      // The messages render inline under their fields, and the sidebar marks
+      // every page that holds one. If the page in view holds none, go to the
+      // first that does: a refusal on a page nobody is looking at would read
+      // as a Save that did nothing.
+      const held = pagesWithErrors(invalid)
+      if (!held.includes(page)) setPage(held[0])
       return
     }
     let result: SaveAck
@@ -393,29 +425,28 @@ export function SettingsForm({
   // read and copy — it is simply owned elsewhere. readOnly refuses the edit
   // while keeping the text legible and selectable.
   //
-  // On a <select> readOnly does nothing, so those still take `disabled` — the
-  // chip beside them is what carries the meaning.
+  // On a <select> or a radio readOnly does nothing, so those still take
+  // `disabled` — the chip beside them is what carries the meaning.
   const errFor = (field: string) =>
     fieldErrors[field] && (
-      // Inline, not a bubble behind a button. The bubble existed because a
-      // rejected field could not afford vertical space in a window that could
-      // not be resized — S1's pinned footer removes that constraint, so the
-      // reason for a refusal no longer costs an interaction to read.
-      <p className="sub err" role="alert">
+      // Inline, under the row, not a bubble behind a button: the footer is
+      // pinned, so the reason for a refusal never costs an interaction to read.
+      <p className="rnote err" role="alert">
         {fieldErrors[field]}
       </p>
     )
 
-  // Amber, not red: nothing has failed.. The value on screen is simply not the
+  // Amber, not red: nothing has failed. The value on screen is simply not the
   // one in the file, and a save will not change it — the same "this is not what
   // you think" the knowledge app paints amber.
   const envNote = (field: string) =>
     overridden(field) && (
-      <p className="sub env">
+      <p className="rnote env">
         Set by <code>{ENV_FOR[field]}</code>, which beats knomit.toml — saving
         cannot change this.
       </p>
     )
+  const envChip = (on: boolean) => on && <span className="chip">env</span>
 
   // A path is shown home-collapsed so it fits without widening the window; the
   // full value stays on `title`, so nothing is actually lost.
@@ -430,314 +461,411 @@ export function SettingsForm({
       .replace(/^[A-Za-z]:\\Users\\[^\\]+\\AppData\\Local/, '%LOCALAPPDATA%')
       .replace(/^\/(Users|home)\/[^/]+/, '~')
 
+  // A missing section is omitted, never shown disabled: without the fleet
+  // props there is no Fleet page to go to.
+  const pages = PAGES.filter((p) => p.id !== 'fleet' || fleet)
+  const errorPages = pagesWithErrors(fieldErrors)
+  const titleOf = (id: Page) => PAGES.find((p) => p.id === id)!.label
+
   return (
-    // Three regions, not one scrolling column. The window is DisableResize, so
-    // a form that grows — an env note under all three fields, a restart offer —
-    // used to push Save past the bottom edge with no way to reach it. Only the
-    // BODY scrolls now; the status header and the footer are pinned, so the
-    // buttons are always where the user left them.
+    // Sidebar and pane. The window is DisableResize, so only the PAGE scrolls:
+    // the sidebar (with the server status at its foot) and the footer (restart
+    // offer, outcome, Cancel and Save) are pinned, so the buttons are always
+    // where the user left them, whichever page is in view.
     <div className="ps">
-      <header className="ps-status">
-        {server.running || effectivePort > 0 ? (
-          <>
-            <span
-              className={
-                portBusy ? 'pip is-warn' : 'pip is-ok'
-              }
-              aria-hidden="true"
-            />
-            <span className="ps-state">Running</span>
-            <code className="ps-addr">{listeningAddress(server, effectivePort)}</code>
-            {portBusy && (
-              // Replaces the old sentence under the port field. The number that
-              // matters is the one it is actually listening on, and this is
-              // where someone looks to find it.
-              <span className="ps-aside">— configured port was busy</span>
-            )}
-          </>
-        ) : (
-          <>
-            {/* Still booting. Do not invent a bound address in this state. */}
-            <span className="pip" aria-hidden="true" />
-            <span className="ps-state is-muted">Starting…</span>
-          </>
-        )}
-      </header>
+      <aside className="side">
+        {/* Icon-headed sections, reversing the earlier "one grouped list"
+            ruling: with four pages to move between, a glyph per page is a
+            landmark rather than scaffolding. The glyphs are the knowledge
+            app's own (icons.tsx copies them), and the selection is a neutral
+            pill, not an accent: no hue here claims anything about the data. */}
+        <nav className="nav" aria-label="Settings sections">
+          {pages.map(({ id, label, Icon }) => {
+            const bad = errorPages.includes(id)
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-current={page === id ? 'page' : undefined}
+                onClick={() => setPage(id)}
+              >
+                <span className="nav-ic" aria-hidden="true">
+                  <Icon color="currentColor" size={15} />
+                </span>
+                <span>{label}</span>
+                {bad && (
+                  // Red, because red already means error in this window. The
+                  // page's own rows say which field and why. The space keeps
+                  // the button's name "Network has an error", not one word.
+                  <>
+                    {' '}
+                    <span className="nav-err" role="img" aria-label="has an error" title="A value on this page was refused" />
+                  </>
+                )}
+              </button>
+            )
+          })}
+        </nav>
 
-      <div className="ps-body">
-        {server.attached && (
-          <div className="banner" role="note">
-            <p>
-              The server was started outside the app{server.pid > 0 ? ` (pid ${server.pid})` : ''}; restart is
-              not available, changes apply on reload.
-            </p>
-            {server.version && (
-              <p className="sub">
-                Server <code>{server.version}</code> · App <code>{server.desktopVersion}</code>
-              </p>
-            )}
-            {server.versionSkew && (
-              <p className="sub warn" role="note">
-                The server and the app are different versions ({majorMinor(server.version)} and{' '}
-                {majorMinor(server.desktopVersion)}): this window may not match the server&apos;s API.
-              </p>
-            )}
-          </div>
-        )}
+        <div className="sstat">
+          {server.running || effectivePort > 0 ? (
+            <>
+              <span className="l1">
+                <span className={portBusy ? 'pip is-warn' : 'pip is-ok'} aria-hidden="true" />
+                <span className="ps-state">Running</span>
+                {server.attached && <span className="att">· attached</span>}
+              </span>
+              <code className="addr">{listeningAddress(server, effectivePort)}</code>
+              {portBusy && (
+                // The number that matters is the one it is actually listening
+                // on, and this is where someone looks to find it.
+                <span className="aside">— configured port was busy</span>
+              )}
+            </>
+          ) : (
+            <span className="l1">
+              {/* Still booting. Do not invent a bound address in this state. */}
+              <span className="pip" aria-hidden="true" />
+              <span className="ps-state is-muted">Starting…</span>
+            </span>
+          )}
+        </div>
+      </aside>
 
-        {/* One grouped list, not four icon-headed sections. Five controls did
-            not need four eyebrows and four hand-drawn glyphs — the scaffolding
-            outweighed the content and the eye counted headings instead of
-            settings. Card and hairlines is also the vocabulary the Manage pane
-            already uses. */}
-        <div className="list">
-          <div className="row scope">
-            <div className="rowlabel" id="httpScopeLabel">
-              HTTP port
-            </div>
-            <div className="control scopes" role="radiogroup" aria-labelledby="httpScopeLabel">
-              {SCOPES.map((o) => (
-                <label key={o.value} className="radio">
+      <main className="main">
+        <div className="content">
+          <section className="page" hidden={page !== 'general'} aria-labelledby="page-general">
+            <h2 className="ptitle" id="page-general">
+              {titleOf('general')}
+            </h2>
+            {server.attached && (
+              <div className="banner" role="note">
+                <p>
+                  The server was started outside the app{server.pid > 0 ? ` (pid ${server.pid})` : ''}; restart is
+                  not available, changes apply on reload.
+                </p>
+                {server.version && (
+                  <p>
+                    Server <code>{server.version}</code> · App <code>{server.desktopVersion}</code>
+                  </p>
+                )}
+                {server.versionSkew && (
+                  <p className="warn" role="note">
+                    The server and the app are different versions ({majorMinor(server.version)} and{' '}
+                    {majorMinor(server.desktopVersion)}): this window may not match the server&apos;s API.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <h3 className="gh">Startup</h3>
+            <div className="card">
+              <Row
+                label="Start at login"
+                htmlFor="startAtLogin"
+                control={
+                  // A real checkbox with a switch drawn on it, not a div with a
+                  // click handler: keyboard, form semantics and the
+                  // accessibility tree all come free that way.
                   <input
-                    type="radio"
-                    name="httpScope"
-                    value={o.value}
-                    checked={s.httpScope === o.value}
-                    disabled={scopeEnv.length > 0}
-                    onChange={() => edit({ httpScope: o.value })}
+                    id="startAtLogin"
+                    className="sw"
+                    type="checkbox"
+                    checked={s.startAtLogin}
+                    onChange={(e) => edit({ startAtLogin: e.target.checked })}
                   />
-                  {o.label}
-                </label>
-              ))}
-              {scopeEnv.length > 0 && <span className="chip">env</span>}
-            </div>
-            {s.httpScope === 'off' && (
-              <p className="sub">
-                No TCP port is open. This app and the kb tool use the local socket; browsers and MCP
-                clients that connect to http://127.0.0.1 cannot.
-              </p>
-            )}
-            {s.httpScope === 'local' && (
-              <p className="sub">
-                Only programs on this computer can connect, on <code>http://127.0.0.1:{s.port}</code>.
-              </p>
-            )}
-            {s.httpScope === 'all' && (
-              <p className="sub warn" role="note">
-                {ALL_NETWORKS_WARNING}
-              </p>
-            )}
-            {s.httpScope === 'other' && (
-              <p className="sub">
-                knomit.toml binds a specific address. Settings leaves it alone; edit the file to change it.
-              </p>
-            )}
-            {scopeEnv.length > 0 && (
-              <p className="sub env">
-                Set by <code>{scopeEnv.join(' and ')}</code>, which beats knomit.toml — saving cannot change this.
-              </p>
-            )}
-          </div>
-
-          <div className="row">
-            <label htmlFor="port">Port</label>
-            <div className="control">
-              <input
-                id="port"
-                className="k-input port"
-                value={s.port}
-                readOnly={overridden('port')}
-                aria-invalid={fieldErrors.port ? true : undefined}
-                onChange={(e) => edit({ port: e.target.value })}
+                }
               />
-              {overridden('port') ? (
-                <span className="chip">env</span>
-              ) : (
-                <span className="hint">
-                  {s.httpScope === 'off' ? 'used when the HTTP port is on' : '1024–65535'}
-                </span>
-              )}
             </div>
-            {errFor('port')}
-            {envNote('port')}
-          </div>
 
-          <div className="row">
-            <label htmlFor="tlsAddr">Fleet listener</label>
-            <div className="control">
-              <input
-                id="tlsAddr"
-                className="k-input addr"
-                value={s.tlsAddr}
-                placeholder="off"
-                spellCheck={false}
-                readOnly={overridden('tlsAddr')}
-                aria-invalid={fieldErrors.tlsAddr ? true : undefined}
-                onChange={(e) => edit({ tlsAddr: e.target.value })}
-              />
-              {overridden('tlsAddr') ? (
-                <span className="chip">env</span>
-              ) : (
-                <span className="hint">Fleet port, host:port for enrolled peers</span>
-              )}
+            <h3 className="gh">Files</h3>
+            <div className="card">
+              <Row label="Config" sub={short(initial.configPath)} subTitle={initial.configPath} />
             </div>
-            {errFor('tlsAddr')}
-            {envNote('tlsAddr')}
-          </div>
+          </section>
 
-          <div className="row">
-            <label htmlFor="logLevel">Log level</label>
-            <div className="control">
-              <select
-                id="logLevel"
-                className="k-select"
-                value={s.logLevel}
-                disabled={overridden('logLevel')}
-                aria-invalid={fieldErrors.logLevel ? true : undefined}
-                onChange={(e) => edit({ logLevel: e.target.value })}
+          <section className="page" hidden={page !== 'network'} aria-labelledby="page-network">
+            <h2 className="ptitle" id="page-network">
+              {titleOf('network')}
+            </h2>
+            <h3 className="gh">HTTP</h3>
+            <div className="card">
+              <Row
+                label="HTTP port"
+                labelId="httpScopeLabel"
+                control={
+                  <>
+                    {envChip(scopeEnv.length > 0)}
+                    {/* Native radios drawn as a segmented control: arrow keys,
+                        form semantics and the accessibility tree come free. */}
+                    <div
+                      className={scopeEnv.length > 0 ? 'seg is-ro' : 'seg'}
+                      role="radiogroup"
+                      aria-labelledby="httpScopeLabel"
+                    >
+                      {SCOPES.map((o) => (
+                        <label key={o.value} className="seg-opt">
+                          <input
+                            type="radio"
+                            name="httpScope"
+                            value={o.value}
+                            checked={s.httpScope === o.value}
+                            disabled={scopeEnv.length > 0}
+                            onChange={() => edit({ httpScope: o.value })}
+                          />
+                          {o.label}
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                }
               >
-                {LEVELS.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-              {overridden('logLevel') && <span className="chip">env</span>}
-            </div>
-            {errFor('logLevel')}
-            {envNote('logLevel')}
-          </div>
+                {s.httpScope === 'off' && (
+                  <p className="rnote">
+                    No TCP port is open. This app and the kb tool use the local socket; browsers and MCP
+                    clients that connect to http://127.0.0.1 cannot.
+                  </p>
+                )}
+                {s.httpScope === 'local' && (
+                  <p className="rnote">
+                    Only programs on this computer can connect, on <code>http://127.0.0.1:{s.port}</code>.
+                  </p>
+                )}
+                {s.httpScope === 'all' && (
+                  <p className="rnote warn" role="note">
+                    {ALL_NETWORKS_WARNING}
+                  </p>
+                )}
+                {s.httpScope === 'other' && (
+                  <p className="rnote">
+                    knomit.toml binds a specific address. Settings leaves it alone; edit the file to change it.
+                  </p>
+                )}
+                {scopeEnv.length > 0 && (
+                  <p className="rnote env">
+                    Set by <code>{scopeEnv.join(' and ')}</code>, which beats knomit.toml — saving cannot change
+                    this.
+                  </p>
+                )}
+              </Row>
 
-          <div className="row">
-            <label htmlFor="logFormat">Log format</label>
-            <div className="control">
-              <select
-                id="logFormat"
-                className="k-select"
-                value={s.logFormat}
-                disabled={overridden('logFormat')}
-                aria-invalid={fieldErrors.logFormat ? true : undefined}
-                onChange={(e) => edit({ logFormat: e.target.value })}
+              <Row
+                label="Port"
+                htmlFor="port"
+                sub={overridden('port') ? undefined : s.httpScope === 'off' ? 'used when the HTTP port is on' : '1024–65535'}
+                control={
+                  <>
+                    {envChip(overridden('port'))}
+                    <input
+                      id="port"
+                      className="k-input port"
+                      value={s.port}
+                      readOnly={overridden('port')}
+                      aria-invalid={fieldErrors.port ? true : undefined}
+                      onChange={(e) => edit({ port: e.target.value })}
+                    />
+                  </>
+                }
               >
-                {FORMATS.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-              {overridden('logFormat') ? (
-                <span className="chip">env</span>
+                {errFor('port')}
+                {envNote('port')}
+              </Row>
+            </div>
+
+            <h3 className="gh">Fleet</h3>
+            <div className="card">
+              <Row
+                label="Fleet listener"
+                htmlFor="tlsAddr"
+                sub="Fleet port, host:port for enrolled peers"
+                control={
+                  <>
+                    {envChip(overridden('tlsAddr'))}
+                    <input
+                      id="tlsAddr"
+                      className="k-input addr"
+                      value={s.tlsAddr}
+                      placeholder="off"
+                      spellCheck={false}
+                      readOnly={overridden('tlsAddr')}
+                      aria-invalid={fieldErrors.tlsAddr ? true : undefined}
+                      onChange={(e) => edit({ tlsAddr: e.target.value })}
+                    />
+                  </>
+                }
+              >
+                {errFor('tlsAddr')}
+                {envNote('tlsAddr')}
+              </Row>
+            </div>
+          </section>
+
+          {fleet && (
+            // Kept mounted while hidden, like every page: a bundle loaded or a
+            // root confirmation open on this page survives a look at Network.
+            <section className="page" hidden={page !== 'fleet'} aria-labelledby="page-fleet">
+              <h2 className="ptitle" id="page-fleet">
+                {titleOf('fleet')}
+              </h2>
+              <FleetIdentitySection
+                identity={identity}
+                onCopyPublicKey={fleet.onCopyPublicKey}
+                onReadClipboard={fleet.onReadClipboard}
+                onInstall={fleet.onInstall}
+                onInstalled={(next) => {
+                  if (next) setIdentity(next)
+                  if (installNeedsRestart(next)) setInstallRestart(true)
+                }}
+              />
+            </section>
+          )}
+
+          <section className="page" hidden={page !== 'logs'} aria-labelledby="page-logs">
+            <h2 className="ptitle" id="page-logs">
+              {titleOf('logs')}
+            </h2>
+            <h3 className="gh">Output</h3>
+            <div className="card">
+              <Row
+                label="Log level"
+                htmlFor="logLevel"
+                control={
+                  <>
+                    {envChip(overridden('logLevel'))}
+                    <select
+                      id="logLevel"
+                      className="k-select"
+                      value={s.logLevel}
+                      disabled={overridden('logLevel')}
+                      aria-invalid={fieldErrors.logLevel ? true : undefined}
+                      onChange={(e) => edit({ logLevel: e.target.value })}
+                    >
+                      {LEVELS.map((l) => (
+                        <option key={l} value={l}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                }
+              >
+                {errFor('logLevel')}
+                {envNote('logLevel')}
+              </Row>
+
+              <Row
+                label="Log format"
+                htmlFor="logFormat"
+                // The label is the VALUE; the gloss says what it means.
+                sub={FORMATS.find((f) => f.value === s.logFormat)?.hint}
+                control={
+                  <>
+                    {envChip(overridden('logFormat'))}
+                    <select
+                      id="logFormat"
+                      className="k-select"
+                      value={s.logFormat}
+                      disabled={overridden('logFormat')}
+                      aria-invalid={fieldErrors.logFormat ? true : undefined}
+                      onChange={(e) => edit({ logFormat: e.target.value })}
+                    >
+                      {FORMATS.map((f) => (
+                        <option key={f.value} value={f.value}>
+                          {f.label}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                }
+              >
+                {errFor('logFormat')}
+                {envNote('logFormat')}
+              </Row>
+            </div>
+
+            <h3 className="gh">File</h3>
+            <div className="card">
+              {initial.logFilePath ? (
+                <Row
+                  label="Log file"
+                  sub={short(initial.logFilePath)}
+                  subTitle={initial.logFilePath}
+                  control={
+                    <button type="button" className="k-btn" onClick={reveal}>
+                      Reveal
+                    </button>
+                  }
+                />
               ) : (
-                <span className="hint">
-                  {FORMATS.find((f) => f.value === s.logFormat)?.hint}
-                </span>
+                // resolveLogFile (logging.go) returns "" only when there is no
+                // `[log] file` AND no resolvable logs directory — nothing is
+                // being written to disk at all. Reveal is DROPPED rather than
+                // disabled: there is no directory to open, and RevealLogFile
+                // would run `open -R ""`, which fails with nothing on screen to
+                // explain it. Saying why beats a button that quietly does nothing.
+                <Row
+                  label="Log file"
+                  sub={
+                    <>
+                      none — set <code>[log] file</code> in knomit.toml
+                    </>
+                  }
+                />
               )}
             </div>
-            {errFor('logFormat')}
-            {envNote('logFormat')}
-          </div>
-
-          <div className="row">
-            <label htmlFor="startAtLogin">Start at login</label>
-            <div className="control">
-              {/* A real checkbox with a switch drawn on it, not a div with a
-                  click handler: keyboard, form semantics and the accessibility
-                  tree all come free that way. */}
-              <input
-                id="startAtLogin"
-                className="sw"
-                type="checkbox"
-                checked={s.startAtLogin}
-                onChange={(e) => edit({ startAtLogin: e.target.checked })}
-              />
-            </div>
-          </div>
+          </section>
         </div>
 
-        {fleet && (
-          <FleetIdentitySection
-            identity={identity}
-            onCopyPublicKey={fleet.onCopyPublicKey}
-            onReadClipboard={fleet.onReadClipboard}
-            onInstall={fleet.onInstall}
-            onInstalled={(next) => {
-              if (next) setIdentity(next)
-              if (installNeedsRestart(next)) setInstallRestart(true)
-            }}
-          />
-        )}
-
-        {/* A footnote, not a peer of Port: dim, mono, home-collapsed. */}
-        <dl className="ps-paths">
-          <dt>Config</dt>
-          <dd title={initial.configPath}>{short(initial.configPath)}</dd>
-          <dt>Log file</dt>
-          {initial.logFilePath ? (
-            <dd title={initial.logFilePath}>
-              <span className="ps-path">{short(initial.logFilePath)}</span>
-              <button type="button" className="linkbtn" onClick={reveal}>
-                Reveal
+        <footer className="foot">
+          {/* Restart is an outcome of Save, so it belongs beside Save, under
+              every page: whichever page caused it, the offer is in one place. */}
+          {needsRestart && (
+            <div className="restartbar">
+              <p>
+                {restartReason(restartKeys, installRestart)}
+                {server.attached &&
+                  ` The server was started outside the app${server.pid > 0 ? ` (pid ${server.pid})` : ''}: restart it where it was started.`}
+              </p>
+              <button
+                type="button"
+                className="k-btn"
+                onClick={restart}
+                disabled={restarting || !server.canRestart}
+                title={server.canRestart ? undefined : 'Only a server the app started can be restarted here.'}
+              >
+                {restarting ? 'Restarting…' : 'Restart server'}
               </button>
-            </dd>
-          ) : (
-            // resolveLogFile (logging.go) returns "" only when there is no
-            // `[log] file` AND no resolvable logs directory — nothing is being
-            // written to disk at all. Reveal is DROPPED rather than disabled:
-            // there is no directory to open, and RevealLogFile would run
-            // `open -R ""`, which fails with nothing on screen to explain it.
-            // Saying why beats a button that quietly does nothing.
-            <dd className="ps-nofile">
-              none — set <code>[log] file</code> in knomit.toml
-            </dd>
+            </div>
           )}
-        </dl>
-      </div>
 
-      <footer className="ps-foot">
-        {/* Restart is an outcome of Save, so it belongs beside Save. It used to
-            render mid-form, where accepting a port change shoved the buttons
-            down at the moment the user was reaching for them. */}
-        {needsRestart && (
-          <div className="restartbar">
-            <p>
-              {restartReason(restartKeys, installRestart)}
-              {server.attached &&
-                ` The server was started outside the app${server.pid > 0 ? ` (pid ${server.pid})` : ''}: restart it where it was started.`}
-            </p>
-            <button
-              type="button"
-              className="k-btn"
-              onClick={restart}
-              disabled={restarting || !server.canRestart}
-              title={server.canRestart ? undefined : 'Only a server the app started can be restarted here.'}
-            >
-              {restarting ? 'Restarting…' : 'Restart server'}
+          <div className="actions">
+            {error ? (
+              <p role="alert" className="outcome is-error" title={error}>
+                {error}
+              </p>
+            ) : saved ? (
+              <p role="status" className="outcome is-ok" title={saved}>
+                {saved}
+              </p>
+            ) : (
+              <span className="outcome" aria-hidden="true" />
+            )}
+            <button type="button" className="k-btn" onClick={onCancel}>
+              Cancel
+            </button>
+            <button type="button" className="k-btn is-primary" onClick={save}>
+              Save
             </button>
           </div>
-        )}
-
-        <div className="actions">
-          {error ? (
-            <p role="alert" className="outcome is-error" title={error}>
-              {error}
-            </p>
-          ) : saved ? (
-            <p role="status" className="outcome is-ok" title={saved}>
-              {saved}
-            </p>
-          ) : (
-            <span className="outcome" aria-hidden="true" />
-          )}
-          <button type="button" className="k-btn" onClick={onCancel}>
-            Cancel
-          </button>
-          <button type="button" className="k-btn is-primary" onClick={save}>
-            Save
-          </button>
-        </div>
-      </footer>
+        </footer>
+      </main>
     </div>
   )
+}
+
+/** The pages holding a refused field, in sidebar order. */
+function pagesWithErrors(errs: Record<string, string>): Page[] {
+  return PAGES.map((p) => p.id).filter((id) => Object.keys(errs).some((f) => PAGE_OF[f] === id))
 }
 
 /**
