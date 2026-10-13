@@ -28,6 +28,13 @@ var installCallers = []string{
 	"tools/desktop/identity.go",
 }
 
+// installCRLCallers are the ONLY production files that may call
+// pki.InstallCRL, the CRL-only install (fleet design D13). It writes trust
+// material like InstallBundle and must never be reachable over HTTP. It has
+// no production caller yet: the fleet reconcile's member tick will be the
+// first, and adding it here is a reviewed decision, not a silent new path.
+var installCRLCallers []string
+
 // TestInstallBundleHasOnlyTheTwoFrontEnds parses every non-test Go file of
 // every package in the module — the desktop's included, which needs its
 // build tag to be listed — and fails on a call to pki.InstallBundle (through
@@ -65,7 +72,8 @@ func TestInstallBundleHasOnlyTheTwoFrontEnds(t *testing.T) {
 		t.Fatalf("listed only %d files; the guard would pass vacuously", len(files))
 	}
 
-	var found []string
+	pinned := map[string][]string{"InstallBundle": installCallers, "InstallCRL": installCRLCallers}
+	found := map[string][]string{}
 	fset := token.NewFileSet()
 	for _, f := range files {
 		file, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
@@ -91,21 +99,26 @@ func TestInstallBundleHasOnlyTheTwoFrontEnds(t *testing.T) {
 			}
 			switch fn := call.Fun.(type) {
 			case *ast.SelectorExpr:
-				if id, ok := fn.X.(*ast.Ident); ok && name != "" && id.Name == name && fn.Sel.Name == "InstallBundle" {
-					found = append(found, rel)
+				if id, ok := fn.X.(*ast.Ident); ok && name != "" && id.Name == name {
+					if _, ok := pinned[fn.Sel.Name]; ok {
+						found[fn.Sel.Name] = append(found[fn.Sel.Name], rel)
+					}
 				}
 			case *ast.Ident:
-				if inPKI && fn.Name == "InstallBundle" {
-					found = append(found, rel)
+				if _, ok := pinned[fn.Name]; ok && inPKI {
+					found[fn.Name] = append(found[fn.Name], rel)
 				}
 			}
 			return true
 		})
 	}
-	slices.Sort(found)
-	found = slices.Compact(found)
-	if !slices.Equal(found, installCallers) {
-		t.Fatalf("pki.InstallBundle is called from %v; only %v may call it — trust material is never installable over HTTP, and each front-end is a reviewed decision", found, installCallers)
+	for fn, allowed := range pinned {
+		got := found[fn]
+		slices.Sort(got)
+		got = slices.Compact(got)
+		if !slices.Equal(got, allowed) {
+			t.Errorf("pki.%s is called from %v; only %v may call it — trust material is never installable over HTTP, and each front-end is a reviewed decision", fn, got, allowed)
+		}
 	}
 }
 

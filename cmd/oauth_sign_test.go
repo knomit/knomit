@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -193,6 +194,8 @@ func TestOAuthSign_RefusesAnInconsistentDescription(t *testing.T) {
 // Reading the passphrase on stdin AFTER the printout is the confirmation;
 // a passphrase from a file signs unattended, so it needs --yes.
 func TestOAuthSign_UnattendedNeedsYes(t *testing.T) {
+	// File custody: the typed passphrase opens root.key and confirms.
+	useKeychain(t, &cliKeychain{items: map[string]string{}, setErr: errors.New("no Secret Service")})
 	dir, passFile, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
 	_, _, err := runSplit(t, "", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,

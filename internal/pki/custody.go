@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -201,6 +202,36 @@ type ExportResult struct {
 	From            RootSource // where the key was read
 	RemovedKeychain bool       // the keychain item was deleted
 	RemovedFile     bool       // <dir>/root.key was deleted
+	// KeychainErr is set when deleting the keychain item failed for a reason
+	// other than "not found" while the key was read from the FILE (a locked
+	// or unreachable keychain): the keychain may still hold the key, so this
+	// machine may still be able to sign. A front end must say so.
+	KeychainErr error
+}
+
+// ErrExportOntoRootKey: --out names the master directory's own root.key. A
+// move would delete the file it just wrote, and with it the only copy.
+var ErrExportOntoRootKey = errors.New("pki: the export file is the master directory's root.key")
+
+// sameDestination reports whether out and keyPath name the same location
+// before either exists: cleaned absolute paths, and again with the parent
+// directories' symlinks resolved where they exist.
+func sameDestination(out, keyPath string) bool {
+	canon := func(p string) string {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return filepath.Clean(p)
+		}
+		return abs
+	}
+	resolved := func(p string) string {
+		d, err := filepath.EvalSymlinks(filepath.Dir(canon(p)))
+		if err != nil {
+			return canon(p)
+		}
+		return filepath.Join(d, filepath.Base(p))
+	}
+	return canon(out) == canon(keyPath) || resolved(out) == resolved(keyPath)
 }
 
 // ExportRoot writes the root key, passphrase-encrypted exactly as root.key
@@ -216,6 +247,13 @@ func ExportRoot(dir, out string, kc Keychain, passphrase []byte, keep bool) (Exp
 	if len(passphrase) == 0 {
 		return ExportResult{}, errors.New("pki: the exported root key requires a passphrase")
 	}
+	keyPath := filepath.Join(dir, RootKeyFile)
+	// The move below removes <dir>/root.key. An export written AT that path
+	// would be removed with it, the keychain item too, and the key would be
+	// gone: refuse that spelling before writing anything.
+	if sameDestination(out, keyPath) {
+		return ExportResult{}, fmt.Errorf("%w (%s); export to a file outside the master directory", ErrExportOntoRootKey, keyPath)
+	}
 	root, src, err := OpenRoot(dir, kc, func() ([]byte, error) { return passphrase, nil })
 	if err != nil {
 		return ExportResult{}, err
@@ -230,12 +268,26 @@ func ExportRoot(dir, out string, kc Keychain, passphrase []byte, keep bool) (Exp
 	if err := writeExclusive(out, data, 0o600); err != nil {
 		return res, err
 	}
+	// Any spelling the path check missed (a symlinked or hard-linked
+	// directory): if the file just written IS <dir>/root.key, stop here and
+	// remove NOTHING — that file is a valid root.key and the keychain item
+	// is untouched.
+	if fo, err := os.Stat(out); err == nil {
+		if fk, err := os.Stat(keyPath); err == nil && os.SameFile(fo, fk) {
+			return res, fmt.Errorf("%w (%s is %s); nothing was removed", ErrExportOntoRootKey, out, keyPath)
+		}
+	}
 	// Read it back before anything is removed: a move must never lose the
 	// only copy.
 	back, _, err := readRootFile(out, passphrase)
 	if err != nil || !back.Equal(priv) {
 		os.Remove(out)
 		return res, fmt.Errorf("pki: the export did not read back as the root key; nothing removed: %v", err)
+	}
+	// Durable before the local copy goes: the file's data is synced by
+	// writeExclusive; its directory entry is synced here.
+	if err := syncDir(filepath.Dir(out)); err != nil {
+		return res, fmt.Errorf("pki: exported to %s, but its directory could not be synced; nothing removed: %w", out, err)
 	}
 	if keep {
 		return res, nil
@@ -249,8 +301,8 @@ func ExportRoot(dir, out string, kc Keychain, passphrase []byte, keep bool) (Exp
 		if src == RootFromKeychain {
 			return res, fmt.Errorf("pki: exported to %s, but the keychain item could not be removed, so the key is now in two places: %w", out, err)
 		}
+		res.KeychainErr = err
 	}
-	keyPath := filepath.Join(dir, RootKeyFile)
 	switch err := os.Remove(keyPath); {
 	case err == nil:
 		res.RemovedFile = true
@@ -297,22 +349,33 @@ func ImportRoot(dir, file string, kc Keychain, passphrase []byte) (Root, RootSou
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return Root{}, "", fmt.Errorf("pki: create master dir: %w", err)
 	}
+	// A failed import leaves no root.crt of its own behind: a new root.crt
+	// beside an older root.key would make every later open fail as "not a
+	// pair".
+	wroteCert := false
 	if installed == nil {
 		if err := writeFileAtomic(certPath, certPEM(cert.Raw), 0o644); err != nil {
 			return Root{}, "", err
 		}
+		wroteCert = true
+	}
+	fail := func(err error) (Root, RootSource, error) {
+		if wroteCert {
+			os.Remove(certPath)
+		}
+		return Root{}, "", err
 	}
 	root := Root{Cert: cert, Signer: priv}
 	secret, err := rootSecret(priv, cert.Subject.CommonName)
 	if err != nil {
-		return Root{}, "", err
+		return fail(err)
 	}
 	kerr := kc.Set(KeychainService, KeychainAccount(id), string(secret))
 	if kerr == nil {
 		return root, RootFromKeychain, nil
 	}
 	if err := writeEncryptedRootKey(filepath.Join(dir, RootKeyFile), priv, cert.Subject.CommonName, passphrase); err != nil {
-		return Root{}, "", fmt.Errorf("pki: the OS keychain refused the root key (%v), and the file fallback failed: %w", kerr, err)
+		return fail(fmt.Errorf("pki: the OS keychain refused the root key (%v), and the file fallback failed: %w", kerr, err))
 	}
 	return root, RootFromFile, nil
 }
@@ -382,6 +445,24 @@ func asEd25519(k any) (ed25519.PrivateKey, error) {
 		return v, nil
 	}
 	return nil, fmt.Errorf("pki: root key is %T, want ed25519", k)
+}
+
+// syncDir makes dir's entries durable (fsync on the directory). Windows
+// cannot open a directory for syncing and persists renames/creates through
+// NTFS journaling, so there it is a no-op.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		d.Close()
+		return err
+	}
+	return d.Close()
 }
 
 // writeExclusive creates path with data, refusing an existing file.

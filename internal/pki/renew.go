@@ -33,5 +33,5 @@ func inFinalFraction(start, end, now time.Time) bool {
 	if life <= 0 {
 		return true
 	}
-	return end.Sub(now)*renewWindowDivisor < life
+	return end.Sub(now) < life/renewWindowDivisor
 }

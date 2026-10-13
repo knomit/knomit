@@ -14,11 +14,14 @@ import (
 
 // cliKeychain is an in-memory pki.Keychain for the CLI tests.
 type cliKeychain struct {
-	items  map[string]string
-	setErr error
+	items                  map[string]string
+	setErr, getErr, delErr error
 }
 
 func (k *cliKeychain) Get(s, a string) (string, error) {
+	if k.getErr != nil {
+		return "", k.getErr
+	}
 	v, ok := k.items[s+"/"+a]
 	if !ok {
 		return "", pki.ErrKeychainItemNotFound
@@ -35,6 +38,9 @@ func (k *cliKeychain) Set(s, a, v string) error {
 }
 
 func (k *cliKeychain) Delete(s, a string) error {
+	if k.delErr != nil {
+		return k.delErr
+	}
 	if _, ok := k.items[s+"/"+a]; !ok {
 		return pki.ErrKeychainItemNotFound
 	}
@@ -102,7 +108,7 @@ func TestIdentity_RootCustodyExportMovesImportRestores(t *testing.T) {
 	}
 
 	onTerminal(t)
-	out, err = run(t, "", "identity", "export-root", "--dir", dir, "--out", export, "--passphrase-file", passFile)
+	out, err = run(t, "correct horse\n", "identity", "export-root", "--dir", dir, "--out", export, "--passphrase-file", passFile)
 	if err != nil || !strings.Contains(out, "removed the local copy") {
 		t.Fatalf("export-root: %v\n%s", err, out)
 	}
@@ -135,7 +141,7 @@ func TestIdentity_ExportRootKeepLeavesTheKey(t *testing.T) {
 	useKeychain(t, kc)
 	onTerminal(t)
 	dir, passFile := master(t)
-	out, err := run(t, "", "identity", "export-root", "--dir", dir, "--keep", "--out", filepath.Join(t.TempDir(), "backup"), "--passphrase-file", passFile)
+	out, err := run(t, "correct horse\n", "identity", "export-root", "--dir", dir, "--keep", "--out", filepath.Join(t.TempDir(), "backup"), "--passphrase-file", passFile)
 	if err != nil || !strings.Contains(out, "kept the local copy") {
 		t.Fatalf("export --keep: %v\n%s", err, out)
 	}
