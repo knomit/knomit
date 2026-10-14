@@ -41,6 +41,11 @@ const (
 	// is for the signing key, chains to the fleet root, and its serial is on
 	// the fleet CRL (rule B; or a self-registration on a revoked leaf).
 	RuleRevoked = "revoked"
+	// RuleNoCert: the fleet revision holds root.crt (the fleet has a PKI) but
+	// there is no valid leaf for the author's id naming its record's key: none
+	// at certs/<id>.pem, one the root did not sign, or a root or CRL that
+	// cannot be read (rule B fails closed).
+	RuleNoCert = "no-cert"
 	// RuleNotPusher: receive-pack only — a new commit signed by a key other
 	// than the pushing instance's certificate key. CheckRange has no pusher.
 	RuleNotPusher = "not-pusher"

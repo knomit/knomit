@@ -267,19 +267,22 @@ func TestRuleA_MergeDiffAgainstEveryParent(t *testing.T) {
 	leaf, _ := p.leaf(j)
 	arts := p.artifacts(p.crl(), map[string]string{"joiner": leaf})
 
+	rec1 := memberFile("joiner", fact.MemberActive, j.PublicKey())
+	rec2 := rec1 + "\nsecond version\n"
+
 	f, main, base := selfRegFixture(t, arts)
-	side := f.commit(f.fleet, with(base, "kb/members/joiner/1.md", "a"), "joiner", j, main)
-	m := f.commit(f.fleet, with(base, "kb/members/joiner/1.md", "a", "kb/members/joiner/2.md", "b"), "joiner", j, main, side)
+	side := f.commit(f.fleet, with(base, "kb/members/joiner/1.md", rec1), "joiner", j, main)
+	m := f.commit(f.fleet, with(base, "kb/members/joiner/1.md", rec2), "joiner", j, main, side)
 	f.ref(f.fleet, "cand", m)
 	v := f.checkSelf("")
 	require.Equal(t, 2, v.Checked)
 	require.Empty(t, v.Refused, "positive control: both stay inside the folder")
 
 	g, gmain, gbase := selfRegFixture(t, arts)
-	gside := g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", "a", "artifacts/fleet/x.txt", "x"), "joiner", j, gmain)
-	// Against gside (the FIRST parent) the merge only adds 2.md (inside);
+	gside := g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", rec1, "artifacts/fleet/x.txt", "x"), "joiner", j, gmain)
+	// Against gside (the FIRST parent) the merge only rewrites 1.md (inside);
 	// against main (the second) it also brings x.txt (outside).
-	gm := g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", "a", "artifacts/fleet/x.txt", "x", "kb/members/joiner/2.md", "b"), "joiner", j, gside, gmain)
+	gm := g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", rec2, "artifacts/fleet/x.txt", "x"), "joiner", j, gside, gmain)
 	g.ref(g.fleet, "cand", gm)
 	v = g.checkSelf("")
 	require.Equal(t, 2, v.Checked)
@@ -363,7 +366,7 @@ func TestRuleA_IDTextMeansNothing(t *testing.T) {
 }
 
 // An unreadable CRL fails rule A CLOSED (never admitted on a CRL nobody can
-// read) and revokes nothing under rule B.
+// read), and rule B too: an active member cannot show an unrevoked leaf.
 func TestRulesAB_UnreadableCRL(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
@@ -377,7 +380,9 @@ func TestRulesAB_UnreadableCRL(t *testing.T) {
 	g, gmain, gbase := selfRegFixture(t, with(p.artifacts("", map[string]string{"joiner": leaf}),
 		"kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, j.PublicKey())))
 	g.ref(g.fleet, "cand", g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", "v2"), "joiner", j, gmain))
-	require.Empty(t, g.checkSelf("").Refused, "an active member with no CRL at all is not revoked")
+	r = onlyRefusal(t, g.checkSelf(""))
+	require.Equal(t, RuleNoCert, r.Rule, "an active member with no CRL at all is refused under PKI")
+	require.Contains(t, r.Reason, "CRL missing")
 }
 
 // abFleet writes a separate fleet repository (members + artifacts) as the
@@ -423,37 +428,94 @@ func TestRuleB_RevokedAtLaterFleetRevisionOnly(t *testing.T) {
 	require.Empty(t, v.Refused, "before the CRL listed it, the same commit is accepted")
 }
 
-// Rule B believes only what the root says: a revoked leaf for ANOTHER key,
-// and a "revoked" leaf for the member's key signed by a rogue root (with the
-// rogue serial on the real CRL), revoke nothing.
+// Rule B fails CLOSED once the fleet has a PKI: an active member's commit
+// needs a leaf for its id that names the record's key, chains to the root
+// and is not revoked. A leaf for ANOTHER key is key-mismatch (even when that
+// other leaf is the revoked one); a leaf a rogue root signed is no-cert; no
+// leaf at all is no-cert. Control: a valid leaf admits.
 //
-// SABOTAGE: drop the key comparison or the chain check from leafFor → red.
-func TestRuleB_OnlyTheRootRevokes(t *testing.T) {
+// SABOTAGE: make certified accept when there is no leaf, or drop the key
+// comparison or the chain check from leafFor → red.
+func TestRuleB_FailsClosedUnderPKI(t *testing.T) {
 	p, rogue := newTestFleetPKI(t), newTestFleetPKI(t)
 	x, other := namedSigner(t, "x"), namedSigner(t, "other")
 	rec := map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}
-
+	xleaf, _ := p.leaf(x)
 	oleaf, oserial := p.leaf(other)
-	f := newRangeFixture(t)
-	f.abFleet(rec, p.artifacts(p.crl(oserial), map[string]string{"agent-x": oleaf}))
-	f.kbWith(VerifyEnforce, "agent-x", x)
-	v, err := f.check(VerifyEnforce)
-	require.NoError(t, err)
-	require.Empty(t, v.Refused, "a revoked leaf for another key does not revoke this key")
-
 	rleaf, rserial := rogue.leaf(x)
-	g := newRangeFixture(t)
-	g.abFleet(rec, p.artifacts(p.crl(rserial), map[string]string{"agent-x": rleaf}))
-	g.kbWith(VerifyEnforce, "agent-x", x)
-	v, err = g.check(VerifyEnforce)
-	require.NoError(t, err)
-	require.Empty(t, v.Refused, "a leaf the root did not sign revokes nothing")
+	cases := []struct {
+		name   string
+		arts   map[string]string
+		want   string
+		reason string
+	}{
+		{"valid leaf", p.artifacts(p.crl(), map[string]string{"agent-x": xleaf}), "", ""},
+		{"leaf for another key", p.artifacts(p.crl(oserial), map[string]string{"agent-x": oleaf}), RuleKeyMismatch, "for another key than the member record's"},
+		{"leaf from a rogue root", p.artifacts(p.crl(rserial), map[string]string{"agent-x": rleaf}), RuleNoCert, "does not chain to the fleet root"},
+		{"no leaf", p.artifacts(p.crl(), nil), RuleNoCert, "no artifacts/fleet/certs/agent-x.pem"},
+	}
+	ran := 0
+	for _, tc := range cases {
+		f := newRangeFixture(t)
+		f.abFleet(rec, tc.arts)
+		f.kbWith(VerifyEnforce, "agent-x", x)
+		v, err := f.check(VerifyEnforce)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Checked, tc.name)
+		if tc.want == "" {
+			require.Empty(t, v.Refused, tc.name)
+		} else {
+			r := onlyRefusal(t, v)
+			require.Equal(t, tc.want, r.Rule, tc.name)
+			require.Contains(t, r.Reason, tc.reason, tc.name)
+		}
+		ran++
+	}
+	require.Equal(t, 4, ran)
+}
+
+// Rule A binds the record to the leaf: what the self-registration leaves in
+// members/<id>/ must be exactly one record, for agent id, active, holding the
+// key the leaf names. A record holding ANOTHER key K2 (signed with K1, whose
+// leaf is valid) is refused, or K2 would sign as a member that no revocation
+// of K1 reaches.
+//
+// SABOTAGE: make selfRecord return nil → every case admitted → red.
+func TestRuleA_RecordMustMatchTheLeaf(t *testing.T) {
+	p := newTestFleetPKI(t)
+	k1, k2 := namedSigner(t, "joiner"), namedSigner(t, "second")
+	leaf, _ := p.leaf(k1)
+	arts := p.artifacts(p.crl(), map[string]string{"joiner": leaf})
+	cases := []struct {
+		name   string
+		kv     []string
+		reason string
+	}{
+		{"record holds another key", []string{"kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, k2.PublicKey())}, "not the signing key"},
+		{"record names another agent", []string{"kb/members/joiner/1.md", memberFile("boss", fact.MemberActive, k1.PublicKey())}, "names agent \"boss\""},
+		{"record is not active", []string{"kb/members/joiner/1.md", memberFile("joiner", fact.MemberLeft, k1.PublicKey())}, "may only write \"active\""},
+		{"two records", []string{"kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, k1.PublicKey()),
+			"kb/members/joiner/2.md", memberFile("joiner", fact.MemberActive, k1.PublicKey())}, "holds 2 files"},
+		{"not a record", []string{"kb/members/joiner/1.md", "junk"}, "does not parse"},
+	}
+	ran := 0
+	for _, tc := range cases {
+		f, main, base := selfRegFixture(t, arts)
+		f.ref(f.fleet, "cand", f.commit(f.fleet, with(base, tc.kv...), "joiner", k1, main))
+		r := onlyRefusal(t, f.checkSelf(""))
+		require.Equal(t, RuleNoRecord, r.Rule, tc.name)
+		require.Contains(t, r.Reason, "self-registration not admitted", tc.name)
+		require.Contains(t, r.Reason, tc.reason, tc.name)
+		ran++
+	}
+	require.Equal(t, 5, ran)
 }
 
 // No PKI files at all: every old-rule verdict is what it was. The table
-// replays the old rules' scenarios against a fleet with NO artifacts and
-// against one with root.crt and an empty CRL but no leaves, and both must
-// give the pre-P3 rule; the row count is asserted so a skipped row is red.
+// replays the old rules' scenarios against a fleet with NO artifacts, and
+// against one where every key has a valid leaf (so rule B is satisfied and
+// only the old rules can refuse); both must give the pre-P3 rule. The row
+// count is asserted so a skipped row is red.
 func TestRulesAB_NoPKIIsToday(t *testing.T) {
 	x, y := namedSigner(t, "x"), namedSigner(t, "y")
 	p := newTestFleetPKI(t)
@@ -476,9 +538,12 @@ func TestRulesAB_NoPKIIsToday(t *testing.T) {
 		{"inactive", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberLeft, x.PublicKey())}, "agent-x", x, RuleInactive},
 		{"unsigned", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", nil, RuleSignature},
 	}
+	xl, _ := p.leaf(x)
+	yl, _ := p.leaf(y)
+	withLeaves := p.artifacts(p.crl(), map[string]string{"agent-x": xl, "agent-y": yl, "agent-z": xl})
 	ran := 0
 	for _, row := range rows {
-		for _, arts := range []map[string]string{nil, p.artifacts(p.crl(), nil)} {
+		for _, arts := range []map[string]string{nil, withLeaves} {
 			f := newRangeFixture(t)
 			f.abFleet(row.members, arts)
 			f.kbWith(VerifyEnforce, row.author, row.signer)

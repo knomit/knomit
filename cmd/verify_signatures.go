@@ -183,12 +183,14 @@ nothing beyond its parents.
 
 When the fleet checkout holds the fleet's certificate artifacts
 (artifacts/fleet/root.crt, crl.pem, certs/<agent id>.pem), two more rules
-apply, read at the same --fleet-rev. A member whose certificate for its key
-is on the CRL is refused (revoked). In the fleet repository itself, a commit
-that only writes its author's own members/<agent id>/ folder is admitted
-without a record when certs/<agent id>.pem holds the signing key, chains to
-root.crt and is not revoked: a new member's first record. Expiry is not
-judged. Without root.crt the rules are exactly the ones above.
+apply, read at the same --fleet-rev. Every member also needs
+certs/<agent id>.pem for its record's key, chaining to root.crt and not on the
+CRL (else no-cert, key-mismatch or revoked). In the fleet repository itself, a
+commit that only writes its author's own members/<agent id>/ folder is
+admitted without a record when certs/<agent id>.pem holds the signing key,
+chains to root.crt and is not revoked, and the folder then holds exactly one
+active record for that agent and that key: a new member's first record.
+Expiry is not judged. Without root.crt the rules are exactly the ones above.
 
   knomit verify ci --candidate "$TIP" --fleet ../fleet
 
