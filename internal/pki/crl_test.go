@@ -119,7 +119,7 @@ func TestCheckCRL_NilAndMalformedFailClosed(t *testing.T) {
 	}
 }
 
-// The master's revocation list is the append-only file; the CRL is a
+// The fleet root's revocation list is the append-only file; the CRL is a
 // projection of it with a Number one higher than the last.
 func TestRevoke_AppendsAndTheNextCRLCarriesEveryPriorEntry(t *testing.T) {
 	dir, root := newTestRoot(t)
@@ -165,7 +165,7 @@ func TestRevoke_AppendsAndTheNextCRLCarriesEveryPriorEntry(t *testing.T) {
 
 // The watermark is PER ROOT, keyed by RootID (the fingerprint of the root
 // key). Two roots with the SAME CommonName — newTestRoot gives every fleet
-// "knomit-master-test" — keep separate entries, so a CN-keyed record would
+// "knomit-fleet-root-test" — keep separate entries, so a CN-keyed record would
 // fail here.
 func TestAcceptedNumber_IsPerRootKeyedByFingerprintNotCN(t *testing.T) {
 	dir := t.TempDir()

@@ -23,6 +23,9 @@ func openRepo(t *testing.T) *store.Service {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = svc.Close() })
+	// Production always gives a store its persisted agent id; this binary has
+	// no test fallback for it either.
+	svc.SetAgentID("test-deadbeef")
 	// Init commits are written by the plumbing layer, which never signs: a new
 	// repository must still be creatable without a signer.
 	if err := svc.InitRepo(context.Background(), map[string]string{"README.md": "seed"}, "agent/test-deadbeef"); err != nil {

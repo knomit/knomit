@@ -29,7 +29,15 @@ type Deps struct {
 	Cfg         config.Config
 	Signer      ssh.Signer
 	AgentBranch string
-	Embedder    store.BatchEmbedder // nil if unavailable
+	// AgentID is this instance's persisted agent id
+	// (instance_identity.agent_id): the author of every commit its stores
+	// write and the id of its fleet member record. Never derived from
+	// AgentBranch (D18).
+	AgentID string
+	// AgentHost is the host label persisted with the identity ({host} in a
+	// trigger match). Empty when the identity predates it.
+	AgentHost string
+	Embedder  store.BatchEmbedder // nil if unavailable
 	// ScriptTools is the in-process MCP tool set a `do: script` trigger's
 	// host calls (F07 PR 3). Injected — internal/mcp imports this package —
 	// by internal/app as mcp.NewScriptTools(embedder). Nil means every host
@@ -498,6 +506,19 @@ func (m *Manager) LensRegistry() *LensRegistry {
 // store.ErrNoSigner. Set at construction and never changed, so no lock.
 func (m *Manager) Signer() ssh.Signer { return m.deps.Signer }
 
+// AgentID returns this instance's persisted agent id (Deps.AgentID), for a
+// caller that opens a Service of its own and writes through it, and for the
+// fleet code that finds this instance's member record. A Manager given none
+// has none, except inside a test binary, where the fixture fallback a test
+// package installed answers (store.TestFallbackAgentID). It is never derived
+// from the agent branch's name.
+func (m *Manager) AgentID() string {
+	if m.deps.AgentID != "" {
+		return m.deps.AgentID
+	}
+	return store.TestFallbackAgentID(m.deps.AgentBranch)
+}
+
 // VerifyAccepts returns this instance's F09 accept list, or nil before Start.
 func (m *Manager) VerifyAccepts() *VerifyAccepts {
 	m.mu.RLock()
@@ -759,6 +780,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 			m:        m,
 			cfg:      cfg,
 			signer:   m.deps.Signer,
+			agentID:  m.deps.AgentID,
 			keyPath:  m.deps.KeyPath,
 			embedder: m.deps.Embedder,
 			onPush:   m.fleetPushed,
@@ -769,7 +791,8 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 	// F07 / F08: built for a writable repo with an agent branch on a
 	// writable server; nil otherwise, and the kicks below are nil checks.
 	if agentBranch != "" && !cfg.ReadOnly {
-		ri.triggers = newTriggerDispatcher(ri, name, agentBranch, m.deps.Signer, cfg.Log.SlowTriggerMS,
+		ri.triggers = newTriggerDispatcher(ri, name, agentBranch,
+			fact.TriggerIdentity{Agent: m.AgentID(), Host: m.deps.AgentHost}, cfg.Log.SlowTriggerMS,
 			cfg.Triggers.ScriptRatePerMinute, m.deps.ScriptTools, cfg.Home, m.ServerAddress)
 		ri.consensus = newConsensusMerger(ri, name, agentBranch)
 	}
@@ -845,7 +868,8 @@ func (m *Manager) Start() error {
 	// exists; this only covers a Manager booted without app (tests, tools), so
 	// the fleet state machine always has its row.
 	if m.deps.AgentBranch != "" {
-		if _, err := resolveIdentity(repoReg.DB(), m.deps.AgentBranch, time.Now()); err != nil {
+		fresh := Identity{AgentID: m.AgentID(), Branch: m.deps.AgentBranch, Host: m.deps.AgentHost}
+		if _, err := resolveIdentity(repoReg.DB(), fresh, time.Now()); err != nil {
 			return err
 		}
 	}

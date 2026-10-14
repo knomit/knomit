@@ -25,8 +25,8 @@ var posixModes = runtime.GOOS != "windows"
 
 func newTestRoot(t *testing.T) (string, Root) {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "master")
-	r, err := NewRoot(dir, "knomit-master-test", testPass, 24*time.Hour)
+	dir := filepath.Join(t.TempDir(), "fleet")
+	r, err := NewRoot(dir, "knomit-fleet-root-test", testPass, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,12 +124,12 @@ func TestIssueInstance_LeafChainsToRootWithRoleInSANAndIsLogged(t *testing.T) {
 		t.Fatalf("KeyUsage = %v", c.KeyUsage)
 	}
 	fp := Fingerprint(pub)
-	wantSAN := "knomit://instance/laptop.local-" + Short(fp)
+	wantSAN := "knomit://instance/laptop.local"
 	if len(c.URIs) != 1 || c.URIs[0].String() != wantSAN {
 		t.Fatalf("URIs = %v, want [%s]", c.URIs, wantSAN)
 	}
-	if SAN(RoleInstance, "laptop.local", fp) != wantSAN {
-		t.Fatalf("SAN() = %s", SAN(RoleInstance, "laptop.local", fp))
+	if SAN(RoleInstance, "laptop.local") != wantSAN {
+		t.Fatalf("SAN() = %s", SAN(RoleInstance, "laptop.local"))
 	}
 	// No private extension: the role lives in the SAN (Go cannot parse a
 	// 2.25 UUID-arc extension OID, crypto/x509/parser.go:233).
@@ -182,7 +182,7 @@ func TestIssueInstance_LeafChainsToRootWithRoleInSANAndIsLogged(t *testing.T) {
 	if lines[0].Serial != c.SerialNumber.Text(16) || lines[0].Serial != rec.Serial {
 		t.Fatalf("logged serial %s, cert %s, returned %s", lines[0].Serial, c.SerialNumber.Text(16), rec.Serial)
 	}
-	if lines[0].Fingerprint != fp || lines[0].SAN != wantSAN || !lines[0].NotAfter.Equal(c.NotAfter) {
+	if lines[0].Fingerprint != fp || lines[0].SAN != wantSAN || lines[0].Label != "laptop.local" || !lines[0].NotAfter.Equal(c.NotAfter) {
 		t.Fatalf("log record %+v", lines[0])
 	}
 	if fi, _ := os.Stat(filepath.Join(dir, IssuedLogFile)); posixModes && fi.Mode().Perm() != 0o600 {

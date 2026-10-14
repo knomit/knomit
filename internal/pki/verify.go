@@ -23,7 +23,6 @@ var (
 	ErrRevoked       = errors.New("pki: certificate revoked")
 	ErrNotEd25519    = errors.New("pki: certificate key is not ed25519")
 	ErrSANMissing    = errors.New("pki: no single well-formed knomit:// URI SAN")
-	ErrSANMismatch   = errors.New("pki: SAN fingerprint does not match the certificate key")
 	ErrRoleUnknown   = errors.New("pki: unknown role in SAN")
 	// ErrRefusedByPeer: WE verified the peer, but the peer refused OUR
 	// certificate. The peer's log carries the reason; we only see an alert.
@@ -69,9 +68,10 @@ func (u Usage) eku() x509.ExtKeyUsage {
 //     root is ErrCRLInvalid, a listed serial is ErrRevoked;
 //  3. the key is ed25519 (ErrNotEd25519);
 //  4. exactly one knomit: URI SAN, byte-exact canonical form (ErrSANMissing);
-//  5. its fp8 equals Short(Fingerprint(key)) (ErrSANMismatch) — the host
-//     part is never compared;
-//  6. its role is known (ErrRoleUnknown).
+//  5. its role is known (ErrRoleUnknown).
+//
+// The SAN's label is never compared with anything: the identity is the
+// leaf's KEY (Identity.Fingerprint), not a name (D18).
 //
 // A stale CRL (NextUpdate past) is still ENFORCED here; warning about it is
 // the loader's job.
@@ -108,8 +108,8 @@ func VerifyInstanceChain(leaf *x509.Certificate, intermediates []*x509.Certifica
 	if _, ok := leaf.PublicKey.(ed25519.PublicKey); !ok {
 		return Identity{}, fmt.Errorf("%w: %T", ErrNotEd25519, leaf.PublicKey)
 	}
-	// SAN shape, fingerprint cross-check and role: the same code IdentityOf
-	// runs, so the two can never disagree about what a leaf names.
+	// SAN shape and role: the same code IdentityOf runs, so the two can never
+	// disagree about what a leaf names.
 	return IdentityOf(leaf)
 }
 
@@ -143,26 +143,27 @@ func rawURIs(leaf *x509.Certificate) ([]string, error) {
 	return out, nil
 }
 
-// parseSAN extracts (role, host, fp8) from the ONE knomit: URI SAN. Strict
-// and case-exact, because a name with two spellings is two identities:
+// parseSAN extracts (role, label) from the ONE knomit: URI SAN. Strict and
+// case-exact, so a certificate has one spelling of its name:
 //
 //   - exactly one URI whose scheme is knomit in any case; two are refused even
 //     if both are valid (no first-wins), and a non-lowercase scheme is refused;
 //   - the role is u.Host (the URI authority): no userinfo, no port;
-//   - the path is exactly "/<host>-<fp8>": one segment, no escapes, fp8 eight
-//     lowercase hex after the LAST '-', host from [A-Za-z0-9._-];
+//   - the path is exactly "/<label>": one segment, no escapes, the label from
+//     [A-Za-z0-9._-]. The label is opaque: nothing is parsed out of it, and a
+//     trailing "-<8 hex>" in it means nothing;
 //   - no query, no fragment.
 //
 // Together these leave exactly one spelling: the raw string is then
-// knomit://<role>/<host>-<fp8> byte for byte, so no canonical-rebuild
-// comparison is needed (it was tried, and no case reached it).
+// knomit://<role>/<label> byte for byte, so no canonical-rebuild comparison
+// is needed.
 //
 // An unknown role is returned, not refused, so the caller can map it to
-// ErrRoleUnknown after the fingerprint check.
-func parseSAN(leaf *x509.Certificate) (Role, string, string, error) {
+// ErrRoleUnknown.
+func parseSAN(leaf *x509.Certificate) (Role, string, error) {
 	uris, err := rawURIs(leaf)
 	if err != nil {
-		return "", "", "", fmt.Errorf("%w: %v", ErrSANMissing, err)
+		return "", "", fmt.Errorf("%w: %v", ErrSANMissing, err)
 	}
 	var mine []string
 	for _, s := range uris {
@@ -172,14 +173,14 @@ func parseSAN(leaf *x509.Certificate) (Role, string, string, error) {
 	}
 	switch len(mine) {
 	case 0:
-		return "", "", "", ErrSANMissing
+		return "", "", ErrSANMissing
 	case 1:
 	default:
-		return "", "", "", fmt.Errorf("%w: %d knomit: URIs, want exactly one", ErrSANMissing, len(mine))
+		return "", "", fmt.Errorf("%w: %d knomit: URIs, want exactly one", ErrSANMissing, len(mine))
 	}
 	raw := mine[0]
-	bad := func(why string) (Role, string, string, error) {
-		return "", "", "", fmt.Errorf("%w: %q: %s", ErrSANMissing, raw, why)
+	bad := func(why string) (Role, string, error) {
+		return "", "", fmt.Errorf("%w: %q: %s", ErrSANMissing, raw, why)
 	}
 	if !strings.HasPrefix(raw, SANScheme+"://") {
 		return bad("scheme must be exactly " + SANScheme + "://")
@@ -192,7 +193,7 @@ func parseSAN(leaf *x509.Certificate) (Role, string, string, error) {
 		return bad(err.Error())
 	}
 	if u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
-		return bad("only knomit://<role>/<host>-<fp8> is allowed")
+		return bad("only knomit://<role>/<label> is allowed")
 	}
 	if strings.Contains(u.Host, ":") {
 		return bad("a port is not allowed")
@@ -201,51 +202,31 @@ func parseSAN(leaf *x509.Certificate) (Role, string, string, error) {
 	if !ok || seg == "" || strings.Contains(seg, "/") {
 		return bad("path must be exactly one segment")
 	}
-	i := strings.LastIndexByte(seg, '-')
-	if i <= 0 {
-		return bad("path must be <host>-<fp8>")
+	if !validHost(seg) {
+		return bad("the label must use only [A-Za-z0-9._-]")
 	}
-	host, fp8 := seg[:i], seg[i+1:]
-	if !validHost(host) || !isLowerHex8(fp8) {
-		return bad("path must be <host>-<fp8> with fp8 eight lowercase hex")
-	}
-	return Role(u.Host), host, fp8, nil
-}
-
-func isLowerHex8(s string) bool {
-	if len(s) != 8 {
-		return false
-	}
-	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return false
-		}
-	}
-	return true
+	return Role(u.Host), seg, nil
 }
 
 // IdentityOf reads the Identity of a leaf WITHOUT verifying it: SAN, role and
 // fingerprint only. It exists for the one caller that sits behind
 // VerifyInstanceChain — internal/web's AuthMiddleware on the TLS listener,
 // where every connection has already passed VerifyConnection — and must not
-// be used to decide whether to trust a certificate. It still refuses a leaf
-// whose SAN does not name its own key, so a bypass of the verifier cannot
-// turn into a principal for someone else's fingerprint.
+// be used to decide whether to trust a certificate. The fingerprint is
+// computed from the leaf's public key, never read from the SAN, so whatever
+// a SAN's label says, the principal is the key's.
 func IdentityOf(leaf *x509.Certificate) (Identity, error) {
 	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
 	if !ok {
 		return Identity{}, fmt.Errorf("%w: %T", ErrNotEd25519, leaf.PublicKey)
 	}
-	role, host, fp8, err := parseSAN(leaf)
+	role, label, err := parseSAN(leaf)
 	if err != nil {
 		return Identity{}, err
 	}
 	fp := Fingerprint(pub)
-	if Short(fp) != fp8 {
-		return Identity{}, fmt.Errorf("%w: SAN carries %s, key is %s", ErrSANMismatch, fp8, Short(fp))
-	}
 	if !role.known() {
 		return Identity{}, fmt.Errorf("%w: %q", ErrRoleUnknown, role)
 	}
-	return Identity{Fingerprint: fp, Host: host, Role: role, Serial: leaf.SerialNumber, NotAfter: leaf.NotAfter}, nil
+	return Identity{Fingerprint: fp, Host: label, Role: role, Serial: leaf.SerialNumber, NotAfter: leaf.NotAfter}, nil
 }

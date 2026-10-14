@@ -32,6 +32,7 @@ func TestBridge_ProxiesPrompts(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 	svc.SetSigner(testsigner.Signer())
+	svc.SetAgentID(testsigner.FixtureAgentID("agent/test"))
 	if err := svc.InitRepo(context.Background(), map[string]string{}, "agent/test"); err != nil {
 		t.Fatal(err)
 	}

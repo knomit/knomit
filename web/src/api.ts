@@ -1133,12 +1133,13 @@ function stripOntologyRoot(ontologyRoot: string, path: string): string {
   return path;
 }
 
-// getAgentBranch returns THIS machine's agent branch for a repo. The server
-// knows it authoritatively (RepoDetails.agent_branch), so prefer that: a repo
-// connected to a shared remote can carry several "agent/*" branches (one per
-// machine), and the heuristic below would otherwise pick the first one
-// alphabetically — a foreign machine's branch with no local facts. Fall back to
-// the branch-list heuristic only when the server doesn't report agent_branch.
+// getAgentBranch returns THIS machine's agent branch for a repo. Only the
+// server knows it: RepoDetails.agent_branch is the instance's PERSISTED agent
+// branch (control.db instance_identity). Nothing here picks a branch by its
+// name (D18): a repo connected to a shared remote, or a host holding peers'
+// pushed branches, carries several "agent/*" branches, and any of them may be
+// a peer's. Without the server's answer the only fallback is "the one branch
+// there is"; otherwise it throws.
 async function getAgentBranch(repo: string): Promise<string> {
   try {
     const details = await getRepo(repo);
@@ -1149,15 +1150,14 @@ async function getAgentBranch(repo: string): Promise<string> {
     // guess a foreign agent/* branch.
     if (details.read_branch) return details.read_branch;
   } catch {
-    // fall through to the branch-list heuristic
+    // fall through: only an unambiguous branch list can answer now
   }
   const data = await fetchJSON<any>(`${repoBase(repo)}/branches`);
   const branches: Array<{ name: string }> =
     (data._embedded?.branches as Array<{ name: string }>) || [];
-  const agent = branches.find(b => b.name.startsWith('agent/'));
-  if (agent) return agent.name;
-  // No agent branch: the only branch there is, if there is exactly one. Never
-  // a branch picked for its name, and never a name that may not exist.
+  // The only branch there is, if there is exactly one. Never a branch picked
+  // for its name (not even an agent/ prefix), and never a name that may not
+  // exist.
   if (branches.length === 1) return branches[0].name;
   throw new Error(`cannot tell which branch of ${repo} to use: the server did not say and it has ${branches.length} branches`);
 }

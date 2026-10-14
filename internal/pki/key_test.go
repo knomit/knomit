@@ -94,8 +94,10 @@ func TestFingerprint_IsSSHWireNotSPKIOrRaw(t *testing.T) {
 // Reproduces internal/app/identity.go fingerprint() inline (internal/app
 // cannot be imported from here, and importing internal/pki from internal/app
 // only for a test would add the dependency the wrong way round). If this ever
-// diverges from identity.go:89-92, the branch name and the certificate SAN
-// stop agreeing and every enrolled instance is refused with ErrSANMismatch.
+// diverges from identity.go's fingerprint(), the 8 hex a first boot BUILDS
+// into the agent branch stop being the prefix of the principal's fingerprint.
+// Nothing compares them any more (D18: no identity from a name, the SAN
+// carries no fp8); this only keeps the construction readable and consistent.
 func TestShort_EqualsTheBranchNameFingerprint(t *testing.T) {
 	path, pub := writeOpenSSHKey(t)
 	data, _ := os.ReadFile(path)

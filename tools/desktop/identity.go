@@ -168,7 +168,7 @@ func (n *NativeService) GetIdentity() (FleetIdentity, error) {
 		id := st.Cert
 		out.Certificate = "ok"
 		out.Principal = pki.PrincipalKind(id.Role) + ":" + id.Fingerprint + "@cert"
-		out.SAN = pki.SAN(id.Role, id.Host, id.Fingerprint)
+		out.SAN = pki.SAN(id.Role, id.Host)
 		out.Serial = id.Serial.Text(16)
 		out.NotAfter = id.NotAfter.UTC().Format(time.RFC3339)
 	default:
@@ -340,7 +340,7 @@ func classOf(err error) string {
 	case errors.Is(err, pki.ErrCRLInvalid):
 		return classCRLInvalid
 	case errors.Is(err, pki.ErrUntrustedRoot), errors.Is(err, pki.ErrExpired), errors.Is(err, pki.ErrRevoked),
-		errors.Is(err, pki.ErrNotEd25519), errors.Is(err, pki.ErrSANMissing), errors.Is(err, pki.ErrSANMismatch),
+		errors.Is(err, pki.ErrNotEd25519), errors.Is(err, pki.ErrSANMissing),
 		errors.Is(err, pki.ErrRoleUnknown):
 		return classChain
 	}

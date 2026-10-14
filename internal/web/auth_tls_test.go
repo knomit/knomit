@@ -84,9 +84,11 @@ func TestAuthMiddleware_TLSListenerWithoutCertIsRefusedEvenWithRequireFalse(t *t
 	}
 }
 
-// A certificate whose SAN does not name its own key never becomes a
-// principal, even if the verifier were bypassed.
-func TestAuthMiddleware_TLSListenerRefusesACertificateNamingAnotherKey(t *testing.T) {
+// D18: the principal is the certificate's KEY, never its SAN. A leaf carrying
+// a's SAN label and b's key (as if the verifier were bypassed) maps to b's
+// fingerprint: nothing about a is read from the name. The key is the part of
+// a certificate the TLS handshake proves possession of; the label is not.
+func TestAuthMiddleware_TLSListenerPrincipalIsTheKeyNotTheSAN(t *testing.T) {
 	f := pkitest.New(t)
 	a := f.Enroll(t, "a", pki.RoleInstance)
 	b := f.Enroll(t, "b", pki.RoleInstance)
@@ -95,8 +97,11 @@ func TestAuthMiddleware_TLSListenerRefusesACertificateNamingAnotherKey(t *testin
 	h := AuthMiddleware(config.AuthConfig{}, false)(principalEcho())
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, tlsRequest("10.0.0.7:5555", &forged))
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("code=%d body=%q", rr.Code, rr.Body.String())
+	if want := "instance:" + b.Fingerprint() + "@cert"; rr.Code != 200 || rr.Body.String() != want {
+		t.Fatalf("code=%d body=%q, want %q (the key's principal)", rr.Code, rr.Body.String(), want)
+	}
+	if strings.Contains(rr.Body.String(), a.Fingerprint()) {
+		t.Fatal("a's identity was read from the SAN")
 	}
 }
 

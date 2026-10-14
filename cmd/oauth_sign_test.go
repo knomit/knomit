@@ -23,8 +23,8 @@ import (
 // `knomit oauth approve|deny --sign` runs on the OPERATOR's machine (F19
 // phase 3b, Task 3, ruling W2): it fetches the waiting request's public
 // description, prints it for the operator to read, checks the named
-// instance against the master's own issuance and revocation logs, and signs
-// with the master key. `approve --signed` delivers the JSON from anywhere.
+// instance against the fleet root's own issuance and revocation logs, and signs
+// with the fleet root key. `approve --signed` delivers the JSON from anywhere.
 
 // runSplit runs the real root command and keeps stdout (the JSON) apart from
 // stderr (what the operator reads).
@@ -77,11 +77,11 @@ func newFakeIssuer(t *testing.T, clientName, redirect string) *fakeIssuer {
 	return f
 }
 
-// signSetup: a master, an instance enrolled by it, and the instance's
+// signSetup: a fleet root, an instance enrolled by it, and the instance's
 // fingerprint.
 func signSetup(t *testing.T) (dir, passFile, fp string) {
 	t.Helper()
-	dir, passFile = master(t)
+	dir, passFile = fleetRoot(t)
 	_, pub, pubPath := instanceHome(t, "headless")
 	enroll(t, dir, passFile, pubPath)
 	return dir, passFile, pki.Fingerprint(pub)
@@ -130,7 +130,7 @@ func TestOAuthSign_PrintsThenSignsWhatItPrinted(t *testing.T) {
 	}
 	sig, _ := base64.StdEncoding.DecodeString(ss.Signature)
 	if !ed25519.Verify(rootPub(t, dir), b, sig) {
-		t.Fatal("the signature does not verify against the master's root")
+		t.Fatal("the signature does not verify against the fleet root's root")
 	}
 }
 
@@ -158,7 +158,7 @@ func TestOAuthSign_PrintoutIsEscaped(t *testing.T) {
 }
 
 // W2: the instance fingerprint comes from the operator, and must be one this
-// master issued and has not revoked — never from the public description.
+// fleet root issued and has not revoked — never from the public description.
 func TestOAuthSign_InstanceMustBeIssuedAndNotRevoked(t *testing.T) {
 	dir, passFile, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
@@ -262,7 +262,7 @@ func TestOAuthSigned_Delivers(t *testing.T) {
 // attacker-chosen in path 2's threat model — the issuer URL reaches the
 // operator from whoever relays the request, and --signed posts to the
 // UNSIGNED `issuer` field of a blob anyone who carried it can rewrite — so
-// none of it reaches the master-key machine's terminal unescaped: not in an
+// none of it reaches the fleet-root-key machine's terminal unescaped: not in an
 // error (cobra prints it to stderr), not on success. These are the gate
 // reviewer's probes, adopted; they were red at 71cf5353.
 const hostileBody = "no such request\x1b[8m\x1b]0;pwned\x07 ‮"

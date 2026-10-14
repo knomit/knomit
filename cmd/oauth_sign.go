@@ -27,7 +27,7 @@ import (
 
 // Consent path 2 on the operator's side (F19 phase 3b, Task 3). `knomit
 // oauth approve|deny <id> --sign <issuer>` runs on the machine that holds
-// the fleet master key — never on the instance — and prints a signed
+// the fleet root key — never on the instance — and prints a signed
 // statement; `knomit oauth approve --signed <file|->` delivers it from any
 // machine (so does curl: it is one POST of that JSON to <issuer>/oauth/approve).
 
@@ -40,12 +40,12 @@ type signOpts struct {
 var fingerprintArgRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // oauthSign fetches the waiting request's description, prints it for the
-// operator to read (errOut), checks the instance against the master's own
+// operator to read (errOut), checks the instance against the fleet root's own
 // logs, signs, and writes the statement JSON to out.
 func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	ctx := cmd.Context()
 	errOut := cmd.ErrOrStderr()
-	dir, err := resolveMasterDir(o.dir)
+	dir, err := resolveFleetRootDir(o.dir)
 	if err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 		return errors.New("--instance must be the instance's full fingerprint (64 lowercase hex, as `knomit identity show` prints it)")
 	}
 	// W2: the instance comes from the operator and is checked against what
-	// THIS master issued and revoked — never taken from the description,
+	// THIS fleet root issued and revoked — never taken from the description,
 	// which anyone relaying the request could have written.
 	host, err := issuedStanding(o.dir, o.instance)
 	if err != nil {
@@ -99,7 +99,7 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	// key opens without one, and a prompt for it would guard nothing.
 	askPass := func() ([]byte, error) {
 		if o.passFile == "-" {
-			fmt.Fprintln(errOut, "Type the master passphrase to sign this, or interrupt to abort:")
+			fmt.Fprintln(errOut, "Type the fleet root passphrase to sign this, or interrupt to abort:")
 		}
 		return readPassphrase(cmd, o.passFile)
 	}
@@ -119,7 +119,7 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	}
 	key, ok := root.Signer.(ed25519.PrivateKey)
 	if !ok {
-		return fmt.Errorf("the master key is %T, not Ed25519", root.Signer)
+		return fmt.Errorf("the fleet root key is %T, not Ed25519", root.Signer)
 	}
 	ss, err := oauth.SignStatement(stmt, key)
 	if err != nil {
@@ -182,7 +182,7 @@ func fetchDescription(ctx context.Context, issuer, id string) (oauth.Description
 }
 
 // issuedStanding returns the host label of the instance whose fingerprint is
-// fp, if this master issued it a certificate that is not revoked.
+// fp, if this fleet root issued it a certificate that is not revoked.
 func issuedStanding(dir, fp string) (string, error) {
 	issued, err := readIssued(dir)
 	if err != nil {
@@ -203,16 +203,16 @@ func issuedStanding(dir, fp string) (string, error) {
 		}
 		seen = true
 		if !gone[strings.ToLower(rec.Serial)] {
-			return strings.TrimPrefix(rec.SAN, "knomit://instance/"), nil
+			return rec.Label, nil
 		}
 	}
 	if seen {
 		return "", fmt.Errorf("instance %s… is revoked in %s; not signing for it", fp[:8], pki.RevokedLogFile)
 	}
-	return "", fmt.Errorf("instance %s… was never issued a certificate by the master in %s; not signing for it", fp[:8], dir)
+	return "", fmt.Errorf("instance %s… was never issued a certificate by the fleet root in %s; not signing for it", fp[:8], dir)
 }
 
-// readIssued parses the master's issuance log.
+// readIssued parses the fleet root's issuance log.
 func readIssued(dir string) ([]pki.Issued, error) {
 	f, err := os.Open(filepath.Join(dir, pki.IssuedLogFile))
 	if err != nil {
@@ -292,7 +292,7 @@ func oauthDeliver(cmd *cobra.Command, src, issuerFlag string) error {
 // B1). In path 2's threat model every one of them is attacker-chosen — the
 // issuer URL reaches the operator from whoever relayed the request, and a
 // --signed blob's issuer field is unsigned — and they are printed on the
-// machine that holds the fleet master key. So they are %q-quoted, which turns
+// machine that holds the fleet root key. So they are %q-quoted, which turns
 // every control, format and bidi character (ESC, OSC, U+202E, invalid UTF-8)
 // into an escape, and capped.
 func fromIssuer(b []byte) string {

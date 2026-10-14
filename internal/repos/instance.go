@@ -73,6 +73,7 @@ type stageEnv struct {
 	m        *Manager
 	cfg      config.Config
 	signer   ssh.Signer
+	agentID  string // Deps.AgentID: the store's commit author (SetAgentID)
 	keyPath  string
 	embedder store.BatchEmbedder
 	// onPush observes every push the reconcile loop makes (the fleet state

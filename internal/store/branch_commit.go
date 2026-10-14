@@ -19,8 +19,9 @@ import (
 // Every authored commit — writeFileExact, deleteFile, batchWriteLocked and the
 // merge commit in mergeIntoBranch — takes its identity from here, so the rule
 // lives in one place: the author is the AGENT whose key signs the commit, not
-// the branch it lands on. For an agent branch that is deriveAgentID(branch);
-// for an experiment branch it is the experiment's owning agent (#394).
+// the branch it lands on: this instance's persisted agent id (SetAgentID),
+// for an agent branch and for an experiment forked from it alike (#394). It
+// is never derived from the branch name (D18).
 func (rh *repoHandler) commitSigs(ctx context.Context, branch, operation string) (author, committer object.Signature, err error) {
 	agentID, err := rh.commitAgentID(ctx, branch)
 	if err != nil {
@@ -36,9 +37,10 @@ func (rh *repoHandler) commitSigs(ctx context.Context, branch, operation string)
 //
 // An experiment branch (exp/<name>) is NOT an agent: its commits are signed by
 // this instance's key, so they are authored by the agent branch the experiment
-// was forked from — its RECORDED parent (experiments.parent_branch). Authoring
-// them `exp/<name>` (the old behaviour, deriveAgentID's verbatim fallback) made
-// the acceptance gate look up a member record at an id no member has
+// was forked from — its RECORDED parent (experiments.parent_branch), which
+// must be this database's agent branch owner. Authoring them `exp/<name>`
+// (the old behaviour, a verbatim fallback from the branch name) made the
+// acceptance gate look up a member record at an id no member has
 // (agentIDOfAuthor) and showed experiment names in every per-author count.
 //
 // It never falls back to the experiment's name. Each case where the owning
@@ -54,12 +56,12 @@ func (rh *repoHandler) commitSigs(ctx context.Context, branch, operation string)
 // An EMPTY owner is unknown, not a mismatch (checkExperimentParentCurrent):
 // the recorded parent names the agent then.
 //
-// deriveAgentID / AgentIDOf keep their meaning; only the experiment case is
-// resolved here.
+// The id itself is ownAgentID: the persisted id this store was given, never
+// a parse of either branch name.
 func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string, error) {
 	name, isExp := ExperimentNameOf(branch)
 	if !isExp {
-		return deriveAgentID(branch), nil
+		return rh.ownAgentID(branch)
 	}
 	exp, ok, err := rh.GetExperiment(ctx, name)
 	if err != nil {
@@ -74,7 +76,7 @@ func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string
 	if err := rh.checkExperimentParentCurrent(ctx, exp); err != nil {
 		return "", fmt.Errorf("author of %s: %w", branch, err)
 	}
-	return deriveAgentID(exp.Parent), nil
+	return rh.ownAgentID(exp.Parent)
 }
 
 // notifyCommit runs the post-commit side effects for a new commit on branch:

@@ -90,7 +90,7 @@ func serveBoth(t *testing.T, handler http.Handler, keyPath string, tcfg config.T
 // wiring of Auth and Grants is pinned by internal/app's tests.
 func serverStack(t *testing.T, cfg config.Config, keyPath string) (http.Handler, *auth.SQLGrants) {
 	t.Helper()
-	mgr := repos.New(context.Background(), repos.Deps{Cfg: cfg, KeyPath: keyPath, AgentBranch: "agent/test-00000000"})
+	mgr := repos.New(context.Background(), repos.Deps{Cfg: cfg, KeyPath: keyPath, AgentBranch: "agent/test-00000000", AgentID: "test-00000000"})
 	if err := mgr.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
 	}

@@ -18,12 +18,12 @@ import (
 // for months and a permission baked into it is stale the day the operator
 // changes their mind.
 //
-// The role is carried in the URI SAN — knomit://<role>/<host>-<fp8> — and
-// NOT in a private extension. A private OID under a 2.25 UUID arc cannot be
-// written in Go (pkix.Extension.Id is []int) and is refused on parse
+// The role is carried in the URI SAN — knomit://<role>/<label> — and NOT in
+// a private extension. A private OID under a 2.25 UUID arc cannot be written
+// in Go (pkix.Extension.Id is []int) and is refused on parse
 // (crypto/x509/parser.go:233, "malformed extension OID field"); an IANA
 // enterprise number costs days of latency for one integer; the SAN is
-// already parsed and cross-checked by VerifyInstanceChain.
+// already parsed by VerifyInstanceChain.
 type Role string
 
 const (
@@ -36,20 +36,22 @@ func (r Role) known() bool { return r == RoleInstance || r == RoleOperator }
 // SANScheme is the URI scheme of every knomit certificate name.
 const SANScheme = "knomit"
 
-// SAN is the certificate name for a key: knomit://<role>/<host>-<fp8>.
+// SAN is the certificate name: knomit://<role>/<label>.
 //
 // Go's url.Parse puts <role> in the URI AUTHORITY (u.Host), not the path;
-// the path is exactly "/<host>-<fp8>". The role is deliberately not "agent"
-// even though the branch is agent/<host>-<fp8>: the SAN names a ROLE, the
-// branch names a namespace, and reusing the word would invite reading the
-// SAN's path as the branch name. Only the fp8 is ever compared; the host is
-// a label.
-func SAN(role Role, host, fp string) string {
-	return SANScheme + "://" + string(role) + "/" + host + "-" + Short(fp)
+// the path is exactly "/<label>". The label is a free display name (the
+// host the operator typed); it carries no fingerprint and nothing compares
+// it to anything (D18: no identity is inferred from a name). The identity of
+// a certificate is its KEY: Identity.Fingerprint is computed from the leaf's
+// public key. The role is deliberately not "agent": the SAN names a ROLE,
+// the branch names a namespace, and reusing the word would invite reading
+// the SAN's path as a branch name.
+func SAN(role Role, label string) string {
+	return SANScheme + "://" + string(role) + "/" + label
 }
 
-// validHost reports whether host is safe as the single path segment of the
-// SAN: non-empty, and only hostname characters. Anything else would either
+// validHost reports whether a label is safe as the single path segment of
+// the SAN: non-empty, and only hostname characters. Anything else would either
 // change what url.Parse returns (a '/', '?', '#') or need escaping, and an
 // escaped name is two spellings of one identity.
 func validHost(host string) bool {
@@ -66,18 +68,19 @@ func validHost(host string) bool {
 	return true
 }
 
-// Issued is one line of the master's issuance log. Revocation references the
+// Issued is one line of the fleet root's issuance log. Revocation references the
 // serial, so an issuance that could not be logged is not returned.
 type Issued struct {
 	Serial      string    `json:"serial"` // lowercase hex, as big.Int.Text(16)
 	SAN         string    `json:"san"`
+	Label       string    `json:"label"`       // the host label given at issue, for display only
 	Fingerprint string    `json:"fingerprint"` // full 64 hex
 	NotAfter    time.Time `json:"not_after"`
 	IssuedAt    time.Time `json:"issued_at"`
 }
 
 // Issuance is one signed leaf as bytes: what IssueLeaf returns and the
-// caller places (a file in the master directory, or an artifact in the
+// caller places (a file in the fleet root directory, or an artifact in the
 // fleet repo).
 type Issuance struct {
 	CertPEM []byte
@@ -91,11 +94,11 @@ type Issuance struct {
 // compare two issuances field by field; production never reassigns it.
 var newSerial = randomSerial
 
-// IssueLeaf signs pub — the instance's EXISTING key; the master never
+// IssueLeaf signs pub — the instance's EXISTING key; the fleet root never
 // generates instance keys — into a leaf certificate usable for both client
 // and server authentication, valid from now, and returns it with its ledger
 // line. It writes nothing. There is no CSR: the operator hands over the
-// public key. The SAN's fp8 is computed from pub, never read from a name.
+// public key. The SAN carries the role and the host as a free label only.
 func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validity time.Duration, now time.Time) (Issuance, error) {
 	if !role.known() {
 		return Issuance{}, fmt.Errorf("pki: unknown role %q", role)
@@ -107,7 +110,7 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validit
 		return Issuance{}, fmt.Errorf("pki: public key is %d bytes, want %d", len(pub), ed25519.PublicKeySize)
 	}
 	fp := Fingerprint(pub)
-	san, err := url.Parse(SAN(role, host, fp))
+	san, err := url.Parse(SAN(role, host))
 	if err != nil {
 		return Issuance{}, fmt.Errorf("pki: SAN: %w", err)
 	}
@@ -117,7 +120,7 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validit
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: host + "-" + Short(fp)},
+		Subject:               pkix.Name{CommonName: host},
 		NotBefore:             now.Add(-clockSkew),
 		NotAfter:              now.Add(validity),
 		BasicConstraintsValid: true,
@@ -137,6 +140,7 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validit
 	rec := Issued{
 		Serial:      cert.SerialNumber.Text(16),
 		SAN:         san.String(),
+		Label:       host,
 		Fingerprint: fp,
 		NotAfter:    cert.NotAfter,
 		IssuedAt:    now.UTC(),
@@ -149,7 +153,7 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validit
 }
 
 // IssueInstance is IssueLeaf as of time.Now() that also appends the ledger
-// line to <dir>/issued.jsonl: the master-directory form `identity enroll`
+// line to <dir>/issued.jsonl: the fleet-root-directory form `identity enroll`
 // uses. A certificate whose line could not be logged is not returned, since
 // revocation finds serials in that log.
 func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, role Role, validity time.Duration) ([]byte, Issued, error) {
@@ -164,7 +168,7 @@ func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, ro
 }
 
 // appendLine appends one ledger line (already newline-terminated), 0600.
-// The master's logs are append-only files; history is the audit trail.
+// The fleet root's logs are append-only files; history is the audit trail.
 func appendLine(path string, line []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {

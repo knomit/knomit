@@ -11,13 +11,13 @@ import (
 	"time"
 )
 
-// keychainRoot makes a master dir whose root key is ONLY in kc (the default
-// after init-master): there is no root.key.
+// keychainRoot makes a fleet root dir whose root key is ONLY in kc (the default
+// after init-root): there is no root.key.
 func keychainRoot(t *testing.T) (string, *fakeKeychain, Root) {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "master")
+	dir := filepath.Join(t.TempDir(), "fleet")
 	kc := newFakeKeychain()
-	root, src, err := CreateRoot(dir, "knomit-master-test", time.Hour, kc, nil)
+	root, src, err := CreateRoot(dir, "knomit-fleet-root-test", time.Hour, kc, nil)
 	if err != nil || src != RootFromKeychain {
 		t.Fatalf("CreateRoot: %v %q", err, src)
 	}
@@ -40,11 +40,11 @@ func stillOpens(t *testing.T, dir string, kc *fakeKeychain, root Root) {
 
 // Review finding 1: --out <dir>/root.key used to write the export there and
 // then delete it as "the local root.key", together with the keychain item.
-func TestExportRoot_RefusesToExportOntoTheMastersRootKey(t *testing.T) {
+func TestExportRoot_RefusesToExportOntoTheFleetRootsRootKey(t *testing.T) {
 	dir, kc, root := keychainRoot(t)
 	keyPath := filepath.Join(dir, RootKeyFile)
 
-	link := filepath.Join(t.TempDir(), "link-to-master")
+	link := filepath.Join(t.TempDir(), "link-to-fleet-root")
 	if err := os.Symlink(dir, link); err != nil {
 		t.Fatal(err)
 	}

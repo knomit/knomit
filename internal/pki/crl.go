@@ -25,7 +25,7 @@ var (
 	ErrCRLInvalid = errors.New("pki: CRL invalid")
 )
 
-// Revoked is one line of the master's revocation log.
+// Revoked is one line of the fleet root's revocation log.
 type Revoked struct {
 	Serial *big.Int  `json:"serial"`
 	At     time.Time `json:"at"`
@@ -109,7 +109,7 @@ func RevokeSerial(root Root, prior []Revoked, current *big.Int, r Revoked, thisU
 	return Revocation{Line: append(line, '\n'), CRLPEM: crl, Number: number}, nil
 }
 
-// Revoke is RevokeSerial against the master directory: it appends r to
+// Revoke is RevokeSerial against the fleet root directory: it appends r to
 // <dir>/revoked.jsonl and reissues <dir>/crl.pem from the WHOLE log with a
 // Number one higher than the current crl.pem's (1 if none).
 func Revoke(dir string, root Root, r Revoked, next time.Time) (*big.Int, error) {
@@ -137,7 +137,7 @@ func Revoke(dir string, root Root, r Revoked, next time.Time) (*big.Int, error) 
 	return rv.Number, nil
 }
 
-// LoadRevoked reads the master's revocation log. An absent log is empty.
+// LoadRevoked reads the fleet root's revocation log. An absent log is empty.
 func LoadRevoked(dir string) ([]Revoked, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, RevokedLogFile))
 	if errors.Is(err, os.ErrNotExist) {

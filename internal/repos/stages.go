@@ -176,6 +176,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 		svc.SetEmbedder(env.embedder)
 	}
 	svc.SetSigner(env.signer)
+	svc.SetAgentID(env.agentID)
 	if m := env.m; m != nil {
 		svc.SetAcceptList(m.acceptListFor(r.uid))
 		svc.SetOwnKeys(m.ownFleetKeys)

@@ -17,7 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Root is the fleet's trust anchor: the master certificate and, on the
+// Root is the fleet's trust anchor: the fleet root certificate and, on the
 // operator's machine only, its signer. Instances hold the certificate alone
 // (LoadRootCert); the private half never lives on a fleet machine.
 type Root struct {
@@ -26,7 +26,7 @@ type Root struct {
 }
 
 // clockSkew backdates NotBefore so a peer whose clock runs a little behind
-// the master's does not refuse a certificate issued moments ago. A defensive
+// the fleet root's does not refuse a certificate issued moments ago. A defensive
 // bound, not a measured property of any fleet.
 const clockSkew = 5 * time.Minute
 
@@ -35,14 +35,14 @@ const clockSkew = 5 * time.Minute
 // 0600) and whose certificate is written beside it. It refuses to run over
 // an existing root — replacing a root orphans every certificate in the
 // fleet — and refuses an empty passphrase, since this key signs every
-// identity. `identity init-master` uses CreateRoot, which prefers the OS
+// identity. `identity init-root` uses CreateRoot, which prefers the OS
 // keychain; NewRoot is the file-only form fixtures build on.
 func NewRoot(dir, cn string, passphrase []byte, validity time.Duration) (Root, error) {
 	if len(passphrase) == 0 {
 		return Root{}, errors.New("pki: the root key requires a passphrase")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return Root{}, fmt.Errorf("pki: create master dir: %w", err)
+		return Root{}, fmt.Errorf("pki: create fleet root dir: %w", err)
 	}
 	keyPath := filepath.Join(dir, RootKeyFile)
 	if _, err := os.Stat(keyPath); err == nil {

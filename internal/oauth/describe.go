@@ -17,7 +17,7 @@ const requestDigestTag = "knomit-oauth-request/v1\n"
 // RequestDigest is SHA-256 (64 lowercase hex) over what a pending request
 // asks for, as the REQUESTER supplied it: client_id, client_name,
 // redirect_uri, resource and the requested scopes (F19 phase 3b, R4). The
-// operator signs it in a master-key approval, and the instance recomputes it
+// operator signs it in a fleet-root-key approval, and the instance recomputes it
 // from its OWN row, never from bytes a client sent, so a statement signed
 // over a description a relay invented does not verify.
 //

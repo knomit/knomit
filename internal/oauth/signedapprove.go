@@ -25,9 +25,9 @@ import (
 
 // Consent path 2 (F19 phase 3b, Task 3): the operator approves or denies a
 // waiting request from their OWN machine by signing a statement with the
-// fleet master key; anyone may carry the signed statement to the instance's
+// fleet root key; anyone may carry the signed statement to the instance's
 // public POST /oauth/approve. The instance verifies it against the fleet
-// root public key it holds (<[tls].dir>/root.crt). The master private key
+// root public key it holds (<[tls].dir>/root.crt). The fleet root private key
 // never touches the instance.
 
 // Verbs, and the tag each statement's first line carries. The verb is IN the
@@ -63,7 +63,7 @@ const signedApprovalSkew = 5 * time.Minute
 
 // replayTableMax bounds the replay table. Inserting needs a VALID signature,
 // so this is not a defence against unauthenticated growth; it keeps a leaked
-// master key from also being a memory lever.
+// fleet root key from also being a memory lever.
 const replayTableMax = 1024
 
 var (
@@ -71,7 +71,7 @@ var (
 	digestRE      = fingerprintRE
 )
 
-// ApprovalStatement is what the master key signs. Bytes is its ONE encoding:
+// ApprovalStatement is what the fleet root key signs. Bytes is its ONE encoding:
 //
 //	knomit-oauth-approve/v1          knomit-oauth-deny/v1
 //	<instance fingerprint>           <instance fingerprint>
@@ -90,7 +90,7 @@ var (
 //
 // The first line is the domain separation (S2): the same key signs X.509
 // certificates and CRLs, which are DER and begin with 0x30; every non-X.509
-// use of the master key signs a message whose first line is a
+// use of the fleet root key signs a message whose first line is a
 // knomit-<purpose>/v<n> tag, and every verifier requires its exact tag.
 type ApprovalStatement struct {
 	Verb     string   `json:"verb"`
@@ -163,7 +163,7 @@ func (s ApprovalStatement) Bytes() ([]byte, error) {
 	return []byte(strings.Join(lines, "\n")), nil
 }
 
-// SignStatement signs s with the master key. It runs on the operator's
+// SignStatement signs s with the fleet root key. It runs on the operator's
 // machine (`knomit oauth approve --sign`), never on an instance.
 func SignStatement(s ApprovalStatement, key ed25519.PrivateKey) (SignedStatement, error) {
 	if s.Verb == VerbApprove {
@@ -178,7 +178,7 @@ func SignStatement(s ApprovalStatement, key ed25519.PrivateKey) (SignedStatement
 }
 
 // FleetRootLabel names a fleet root in decided_by / granted_by: the first 8
-// hex of its pki.Fingerprint. "master:<label>" is deliberately not a
+// hex of its pki.Fingerprint. "fleet-root:<label>" is deliberately not a
 // principal spelling (auth.ParsePrincipal refuses it), so it can never
 // match a grants row.
 func FleetRootLabel(pub ed25519.PublicKey) string { return pki.Fingerprint(pub)[:8] }
@@ -227,7 +227,7 @@ func (i *Issuer) ApplySigned(ctx context.Context, ss SignedStatement) (Pending, 
 	if RequestDigest(p) != ss.Digest {
 		return Pending{}, ErrStatementMismatch
 	}
-	by := "master:" + FleetRootLabel(root)
+	by := "fleet-root:" + FleetRootLabel(root)
 	if ss.Verb == VerbDeny {
 		if err := i.Deny(ctx, ss.ID, by); err != nil {
 			return Pending{}, err

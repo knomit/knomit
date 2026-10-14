@@ -29,6 +29,24 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 	}
 }
 
+// TestFallbackAgentIDOnlyInstalledFromTests: store.SetTestFallbackAgentID lets
+// a test binary author commits as a fixture id derived from a branch name.
+// Production never derives an agent id from a name (D18): a store given no id
+// fails with ErrNoAgentID. The setter refuses to work outside a test binary;
+// this keeps production SOURCE from naming it (or the fallback's installer)
+// at all. The READ side, store.TestFallbackAgentID, is deliberately not a
+// needle: repos.Manager calls it, and outside a test binary it returns "".
+func TestFallbackAgentIDOnlyInstalledFromTests(t *testing.T) {
+	offenders := productionSourceNaming(t,
+		[]string{"SetTestFallbackAgentID", "FixtureAgentID"},
+		filepath.Join("internal", "store", "agent_id.go"),
+		filepath.Join("internal", "testsupport", "testsigner", "testsigner.go"),
+	)
+	if len(offenders) > 0 {
+		t.Fatalf("production source must not install the test fallback agent id:\n  %s", strings.Join(offenders, "\n  "))
+	}
+}
+
 // TestFastDurabilityOnlyReferencedFromTests: store.SetTestFastDurability turns
 // SQLite's fsyncs off (synchronous=OFF) for a whole test binary (#365). In a
 // production knomit that would turn a power cut into a corrupt store or

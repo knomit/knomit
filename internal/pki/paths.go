@@ -15,7 +15,7 @@ const (
 	CRLNumberFile = "crl.number"
 )
 
-// File names, master side (the operator's --dir, never a fleet machine).
+// File names, fleet root side (the operator's --dir, never a fleet machine).
 const (
 	RootKeyFile    = "root.key"
 	IssuedLogFile  = "issued.jsonl"

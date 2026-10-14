@@ -478,7 +478,7 @@ func (m *Manager) ownFleetKeys() []ssh.PublicKey {
 			return
 		}
 		if upstream := svc.UpstreamBranch(); upstream != "" {
-			keys, _ = svc.FleetKeysOf(upstream, store.AgentIDOf(m.deps.AgentBranch))
+			keys, _ = svc.FleetKeysOf(upstream, m.AgentID())
 		}
 	})
 	return keys

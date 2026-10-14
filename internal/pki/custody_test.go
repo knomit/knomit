@@ -81,10 +81,10 @@ func signsAs(t *testing.T, root Root, want ed25519.PublicKey) {
 }
 
 func TestCreateRoot_StoresInTheKeychainUnderTheRootID(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "master")
+	dir := filepath.Join(t.TempDir(), "fleet")
 	kc := newFakeKeychain()
 	pass, calls := countingPass(custodyPass)
-	root, src, err := CreateRoot(dir, "knomit-master-test", time.Hour, kc, pass)
+	root, src, err := CreateRoot(dir, "knomit-fleet-root-test", time.Hour, kc, pass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestCreateRoot_StoresInTheKeychainUnderTheRootID(t *testing.T) {
 }
 
 func TestCreateRoot_KeychainRefusedFallsBackToTheFile(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "master")
+	dir := filepath.Join(t.TempDir(), "fleet")
 	kc := newFakeKeychain()
 	kc.setErr = errors.New("no Secret Service")
 
@@ -138,7 +138,7 @@ func TestCreateRoot_KeychainRefusedFallsBackToTheFile(t *testing.T) {
 
 func TestOpenRoot_KeychainErrorFallsBackToTheFile(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-master-test", custodyPass, time.Hour)
+	root, err := NewRoot(dir, "knomit-fleet-root-test", custodyPass, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestOpenRoot_KeychainErrorFallsBackToTheFile(t *testing.T) {
 }
 
 func TestOpenRoot_NeitherKeychainNorFileIsAClearError(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "master")
+	dir := filepath.Join(t.TempDir(), "fleet")
 	kc := newFakeKeychain()
 	if _, _, err := CreateRoot(dir, "cn", time.Hour, kc, nil); err != nil {
 		t.Fatal(err)
@@ -197,9 +197,9 @@ func TestOpenRoot_NeitherKeychainNorFileIsAClearError(t *testing.T) {
 }
 
 func TestExportImport_RoundTripMovesTheKey(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "master")
+	dir := filepath.Join(t.TempDir(), "fleet")
 	kc := newFakeKeychain()
-	root, _, err := CreateRoot(dir, "knomit-master-test", time.Hour, kc, nil)
+	root, _, err := CreateRoot(dir, "knomit-fleet-root-test", time.Hour, kc, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestExportImport_RoundTripMovesTheKey(t *testing.T) {
 		t.Fatalf("the keychain still holds %v after a move", keys(kc.items))
 	}
 	if _, _, err := OpenRoot(dir, kc, nil); !errors.Is(err, ErrNoRootKey) {
-		t.Fatalf("the old master can still open the root after a move: %v", err)
+		t.Fatalf("the old fleet root can still open the root after a move: %v", err)
 	}
 	if fi, err := os.Stat(out); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("export file: %v %v", fi, err)
@@ -227,7 +227,7 @@ func TestExportImport_RoundTripMovesTheKey(t *testing.T) {
 		t.Fatal("a second export over an existing file succeeded")
 	}
 
-	newDir := filepath.Join(t.TempDir(), "master")
+	newDir := filepath.Join(t.TempDir(), "fleet")
 	kc2 := newFakeKeychain()
 	if _, _, err := ImportRoot(newDir, out, kc2, []byte("wrong")); err == nil {
 		t.Fatal("import with the wrong passphrase succeeded")
@@ -247,7 +247,7 @@ func TestExportImport_RoundTripMovesTheKey(t *testing.T) {
 }
 
 func TestExportRoot_KeepLeavesTheLocalCopy(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "master")
+	dir := filepath.Join(t.TempDir(), "fleet")
 	kc := newFakeKeychain()
 	root, _, err := CreateRoot(dir, "cn", time.Hour, kc, nil)
 	if err != nil {

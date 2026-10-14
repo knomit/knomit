@@ -61,15 +61,15 @@ func useHome(t *testing.T, home string) {
 	}
 }
 
-func master(t *testing.T) (dir, passFile string) {
+func fleetRoot(t *testing.T) (dir, passFile string) {
 	t.Helper()
 	base := t.TempDir()
-	dir = filepath.Join(base, "master")
+	dir = filepath.Join(base, "fleet")
 	passFile = filepath.Join(base, "pass")
 	os.WriteFile(passFile, []byte("correct horse\n"), 0o600)
-	out, err := run(t, "", "identity", "init-master", "--dir", dir, "--cn", "knomit-master-test", "--passphrase-file", passFile)
+	out, err := run(t, "", "identity", "init-root", "--dir", dir, "--cn", "knomit-fleet-root-test", "--passphrase-file", passFile)
 	if err != nil || !strings.Contains(out, "BEGIN CERTIFICATE") {
-		t.Fatalf("init-master: %v\n%s", err, out)
+		t.Fatalf("init-root: %v\n%s", err, out)
 	}
 	return dir, passFile
 }
@@ -83,11 +83,11 @@ func enroll(t *testing.T, dir, passFile, pubPath string) string {
 	return bundle
 }
 
-// The offline flow end to end: init-master → enroll the instance's EXISTING
+// The offline flow end to end: init-root → enroll the instance's EXISTING
 // key → install on the instance → show names the same fingerprint the branch
 // name carries → revoke → the reissued CRL lists the serial.
 func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	home, pub, pubPath := instanceHome(t, "laptop")
 	bundle := enroll(t, dir, passFile, pubPath)
 
@@ -97,7 +97,7 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
 	fp := pki.Fingerprint(pub)
-	if !strings.Contains(out, "principal: instance:"+fp+"@cert") || !strings.Contains(out, "san: knomit://instance/laptop-"+pki.Short(fp)) {
+	if !strings.Contains(out, "principal: instance:"+fp+"@cert") || !strings.Contains(out, "san: knomit://instance/laptop\n") {
 		t.Fatalf("install output:\n%s", out)
 	}
 	if !strings.Contains(out, "[tls]") { // addr unset: it tells the operator what to add
@@ -146,14 +146,14 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 	if !pki.IsRevoked(crl, leaf.SerialNumber) || crl.Number.Cmp(big.NewInt(2)) != 0 {
 		t.Fatalf("CRL Number %v, lists serial: %v", crl.Number, pki.IsRevoked(crl, leaf.SerialNumber))
 	}
-	// A serial the master never issued is refused rather than revoking nothing.
+	// A serial the fleet root never issued is refused rather than revoking nothing.
 	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", "abc123", "--passphrase-file", passFile); err == nil {
 		t.Fatal("revoke of an unknown serial succeeded")
 	}
 }
 
 func TestIdentity_InstallRefusals(t *testing.T) {
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	_, _, otherPub := instanceHome(t, "other")
 	useHome(t, home)
@@ -168,7 +168,7 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle, "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	// Revoke some unrelated certificate so the master's CRL moves to #2,
+	// Revoke some unrelated certificate so the fleet root's CRL moves to #2,
 	// enroll again (bundle carries #2), install it, then try the #1 bundle.
 	_, _, strayPub := instanceHome(t, "stray")
 	stray := parseCert(t, readFirstCert(t, enroll(t, dir, passFile, strayPub)))
@@ -183,7 +183,7 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 	}
 
 	// 3. A bundle from a DIFFERENT fleet root: refused unless --replace-root.
-	dir2, pass2 := master(t)
+	dir2, pass2 := fleetRoot(t)
 	foreign := enroll(t, dir2, pass2, pubPath)
 	if _, err := run(t, "", "identity", "install", "--bundle", foreign); err == nil || !strings.Contains(err.Error(), "--replace-root") {
 		t.Fatalf("switched fleets without --replace-root: %v", err)
@@ -195,7 +195,7 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 	}
 	// The bounce: back to the FIRST fleet with its OLD bundle (CRL #1, while
 	// that root's watermark is #2). Nothing was reset on the way through the
-	// other fleet, so this is still a rollback. (The two masters share a
+	// other fleet, so this is still a rollback. (The two fleet roots share a
 	// CommonName, so a CN-keyed watermark would not tell them apart either.)
 	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle, "--replace-root", "--yes"); err == nil || !strings.Contains(err.Error(), "older") {
 		t.Fatalf("A -> B -> old A bundle was accepted: %v", err)
@@ -222,7 +222,7 @@ func TestIdentity_RefusedInstallLeavesThePKIDirAlone(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits")
 	}
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
 	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
@@ -232,7 +232,7 @@ func TestIdentity_RefusedInstallLeavesThePKIDirAlone(t *testing.T) {
 	if err := os.Chmod(pkiDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	dir2, pass2 := master(t)
+	dir2, pass2 := fleetRoot(t)
 	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir2, pass2, pubPath)); err == nil || !strings.Contains(err.Error(), "--replace-root") {
 		t.Fatalf("switched fleets without --replace-root: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestIdentity_RefusedInstallLeavesThePKIDirAlone(t *testing.T) {
 // --root or --yes, it refuses, naming the fingerprint and the flags, and
 // writes nothing.
 func TestIdentity_FirstInstallConfirmsTheRoot(t *testing.T) {
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	home, pub, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
 	bundle := enroll(t, dir, passFile, pubPath)
@@ -306,7 +306,7 @@ func TestIdentity_FirstInstallConfirmsTheRoot(t *testing.T) {
 // injected reader, which is what the command passes when stdin is a
 // terminal and --bundle is a file.
 func TestIdentity_InstallPromptsOnATerminal(t *testing.T) {
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	for _, tc := range []struct {
 		name, answer string
 		yes, ok      bool
@@ -357,7 +357,7 @@ func TestIdentity_IsTerminal(t *testing.T) {
 // An installed root.crt that does not load is refused before the bundle's
 // root is shown or asked about, naming the file.
 func TestIdentity_UnreadableRootIsRefusedBeforeAsking(t *testing.T) {
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
 	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
@@ -379,13 +379,13 @@ func TestIdentity_UnreadableRootIsRefusedBeforeAsking(t *testing.T) {
 // --replace-root is the permission to move; the new root still needs the
 // same confirmation as a first install.
 func TestIdentity_ReplaceRootNeedsConfirmationToo(t *testing.T) {
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
 	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	dir2, pass2 := master(t)
+	dir2, pass2 := fleetRoot(t)
 	foreign := enroll(t, dir2, pass2, pubPath)
 	out, err := run(t, "", "identity", "install", "--bundle", foreign, "--replace-root")
 	if err == nil || !strings.Contains(err.Error(), "--root") || !strings.Contains(out, "installed fleet root: ") {
@@ -424,9 +424,9 @@ func TestIdentity_DesktopPublicKeyLineRoundTripsThroughEnroll(t *testing.T) {
 // root.key, and enroll needs the right passphrase to open it.
 func TestIdentity_EnrollNeedsAPassphraseAndTheRightOne(t *testing.T) {
 	useKeychain(t, &cliKeychain{items: map[string]string{}, setErr: errors.New("no Secret Service")})
-	dir, _ := master(t)
+	dir, _ := fleetRoot(t)
 	if _, err := os.Stat(filepath.Join(dir, pki.RootKeyFile)); err != nil {
-		t.Fatalf("init-master without a keychain wrote no root.key: %v", err)
+		t.Fatalf("init-root without a keychain wrote no root.key: %v", err)
 	}
 	_, _, pubPath := instanceHome(t, "laptop")
 	if _, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath); err == nil {
@@ -521,20 +521,20 @@ func parseCert(t *testing.T, raw []byte) *x509.Certificate {
 // (OpenSSL 3 lowercase `sha256 Fingerprint=`, LibreSSL `SHA256 Fingerprint=`).
 // Every other value — the openssl forms, truncated or SHA-1 values, junk — is
 // refused naming the form and where to get it, and installs nothing.
-// init-master prints the value and show prints the installed root.
+// init-root prints the value and show prints the installed root.
 // Sabotage: compare --root without the form check (red: the malformed values
 // get "is not the bundle's fleet root" instead of the form), or drop the
-// init-master line (red).
+// init-root line (red).
 func TestIdentity_RootFingerprintForm(t *testing.T) {
 	base := t.TempDir()
-	dir := filepath.Join(base, "master")
+	dir := filepath.Join(base, "fleet")
 	passFile := filepath.Join(base, "pass")
 	if err := os.WriteFile(passFile, []byte("correct horse\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	initOut, err := run(t, "", "identity", "init-master", "--dir", dir, "--cn", "knomit-master-test", "--passphrase-file", passFile)
+	initOut, err := run(t, "", "identity", "init-root", "--dir", dir, "--cn", "knomit-fleet-root-test", "--passphrase-file", passFile)
 	if err != nil {
-		t.Fatalf("init-master: %v\n%s", err, initOut)
+		t.Fatalf("init-root: %v\n%s", err, initOut)
 	}
 	rootCert, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile))
 	if err != nil {
@@ -547,7 +547,7 @@ func TestIdentity_RootFingerprintForm(t *testing.T) {
 	sum := sha256.Sum256(sshPub.Marshal())
 	rootFP := hex.EncodeToString(sum[:])
 	if !strings.Contains(initOut, "# fleet root fingerprint: "+rootFP+" ") {
-		t.Fatalf("init-master does not print the root fingerprint %s:\n%s", rootFP, initOut)
+		t.Fatalf("init-root does not print the root fingerprint %s:\n%s", rootFP, initOut)
 	}
 
 	certSum := sha256.Sum256(rootCert.Raw)
@@ -578,7 +578,7 @@ func TestIdentity_RootFingerprintForm(t *testing.T) {
 	for name, v := range malformed {
 		_, err := run(t, "", "identity", "install", "--bundle", bundle, "--root", v)
 		if err == nil || !strings.Contains(err.Error(), "is not a fleet root fingerprint") ||
-			!strings.Contains(err.Error(), "64 hex characters") || !strings.Contains(err.Error(), "init-master") {
+			!strings.Contains(err.Error(), "64 hex characters") || !strings.Contains(err.Error(), "init-root") {
 			t.Fatalf("%s: --root %q not refused for its form: %v", name, v, err)
 		}
 		if strings.Contains(v, ":") && !strings.Contains(err.Error(), "hashes the root CERTIFICATE") {
@@ -594,7 +594,7 @@ func TestIdentity_RootFingerprintForm(t *testing.T) {
 		t.Fatalf("--root %s: %v\n%s", rootFP, err, out)
 	}
 	show, err := run(t, "", "identity", "show")
-	if err != nil || !strings.Contains(show, "root: "+rootFP+` ("knomit-master-test")`) {
+	if err != nil || !strings.Contains(show, "root: "+rootFP+` ("knomit-fleet-root-test")`) {
 		t.Fatalf("show does not print the installed root: %v\n%s", err, show)
 	}
 }

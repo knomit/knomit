@@ -6,45 +6,76 @@ import (
 	"fmt"
 	"path/filepath"
 	"time"
-
-	"knomit/internal/store"
 )
 
-// ResolveIdentity returns this instance's agent branch, persisted in
-// control.db (F09 PR 5, D1).
+// Identity is this instance's persisted identity (control.db
+// instance_identity): its opaque agent id (the commit author), its agent
+// branch, and the host label it was created with. The three are written
+// TOGETHER, once, and read back as stored ever after. Nothing derives one of
+// them from another by parsing a name (D18): the id is not "branch minus
+// agent/", and the host is not "id minus its fingerprint".
+type Identity struct {
+	AgentID string
+	Branch  string
+	// Host is the sanitized hostname at creation, a label ({host} in a
+	// trigger match). Empty for an identity created before it was stored.
+	Host string
+}
+
+// ResolveIdentity returns this instance's identity, persisted in control.db
+// (F09 PR 5, D1).
 //
 // Before PR 5 the branch was re-derived at every boot from the current key and
-// hostname (app.agentBranch), so a key rotation or a hostname change gave the
-// instance a new id. Now derived is used ONCE: on the first boot that finds no
-// instance_identity row, it is written, and every later boot returns the
-// stored branch whatever the key or hostname. The commit author follows,
-// because it is derived from the branch (store.AgentIDOf).
+// hostname, so a key rotation or a hostname change gave the instance a new id.
+// Now fresh is used ONCE: on the first boot that finds no instance_identity
+// row, it is written, and every later boot returns the stored identity
+// whatever the key or hostname. fresh is BUILT by the caller (app constructs
+// id and branch from the host and the key's fp8); it is never parsed back.
 //
 // control.db is opened through OpenRegistry, the one path allowed to migrate
 // it, and closed again: the Manager opens its own handle at Start.
-func ResolveIdentity(home, derived string) (string, error) {
+func ResolveIdentity(home string, fresh Identity) (Identity, error) {
 	reg, err := OpenRegistry(filepath.Join(home, "control.db"))
 	if err != nil {
-		return "", fmt.Errorf("instance identity: %w", err)
+		return Identity{}, fmt.Errorf("instance identity: %w", err)
 	}
 	defer reg.Close()
-	return resolveIdentity(reg.DB(), derived, time.Now())
+	return resolveIdentity(reg.DB(), fresh, time.Now())
 }
 
-func resolveIdentity(db *sql.DB, derived string, now time.Time) (string, error) {
-	var branch string
-	err := db.QueryRow(`SELECT branch FROM instance_identity WHERE id = 1`).Scan(&branch)
+func resolveIdentity(db *sql.DB, fresh Identity, now time.Time) (Identity, error) {
+	var id Identity
+	var host sql.NullString
+	err := db.QueryRow(`SELECT i.agent_id, i.branch, h.host FROM instance_identity i
+		LEFT JOIN instance_identity_host h ON h.id = i.id WHERE i.id = 1`).Scan(&id.AgentID, &id.Branch, &host)
 	if err == nil {
-		return branch, nil
+		id.Host = host.String
+		return id, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("instance identity: read: %w", err)
+		return Identity{}, fmt.Errorf("instance identity: read: %w", err)
 	}
-	if _, err := db.Exec(`INSERT INTO instance_identity (id, agent_id, branch, created_at, fleet_state_since)
-		VALUES (1, ?, ?, ?, ?)`, store.AgentIDOf(derived), derived, now.Unix(), now.Unix()); err != nil {
-		return "", fmt.Errorf("instance identity: write: %w", err)
+	if fresh.AgentID == "" || fresh.Branch == "" {
+		return Identity{}, errors.New("instance identity: no stored identity and none to create (empty agent id or branch)")
 	}
-	return derived, nil
+	tx, err := db.Begin()
+	if err != nil {
+		return Identity{}, fmt.Errorf("instance identity: write: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`INSERT INTO instance_identity (id, agent_id, branch, created_at, fleet_state_since)
+		VALUES (1, ?, ?, ?, ?)`, fresh.AgentID, fresh.Branch, now.Unix(), now.Unix()); err != nil {
+		return Identity{}, fmt.Errorf("instance identity: write: %w", err)
+	}
+	if fresh.Host != "" {
+		if _, err := tx.Exec(`INSERT INTO instance_identity_host (id, host) VALUES (1, ?)`, fresh.Host); err != nil {
+			return Identity{}, fmt.Errorf("instance identity: write host: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Identity{}, fmt.Errorf("instance identity: write: %w", err)
+	}
+	return fresh, nil
 }
 
 // Fleet membership states (instance_identity.fleet_state).
