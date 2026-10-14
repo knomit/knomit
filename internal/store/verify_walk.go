@@ -58,6 +58,7 @@ const (
 	RuleArtifactSize       = "artifact-size"        // a blob larger than its max_size
 	RuleArtifactPKI        = "artifact-pki"         // a pki file added that does not hold as its role
 	RuleArtifactRules      = "artifact-rules"       // the rules for a path are ambiguous, or a blob cannot be read
+	RuleArtifactNotAFile   = "artifact-not-a-file"  // a tree, symlink or submodule at a declared path, or anything under one
 )
 
 // walkHistory visits every commit reachable from start and not from stop,

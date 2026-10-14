@@ -151,7 +151,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	members, lerr := m.fleetMembersAtMain(ri)
 	if lerr == nil {
 		for _, mem := range members {
-			if strings.EqualFold(mem.Agent, row.AgentID) {
+			if mem.Agent == row.AgentID {
 				st.RecordState = mem.State
 				// The RECORD differs, not "the branch is ahead": the sync
 				// loop merges main into the agent branch, so the branch is
@@ -479,7 +479,7 @@ func sameFleetURL(a, b string) bool {
 // uuid8 shape, derived from the id instead of random.
 func memberRecordPath(root, agentID string) string {
 	sum := sha256.Sum256([]byte(agentID))
-	return path.Join(root, fact.MembersTopic, strings.ToLower(agentID), hex.EncodeToString(sum[:4])+".md")
+	return path.Join(root, fact.MembersTopic, agentID, hex.EncodeToString(sum[:4])+".md")
 }
 
 // ownFleetKeys is every key this instance's member record has held in its

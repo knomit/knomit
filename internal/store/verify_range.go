@@ -158,7 +158,7 @@ type memberIndex struct {
 func indexMembers(ms []FleetMember) memberIndex {
 	idx := memberIndex{byAgent: map[string][]FleetMember{}, byKey: map[string][]FleetMember{}}
 	for _, m := range ms {
-		idx.byAgent[strings.ToLower(m.Agent)] = append(idx.byAgent[strings.ToLower(m.Agent)], m)
+		idx.byAgent[m.Agent] = append(idx.byAgent[m.Agent], m)
 		k := string(m.Key.Marshal())
 		idx.byKey[k] = append(idx.byKey[k], m)
 	}
@@ -195,7 +195,7 @@ func newJudge(f Fleet, selfRoot string, ont *fact.Ontology, kbRoot string) judge
 	}
 	j := judge{memberIndex: indexMembers(f.Members), pki: f.PKI, ont: ont, kbRoot: kbRoot}
 	if selfRoot != "" {
-		j.membersDir = strings.ToLower(path.Join(selfRoot, fact.MembersTopic)) + "/"
+		j.membersDir = path.Join(selfRoot, fact.MembersTopic) + "/"
 	}
 	return j
 }
@@ -218,7 +218,7 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 		}
 	}
 	for _, m := range j.byKey[string(s.Key.Marshal())] {
-		if strings.ToLower(m.Agent) != id {
+		if m.Agent != id {
 			return false
 		}
 	}
@@ -397,7 +397,7 @@ func (j judge) selfRegistration(c *object.Commit, id string, s CommitSigner, ref
 }
 
 // selfRecord checks what a self-registration leaves in its folder dir
-// (lowercased, ending in "/") in c's tree: exactly one file, a member record
+// (ending in "/", compared exactly) in c's tree: exactly one file, a member record
 // that parses, for agent id, in state active, holding the signing key.
 func selfRecord(c *object.Commit, dir, id string, s CommitSigner) error {
 	tree, err := c.Tree()
@@ -407,7 +407,7 @@ func selfRecord(c *object.Commit, dir, id string, s CommitSigner) error {
 	var recs []fact.Member
 	files := 0
 	err = tree.Files().ForEach(func(f *object.File) error {
-		if !strings.HasPrefix(strings.ToLower(f.Name), dir) {
+		if !strings.HasPrefix(f.Name, dir) {
 			return nil
 		}
 		files++
@@ -431,7 +431,7 @@ func selfRecord(c *object.Commit, dir, id string, s CommitSigner) error {
 		return err
 	case files != 1:
 		return fmt.Errorf("%s holds %d files, want exactly one member record", dir, files)
-	case !strings.EqualFold(recs[0].Agent, id):
+	case recs[0].Agent != id:
 		return fmt.Errorf("the record names agent %q, not the author %q", recs[0].Agent, id)
 	case recs[0].State != fact.MemberActive:
 		return fmt.Errorf("the record's state is %q; a self-registration may only write %q", recs[0].State, fact.MemberActive)
@@ -489,7 +489,7 @@ func (j judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
 	// R2: the leaf's email SAN id must EQUAL the id it is filed under (and
 	// the author's): a leaf the root issued to another agent, planted at this
 	// id's path, vouches for nothing here. Equality only; nothing is parsed.
-	if ident.AgentID != strings.ToLower(id) {
+	if ident.AgentID != id {
 		return leaf, fmt.Errorf("%w: its email SAN %q names agent %q, not %q", errLeafOtherID, ident.Email, ident.AgentID, id)
 	}
 	return leaf, nil
@@ -501,7 +501,7 @@ var errLeafOtherID = errors.New("the certificate is not issued to this agent id"
 
 // onlyUnder reports whether c changes at least one path and every path it
 // changes against EVERY parent (the empty tree for a root commit) is under
-// dir (lowercased, ending in "/"). A merge that brings in anything else from
+// dir (ending in "/", compared exactly). A merge that brings in anything else from
 // one side is not under dir against the other side. An unreadable tree is
 // "no": the commit falls back to the record rules.
 func onlyUnder(c *object.Commit, dir string) bool {
@@ -524,7 +524,7 @@ func onlyUnder(c *object.Commit, dir string) bool {
 				if name == "" {
 					continue
 				}
-				if !strings.HasPrefix(strings.ToLower(name), dir) {
+				if !strings.HasPrefix(name, dir) {
 					return false
 				}
 				changed = true

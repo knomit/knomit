@@ -101,12 +101,15 @@ func newIdentity(fp string) repos.Identity {
 	return repos.Identity{AgentID: id, Branch: "agent/" + id, Host: host}
 }
 
-// sanitizeHostname replaces chars invalid in git ref names with "-".
-// Falls back to "local" if hostname is empty.
+// sanitizeHostname lowercases the hostname — agent ids are lower case
+// everywhere (pki.ValidAgentID), so the host part of a minted id is too, and
+// the host label with it — and replaces chars invalid in git ref names with
+// "-". Falls back to "local" if hostname is empty.
 func sanitizeHostname(hostname string) string {
 	if hostname == "" {
 		return "local"
 	}
+	hostname = strings.ToLower(hostname)
 	replacer := strings.NewReplacer(
 		" ", "-",
 		"~", "-",

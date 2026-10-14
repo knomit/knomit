@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"math/big"
 	"path"
 	"strings"
 
@@ -26,11 +27,18 @@ import (
 //   - append-only: the new blob holds the old one as an exact byte prefix;
 //   - replace: modified only when replace_when holds — crl-newer
 //     (crlNewer) or leaf-renewal (leafRenewal);
+//   - revoked_set: superset — a replacing CRL lists every serial the old one
+//     lists (crlNewer);
 //   - max_size: the new blob is no larger;
-//   - a file with a change or pki rule must stay a regular file;
+//   - a declared path holds a regular file: a tree, symlink or submodule AT a
+//     declared path, or any entry UNDER one (a directory squatting the name a
+//     declared file takes, such as certs/<id>.pem/x), is refused
+//     (RuleArtifactNotAFile);
 //   - a pki file that is ADDED must hold as its role (pkiAdd): a root that is
 //     a CA certificate, a CRL the root signed, a leaf that chains to the root,
-//     is not revoked and is issued to the id its file name stands for.
+//     is not revoked and is issued to the id its file name stands for, an
+//     issuance record the root issued (pki.CheckIssuance), a revocation
+//     statement the root signed (pki.VerifyRevocation).
 //
 // The PKI a primitive needs — the root, the CRL, the member records — is read
 // from c's OWN tree. The root there is the root of every parent too (it is
@@ -128,6 +136,11 @@ func (a *artifactCheck) change(ch *object.Change) (rule, reason string) {
 	if name == "" {
 		name = ch.From.Name
 	}
+	if ch.To.Name != "" {
+		if rule, reason := a.squat(name); rule != "" {
+			return rule, reason
+		}
+	}
 	attrs, err := a.j.ont.ArtifactAttrs(name)
 	if err != nil {
 		return RuleArtifactRules, err.Error()
@@ -142,21 +155,18 @@ func (a *artifactCheck) change(ch *object.Change) (rule, reason string) {
 		}
 		return "", ""
 	}
-	newF, err := ch.To.Tree.TreeEntryFile(&ch.To.TreeEntry)
-	if attrs.Change != "" || attrs.PKI != "" {
-		if m := ch.To.TreeEntry.Mode; m != filemode.Regular && m != filemode.Executable {
-			rule := changeRule(attrs.Change)
-			if attrs.Change == "" {
-				rule = RuleArtifactPKI
-			}
-			return rule, fmt.Sprintf("%s must be a regular file, not mode %s", name, m)
-		}
+	if m := ch.To.TreeEntry.Mode; m != filemode.Regular && m != filemode.Executable {
+		return RuleArtifactNotAFile, fmt.Sprintf("%s is a declared artifact and must be a regular file, not mode %s", name, m)
 	}
+	newF, err := ch.To.Tree.TreeEntryFile(&ch.To.TreeEntry)
 	if err != nil {
 		return RuleArtifactRules, fmt.Sprintf("%s cannot be read: %v", name, err)
 	}
 	if attrs.MaxSize > 0 && newF.Size > attrs.MaxSize {
 		return RuleArtifactSize, fmt.Sprintf("%s is %d bytes, larger than its max_size of %d", name, newF.Size, attrs.MaxSize)
+	}
+	if bound := readBound(attrs); newF.Size > bound {
+		return RuleArtifactRules, fmt.Sprintf("%s is %d bytes, more than the judge reads of a %s file (%d)", name, newF.Size, attrs.PKI, bound)
 	}
 	added := ch.From.Name == ""
 	if added {
@@ -201,7 +211,7 @@ func (a *artifactCheck) change(ch *object.Change) (rule, reason string) {
 		var err error
 		switch attrs.ReplaceWhen {
 		case fact.ReplaceCRLNewer:
-			err = a.crlNewer(oldRaw, newRaw)
+			err = a.crlNewer(oldRaw, newRaw, attrs.RevokedSet == fact.RevokedSetSuperset)
 		case fact.ReplaceLeafRenewal:
 			err = a.leafRenewal(name, oldRaw, newRaw)
 		default:
@@ -213,6 +223,31 @@ func (a *artifactCheck) change(ch *object.Change) (rule, reason string) {
 		return "", ""
 	}
 	return RuleArtifactRules, fmt.Sprintf("%s: unknown change rule %q", name, attrs.Change)
+}
+
+// squat refuses an entry UNDER a declared artifact path: when any proper
+// ancestor directory of name (below artifacts/) is itself matched by a
+// declared pattern, that name is declared a FILE, and this tree squats it —
+// certs/<id>.pem/x would keep <id>'s leaf from ever being added, and a
+// reader that skips non-files would see no leaf at all.
+func (a *artifactCheck) squat(name string) (rule, reason string) {
+	rel := strings.TrimPrefix(name, fact.ArtifactsRoot+"/")
+	for i := strings.IndexByte(rel, '/'); i >= 0; {
+		dir := fact.ArtifactsRoot + "/" + rel[:i]
+		attrs, err := a.j.ont.ArtifactAttrs(dir)
+		if err != nil {
+			return RuleArtifactRules, err.Error()
+		}
+		if attrs.Matched {
+			return RuleArtifactNotAFile, fmt.Sprintf("%s is under %s, which is a declared artifact file, not a directory", name, dir)
+		}
+		next := strings.IndexByte(rel[i+1:], '/')
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+	return "", ""
 }
 
 func blobBytes(f *object.File) ([]byte, error) {
@@ -279,14 +314,27 @@ func (a *artifactCheck) pkiAdd(role, name string, raw []byte) error {
 	case fact.PKILeaf:
 		_, _, err := a.validLeaf(name, raw)
 		return err
+	case fact.PKIIssuance, fact.PKIRevocation:
+		a.readPKI()
+		if a.root == nil {
+			return fmt.Errorf("no root to check it against: %w", a.rootErr)
+		}
+		var err error
+		if role == fact.PKIIssuance {
+			_, err = pki.CheckIssuance(raw, a.root)
+		} else {
+			_, err = pki.VerifyRevocation(raw, a.root)
+		}
+		return err
 	}
 	return fmt.Errorf("unknown pki role %q", role)
 }
 
 // validLeaf checks a leaf file at name: it parses, chains to the tree's root,
 // is not revoked by the tree's CRL, and its email SAN's agent id EQUALS the id
-// its file name stands for (equality only, R2). It returns the leaf and that
-// id.
+// its file name stands for, byte for byte (equality only, R2; ids are lower
+// case and nothing is case folded, so certs/Vic.pem can hold no leaf). It
+// returns the leaf and that id.
 func (a *artifactCheck) validLeaf(name string, raw []byte) (*x509.Certificate, string, error) {
 	layout, _ := a.j.ont.PKILayout()
 	id, ok := layout.LeafID(path.Base(name))
@@ -320,8 +368,10 @@ func (a *artifactCheck) validLeaf(name string, raw []byte) (*x509.Certificate, s
 
 // crlNewer is replace_when: crl-newer: the new CRL is signed by the declared
 // root, and its Number is strictly greater than the old CRL's. An old CRL that
-// does not parse cannot be shown older, so nothing replaces it this way.
-func (a *artifactCheck) crlNewer(oldRaw, newRaw []byte) error {
+// does not parse cannot be shown older, so nothing replaces it this way. With
+// superset (revoked_set: superset) the new CRL must also list every serial
+// the old one lists: a reissue never un-revokes.
+func (a *artifactCheck) crlNewer(oldRaw, newRaw []byte, superset bool) error {
 	crl, err := parseCRLPEM(newRaw)
 	if err != nil {
 		return err
@@ -340,7 +390,21 @@ func (a *artifactCheck) crlNewer(oldRaw, newRaw []byte) error {
 	if crl.Number.Cmp(old.Number) <= 0 {
 		return fmt.Errorf("CRL Number %v is not greater than the %v it replaces (rollback)", crl.Number, old.Number)
 	}
+	if superset {
+		for _, e := range old.RevokedCertificateEntries {
+			if e.SerialNumber == nil || !pki.IsRevoked(crl, e.SerialNumber) {
+				return fmt.Errorf("CRL Number %v drops serial %s that the CRL it replaces lists (revoked_set: superset)", crl.Number, serialText(e.SerialNumber))
+			}
+		}
+	}
 	return nil
+}
+
+func serialText(s *big.Int) string {
+	if s == nil {
+		return "<none>"
+	}
+	return s.Text(16)
 }
 
 // leafRenewal is replace_when: leaf-renewal: the new leaf holds (validLeaf:
@@ -373,7 +437,7 @@ func (a *artifactCheck) leafRenewal(name string, oldRaw, newRaw []byte) error {
 	}
 	var recs []fact.Member
 	for _, m := range members {
-		if strings.EqualFold(m.Agent, id) {
+		if m.Agent == id {
 			recs = append(recs, m.Member)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"strings"
 	"sync"
@@ -220,9 +221,32 @@ func loadFleetAt(fleetID string, c *object.Commit, root string) (Fleet, error) {
 	return Fleet{Members: members, PKI: p}, nil
 }
 
-// defaultPKIFileCap bounds a declared certificate artifact that has no
-// max_size of its own: no reader holds an unbounded blob.
+// defaultPKIFileCap bounds a declared certificate artifact other than the CRL
+// that has no max_size of its own: no reader holds an unbounded blob.
 const defaultPKIFileCap = 64 << 10
+
+// crlReadBound is how much of a CRL with no max_size a reader reads. It is a
+// memory guard, not a policy cap: the CRL grows with every revocation and
+// never shrinks (revoked_set: superset), so the fleet preset declares no
+// max_size on it, and this bound sits far above any real fleet's CRL (an
+// entry is about 40 bytes: over a million revocations).
+const crlReadBound = 64 << 20
+
+// readBound is how much of a declared artifact with attributes a a reader
+// reads: its max_size; else crlReadBound for a CRL, defaultPKIFileCap for any
+// other pki file; else (a declared file with no pki role and no cap) no
+// bound.
+func readBound(a fact.ArtifactAttrs) int64 {
+	switch {
+	case a.MaxSize > 0:
+		return a.MaxSize
+	case a.PKI == fact.PKICRL:
+		return crlReadBound
+	case a.PKI != "":
+		return defaultPKIFileCap
+	}
+	return math.MaxInt64
+}
 
 // FleetPKI is the fleet's certificate artifacts at one revision: the root
 // certificate, the CRL, and the leaf for each agent id, at the paths the
@@ -240,20 +264,21 @@ type FleetPKI struct {
 	RootErr error                // the root file is present but unusable
 	CRL     *x509.RevocationList // nil when CRLErr is set
 	CRLErr  error                // the CRL is absent, unparseable or too large
-	certs   map[string]leafBlob  // lowercased <id> -> the leaf file
+	certs   map[string]leafBlob  // <id> (the file name's '*' part, exactly) -> the leaf file
 }
 
-// leafBlob is one leaf file as read: its bytes, or why it is unusable (two
-// spellings of one id, larger than its cap).
+// leafBlob is one leaf file as read: its bytes, or why it is unusable
+// (larger than its cap).
 type leafBlob struct {
 	raw []byte
 	err error
 }
 
 // Cert returns the leaf artifact for agent id, looked up by the id as a file
-// name and never parsed: nil, nil when there is none.
+// name, byte for byte, and never parsed or case folded: nil, nil when there is
+// none.
 func (p *FleetPKI) Cert(id string) (*x509.Certificate, error) {
-	b, ok := p.certs[strings.ToLower(id)]
+	b, ok := p.certs[id]
 	if !ok {
 		return nil, nil
 	}
@@ -302,13 +327,14 @@ func parseCRLPEM(raw []byte) (*x509.RevocationList, error) {
 	return crl, nil
 }
 
-// pkiFileCap is the read bound for a declared certificate artifact: its
-// max_size, else defaultPKIFileCap.
+// pkiFileCap is the read bound for a declared certificate artifact
+// (readBound); defaultPKIFileCap when its rules cannot be resolved.
 func pkiFileCap(ont *fact.Ontology, p string) int64 {
-	if a, err := ont.ArtifactAttrs(p); err == nil && a.MaxSize > 0 {
-		return a.MaxSize
+	a, err := ont.ArtifactAttrs(p)
+	if err != nil {
+		return defaultPKIFileCap
 	}
-	return defaultPKIFileCap
+	return readBound(a)
 }
 
 // errTooLarge: a declared artifact is larger than its cap.
@@ -378,12 +404,7 @@ func loadPKI(tree *object.Tree, ont *fact.Ontology) (*FleetPKI, error) {
 		if err != nil && !errors.Is(err, errTooLarge) {
 			return nil, err
 		}
-		key := strings.ToLower(id)
-		if _, dup := p.certs[key]; dup {
-			p.certs[key] = leafBlob{err: errors.New("more than one file for this id (case differs)")} // neither is believed
-			continue
-		}
-		p.certs[key] = leafBlob{raw: raw, err: err}
+		p.certs[id] = leafBlob{raw: raw, err: err}
 	}
 	return p, nil
 }
@@ -434,7 +455,7 @@ func (s *Service) FleetKeysOf(branch, agentID string) ([]ssh.PublicKey, error) {
 		}
 		for _, m := range ms {
 			k := string(m.Key.Marshal())
-			if strings.EqualFold(m.Agent, agentID) && !seen[k] {
+			if m.Agent == agentID && !seen[k] {
 				seen[k] = true
 				keys = append(keys, m.Key)
 			}

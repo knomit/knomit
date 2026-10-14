@@ -1168,7 +1168,7 @@ func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commit
 		m.trigger = store.TrailerValue(info.Message, store.TrailerTrigger)
 		m.kind = "human"
 		switch {
-		case strings.HasSuffix(strings.ToLower(info.AuthorEmail), "@agents.knomit.io"):
+		case strings.HasSuffix(info.AuthorEmail, "@agents.knomit.io"):
 			m.kind = "agent"
 		case info.AuthorName == "" && info.AuthorEmail == "":
 			m.kind = "unknown"

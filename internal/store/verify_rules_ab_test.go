@@ -2,6 +2,9 @@ package store
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
 	"testing"
@@ -72,6 +75,36 @@ func (p *testFleetPKI) crl(serials ...*big.Int) string {
 
 func (p *testFleetPKI) rootPEM() string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: p.root.Cert.Raw}))
+}
+
+// revocation is a root-signed revocation statement file for serial.
+func (p *testFleetPKI) revocation(serial *big.Int, reason string) string {
+	p.t.Helper()
+	id, err := pki.RootID(p.root.Cert)
+	require.NoError(p.t, err)
+	raw, err := pki.SignRevocation(p.root, pki.RevocationStatement{Root: id, Serial: serial, At: time.Now().UTC().Truncate(time.Second), Reason: reason})
+	require.NoError(p.t, err)
+	return string(raw)
+}
+
+// craftedLeaf is a leaf the root signs for k's key carrying exactly this
+// email SAN, so a test can express an address IssueLeaf refuses to write
+// (an upper-case agent id).
+func (p *testFleetPKI) craftedLeaf(email string, k ssh.Signer) string {
+	p.t.Helper()
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: email},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		EmailAddresses:        []string{email},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, p.root.Cert, edPubOf(p.t, k), p.root.Signer)
+	require.NoError(p.t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
 // presetLayout is where the fleet preset declares the certificate artifacts
@@ -686,12 +719,16 @@ func TestFleetPKIAt_ReadsArtifacts(t *testing.T) {
 	require.Equal(t, p.root.Cert.Raw, got.Root.Raw)
 	require.NoError(t, got.CRLErr)
 	require.True(t, pki.IsRevoked(got.CRL, serial))
-	c, err := got.Cert("AGENT-X")
+	c, err := got.Cert("agent-x")
 	require.NoError(t, err)
 	require.Equal(t, serial, c.SerialNumber)
 	none, err := got.Cert("agent-y")
 	require.NoError(t, err)
 	require.Nil(t, none)
+	// Ids are compared exactly, never case folded: AGENT-X is another id.
+	upper, err := got.Cert("AGENT-X")
+	require.NoError(t, err)
+	require.Nil(t, upper, "no case folding")
 
 	bare := newFleetPushHost(t, nil)
 	got, err = bare.svc.FleetPKIAt("main")

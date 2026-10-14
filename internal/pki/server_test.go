@@ -512,7 +512,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 	fa.publishCRL(t, dir)
 	rec := &recorder{}
 	addr := startServer(t, dir, srvM.keyPath, rec)
-	peerA := fa.enroll(t, "peerA")
+	peerA := fa.enroll(t, "peer-a")
 	if _, err := get(fa.clientFor(t, peerA, nil), addr); err != nil {
 		t.Fatalf("control: fleet A peer before the move: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	peerB := fb.enroll(t, "peerB")
+	peerB := fb.enroll(t, "peer-b")
 	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
 		t.Fatalf("fleet B peer refused after --replace-root, no restart: %v\nserver log:\n%s", err, rec)
 	}
@@ -589,7 +589,7 @@ func TestServerConfig_WatermarkIsPerRootSoABounceCannotRollBack(t *testing.T) {
 	certB, _, _ := IssueInstance(fb.dir, fb.root, srvM.pub, "server@agents.knomit.io", time.Hour)
 	crlB1, _ := os.ReadFile(filepath.Join(fb.dir, CRLFile))
 	installSet(t, dir, rootB, crlB1, certB)
-	peerA, peerB := fa.enroll(t, "peerA"), fb.enroll(t, "peerB")
+	peerA, peerB := fa.enroll(t, "peer-a"), fb.enroll(t, "peer-b")
 	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
 		t.Fatalf("after moving to B, B's peer refused: %v\n%s", err, rec)
 	}

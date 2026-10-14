@@ -36,12 +36,17 @@ func TestFleetPreset_DeclaresArtifactRulesAndEnforce(t *testing.T) {
 		want ArtifactAttrs
 	}{
 		{"artifacts/fleet/root.crt", ArtifactAttrs{Matched: true, PKI: PKIRoot, Change: ChangeWriteOnce, MaxSize: 16 << 10}},
-		{"artifacts/fleet/crl.pem", ArtifactAttrs{Matched: true, PKI: PKICRL, Change: ChangeReplace, ReplaceWhen: ReplaceCRLNewer, MaxSize: 16 << 10}},
+		// The CRL grows with every revocation and never shrinks (the
+		// superset rule): it carries no max_size.
+		{"artifacts/fleet/crl.pem", ArtifactAttrs{Matched: true, PKI: PKICRL, Change: ChangeReplace, ReplaceWhen: ReplaceCRLNewer, RevokedSet: RevokedSetSuperset}},
 		{"artifacts/fleet/certs/vic.pem", ArtifactAttrs{Matched: true, PKI: PKILeaf, Change: ChangeReplace, ReplaceWhen: ReplaceLeafRenewal, MaxSize: 16 << 10}},
-		{"artifacts/fleet/issued.jsonl", ArtifactAttrs{Matched: true, Change: ChangeAppendOnly, MaxSize: 16 << 10}},
-		{"artifacts/fleet/revoked.jsonl", ArtifactAttrs{Matched: true, Change: ChangeAppendOnly, MaxSize: 16 << 10}},
-		{"artifacts/fleet/notes/x.md", ArtifactAttrs{Matched: true, MaxSize: 16 << 10}},
-		{"artifacts/fleet/certs/sub/x.pem", ArtifactAttrs{Matched: true, MaxSize: 16 << 10}}, // * never crosses '/'
+		{"artifacts/fleet/issued/2026-10-14-x.pem", ArtifactAttrs{Matched: true, PKI: PKIIssuance, Change: ChangeWriteOnce, MaxSize: 16 << 10}},
+		{"artifacts/fleet/revocations/2026-10-14-x.txt", ArtifactAttrs{Matched: true, PKI: PKIRevocation, Change: ChangeWriteOnce, MaxSize: 4 << 10}},
+		// The ledgers are gone: no rule names them.
+		{"artifacts/fleet/issued.jsonl", ArtifactAttrs{}},
+		{"artifacts/fleet/revoked.jsonl", ArtifactAttrs{}},
+		{"artifacts/fleet/notes/x.md", ArtifactAttrs{}},
+		{"artifacts/fleet/certs/sub/x.pem", ArtifactAttrs{}}, // * never crosses '/'
 		{"artifacts/other/x", ArtifactAttrs{}},
 		{"kb/members/vic/1.md", ArtifactAttrs{}},
 	} {
@@ -91,6 +96,11 @@ func TestArtifactSection_ParseStrictness(t *testing.T) {
 		"empty segment":             "  a//x: { change: write-once }\n",
 		"partial double star":       "  a/**x: { change: write-once }\n",
 		"block is not a mapping":    "  a/x: write-once\n",
+		"revoked_set on a non-crl":  "  a/x: { change: write-once, revoked_set: superset }\n",
+		"bad revoked_set":           "  a/r: { pki: root, change: write-once }\n  a/c: { pki: crl, change: replace, replace_when: crl-newer, revoked_set: subset }\n",
+		"issuance not write-once":   "  a/r: { pki: root, change: write-once }\n  a/i/*.pem: { pki: issuance, change: append-only }\n",
+		"revocation replaceable":    "  a/r: { pki: root, change: write-once }\n  a/v/*.txt: { pki: revocation, change: replace, replace_when: crl-newer }\n",
+		"issuance without root":     "  a/i/*.pem: { pki: issuance, change: write-once }\n",
 	} {
 		doc := ontWithArtifacts(section)
 		if _, err := ParseOntology([]byte(doc)); err == nil {

@@ -22,16 +22,22 @@ const AgentEmailDomain = "agents.knomit.io"
 
 // AgentIDOfEmail returns the agent id in an agent address,
 // <id>[+<op>]@agents.knomit.io, or "" for any other address. It is the ONE
-// string operation on an identity (D18): take the address's local part,
-// lowercased, drop any +<op>, and require the domain to be exactly
-// agents.knomit.io. The id it returns is OPAQUE: it is only compared for
-// equality, never parsed further.
+// string operation on an identity (D18): require the domain to be exactly
+// agents.knomit.io, take the local part, drop any +<op>, and require what is
+// left to be a valid agent id (ValidAgentID: lower case, no '@', no white
+// space). NOTHING is case folded: Vic@agents.knomit.io and
+// vic@AGENTS.KNOMIT.IO are not agent addresses at all. The id it returns is
+// OPAQUE: it is only compared for equality, byte for byte, never parsed
+// further.
 func AgentIDOfEmail(email string) string {
-	local, ok := strings.CutSuffix(strings.ToLower(strings.TrimSpace(email)), "@"+AgentEmailDomain)
-	if !ok || local == "" {
+	local, ok := strings.CutSuffix(email, "@"+AgentEmailDomain)
+	if !ok {
 		return ""
 	}
 	id, _, _ := strings.Cut(local, "+")
+	if ValidAgentID(id) != nil {
+		return ""
+	}
 	return id
 }
 
@@ -40,13 +46,16 @@ func AgentIDOfEmail(email string) string {
 var ErrAgentIDInvalid = errors.New("pki: invalid agent id")
 
 // ValidAgentID refuses an agent id that AgentIDOfEmail would not return from
-// <id>@agents.knomit.io as itself: empty, holding '+' (everything after it
-// would be read as an operation, so a+b would be judged as a), '@', or white
-// space or a control character (TrimSpace, or an address that is not one). It
-// is checked where an id is MINTED (repos.ResolveIdentity) and where a
-// certificate is issued for one; it never extracts anything from an id.
-// IssueLeaf additionally needs the whole address to be printable ASCII (an
-// email SAN is an IA5String).
+// <id>@agents.knomit.io as itself: empty, holding an UPPER-CASE letter (agent
+// ids are lower case everywhere, and every comparison of one is exact, so an
+// upper-case id could never equal the lower-case member folder, file name or
+// record that names it), '+' (everything after it would be read as an
+// operation, so a+b would be judged as a), '@', or white space or a control
+// character. Every id it accepts reads back as itself. It is checked where an
+// id is MINTED (repos.ResolveIdentity), where a stored id is read back at boot,
+// and where a certificate is issued for one; it never extracts anything from
+// an id. IssueLeaf additionally needs the whole address to be printable ASCII
+// (an email SAN is an IA5String).
 func ValidAgentID(id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: empty", ErrAgentIDInvalid)
@@ -55,8 +64,11 @@ func ValidAgentID(id string) error {
 		return fmt.Errorf("%w: %q holds '+' or '@'", ErrAgentIDInvalid, id)
 	}
 	for _, c := range id {
-		if unicode.IsSpace(c) || unicode.IsControl(c) {
+		switch {
+		case unicode.IsSpace(c) || unicode.IsControl(c):
 			return fmt.Errorf("%w: %q holds white space or a control character", ErrAgentIDInvalid, id)
+		case unicode.IsUpper(c):
+			return fmt.Errorf("%w: %q holds an upper-case letter (agent ids are lower case)", ErrAgentIDInvalid, id)
 		}
 	}
 	return nil
@@ -81,6 +93,18 @@ func AgentEmail(id string) (string, error) {
 	return id + "@" + AgentEmailDomain, nil
 }
 
+// agentDomainSpelling refuses a domain that is the agent domain in another
+// case spelling (AGENTS.knomit.io). Such an address is no agent address
+// (AgentIDOfEmail is exact), so a certificate carrying it would silently be
+// an OPERATOR certificate for what was meant as an instance: refusing it is
+// louder. It folds case only to refuse; it never makes two spellings equal.
+func agentDomainSpelling(domain string) error {
+	if domain != AgentEmailDomain && strings.EqualFold(domain, AgentEmailDomain) {
+		return fmt.Errorf("%w: the agent domain is written %q; it is %q, lower case", ErrAgentIDInvalid, domain, AgentEmailDomain)
+	}
+	return nil
+}
+
 // Issued is one line of the fleet root's issuance log. Revocation references the
 // serial, so an issuance that could not be logged is not returned.
 type Issued struct {
@@ -92,8 +116,10 @@ type Issued struct {
 }
 
 // Issuance is one signed leaf as bytes: what IssueLeaf returns and the
-// caller places (a file in the fleet root directory, or an artifact in the
-// fleet repo).
+// caller places. In the fleet repository, CertPEM is BOTH the member's leaf
+// (certs/<id>.pem) and the issuance record (issued/<name>.pem, one file per
+// issuance, CheckIssuance); there is no ledger there. Line is for the fleet
+// root directory's LOCAL issuance log only.
 type Issuance struct {
 	CertPEM []byte
 	Record  Issued
@@ -126,7 +152,10 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, email string, validity time.Dur
 		if !ok || local == "" || domain == "" || strings.Contains(domain, "@") || !printableASCII(email) {
 			return Issuance{}, fmt.Errorf("pki: %q is not an email address", email)
 		}
-		if strings.EqualFold(domain, AgentEmailDomain) {
+		if err := agentDomainSpelling(domain); err != nil {
+			return Issuance{}, err
+		}
+		if domain == AgentEmailDomain {
 			if err := ValidAgentID(local); err != nil {
 				return Issuance{}, err
 			}

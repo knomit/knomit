@@ -41,6 +41,14 @@ func (r *memRepo) blob(content string) plumbing.Hash {
 	return h
 }
 
+// A content starting with symlinkEntry makes the entry a symlink to the
+// rest; one starting with gitlinkEntry makes it a submodule (gitlink) at the
+// 40-hex commit that follows.
+const (
+	symlinkEntry = "\x00symlink:"
+	gitlinkEntry = "\x00gitlink:"
+)
+
 func (r *memRepo) tree(files map[string]string) plumbing.Hash {
 	sub := map[string]map[string]string{}
 	var entries []object.TreeEntry
@@ -52,7 +60,14 @@ func (r *memRepo) tree(files map[string]string) plumbing.Hash {
 			sub[dir][rest] = content
 			continue
 		}
-		entries = append(entries, object.TreeEntry{Name: p, Mode: filemode.Regular, Hash: r.blob(content)})
+		switch {
+		case strings.HasPrefix(content, symlinkEntry):
+			entries = append(entries, object.TreeEntry{Name: p, Mode: filemode.Symlink, Hash: r.blob(strings.TrimPrefix(content, symlinkEntry))})
+		case strings.HasPrefix(content, gitlinkEntry):
+			entries = append(entries, object.TreeEntry{Name: p, Mode: filemode.Submodule, Hash: plumbing.NewHash(strings.TrimPrefix(content, gitlinkEntry))})
+		default:
+			entries = append(entries, object.TreeEntry{Name: p, Mode: filemode.Regular, Hash: r.blob(content)})
+		}
 	}
 	for dir, fs := range sub {
 		entries = append(entries, object.TreeEntry{Name: dir, Mode: filemode.Dir, Hash: r.tree(fs)})

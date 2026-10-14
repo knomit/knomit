@@ -111,7 +111,7 @@ func TestResolveIdentity_RefusesToMintAnIDThatDoesNotReadBack(t *testing.T) {
 	t.Cleanup(func() { _ = reg.Close() })
 	db := reg.DB()
 
-	for _, id := range []string{"lap+top-12345678", "lap@top-12345678"} {
+	for _, id := range []string{"lap+top-12345678", "lap@top-12345678", "Laptop-12345678"} {
 		_, err := resolveIdentity(db, Identity{AgentID: id, Branch: "agent/" + id, Host: "h"}, fixedNow())
 		require.ErrorIs(t, err, pki.ErrAgentIDInvalid, id)
 		var n int
@@ -122,4 +122,32 @@ func TestResolveIdentity_RefusesToMintAnIDThatDoesNotReadBack(t *testing.T) {
 	got, err := resolveIdentity(db, ok, fixedNow())
 	require.NoError(t, err)
 	require.Equal(t, ok, got)
+}
+
+// Agent ids are lower case everywhere, and there is no legacy path: a boot
+// that finds a stored id that is not a valid agent id (an upper-case one,
+// minted before the rule) refuses with ErrStoredAgentIDInvalid, which tells
+// the operator a fresh start (deleting control.db) is required. The stored
+// row is neither rewritten nor lowercased.
+//
+// SABOTAGE: drop the ValidAgentID check on the read path → the stored id is
+// returned → red.
+func TestResolveIdentity_RefusesAStoredInvalidIDAtBoot(t *testing.T) {
+	reg, err := OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reg.Close() })
+	db := reg.DB()
+	const old = "Pauls-MacBook-Pro.local-12345678"
+	_, err = db.Exec(`INSERT INTO instance_identity (id, agent_id, branch, created_at, fleet_state_since)
+		VALUES (1, ?, ?, 0, 0)`, old, "agent/"+old)
+	require.NoError(t, err)
+
+	_, err = resolveIdentity(db, Identity{AgentID: "fresh-87654321", Branch: "agent/fresh-87654321", Host: "fresh"}, fixedNow())
+	require.ErrorIs(t, err, ErrStoredAgentIDInvalid)
+	require.Contains(t, err.Error(), "delete control.db")
+	require.Contains(t, err.Error(), old)
+
+	var stored string
+	require.NoError(t, db.QueryRow(`SELECT agent_id FROM instance_identity WHERE id = 1`).Scan(&stored))
+	require.Equal(t, old, stored, "the stored id is not rewritten")
 }

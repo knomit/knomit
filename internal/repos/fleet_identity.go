@@ -45,12 +45,26 @@ func ResolveIdentity(home string, fresh Identity) (Identity, error) {
 	return resolveIdentity(reg.DB(), fresh, time.Now())
 }
 
+// ErrStoredAgentIDInvalid: the agent id persisted in control.db is not a
+// valid agent id (pki.ValidAgentID: an id holding an upper-case letter, from
+// before agent ids were minted lower case, is the expected case). Boot
+// refuses it; nothing rewrites a stored id. The remedy is a fresh start:
+// stop knomit, delete control.db, and start again — the instance mints a new
+// lower-case id and registers again (kb/decisions/identity/opaque-persisted-agent-id).
+var ErrStoredAgentIDInvalid = errors.New("instance identity: the stored agent id is invalid; a fresh start is required (stop knomit, delete control.db in the knomit home, and start again: the instance mints a new lower-case agent id and must register with its fleet again)")
+
 func resolveIdentity(db *sql.DB, fresh Identity, now time.Time) (Identity, error) {
 	var id Identity
 	var host sql.NullString
 	err := db.QueryRow(`SELECT i.agent_id, i.branch, h.host FROM instance_identity i
 		LEFT JOIN instance_identity_host h ON h.id = i.id WHERE i.id = 1`).Scan(&id.AgentID, &id.Branch, &host)
 	if err == nil {
+		// The stored id must still be one this binary would mint: lower
+		// case, reading back as itself. There is no legacy path and no
+		// rewrite: an id minted before the rule is a fresh start.
+		if verr := pki.ValidAgentID(id.AgentID); verr != nil {
+			return Identity{}, fmt.Errorf("%w: control.db holds agent id %q: %v", ErrStoredAgentIDInvalid, id.AgentID, verr)
+		}
 		id.Host = host.String
 		return id, nil
 	}

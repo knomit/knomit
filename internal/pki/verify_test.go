@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,9 +120,9 @@ func TestVerifyInstanceChain_RoundTripsInstanceAndOperator(t *testing.T) {
 }
 
 // R3: instance versus operator is decided by the email SAN ALONE. Exactly one
-// email SAN whose domain is exactly agents.knomit.io is an instance (its
-// local part, lowercased, +<op> dropped, is the agent id); anything else is
-// an operator. A URI SAN (such as knomit://instance/<label>) makes nothing an
+// email SAN whose domain is exactly agents.knomit.io and whose local part,
+// +<op> dropped, is a valid (lower-case) agent id is an instance; anything
+// else is an operator. Nothing is case folded. A URI SAN (such as knomit://instance/<label>) makes nothing an
 // instance. The principal is the key's fingerprint in every case.
 func TestIdentityOf_KindFromTheEmailSANAlone(t *testing.T) {
 	f := newFleet(t)
@@ -134,7 +135,8 @@ func TestIdentityOf_KindFromTheEmailSANAlone(t *testing.T) {
 	}{
 		{"agent address", []string{"laptop@agents.knomit.io"}, nil, "laptop"},
 		{"op suffix dropped", []string{"laptop+learn@agents.knomit.io"}, nil, "laptop"},
-		{"case folded", []string{"LapTop@Agents.Knomit.IO"}, nil, "laptop"},
+		{"upper-case id", []string{"LapTop@agents.knomit.io"}, nil, ""},
+		{"upper-case domain", []string{"laptop@Agents.Knomit.IO"}, nil, ""},
 		{"other domain", []string{"laptop@example.com"}, nil, ""},
 		{"lookalike suffix", []string{"laptop@agents.knomit.io.example.com"}, nil, ""},
 		{"subdomain", []string{"laptop@x.agents.knomit.io"}, nil, ""},
@@ -161,15 +163,28 @@ func TestIdentityOf_KindFromTheEmailSANAlone(t *testing.T) {
 func TestIssueLeaf_RefusesAnAgentIDThatDoesNotReadBack(t *testing.T) {
 	f := newFleet(t)
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	for _, email := range []string{"a+b@agents.knomit.io", "a b@agents.knomit.io", "@agents.knomit.io", "no-at-sign", "x@y@z", "café@example.com"} {
+	for _, email := range []string{"a+b@agents.knomit.io", "a b@agents.knomit.io", "@agents.knomit.io", "no-at-sign", "x@y@z", "café@example.com",
+		"Laptop@agents.knomit.io", "laptop@AGENTS.knomit.io", "laptop@Agents.Knomit.IO"} {
 		if _, err := IssueLeaf(f.root, pub, email, time.Hour, time.Now()); err == nil {
 			t.Errorf("IssueLeaf(%q) issued", email)
 		}
 	}
-	for _, id := range []string{"a+b", "a@b", "", "a b"} {
+	for _, id := range []string{"a+b", "a@b", "", "a b", "Laptop", "laptop-AB12CD34", "Pauls-MacBook-Pro.local-ab12cd34"} {
 		if _, err := AgentEmail(id); !errors.Is(err, ErrAgentIDInvalid) {
 			t.Errorf("AgentEmail(%q): err=%v, want ErrAgentIDInvalid", id, err)
 		}
+		if err := ValidAgentID(id); !errors.Is(err, ErrAgentIDInvalid) {
+			t.Errorf("ValidAgentID(%q): err=%v, want ErrAgentIDInvalid", id, err)
+		}
+		// Every id ValidAgentID refuses is also no agent id when read back
+		// from an address: the two agree.
+		if id != "" && AgentIDOfEmail(id+"@"+AgentEmailDomain) == id {
+			t.Errorf("AgentIDOfEmail reads %q back as itself, but ValidAgentID refuses it", id)
+		}
+	}
+	// Upper case is refused, never folded: the error names it.
+	if err := ValidAgentID("Laptop"); err == nil || !strings.Contains(err.Error(), "upper-case") {
+		t.Errorf("ValidAgentID(Laptop): %v, want an upper-case refusal", err)
 	}
 	// Positive control: the plain id issues and reads back as itself.
 	email, err := AgentEmail("laptop-ab12cd34")

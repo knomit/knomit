@@ -67,7 +67,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"context.WithTimeout", "context.Background", "ctx.Err", "ctx.Done",
 		// pure helpers
 		"time.Now", "time.Since", "time.Duration", "time.Sleep", "time.NewTimer", "?.Milliseconds", "?.UTC", "?.Truncate", "rs.now.Unix",
-		"strings.TrimPrefix", "strings.HasSuffix", "strings.ToLower",
+		"strings.TrimPrefix", "strings.HasSuffix",
 		"plumbing.NewHash", "commit.String", "head.String", "errors.As", "err.Error", "fmt.Sprintf",
 		"sort.Strings", "sort.Slice", "sort.SliceStable", "append", "len", "make", "delete", "recover",
 	},

@@ -11,16 +11,20 @@ description: >-
 # once the fleet has a root certificate, the fleet's certificates.
 attributes:
   verify_signatures: enforce
-# The fleet's certificate artifacts and ledgers, under artifacts/ (R7). The
-# commit judge enforces these rules on every commit; the fleet reader finds
-# the certificates through the pki declarations.
+# The fleet's certificate artifacts, under artifacts/ (R7). The commit judge
+# enforces these rules on every commit; the fleet reader finds the
+# certificates through the pki declarations. Each issuance (the issued leaf)
+# and each revocation (a root-signed statement) is a file of its own, written
+# once; a file name is for uniqueness only and means nothing. The root is
+# added only while it is missing: commit root.crt and crl.pem FIRST, when the
+# fleet repository is created, and add members only afterwards. The CRL
+# grows with every revocation and never shrinks, so it has no max_size.
 artifacts:
-  fleet/root.crt: { pki: root, change: write-once }
-  fleet/crl.pem: { pki: crl, change: replace, replace_when: crl-newer }
-  fleet/certs/*.pem: { pki: leaf, change: replace, replace_when: leaf-renewal }
-  fleet/issued.jsonl: { change: append-only }
-  fleet/revoked.jsonl: { change: append-only }
-  fleet/**: { max_size: 16KiB }
+  fleet/root.crt: { pki: root, change: write-once, max_size: 16KiB }
+  fleet/crl.pem: { pki: crl, change: replace, replace_when: crl-newer, revoked_set: superset }
+  fleet/certs/*.pem: { pki: leaf, change: replace, replace_when: leaf-renewal, max_size: 16KiB }
+  fleet/issued/*.pem: { pki: issuance, change: write-once, max_size: 16KiB }
+  fleet/revocations/*.txt: { pki: revocation, change: write-once, max_size: 4KiB }
 topics:
   members:
     description: >-

@@ -23,11 +23,11 @@ import (
 // changes a matching path:
 //
 //	artifacts:
-//	  fleet/root.crt:      { pki: root, change: write-once }
-//	  fleet/crl.pem:       { pki: crl,  change: replace, replace_when: crl-newer }
-//	  fleet/certs/*.pem:   { pki: leaf, change: replace, replace_when: leaf-renewal }
-//	  fleet/issued.jsonl:  { change: append-only }
-//	  fleet/**:            { max_size: 16KiB }
+//	  fleet/root.crt:          { pki: root, change: write-once, max_size: 16KiB }
+//	  fleet/crl.pem:           { pki: crl, change: replace, replace_when: crl-newer, revoked_set: superset }
+//	  fleet/certs/*.pem:       { pki: leaf, change: replace, replace_when: leaf-renewal, max_size: 16KiB }
+//	  fleet/issued/*.pem:      { pki: issuance, change: write-once, max_size: 16KiB }
+//	  fleet/revocations/*.txt: { pki: revocation, change: write-once, max_size: 4KiB }
 //
 // Keys and values:
 //
@@ -41,15 +41,28 @@ import (
 //     revoked by the CRL, its email SAN's agent id equals the file's id, its
 //     key is that agent's member record's current key, and its NotBefore is
 //     strictly later than the old leaf's.
-//   - pki: root | crl | leaf — the file's role. store.FleetAt reads the fleet's
-//     certificate artifacts from these declarations, never from fixed paths.
-//     A leaf pattern's last segment holds exactly one '*', which stands for
-//     the agent id (the file's name is the lookup key; nothing parses the id).
+//   - revoked_set: superset — (pki: crl only) a replacing CRL also lists every
+//     serial the CRL it replaces lists: a revocation is never undone by a
+//     reissue. A new key rather than a new crl-newer value (closed-value rule).
+//   - pki: root | crl | leaf | issuance | revocation — the file's role.
+//     store.FleetAt reads the fleet's certificate artifacts (root, crl, leaf)
+//     from these declarations, never from fixed paths. A leaf pattern's last
+//     segment holds exactly one '*', which stands for the agent id (the file's
+//     name is the lookup key; nothing parses the id). An issuance file is an
+//     issued leaf's PEM (pki.CheckIssuance); a revocation file is a root-signed
+//     revocation statement (pki.VerifyRevocation). Both are per-operation
+//     records, write-once, judged when added and read by nothing else; their
+//     names are for uniqueness and readability only — nothing derives order or
+//     meaning from a name (D18).
 //   - max_size — the largest blob a matching path may hold: a positive
-//     integer of bytes, or <n>B, <n>KiB, <n>MiB. Larger fails closed.
+//     integer of bytes, or <n>B, <n>KiB, <n>MiB. Larger fails closed. Never
+//     declare it on a file that grows without bound (the CRL): it would turn a
+//     legitimate update into a permanent refusal.
 //
 // A first ADD of any declared file is allowed (bootstrap); a file declared
-// with a pki role must still parse as that role when added.
+// with a pki role must still hold as that role when added. A declared path
+// must hold a regular file: a tree, symlink or submodule AT a declared path,
+// or anything UNDER one (a directory squatting a file's name), is refused.
 //
 // PATTERNS are relative to ArtifactsRoot and use the trigger glob syntax
 // (glob.go): '*' and '?' inside one segment, "**" as a whole segment for any
@@ -79,10 +92,13 @@ const (
 	ArtifactKeyChange      = "change"
 	ArtifactKeyReplaceWhen = "replace_when"
 	ArtifactKeyMaxSize     = "max_size"
+	ArtifactKeyRevokedSet  = "revoked_set"
 
-	PKIRoot = "root"
-	PKICRL  = "crl"
-	PKILeaf = "leaf"
+	PKIRoot       = "root"
+	PKICRL        = "crl"
+	PKILeaf       = "leaf"
+	PKIIssuance   = "issuance"
+	PKIRevocation = "revocation"
 
 	ChangeWriteOnce  = "write-once"
 	ChangeAppendOnly = "append-only"
@@ -90,23 +106,27 @@ const (
 
 	ReplaceCRLNewer    = "crl-newer"
 	ReplaceLeafRenewal = "leaf-renewal"
+
+	RevokedSetSuperset = "superset"
 )
 
 // maxArtifactSize bounds what max_size may declare.
 const maxArtifactSize = 1 << 30
 
 var artifactValues = map[string][]string{
-	ArtifactKeyPKI:         {PKIRoot, PKICRL, PKILeaf},
+	ArtifactKeyPKI:         {PKIRoot, PKICRL, PKILeaf, PKIIssuance, PKIRevocation},
 	ArtifactKeyChange:      {ChangeWriteOnce, ChangeAppendOnly, ChangeReplace},
 	ArtifactKeyReplaceWhen: {ReplaceCRLNewer, ReplaceLeafRenewal},
+	ArtifactKeyRevokedSet:  {RevokedSetSuperset},
 }
 
 // ArtifactAttrs is what the artifacts section says about one path.
 type ArtifactAttrs struct {
 	Matched     bool   // some declared pattern matches the path
-	PKI         string // "", PKIRoot, PKICRL or PKILeaf
+	PKI         string // "" or one of the PKI* roles
 	Change      string // "", ChangeWriteOnce, ChangeAppendOnly or ChangeReplace
 	ReplaceWhen string // set exactly when Change is ChangeReplace
+	RevokedSet  string // "" or RevokedSetSuperset (pki: crl only)
 	MaxSize     int64  // 0: no cap declared
 }
 
@@ -118,6 +138,7 @@ type artifactRule struct {
 	pki         string
 	change      string
 	replaceWhen string
+	revokedSet  string
 	maxSize     int64
 }
 
@@ -200,7 +221,7 @@ func (o *Ontology) ArtifactAttrs(repoPath string) (ArtifactAttrs, error) {
 			switch {
 			case changeFrom == nil || r.rank != changeFrom.rank && rankLess(r.rank, changeFrom.rank):
 				changeFrom = r
-			case r.rank == changeFrom.rank && (r.change != changeFrom.change || r.replaceWhen != changeFrom.replaceWhen):
+			case r.rank == changeFrom.rank && (r.change != changeFrom.change || r.replaceWhen != changeFrom.replaceWhen || r.revokedSet != changeFrom.revokedSet):
 				return ArtifactAttrs{}, fmt.Errorf("artifact rules for %s are ambiguous: %q and %q are equally specific and declare different change rules", repoPath, changeFrom.pattern, r.pattern)
 			}
 		}
@@ -209,7 +230,7 @@ func (o *Ontology) ArtifactAttrs(repoPath string) (ArtifactAttrs, error) {
 		out.PKI = pkiFrom.pki
 	}
 	if changeFrom != nil {
-		out.Change, out.ReplaceWhen = changeFrom.change, changeFrom.replaceWhen
+		out.Change, out.ReplaceWhen, out.RevokedSet = changeFrom.change, changeFrom.replaceWhen, changeFrom.revokedSet
 	}
 	return out, nil
 }
@@ -316,6 +337,8 @@ func compileArtifacts(section map[string]map[string]any, body *yaml.Node) (compi
 				r.change = s
 			case ArtifactKeyReplaceWhen:
 				r.replaceWhen = s
+			case ArtifactKeyRevokedSet:
+				r.revokedSet = s
 			}
 		}
 		switch {
@@ -333,6 +356,10 @@ func compileArtifacts(section map[string]map[string]any, body *yaml.Node) (compi
 			fail(pat, "pki: crl needs change: replace and replace_when: crl-newer")
 		case r.pki == PKILeaf && r.replaceWhen != ReplaceLeafRenewal:
 			fail(pat, "pki: leaf needs change: replace and replace_when: leaf-renewal")
+		case r.revokedSet != "" && r.pki != PKICRL:
+			fail(pat, "revoked_set needs pki: crl")
+		case (r.pki == PKIIssuance || r.pki == PKIRevocation) && r.change != ChangeWriteOnce:
+			fail(pat, "pki: "+r.pki+" needs change: write-once (a per-operation record is never changed)")
 		case (r.pki == PKIRoot || r.pki == PKICRL) && (r.rank[0] > 0 || r.rank[1] > 0):
 			fail(pat, "a pki: "+r.pki+" pattern must name one file (no wildcards)")
 		case r.pki == PKILeaf && !leafPatternOK(segs):
@@ -362,8 +389,12 @@ func compileArtifacts(section map[string]map[string]any, body *yaml.Node) (compi
 			}
 		}
 	}
-	if out.pki.Root == "" && (out.pki.CRL != "" || out.pki.HasLeaves()) {
-		diags = append(diags, diagAt(body, "parse ontology: artifacts: a pki: crl or pki: leaf is declared without a pki: root"))
+	opRecords := false
+	for _, r := range out.rules {
+		opRecords = opRecords || r.pki == PKIIssuance || r.pki == PKIRevocation
+	}
+	if out.pki.Root == "" && (out.pki.CRL != "" || out.pki.HasLeaves() || opRecords) {
+		diags = append(diags, diagAt(body, "parse ontology: artifacts: a pki: crl, leaf, issuance or revocation is declared without a pki: root"))
 	}
 	return out, diags
 }
