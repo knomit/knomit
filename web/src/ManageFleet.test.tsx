@@ -185,3 +185,21 @@ describe('the Fleet page layout', () => {
     expect(screen.getByTestId('fleet-register-why').textContent).toMatch(/registration is still being pushed/);
   });
 });
+
+// Operators pass this instance's agent id to `knomit identity enroll`, so the
+// id the page shows can be copied as-is: exactly the server's opaque string.
+describe('agent id copy control', () => {
+  it('sits next to the agent id and copies exactly that id to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    vi.mocked(api.getFleet).mockResolvedValue({ ...standalone, agent_id: 'opaque id/with:odd-chars 7' });
+    render(<FleetPage />);
+    const btn = await screen.findByTestId('fleet-agent-id-copy');
+    expect(btn.tagName).toBe('BUTTON');
+    expect(btn.querySelector('svg')).not.toBeNull();
+    expect(btn.parentElement?.textContent).toBe('opaque id/with:odd-chars 7');
+    fireEvent.click(btn);
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith('opaque id/with:odd-chars 7');
+  });
+});

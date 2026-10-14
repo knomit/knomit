@@ -20,6 +20,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/pki"
+	"knomit/internal/repos"
 )
 
 // identityCmd is `knomit identity`: the offline enrollment flow of F19
@@ -584,7 +585,7 @@ func serialsToRevoke(dir, serialHex, fp string) ([]*big.Int, error) {
 func identityShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show",
-		Short: "Show this instance's fingerprint, certificate and CRL state",
+		Short: "Show this instance's agent id, fingerprint, certificate and CRL state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -599,6 +600,22 @@ func showIdentity(out io.Writer, cfg config.Config) error {
 	st, err := pki.Status(cfg.TLS.Dir, config.ResolveKeyPath(cfg))
 	if err != nil {
 		return err
+	}
+	agentID, found, err := repos.StoredAgentID(cfg.Home)
+	switch {
+	case err != nil:
+		fmt.Fprintf(out, "agent_id: unreadable: %v\n", err)
+	case !found:
+		fmt.Fprintln(out, "agent_id: none (assigned when the instance first starts)")
+	default:
+		// A stored id that is no longer valid (upper case, from before agent
+		// ids were lower case) is shown as stored, with the reason boot will
+		// refuse it and the remedy. show never rewrites it.
+		if verr := pki.ValidAgentID(agentID); verr != nil {
+			fmt.Fprintf(out, "agent_id: %s (invalid: %v; boot refuses it: %v)\n", agentID, verr, repos.ErrStoredAgentIDInvalid)
+		} else {
+			fmt.Fprintf(out, "agent_id: %s\n", agentID)
+		}
 	}
 	fmt.Fprintf(out, "key: %s\nfingerprint: %s\nshort: %s\n", st.KeyPath, st.Fingerprint, pki.Short(st.Fingerprint))
 	switch {
