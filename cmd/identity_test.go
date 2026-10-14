@@ -538,13 +538,24 @@ func TestIdentity_RootKeyIsAPlainFileEnrollAsksNothing(t *testing.T) {
 	if after, _ := os.ReadFile(filepath.Join(dir, pki.CRLFile)); string(after) != string(crl) {
 		t.Fatal("a refused revoke reissued the CRL")
 	}
-	for _, args := range [][]string{
-		{"identity", "init-root", "--dir", filepath.Join(t.TempDir(), "f"), "--cn", "x", "--passphrase-file", "-"},
-		{"identity", "export-root", "--dir", dir, "--out", filepath.Join(t.TempDir(), "x")},
-		{"identity", "import-root", "x", "--dir", dir},
-	} {
-		if _, err := run(t, "", args...); err == nil {
-			t.Fatalf("%v: accepted; the passphrase flag and the export/import commands are gone", args)
+	if _, err := run(t, "", "identity", "init-root", "--dir", filepath.Join(t.TempDir(), "f"), "--cn", "x", "--passphrase-file", "-"); err == nil || !strings.Contains(err.Error(), "passphrase-file") {
+		t.Fatalf("init-root --passphrase-file: %v; the passphrase flag is gone", err)
+	}
+	// The export/import commands are gone from the command tree. Running
+	// them proves nothing: `identity` is a group without --dir (a flag
+	// error) and answers an unknown subcommand with its help and exit 0
+	// (kb gotcha 6ed9b0b3), so the tree itself is what is asserted. The
+	// enroll row proves the lookup can find a subcommand that exists.
+	have := map[string]bool{}
+	for _, sub := range identityCmd().Commands() {
+		have[sub.Name()] = true
+	}
+	if !have["enroll"] {
+		t.Fatalf("fixture: identity has no enroll subcommand, so the absence rows prove nothing: %v", have)
+	}
+	for _, gone := range []string{"export-root", "import-root"} {
+		if have[gone] {
+			t.Fatalf("identity still has a %s subcommand; the root key is a plain file and is copied, not exported", gone)
 		}
 	}
 }

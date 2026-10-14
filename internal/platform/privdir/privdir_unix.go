@@ -4,6 +4,7 @@ package privdir
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"syscall"
@@ -71,5 +72,35 @@ func ensure(path string) error {
 		return nil
 	}
 	log.Info().Str("path", path).Msgf("tightened data root to 0700 (was %o)", perm)
+	return nil
+}
+
+// geteuid is os.Geteuid, a variable so a test can play another user: a
+// directory owned by a second account cannot be built without one.
+var geteuid = os.Geteuid
+
+// verify is Verify on unix: Lstat (never through a link), a directory,
+// owned by the effective uid, with no group or other bit.
+func verify(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s is a symlink; use the directory it points to, not a link to it", ErrNotPrivate, path)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%w: %s is not a directory", ErrNotPrivate, path)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%w: %s: its owner cannot be read", ErrNotPrivate, path)
+	}
+	if uid := geteuid(); int(st.Uid) != uid {
+		return fmt.Errorf("%w: %s is owned by uid %d, not by this user (uid %d)", ErrNotPrivate, path, st.Uid, uid)
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("%w: %s is mode %04o, open to other users; fix it with: chmod 700 %s", ErrNotPrivate, path, perm, path)
+	}
 	return nil
 }

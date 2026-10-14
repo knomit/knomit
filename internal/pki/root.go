@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -41,13 +42,17 @@ var ErrNoRootKey = errors.New("pki: the fleet root key is not on this machine")
 // like an SSH key, and whose certificate is written beside it (root.crt).
 // dir is made private to the user first (privdir.Ensure: 0700 on unix, a
 // protected owner-only DACL on Windows), so everything written inside it
-// inherits owner-only access on every OS. There is no keychain and no
-// passphrase: whoever can read dir can sign for the fleet, exactly as with
-// ~/.ssh/id_ed25519.
+// inherits owner-only access on every OS. Ensure is best-effort, so dir is
+// then checked (privdir.Verify) and a directory that is still not private (a
+// symlink, another owner, a DACL granting others) is refused before any key
+// exists. There is no keychain and no passphrase: whoever can read dir can
+// sign for the fleet, exactly as with ~/.ssh/id_ed25519.
 //
 // It refuses to run over an existing root.key or root.crt: replacing a root
 // orphans every certificate in the fleet. root.key is created O_EXCL, which
-// is the check that holds under a race with a second writer.
+// is the check that holds under a race with a second writer, AND the only
+// refusal of a dangling root.key symlink (the os.Stat pre-check follows the
+// link and finds nothing); without it the key would be written through it.
 func NewRoot(dir, cn string, validity time.Duration) (Root, error) {
 	for _, f := range []string{RootKeyFile, RootCertFile} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
@@ -56,6 +61,12 @@ func NewRoot(dir, cn string, validity time.Duration) (Root, error) {
 	}
 	if err := privdir.Ensure(dir); err != nil {
 		return Root{}, fmt.Errorf("pki: create fleet root dir: %w", err)
+	}
+	// Ensure is best-effort (it warns over a directory it cannot make
+	// private); the plain root key is the one thing that must not be written
+	// into such a directory.
+	if err := privdir.Verify(dir); err != nil {
+		return Root{}, fmt.Errorf("pki: refusing to write the fleet root key: %w", err)
 	}
 	root, priv, err := generateRoot(cn, validity)
 	if err != nil {
@@ -108,19 +119,47 @@ func generateRoot(cn string, validity time.Duration) (Root, ed25519.PrivateKey, 
 	return Root{Cert: cert, Signer: priv}, priv, nil
 }
 
+// ErrUnprotectedRootKey: root.key is a symlink, or (unix) readable or
+// writable by other users. Refused, as ssh refuses an "UNPROTECTED PRIVATE
+// KEY FILE", with the fix in the message.
+var ErrUnprotectedRootKey = errors.New("pki: the fleet root key file is not protected")
+
 // LoadRoot opens the fleet root in dir: the plain root.key and root.crt
 // beside it. It asks for nothing. A missing root.key is ErrNoRootKey (this
 // machine is not the master); a pair whose halves do not match is refused.
+//
+// Before reading the key it refuses, naming the fix: a fleet root directory
+// that is not private to the user (privdir.Verify; a "copy the directory"
+// move with cp -r or an unzip lands it 0755), and a root.key that is a
+// symlink or, on unix, has any group or other bit (ErrUnprotectedRootKey).
+// It does not tighten either: unlike NewRoot, it did not create them.
 func LoadRoot(dir string) (Root, error) {
 	keyPath := filepath.Join(dir, RootKeyFile)
-	raw, err := os.ReadFile(keyPath)
+	fi, err := os.Lstat(keyPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return Root{}, fmt.Errorf("%w: %s is absent", ErrNoRootKey, keyPath)
 	}
 	if err != nil {
 		return Root{}, fmt.Errorf("pki: read root key: %w", err)
 	}
+	if err := privdir.Verify(dir); err != nil {
+		return Root{}, fmt.Errorf("pki: refusing to read the fleet root key: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return Root{}, fmt.Errorf("%w: %s is a symlink or not a regular file; put the key itself there", ErrUnprotectedRootKey, keyPath)
+	}
+	if perm := fi.Mode().Perm(); runtime.GOOS != "windows" && perm&0o077 != 0 {
+		return Root{}, fmt.Errorf("%w: %s is mode %04o, open to other users; fix it with: chmod 600 %s", ErrUnprotectedRootKey, keyPath, perm, keyPath)
+	}
+	raw, err := os.ReadFile(keyPath)
+	if err != nil {
+		return Root{}, fmt.Errorf("pki: read root key: %w", err)
+	}
 	k, err := ssh.ParseRawPrivateKey(raw)
+	var encrypted *ssh.PassphraseMissingError
+	if errors.As(err, &encrypted) {
+		return Root{}, fmt.Errorf("pki: %s is passphrase-protected (written by an older build); the root key is a plain file now, remove the passphrase with: ssh-keygen -p -N '' -f %s", keyPath, keyPath)
+	}
 	if err != nil {
 		return Root{}, fmt.Errorf("pki: %s: %w", keyPath, err)
 	}
