@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 
 	"knomit/internal/config"
 	"knomit/internal/serveraddr"
@@ -455,14 +454,49 @@ func desktopHome(t *testing.T) string {
 	for _, k := range envKeys {
 		t.Setenv(k, "")
 	}
-	// SaveSettings rebuilds the global logger; put it back for the rest of the
-	// package.
-	prev, prevLevel := log.Logger, zerolog.GlobalLevel()
+	// SaveSettings rebuilds the desktop's log sink (applyLogConfig) onto
+	// <home>/knomit-desktop.log and sets the global level; put both back for
+	// the rest of the package. Resetting the SINK is the part that matters:
+	// log.Logger is assigned once in init and never again, so restoring it
+	// restores nothing. The reset closes the rotator, which holds the file
+	// open once anything logs (every reload outcome but applied and
+	// restart_needed warns). Registered AFTER t.TempDir, so it runs BEFORE
+	// TempDir's RemoveAll (cleanups are LIFO): Windows cannot delete an open
+	// file.
+	prevLevel := zerolog.GlobalLevel()
 	t.Cleanup(func() {
-		log.Logger = prev
+		_ = applyLogConfig(config.LogConfig{Level: "info"}, "")
 		zerolog.SetGlobalLevel(prevLevel)
 	})
 	return home
+}
+
+// desktopHome hands the log sink back closed. A save whose reload warns opens
+// <home>/knomit-desktop.log; a rotator still owning it after the test is the
+// handle that made TempDir's RemoveAll fail on Windows ("being used by another
+// process") and, on every platform, left later tests logging into a deleted
+// directory.
+func TestDesktopHome_ReleasesTheDesktopLogFile(t *testing.T) {
+	t.Run("save that warns", func(t *testing.T) {
+		n, f, home := saveFixture(t)
+		f.err = errors.New("does not listen for reload")
+		ack, err := n.SaveSettings(fromSettings, scopeSettings(scopeAll))
+		if err != nil || ack.Outcome != "unavailable" {
+			t.Fatalf("ack %+v err %v", ack, err)
+		}
+		// Reached: the warning really went to the desktop's file, so the
+		// rotator really holds it open at this point.
+		logFile := filepath.Join(home, "knomit-desktop.log")
+		if b, _ := os.ReadFile(logFile); !strings.Contains(string(b), "did not apply them") {
+			t.Fatalf("the reload warning did not reach %s: %q", logFile, b)
+		}
+	})
+	globalSink.mu.RLock()
+	closer := globalSink.closer
+	globalSink.mu.RUnlock()
+	if closer != nil {
+		t.Fatal("after desktopHome's cleanup the log sink still owns the test's knomit-desktop.log rotator")
+	}
 }
 
 // The round trip the dialog actually performs: Save, then reopen and read back.
