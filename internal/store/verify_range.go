@@ -66,7 +66,7 @@ func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
 //  2. The fleet's member records and certificate artifacts (the files its
 //     ontology declares pki: root, crl and leaf) are loaded from the ONE fleet
 //     revision (malformed records skipped and logged). A missing or unreadable
-//     fleet, or one whose ontology is not the fleet preset, is an error: the
+//     fleet, or one whose ontology is not the fleet ontology, is an error: the
 //     gate could not run. Missing artifacts are not an error: no PKI.
 //  3. Every commit in Candidate ∖ Main is judged by judgeCommit.
 func CheckRange(in RangeInput) (RangeVerdict, error) {

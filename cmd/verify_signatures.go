@@ -183,7 +183,7 @@ nothing beyond its parents.
 
 When the fleet checkout holds the fleet's certificate artifacts — the root,
 CRL and leaf files its ontology's artifacts section declares (pki: root, crl,
-leaf; the fleet preset puts them under artifacts/fleet/) — two more rules
+leaf; the fleet ontology puts them under artifacts/fleet/) — two more rules
 apply, read at the same --fleet-rev. Every member also needs the leaf for its
 agent id: issued to that id (its email address is <agent id>@agents.knomit.io),
 for its record's key, chaining to the root and not on the CRL (else no-cert,
@@ -214,7 +214,7 @@ it, and without --upstream, the gate cannot run (exit 2).
 Exit codes: 0 mergeable (verification off, a clean range, or failures in log
 mode, which are reported only), 1 blocked (failures in enforce), 2 could not
 run (a missing or unreadable fleet while verification is on, a checkout whose
-ontology is not the fleet preset, an unknown verify_signatures value).`,
+ontology is not the fleet ontology, an unknown verify_signatures value).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

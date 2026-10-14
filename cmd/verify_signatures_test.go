@@ -87,7 +87,7 @@ func ciRepo(t *testing.T, mode string) string {
 	return dir
 }
 
-// fleetRepo is a plain git checkout whose ontology is the fleet preset, with
+// fleetRepo is a plain git checkout whose ontology is the fleet ontology, with
 // no member records.
 func fleetRepo(t *testing.T) string {
 	t.Helper()

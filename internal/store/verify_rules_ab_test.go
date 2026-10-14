@@ -107,10 +107,10 @@ func (p *testFleetPKI) craftedLeaf(email string, k ssh.Signer) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
-// presetLayout is where the fleet preset declares the certificate artifacts
+// fleetLayout is where the fleet ontology declares the certificate artifacts
 // (pki: root, crl, leaf): the tests take the paths from the declaration, as
 // the reader does.
-func presetLayout(t *testing.T) fact.PKILayout {
+func fleetLayout(t *testing.T) fact.PKILayout {
 	t.Helper()
 	l, ok := fact.FleetOntology().PKILayout()
 	require.True(t, ok)
@@ -120,7 +120,7 @@ func presetLayout(t *testing.T) fact.PKILayout {
 // artifacts is the artifact files at the preset's declared paths: the root,
 // the CRL (crl "" = absent) and one leaf per id.
 func (p *testFleetPKI) artifacts(crl string, leaves map[string]string) map[string]string {
-	l := presetLayout(p.t)
+	l := fleetLayout(p.t)
 	out := map[string]string{l.Root: p.rootPEM()}
 	if crl != "" {
 		out[l.CRL] = crl
@@ -131,7 +131,7 @@ func (p *testFleetPKI) artifacts(crl string, leaves map[string]string) map[strin
 	return out
 }
 
-// fleetEnforceOntology is the fleet preset as it ships (R7): verify_signatures
+// fleetEnforceOntology is the fleet ontology as it ships (R7): verify_signatures
 // enforce, and the artifacts section declaring the PKI and its rules.
 var fleetEnforceOntology = func() string {
 	out, err := fact.FleetOntology().Serialize()

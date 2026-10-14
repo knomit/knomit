@@ -13,7 +13,7 @@ import (
 	"knomit/internal/fact"
 )
 
-// The preset's per-operation record directories (fleet/issued/*.pem,
+// The fleet ontology's per-operation record directories (fleet/issued/*.pem,
 // fleet/revocations/*.txt). The judge never names them; the tests do.
 const (
 	issuedDir      = "artifacts/fleet/issued/"
@@ -42,7 +42,7 @@ func newArtFleet(t *testing.T) *artFleet {
 	boss, vic := namedSigner(t, "boss"), namedSigner(t, "vic")
 	bl, _ := p.leaf("boss", boss)
 	vl, _ := p.leaf("vic", vic)
-	a := &artFleet{t: t, p: p, boss: boss, vic: vic, l: presetLayout(t),
+	a := &artFleet{t: t, p: p, boss: boss, vic: vic, l: fleetLayout(t),
 		issued: issuedDir + "0001-boss.pem", rev: revocationsDir + "0001.txt"}
 	arts := p.artifacts(p.crl(big.NewInt(0x5)), map[string]string{"boss": bl, "vic": vl})
 	arts["kb/members/vic/1.md"] = memberFile("vic", fact.MemberActive, vic.PublicKey())
@@ -227,7 +227,7 @@ func TestArtifactRules_LeafPlantAndRenewal(t *testing.T) {
 func TestArtifactRules_Bootstrap(t *testing.T) {
 	p, rogue := newTestFleetPKI(t), newTestFleetPKI(t)
 	boss := namedSigner(t, "boss")
-	l := presetLayout(t)
+	l := fleetLayout(t)
 	bl, _ := p.leaf("boss", boss)
 	rbl, _ := rogue.leaf("boss", boss)
 
@@ -263,7 +263,7 @@ func TestArtifactRules_Bootstrap(t *testing.T) {
 func TestFleetPKI_ReadsAreBounded(t *testing.T) {
 	p := newTestFleetPKI(t)
 	x := namedSigner(t, "x")
-	l := presetLayout(t)
+	l := fleetLayout(t)
 	leaf, _ := p.leaf("agent-x", x)
 	f := newRangeFixture(t)
 	arts := p.artifacts(p.crl(), map[string]string{"agent-x": leaf + strings.Repeat("\n", 16<<10)})

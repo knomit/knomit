@@ -18,7 +18,7 @@
 #
 # Inputs, set once per repository:
 #   - Repository variable KNOMIT_FLEET_URL: the fleet repository to clone (the
-#     knomit repository whose ontology is the fleet preset). Needed only when
+#     knomit repository whose ontology is the fleet ontology). Needed only when
 #     verification is on.
 #   - Repository secret KNOMIT_FLEET_TOKEN (optional): a read token, if the
 #     fleet repository is private.
