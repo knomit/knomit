@@ -34,7 +34,9 @@ import (
 // through an edge that decided who is asking.
 type PushPolicy struct {
 	// Pusher is the full 64-hex key fingerprint of the pushing instance (the
-	// certificate principal's ID). Empty when Refusal is set.
+	// certificate principal's ID). Empty when Refusal is set. It decides no
+	// ref: it is compared, in full, with each new commit's SSHSIG signer
+	// (signer = pusher), never with any part of a branch name.
 	Pusher string
 	// Refusal, when non-empty, refuses the whole request with this text: a
 	// principal that is not an instance certificate, one without push:own,
@@ -66,7 +68,7 @@ func pushPolicyFrom(ctx context.Context) (PushPolicy, bool) {
 const errNoPushPolicy = "knomit: pushing is not available here: no verified pusher"
 
 // receivePack serves git's receive-pack for one store: an enrolled peer
-// updating EXACTLY its own agent branch (F11). It is knomit's own code over
+// updating EXACTLY one agent/* branch that is not this host's own (F11). It is knomit's own code over
 // go-git's codec, as upload-pack is: go-git's server writes the pack into the
 // store before any ref is judged, advertises every ref and delete-refs, and
 // ignores the old hash — each of which F11 forbids.
@@ -302,7 +304,7 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 		return nil, errNoPushPolicy
 	case pol.Refusal != "":
 		return nil, pol.Refusal
-	case len(pol.Pusher) < 8:
+	case pol.Pusher == "":
 		return nil, errNoPushPolicy
 	}
 	if _, err := rp.rh.resolveRef(ctx, rp.upstream()); err != nil {
@@ -311,16 +313,19 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 	if len(req.Commands) != 1 {
 		return nil, fmt.Sprintf("knomit: a push may update exactly one ref, refs/heads/agent/<your branch>; this push names %d", len(req.Commands))
 	}
+	// No rule here asks whose branch the ref is. Branch ownership is not an
+	// identity property (D18/D19): a forge cannot enforce it, so a knomit host
+	// does not depend on it either, and nothing parses a fingerprint out of a
+	// ref name. Any enrolled pusher may update any agent/* ref other than this
+	// host's own; what keeps a branch's CONTENT honest is the commit judge plus
+	// signer = pusher (verify) and the merge-time dot-path guard.
 	cmd := req.Commands[0]
 	name := cmd.Name.String()
-	fp8 := pki.Short(pol.Pusher)
 	switch {
 	case cmd.Action() == packp.Delete:
 		return nil, fmt.Sprintf("knomit: branch deletion is not allowed: %s", name)
 	case !strings.HasPrefix(name, "refs/heads/agent/"):
-		return nil, fmt.Sprintf("knomit: only your own agent branch may be pushed; %s is not an agent branch", name)
-	case !strings.HasSuffix(name, "-"+fp8):
-		return nil, fmt.Sprintf("knomit: %s is not your agent branch (your certificate's fingerprint is %s)", name, fp8)
+		return nil, fmt.Sprintf("knomit: only agent branches may be pushed; %s is not an agent branch", name)
 	case pol.OwnBranch != "" && name == "refs/heads/"+pol.OwnBranch:
 		return nil, fmt.Sprintf("knomit: %s is this host's own branch; it is written only by this host", name)
 	}

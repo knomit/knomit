@@ -19,9 +19,12 @@ func TestIsPushedBranch(t *testing.T) {
 
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "r", AgentBranch: "agent/host-0a1b2c3d", Svc: svc})
 	for branch, want := range map[string]bool{
-		"agent/peer-99887766":     true,  // a peer's pushed branch
-		"agent/host-0a1b2c3d":     false, // this instance's agent branch
-		"agent/oldname-0a1b2c3d":  false, // own branch from before a rename
+		"agent/peer-99887766": true,  // a peer's pushed branch
+		"agent/host-0a1b2c3d": false, // this instance's agent branch
+		// D18: a peer branch whose name ends in OUR fp8 is still a peer's
+		// branch. It used to be hidden as "own branch from before a rename".
+		"agent/oldname-0a1b2c3d":  true,
+		"agent/host-0a1b2c3d-x":   true,  // our name as a prefix: not ours either
 		"main":                    false, // the upstream (and not agent/*)
 		"exp/try":                 false, // an experiment
 		"feature/x":               false, // anything outside agent/

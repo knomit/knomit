@@ -81,7 +81,7 @@ func (f fleet) enrollWindow(t *testing.T, host string, notBefore, notAfter time.
 	t.Helper()
 	keyPath, pub := writeOpenSSHKey(t)
 	serial, _ := randomSerial()
-	u, _ := parseURL(SAN(RoleInstance, host, Fingerprint(pub)))
+	u, _ := parseURL(SAN(RoleInstance, host))
 	tmpl := &x509.Certificate{
 		SerialNumber: serial, Subject: pkix.Name{CommonName: host},
 		NotBefore: notBefore, NotAfter: notAfter,
@@ -233,7 +233,7 @@ func TestServerConfig_SelfSignedClientRefusedWithReason(t *testing.T) {
 	f, _, _, rec, addr := serverSide(t)
 	keyPath, pub := writeOpenSSHKey(t)
 	signer, _, _ := LoadSigner(keyPath)
-	u, _ := parseURL(SAN(RoleInstance, "rogue", Fingerprint(pub)))
+	u, _ := parseURL(SAN(RoleInstance, "rogue"))
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(9), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, URIs: u}
 	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)

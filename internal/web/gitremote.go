@@ -116,11 +116,12 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 }
 
 // pushPolicy is who is pushing to ri, as the store's receive-pack needs it.
-// Only an INSTANCE vouched for by a CERTIFICATE can push: its full-key
-// fingerprint names its own agent branch. Anonymous, socket and operator
-// principals have no agent branch here, and bearer tokens never reach /git
-// (the OAuth listener mounts no /git). The whole-request refusals are
-// decided here, where the principal and the repo are.
+// Only an INSTANCE vouched for by a CERTIFICATE can push. Its full-key
+// fingerprint becomes Pusher, which the store compares with each new commit's
+// signer (signer = pusher); it names no branch, and no ref is owned by it.
+// Anonymous, socket and operator principals cannot push, and bearer tokens
+// never reach /git (the OAuth listener mounts no /git). The whole-request
+// refusals are decided here, where the principal and the repo are.
 func pushPolicy(r *http.Request, rm *repos.Manager, ri *repos.RepoInstance) store.PushPolicy {
 	p, _ := auth.FromContext(r.Context())
 	pol := store.PushPolicy{

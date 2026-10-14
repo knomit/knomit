@@ -36,8 +36,21 @@ func Signer() ssh.Signer {
 }
 
 // Install makes Signer the fallback for every signer-less store in this test
-// binary (store.SetTestFallbackSigner).
-func Install() { store.SetTestFallbackSigner(Signer()) }
+// binary (store.SetTestFallbackSigner), and FixtureAgentID the agent id of
+// every store and repos.Manager given none (store.SetTestFallbackAgentID).
+func Install() {
+	store.SetTestFallbackSigner(Signer())
+	store.SetTestFallbackAgentID(FixtureAgentID)
+}
+
+// FixtureAgentID is the agent id a test fixture that names only an agent
+// branch authors as: the branch without its "agent/" prefix. It is a FIXTURE
+// CONVENTION, so the many tests that build a store from a branch name alone
+// keep matching their member records; production never derives an id from a
+// branch (D18) and passes the persisted instance_identity.agent_id instead.
+// A test that must prove the persisted id wins sets one that differs from
+// this.
+func FixtureAgentID(branch string) string { return strings.TrimPrefix(branch, "agent/") }
 
 // Named returns a deterministic signer derived from name, distinct from the
 // fallback: give it to Deps.Signer / SetSigner in a test that must prove a

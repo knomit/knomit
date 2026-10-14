@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"os"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -32,6 +33,10 @@ func fallbackTestSigner() ssh.Signer {
 // SetTestFastDurability.
 func TestMain(m *testing.M) {
 	SetTestFallbackSigner(fallbackTestSigner())
+	// The same fixture convention internal/testsupport/testsigner installs
+	// (FixtureAgentID): a store given no agent id authors as its branch
+	// without "agent/". Test binaries only; production passes the persisted id.
+	SetTestFallbackAgentID(func(branch string) string { return strings.TrimPrefix(branch, "agent/") })
 	SetTestFastDurability(true)
 	os.Exit(m.Run())
 }

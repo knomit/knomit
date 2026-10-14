@@ -10,10 +10,10 @@ import (
 	"knomit/internal/pki"
 )
 
-// The agent branch name and the certificate SAN carry the same 8 hex, and the
-// principal ID carries all 64 of the same hash. If ensureKeyPair's fingerprint
-// ever stopped being the prefix of pki.Fingerprint, every enrolled instance
-// would be refused with ErrSANMismatch while its branch looked fine.
+// The 8 hex a first boot builds into the agent id and branch are the prefix of
+// the principal ID's 64. Nothing parses them back or compares them (D18); the
+// test keeps the construction consistent, so a reader comparing a branch with
+// a fingerprint by eye is not misled.
 func TestEnsureKeyPair_FingerprintIsPrefixOfPKIFingerprint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "id_ed25519")
 	signer, fp8, err := ensureKeyPair(path) // generates

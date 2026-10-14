@@ -216,6 +216,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		// pushes the result as our agent branch. Those commits must be signed:
 		// without a signer they went out unsigned (now store.ErrNoSigner).
 		remoteSvc.SetSigner(rm.Signer())
+		remoteSvc.SetAgentID(rm.AgentID())
 		if ri := repos.RepoFromContext(r.Context()); ri != nil {
 			remoteSvc.SetAcceptList(rm.AcceptListFor(ri.UID()))
 		}

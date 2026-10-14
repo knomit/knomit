@@ -97,7 +97,7 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
 	fp := pki.Fingerprint(pub)
-	if !strings.Contains(out, "principal: instance:"+fp+"@cert") || !strings.Contains(out, "san: knomit://instance/laptop-"+pki.Short(fp)) {
+	if !strings.Contains(out, "principal: instance:"+fp+"@cert") || !strings.Contains(out, "san: knomit://instance/laptop\n") {
 		t.Fatalf("install output:\n%s", out)
 	}
 	if !strings.Contains(out, "[tls]") { // addr unset: it tells the operator what to add

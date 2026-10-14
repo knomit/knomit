@@ -42,7 +42,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"d.wakeSync", "d.ri.wakeSync",
 		"crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
-		"newTriggerStats", "triggerIdentityFor", "isHex8", "currentTriggerHooks", "d.triggerKick", "d.safeRun",
+		"newTriggerStats", "currentTriggerHooks", "d.triggerKick", "d.safeRun",
 		"d.runOnce", "d.phaseA", "d.advance", "d.sweepDue", "d.phaseB", "d.buffer", "d.maybeFlush", "d.flush", "d.settle", "d.flushOnStop", "d.resetPending",
 		"d.overlayPending", "d.verifyModeOn", "d.verifiedBelow", "d.buildChange", "d.emit", "d.recordSet",
 		"d.lastCompiledSet", "d.logInvalidOnce", "d.logOntologyErrorOnce", "d.clearOntologyError", "d.clock",
@@ -67,8 +67,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"context.WithTimeout", "context.Background", "ctx.Err", "ctx.Done",
 		// pure helpers
 		"time.Now", "time.Since", "time.Duration", "time.Sleep", "time.NewTimer", "?.Milliseconds", "?.UTC", "?.Truncate", "rs.now.Unix",
-		"sha256.Sum256", "hex.EncodeToString", "signer.PublicKey", "?.Marshal",
-		"strings.TrimPrefix", "strings.LastIndex", "strings.HasSuffix", "strings.ToLower",
+		"strings.TrimPrefix", "strings.HasSuffix", "strings.ToLower",
 		"plumbing.NewHash", "commit.String", "head.String", "errors.As", "err.Error", "fmt.Sprintf",
 		"sort.Strings", "sort.Slice", "sort.SliceStable", "append", "len", "make", "delete", "recover",
 	},

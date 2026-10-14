@@ -98,11 +98,11 @@ func TestAgentSlug(t *testing.T) {
 	}
 }
 
-// The slug of a real branch built by agentBranch must be stable and contain
+// The slug of a real branch built by newIdentity must be stable and contain
 // nothing outside [a-z0-9-] — asserted against the composed value rather than
 // a literal, so this keeps holding if the branch format changes.
 func TestAgentSlug_OfComposedAgentBranch(t *testing.T) {
-	branch := agentBranch("8ef0cd32")
+	branch := newIdentity("8ef0cd32").Branch
 	slug := AgentSlug(branch)
 
 	require.NotEmpty(t, slug)

@@ -687,7 +687,7 @@ func TestCreateFromTemplate_Fleet(t *testing.T) {
 	require.ErrorIs(t, err, ErrTemplateFleetStateUnavailable, "no identity row")
 	require.ErrorContains(t, err, "no rows")
 	require.Nil(t, m.Get("fleet"))
-	_, err = resolveIdentity(db, tmplAgent, fixedNow())
+	_, err = resolveIdentity(db, Identity{AgentID: "test-abc", Branch: tmplAgent}, fixedNow())
 	require.NoError(t, err)
 
 	require.NoError(t, setFleetState(db, FleetStandalone, fixedNow()))

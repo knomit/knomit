@@ -71,6 +71,9 @@ type repoHandler struct {
 	gits   *storegit.Storer
 	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer ssh.Signer        // SSH signer for commit signing (shared)
+	// agentID is this instance's persisted agent id (SetAgentID), named by
+	// every authored commit. Never derived from a branch name.
+	agentID string
 
 	// changes holds each derived commit's tree diff until its commit_log rows
 	// are built from it: one diff per commit (changeLists).
@@ -436,9 +439,9 @@ const agentBranchOwnerKey = "agent_branch_owner"
 // AgentBranchOwner returns the agent branch this database records as its
 // current owner, or "" if none has been recorded yet.
 //
-// The agent branch name is agent/<hostname>-<key-fingerprint>, derived at
-// startup from machine-local state (see app.agentBranch). Recording the owner
-// makes "which branch does this database write to" an explicit stored fact
+// The agent branch is the instance's persisted identity (control.db
+// instance_identity, built once at first boot by app.newIdentity). Recording
+// the owner makes "which branch does this database write to" an explicit stored fact
 // rather than something re-derived, so an instance whose derived name no
 // longer matches can seed a new branch from the recorded one instead of
 // guessing from HEAD or from branch-name shape.

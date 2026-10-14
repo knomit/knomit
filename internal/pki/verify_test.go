@@ -135,7 +135,7 @@ func TestVerifyInstanceChain_SelfSignedIsUntrusted(t *testing.T) {
 	f := newFleet(t)
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(5), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, ExtraExtensions: []pkix.Extension{rawSANExt(SAN(RoleInstance, "h", Fingerprint(pub)))}}
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, ExtraExtensions: []pkix.Extension{rawSANExt(SAN(RoleInstance, "h"))}}
 	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
 	c, _ := x509.ParseCertificate(der)
 	if _, err := f.verify(c, UsageClient); !errors.Is(err, ErrUntrustedRoot) {
@@ -182,24 +182,41 @@ func TestVerifyInstanceChain_CRLMissingOrForeignFailsClosed(t *testing.T) {
 func TestVerifyInstanceChain_NotEd25519(t *testing.T) {
 	f := newFleet(t)
 	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	c := f.crafted(t, &k.PublicKey, "knomit://instance/h-00000000")
+	c := f.crafted(t, &k.PublicKey, "knomit://instance/h")
 	if _, err := f.verify(c, UsageClient); !errors.Is(err, ErrNotEd25519) {
 		t.Fatalf("err=%v, want ErrNotEd25519", err)
 	}
 }
 
-func TestVerifyInstanceChain_SANFp8MustMatchTheKey(t *testing.T) {
+// TestVerifyInstanceChain_IdentityIsTheKeyNotTheSAN (D18): the SAN carries a
+// role and a free label; the identity is the leaf's KEY. A SAN with no
+// fingerprint in it verifies, and a label that happens to end in another
+// key's fp8 is not refused for it: the principal is still the key's own
+// fingerprint, and the label comes back verbatim.
+func TestVerifyInstanceChain_IdentityIsTheKeyNotTheSAN(t *testing.T) {
 	f := newFleet(t)
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	other, _, _ := ed25519.GenerateKey(rand.Reader)
-	c := f.crafted(t, pub, SAN(RoleInstance, "h", Fingerprint(other)))
-	if _, err := f.verify(c, UsageClient); !errors.Is(err, ErrSANMismatch) {
-		t.Fatalf("err=%v, want ErrSANMismatch", err)
+	if Short(Fingerprint(other)) == Short(Fingerprint(pub)) {
+		t.Fatal("fixture: the two keys share an fp8")
 	}
-	// The HOST is never compared: any label with the right fp8 verifies.
-	c = f.crafted(t, pub, SAN(RoleInstance, "anything-at-all", Fingerprint(pub)))
-	if _, err := f.verify(c, UsageClient); err != nil {
-		t.Fatalf("host label must not matter: %v", err)
+	for _, label := range []string{
+		"laptop",                              // no fingerprint at all
+		"laptop-" + Short(Fingerprint(other)), // another key's fp8
+		"ci-0badcafe",                         // a hostname that merely ends in 8 hex
+		"laptop.local-" + Short(Fingerprint(pub)), // the old shape still verifies, as a label
+	} {
+		c := f.crafted(t, pub, SAN(RoleInstance, label))
+		id, err := f.verify(c, UsageClient)
+		if err != nil {
+			t.Fatalf("label %q: refused: %v", label, err)
+		}
+		if id.Fingerprint != Fingerprint(pub) {
+			t.Fatalf("label %q: identity %s, want the key's fingerprint %s", label, id.Fingerprint, Fingerprint(pub))
+		}
+		if id.Host != label || id.Role != RoleInstance {
+			t.Fatalf("label %q: got host %q role %q", label, id.Host, id.Role)
+		}
 	}
 }
 
@@ -207,7 +224,7 @@ func TestVerifyInstanceChain_UnknownRole(t *testing.T) {
 	f := newFleet(t)
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	for _, role := range []string{"agent", "Instance", "admin"} {
-		c := f.crafted(t, pub, "knomit://"+role+"/h-"+Short(Fingerprint(pub)))
+		c := f.crafted(t, pub, "knomit://"+role+"/h")
 		if _, err := f.verify(c, UsageClient); !errors.Is(err, ErrRoleUnknown) {
 			t.Fatalf("role %q: err=%v, want ErrRoleUnknown", role, err)
 		}
@@ -216,40 +233,30 @@ func TestVerifyInstanceChain_UnknownRole(t *testing.T) {
 
 func TestVerifyInstanceChain_SANShapeIsStrict(t *testing.T) {
 	f := newFleet(t)
-	// The "uppercase fp8" case is only a NEGATIVE case if fp8 has a letter;
-	// an all-digit fp8 uppercases to itself and is valid. Draw keys until
-	// it has one, so the case cannot pass by chance.
-	var pub ed25519.PublicKey
-	for {
-		pub, _, _ = ed25519.GenerateKey(rand.Reader)
-		if upper(Short(Fingerprint(pub))) != Short(Fingerprint(pub)) {
-			break
-		}
-	}
-	fp8 := Short(Fingerprint(pub))
-	good := "knomit://instance/h-" + fp8
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	good := "knomit://instance/h"
 	cases := map[string][]string{
 		"no SAN":            nil,
-		"non-knomit only":   {"https://example.com/h-" + fp8},
+		"non-knomit only":   {"https://example.com/h"},
 		"two knomit URIs":   {good, good},
-		"two different":     {good, "knomit://operator/h-" + fp8},
-		"uppercase scheme":  {"KNOMIT://instance/h-" + fp8},
-		"mixed-case scheme": {"Knomit://instance/h-" + fp8},
-		"userinfo":          {"knomit://u@instance/h-" + fp8},
+		"two different":     {good, "knomit://operator/h"},
+		"uppercase scheme":  {"KNOMIT://instance/h"},
+		"mixed-case scheme": {"Knomit://instance/h"},
+		"userinfo":          {"knomit://u@instance/h"},
 		"query":             {good + "?x=1"},
 		"empty query":       {good + "?"},
 		"fragment":          {good + "#f"},
-		"two segments":      {"knomit://instance/a/h-" + fp8},
+		"two segments":      {"knomit://instance/a/h"},
 		"trailing slash":    {good + "/"},
-		"escaped":           {"knomit://instance/h%2D" + fp8},
-		"no host part":      {"knomit://instance/-" + fp8},
-		"uppercase fp8":     {"knomit://instance/h-" + upper(fp8)},
-		"short fp8":         {"knomit://instance/h-" + fp8[:7]},
+		"escaped":           {"knomit://instance/h%2Dx"},
+		"empty label":       {"knomit://instance/"},
+		"no path":           {"knomit://instance"},
+		"label character":   {"knomit://instance/h~x"},
 		// crypto/x509 PARSES this (parser.go:424 domainNameValid accepts
 		// "instance:443"), so parseSAN's own port check is the only guard.
-		"port":       {"knomit://instance:443/h-" + fp8},
-		"empty port": {"knomit://instance:/h-" + fp8},
-		"opaque":     {"knomit:instance/h-" + fp8},
+		"port":       {"knomit://instance:443/h"},
+		"empty port": {"knomit://instance:/h"},
+		"opaque":     {"knomit:instance/h"},
 	}
 	for name, uris := range cases {
 		c := f.crafted(t, pub, uris...)
@@ -265,16 +272,6 @@ func TestVerifyInstanceChain_SANShapeIsStrict(t *testing.T) {
 			t.Fatalf("canonical %v refused: %v", uris, err)
 		}
 	}
-}
-
-func upper(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'a' && c <= 'f' {
-			b[i] = c - 32
-		}
-	}
-	return string(b)
 }
 
 // The trust anchor is the fleet root ALONE. A peer's own certificates are

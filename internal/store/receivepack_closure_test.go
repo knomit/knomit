@@ -18,14 +18,13 @@ import (
 
 // pusherOf is the full certificate-key fingerprint an instance holding k
 // pushes as (the principal ID the edge puts in PushPolicy.Pusher), and a
-// branch name the EXISTING own-branch rule in judgeRequest admits for it. The
-// name is built for that rule only; nothing in P1 reads anything from it.
+// branch to push to. The branch name carries no part of the fingerprint:
+// receive-pack reads no ownership from a name (D18).
 func pusherOf(t *testing.T, k ssh.Signer) (fp, branch string) {
 	t.Helper()
 	pub, ok := k.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey().(ed25519.PublicKey)
 	require.True(t, ok)
-	fp = pki.Fingerprint(pub)
-	return fp, "agent/peer-" + pki.Short(fp)
+	return pki.Fingerprint(pub), "agent/peer-opaque"
 }
 
 // branchFiles reads the files at a host branch's tip.

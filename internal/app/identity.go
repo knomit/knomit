@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/pki"
+	"knomit/internal/repos"
 )
 
 // ensureKeyPair loads or generates an Ed25519 keypair at the given path.
@@ -87,11 +88,17 @@ func fingerprint(pub ssh.PublicKey) string {
 	return hex.EncodeToString(h[:])[:8]
 }
 
-// agentBranch returns the agent branch name for this machine and key fingerprint.
-// Format: agent/<sanitized-hostname>-<fingerprint8>
-func agentBranch(fp string) string {
+// newIdentity BUILDS the identity a first boot persists, from this machine's
+// hostname and the key's fingerprint8: host = the sanitized hostname,
+// agent id = <host>-<fp8>, branch = agent/<agent id>. It is construction
+// only. After the first boot the three are read back from control.db as
+// stored (repos.ResolveIdentity), and nothing parses the host or the fp8 back
+// out of the id or the branch (D18): they are separate stored values.
+func newIdentity(fp string) repos.Identity {
 	hostname, _ := os.Hostname()
-	return "agent/" + sanitizeHostname(hostname) + "-" + fp
+	host := sanitizeHostname(hostname)
+	id := host + "-" + fp
+	return repos.Identity{AgentID: id, Branch: "agent/" + id, Host: host}
 }
 
 // sanitizeHostname replaces chars invalid in git ref names with "-".

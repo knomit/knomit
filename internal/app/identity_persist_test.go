@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
 	"knomit/test/testenv"
 )
 
@@ -24,6 +23,7 @@ func TestBoot_AgentIdentityIsPersisted(t *testing.T) {
 		t.Fatalf("boot: %v", err)
 	}
 	first := a.AgentBranch()
+	firstID := a.AgentID()
 	firstKey := a.KeyPath()
 	a.Close()
 	if first == "" {
@@ -43,15 +43,15 @@ func TestBoot_AgentIdentityIsPersisted(t *testing.T) {
 	if a2.AgentBranch() != first {
 		t.Fatalf("agent branch changed with the key: %q -> %q", first, a2.AgentBranch())
 	}
-	if got, want := store.AgentIDOf(a2.AgentBranch()), store.AgentIDOf(first); got != want {
-		t.Fatalf("author id changed: %q -> %q", want, got)
+	if a2.AgentID() != firstID || firstID == "" {
+		t.Fatalf("author id changed: %q -> %q", firstID, a2.AgentID())
 	}
 	// And the rotated key really is different (otherwise the test proves nothing).
 	_, fp, err := ensureKeyPair(a2.KeyPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agentBranch(fp) == first {
+	if newIdentity(fp).Branch == first {
 		t.Fatal("fixture: the regenerated key derives the same branch; the test cannot tell persisted from re-derived")
 	}
 }

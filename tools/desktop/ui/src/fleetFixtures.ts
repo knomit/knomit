@@ -28,7 +28,7 @@ export const enrolled: FleetIdentity = {
   enrolled: true,
   certificate: 'ok',
   principal: `instance:${FP}@cert`,
-  san: 'knomit://instance/laptop-a22ef991',
+  san: 'knomit://instance/laptop',
   serial: 'b09ad10ba3108b5d36091c85ea798e45',
   notAfter: '2026-12-24T22:49:01Z',
   rootFingerprint: ROOT_A,

@@ -37,6 +37,8 @@ type App struct {
 	signer      ssh.Signer
 	keyPath     string
 	agentBranch string
+	agentID     string // persisted instance_identity.agent_id
+	agentHost   string // host label persisted with the identity
 
 	closers []func()
 }
@@ -45,6 +47,7 @@ func (a *App) Manager() *repos.Manager { return a.manager }
 func (a *App) Server() *web.Server     { return a.server }
 func (a *App) Signer() ssh.Signer      { return a.signer }
 func (a *App) AgentBranch() string     { return a.agentBranch }
+func (a *App) AgentID() string         { return a.agentID }
 
 // KeyPath is the instance key file app.New resolved ([remote].ssh_key or
 // <Home>/id_ed25519) — the key the TLS certificate must wrap.
@@ -127,14 +130,16 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 	a.signer = signer
 	a.keyPath = keyPath
-	// The agent branch is PERSISTED (F09 PR 5): derived from the key and
-	// hostname only on the first boot that finds no identity in control.db,
-	// read from there ever after, so a key rotation or a hostname change
-	// keeps the id. The commit author follows (store.AgentIDOf).
-	a.agentBranch, err = repos.ResolveIdentity(cfg.Home, agentBranch(keyFingerprint))
+	// The identity is PERSISTED (F09 PR 5): built from the key and hostname
+	// only on the first boot that finds no identity in control.db, read from
+	// there ever after, so a key rotation or a hostname change keeps it. The
+	// agent id (the commit author), the branch and the host label are three
+	// stored values; none is derived from another's name (D18).
+	ident, err := repos.ResolveIdentity(cfg.Home, newIdentity(keyFingerprint))
 	if err != nil {
 		return nil, err
 	}
+	a.agentBranch, a.agentID, a.agentHost = ident.Branch, ident.AgentID, ident.Host
 
 	// The knomit+https go-git transport, registered before anything can
 	// clone or sync (repos.New and Manager.Start are below): go-git's
@@ -190,6 +195,8 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		Cfg:         cfg,
 		Signer:      signer,
 		AgentBranch: a.agentBranch,
+		AgentID:     a.agentID,
+		AgentHost:   a.agentHost,
 		Embedder:    embedder,
 		KeyPath:     keyPath,
 		// F07 `do: script`: the in-process MCP tool set a script's host

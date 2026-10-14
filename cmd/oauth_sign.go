@@ -203,7 +203,7 @@ func issuedStanding(dir, fp string) (string, error) {
 		}
 		seen = true
 		if !gone[strings.ToLower(rec.Serial)] {
-			return strings.TrimPrefix(rec.SAN, "knomit://instance/"), nil
+			return rec.Label, nil
 		}
 	}
 	if seen {

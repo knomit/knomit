@@ -50,8 +50,6 @@ package repos
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,7 +61,6 @@ import (
 	"github.com/dop251/goja"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
 	"knomit/internal/platform/crashdump"
@@ -200,7 +197,13 @@ type triggerDispatcher struct {
 // ratePerMinute is [triggers].script_rate_per_minute; tools the injected
 // in-process MCP tool set of `do: script` (nil on a build with none); home
 // the knomit home whose recipes/ folder holds this machine's recipes.
-func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh.Signer, slowMS, ratePerMinute int, tools ScriptTools, home string, serverAddr func() string) *triggerDispatcher {
+//
+// identity is this instance's {agent} and {host}, from its PERSISTED
+// identity (instance_identity.agent_id and the host label stored with it),
+// handed in by the Manager. Nothing here derives either from the agent
+// branch's name (D18): a hostname that happens to end in "-<8 hex>" is not
+// trimmed, and an opaque id is not split.
+func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, identity fact.TriggerIdentity, slowMS, ratePerMinute int, tools ScriptTools, home string, serverAddr func() string) *triggerDispatcher {
 	if serverAddr == nil {
 		serverAddr = func() string { return "" }
 	}
@@ -208,7 +211,7 @@ func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh
 		ri:         ri,
 		repo:       repo,
 		branch:     agentBranch,
-		identity:   triggerIdentityFor(agentBranch, signer),
+		identity:   identity,
 		indexReady: func() bool { return ri.Status().Index.State == IndexStateReady },
 		slow:       time.Duration(slowMS) * time.Millisecond,
 		kick:       make(chan struct{}, 1),
@@ -218,38 +221,6 @@ func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh
 		serverAddr: serverAddr,
 		rc:         newRecipeState(),
 	}
-}
-
-// triggerIdentityFor is this instance's {agent}, {host} and {fp8}. {agent} is
-// the branch minus "agent/", which is also the commit author's name; {fp8} is
-// the first 8 hex of sha256 of the signing key (identity.go's fingerprint),
-// the SAME key the signer uses — a store with no signer has no {fp8}, and a
-// trigger naming it is then invalid on this instance; {host} is the branch
-// name without the fingerprint suffix (a legacy agent/<host> branch has no
-// suffix, so {host} == {agent} there, and {agent} still names the inbox).
-func triggerIdentityFor(agentBranch string, signer ssh.Signer) fact.TriggerIdentity {
-	agent := strings.TrimPrefix(agentBranch, "agent/")
-	id := fact.TriggerIdentity{Agent: agent, Host: agent}
-	if signer != nil {
-		h := sha256.Sum256(signer.PublicKey().Marshal())
-		id.FP8 = hex.EncodeToString(h[:])[:8]
-	}
-	if i := strings.LastIndex(agent, "-"); i >= 0 && isHex8(agent[i+1:]) {
-		id.Host = agent[:i]
-	}
-	return id
-}
-
-func isHex8(s string) bool {
-	if len(s) != 8 {
-		return false
-	}
-	for _, r := range s {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
-			return false
-		}
-	}
-	return true
 }
 
 // indexIsReady reports whether the due sweep may read the index now.
@@ -1315,7 +1286,7 @@ func factGlobal(ctx context.Context, trees store.TriggerTrees, commit plumbing.H
 // log (every outcome but if-false), the evaluation and fire counts, and
 // whether ctx cancelled the run.
 func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []store.TriggerFire, evaluated, fires int, aborted bool) {
-	agent := map[string]any{"id": d.identity.Agent, "host": d.identity.Host, "fp8": d.identity.FP8, "branch": d.branch}
+	agent := map[string]any{"id": d.identity.Agent, "host": d.identity.Host, "branch": d.branch}
 	for _, p := range rs.pending {
 		if ctx.Err() != nil {
 			return nil, 0, 0, true

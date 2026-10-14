@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var testIdentity = TriggerIdentity{Agent: "mindev.local-8ef0cd32", Host: "mindev.local", FP8: "8ef0cd32"}
+var testIdentity = TriggerIdentity{Agent: "mindev.local-8ef0cd32", Host: "mindev.local"}
 
 // ontologyWithTriggers wraps topic YAML (indented under `topics:`) into a
 // minimal ontology document.

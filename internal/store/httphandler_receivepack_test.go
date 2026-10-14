@@ -32,9 +32,10 @@ import (
 	"knomit/internal/fact"
 )
 
-// The pusher every test pushes as. Its fp8 names its branch; the host's own
-// branch deliberately shares that fp8, so the host-own-branch refusal is
-// reachable (the fp8 rule would otherwise catch it first).
+// The pusher every test pushes as. Branch names carry no ownership (D18):
+// the fp8-looking suffixes below are labels only, and the host's own branch
+// shares the pusher's fp8 to show that the host-own-branch refusal is an
+// exact-name rule, not a fingerprint one.
 const (
 	pushFP     = "abcd1234" + "00000000000000000000000000000000000000000000000000000000"
 	peerBranch = "agent/peer-abcd1234"
@@ -265,8 +266,10 @@ func TestReceivePack_OwnBranchRegisteredAndIndexed(t *testing.T) {
 	require.Contains(t, rep.Branches, peerBranch, "the pushed branch is a maintained, indexed branch")
 }
 
-// T2: every single-ref push outside the own-branch rule is refused with the
-// rule's text, and nothing it sent is kept.
+// T2: every single-ref push outside the ref rules (agent/* only, never the
+// host's own branch) is refused with the rule's text, and nothing it sent is
+// kept. A branch's NAME decides no ownership: see
+// TestReceivePack_BranchNameCarriesNoOwnership.
 func TestReceivePack_RefusesOutsideOwnBranch(t *testing.T) {
 	h := newPushHost(t, "", 1)
 	p := newPeer(t, h.srv.URL)
@@ -275,9 +278,8 @@ func TestReceivePack_RefusesOutsideOwnBranch(t *testing.T) {
 	mainBefore, hostBefore, objsBefore := h.ref("main"), h.ref(hostBranch), h.objects()
 
 	for _, tc := range []struct{ dst, want string }{
-		{"refs/heads/main", "only your own agent branch may be pushed; refs/heads/main is not an agent branch"},
-		{"refs/heads/agent/other-99999999", "refs/heads/agent/other-99999999 is not your agent branch (your certificate's fingerprint is abcd1234)"},
-		{"refs/heads/foo", "only your own agent branch may be pushed; refs/heads/foo is not an agent branch"},
+		{"refs/heads/main", "only agent branches may be pushed; refs/heads/main is not an agent branch"},
+		{"refs/heads/foo", "only agent branches may be pushed; refs/heads/foo is not an agent branch"},
 		{"refs/heads/exp/x", "refs/heads/exp/x is not an agent branch"},
 		{"refs/heads/" + hostBranch, "is this host's own branch; it is written only by this host"},
 	} {
@@ -578,7 +580,7 @@ func TestReceivePack_RealGit(t *testing.T) {
 	cmd.Dir = c
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	require.Contains(t, string(out), "remote error: knomit: only your own agent branch may be pushed")
+	require.Contains(t, string(out), "remote error: knomit: only agent branches may be pushed")
 }
 
 // T14: a client that asked for no sideband still reads the refusal.
@@ -589,7 +591,7 @@ func TestReceivePack_RefusalWithoutSideband(t *testing.T) {
 	p.setBranch("work", c)
 	err := p.push(h.srv.URL, nil, "+refs/heads/work:refs/heads/main")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "only your own agent branch may be pushed")
+	require.Contains(t, err.Error(), "only agent branches may be pushed")
 }
 
 // T16: a client that goes away once the push is accepted cannot abort the

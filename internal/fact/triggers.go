@@ -95,7 +95,7 @@ var (
 // OntologySchema serves it; a key missing from here is reported as unknown.
 var triggerKeys = []SchemaField{
 	{"Trigger", "name", "Unique name of the trigger in this ontology (kebab-case). Its bookmark is keyed by it: renaming starts it fresh."},
-	{"Trigger", "match", "Path pattern relative to the ontology root, starting with this topic's path: * one segment, ** any depth, ? one character; {agent}, {host} and {fp8} are this instance's. Absent means everything under the topic. Never a dot path."},
+	{"Trigger", "match", "Path pattern relative to the ontology root, starting with this topic's path: * one segment, ** any depth, ? one character; {agent} and {host} are this instance's. Absent means everything under the topic. Never a dot path."},
 	{"Trigger", "on", "learn, update, retract, due — a single value or a list. due fires once per trigger when a matching fact's expires has passed (facts live at the head only); changing the fact's expires re-arms it."},
 	{"Trigger", "if", "Optional JavaScript condition over fact, agent and change; empty means always"},
 	{"Trigger", "do", "The action: emit (log line and SSE event); script (runs the inline `js` code, or .knomit/triggers/<script>.js from the agent branch's head, in the sandbox, with the knomit host API: query, explain, learn, update, retract, emit, push, run); or push (asks this machine's sync loop for a round now instead of at its interval: a 1 s countdown from the first fire batches a burst into one fetch, merge and push of this machine's own branch; fire log only, outcome kicked); or run (starts the recipe named by `recipe` on this machine, without waiting: outcome started with a run id, and the recipe's result is a second fire-log row with the same id)."},
@@ -211,17 +211,20 @@ func decodeTriggerSpec(item *yaml.Node) TriggerSpec {
 	return s
 }
 
-// TriggerIdentity is THIS instance, for the {agent}, {host} and {fp8}
-// placeholders. The dispatcher passes the process identity: agent is the
-// agent branch minus "agent/", which is also the commit author's name.
+// TriggerIdentity is THIS instance, for the {agent} and {host} placeholders.
+// The dispatcher passes the PERSISTED identity: Agent is
+// instance_identity.agent_id (also the commit author's name), Host the host
+// label stored with it. Neither is parsed out of a branch name (D18). There
+// is no {fp8}: a placeholder for part of a key fingerprint invited templates
+// to rebuild names from it.
 type TriggerIdentity struct {
-	Agent, Host, FP8 string
+	Agent, Host string
 }
 
 // placeholderRe finds every {name} in a pattern.
 var placeholderRe = regexp.MustCompile(`\{([^{}]*)\}`)
 
-// substitutePlaceholders replaces {agent}, {host} and {fp8}. An unknown name,
+// substitutePlaceholders replaces {agent} and {host}. An unknown name,
 // a stray brace, or a value that would read as glob syntax or cross a segment
 // is an error.
 func substitutePlaceholders(pattern string, id TriggerIdentity) (string, error) {
@@ -234,11 +237,9 @@ func substitutePlaceholders(pattern string, id TriggerIdentity) (string, error) 
 			v = id.Agent
 		case "host":
 			v = id.Host
-		case "fp8":
-			v = id.FP8
 		default:
 			if err == nil {
-				err = fmt.Errorf("unknown placeholder %s (known: {agent}, {host}, {fp8})", m)
+				err = fmt.Errorf("unknown placeholder %s (known: {agent}, {host})", m)
 			}
 			return m
 		}
@@ -262,7 +263,7 @@ func substitutePlaceholders(pattern string, id TriggerIdentity) (string, error) 
 // validationIdentity stands in for the instance while validating at parse
 // time, where no identity is known: it proves the placeholders are known and
 // the substituted pattern compiles.
-var validationIdentity = TriggerIdentity{Agent: "agent-00000000", Host: "host", FP8: "00000000"}
+var validationIdentity = TriggerIdentity{Agent: "agent-00000000", Host: "host"}
 
 // CompiledTrigger is an active trigger, ready to match and evaluate.
 type CompiledTrigger struct {

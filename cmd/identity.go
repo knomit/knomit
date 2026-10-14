@@ -389,7 +389,7 @@ func installBundle(out io.Writer, cfg config.Config, raw []byte, opts installOpt
 		return err
 	}
 	fmt.Fprintf(out, "installed in %s\nprincipal: %s:%s@cert\nsan: %s\nnot_after: %s\n",
-		dir, pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host, id.Fingerprint), id.NotAfter.Format(time.RFC3339))
+		dir, pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host), id.NotAfter.Format(time.RFC3339))
 	if cfg.TLS.Addr == "" {
 		fmt.Fprintln(out, "the TLS listener is off; to accept enrolled peers add to knomit.toml:\n  [tls]\n  addr = \"0.0.0.0:19279\"")
 	} else {
@@ -568,7 +568,7 @@ func showIdentity(out io.Writer, cfg config.Config) error {
 	case st.Cert != nil:
 		id := st.Cert
 		fmt.Fprintf(out, "principal: %s:%s@cert\nsan: %s\nserial: %s\nnot_after: %s\n",
-			pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host, id.Fingerprint), id.Serial.Text(16), id.NotAfter.Format(time.RFC3339))
+			pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host), id.Serial.Text(16), id.NotAfter.Format(time.RFC3339))
 	}
 	if st.Root != nil {
 		fmt.Fprintf(out, "root: %s (%q)\n", st.Root.Fingerprint, st.Root.CommonName)

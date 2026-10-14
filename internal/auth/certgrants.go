@@ -7,8 +7,11 @@ import "context"
 // admission: an instance the operator enrolled may read, which is what fleet
 // membership means (F10's admitted-fingerprint list, replaced by the
 // certificate). `push:own` joined `read` by the user's F11 ruling
-// (2026-09-28, "1. A"): it lets a peer update ONLY its own agent branch on
-// this host, and a per-peer grant was a step the operator would always take.
+// (2026-09-28, "1. A"): it lets a peer push to this host, and a per-peer
+// grant was a step the operator would always take. Despite the name, no
+// branch is "owned" (D18/D19: branch ownership is not an identity property):
+// receive-pack admits any agent/* ref but the host's own, and what binds a
+// pushed commit to its pusher is signer = pusher under verify_signatures.
 // `write`, `merge:main`, `operator` and `admin` stay grants rows.
 //
 // Only KindInstance via a certificate gets the implicit read. An operator

@@ -480,7 +480,7 @@ func TestFleetIdentity_GetIdentityStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !id.Enrolled || id.Principal != "instance:"+m.Fingerprint()+"@cert" || id.SAN != pki.SAN(pki.RoleInstance, "laptop", m.Fingerprint()) ||
+	if !id.Enrolled || id.Principal != "instance:"+m.Fingerprint()+"@cert" || id.SAN != pki.SAN(pki.RoleInstance, "laptop") ||
 		id.Serial != m.Cert.SerialNumber.Text(16) || id.RootFingerprint != rootFP(t, f) || id.CRLNumber != "1" || id.Dir != filepath.Join(home, "pki") {
 		t.Fatalf("enrolled: %+v", id)
 	}

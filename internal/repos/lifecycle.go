@@ -948,6 +948,7 @@ func (m *Manager) initTemplate(ctx context.Context, spec CreateSpec, dbPath stri
 	// The template commit is an AUTHORED write: signed by this instance, so it
 	// records who instantiated a template that brings recipes which run exec.
 	svc.SetSigner(m.deps.Signer)
+	svc.SetAgentID(m.deps.AgentID)
 	if err := svc.InitRepo(ctx, nil, m.deps.AgentBranch); err != nil {
 		return fmt.Errorf("init git: %w", err)
 	}
@@ -1067,6 +1068,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// the history, and the own key is what E4 checks origin's copy of this
 	// instance's agent branch against (a store with no signer refuses adoption).
 	svc.SetSigner(m.deps.Signer)
+	svc.SetAgentID(m.deps.AgentID)
 	svc.SetAcceptList(m.acceptListFor(uid))
 	svc.SetOwnKeys(m.ownFleetKeys)
 	// No Crypt is wired here: the clone's credential is already resolved above
@@ -1238,6 +1240,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// pushed: it must be signed like every later one. Without this it went out
 	// unsigned (and now fails with store.ErrNoSigner).
 	svc.SetSigner(m.deps.Signer)
+	svc.SetAgentID(m.deps.AgentID)
 	svc.SetOwnKeys(m.ownFleetKeys)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
 	svc.SetAcceptList(m.acceptListFor(uid))

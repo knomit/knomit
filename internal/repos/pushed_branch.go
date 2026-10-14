@@ -8,9 +8,13 @@ import (
 
 // IsPushedBranch reports whether branch is one a PEER pushed to this host
 // (F11) and may therefore be merged into this instance's agent branch: an
-// `agent/*` branch that is neither this instance's agent branch, nor the
-// repo's upstream, nor this instance's own branch from before a hostname
-// change (same `-<fp8>` suffix as the current agent branch).
+// `agent/*` branch that is neither this instance's agent branch nor the
+// repo's upstream.
+//
+// "This instance's agent branch" is ri.agentBranch, the branch persisted in
+// control.db instance_identity, compared by EXACT equality. Nothing is
+// inferred from the shape of a name (D18): a peer branch whose name happens
+// to end in this instance's fp8 is still a peer's branch.
 //
 // It classifies by NAME, which kb/invariants/store/branch-roles warns
 // against for roles that reconcile acts on destructively. Two things act on
@@ -35,24 +39,5 @@ func (ri *RepoInstance) isPushedBranch(branch, upstream string) bool {
 	if !strings.HasPrefix(branch, "agent/") {
 		return false
 	}
-	if own := fp8Suffix(ri.agentBranch); own != "" && fp8Suffix(branch) == own {
-		return false
-	}
 	return branch != upstream
-}
-
-// fp8Suffix is the trailing `-<8 hex>` of an agent branch name
-// (agent/<host>-<fp8>), or "" when the name has none.
-func fp8Suffix(branch string) string {
-	i := strings.LastIndexByte(branch, '-')
-	if i < 0 || len(branch)-i-1 != 8 {
-		return ""
-	}
-	s := branch[i+1:]
-	for _, c := range s {
-		if !strings.ContainsRune("0123456789abcdef", c) {
-			return ""
-		}
-	}
-	return s
 }
