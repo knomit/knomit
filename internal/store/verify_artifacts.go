@@ -1,0 +1,387 @@
+package store
+
+import (
+	"crypto/ed25519"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"path"
+	"strings"
+
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/fact"
+	"knomit/internal/pki"
+)
+
+// artifactRules is R7: the artifacts section of the JUDGED repository's
+// ontology at main (fact.Ontology.ArtifactAttrs) applied to c. For every path
+// under artifacts/ that c changes against EVERY parent (the empty tree for a
+// root commit), the rules of that path must hold:
+//
+//   - a file with a change rule is never deleted;
+//   - write-once: never modified (a first add is allowed);
+//   - append-only: the new blob holds the old one as an exact byte prefix;
+//   - replace: modified only when replace_when holds — crl-newer
+//     (crlNewer) or leaf-renewal (leafRenewal);
+//   - max_size: the new blob is no larger;
+//   - a file with a change or pki rule must stay a regular file;
+//   - a pki file that is ADDED must hold as its role (pkiAdd): a root that is
+//     a CA certificate, a CRL the root signed, a leaf that chains to the root,
+//     is not revoked and is issued to the id its file name stands for.
+//
+// The PKI a primitive needs — the root, the CRL, the member records — is read
+// from c's OWN tree. The root there is the root of every parent too (it is
+// write-once, and a commit that changes it is refused by the same check), and
+// a CRL c replaces is held to crl-newer in the same pass; so a commit is
+// judged against exactly the trust state it leaves behind, the same in
+// receive-pack and in `verify ci`.
+//
+// An undeclared path has no rule; a path whose rules are ambiguous, or whose
+// blob cannot be read, is refused (RuleArtifactRules).
+func (j judge) artifactRules(c *object.Commit) (Refusal, bool) {
+	if !j.ont.HasArtifactRules() {
+		return Refusal{}, true
+	}
+	h := c.Hash.String()
+	refuse := func(rule, reason string) (Refusal, bool) {
+		return Refusal{Commit: h, Rule: rule, Reason: reason}, false
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		return refuse(RuleArtifactRules, fmt.Sprintf("the commit's tree cannot be read: %v", err))
+	}
+	parents, err := parentTrees(c)
+	if err != nil {
+		return refuse(RuleArtifactRules, fmt.Sprintf("a parent's tree cannot be read: %v", err))
+	}
+	a := &artifactCheck{j: j, tree: tree}
+	for _, pt := range parents {
+		changes, err := object.DiffTree(pt, tree)
+		if err != nil {
+			return refuse(RuleArtifactRules, fmt.Sprintf("diff: %v", err))
+		}
+		for _, ch := range changes {
+			if !underArtifacts(ch.From.Name) && !underArtifacts(ch.To.Name) {
+				continue
+			}
+			if rule, reason := a.change(ch); rule != "" {
+				return refuse(rule, reason)
+			}
+		}
+	}
+	return Refusal{}, true
+}
+
+func underArtifacts(p string) bool { return strings.HasPrefix(p, fact.ArtifactsRoot+"/") }
+
+// parentTrees returns the trees of c's parents, or the empty tree (nil) for a
+// root commit.
+func parentTrees(c *object.Commit) ([]*object.Tree, error) {
+	if c.NumParents() == 0 {
+		return []*object.Tree{nil}, nil
+	}
+	out := make([]*object.Tree, 0, c.NumParents())
+	for i := range c.NumParents() {
+		p, err := c.Parent(i)
+		if err != nil {
+			return nil, err
+		}
+		pt, err := p.Tree()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pt)
+	}
+	return out, nil
+}
+
+// artifactCheck judges the changes of one commit, reading its tree's PKI at
+// most once.
+type artifactCheck struct {
+	j    judge
+	tree *object.Tree
+
+	pkiRead bool
+	root    *x509.Certificate
+	rootErr error
+	crl     *x509.RevocationList
+	crlErr  error
+}
+
+// changeRule is the refusal rule for breaking a change rule.
+func changeRule(change string) string {
+	switch change {
+	case fact.ChangeWriteOnce:
+		return RuleArtifactWriteOnce
+	case fact.ChangeAppendOnly:
+		return RuleArtifactAppendOnly
+	}
+	return RuleArtifactReplace
+}
+
+// change judges one changed path; "" when it keeps its rules.
+func (a *artifactCheck) change(ch *object.Change) (rule, reason string) {
+	name := ch.To.Name
+	if name == "" {
+		name = ch.From.Name
+	}
+	attrs, err := a.j.ont.ArtifactAttrs(name)
+	if err != nil {
+		return RuleArtifactRules, err.Error()
+	}
+	if !attrs.Matched {
+		return "", ""
+	}
+	// Deleted.
+	if ch.To.Name == "" {
+		if attrs.Change != "" {
+			return changeRule(attrs.Change), fmt.Sprintf("%s is deleted, and a %s file is never deleted", name, attrs.Change)
+		}
+		return "", ""
+	}
+	newF, err := ch.To.Tree.TreeEntryFile(&ch.To.TreeEntry)
+	if attrs.Change != "" || attrs.PKI != "" {
+		if m := ch.To.TreeEntry.Mode; m != filemode.Regular && m != filemode.Executable {
+			rule := changeRule(attrs.Change)
+			if attrs.Change == "" {
+				rule = RuleArtifactPKI
+			}
+			return rule, fmt.Sprintf("%s must be a regular file, not mode %s", name, m)
+		}
+	}
+	if err != nil {
+		return RuleArtifactRules, fmt.Sprintf("%s cannot be read: %v", name, err)
+	}
+	if attrs.MaxSize > 0 && newF.Size > attrs.MaxSize {
+		return RuleArtifactSize, fmt.Sprintf("%s is %d bytes, larger than its max_size of %d", name, newF.Size, attrs.MaxSize)
+	}
+	added := ch.From.Name == ""
+	if added {
+		if attrs.PKI == "" {
+			return "", ""
+		}
+		raw, err := blobBytes(newF)
+		if err != nil {
+			return RuleArtifactRules, fmt.Sprintf("%s cannot be read: %v", name, err)
+		}
+		if err := a.pkiAdd(attrs.PKI, name, raw); err != nil {
+			return RuleArtifactPKI, fmt.Sprintf("%s is added as the pki %s but does not hold: %v", name, attrs.PKI, err)
+		}
+		return "", ""
+	}
+	// Modified (DiffTree pairs only equal names: no rename detection).
+	switch attrs.Change {
+	case "":
+		return "", ""
+	case fact.ChangeWriteOnce:
+		return RuleArtifactWriteOnce, fmt.Sprintf("%s is write-once and this commit modifies it", name)
+	}
+	oldF, err := ch.From.Tree.TreeEntryFile(&ch.From.TreeEntry)
+	if err != nil {
+		return RuleArtifactRules, fmt.Sprintf("%s (before) cannot be read: %v", name, err)
+	}
+	oldRaw, err := blobBytes(oldF)
+	if err != nil {
+		return RuleArtifactRules, fmt.Sprintf("%s (before) cannot be read: %v", name, err)
+	}
+	newRaw, err := blobBytes(newF)
+	if err != nil {
+		return RuleArtifactRules, fmt.Sprintf("%s cannot be read: %v", name, err)
+	}
+	switch attrs.Change {
+	case fact.ChangeAppendOnly:
+		if len(newRaw) <= len(oldRaw) || string(newRaw[:len(oldRaw)]) != string(oldRaw) {
+			return RuleArtifactAppendOnly, fmt.Sprintf("%s is append-only and the new content does not start with the old (%d -> %d bytes)", name, len(oldRaw), len(newRaw))
+		}
+		return "", ""
+	case fact.ChangeReplace:
+		var err error
+		switch attrs.ReplaceWhen {
+		case fact.ReplaceCRLNewer:
+			err = a.crlNewer(oldRaw, newRaw)
+		case fact.ReplaceLeafRenewal:
+			err = a.leafRenewal(name, oldRaw, newRaw)
+		default:
+			err = fmt.Errorf("unknown replace_when %q", attrs.ReplaceWhen)
+		}
+		if err != nil {
+			return RuleArtifactReplace, fmt.Sprintf("%s is replaced but replace_when %s does not hold: %v", name, attrs.ReplaceWhen, err)
+		}
+		return "", ""
+	}
+	return RuleArtifactRules, fmt.Sprintf("%s: unknown change rule %q", name, attrs.Change)
+}
+
+func blobBytes(f *object.File) ([]byte, error) {
+	s, err := f.Contents()
+	return []byte(s), err
+}
+
+// readPKI reads the declared root and CRL from the commit's own tree, once.
+func (a *artifactCheck) readPKI() {
+	if a.pkiRead {
+		return
+	}
+	a.pkiRead = true
+	layout, ok := a.j.ont.PKILayout()
+	if !ok {
+		a.rootErr, a.crlErr = errors.New("the ontology declares no pki: root"), errors.New("the ontology declares no pki: root")
+		return
+	}
+	raw, ok, err := treeBytesCapped(a.tree, layout.Root, pkiFileCap(a.j.ont, layout.Root))
+	switch {
+	case err != nil:
+		a.rootErr = fmt.Errorf("%s: %w", layout.Root, err)
+	case !ok:
+		a.rootErr = fmt.Errorf("no %s", layout.Root)
+	default:
+		if a.root, err = parseRootPEM(raw); err != nil {
+			a.root, a.rootErr = nil, fmt.Errorf("%s: %w", layout.Root, err)
+		}
+	}
+	if layout.CRL == "" {
+		a.crlErr = errors.New("the ontology declares no pki: crl")
+		return
+	}
+	raw, ok, err = treeBytesCapped(a.tree, layout.CRL, pkiFileCap(a.j.ont, layout.CRL))
+	switch {
+	case err != nil:
+		a.crlErr = fmt.Errorf("%s: %w", layout.CRL, err)
+	case !ok:
+		a.crlErr = fmt.Errorf("no %s", layout.CRL)
+	default:
+		if a.crl, err = parseCRLPEM(raw); err != nil {
+			a.crl, a.crlErr = nil, fmt.Errorf("%s: %w", layout.CRL, err)
+		}
+	}
+}
+
+// pkiAdd: an added pki file must hold as its role.
+func (a *artifactCheck) pkiAdd(role, name string, raw []byte) error {
+	switch role {
+	case fact.PKIRoot:
+		_, err := parseRootPEM(raw)
+		return err
+	case fact.PKICRL:
+		crl, err := parseCRLPEM(raw)
+		if err != nil {
+			return err
+		}
+		a.readPKI()
+		if a.root == nil {
+			return fmt.Errorf("no root to check it against: %w", a.rootErr)
+		}
+		_, err = pki.CheckCRL(crl, a.root, nil)
+		return err
+	case fact.PKILeaf:
+		_, _, err := a.validLeaf(name, raw)
+		return err
+	}
+	return fmt.Errorf("unknown pki role %q", role)
+}
+
+// validLeaf checks a leaf file at name: it parses, chains to the tree's root,
+// is not revoked by the tree's CRL, and its email SAN's agent id EQUALS the id
+// its file name stands for (equality only, R2). It returns the leaf and that
+// id.
+func (a *artifactCheck) validLeaf(name string, raw []byte) (*x509.Certificate, string, error) {
+	layout, _ := a.j.ont.PKILayout()
+	id, ok := layout.LeafID(path.Base(name))
+	if !ok || path.Dir(name) != layout.LeafDir {
+		return nil, "", fmt.Errorf("%s is not at a leaf path (%s)", name, layout.LeafPath("<id>"))
+	}
+	leaf, err := parseCertPEM(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	a.readPKI()
+	if a.root == nil {
+		return nil, "", fmt.Errorf("no root to check it against: %w", a.rootErr)
+	}
+	if a.crl == nil {
+		return nil, "", fmt.Errorf("no CRL to check it against: %w", a.crlErr)
+	}
+	at := leaf.NotBefore
+	if a.root.NotBefore.After(at) {
+		at = a.root.NotBefore
+	}
+	ident, err := pki.VerifyInstanceChain(leaf, nil, a.root, a.crl, at, pki.UsageClient)
+	if err != nil {
+		return nil, "", err
+	}
+	if ident.AgentID == "" || ident.AgentID != id {
+		return nil, "", fmt.Errorf("its email SAN %q names agent %q, but the file is for %q", ident.Email, ident.AgentID, id)
+	}
+	return leaf, id, nil
+}
+
+// crlNewer is replace_when: crl-newer: the new CRL is signed by the declared
+// root, and its Number is strictly greater than the old CRL's. An old CRL that
+// does not parse cannot be shown older, so nothing replaces it this way.
+func (a *artifactCheck) crlNewer(oldRaw, newRaw []byte) error {
+	crl, err := parseCRLPEM(newRaw)
+	if err != nil {
+		return err
+	}
+	a.readPKI()
+	if a.root == nil {
+		return fmt.Errorf("no root to check it against: %w", a.rootErr)
+	}
+	if _, err := pki.CheckCRL(crl, a.root, nil); err != nil {
+		return err
+	}
+	old, err := parseCRLPEM(oldRaw)
+	if err != nil || old.Number == nil {
+		return fmt.Errorf("the CRL it replaces has no readable Number: %v", err)
+	}
+	if crl.Number.Cmp(old.Number) <= 0 {
+		return fmt.Errorf("CRL Number %v is not greater than the %v it replaces (rollback)", crl.Number, old.Number)
+	}
+	return nil
+}
+
+// leafRenewal is replace_when: leaf-renewal: the new leaf holds (validLeaf:
+// chains to the root, not revoked by the current CRL, issued to the file's
+// id), its key is the current key of the ONE member record for that id in the
+// commit's tree, and its NotBefore is strictly later than the old leaf's.
+func (a *artifactCheck) leafRenewal(name string, oldRaw, newRaw []byte) error {
+	leaf, id, err := a.validLeaf(name, newRaw)
+	if err != nil {
+		return err
+	}
+	old, err := parseCertPEM(oldRaw)
+	if err != nil {
+		return fmt.Errorf("the leaf it replaces does not parse: %v", err)
+	}
+	if !leaf.NotBefore.After(old.NotBefore) {
+		return fmt.Errorf("its NotBefore %s is not later than the replaced leaf's %s", leaf.NotBefore, old.NotBefore)
+	}
+	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return pki.ErrNotEd25519
+	}
+	key, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return err
+	}
+	members, err := loadMembersOfTree("judged", a.tree, a.j.kbRoot)
+	if err != nil {
+		return err
+	}
+	var recs []fact.Member
+	for _, m := range members {
+		if strings.EqualFold(m.Agent, id) {
+			recs = append(recs, m.Member)
+		}
+	}
+	if len(recs) != 1 {
+		return fmt.Errorf("%d member records for agent %q, want exactly one", len(recs), id)
+	}
+	if !fact.SameKey(recs[0].Key, key) {
+		return fmt.Errorf("its key is not the current key of agent %q's member record", id)
+	}
+	return nil
+}

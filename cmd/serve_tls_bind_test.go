@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/app"
-	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/crashdump"
 	"knomit/test/testenv"
@@ -52,7 +51,7 @@ func TestServeTLS_BindConflictFailsTheBoot(t *testing.T) {
 		}
 	}
 	f := pkitest.New(t)
-	f.Install(t, f.Enroll(t, "serve", pki.RoleInstance, keyPath), filepath.Join(home, "pki"))
+	f.Install(t, f.Enroll(t, "serve@agents.knomit.io", keyPath), filepath.Join(home, "pki"))
 	widenRoot(t, home)
 
 	held, err := net.Listen("tcp", "127.0.0.1:0")

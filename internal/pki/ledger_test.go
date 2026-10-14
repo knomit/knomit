@@ -53,7 +53,7 @@ func TestIssueLeaf_EquivalentToIssueInstance(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	pinSerial(t, 0x5eed)
 
-	fileCertPEM, fileRec, err := IssueInstance(dir, root, pub, "laptop", RoleInstance, 90*time.Hour)
+	fileCertPEM, fileRec, err := IssueInstance(dir, root, pub, "laptop@agents.knomit.io", 90*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestIssueLeaf_EquivalentToIssueInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	is, err := IssueLeaf(root, pub, "laptop", RoleInstance, 90*time.Hour, fileRec.IssuedAt)
+	is, err := IssueLeaf(root, pub, "laptop@agents.knomit.io", 90*time.Hour, fileRec.IssuedAt)
 	if err != nil {
 		t.Fatal(err)
 	}

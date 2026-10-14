@@ -76,8 +76,9 @@ func NewKey(t testing.TB) (string, ed25519.PublicKey) {
 }
 
 // Enroll issues a certificate for a fresh key (or for keyPath's key when
-// given) with the given role.
-func (f *Fleet) Enroll(t testing.TB, host string, role pki.Role, keyPath ...string) Member {
+// given) whose one email SAN is email: <id>@agents.knomit.io for an instance
+// certificate, any other address (or "") for an operator certificate.
+func (f *Fleet) Enroll(t testing.TB, email string, keyPath ...string) Member {
 	t.Helper()
 	var path string
 	var pub ed25519.PublicKey
@@ -91,7 +92,7 @@ func (f *Fleet) Enroll(t testing.TB, host string, role pki.Role, keyPath ...stri
 	} else {
 		path, pub = NewKey(t)
 	}
-	certPEM, _, err := pki.IssueInstance(f.Dir, f.Root, pub, host, role, time.Hour)
+	certPEM, _, err := pki.IssueInstance(f.Dir, f.Root, pub, email, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

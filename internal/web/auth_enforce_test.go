@@ -13,7 +13,6 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 )
 
@@ -303,7 +302,7 @@ func asTLSPeer(h http.Handler, c *x509.Certificate) http.Handler {
 func TestMCPToolsList_InstancePrincipalHoldsReadImplicitlyAndWriteByRow(t *testing.T) {
 	const mount = "/api/v1/repos/alpha/branches/agent:test/mcp"
 	f := pkitest.New(t)
-	peer := f.Enroll(t, "peer", pki.RoleInstance)
+	peer := f.Enroll(t, "peer@agents.knomit.io")
 	principal := auth.InstancePrincipal(peer.Fingerprint()).String()
 
 	list := func(t *testing.T, rows auth.StaticGrants) string {
@@ -343,7 +342,7 @@ func TestMCPToolsList_InstancePrincipalHoldsReadImplicitlyAndWriteByRow(t *testi
 // mutation, and the problem document names its full principal.
 func TestWriteGate_InstancePrincipalNeedsAWriteRow(t *testing.T) {
 	f := pkitest.New(t)
-	peer := f.Enroll(t, "peer", pki.RoleInstance)
+	peer := f.Enroll(t, "peer@agents.knomit.io")
 	principal := auth.InstancePrincipal(peer.Fingerprint()).String()
 	s := &Server{
 		Manager: newTestManagerWithRepos(t, "alpha"),

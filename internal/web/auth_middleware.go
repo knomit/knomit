@@ -112,11 +112,14 @@ func authMiddleware(cfg config.AuthConfig, disabled bool, trustedOrigins []strin
 				id, err := pki.IdentityOf(r.TLS.PeerCertificates[0])
 				if err != nil {
 					hal.WriteProblem(w, http.StatusForbidden, "Authentication required",
-						"the TLS listener accepts only enrolled instances; the client certificate names no knomit identity", r.URL.Path)
+						"the TLS listener accepts only enrolled instances; the client certificate's key is not ed25519", r.URL.Path)
 					return
 				}
 				p := auth.InstancePrincipal(id.Fingerprint)
-				if id.Role == pki.RoleOperator {
+				// R3: the email SAN alone says which: an agent address
+				// (<id>@agents.knomit.io) is an instance, anything else an
+				// operator. The principal is always the key.
+				if !id.IsInstance() {
 					p = auth.OperatorPrincipal(id.Fingerprint)
 				}
 				next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(ctx, p)))

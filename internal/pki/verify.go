@@ -3,16 +3,10 @@ package pki
 import (
 	"crypto/ed25519"
 	"crypto/x509"
-	"encoding/asn1"
 	"errors"
 	"fmt"
 	"math/big"
-	"net/url"
-	"strings"
 	"time"
-
-	"golang.org/x/crypto/cryptobyte"
-	cbasn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
 
 // One named error per refusal, so the TLS layer can log WHY a peer was
@@ -22,22 +16,39 @@ var (
 	ErrExpired       = errors.New("pki: certificate expired or not yet valid")
 	ErrRevoked       = errors.New("pki: certificate revoked")
 	ErrNotEd25519    = errors.New("pki: certificate key is not ed25519")
-	ErrSANMissing    = errors.New("pki: no single well-formed knomit:// URI SAN")
-	ErrRoleUnknown   = errors.New("pki: unknown role in SAN")
 	// ErrRefusedByPeer: WE verified the peer, but the peer refused OUR
 	// certificate. The peer's log carries the reason; we only see an alert.
 	ErrRefusedByPeer = errors.New("pki: the peer refused this instance's certificate")
 )
 
-// Identity is what a verified certificate establishes. Fingerprint is the
-// full 64-hex value (the principal ID); Host is a label from the SAN and is
-// never compared to anything.
+// Identity is what a verified certificate establishes.
+//
+// Fingerprint is the full 64-hex fingerprint of the leaf's KEY: the principal
+// ID, whatever the certificate's names say. Email is the certificate's email
+// SAN when it carries exactly one, else "". AgentID is AgentIDOfEmail(Email):
+// non-empty exactly when that address is an agent address
+// (<id>@agents.knomit.io), which is what makes the certificate an INSTANCE
+// certificate (R3). Any other certificate — another address, several, or
+// none — is an OPERATOR certificate. There is no role field.
 type Identity struct {
 	Fingerprint string
-	Host        string
-	Role        Role
+	Email       string
+	AgentID     string
 	Serial      *big.Int
 	NotAfter    time.Time
+}
+
+// IsInstance reports whether the certificate is an instance certificate: its
+// one email SAN is an agent address.
+func (id Identity) IsInstance() bool { return id.AgentID != "" }
+
+// PrincipalKind is the principal kind the certificate authenticates as:
+// "instance" for an instance certificate, "operator" for every other one.
+func (id Identity) PrincipalKind() string {
+	if id.IsInstance() {
+		return "instance"
+	}
+	return "operator"
 }
 
 // Usage says which side of a connection the certificate is on.
@@ -66,12 +77,12 @@ func (u Usage) eku() x509.ExtKeyUsage {
 //     (ErrUntrustedRoot, ErrExpired);
 //  2. the CRL: nil is ErrCRLMissing (fail closed), a CRL not signed by the
 //     root is ErrCRLInvalid, a listed serial is ErrRevoked;
-//  3. the key is ed25519 (ErrNotEd25519);
-//  4. exactly one knomit: URI SAN, byte-exact canonical form (ErrSANMissing);
-//  5. its role is known (ErrRoleUnknown).
+//  3. the key is ed25519 (ErrNotEd25519).
 //
-// The SAN's label is never compared with anything: the identity is the
-// leaf's KEY (Identity.Fingerprint), not a name (D18).
+// The identity it returns is IdentityOf's: the key's fingerprint, and the
+// email SAN that says instance or operator. Nothing about the certificate's
+// names is refused here: a certificate the root signed is admitted, and what
+// its name makes it (instance or operator) decides what it may do.
 //
 // A stale CRL (NextUpdate past) is still ENFORCED here; warning about it is
 // the loader's job.
@@ -104,129 +115,29 @@ func VerifyInstanceChain(leaf *x509.Certificate, intermediates []*x509.Certifica
 	if IsRevoked(crl, leaf.SerialNumber) {
 		return Identity{}, fmt.Errorf("%w: serial %s", ErrRevoked, leaf.SerialNumber.Text(16))
 	}
-
-	if _, ok := leaf.PublicKey.(ed25519.PublicKey); !ok {
-		return Identity{}, fmt.Errorf("%w: %T", ErrNotEd25519, leaf.PublicKey)
-	}
-	// SAN shape and role: the same code IdentityOf runs, so the two can never
-	// disagree about what a leaf names.
 	return IdentityOf(leaf)
 }
 
-var oidSubjectAltName = asn1.ObjectIdentifier{2, 5, 29, 17}
-
-// rawURIs returns the uniformResourceIdentifier entries of the leaf's SAN
-// extension AS WRITTEN. Go's parsed leaf.URIs have been through url.Parse,
-// which lowercases the scheme; reading the DER keeps the check case-exact.
-func rawURIs(leaf *x509.Certificate) ([]string, error) {
-	var out []string
-	for _, ext := range leaf.Extensions {
-		if !ext.Id.Equal(oidSubjectAltName) {
-			continue
-		}
-		in := cryptobyte.String(ext.Value)
-		var seq cryptobyte.String
-		if !in.ReadASN1(&seq, cbasn1.SEQUENCE) || !in.Empty() {
-			return nil, errors.New("malformed subjectAltName")
-		}
-		for !seq.Empty() {
-			var v cryptobyte.String
-			var tag cbasn1.Tag
-			if !seq.ReadAnyASN1(&v, &tag) {
-				return nil, errors.New("malformed subjectAltName entry")
-			}
-			if tag == cbasn1.Tag(6).ContextSpecific() { // [6] uniformResourceIdentifier
-				out = append(out, string(v))
-			}
-		}
-	}
-	return out, nil
-}
-
-// parseSAN extracts (role, label) from the ONE knomit: URI SAN. Strict and
-// case-exact, so a certificate has one spelling of its name:
+// IdentityOf reads the Identity of a leaf WITHOUT verifying it: fingerprint
+// and email SAN only. It must not be used to decide whether to trust a
+// certificate; its callers sit behind VerifyInstanceChain (internal/web's
+// AuthMiddleware on the TLS listener, where every connection has already
+// passed VerifyConnection; the fleet judge, after its own chain check). The
+// fingerprint is computed from the leaf's public key, never read from a
+// name, so whatever the certificate's names say, the principal is the key's.
 //
-//   - exactly one URI whose scheme is knomit in any case; two are refused even
-//     if both are valid (no first-wins), and a non-lowercase scheme is refused;
-//   - the role is u.Host (the URI authority): no userinfo, no port;
-//   - the path is exactly "/<label>": one segment, no escapes, the label from
-//     [A-Za-z0-9._-]. The label is opaque: nothing is parsed out of it, and a
-//     trailing "-<8 hex>" in it means nothing;
-//   - no query, no fragment.
-//
-// Together these leave exactly one spelling: the raw string is then
-// knomit://<role>/<label> byte for byte, so no canonical-rebuild comparison
-// is needed.
-//
-// An unknown role is returned, not refused, so the caller can map it to
-// ErrRoleUnknown.
-func parseSAN(leaf *x509.Certificate) (Role, string, error) {
-	uris, err := rawURIs(leaf)
-	if err != nil {
-		return "", "", fmt.Errorf("%w: %v", ErrSANMissing, err)
-	}
-	var mine []string
-	for _, s := range uris {
-		if len(s) >= len(SANScheme)+1 && strings.EqualFold(s[:len(SANScheme)+1], SANScheme+":") {
-			mine = append(mine, s)
-		}
-	}
-	switch len(mine) {
-	case 0:
-		return "", "", ErrSANMissing
-	case 1:
-	default:
-		return "", "", fmt.Errorf("%w: %d knomit: URIs, want exactly one", ErrSANMissing, len(mine))
-	}
-	raw := mine[0]
-	bad := func(why string) (Role, string, error) {
-		return "", "", fmt.Errorf("%w: %q: %s", ErrSANMissing, raw, why)
-	}
-	if !strings.HasPrefix(raw, SANScheme+"://") {
-		return bad("scheme must be exactly " + SANScheme + "://")
-	}
-	if strings.ContainsAny(raw, "?#%@") {
-		return bad("query, fragment, escapes and userinfo are not allowed")
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return bad(err.Error())
-	}
-	if u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
-		return bad("only knomit://<role>/<label> is allowed")
-	}
-	if strings.Contains(u.Host, ":") {
-		return bad("a port is not allowed")
-	}
-	seg, ok := strings.CutPrefix(u.Path, "/")
-	if !ok || seg == "" || strings.Contains(seg, "/") {
-		return bad("path must be exactly one segment")
-	}
-	if !validHost(seg) {
-		return bad("the label must use only [A-Za-z0-9._-]")
-	}
-	return Role(u.Host), seg, nil
-}
-
-// IdentityOf reads the Identity of a leaf WITHOUT verifying it: SAN, role and
-// fingerprint only. It exists for the one caller that sits behind
-// VerifyInstanceChain — internal/web's AuthMiddleware on the TLS listener,
-// where every connection has already passed VerifyConnection — and must not
-// be used to decide whether to trust a certificate. The fingerprint is
-// computed from the leaf's public key, never read from the SAN, so whatever
-// a SAN's label says, the principal is the key's.
+// The kind is decided by the address alone (R3): exactly one email SAN that
+// is an agent address is an instance; anything else is an operator. Only
+// AgentIDOfEmail touches the address; the id it yields is never parsed.
 func IdentityOf(leaf *x509.Certificate) (Identity, error) {
 	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
 	if !ok {
 		return Identity{}, fmt.Errorf("%w: %T", ErrNotEd25519, leaf.PublicKey)
 	}
-	role, label, err := parseSAN(leaf)
-	if err != nil {
-		return Identity{}, err
+	id := Identity{Fingerprint: Fingerprint(pub), Serial: leaf.SerialNumber, NotAfter: leaf.NotAfter}
+	if len(leaf.EmailAddresses) == 1 {
+		id.Email = leaf.EmailAddresses[0]
+		id.AgentID = AgentIDOfEmail(id.Email)
 	}
-	fp := Fingerprint(pub)
-	if !role.known() {
-		return Identity{}, fmt.Errorf("%w: %q", ErrRoleUnknown, role)
-	}
-	return Identity{Fingerprint: fp, Host: label, Role: role, Serial: leaf.SerialNumber, NotAfter: leaf.NotAfter}, nil
+	return id, nil
 }

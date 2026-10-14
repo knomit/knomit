@@ -127,7 +127,7 @@ func TestRevoke_AppendsAndTheNextCRLCarriesEveryPriorEntry(t *testing.T) {
 	var lastNum *big.Int
 	for range 3 {
 		pub, _, _ := ed25519.GenerateKey(rand.Reader)
-		_, rec, err := IssueInstance(dir, root, pub, "h", RoleInstance, time.Hour)
+		_, rec, err := IssueInstance(dir, root, pub, "h@agents.knomit.io", time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}

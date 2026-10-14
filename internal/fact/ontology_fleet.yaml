@@ -7,6 +7,20 @@ description: >-
   never deleted: leaving or revoking is a state change. An instance joins by
   writing its own record on its agent branch; a human accepts by merging it
   into main.
+# Every commit that enters main is judged against the member records and,
+# once the fleet has a root certificate, the fleet's certificates.
+attributes:
+  verify_signatures: enforce
+# The fleet's certificate artifacts and ledgers, under artifacts/ (R7). The
+# commit judge enforces these rules on every commit; the fleet reader finds
+# the certificates through the pki declarations.
+artifacts:
+  fleet/root.crt: { pki: root, change: write-once }
+  fleet/crl.pem: { pki: crl, change: replace, replace_when: crl-newer }
+  fleet/certs/*.pem: { pki: leaf, change: replace, replace_when: leaf-renewal }
+  fleet/issued.jsonl: { change: append-only }
+  fleet/revoked.jsonl: { change: append-only }
+  fleet/**: { max_size: 16KiB }
 topics:
   members:
     description: >-

@@ -29,8 +29,8 @@ func tlsRequest(remote string, peers ...*x509.Certificate) *http.Request {
 
 func TestAuthMiddleware_TLSListenerMapsTheCertificateToItsPrincipal(t *testing.T) {
 	f := pkitest.New(t)
-	inst := f.Enroll(t, "peer", pki.RoleInstance)
-	op := f.Enroll(t, "alice", pki.RoleOperator)
+	inst := f.Enroll(t, "peer@agents.knomit.io")
+	op := f.Enroll(t, "alice@example.com")
 	h := AuthMiddleware(config.AuthConfig{Require: false}, false)(principalEcho())
 	for _, tc := range []struct {
 		m    pkitest.Member
@@ -90,8 +90,8 @@ func TestAuthMiddleware_TLSListenerWithoutCertIsRefusedEvenWithRequireFalse(t *t
 // a certificate the TLS handshake proves possession of; the label is not.
 func TestAuthMiddleware_TLSListenerPrincipalIsTheKeyNotTheSAN(t *testing.T) {
 	f := pkitest.New(t)
-	a := f.Enroll(t, "a", pki.RoleInstance)
-	b := f.Enroll(t, "b", pki.RoleInstance)
+	a := f.Enroll(t, "a@agents.knomit.io")
+	b := f.Enroll(t, "b@agents.knomit.io")
 	forged := *a.Cert
 	forged.PublicKey = b.Cert.PublicKey // a's SAN, b's key
 	h := AuthMiddleware(config.AuthConfig{}, false)(principalEcho())
@@ -111,7 +111,7 @@ func TestAuthMiddleware_TLSListenerPrincipalIsTheKeyNotTheSAN(t *testing.T) {
 // and this would answer 403 instead of the principal.
 func TestTLSServer_RealHandshakeReachesTheHandlerAsTheInstancePrincipal(t *testing.T) {
 	f := pkitest.New(t)
-	srvM := f.Enroll(t, "server", pki.RoleInstance)
+	srvM := f.Enroll(t, "server@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 	f.Install(t, srvM, dir)
 	cfg, err := pki.ServerConfig(dir, srvM.KeyPath, nil)
@@ -136,7 +136,7 @@ func TestTLSServer_RealHandshakeReachesTheHandlerAsTheInstancePrincipal(t *testi
 	go srv.Serve(ln)
 	defer srv.Close()
 
-	peer := f.Enroll(t, "peer", pki.RoleInstance)
+	peer := f.Enroll(t, "peer@agents.knomit.io")
 	resp, err := f.Client(t, peer).Get("https://" + ln.Addr().String() + "/x")
 	if err != nil {
 		t.Fatal(err)

@@ -93,14 +93,14 @@ func keys(m map[string]string) []string {
 
 func TestInstallBundle_WritesTheThreeFilesAndTheWatermark(t *testing.T) {
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 
 	id, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m), pki.InstallOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id.Fingerprint != m.Fingerprint() || id.Host != "laptop" || id.Role != pki.RoleInstance {
+	if id.Fingerprint != m.Fingerprint() || id.AgentID != "laptop" || !id.IsInstance() {
 		t.Fatalf("identity %+v, want fingerprint %s host laptop", id, m.Fingerprint())
 	}
 	posix := runtime.GOOS != "windows"
@@ -132,20 +132,20 @@ func TestInstallBundle_WritesTheThreeFilesAndTheWatermark(t *testing.T) {
 // without showing the bundle, and the CLI's wording is kept.
 func TestInstallBundle_RefusalsAreClassifiedAndWriteNothing(t *testing.T) {
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m), pki.InstallOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	bumpCRL(t, f, 2)
-	current := bundleFor(t, f, f.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath))
+	current := bundleFor(t, f, f.Enroll(t, "laptop@agents.knomit.io", m.KeyPath))
 	if _, err := pki.InstallBundle(dir, m.KeyPath, current, pki.InstallOptions{ExpectInstalledRoot: rootOf(t, f)}); err != nil {
 		t.Fatal(err) // positive control: CRL #2 moves the watermark to 2
 	}
 
 	f1 := pkitest.New(t)
-	other := f.Enroll(t, "other", pki.RoleInstance) // another instance's key, same fleet
-	foreign := f1.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath)
+	other := f.Enroll(t, "other@agents.knomit.io") // another instance's key, same fleet
+	foreign := f1.Enroll(t, "laptop@agents.knomit.io", m.KeyPath)
 
 	// A bundle carrying CRL #1 from THIS fleet, while #2 is held: rollback.
 	oldCRL := func() []byte {
@@ -220,12 +220,12 @@ func TestInstallBundle_RefusalsAreClassifiedAndWriteNothing(t *testing.T) {
 // by naming them; the CLI's text is unchanged.
 func TestInstallBundle_RootDiffersNamesBothRoots(t *testing.T) {
 	f, f1 := pkitest.New(t), pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m), pki.InstallOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	foreign := bundleFor(t, f1, f1.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath))
+	foreign := bundleFor(t, f1, f1.Enroll(t, "laptop@agents.knomit.io", m.KeyPath))
 
 	_, err := pki.InstallBundle(dir, m.KeyPath, foreign, pki.InstallOptions{ExpectInstalledRoot: ""})
 	var rd *pki.RootDiffersError
@@ -261,12 +261,12 @@ func TestInstallBundle_RootDiffersNamesBothRoots(t *testing.T) {
 // so on the Windows CI leg (internal/pki runs there).
 func TestInstallBundle_ReinstallReplacesExistingFiles(t *testing.T) {
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m), pki.InstallOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	m2 := f.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath) // a new serial for the same key
+	m2 := f.Enroll(t, "laptop@agents.knomit.io", m.KeyPath) // a new serial for the same key
 	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m2), pki.InstallOptions{ExpectInstalledRoot: rootOf(t, f)}); err != nil {
 		t.Fatalf("reinstall over existing files: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestInstallBundle_ReinstallReplacesExistingFiles(t *testing.T) {
 
 func TestSplitBundle_ReturnsTheRootForConfirmation(t *testing.T) {
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	b, err := pki.SplitBundle(bundleFor(t, f, m))
 	if err != nil {
 		t.Fatal(err)
@@ -290,7 +290,7 @@ func TestSplitBundle_ReturnsTheRootForConfirmation(t *testing.T) {
 
 func TestStatus_NotEnrolledThenEnrolled(t *testing.T) {
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 
 	st, err := pki.Status(dir, m.KeyPath)
@@ -311,7 +311,7 @@ func TestStatus_NotEnrolledThenEnrolled(t *testing.T) {
 	if !st.Enrolled || st.Cert == nil || st.IdentityErr != nil {
 		t.Fatalf("status after install: %+v", st)
 	}
-	if st.Cert.Fingerprint != m.Fingerprint() || st.Cert.Host != "laptop" ||
+	if st.Cert.Fingerprint != m.Fingerprint() || st.Cert.AgentID != "laptop" ||
 		st.Cert.Serial.Cmp(m.Cert.SerialNumber) != 0 || !st.Cert.NotAfter.Equal(m.Cert.NotAfter) {
 		t.Fatalf("cert status %+v", st.Cert)
 	}
@@ -330,7 +330,7 @@ func TestStatus_KeyUnreadableIsAnError(t *testing.T) {
 }
 
 func TestPrincipalKind(t *testing.T) {
-	if pki.PrincipalKind(pki.RoleOperator) != "operator" || pki.PrincipalKind(pki.RoleInstance) != "instance" {
+	if (pki.Identity{}).PrincipalKind() != "operator" || (pki.Identity{AgentID: "a"}).PrincipalKind() != "instance" {
 		t.Fatal("principal kinds")
 	}
 }
@@ -340,7 +340,7 @@ func TestPrincipalKind(t *testing.T) {
 // fleet's bundle in. It fails closed, and nothing is written.
 func TestInstallBundle_UnreadableInstalledRootFailsClosed(t *testing.T) {
 	f, f1 := pkitest.New(t), pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m), pki.InstallOptions{}); err != nil {
 		t.Fatal(err)
@@ -349,7 +349,7 @@ func TestInstallBundle_UnreadableInstalledRootFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := snapshot(t, dir)
-	foreign := bundleFor(t, f1, f1.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath))
+	foreign := bundleFor(t, f1, f1.Enroll(t, "laptop@agents.knomit.io", m.KeyPath))
 	_, err := pki.InstallBundle(dir, m.KeyPath, foreign, pki.InstallOptions{ExpectInstalledRoot: ""})
 	if err == nil || errors.Is(err, pki.ErrRootDiffers) {
 		t.Fatalf("installed over an unreadable root.crt: %v", err)
@@ -377,7 +377,7 @@ func TestInstallBundle_UnreadableInstalledRootFailsClosed(t *testing.T) {
 // beside it needed <pki>'s parent — which is created, 0700 — to exist.
 func TestInstallBundle_FirstInstallIsCheckedAgainstNoRoot(t *testing.T) {
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	home := filepath.Join(t.TempDir(), "home") // does not exist yet
 	dir := filepath.Join(home, "pki")
 
@@ -413,7 +413,7 @@ func TestInstallBundle_FirstInstallIsCheckedAgainstNoRoot(t *testing.T) {
 // runs between the read and the install.
 func TestInstallBundle_RootChangedSinceReadIsRefused(t *testing.T) {
 	fa, fb, fc := pkitest.New(t), pkitest.New(t), pkitest.New(t)
-	m := fa.Enroll(t, "laptop", pki.RoleInstance)
+	m := fa.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, fa, m), pki.InstallOptions{}); err != nil {
 		t.Fatal(err)
@@ -428,13 +428,13 @@ func TestInstallBundle_RootChangedSinceReadIsRefused(t *testing.T) {
 	seen := st.Root.Fingerprint
 
 	// The other process moves this instance to C in between.
-	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, fc, fc.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath)),
+	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, fc, fc.Enroll(t, "laptop@agents.knomit.io", m.KeyPath)),
 		pki.InstallOptions{ExpectInstalledRoot: seen}); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshot(t, dir)
 
-	_, err = pki.InstallBundle(dir, m.KeyPath, bundleFor(t, fb, fb.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath)),
+	_, err = pki.InstallBundle(dir, m.KeyPath, bundleFor(t, fb, fb.Enroll(t, "laptop@agents.knomit.io", m.KeyPath)),
 		pki.InstallOptions{ExpectInstalledRoot: seen})
 	var rd *pki.RootDiffersError
 	if !errors.As(err, &rd) || rd.Installed.Fingerprint != rootOf(t, fc) || rd.Bundle.Fingerprint != rootOf(t, fb) {
@@ -451,7 +451,7 @@ func TestInstallBundle_RootChangedSinceReadIsRefused(t *testing.T) {
 // holder has it, InstallBundle waits rather than reading the root.
 func TestInstallBundle_WaitsForTheInstallLock(t *testing.T) {
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 	holder, err := os.OpenFile(pki.LockPath(dir), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
@@ -486,7 +486,7 @@ func TestInstallBundle_WaitsForTheInstallLock(t *testing.T) {
 // install is refused before its root is shown for confirmation.
 func TestPreviewBundle_NamesRootAndPrincipalAfterTheKeyAndChainChecks(t *testing.T) {
 	f, f1 := pkitest.New(t), pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	p, err := pki.PreviewBundle(m.KeyPath, bundleFor(t, f, m))
 	if err != nil {
 		t.Fatal(err)
@@ -494,10 +494,10 @@ func TestPreviewBundle_NamesRootAndPrincipalAfterTheKeyAndChainChecks(t *testing
 	if p.Root.Fingerprint != rootOf(t, f) || p.Principal != "instance:"+m.Fingerprint()+"@cert" {
 		t.Fatalf("preview %+v", p)
 	}
-	other := f.Enroll(t, "other", pki.RoleInstance)
+	other := f.Enroll(t, "other@agents.knomit.io")
 	rootPEM, _ := os.ReadFile(filepath.Join(f.Dir, pki.RootCertFile))
 	crlPEM, _ := os.ReadFile(filepath.Join(f.Dir, pki.CRLFile))
-	untrusted := bytes.Join([][]byte{f1.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath).CertPEM, rootPEM, crlPEM}, nil)
+	untrusted := bytes.Join([][]byte{f1.Enroll(t, "laptop@agents.knomit.io", m.KeyPath).CertPEM, rootPEM, crlPEM}, nil)
 	for _, tc := range []struct {
 		name  string
 		raw   []byte
@@ -518,7 +518,7 @@ func TestPreviewBundle_NamesRootAndPrincipalAfterTheKeyAndChainChecks(t *testing
 // so the front-end refuses before showing a first-install question.
 func TestInstalledRoot_MissingIsNoneUnreadableIsAnError(t *testing.T) {
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	dir := filepath.Join(t.TempDir(), "pki")
 	if ri, err := pki.InstalledRoot(dir); err != nil || ri != (pki.RootInfo{}) {
 		t.Fatalf("fresh home: %+v %v", ri, err)
@@ -545,7 +545,7 @@ func TestInstallBundle_UnwritableParentNamesTheLock(t *testing.T) {
 		t.Skip("POSIX permission bits, not root")
 	}
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	m := f.Enroll(t, "laptop@agents.knomit.io")
 	parent := filepath.Join(t.TempDir(), "etc-knomit")
 	dir := filepath.Join(parent, "pki")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

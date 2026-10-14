@@ -363,7 +363,7 @@ func PreviewBundle(keyPath string, raw []byte) (BundlePreview, error) {
 	if err != nil {
 		return BundlePreview{}, err
 	}
-	return BundlePreview{Root: rootInfo(b.Root), Principal: PrincipalKind(id.Role) + ":" + id.Fingerprint + "@cert"}, nil
+	return BundlePreview{Root: rootInfo(b.Root), Principal: id.PrincipalKind() + ":" + id.Fingerprint + "@cert"}, nil
 }
 
 func fingerprintOf(c *x509.Certificate) string {
@@ -371,15 +371,6 @@ func fingerprintOf(c *x509.Certificate) string {
 		return Fingerprint(pub)
 	}
 	return "????????"
-}
-
-// PrincipalKind is the principal kind a role authenticates as: "operator" or
-// "instance".
-func PrincipalKind(r Role) string {
-	if r == RoleOperator {
-		return "operator"
-	}
-	return "instance"
 }
 
 // EnrollmentStatus is `identity show`'s data: the instance key, and whatever

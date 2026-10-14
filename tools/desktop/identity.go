@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -57,9 +58,9 @@ const (
 )
 
 // FleetIdentity is what the section renders. It carries no CommonName, or
-// any other free text from a bundle: fingerprints, the SAN (whose host
-// pki.IdentityOf has already validated as hostname characters), and values
-// derived from numbers and dates. That is what makes displaying it safe.
+// any other free text from a bundle: fingerprints, the email SAN (shown only
+// when displayEmail admits its characters), and values derived from numbers
+// and dates. That is what makes displaying it safe.
 type FleetIdentity struct {
 	State          string `json:"state"`
 	Dir            string `json:"dir"` // [tls].dir this call read; a Finder-launched app sees no shell env
@@ -167,8 +168,8 @@ func (n *NativeService) GetIdentity() (FleetIdentity, error) {
 	case st.Cert != nil:
 		id := st.Cert
 		out.Certificate = "ok"
-		out.Principal = pki.PrincipalKind(id.Role) + ":" + id.Fingerprint + "@cert"
-		out.SAN = pki.SAN(id.Role, id.Host)
+		out.Principal = id.PrincipalKind() + ":" + id.Fingerprint + "@cert"
+		out.SAN = displayEmail(id.Email)
 		out.Serial = id.Serial.Text(16)
 		out.NotAfter = id.NotAfter.UTC().Format(time.RFC3339)
 	default:
@@ -292,7 +293,7 @@ func (n *NativeService) InstallBundle(ctx context.Context, raw, confirmFrom, con
 	if cur, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile)); err == nil {
 		rootID, _ = pki.RootID(cur)
 	}
-	log.Info().Str("principal", pki.PrincipalKind(id.Role)+":"+id.Fingerprint+"@cert").Str("root", rootID).
+	log.Info().Str("principal", id.PrincipalKind()+":"+id.Fingerprint+"@cert").Str("root", rootID).
 		Bool("replaced_root", from != "" && from != to).Str("dir", dir).Msg("fleet identity installed")
 	res := InstallResult{Installed: true}
 	if fi, err := n.GetIdentity(); err == nil {
@@ -327,6 +328,20 @@ func (n *NativeService) refused(err error) InstallResult {
 
 // classOf is the one mapping from pki's error classes to the UI's. Malformed
 // is checked first: a CRL that does not parse wraps ErrCRLInvalid as well.
+// displayEmail returns the certificate's email SAN for display when it holds
+// only address characters ([A-Za-z0-9._+@-]), and "" otherwise: the root
+// signed it, but the section shows no free text from a bundle.
+func displayEmail(email string) string {
+	for _, c := range email {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', strings.ContainsRune("._+@-", c):
+		default:
+			return ""
+		}
+	}
+	return email
+}
+
 func classOf(err error) string {
 	switch {
 	case errors.Is(err, pki.ErrMalformedBundle):
@@ -340,8 +355,7 @@ func classOf(err error) string {
 	case errors.Is(err, pki.ErrCRLInvalid):
 		return classCRLInvalid
 	case errors.Is(err, pki.ErrUntrustedRoot), errors.Is(err, pki.ErrExpired), errors.Is(err, pki.ErrRevoked),
-		errors.Is(err, pki.ErrNotEd25519), errors.Is(err, pki.ErrSANMissing),
-		errors.Is(err, pki.ErrRoleUnknown):
+		errors.Is(err, pki.ErrNotEd25519):
 		return classChain
 	}
 	return classError

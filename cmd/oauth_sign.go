@@ -181,7 +181,7 @@ func fetchDescription(ctx context.Context, issuer, id string) (oauth.Description
 	return d, nil
 }
 
-// issuedStanding returns the host label of the instance whose fingerprint is
+// issuedStanding returns the email SAN of the instance whose fingerprint is
 // fp, if this fleet root issued it a certificate that is not revoked.
 func issuedStanding(dir, fp string) (string, error) {
 	issued, err := readIssued(dir)
@@ -203,7 +203,7 @@ func issuedStanding(dir, fp string) (string, error) {
 		}
 		seen = true
 		if !gone[strings.ToLower(rec.Serial)] {
-			return rec.Label, nil
+			return rec.Email, nil
 		}
 	}
 	if seen {

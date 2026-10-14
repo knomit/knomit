@@ -63,8 +63,8 @@ var pushRuleRE = regexp.MustCompile(`refused by verify_signatures=enforce: ([a-z
 func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j, g, z := namedSigner(t, "joiner"), namedSigner(t, "gone"), namedSigner(t, "stranger")
-	jl, _ := p.leaf(j)
-	gl, gs := p.leaf(g)
+	jl, _ := p.leaf("joiner", j)
+	gl, gs := p.leaf("gone", g)
 	extra := p.artifacts(p.crl(gs), map[string]string{"joiner": jl, "gone": gl})
 	extra["kb/members/gone/1.md"] = memberFile("gone", fact.MemberActive, g.PublicKey())
 	h := newFleetPushHost(t, extra)

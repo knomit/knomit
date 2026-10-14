@@ -16,7 +16,6 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/serveraddr"
 )
@@ -67,7 +66,7 @@ func (f *fixture) withCert(t *testing.T) {
 	t.Helper()
 	keyPath, _ := pkitest.NewKey(t)
 	fleet := pkitest.New(t)
-	fleet.Install(t, fleet.Enroll(t, "serve", pki.RoleInstance, keyPath), f.cfg.TLS.Dir)
+	fleet.Install(t, fleet.Enroll(t, "serve@agents.knomit.io", keyPath), f.cfg.TLS.Dir)
 	f.keyPath = keyPath
 	f.cfg.TLS.Addr = f.tlsAddr
 }

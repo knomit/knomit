@@ -41,14 +41,23 @@ const (
 	// is for the signing key, chains to the fleet root, and its serial is on
 	// the fleet CRL (rule B; or a self-registration on a revoked leaf).
 	RuleRevoked = "revoked"
-	// RuleNoCert: the fleet revision holds root.crt (the fleet has a PKI) but
-	// there is no valid leaf for the author's id naming its record's key: none
-	// at certs/<id>.pem, one the root did not sign, or a root or CRL that
-	// cannot be read (rule B fails closed).
+	// RuleNoCert: the fleet revision holds its declared root (the fleet has a
+	// PKI) but there is no valid leaf for the author's id naming its record's
+	// key: none at the id's leaf path, one the root did not sign, one issued to
+	// another agent id, or a root or CRL that cannot be read (rule B fails
+	// closed).
 	RuleNoCert = "no-cert"
 	// RuleNotPusher: receive-pack only — a new commit signed by a key other
 	// than the pushing instance's certificate key. CheckRange has no pusher.
 	RuleNotPusher = "not-pusher"
+	// The artifact rules (R7): a commit that changes a path under artifacts/
+	// against the judged repository's ontology at main (artifactRules).
+	RuleArtifactWriteOnce  = "artifact-write-once"  // a write-once file modified or deleted
+	RuleArtifactAppendOnly = "artifact-append-only" // an append-only file not extended by an exact prefix, or deleted
+	RuleArtifactReplace    = "artifact-replace"     // a replace file deleted, or replaced without its replace_when
+	RuleArtifactSize       = "artifact-size"        // a blob larger than its max_size
+	RuleArtifactPKI        = "artifact-pki"         // a pki file added that does not hold as its role
+	RuleArtifactRules      = "artifact-rules"       // the rules for a path are ambiguous, or a blob cannot be read
 )
 
 // walkHistory visits every commit reachable from start and not from stop,

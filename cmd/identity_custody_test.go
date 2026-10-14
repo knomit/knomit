@@ -90,7 +90,7 @@ func TestIdentity_RootCustodyExportMovesImportRestores(t *testing.T) {
 		t.Fatalf("init-root with a keychain wrote root.key: %v", err)
 	}
 	_, _, pubPath := instanceHome(t, "laptop")
-	out, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath)
+	out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath)
 	if err != nil || !strings.Contains(out, "from the OS keychain") {
 		t.Fatalf("enroll from the keychain without a passphrase: %v\n%s", err, out)
 	}
@@ -115,7 +115,7 @@ func TestIdentity_RootCustodyExportMovesImportRestores(t *testing.T) {
 	if len(kc.items) != 0 {
 		t.Fatalf("export-root (a move) left %v in the keychain", kc.items)
 	}
-	if _, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath); !errors.Is(err, pki.ErrNoRootKey) {
+	if _, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath); !errors.Is(err, pki.ErrNoRootKey) {
 		t.Fatalf("enroll after the key moved away: %v, want ErrNoRootKey", err)
 	}
 
@@ -131,7 +131,7 @@ func TestIdentity_RootCustodyExportMovesImportRestores(t *testing.T) {
 	// only for the CRL; give it the old CRL, as a takeover would from main.
 	crl, _ := os.ReadFile(filepath.Join(dir, pki.CRLFile))
 	os.WriteFile(filepath.Join(newDir, pki.CRLFile), crl, 0o644)
-	if out, err := run(t, "", "identity", "enroll", "--dir", newDir, "--pubkey", pubPath); err != nil || !strings.Contains(out, "BEGIN X509 CRL") {
+	if out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", newDir, "--pubkey", pubPath); err != nil || !strings.Contains(out, "BEGIN X509 CRL") {
 		t.Fatalf("enroll after import: %v\n%s", err, out)
 	}
 }
@@ -170,7 +170,7 @@ func TestIdentity_FleetRootDirDefaultsUnderHome(t *testing.T) {
 		t.Fatalf("identity init-master still runs:\n%s", out)
 	}
 	_, _, pubPath := instanceHome(t, "laptop")
-	if out, err := run(t, "", "identity", "enroll", "--pubkey", pubPath); err != nil || !strings.Contains(out, "BEGIN CERTIFICATE") {
+	if out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--pubkey", pubPath); err != nil || !strings.Contains(out, "BEGIN CERTIFICATE") {
 		t.Fatalf("enroll without --dir: %v\n%s", err, out)
 	}
 }

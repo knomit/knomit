@@ -589,3 +589,38 @@ func TestRefreshDivergence_NeverAddsOrChangesRootAttributes(t *testing.T) {
 	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(withLog, presetPlain), "a preset must not DROP a root attribute")
 	require.Equal(t, "", refreshDivergence(withLog, presetLog), "an identical root block is preserved, so the refresh may run")
 }
+
+// R7: an EXISTING fleet repository, created from the fleet preset before it
+// declared verify_signatures and the artifacts section, is NOT upgraded by the
+// boot refresh: the new preset would add a root attribute and artifact rules,
+// both repository policy that a refresh (a commit this instance signs) never
+// adds. Such a repository keeps its file — verification off, no artifact
+// rules, no PKI declared — until its operator commits the new ontology. A
+// stored file with the same artifacts section but another root attribute is
+// blocked too; one identical to the preset refreshes.
+func TestRefreshDivergence_OldFleetPresetIsNotUpgraded(t *testing.T) {
+	const oldFleet = "id: fleet\nname: Fleet\ntopics:\n  members:\n    description: d\n"
+	old, err := fact.ParseOntology([]byte(oldFleet))
+	require.NoError(t, err)
+	preset := fact.FleetOntology()
+	require.Equal(t, "", old.SubsetDivergence(preset), "the taxonomy alone is a subset")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(old, preset))
+
+	raw, err := preset.Serialize()
+	require.NoError(t, err)
+	logMode, err := fact.ParseOntology(bytes.Replace(raw, []byte("verify_signatures: enforce\n"), []byte("verify_signatures: log\n"), 1))
+	require.NoError(t, err)
+	require.True(t, fact.ArtifactRulesEqual(logMode, preset), "fixture: only the root attribute differs")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(logMode, preset))
+
+	// The same root attribute but no artifacts section: only the artifact
+	// guard (ArtifactRulesEqual) stops the preset ADDING the rules.
+	noRules, err := fact.ParseOntology([]byte("id: fleet\nname: Fleet\nattributes:\n  verify_signatures: enforce\ntopics:\n  members:\n    description: d\n"))
+	require.NoError(t, err)
+	require.True(t, fact.RootAttributesEqual(noRules, preset), "fixture: only the artifacts section differs")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(noRules, preset))
+
+	same, err := fact.ParseOntology(raw)
+	require.NoError(t, err)
+	require.Equal(t, "", refreshDivergence(same, preset), "control: the preset itself refreshes")
+}

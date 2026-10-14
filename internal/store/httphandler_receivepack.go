@@ -357,7 +357,7 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 // signer rule there would stop nobody.
 func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*object.Commit, lg zerolog.Logger) string {
 	upstream := rp.upstream()
-	mode, isFleet, err := rp.rh.verifyModeAt(ctx, upstream)
+	mode, ont, err := rp.rh.verifyModeAt(ctx, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: verify_signatures at %s could not be read: %v", upstream, err)
 	}
@@ -381,12 +381,12 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 	// repository must itself be the fleet repository (its ontology at the
 	// upstream is the fleet preset).
 	selfRoot := ""
-	if isFleet {
+	if fact.IsFleetOntology(ont) {
 		if selfRoot = rp.rh.factRoot; selfRoot == "" {
 			selfRoot = "kb"
 		}
 	}
-	gate := newJudge(fleet, selfRoot)
+	gate := newJudge(fleet, selfRoot, ont, rp.rh.factRoot)
 	for _, c := range commits {
 		ref, ok := gate.judgeCommit(c)
 		if ok {
@@ -588,30 +588,37 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 var pushRegisterHook func()
 
 // verifyModeAt reads verify_signatures from the ontology at branch's tip, and
-// whether that ontology is the fleet preset (this repository is the fleet).
-func (rh *repoHandler) verifyModeAt(ctx context.Context, branch string) (mode string, isFleet bool, err error) {
+// that ontology: the judge reads from it whether this repository is the fleet
+// (rule A) and its artifact rules (R7). With verification on, an ontology
+// that does not parse is an error: its rules cannot be known.
+func (rh *repoHandler) verifyModeAt(ctx context.Context, branch string) (mode string, ont *fact.Ontology, err error) {
 	h, err := rh.resolveRef(ctx, branch)
 	if err != nil {
-		return "", false, err
+		return "", nil, err
 	}
 	c, err := object.GetCommit(rh.gits, h)
 	if err != nil {
-		return "", false, err
+		return "", nil, err
 	}
 	raw, err := treeOntology(c)
 	if err != nil {
-		return "", false, err
+		return "", nil, err
 	}
 	if raw == nil {
-		return VerifyOff, false, nil
+		return VerifyOff, nil, nil
 	}
 	vs, err := fact.ReadVerifySettings(raw)
 	if err != nil {
-		return "", false, err
+		return "", nil, err
 	}
 	if !vs.Valid {
-		return "", false, errors.New("unknown value")
+		return "", nil, errors.New("unknown value")
 	}
-	ont, perr := fact.ParseOntology(raw)
-	return vs.Mode, perr == nil && fact.IsFleetOntology(ont), nil
+	if vs.Mode == VerifyOff {
+		return VerifyOff, nil, nil
+	}
+	if ont, err = fact.ParseOntology(raw); err != nil {
+		return "", nil, err
+	}
+	return vs.Mode, ont, nil
 }

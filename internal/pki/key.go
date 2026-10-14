@@ -79,8 +79,9 @@ func PKCS8(priv ed25519.PrivateKey) ([]byte, error) {
 }
 
 // AuthorizedKeyLine is the instance's public key as one authorized_keys line
-// with the "knomit@<hostname>" comment, which `knomit identity enroll` reads
-// the certificate's host label from. ONE builder, so the .pub the server
+// with the "knomit@<hostname>" comment, a hint for the person reading it: the
+// certificate `knomit identity enroll` issues names the agent id the operator
+// passes (--agent-id), never this comment (D18). ONE builder, so the .pub the server
 // writes when it creates the key (internal/app ensureKeyPair) and
 // PublicKeyLine cannot differ.
 func AuthorizedKeyLine(pub ssh.PublicKey) string {

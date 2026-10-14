@@ -181,16 +181,26 @@ exactly one member record; the signing key is that record's current key and no
 other record's; the agent is active. An unsigned merge passes only if it adds
 nothing beyond its parents.
 
-When the fleet checkout holds the fleet's certificate artifacts
-(artifacts/fleet/root.crt, crl.pem, certs/<agent id>.pem), two more rules
-apply, read at the same --fleet-rev. Every member also needs
-certs/<agent id>.pem for its record's key, chaining to root.crt and not on the
-CRL (else no-cert, key-mismatch or revoked). In the fleet repository itself, a
-commit that only writes its author's own members/<agent id>/ folder is
-admitted without a record when certs/<agent id>.pem holds the signing key,
-chains to root.crt and is not revoked, and the folder then holds exactly one
-active record for that agent and that key: a new member's first record.
-Expiry is not judged. Without root.crt the rules are exactly the ones above.
+When the fleet checkout holds the fleet's certificate artifacts — the root,
+CRL and leaf files its ontology's artifacts section declares (pki: root, crl,
+leaf; the fleet preset puts them under artifacts/fleet/) — two more rules
+apply, read at the same --fleet-rev. Every member also needs the leaf for its
+agent id: issued to that id (its email address is <agent id>@agents.knomit.io),
+for its record's key, chaining to the root and not on the CRL (else no-cert,
+key-mismatch or revoked). In the fleet repository itself, a commit that only
+writes its author's own members/<agent id>/ folder is admitted without a
+record when the agent id has no active record, the signing key is no record's
+current key, and the leaf for the id holds the signing key, chains to the root
+and is not revoked; the folder must then hold exactly one active record for
+that agent and that key: a new member's first record. Expiry is not judged.
+Without a root the rules are exactly the ones above.
+
+The upstream's ontology may also declare rules for files under artifacts/
+(change: write-once, append-only, or replace with replace_when; max_size).
+Every commit is judged against them as well, against every parent: a commit
+that deletes or rewrites a protected file is refused with the rule it broke
+(artifact-write-once, artifact-append-only, artifact-replace, artifact-size,
+artifact-pki).
 
   knomit verify ci --candidate "$TIP" --fleet ../fleet
 

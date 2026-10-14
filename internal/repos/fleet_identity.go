@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"time"
+
+	"knomit/internal/pki"
 )
 
 // Identity is this instance's persisted identity (control.db
@@ -57,6 +59,13 @@ func resolveIdentity(db *sql.DB, fresh Identity, now time.Time) (Identity, error
 	}
 	if fresh.AgentID == "" || fresh.Branch == "" {
 		return Identity{}, errors.New("instance identity: no stored identity and none to create (empty agent id or branch)")
+	}
+	// The id is minted HERE, once. It must read back as itself from the
+	// address it commits as and its certificate carries,
+	// <id>@agents.knomit.io: an id holding '+' would be read as <before +>,
+	// and judged as another agent (R2).
+	if err := pki.ValidAgentID(fresh.AgentID); err != nil {
+		return Identity{}, fmt.Errorf("instance identity: refusing to mint agent id: %w", err)
 	}
 	tx, err := db.Begin()
 	if err != nil {

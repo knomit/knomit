@@ -116,6 +116,8 @@ func sanitizeHostname(hostname string) string {
 		"*", "-",
 		"[", "-",
 		"\\", "-",
+		"+", "-", // an agent id may not hold + (it would read back as a shorter id)
+		"@", "-",
 	)
 	return replacer.Replace(hostname)
 }

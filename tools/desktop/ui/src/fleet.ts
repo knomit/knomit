@@ -7,8 +7,8 @@
 // fixtures below — typed as these interfaces — against it. A renamed field
 // therefore fails a test instead of rendering nothing.
 //
-// Nothing here carries free text from a bundle: fingerprints, a SAN whose label
-// Go has validated as hostname characters, numbers and dates. That is why the
+// Nothing here carries free text from a bundle: fingerprints, the email SAN
+// (shown only when Go admits its characters), numbers and dates. That is why the
 // section can render every field as plain text.
 
 export interface FleetTLS {

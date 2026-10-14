@@ -13,7 +13,6 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -149,8 +148,8 @@ func TestPushedBranches_ListAndMerge(t *testing.T) {
 // granted `write` but not `operator` is refused by Require(operator).
 func TestPushedMerge_PermissionGates(t *testing.T) {
 	f := pkitest.New(t)
-	inst := f.Enroll(t, "peer", pki.RoleInstance)
-	op := f.Enroll(t, "ops", pki.RoleOperator)
+	inst := f.Enroll(t, "peer@agents.knomit.io")
+	op := f.Enroll(t, "ops@example.com")
 	opPrincipal := auth.OperatorPrincipal(op.Fingerprint()).String()
 	grants := auth.StaticGrants{opPrincipal: {auth.Read: {}, auth.Write: {}}}
 	s := &Server{Auth: config.AuthConfig{LoopbackDefault: config.Defaults().Auth.LoopbackDefault}, Grants: grants}

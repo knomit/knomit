@@ -51,16 +51,11 @@ func (v RangeVerdict) ExitCode() int {
 }
 
 // agentIDOfAuthor returns the agent id in an agent author address,
-// <id>[+<op>]@agents.knomit.io, or "" for any other address. The id is OPAQUE:
-// it is looked up, never parsed further.
-func agentIDOfAuthor(email string) string {
-	local, ok := strings.CutSuffix(strings.ToLower(strings.TrimSpace(email)), "@agents.knomit.io")
-	if !ok || local == "" {
-		return ""
-	}
-	id, _, _ := strings.Cut(local, "+")
-	return id
-}
+// <id>[+<op>]@agents.knomit.io, or "" for any other address. It is
+// pki.AgentIDOfEmail, the ONE string operation on an identity, shared with the
+// certificate's email SAN so the two can never disagree (R2). The id is
+// OPAQUE: it is looked up and compared, never parsed further.
+func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
 
 // CheckRange is F09's acceptance gate: it runs ONCE, where a change enters a
 // knowledge base's main (the merge job, via `knomit verify ci`), over plain git
@@ -68,8 +63,8 @@ func agentIDOfAuthor(email string) string {
 //
 //  1. verify_signatures is read at Main's tip FIRST. Off or absent: the verdict
 //     is off and nothing else runs; the fleet is never touched.
-//  2. The fleet's member records and certificate artifacts (root.crt, crl.pem,
-//     certs/<id>.pem under artifacts/fleet/) are loaded from the ONE fleet
+//  2. The fleet's member records and certificate artifacts (the files its
+//     ontology declares pki: root, crl and leaf) are loaded from the ONE fleet
 //     revision (malformed records skipped and logged). A missing or unreadable
 //     fleet, or one whose ontology is not the fleet preset, is an error: the
 //     gate could not run. Missing artifacts are not an error: no PKI.
@@ -100,6 +95,15 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	if settings.Mode == VerifyOff {
 		return out, nil
 	}
+	// The artifact rules (R7) are read from the SAME ontology, at main's tip.
+	// One that does not parse cannot say which rules hold: the gate could not
+	// run, never a pass.
+	var ont *fact.Ontology
+	if raw != nil {
+		if ont, err = fact.ParseOntology(raw); err != nil {
+			return RangeVerdict{}, fmt.Errorf("verify: ontology at %s: %w", in.Main, err)
+		}
+	}
 
 	if in.FleetDir == "" {
 		return RangeVerdict{}, ErrNoFleet
@@ -115,12 +119,12 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	// Rule A (self-registration) exists only where member records live: the
 	// knowledge base being judged must itself be the fleet repository.
 	selfRoot := ""
-	if ont, perr := fact.ParseOntology(raw); raw != nil && perr == nil && fact.IsFleetOntology(ont) {
+	if fact.IsFleetOntology(ont) {
 		if selfRoot = in.FleetRoot; selfRoot == "" {
 			selfRoot = "kb"
 		}
 	}
-	gate := newJudge(fleet, selfRoot)
+	gate := newJudge(fleet, selfRoot, ont, in.FleetRoot)
 
 	candC, err := resolveCommit(kb, in.Candidate)
 	if err != nil {
@@ -161,27 +165,52 @@ func indexMembers(ms []FleetMember) memberIndex {
 	return idx
 }
 
-// judge is everything judgeCommit reads from the fleet at ONE revision: the
-// member records, the certificate artifacts, and where the judged
-// repository's member records live.
+// judge is everything judgeCommit reads: the fleet at ONE revision (member
+// records, certificate artifacts), where the judged repository's member
+// records live, and the judged repository's ontology at main (its artifact
+// rules).
 type judge struct {
 	memberIndex
-	pki *FleetPKI // nil: no artifacts/fleet/root.crt at the fleet revision
+	pki *FleetPKI // nil: the fleet revision declares or holds no root
 	// membersDir is "<root>/members/" of the JUDGED repository when that
 	// repository is the fleet repository itself, else "" (rule A off: there
 	// is nothing to self-register into).
 	membersDir string
+	// ont is the JUDGED repository's ontology at main, read at the same
+	// revision as verify_signatures; its artifacts section is enforced on
+	// every commit (artifactRules). nil: no rules.
+	ont *fact.Ontology
+	// kbRoot is the judged repository's fact root, where leaf-renewal reads
+	// the member records of the commit's own tree.
+	kbRoot string
 }
 
 // newJudge builds the judge for one fleet revision. selfRoot is the judged
 // repository's fact root when that repository is the fleet repository, and
-// "" when it is not (rule A off).
-func newJudge(f Fleet, selfRoot string) judge {
-	j := judge{memberIndex: indexMembers(f.Members), pki: f.PKI}
+// "" when it is not (rule A off). ont is the judged repository's ontology at
+// main and kbRoot its fact root ("" = "kb").
+func newJudge(f Fleet, selfRoot string, ont *fact.Ontology, kbRoot string) judge {
+	if kbRoot == "" {
+		kbRoot = "kb"
+	}
+	j := judge{memberIndex: indexMembers(f.Members), pki: f.PKI, ont: ont, kbRoot: kbRoot}
 	if selfRoot != "" {
 		j.membersDir = strings.ToLower(path.Join(selfRoot, fact.MembersTopic)) + "/"
 	}
 	return j
+}
+
+// mayRegister is R4's gate on rule A: the id has NO active record, and the
+// signing key is not ANY record's current key. Rule A is a join (or a rejoin
+// under a new key); it never takes over an id an active record holds, and it
+// never makes one key the current key of two records.
+func (j judge) mayRegister(id string, s CommitSigner) bool {
+	for _, m := range j.byAgent[id] {
+		if m.State == fact.MemberActive {
+			return false
+		}
+	}
+	return len(j.byKey[string(s.Key.Marshal())]) == 0
 }
 
 // judgeCommit applies the gate's rules to one commit:
@@ -196,11 +225,26 @@ func newJudge(f Fleet, selfRoot string) judge {
 //     (certified: RuleNoCert, RuleKeyMismatch, RuleRevoked);
 //   - rule A: a commit refused above for having no record, a record for
 //     another key, or an inactive record is ADMITTED when it is a
-//     self-registration backed by a valid leaf artifact (selfRegistration).
+//     self-registration backed by a valid leaf artifact (selfRegistration) —
+//     only when the id has no active record and the signing key is no
+//     record's current key (R4, mayRegister);
+//   - the artifact rules (R7): every commit the rules above admit, signed or
+//     an M3 merge, must also keep every artifact rule of the judged
+//     repository's ontology at main (artifactRules).
 //
 // Nothing is derived from the id's text (D18): it is only the key under which
-// a record or a leaf file is looked up.
+// a record or a leaf file is looked up, and compared for equality with the
+// leaf's email SAN id.
 func (j judge) judgeCommit(c *object.Commit) (Refusal, bool) {
+	r, ok := j.judgeSigner(c)
+	if !ok {
+		return r, false
+	}
+	return j.artifactRules(c)
+}
+
+// judgeSigner is every rule of judgeCommit but the artifact rules.
+func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 	h := c.Hash.String()
 	s, serr := verifyCommitSignature(c)
 	if serr != nil {
@@ -225,7 +269,7 @@ func (j judge) judgeCommit(c *object.Commit) (Refusal, bool) {
 	switch {
 	case ok:
 		return j.certified(h, id, s)
-	case r.Rule == RuleNoRecord || r.Rule == RuleKeyMismatch || r.Rule == RuleInactive:
+	case (r.Rule == RuleNoRecord || r.Rule == RuleKeyMismatch || r.Rule == RuleInactive) && j.mayRegister(id, s):
 		return j.selfRegistration(c, id, s, r)
 	}
 	return r, false
@@ -280,9 +324,9 @@ func (j judge) certified(h, id string, s CommitSigner) (Refusal, bool) {
 	case err == nil && leaf != nil:
 		return Refusal{}, true
 	case err == nil:
-		r.Rule, r.Reason = RuleNoCert, fmt.Sprintf("the fleet has certificates but no %s/%s.pem at the fleet revision", fleetCertsDir, id)
+		r.Rule, r.Reason = RuleNoCert, fmt.Sprintf("the fleet has certificates but no %s at the fleet revision", j.pki.Layout.LeafPath(id))
 	case errors.Is(err, errLeafOtherKey):
-		r.Rule, r.Reason = RuleKeyMismatch, fmt.Sprintf("%s/%s.pem is for another key than the member record's", fleetCertsDir, id)
+		r.Rule, r.Reason = RuleKeyMismatch, fmt.Sprintf("%s is for another key than the member record's", j.pki.Layout.LeafPath(id))
 	case errors.Is(err, pki.ErrRevoked):
 		r.Rule, r.Reason = RuleRevoked, fmt.Sprintf("the certificate for agent %q (serial %s) is on the fleet CRL", id, leaf.SerialNumber.Text(16))
 	default:
@@ -325,10 +369,10 @@ func (j judge) selfRegistration(c *object.Commit, id string, s CommitSigner, ref
 	}
 	switch {
 	case leaf == nil && err == nil:
-		refusal.Reason += fmt.Sprintf("; self-registration not admitted: no %s/%s.pem at the fleet revision", fleetCertsDir, id)
+		refusal.Reason += fmt.Sprintf("; self-registration not admitted: no %s at the fleet revision", j.pki.Layout.LeafPath(id))
 	case errors.Is(err, errLeafOtherKey):
 		refusal.Rule = RuleKeyMismatch
-		refusal.Reason = fmt.Sprintf("self-registration not admitted: %s/%s.pem is for another key than the signing key", fleetCertsDir, id)
+		refusal.Reason = fmt.Sprintf("self-registration not admitted: %s is for another key than the signing key", j.pki.Layout.LeafPath(id))
 	case errors.Is(err, pki.ErrRevoked):
 		refusal.Rule = RuleRevoked
 		refusal.Reason = fmt.Sprintf("self-registration not admitted: the certificate for agent %q (serial %s) is on the fleet CRL", id, leaf.SerialNumber.Text(16))
@@ -426,9 +470,22 @@ func (j judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
 	if j.pki.Root.NotBefore.After(at) {
 		at = j.pki.Root.NotBefore
 	}
-	_, err = pki.VerifyInstanceChain(leaf, nil, j.pki.Root, j.pki.CRL, at, pki.UsageClient)
-	return leaf, err
+	ident, err := pki.VerifyInstanceChain(leaf, nil, j.pki.Root, j.pki.CRL, at, pki.UsageClient)
+	if err != nil {
+		return leaf, err
+	}
+	// R2: the leaf's email SAN id must EQUAL the id it is filed under (and
+	// the author's): a leaf the root issued to another agent, planted at this
+	// id's path, vouches for nothing here. Equality only; nothing is parsed.
+	if ident.AgentID != strings.ToLower(id) {
+		return leaf, fmt.Errorf("%w: its email SAN %q names agent %q, not %q", errLeafOtherID, ident.Email, ident.AgentID, id)
+	}
+	return leaf, nil
 }
+
+// errLeafOtherID: the leaf artifact at an id's path was issued to another
+// agent id (or is an operator certificate).
+var errLeafOtherID = errors.New("the certificate is not issued to this agent id")
 
 // onlyUnder reports whether c changes at least one path and every path it
 // changes against EVERY parent (the empty tree for a root commit) is under
@@ -440,20 +497,9 @@ func onlyUnder(c *object.Commit, dir string) bool {
 	if err != nil {
 		return false
 	}
-	parents := []*object.Tree{nil}
-	if c.NumParents() > 0 {
-		parents = parents[:0]
-		for i := range c.NumParents() {
-			p, err := c.Parent(i)
-			if err != nil {
-				return false
-			}
-			pt, err := p.Tree()
-			if err != nil {
-				return false
-			}
-			parents = append(parents, pt)
-		}
+	parents, err := parentTrees(c)
+	if err != nil {
+		return false
 	}
 	changed := false
 	for _, pt := range parents {

@@ -108,7 +108,7 @@ func TestOAuthSign_PrintsThenSignsWhatItPrinted(t *testing.T) {
 	if i, j := strings.Index(stderr, `"localhost:52346"`), strings.Index(stderr, `"Claude Code"`); i < 0 || j < 0 || i > j {
 		t.Fatalf("printout does not lead with the redirect host:\n%s", stderr)
 	}
-	for _, want := range []string{fi.desc.ClientID, fi.desc.Resource, "read write push:own merge:main operator", `"laptop"`, `"read write"`, "headless"} {
+	for _, want := range []string{fi.desc.ClientID, fi.desc.Resource, "read write push:own merge:main operator", `"laptop"`, `"read write"`, `on instance "laptop@agents.knomit.io"`} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("printout lacks %q:\n%s", want, stderr)
 		}

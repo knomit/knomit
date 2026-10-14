@@ -97,9 +97,14 @@ func loadMembers(fleetID string, c *object.Commit, root string) ([]FleetMember, 
 	if err != nil {
 		return nil, err
 	}
+	return loadMembersOfTree(fleetID, tree, root)
+}
+
+// loadMembersOfTree is loadMembers over a tree.
+func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetMember, error) {
 	prefix := path.Join(root, fact.MembersTopic) + "/"
 	var out []FleetMember
-	err = tree.Files().ForEach(func(f *object.File) error {
+	err := tree.Files().ForEach(func(f *object.File) error {
 		if !strings.HasPrefix(f.Name, prefix) || !strings.HasSuffix(f.Name, ".md") {
 			return nil
 		}
@@ -156,8 +161,8 @@ func (s *Service) FleetMembersAt(branch string) ([]FleetMember, error) {
 }
 
 // FleetPKIAt returns the fleet's certificate artifacts at branch in THIS store
-// (a mounted fleet repository): nil, nil when that revision holds no
-// artifacts/fleet/root.crt.
+// (a mounted fleet repository): nil, nil when that revision declares no
+// pki: root or holds no root file.
 func (s *Service) FleetPKIAt(branch string) (*FleetPKI, error) {
 	f, err := s.FleetAt(branch)
 	return f.PKI, err
@@ -182,11 +187,12 @@ func (s *Service) FleetAt(branch string) (Fleet, error) {
 // Fleet is the judge's input from a fleet repository at ONE revision.
 type Fleet struct {
 	Members []FleetMember
-	PKI     *FleetPKI // nil: the revision holds no artifacts/fleet/root.crt
+	PKI     *FleetPKI // nil: the revision declares no pki: root, or holds no root file yet
 }
 
 // loadFleetAt checks that c's ontology is the fleet preset and reads its
-// member records (under <root>/members/) and certificate artifacts.
+// member records (under <root>/members/) and the certificate artifacts its
+// ontology's artifacts section declares (pki: root | crl | leaf).
 func loadFleetAt(fleetID string, c *object.Commit, root string) (Fleet, error) {
 	if root == "" {
 		root = "kb"
@@ -203,103 +209,159 @@ func loadFleetAt(fleetID string, c *object.Commit, root string) (Fleet, error) {
 	if err != nil {
 		return Fleet{}, err
 	}
-	p, err := loadFleetPKI(c)
+	tree, err := c.Tree()
+	if err != nil {
+		return Fleet{}, fmt.Errorf("fleet: %w", err)
+	}
+	p, err := loadPKI(tree, ont)
 	if err != nil {
 		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
 	return Fleet{Members: members, PKI: p}, nil
 }
 
-// The fleet's certificate artifacts (D7): plain files on the fleet's main,
-// written by the fleet root's holder. Repo-root paths, not under the fact root.
-const (
-	fleetRootCertPath = fact.ArtifactsRoot + "/fleet/root.crt"
-	fleetCRLPath      = fact.ArtifactsRoot + "/fleet/crl.pem"
-	fleetCertsDir     = fact.ArtifactsRoot + "/fleet/certs"
-)
+// defaultPKIFileCap bounds a declared certificate artifact that has no
+// max_size of its own: no reader holds an unbounded blob.
+const defaultPKIFileCap = 64 << 10
 
 // FleetPKI is the fleet's certificate artifacts at one revision: the root
-// certificate, the CRL, and the leaf for each agent id at
-// artifacts/fleet/certs/<id>.pem.
+// certificate, the CRL, and the leaf for each agent id, at the paths the
+// fleet's ontology declares (Layout).
 //
-// A file that is present but does not parse never fails the load: a broken
-// artifact on main must not refuse every push, including the one that fixes
-// it. It is kept as an error instead, and every rule that needs it fails
-// CLOSED: a self-registration is never admitted on a root, CRL or leaf
+// A file that is present but does not parse, or is larger than its declared
+// max_size, never fails the load: a broken artifact on main must not refuse
+// every push. It is kept as an error instead, and every rule that needs it
+// fails CLOSED: a self-registration is never admitted on a root, CRL or leaf
 // nobody can read, and a revocation is believed only from a CRL the root
 // signed, about a leaf the root signed.
 type FleetPKI struct {
+	Layout  fact.PKILayout
 	Root    *x509.Certificate    // nil when RootErr is set
-	RootErr error                // root.crt present but unusable
+	RootErr error                // the root file is present but unusable
 	CRL     *x509.RevocationList // nil when CRLErr is set
-	CRLErr  error                // crl.pem absent or unparseable
-	certs   map[string][]byte    // lowercased <id> -> raw PEM (nil: two spellings of one id)
+	CRLErr  error                // the CRL is absent, unparseable or too large
+	certs   map[string]leafBlob  // lowercased <id> -> the leaf file
+}
+
+// leafBlob is one leaf file as read: its bytes, or why it is unusable (two
+// spellings of one id, larger than its cap).
+type leafBlob struct {
+	raw []byte
+	err error
 }
 
 // Cert returns the leaf artifact for agent id, looked up by the id as a file
 // name and never parsed: nil, nil when there is none.
 func (p *FleetPKI) Cert(id string) (*x509.Certificate, error) {
-	raw, ok := p.certs[strings.ToLower(id)]
+	b, ok := p.certs[strings.ToLower(id)]
 	if !ok {
 		return nil, nil
 	}
-	name := fleetCertsDir + "/" + id + ".pem"
-	if raw == nil {
-		return nil, fmt.Errorf("%s: more than one file for this id (case differs)", name)
+	name := p.Layout.LeafPath(id)
+	if b.err != nil {
+		return nil, fmt.Errorf("%s: %w", name, b.err)
 	}
-	blk, _ := pem.Decode(raw)
-	if blk == nil || blk.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("%s: no CERTIFICATE PEM block", name)
-	}
-	c, err := x509.ParseCertificate(blk.Bytes)
+	c, err := parseCertPEM(b.raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return c, nil
 }
 
-// loadFleetPKI reads the certificate artifacts from c's tree: nil, nil when
-// there is no root.crt (no PKI: the judge's rules are what they were before
-// the artifacts existed). The leaves are read as raw bytes here and parsed
-// per author id on demand. They are read eagerly because a caller may judge
-// after its read handle on the store is released (receive-pack's policy
-// callback), so nothing may touch the store lazily; the cost is the same
-// order as the member records, which are all read and parsed already.
-func loadFleetPKI(c *object.Commit) (*FleetPKI, error) {
-	tree, err := c.Tree()
+// parseCertPEM parses one CERTIFICATE PEM block.
+func parseCertPEM(raw []byte) (*x509.Certificate, error) {
+	blk, _ := pem.Decode(raw)
+	if blk == nil || blk.Type != "CERTIFICATE" {
+		return nil, errors.New("no CERTIFICATE PEM block")
+	}
+	return x509.ParseCertificate(blk.Bytes)
+}
+
+// parseRootPEM parses a root certificate: a CA certificate.
+func parseRootPEM(raw []byte) (*x509.Certificate, error) {
+	c, err := parseCertPEM(raw)
 	if err != nil {
 		return nil, err
 	}
-	rootRaw, ok, err := treeBytes(tree, fleetRootCertPath)
-	if err != nil || !ok {
-		return nil, err
+	if !c.IsCA {
+		return nil, errors.New("not a CA certificate")
 	}
-	p := &FleetPKI{certs: map[string][]byte{}}
-	if blk, _ := pem.Decode(rootRaw); blk == nil || blk.Type != "CERTIFICATE" {
-		p.RootErr = fmt.Errorf("%s: no CERTIFICATE PEM block", fleetRootCertPath)
-	} else if rc, perr := x509.ParseCertificate(blk.Bytes); perr != nil {
-		p.RootErr = fmt.Errorf("%s: %w", fleetRootCertPath, perr)
-	} else if !rc.IsCA {
-		p.RootErr = fmt.Errorf("%s is not a CA certificate", fleetRootCertPath)
-	} else {
-		p.Root = rc
+	return c, nil
+}
+
+// parseCRLPEM parses one X509 CRL PEM block.
+func parseCRLPEM(raw []byte) (*x509.RevocationList, error) {
+	blk, _ := pem.Decode(raw)
+	if blk == nil || blk.Type != "X509 CRL" {
+		return nil, fmt.Errorf("%w: no X509 CRL PEM block", pki.ErrCRLInvalid)
 	}
-	crlRaw, ok, err := treeBytes(tree, fleetCRLPath)
+	crl, err := x509.ParseRevocationList(blk.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", pki.ErrCRLInvalid, err)
+	}
+	return crl, nil
+}
+
+// pkiFileCap is the read bound for a declared certificate artifact: its
+// max_size, else defaultPKIFileCap.
+func pkiFileCap(ont *fact.Ontology, p string) int64 {
+	if a, err := ont.ArtifactAttrs(p); err == nil && a.MaxSize > 0 {
+		return a.MaxSize
+	}
+	return defaultPKIFileCap
+}
+
+// errTooLarge: a declared artifact is larger than its cap.
+var errTooLarge = errors.New("larger than its max_size")
+
+// loadPKI reads the certificate artifacts ont declares from tree: nil, nil
+// when ont declares no pki: root or tree holds no root file (no PKI: the
+// judge's rules are what they were before the artifacts existed). The leaves
+// are read as raw bytes here and parsed per author id on demand. They are
+// read eagerly because a caller may judge after its read handle on the store
+// is released (receive-pack's policy callback), so nothing may touch the
+// store lazily. Every read is bounded by the file's cap.
+func loadPKI(tree *object.Tree, ont *fact.Ontology) (*FleetPKI, error) {
+	layout, ok := ont.PKILayout()
+	if !ok {
+		return nil, nil
+	}
+	rootRaw, ok, err := treeBytesCapped(tree, layout.Root, pkiFileCap(ont, layout.Root))
+	if !ok && err == nil {
+		return nil, nil
+	}
+	p := &FleetPKI{Layout: layout, certs: map[string]leafBlob{}}
 	switch {
+	case errors.Is(err, errTooLarge):
+		p.RootErr = fmt.Errorf("%s: %w", layout.Root, err)
 	case err != nil:
 		return nil, err
-	case !ok:
-		p.CRLErr = fmt.Errorf("%w: no %s", pki.ErrCRLMissing, fleetCRLPath)
 	default:
-		if blk, _ := pem.Decode(crlRaw); blk == nil || blk.Type != "X509 CRL" {
-			p.CRLErr = fmt.Errorf("%w: %s: no X509 CRL PEM block", pki.ErrCRLInvalid, fleetCRLPath)
-		} else if crl, perr := x509.ParseRevocationList(blk.Bytes); perr != nil {
-			p.CRLErr = fmt.Errorf("%w: %s: %v", pki.ErrCRLInvalid, fleetCRLPath, perr)
-		} else {
-			p.CRL = crl
+		if p.Root, err = parseRootPEM(rootRaw); err != nil {
+			p.Root, p.RootErr = nil, fmt.Errorf("%s: %w", layout.Root, err)
 		}
 	}
-	certs, err := tree.Tree(fleetCertsDir)
+	if layout.CRL == "" {
+		p.CRLErr = fmt.Errorf("%w: the ontology declares no pki: crl", pki.ErrCRLMissing)
+	} else {
+		crlRaw, ok, err := treeBytesCapped(tree, layout.CRL, pkiFileCap(ont, layout.CRL))
+		switch {
+		case errors.Is(err, errTooLarge):
+			p.CRLErr = fmt.Errorf("%w: %s: %v", pki.ErrCRLInvalid, layout.CRL, err)
+		case err != nil:
+			return nil, err
+		case !ok:
+			p.CRLErr = fmt.Errorf("%w: no %s", pki.ErrCRLMissing, layout.CRL)
+		default:
+			if p.CRL, err = parseCRLPEM(crlRaw); err != nil {
+				p.CRL, p.CRLErr = nil, fmt.Errorf("%s: %w", layout.CRL, err)
+			}
+		}
+	}
+	if !layout.HasLeaves() {
+		return p, nil
+	}
+	certs, err := tree.Tree(layout.LeafDir)
 	if errors.Is(err, object.ErrDirectoryNotFound) {
 		return p, nil
 	}
@@ -307,27 +369,29 @@ func loadFleetPKI(c *object.Commit) (*FleetPKI, error) {
 		return nil, err
 	}
 	for _, e := range certs.Entries {
-		id, isPEM := strings.CutSuffix(e.Name, ".pem")
-		if !isPEM || id == "" || !e.Mode.IsFile() || e.Mode == filemode.Symlink {
+		id, isLeaf := layout.LeafID(e.Name)
+		if !isLeaf || !e.Mode.IsFile() || e.Mode == filemode.Symlink {
 			continue
 		}
-		raw, _, err := treeBytes(certs, e.Name)
-		if err != nil {
+		full := layout.LeafDir + "/" + e.Name
+		raw, _, err := treeBytesCapped(certs, e.Name, pkiFileCap(ont, full))
+		if err != nil && !errors.Is(err, errTooLarge) {
 			return nil, err
 		}
 		key := strings.ToLower(id)
 		if _, dup := p.certs[key]; dup {
-			p.certs[key] = nil // two spellings of one id: neither is believed
+			p.certs[key] = leafBlob{err: errors.New("more than one file for this id (case differs)")} // neither is believed
 			continue
 		}
-		p.certs[key] = raw
+		p.certs[key] = leafBlob{raw: raw, err: err}
 	}
 	return p, nil
 }
 
-// treeBytes reads a regular file from tree: ok=false when absent. A symlink
-// counts as absent: its link text is not the file.
-func treeBytes(tree *object.Tree, p string) ([]byte, bool, error) {
+// treeBytesCapped reads a regular file from tree: ok=false when absent. A
+// symlink counts as absent: its link text is not the file. A blob larger than
+// limit is errTooLarge and is not read.
+func treeBytesCapped(tree *object.Tree, p string, limit int64) ([]byte, bool, error) {
 	f, err := tree.File(p)
 	if errors.Is(err, object.ErrFileNotFound) {
 		return nil, false, nil
@@ -337,6 +401,9 @@ func treeBytes(tree *object.Tree, p string) ([]byte, bool, error) {
 	}
 	if f.Mode == filemode.Symlink {
 		return nil, false, nil
+	}
+	if f.Size > limit {
+		return nil, true, fmt.Errorf("%w (%d > %d bytes)", errTooLarge, f.Size, limit)
 	}
 	s, err := f.Contents()
 	if err != nil {

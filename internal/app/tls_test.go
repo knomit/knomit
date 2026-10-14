@@ -133,11 +133,11 @@ func TestServeTLS_EndToEnd(t *testing.T) {
 	handler, grants := serverStack(t, cfg, keyPath)
 
 	f := pkitest.New(t)
-	self := f.Enroll(t, "server", pki.RoleInstance, keyPath) // the server's OWN key
+	self := f.Enroll(t, "server@agents.knomit.io", keyPath) // the server's OWN key
 	f.Install(t, self, cfg.TLS.Dir)
 	plain, tlsAddr := serveBoth(t, handler, keyPath, cfg.TLS)
 
-	peer := f.Enroll(t, "peer", pki.RoleInstance)
+	peer := f.Enroll(t, "peer@agents.knomit.io")
 	principal := auth.InstancePrincipal(peer.Fingerprint()).String()
 	pc := f.Client(t, peer)
 
@@ -217,10 +217,10 @@ func TestServeTLS_RevocationCutsAnEstablishedConnection(t *testing.T) {
 	keyPath, _ := pkitest.NewKey(t)
 	handler, _ := serverStack(t, cfg, keyPath)
 	f := pkitest.New(t)
-	f.Install(t, f.Enroll(t, "server", pki.RoleInstance, keyPath), cfg.TLS.Dir)
+	f.Install(t, f.Enroll(t, "server@agents.knomit.io", keyPath), cfg.TLS.Dir)
 	_, tlsAddr := serveBoth(t, handler, keyPath, cfg.TLS)
 
-	peer := f.Enroll(t, "peer", pki.RoleInstance)
+	peer := f.Enroll(t, "peer@agents.knomit.io")
 	c, err := tls.Dial("tcp", tlsAddr, f.Client(t, peer).Transport.(*http.Transport).TLSClientConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +266,7 @@ func TestOpenTLSServer_ConfiguredWithoutCertificateIsOffAndWarns(t *testing.T) {
 // A certificate is installed but the CRL is gone: fail closed, an error.
 func TestOpenTLSServer_InstalledButCRLMissingIsAnError(t *testing.T) {
 	f := pkitest.New(t)
-	self := f.Enroll(t, "server", pki.RoleInstance)
+	self := f.Enroll(t, "server@agents.knomit.io")
 	dir := t.TempDir()
 	f.Install(t, self, dir)
 	if err := removeFile(dir + "/" + pki.CRLFile); err != nil {
@@ -288,7 +288,7 @@ func removeFile(p string) error { return os.Remove(p) }
 // it from like, fails this.
 func TestOpenTLSServer_OwnsItsTimeouts(t *testing.T) {
 	f := pkitest.New(t)
-	self := f.Enroll(t, "server", pki.RoleInstance)
+	self := f.Enroll(t, "server@agents.knomit.io")
 	dir := t.TempDir()
 	f.Install(t, self, dir)
 	h := http.NewServeMux()
@@ -321,7 +321,7 @@ func TestOpenTLSServer_OwnsItsTimeouts(t *testing.T) {
 // free address (so only the CRL can).
 func TestOpenTLSServer_AddrInUseIsTypedAndTrustFailureIsNot(t *testing.T) {
 	f := pkitest.New(t)
-	self := f.Enroll(t, "server", pki.RoleInstance)
+	self := f.Enroll(t, "server@agents.knomit.io")
 	dir := t.TempDir()
 	f.Install(t, self, dir)
 

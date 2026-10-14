@@ -77,16 +77,18 @@ func TestVerifyCI_RulesABOverPlainCheckouts(t *testing.T) {
 
 	root, err := pki.NewRoot(filepath.Join(tmp, "root"), "fleet-test", []byte("pw"), 10*365*24*time.Hour)
 	require.NoError(t, err)
-	leaf := func(a agent) (string, *big.Int) {
-		is, err := pki.IssueLeaf(root, a.pub, "label", pki.RoleInstance, 365*24*time.Hour, time.Now())
+	leaf := func(id string, a agent) (string, *big.Int) {
+		email, err := pki.AgentEmail(id)
+		require.NoError(t, err)
+		is, err := pki.IssueLeaf(root, a.pub, email, 365*24*time.Hour, time.Now())
 		require.NoError(t, err)
 		n, ok := new(big.Int).SetString(is.Record.Serial, 16)
 		require.True(t, ok)
 		return string(is.CertPEM), n
 	}
 	agents := map[string]agent{"boss": newAgent("boss"), "joiner": newAgent("joiner"), "gone": newAgent("gone"), "stranger": newAgent("stranger")}
-	jl, _ := leaf(agents["joiner"])
-	gl, gs := leaf(agents["gone"])
+	jl, _ := leaf("joiner", agents["joiner"])
+	gl, gs := leaf("gone", agents["gone"])
 	crl, err := pki.SignCRL(root, []pki.Revoked{{Serial: gs, At: time.Now()}}, big.NewInt(1), time.Now(), time.Now().Add(30*24*time.Hour))
 	require.NoError(t, err)
 
@@ -94,7 +96,11 @@ func TestVerifyCI_RulesABOverPlainCheckouts(t *testing.T) {
 	fleet := filepath.Join(tmp, "fleet")
 	require.NoError(t, os.MkdirAll(fleet, 0o755))
 	git(fleet, nil, "init", "-q", "-b", "main")
-	write(fleet, fact.OntologyFile, "id: fleet\nname: Fleet\nattributes:\n  verify_signatures: enforce\ntopics:\n  members:\n    description: d\n")
+	// The fleet preset as it ships: enforce, and the artifacts section that
+	// declares where the certificates are (R7).
+	preset, err := fact.FleetOntology().Serialize()
+	require.NoError(t, err)
+	write(fleet, fact.OntologyFile, string(preset))
 	write(fleet, "kb/members/boss/1.md", member("boss", agents["boss"]))
 	write(fleet, "kb/members/gone/1.md", member("gone", agents["gone"]))
 	write(fleet, "artifacts/fleet/root.crt", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Cert.Raw})))

@@ -77,7 +77,7 @@ func fleetRoot(t *testing.T) (dir, passFile string) {
 func enroll(t *testing.T, dir, passFile, pubPath string) string {
 	t.Helper()
 	bundle := filepath.Join(t.TempDir(), "bundle.pem")
-	if out, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", passFile, "--out", bundle); err != nil {
+	if out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", passFile, "--out", bundle); err != nil {
 		t.Fatalf("enroll: %v\n%s", err, out)
 	}
 	return bundle
@@ -97,7 +97,7 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
 	fp := pki.Fingerprint(pub)
-	if !strings.Contains(out, "principal: instance:"+fp+"@cert") || !strings.Contains(out, "san: knomit://instance/laptop\n") {
+	if !strings.Contains(out, "principal: instance:"+fp+"@cert") || !strings.Contains(out, "email: \"laptop@agents.knomit.io\"\n") {
 		t.Fatalf("install output:\n%s", out)
 	}
 	if !strings.Contains(out, "[tls]") { // addr unset: it tells the operator what to add
@@ -399,24 +399,56 @@ func TestIdentity_ReplaceRootNeedsConfirmationToo(t *testing.T) {
 }
 
 // The desktop's "Copy public key" line (pki.PublicKeyLine) is accepted by
-// `enroll --pubkey` as the same key, and carries the host enroll would put in
-// the SAN — so an operator given only that line needs no --host.
+// `enroll --pubkey` as the same key. Its knomit@<host> comment names nothing:
+// the certificate's identity is the --agent-id the operator gives (D18).
 func TestIdentity_DesktopPublicKeyLineRoundTripsThroughEnroll(t *testing.T) {
 	home, pub, _ := instanceHome(t, "laptop")
 	line, err := pki.PublicKeyLine(filepath.Join(home, "id_ed25519"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, host, err := parseInstancePubkey(line)
+	got, err := parseInstancePubkey(line)
 	if err != nil {
 		t.Fatalf("enroll --pubkey refuses the desktop's line %q: %v", line, err)
 	}
-	want, _ := os.Hostname()
-	if want == "" {
-		want = "local"
+	if !got.Equal(pub) {
+		t.Fatal("round trip: a different key")
 	}
-	if !got.Equal(pub) || host != want {
-		t.Fatalf("round trip: key equal %v, host %q, want %q", got.Equal(pub), host, want)
+}
+
+// R1/R3 at the CLI: --agent-id issues the instance address, --operator any
+// other address or none; an id holding '+' is refused (it would read back as
+// a shorter id), and so is an agent address passed as an operator's --email.
+func TestIdentity_EnrollEmailFromFlags(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		agentID  string
+		operator bool
+		email    string
+		want     string // "" with wantErr
+		wantErr  string
+	}{
+		{name: "instance", agentID: "laptop-ab12cd34", want: "laptop-ab12cd34@agents.knomit.io"},
+		{name: "operator with address", operator: true, email: "ops@example.com", want: "ops@example.com"},
+		{name: "operator without address", operator: true, want: ""},
+		{name: "plus in id refused", agentID: "a+b", wantErr: "holds '+'"},
+		{name: "neither", wantErr: "--agent-id is required"},
+		{name: "both", agentID: "x", operator: true, wantErr: "exclusive"},
+		{name: "agent address as operator", operator: true, email: "x@agents.knomit.io", wantErr: "is an agent address"},
+		{name: "email on instance", agentID: "x", email: "x@example.com", wantErr: "--email is for an operator"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := enrollEmail(c.agentID, c.operator, c.email)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("enrollEmail = %q, %v; want error containing %q", got, err, c.wantErr)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("enrollEmail = %q, %v; want %q", got, err, c.want)
+			}
+		})
 	}
 }
 
@@ -429,13 +461,13 @@ func TestIdentity_EnrollNeedsAPassphraseAndTheRightOne(t *testing.T) {
 		t.Fatalf("init-root without a keychain wrote no root.key: %v", err)
 	}
 	_, _, pubPath := instanceHome(t, "laptop")
-	if _, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath); err == nil {
+	if _, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath); err == nil {
 		t.Fatal("enroll without --passphrase-file succeeded")
 	}
-	if _, err := run(t, "wrong\n", "identity", "enroll", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err == nil {
+	if _, err := run(t, "wrong\n", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err == nil {
 		t.Fatal("enroll with the wrong passphrase succeeded")
 	}
-	if out, err := run(t, "correct horse\n", "identity", "enroll", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err != nil || !strings.Contains(out, "BEGIN X509 CRL") {
+	if out, err := run(t, "correct horse\n", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err != nil || !strings.Contains(out, "BEGIN X509 CRL") {
 		t.Fatalf("enroll with the passphrase on stdin: %v\n%s", err, out)
 	}
 }

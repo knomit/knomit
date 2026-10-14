@@ -38,10 +38,19 @@ func edPubOf(t *testing.T, k ssh.Signer) ed25519.PublicKey {
 	return pub
 }
 
-// leaf issues a leaf for k's key; the label is free text (D18).
-func (p *testFleetPKI) leaf(k ssh.Signer) (string, *big.Int) {
+// leaf issues an instance leaf for k's key, to agent id (its email SAN is
+// <id>@agents.knomit.io, R1).
+func (p *testFleetPKI) leaf(id string, k ssh.Signer) (string, *big.Int) {
 	p.t.Helper()
-	is, err := pki.IssueLeaf(p.root, edPubOf(p.t, k), "some-label", pki.RoleInstance, 365*24*time.Hour, time.Now())
+	return p.leafAt(id, k, time.Now())
+}
+
+// leafAt is leaf issued as of now (its NotBefore is now minus the skew).
+func (p *testFleetPKI) leafAt(id string, k ssh.Signer, now time.Time) (string, *big.Int) {
+	p.t.Helper()
+	email, err := pki.AgentEmail(id)
+	require.NoError(p.t, err)
+	is, err := pki.IssueLeaf(p.root, edPubOf(p.t, k), email, 365*24*time.Hour, now)
 	require.NoError(p.t, err)
 	serial, ok := new(big.Int).SetString(is.Record.Serial, 16)
 	require.True(p.t, ok)
@@ -65,23 +74,39 @@ func (p *testFleetPKI) rootPEM() string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: p.root.Cert.Raw}))
 }
 
-// artifacts is the artifact files: root.crt, crl.pem (crl "" = absent) and
-// one leaf per id.
+// presetLayout is where the fleet preset declares the certificate artifacts
+// (pki: root, crl, leaf): the tests take the paths from the declaration, as
+// the reader does.
+func presetLayout(t *testing.T) fact.PKILayout {
+	t.Helper()
+	l, ok := fact.FleetOntology().PKILayout()
+	require.True(t, ok)
+	return l
+}
+
+// artifacts is the artifact files at the preset's declared paths: the root,
+// the CRL (crl "" = absent) and one leaf per id.
 func (p *testFleetPKI) artifacts(crl string, leaves map[string]string) map[string]string {
-	out := map[string]string{fleetRootCertPath: p.rootPEM()}
+	l := presetLayout(p.t)
+	out := map[string]string{l.Root: p.rootPEM()}
 	if crl != "" {
-		out[fleetCRLPath] = crl
+		out[l.CRL] = crl
 	}
-	for id, l := range leaves {
-		out[fleetCertsDir+"/"+id+".pem"] = l
+	for id, leaf := range leaves {
+		out[l.LeafPath(id)] = leaf
 	}
 	return out
 }
 
-// fleetEnforceOntology is a fleet-preset ontology (the id is what makes it a
-// fleet) with verify_signatures = enforce, as P4 will ship it.
-const fleetEnforceOntology = "id: fleet\nname: Fleet\nattributes:\n  verify_signatures: enforce\n" +
-	"topics:\n  members:\n    description: d\n"
+// fleetEnforceOntology is the fleet preset as it ships (R7): verify_signatures
+// enforce, and the artifacts section declaring the PKI and its rules.
+var fleetEnforceOntology = func() string {
+	out, err := fact.FleetOntology().Serialize()
+	if err != nil {
+		panic(err)
+	}
+	return string(out)
+}()
 
 // fleetMain commits files (complete tree) onto the fleet repository's main,
 // chaining onto the previous main, and returns the commit.
@@ -151,7 +176,7 @@ func onlyRefusal(t *testing.T, v RangeVerdict) Refusal {
 func TestRuleA_AdmittedWithMatchingCert(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
-	leaf, _ := p.leaf(j)
+	leaf, _ := p.leaf("joiner", j)
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	v := f.checkSelf("")
@@ -185,7 +210,7 @@ func TestRuleA_NoCertIsNoRecord(t *testing.T) {
 func TestRuleA_RevokedSerialRefused(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
-	leaf, serial := p.leaf(j)
+	leaf, serial := p.leaf("joiner", j)
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(serial), map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
@@ -200,7 +225,7 @@ func TestRuleA_RevokedSerialRefused(t *testing.T) {
 func TestRuleA_CertForOtherKeyIsKeyMismatch(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j, other := namedSigner(t, "joiner"), namedSigner(t, "other")
-	leaf, _ := p.leaf(other)
+	leaf, _ := p.leaf("joiner", other)
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
@@ -216,7 +241,7 @@ func TestRuleA_CertForOtherKeyIsKeyMismatch(t *testing.T) {
 func TestRuleA_CertNotChainingRefused(t *testing.T) {
 	p, rogue := newTestFleetPKI(t), newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
-	leaf, _ := rogue.leaf(j)
+	leaf, _ := rogue.leaf("joiner", j)
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
@@ -233,7 +258,7 @@ func TestRuleA_CertNotChainingRefused(t *testing.T) {
 func TestRuleA_ShapeOnlyOwnMembersFolder(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
-	leaf, _ := p.leaf(j)
+	leaf, _ := p.leaf("joiner", j)
 	arts := p.artifacts(p.crl(), map[string]string{"joiner": leaf})
 	cases := map[string][]string{
 		"also outside":      {"kb/members/joiner/1.md", "x", "artifacts/fleet/certs/evil.pem", "x"},
@@ -264,7 +289,7 @@ func TestRuleA_ShapeOnlyOwnMembersFolder(t *testing.T) {
 func TestRuleA_MergeDiffAgainstEveryParent(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
-	leaf, _ := p.leaf(j)
+	leaf, _ := p.leaf("joiner", j)
 	arts := p.artifacts(p.crl(), map[string]string{"joiner": leaf})
 
 	rec1 := memberFile("joiner", fact.MemberActive, j.PublicKey())
@@ -294,28 +319,84 @@ func TestRuleA_MergeDiffAgainstEveryParent(t *testing.T) {
 	require.Equal(t, RuleNoRecord, rules[gside.Hash.String()])
 }
 
-// Rule A covers "the id has no ACTIVE record" and "the record is for another
-// key": a left record (rejoin, D11) and a record holding an old key are both
-// admitted on a leaf for the signing key.
-func TestRuleA_InactiveOrOtherKeyRecordAdmitted(t *testing.T) {
+// R4 (review F2): rule A runs only when the id has NO active record AND the
+// signing key is no record's current key. Every case has a valid leaf for
+// the signing key issued to "joiner", so a missing gate admits:
+//   - a LEFT record under an OLD key: admitted (a rejoin under a new key);
+//   - an ACTIVE record under another key: refused key-mismatch (the F2
+//     takeover: an active record is never overwritten through rule A);
+//   - a left record under the SAME key: refused inactive (the signing key is
+//     that record's current key);
+//   - no record, but the signing key is boss's current key: refused
+//     no-record (one key never becomes the current key of two records).
+//
+// SABOTAGE: make mayRegister return true → the three refusals are admitted →
+// red.
+func TestRuleA_OnlyWithoutAnActiveRecordAndForAnUnusedKey(t *testing.T) {
 	p := newTestFleetPKI(t)
-	j, old := namedSigner(t, "joiner"), namedSigner(t, "old")
-	leaf, _ := p.leaf(j)
-	arts := p.artifacts(p.crl(), map[string]string{"joiner": leaf})
-	for name, rec := range map[string]string{
-		"left record":       memberFile("joiner", fact.MemberLeft, j.PublicKey()),
-		"record of old key": memberFile("joiner", fact.MemberActive, old.PublicKey()),
-	} {
-		f, main, base := selfRegFixture(t, with(arts, "kb/members/joiner/1.md", rec))
-		f.selfReg(main, with(base, "kb/members/joiner/1.md", rec), "joiner", j)
-		v := f.checkSelf("")
-		require.Empty(t, v.Refused, name)
-
-		g, gmain, gbase := selfRegFixture(t, map[string]string{"kb/members/joiner/1.md": rec})
-		g.selfReg(gmain, gbase, "joiner", j)
-		r := onlyRefusal(t, g.checkSelf(""))
-		require.Contains(t, []string{RuleInactive, RuleKeyMismatch}, r.Rule, "%s without PKI: today's rule", name)
+	j, old, boss := namedSigner(t, "joiner"), namedSigner(t, "old"), namedSigner(t, "boss")
+	leaf, _ := p.leaf("joiner", j)
+	bossLeafAsJoiner, _ := p.leaf("joiner", boss)
+	cases := []struct {
+		name   string
+		rec    string // joiner's record on main ("" = none)
+		leaf   string
+		signer ssh.Signer
+		want   string // "" = admitted
+	}{
+		{"left record, old key", memberFile("joiner", fact.MemberLeft, old.PublicKey()), leaf, j, ""},
+		{"active record, other key", memberFile("joiner", fact.MemberActive, old.PublicKey()), leaf, j, RuleKeyMismatch},
+		{"left record, same key", memberFile("joiner", fact.MemberLeft, j.PublicKey()), leaf, j, RuleInactive},
+		{"no record, key is boss's", "", bossLeafAsJoiner, boss, RuleNoRecord},
 	}
+	ran := 0
+	for _, tc := range cases {
+		arts := p.artifacts(p.crl(), map[string]string{"joiner": tc.leaf})
+		if tc.rec != "" {
+			arts["kb/members/joiner/1.md"] = tc.rec
+		}
+		f, main, base := selfRegFixture(t, arts)
+		f.selfReg(main, base, "joiner", tc.signer)
+		v := f.checkSelf("")
+		require.Equal(t, 1, v.Checked, tc.name)
+		if tc.want == "" {
+			require.Empty(t, v.Refused, tc.name)
+		} else {
+			r := onlyRefusal(t, v)
+			require.Equal(t, tc.want, r.Rule, tc.name)
+			require.NotContains(t, r.Reason, "self-registration", "%s: rule A must not even be consulted", tc.name)
+		}
+		ran++
+	}
+	require.Equal(t, 4, ran)
+}
+
+// R2 (review P4): a leaf the root really issued, but to ANOTHER agent id,
+// planted at this id's path, vouches for nothing — the email SAN id must equal
+// the id. Rule B refuses the active member it would otherwise certify, and
+// rule A refuses a self-registration on it.
+//
+// SABOTAGE: drop the AgentID comparison in leafFor → both admitted → red.
+func TestRulesAB_LeafIssuedToAnotherIDIsRefused(t *testing.T) {
+	p := newTestFleetPKI(t)
+	x, j := namedSigner(t, "x"), namedSigner(t, "joiner")
+	xAsBoss, _ := p.leaf("boss", x)
+	f := newRangeFixture(t)
+	f.abFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())},
+		p.artifacts(p.crl(), map[string]string{"agent-x": xAsBoss}))
+	f.kbWith(VerifyEnforce, "agent-x", x)
+	v, err := f.check(VerifyEnforce)
+	require.NoError(t, err)
+	r := onlyRefusal(t, v)
+	require.Equal(t, RuleNoCert, r.Rule)
+	require.Contains(t, r.Reason, `names agent "boss", not "agent-x"`)
+
+	jAsOther, _ := p.leaf("other", j)
+	g, gmain, gbase := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{"joiner": jAsOther}))
+	g.selfReg(gmain, gbase, "joiner", j)
+	r = onlyRefusal(t, g.checkSelf(""))
+	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Contains(t, r.Reason, `names agent "other", not "joiner"`)
 }
 
 // Rule A exists only in the fleet repository: the same self-registration
@@ -324,7 +405,7 @@ func TestRuleA_InactiveOrOtherKeyRecordAdmitted(t *testing.T) {
 func TestRuleA_OnlyInTheFleetRepository(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
-	leaf, _ := p.leaf(j)
+	leaf, _ := p.leaf("joiner", j)
 	f := newRangeFixture(t)
 	files := map[string]string{fact.OntologyFile: fleetOntologyYAML(t)}
 	for k, v := range p.artifacts(p.crl(), map[string]string{"joiner": leaf}) {
@@ -353,13 +434,13 @@ func TestRuleA_IDTextMeansNothing(t *testing.T) {
 	misleading := "joiner-deadbeef"
 	require.NotEqual(t, "deadbeef", fp8)
 
-	leaf, _ := p.leaf(j)
+	leaf, _ := p.leaf(misleading, j)
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{misleading: leaf}))
 	f.selfReg(main, base, misleading, j)
 	require.Empty(t, f.checkSelf("").Refused, "a misleading suffix changes nothing")
 
 	honest := "joiner-" + fp8
-	oleaf, _ := p.leaf(other)
+	oleaf, _ := p.leaf(honest, other)
 	g, gmain, gbase := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{honest: oleaf}))
 	g.selfReg(gmain, gbase, honest, j)
 	require.Equal(t, RuleKeyMismatch, onlyRefusal(t, g.checkSelf("")).Rule, "a matching suffix admits nothing")
@@ -370,7 +451,7 @@ func TestRuleA_IDTextMeansNothing(t *testing.T) {
 func TestRulesAB_UnreadableCRL(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
-	leaf, _ := p.leaf(j)
+	leaf, _ := p.leaf("joiner", j)
 	f, main, base := selfRegFixture(t, p.artifacts("not a crl", map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
@@ -408,7 +489,7 @@ func (f *rangeFixture) abFleet(members map[string]string, artifacts map[string]s
 func TestRuleB_RevokedAtLaterFleetRevisionOnly(t *testing.T) {
 	p := newTestFleetPKI(t)
 	x := namedSigner(t, "x")
-	leaf, serial := p.leaf(x)
+	leaf, serial := p.leaf("agent-x", x)
 	f := newRangeFixture(t)
 	rec := map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}
 	before := f.abFleet(rec, p.artifacts(p.crl(), map[string]string{"agent-x": leaf}))
@@ -440,9 +521,9 @@ func TestRuleB_FailsClosedUnderPKI(t *testing.T) {
 	p, rogue := newTestFleetPKI(t), newTestFleetPKI(t)
 	x, other := namedSigner(t, "x"), namedSigner(t, "other")
 	rec := map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}
-	xleaf, _ := p.leaf(x)
-	oleaf, oserial := p.leaf(other)
-	rleaf, rserial := rogue.leaf(x)
+	xleaf, _ := p.leaf("agent-x", x)
+	oleaf, oserial := p.leaf("agent-x", other)
+	rleaf, rserial := rogue.leaf("agent-x", x)
 	cases := []struct {
 		name   string
 		arts   map[string]string
@@ -484,7 +565,7 @@ func TestRuleB_FailsClosedUnderPKI(t *testing.T) {
 func TestRuleA_RecordMustMatchTheLeaf(t *testing.T) {
 	p := newTestFleetPKI(t)
 	k1, k2 := namedSigner(t, "joiner"), namedSigner(t, "second")
-	leaf, _ := p.leaf(k1)
+	leaf, _ := p.leaf("joiner", k1)
 	arts := p.artifacts(p.crl(), map[string]string{"joiner": leaf})
 	cases := []struct {
 		name   string
@@ -538,9 +619,10 @@ func TestRulesAB_NoPKIIsToday(t *testing.T) {
 		{"inactive", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberLeft, x.PublicKey())}, "agent-x", x, RuleInactive},
 		{"unsigned", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", nil, RuleSignature},
 	}
-	xl, _ := p.leaf(x)
-	yl, _ := p.leaf(y)
-	withLeaves := p.artifacts(p.crl(), map[string]string{"agent-x": xl, "agent-y": yl, "agent-z": xl})
+	xl, _ := p.leaf("agent-x", x)
+	yl, _ := p.leaf("agent-y", y)
+	zl, _ := p.leaf("agent-z", x)
+	withLeaves := p.artifacts(p.crl(), map[string]string{"agent-x": xl, "agent-y": yl, "agent-z": zl})
 	ran := 0
 	for _, row := range rows {
 		for _, arts := range []map[string]string{nil, withLeaves} {
@@ -566,7 +648,7 @@ func TestRulesAB_NoPKIIsToday(t *testing.T) {
 func TestFleetPKIAt_ReadsArtifacts(t *testing.T) {
 	p := newTestFleetPKI(t)
 	x := namedSigner(t, "x")
-	leaf, serial := p.leaf(x)
+	leaf, serial := p.leaf("agent-x", x)
 	h := newFleetPushHost(t, with(p.artifacts(p.crl(serial), map[string]string{"agent-x": leaf})))
 	got, err := h.svc.FleetPKIAt("main")
 	require.NoError(t, err)
