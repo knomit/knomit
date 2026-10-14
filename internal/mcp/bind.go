@@ -198,9 +198,6 @@ func resumeExperimentBinding(ctx context.Context, mgr *repos.Manager, b *repos.B
 	if ri.Subscribed() {
 		return nil, fmt.Errorf("repo %q is a subscription and can hold no experiment", ri.Name())
 	}
-	if ri.IsFleet() {
-		return nil, fmt.Errorf("repo %q: %v; it holds no experiments", ri.Name(), repos.ErrFleetReadOnly)
-	}
 	svc, release, err := ri.Acquire()
 	if err != nil {
 		return nil, errStoreUnavailable

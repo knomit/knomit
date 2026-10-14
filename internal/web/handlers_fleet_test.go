@@ -158,6 +158,13 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 
 	rec = post("/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
 	require.Equal(t, http.StatusCreated, rec.Code, "control: %s", rec.Body.String())
+
+	// The operator's merge of a pushed member branch is NOT an authored write
+	// and stays open on the fleet repository: an unknown branch is a 404, not
+	// the read-only 403.
+	// SABOTAGE: drop the IsFleet exemption in handlePushedMerge -> 403 -> red.
+	rec = post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/peer")+"/merge", `{"expected_tip":"0123456789012345678901234567890123456789"}`)
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 }
 
 // A restore or a connect refused for the reserved fleet id is a 422 the
