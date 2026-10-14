@@ -522,11 +522,15 @@ func TestListTemplates_NotOpenRepoIsNotAWarning(t *testing.T) {
 	_, _, err := half.Acquire()
 	require.Error(t, err, "fixture: the repo is not open")
 
+	// The pinned playbooks' own listing, so the count follows the pin.
+	open, err := m.ListTemplates(context.Background(), "playbooks")
+	require.NoError(t, err)
+	require.NotEmpty(t, open, "fixture: the playbooks list templates")
 	logs := captureLogs(t, zerolog.DebugLevel)
 	for range 2 {
 		got, err := m.ListTemplates(context.Background(), "")
 		require.NoError(t, err)
-		require.Len(t, got, 4, "the open repo is still listed")
+		require.Equal(t, open, got, "the open repo is still listed")
 	}
 	skips := 0
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
