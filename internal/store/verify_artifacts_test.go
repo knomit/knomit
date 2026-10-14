@@ -235,9 +235,8 @@ func TestArtifactRules_Bootstrap(t *testing.T) {
 	require.Equal(t, RuleNoCert, r.Rule, "with the root on main, a member with no CRL and no leaf is refused")
 }
 
-// An oversized trust file already on main (written before the rules) is
-// never read whole: the reader treats it as unusable and rule B fails
-// closed.
+// An oversized trust file at the fleet revision is never read whole: the
+// reader treats it as unusable and rule B fails closed.
 func TestFleetPKI_ReadsAreBounded(t *testing.T) {
 	p := newTestFleetPKI(t)
 	x := namedSigner(t, "x")

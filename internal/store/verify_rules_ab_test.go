@@ -319,56 +319,85 @@ func TestRuleA_MergeDiffAgainstEveryParent(t *testing.T) {
 	require.Equal(t, RuleNoRecord, rules[gside.Hash.String()])
 }
 
-// R4 (review F2): rule A runs only when the id has NO active record AND the
-// signing key is no record's current key. Every case has a valid leaf for
-// the signing key issued to "joiner", so a missing gate admits:
+// R4 (review F2), as clarified by O3: rule A runs only when the id has NO
+// active record AND the signing key is not the current key of a record for a
+// DIFFERENT id. The id's OWN left record holding the same key does not block a
+// rejoin: leave = revoke, so a same-key rejoin needs a fresh leaf the master
+// issued after the leave, and that fresh leaf is the approval. Every case has
+// a leaf for the signing key issued to "joiner", so a missing gate admits:
 //   - a LEFT record under an OLD key: admitted (a rejoin under a new key);
 //   - an ACTIVE record under another key: refused key-mismatch (the F2
 //     takeover: an active record is never overwritten through rule A);
-//   - a left record under the SAME key: refused inactive (the signing key is
-//     that record's current key);
-//   - no record, but the signing key is boss's current key: refused
-//     no-record (one key never becomes the current key of two records).
+//   - a left record under the SAME key, the old leaf on the CRL and a fresh
+//     leaf at certs/joiner.pem: admitted (the same-key rejoin);
+//   - the same, but certs/joiner.pem is still the revoked leaf: refused
+//     revoked by rule A itself (no fresh certificate, no rejoin);
+//   - no record, but the signing key is boss's (active) current key: refused
+//     no-record (one key never becomes the current key of two records);
+//   - no record, but the signing key is the current key of ghost's LEFT
+//     record: refused no-record (another id's record, of any state, blocks).
 //
-// SABOTAGE: make mayRegister return true → the three refusals are admitted →
-// red.
-func TestRuleA_OnlyWithoutAnActiveRecordAndForAnUnusedKey(t *testing.T) {
+// SABOTAGE: make mayRegister return true → the gate rows are admitted → red;
+// restore the any-record key check (len(byKey) == 0) → the same-key rejoin is
+// refused inactive → red.
+func TestRuleA_OnlyWithoutAnActiveRecordAndForAKeyNoOtherIDHolds(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j, old, boss := namedSigner(t, "joiner"), namedSigner(t, "old"), namedSigner(t, "boss")
 	leaf, _ := p.leaf("joiner", j)
+	revokedLeaf, revokedSerial := p.leaf("joiner", j)
+	freshLeaf, _ := p.leaf("joiner", j)
 	bossLeafAsJoiner, _ := p.leaf("joiner", boss)
+	const (
+		admitted = iota
+		gate     // refused before rule A: rule A is not consulted
+		ruleA    // rule A consulted, and it refuses
+	)
+	joinerRec := func(state string, k ssh.PublicKey) map[string]string {
+		return map[string]string{"kb/members/joiner/1.md": memberFile("joiner", state, k)}
+	}
 	cases := []struct {
-		name   string
-		rec    string // joiner's record on main ("" = none)
-		leaf   string
-		signer ssh.Signer
-		want   string // "" = admitted
+		name    string
+		records map[string]string // member records on main besides boss's
+		leaf    string
+		revoked []*big.Int
+		signer  ssh.Signer
+		want    string
+		kind    int
 	}{
-		{"left record, old key", memberFile("joiner", fact.MemberLeft, old.PublicKey()), leaf, j, ""},
-		{"active record, other key", memberFile("joiner", fact.MemberActive, old.PublicKey()), leaf, j, RuleKeyMismatch},
-		{"left record, same key", memberFile("joiner", fact.MemberLeft, j.PublicKey()), leaf, j, RuleInactive},
-		{"no record, key is boss's", "", bossLeafAsJoiner, boss, RuleNoRecord},
+		{"left record, old key", joinerRec(fact.MemberLeft, old.PublicKey()), leaf, nil, j, "", admitted},
+		{"active record, other key", joinerRec(fact.MemberActive, old.PublicKey()), leaf, nil, j, RuleKeyMismatch, gate},
+		{"left record, same key, fresh leaf", joinerRec(fact.MemberLeft, j.PublicKey()), freshLeaf, []*big.Int{revokedSerial}, j, "", admitted},
+		{"left record, same key, revoked leaf", joinerRec(fact.MemberLeft, j.PublicKey()), revokedLeaf, []*big.Int{revokedSerial}, j, RuleRevoked, ruleA},
+		{"no record, key is boss's", nil, bossLeafAsJoiner, nil, boss, RuleNoRecord, gate},
+		{"no record, key is another id's left record's",
+			map[string]string{"kb/members/ghost/1.md": memberFile("ghost", fact.MemberLeft, j.PublicKey())},
+			leaf, nil, j, RuleNoRecord, gate},
 	}
 	ran := 0
 	for _, tc := range cases {
-		arts := p.artifacts(p.crl(), map[string]string{"joiner": tc.leaf})
-		if tc.rec != "" {
-			arts["kb/members/joiner/1.md"] = tc.rec
+		arts := p.artifacts(p.crl(tc.revoked...), map[string]string{"joiner": tc.leaf})
+		for k, v := range tc.records {
+			arts[k] = v
 		}
 		f, main, base := selfRegFixture(t, arts)
 		f.selfReg(main, base, "joiner", tc.signer)
 		v := f.checkSelf("")
 		require.Equal(t, 1, v.Checked, tc.name)
-		if tc.want == "" {
+		switch tc.kind {
+		case admitted:
 			require.Empty(t, v.Refused, tc.name)
-		} else {
+		case gate:
 			r := onlyRefusal(t, v)
 			require.Equal(t, tc.want, r.Rule, tc.name)
 			require.NotContains(t, r.Reason, "self-registration", "%s: rule A must not even be consulted", tc.name)
+		case ruleA:
+			r := onlyRefusal(t, v)
+			require.Equal(t, tc.want, r.Rule, tc.name)
+			require.Contains(t, r.Reason, "self-registration not admitted", "%s: rule A must be the one refusing", tc.name)
 		}
 		ran++
 	}
-	require.Equal(t, 4, ran)
+	require.Equal(t, 6, ran)
 }
 
 // R2 (review P4): a leaf the root really issued, but to ANOTHER agent id,

@@ -590,21 +590,20 @@ func TestRefreshDivergence_NeverAddsOrChangesRootAttributes(t *testing.T) {
 	require.Equal(t, "", refreshDivergence(withLog, presetLog), "an identical root block is preserved, so the refresh may run")
 }
 
-// R7: an EXISTING fleet repository, created from the fleet preset before it
-// declared verify_signatures and the artifacts section, is NOT upgraded by the
-// boot refresh: the new preset would add a root attribute and artifact rules,
-// both repository policy that a refresh (a commit this instance signs) never
-// adds. Such a repository keeps its file — verification off, no artifact
-// rules, no PKI declared — until its operator commits the new ontology. A
-// stored file with the same artifacts section but another root attribute is
-// blocked too; one identical to the preset refreshes.
-func TestRefreshDivergence_OldFleetPresetIsNotUpgraded(t *testing.T) {
-	const oldFleet = "id: fleet\nname: Fleet\ntopics:\n  members:\n    description: d\n"
-	old, err := fact.ParseOntology([]byte(oldFleet))
+// R7: the artifact rules are repository policy, like the root attributes, so
+// refreshDivergence treats them the same way: a stored fleet ontology whose
+// taxonomy is a subset of the preset but whose root attribute or artifacts
+// section differs is divergence (the refresh, a commit this instance signs,
+// never adds, changes or drops policy, 77ad0332). The same rule is the
+// template preset-identity check (ErrTemplatePresetID). One identical to the
+// preset refreshes.
+func TestRefreshDivergence_FleetPolicyIsNeverAddedByRefresh(t *testing.T) {
+	const bare = "id: fleet\nname: Fleet\ntopics:\n  members:\n    description: d\n"
+	noPolicy, err := fact.ParseOntology([]byte(bare))
 	require.NoError(t, err)
 	preset := fact.FleetOntology()
-	require.Equal(t, "", old.SubsetDivergence(preset), "the taxonomy alone is a subset")
-	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(old, preset))
+	require.Equal(t, "", noPolicy.SubsetDivergence(preset), "the taxonomy alone is a subset")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(noPolicy, preset))
 
 	raw, err := preset.Serialize()
 	require.NoError(t, err)

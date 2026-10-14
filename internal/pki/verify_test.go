@@ -121,7 +121,7 @@ func TestVerifyInstanceChain_RoundTripsInstanceAndOperator(t *testing.T) {
 // R3: instance versus operator is decided by the email SAN ALONE. Exactly one
 // email SAN whose domain is exactly agents.knomit.io is an instance (its
 // local part, lowercased, +<op> dropped, is the agent id); anything else is
-// an operator. A legacy knomit://instance/<label> URI makes nothing an
+// an operator. A URI SAN (such as knomit://instance/<label>) makes nothing an
 // instance. The principal is the key's fingerprint in every case.
 func TestIdentityOf_KindFromTheEmailSANAlone(t *testing.T) {
 	f := newFleet(t)
@@ -140,7 +140,7 @@ func TestIdentityOf_KindFromTheEmailSANAlone(t *testing.T) {
 		{"subdomain", []string{"laptop@x.agents.knomit.io"}, nil, ""},
 		{"no email SAN", nil, nil, ""},
 		{"two emails, one an agent address", []string{"laptop@agents.knomit.io", "ops@example.com"}, nil, ""},
-		{"legacy instance URI only", nil, []string{"knomit://instance/laptop"}, ""},
+		{"instance URI SAN only", nil, []string{"knomit://instance/laptop"}, ""},
 	} {
 		leaf := f.crafted(t, pub, c.emails, c.uris...)
 		id, err := f.verify(leaf, UsageClient)

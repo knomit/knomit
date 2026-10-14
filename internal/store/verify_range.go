@@ -201,16 +201,28 @@ func newJudge(f Fleet, selfRoot string, ont *fact.Ontology, kbRoot string) judge
 }
 
 // mayRegister is R4's gate on rule A: the id has NO active record, and the
-// signing key is not ANY record's current key. Rule A is a join (or a rejoin
-// under a new key); it never takes over an id an active record holds, and it
-// never makes one key the current key of two records.
+// signing key is not the current key of a record for a DIFFERENT id (in any
+// state). Rule A is a join or a rejoin; it never takes over an id an active
+// record holds, and it never makes one key the current key of two ids.
+//
+// The id's OWN inactive record holding the signing key does not block: that
+// is a same-key rejoin. Leave = revoke, so the leaf that held the key is on
+// the CRL, and rule A admits the rejoin only on a fresh leaf the master
+// issued after the leave (selfRegistration) — that leaf is the approval.
+// MISREADING: this is not "any record's key" (that refuses every same-key
+// rejoin), and not "an active record's key" (that lets two ids share a key).
 func (j judge) mayRegister(id string, s CommitSigner) bool {
 	for _, m := range j.byAgent[id] {
 		if m.State == fact.MemberActive {
 			return false
 		}
 	}
-	return len(j.byKey[string(s.Key.Marshal())]) == 0
+	for _, m := range j.byKey[string(s.Key.Marshal())] {
+		if strings.ToLower(m.Agent) != id {
+			return false
+		}
+	}
+	return true
 }
 
 // judgeCommit applies the gate's rules to one commit:
@@ -226,8 +238,8 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 //   - rule A: a commit refused above for having no record, a record for
 //     another key, or an inactive record is ADMITTED when it is a
 //     self-registration backed by a valid leaf artifact (selfRegistration) —
-//     only when the id has no active record and the signing key is no
-//     record's current key (R4, mayRegister);
+//     only when the id has no active record and the signing key is not the
+//     current key of another id's record (R4, mayRegister);
 //   - the artifact rules (R7): every commit the rules above admit, signed or
 //     an M3 merge, must also keep every artifact rule of the judged
 //     repository's ontology at main (artifactRules).
