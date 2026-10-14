@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/auth"
+	"knomit/internal/serveraddr"
 )
 
 // The supervisor is tested against a FAKE `knomit`: this test binary itself,
@@ -123,6 +124,15 @@ func fakeServerMain() int {
 		// test exercises that window everywhere.
 		time.Sleep(300 * time.Millisecond)
 		return 3
+	case "exit3-on-eof":
+		// A child that has lost the socket to another server and is on its
+		// way out, held there: alive and never answering until the supervisor
+		// closes its stdin. The window in which another server answers while
+		// our doomed child is still alive stays open for as long as the test
+		// needs it, so no sleep decides whether the test sees it.
+		fmt.Fprintln(os.Stderr, "Error: local listener: the path is held by another live process")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		return 3
 	case "crash":
 		fmt.Fprintln(os.Stderr, "panic: boom\n\ngoroutine 1 [running]:\nmain.main()")
 		return 1
@@ -134,6 +144,17 @@ func fakeServerMain() int {
 		fmt.Fprintln(os.Stderr, "fake knomit: listen:", err)
 		return 7
 	}
+	// server.json naming this process, written after the listener is bound
+	// and BEFORE anything is served, as `knomit serve` does
+	// (Listeners.Advertise runs before serveInto in cmd/serve.go): the
+	// supervisor reads it to tell its own child from another server
+	// answering on the same socket.
+	lock := filepath.Join(os.Getenv("KNOMIT_HOME"), "server.json")
+	if err := serveraddr.WriteLock(lock, serveraddr.LockInfo{PID: os.Getpid(), Version: "0.5.3.fake", Schema: serveraddr.LockSchemaV2}); err != nil {
+		fmt.Fprintln(os.Stderr, "fake knomit: write server.json:", err)
+		return 2
+	}
+	defer func() { _ = serveraddr.RemoveLockIfOwner(lock, os.Getpid()) }()
 	srv := &http.Server{Handler: versionHandler(envOr("FAKE_SERVE_VERSION", "0.5.3.fake"))}
 	go func() { _ = srv.Serve(ln) }()
 	_, _ = io.Copy(io.Discard, os.Stdin) // the supervisor's lifeline

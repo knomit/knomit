@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -215,6 +216,69 @@ func TestSupervisor_Exit3SwitchesToAttach(t *testing.T) {
 	}
 	if d := e.backoffs(); len(d) != 0 {
 		t.Errorf("exit 3 was treated as a crash: backoff %v", d)
+	}
+}
+
+// The exit-3 window in production: another server starts answering on the
+// socket while our child, which lost the socket to it, is still alive. The
+// readiness probe reaches that other server; it must NOT be reported as our
+// own server being ready, and "Restart server" must end refused as attached,
+// never report a restart that did not happen.
+//
+// Deterministic: the child (exit3-on-eof) stays alive until its stdin is
+// closed, so the window is open for the whole first half of the test, and the
+// holder counts the probes it answers. Before the fix the first answered
+// probe made the supervisor ready as owner and no second probe came; after
+// it, probes keep coming and ready is never set while our child is alive.
+func TestSupervisor_HolderAnsweringBeforeExit3IsNotOwnedReady(t *testing.T) {
+	e, s := newFakeEnv(t, "exit3-on-eof")
+	// The holder's own server.json, as a `knomit serve` holding the socket
+	// writes it.
+	const holderPID = 4242
+	if err := serveraddr.WriteLock(filepath.Join(e.home, "server.json"), serveraddr.LockInfo{PID: holderPID, Version: "0.5.3.cli", Schema: serveraddr.LockSchemaV2}); err != nil {
+		t.Fatal(err)
+	}
+	var answered atomic.Int32
+	externalServer(t, e.socket, "0.5.3.cli", func() bool {
+		// Booting until our spawn is recorded (so the supervisor spawns),
+		// then answering while our child is still alive.
+		if len(e.spawns(t)) == 0 {
+			return false
+		}
+		answered.Add(1)
+		return true
+	})
+	s.start(context.Background())
+
+	eventually(t, 30*time.Second, "owned-ready, or three probes answered by the holder", func() bool {
+		return s.status().Ready || answered.Load() >= 3
+	})
+	s.mu.Lock()
+	ready, attached, child := s.ready, s.attached, s.child
+	s.mu.Unlock()
+	if child == nil {
+		t.Fatal("our child is gone before the window was examined; the test did not hold it open")
+	}
+	if ready {
+		t.Fatalf("ready (attached=%v) while our own child is alive and the answering server is pid %d: "+
+			"owned-ready was reported for a server that is not our child", attached, holderPID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := s.restartServer(ctx)
+	var att errAttachedServer
+	if !errors.As(err, &att) || att.pid != holderPID {
+		t.Fatalf("restartServer in the exit-3 window = %v, want the attached refusal naming pid %d", err, holderPID)
+	}
+	if !s.isAttached() || !s.status().Ready {
+		t.Fatalf("after the window: attached=%v ready=%v, want attached and ready", s.isAttached(), s.status().Ready)
+	}
+	if n := len(e.spawns(t)); n != 1 {
+		t.Errorf("spawns = %d, want 1 (the holder is attached to, never replaced)", n)
+	}
+	if d := e.backoffs(); len(d) != 0 {
+		t.Errorf("a backoff was waited out: %v", d)
 	}
 }
 
