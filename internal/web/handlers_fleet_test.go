@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
+	"knomit/internal/web/hal"
 )
 
 func gitRun(t *testing.T, dir string, args ...string) {
@@ -156,4 +158,21 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 
 	rec = post("/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
 	require.Equal(t, http.StatusCreated, rec.Code, "control: %s", rec.Body.String())
+}
+
+// A restore or a connect refused for the reserved fleet id is a 422 the
+// client can read, never the 500 of an unmapped error: Identify refuses a
+// restored fleet repository, guardSwap a connect.
+// SABOTAGE: drop either ErrFleetOntologyReserved arm -> 500 -> red.
+func TestFleetReserved_RestoreAndConnectStatuses(t *testing.T) {
+	err := fmt.Errorf("register repo: %w", repos.ErrFleetOntologyReserved)
+	status, title := archiveErrStatus(err)
+	require.Equal(t, http.StatusUnprocessableEntity, status)
+	require.Equal(t, "Fleet ontology reserved", title)
+
+	require.True(t, isCommitRefusal(err), "a connect refused before anything changed")
+	rec := httptest.NewRecorder()
+	writeCommitProblem(rec, httptest.NewRequest(http.MethodPost, "/repos/kb/origin-sessions/x/commit", nil), hal.URLBuilder{}, "kb", err)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Fleet ontology reserved")
 }
