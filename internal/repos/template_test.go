@@ -664,9 +664,18 @@ func TestListTemplates(t *testing.T) {
 		require.Len(t, ti.Commit, 40)
 		require.True(t, strings.HasPrefix(ti.Fact, "kb/templates/"+ti.Name+"/"), ti.Fact)
 	}
-	require.Equal(t, []string{"playbooks/coding", "playbooks/fleet", "playbooks/general", "playbooks/mission", "team/mission"}, keys)
-	require.Equal(t, "Team mission", all[4].Description)
-	require.True(t, strings.HasPrefix(all[3].Description, "The mission template"), all[3].Description)
+	// The pinned playbooks' templates (what they hold follows the pin), then
+	// the team's, sorted by repo and name.
+	pb, err := m.ListTemplates(context.Background(), "playbooks")
+	require.NoError(t, err)
+	var want []string
+	for _, ti := range pb {
+		want = append(want, "playbooks/"+ti.Name)
+	}
+	require.Subset(t, want, []string{"playbooks/coding", "playbooks/general", "playbooks/mission"})
+	require.Equal(t, append(want, "team/mission"), keys)
+	require.Equal(t, "Team mission", all[len(all)-1].Description)
+	require.True(t, strings.HasPrefix(all[len(all)-2].Description, "The mission template"), all[len(all)-2].Description)
 
 	one, err := m.ListTemplates(context.Background(), "team")
 	require.NoError(t, err)
