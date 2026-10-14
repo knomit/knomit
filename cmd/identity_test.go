@@ -598,3 +598,45 @@ func TestIdentity_RootFingerprintForm(t *testing.T) {
 		t.Fatalf("show does not print the installed root: %v\n%s", err, show)
 	}
 }
+
+// show prints the agent id the instance persisted in control.db — the one
+// app.New resolves and authors commits as — not anything built from the key.
+// The stored id here deliberately shares nothing with the key's fingerprint,
+// so a show that re-derived <host>-<fp8> would print a different id.
+func TestIdentityShow_PrintsPersistedAgentID(t *testing.T) {
+	home, pub, _ := instanceHome(t, "laptop")
+	const stored = "opaque-agent-0001"
+	if _, err := repos.ResolveIdentity(home, repos.Identity{AgentID: stored, Branch: "agent/" + stored, Host: "laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "agent_id: "+stored+"\n") {
+		t.Fatalf("show does not print the persisted agent id %q:\n%s", stored, out)
+	}
+	sshPub, _ := ssh.NewPublicKey(pub)
+	h := sha256.Sum256(sshPub.Marshal())
+	if fp8 := hex.EncodeToString(h[:])[:8]; strings.Contains(out, "agent_id: laptop-"+fp8) {
+		t.Fatalf("show printed an id derived from the key:\n%s", out)
+	}
+}
+
+// With no control.db yet (the instance never served), show says there is no
+// agent id and does NOT create control.db as a side effect.
+func TestIdentityShow_NoAgentIDBeforeFirstBoot(t *testing.T) {
+	home, _, _ := instanceHome(t, "laptop")
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "agent_id: none") {
+		t.Fatalf("show without control.db:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "control.db")); !os.IsNotExist(err) {
+		t.Fatalf("show created control.db (stat err %v)", err)
+	}
+}

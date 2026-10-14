@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -41,6 +42,38 @@ func ResolveIdentity(home string, fresh Identity) (Identity, error) {
 	}
 	defer reg.Close()
 	return resolveIdentity(reg.DB(), fresh, time.Now())
+}
+
+// StoredAgentID returns the agent id persisted in home's control.db — the id
+// app.New resolves at boot and every commit is authored as — for display
+// (`knomit identity show`). It never creates or migrates control.db: found is
+// false when control.db or its instance_identity row does not exist yet (the
+// instance has not started on a binary that persists it). The id is returned
+// as stored; it is opaque and nothing may parse it (D18).
+func StoredAgentID(home string) (id string, found bool, err error) {
+	path := filepath.Join(home, "control.db")
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("instance identity: %w", err)
+	}
+	reg, err := OpenRegistryNoSchema(path)
+	if err != nil {
+		return "", false, fmt.Errorf("instance identity: %w", err)
+	}
+	defer reg.Close()
+	if ok, err := tableExists(reg.DB(), "instance_identity"); err != nil || !ok {
+		return "", false, err
+	}
+	err = reg.DB().QueryRow(`SELECT agent_id FROM instance_identity WHERE id = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("instance identity: read: %w", err)
+	}
+	return id, true, nil
 }
 
 func resolveIdentity(db *sql.DB, fresh Identity, now time.Time) (Identity, error) {
