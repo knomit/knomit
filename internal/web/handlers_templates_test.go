@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/testsupport/playbooks"
@@ -21,13 +22,7 @@ import (
 // knomit-playbooks checkout as "playbooks" (a clone of a local bare repo).
 func templatesServer(t *testing.T, mountPlaybooks bool) (http.Handler, *repos.Manager) {
 	t.Helper()
-	return templatesServerAt(t, t.TempDir(), mountPlaybooks)
-}
-
-// templatesServerAt is templatesServer with filesystem origins allowed under
-// root.
-func templatesServerAt(t *testing.T, root string, mountPlaybooks bool) (http.Handler, *repos.Manager) {
-	t.Helper()
+	root := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb", LocalOriginRoot: root},
 		AgentBranch: "machine/test",
@@ -87,7 +82,9 @@ func TestTemplates_ListingRoutes(t *testing.T) {
 		require.True(t, strings.HasPrefix(ti.Fact, "kb/templates/"+ti.Name+"/"), ti.Fact)
 		names = append(names, ti.Name)
 	}
-	require.Equal(t, []string{"coding", "fleet", "general", "mission"}, names)
+	// The pinned playbooks may still carry a fleet template (it is listed,
+	// and refused at create); the ordinary templates are all there.
+	require.Subset(t, names, []string{"coding", "general", "mission"})
 
 	code, one := getTemplates(t, r, "/repos/playbooks/templates")
 	require.Equal(t, http.StatusOK, code)
@@ -122,7 +119,6 @@ func TestPostRepos_Template(t *testing.T) {
 		{`{"name":"a","mode":"template","template":{"repo":"playbooks","name":"../x"}}`, http.StatusBadRequest, "template name"},
 		{`{"name":"a","mode":"template","template":{"repo":"nope","name":"mission"}}`, http.StatusNotFound, "not mounted"},
 		{`{"name":"a","mode":"template","template":{"repo":"playbooks","name":"absent"}}`, http.StatusNotFound, "template not found"},
-		{`{"name":"a","mode":"template","template":{"repo":"playbooks","name":"fleet"}}`, http.StatusConflict, "initialize"},
 		{`{"name":"a","mode":"clone","template":{"repo":"playbooks","name":"mission"},"origin":{"url":"https://example.com/x.git"}}`, http.StatusBadRequest, "template"},
 		{`{"name":"a","mode":"preset","ontology_preset":"default","template":{"repo":"playbooks","name":"mission"}}`, http.StatusBadRequest, "template"},
 	} {
@@ -150,50 +146,33 @@ func TestCreateErrStatus_TemplateSentinels(t *testing.T) {
 	}
 	status, _ := createErrStatus(repos.ErrTemplateSourceUnavailable)
 	require.Equal(t, http.StatusServiceUnavailable, status)
-	status, title := createErrStatus(repos.ErrTemplateFleetStateUnavailable)
-	require.Equal(t, http.StatusServiceUnavailable, status)
-	require.Equal(t, "Fleet state unavailable", title)
 }
 
-// N5 (#433 review): the two fleet-template 409s carry different titles, and
-// the title comes from the ERROR the create returned: a fleet template as a
-// LOCAL repo is told to use initialize; an initialize on an instance that
-// already has a fleet is NOT (it already is one). Both run the real
-// checkTemplateMode through POST /repos, not a hand-built sentinel.
-// SABOTAGE: put the ErrTemplateFleetLocal arm before ErrTemplateFleetPresent
-// in createErrStatus → the second-fleet row reads "needs initialize" → red.
-func TestPostRepos_FleetTemplateTitles(t *testing.T) {
-	root := t.TempDir()
-	r, m := templatesServerAt(t, root, true)
-	post := func(body string) *httptest.ResponseRecorder {
+// The reserved fleet id over REST: every create door that names the ontology
+// answers 422 "Fleet ontology reserved" before any job starts (no 202), and
+// nothing is created.
+// SABOTAGE: drop the ErrFleetOntologyReserved arm of createErrStatus -> 500
+// -> red.
+func TestPostRepos_FleetOntologyReserved(t *testing.T) {
+	r, m := templatesServer(t, true)
+	fleetYAML, err := fact.FleetOntology().Serialize()
+	require.NoError(t, err)
+	yamlJSON, err := json.Marshal(string(fleetYAML))
+	require.NoError(t, err)
+	for _, body := range []string{
+		`{"name":"f1","mode":"preset","ontology_preset":"fleet"}`,
+		`{"name":"f1","mode":"custom","ontology_yaml":` + string(yamlJSON) + `}`,
+	} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
-		return rec
-	}
-	title := func(rec *httptest.ResponseRecorder) string {
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "%s -> %s", body, rec.Body.String())
 		var p struct {
-			Title string `json:"title"`
+			Title  string `json:"title"`
+			Detail string `json:"detail"`
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p), rec.Body.String())
-		return p.Title
+		require.Equal(t, "Fleet ontology reserved", p.Title)
+		require.Contains(t, p.Detail, "knomit fleet")
+		require.Nil(t, m.Get("f1"))
 	}
-	initFleet := func(name, bare string) string {
-		url := seedBareRemoteForTest(t, filepath.Join(root, bare))
-		return `{"name":"` + name + `","mode":"initialize","origin":{"url":"` + url + `"},"template":{"repo":"playbooks","name":"fleet"}}`
-	}
-
-	rec := post(`{"name":"f0","mode":"template","template":{"repo":"playbooks","name":"fleet"}}`)
-	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
-	require.Equal(t, "Fleet template needs initialize", title(rec))
-
-	rec = post(initFleet("fleet", "fleet1.git"))
-	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
-	require.Equal(t, "done", awaitCreate(t, r, rec)["state"])
-	require.True(t, m.IsFleetRepo("fleet"), "reached: the instance now has a fleet")
-
-	rec = post(initFleet("fleet2", "fleet2.git"))
-	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
-	require.Equal(t, "Fleet already present", title(rec))
-	require.Contains(t, rec.Body.String(), `\"fleet\"`, "the detail names the fleet repository")
-	require.Nil(t, m.Get("fleet2"))
 }

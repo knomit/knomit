@@ -6,18 +6,22 @@ import (
 	"testing"
 )
 
-// TestFleetPreset: the fleet preset is embedded, is recognised by its id, is
-// reachable by preset name and by id (boot refresh), and holds only members.
-func TestFleetPreset(t *testing.T) {
+// TestFleetOntology: the fleet ontology is built in, is recognised by its id,
+// holds only members, and is NOT a preset: no preset name reaches it and the
+// preset refresh does not know its id (the fleet code refreshes it, and only
+// on the master).
+// SABOTAGE: restore the "fleet" arm of OntologyByPreset or EmbeddedPresetByID
+// -> red.
+func TestFleetOntology(t *testing.T) {
 	o := FleetOntology()
 	if !IsFleetOntology(o) {
-		t.Fatalf("fleet preset id = %q", o.ID)
+		t.Fatalf("fleet ontology id = %q", o.ID)
 	}
-	if byName, err := OntologyByPreset("fleet"); err != nil || byName != o {
-		t.Fatalf("OntologyByPreset(fleet) = %v, %v", byName, err)
+	if byName, err := OntologyByPreset(FleetOntologyID); err == nil {
+		t.Fatalf("OntologyByPreset(fleet) = %v, want an unknown-preset error", byName)
 	}
-	if EmbeddedPresetByID(FleetOntologyID) != o {
-		t.Fatal("EmbeddedPresetByID must return the fleet preset")
+	if p := EmbeddedPresetByID(FleetOntologyID); p != nil {
+		t.Fatalf("EmbeddedPresetByID(fleet) = %v, want nil", p.ID)
 	}
 	if _, ok := o.Topics[MembersTopic]; !ok || len(o.Topics) != 1 {
 		t.Fatalf("topics = %v, want exactly members", o.Topics)

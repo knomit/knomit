@@ -150,6 +150,11 @@ func handleExperimentOpen(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 				r.URL.Path)
 			return
 		}
+		if ri.IsFleet() {
+			hal.WriteProblem(w, http.StatusConflict, "Fleet repository is read-only",
+				repos.ErrFleetReadOnly.Error()+"; it holds no experiments", r.URL.Path)
+			return
+		}
 		if oerr := ri.OntologyError(); oerr != nil {
 			hal.WriteProblem(w, http.StatusConflict, "Repository has no ontology",
 				"this repository accepts no writes on any branch, experiments included: "+oerr.Error(),

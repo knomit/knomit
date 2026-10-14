@@ -450,20 +450,6 @@ func artifactsNotSubset(a, b map[string]map[string]any) bool {
 	return false
 }
 
-// ArtifactRulesEqual reports whether a and b declare the same artifacts
-// section. The boot refresh uses it, like RootAttributesEqual, so writing a
-// preset can never add, change or drop an artifact rule.
-func ArtifactRulesEqual(a, b *Ontology) bool {
-	var aa, ba map[string]map[string]any
-	if a != nil {
-		aa = a.Artifacts
-	}
-	if b != nil {
-		ba = b.Artifacts
-	}
-	return !artifactsNotSubset(aa, ba) && !artifactsNotSubset(ba, aa)
-}
-
 // serializeArtifacts emits the section with sorted patterns and keys, values
 // as decoded (unknown keys included).
 func serializeArtifacts(parent *yaml.Node, section map[string]map[string]any) error {

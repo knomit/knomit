@@ -113,6 +113,9 @@ func readOnlyViewMessage(b *repos.Binding) string {
 	ri := b.Write()
 	bound := b.WriteMountBranch()
 	switch {
+	case ri.IsFleet():
+		return fmt.Sprintf("read-only view: repo %q: %v; it accepts no fact writes on any branch, including %q",
+			ri.Name(), repos.ErrFleetReadOnly, bound)
 	case ri.Subscribed():
 		return fmt.Sprintf("read-only view: repo %q is a subscription — it follows a remote branch "+
 			"and accepts no fact writes on any branch, including %q", ri.Name(), bound)

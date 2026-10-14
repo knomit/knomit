@@ -186,13 +186,18 @@ func ExperimentHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolR
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		ri := b.Write()
+		action := req.GetString("action", "")
+		// The fleet repository accepts no authored writes, and an experiment
+		// is one: only listing is answered.
+		if ri.IsFleet() && action != "list" {
+			return mcpgo.NewToolResultError(fmt.Sprintf("repo %q: %v; it holds no experiments", ri.Name(), repos.ErrFleetReadOnly)), nil
+		}
 		svc, release, err := ri.Acquire()
 		if err != nil {
 			return mcpgo.NewToolResultError(errStoreUnavailable.Error()), nil
 		}
 		defer release()
 
-		action := req.GetString("action", "")
 		name := req.GetString("name", "")
 		active := repos.ActiveExperiment(b)
 

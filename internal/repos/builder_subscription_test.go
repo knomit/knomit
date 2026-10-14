@@ -49,7 +49,7 @@ func mountSubscription(m *Manager, uid string, origin Origin) (*RepoInstance, er
 	if err := m.Origins().Set(uid, origin); err != nil {
 		return nil, err
 	}
-	return m.mountExisting(uid, uid, &origin)
+	return m.mountExisting(uid, uid, &origin, false)
 }
 
 // buildSubscription mounts a subscription store with a well-formed
@@ -127,7 +127,7 @@ func TestMount_SubscriptionWithoutUpstreamIsRefused(t *testing.T) {
 	require.NoError(t, m.Origins().Set("uid-sub2", Origin{URL: url, Branch: upstream, Mode: OriginModeSubscribe}))
 	_, err := m.Repos().DB().Exec(`UPDATE repo_origins SET branch = '' WHERE repo_uid = ?`, "uid-sub2")
 	require.NoError(t, err)
-	ri, err := m.mountExisting("uid-sub2", "uid-sub2", &Origin{URL: url, Mode: OriginModeSubscribe})
+	ri, err := m.mountExisting("uid-sub2", "uid-sub2", &Origin{URL: url, Mode: OriginModeSubscribe}, false)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnavailable)
 	require.ErrorContains(t, err, "no upstream branch recorded")

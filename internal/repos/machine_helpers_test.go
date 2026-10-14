@@ -66,7 +66,7 @@ func restartServe(t *testing.T, ri *RepoInstance) {
 // registry row, Populate a no-op — and registers it in m's maps.
 func mountAs(t *testing.T, m *Manager, name, uid string, origin *Origin) *RepoInstance {
 	t.Helper()
-	ri, err := m.mountExisting(name, uid, origin)
+	ri, err := m.mountExisting(name, uid, origin, false)
 	require.NoError(t, err)
 	m.Set(name, ri)
 	return ri

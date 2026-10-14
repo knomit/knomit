@@ -86,7 +86,7 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
-// fleetRepo is the ONE mounted repository whose ontology is the fleet preset
+// fleetRepo is the ONE mounted repository whose ontology is the fleet ontology
 // (nil when there is none). That is how an instance knows its fleet: no name,
 // no URL in control.db.
 func (m *Manager) fleetRepo() *RepoInstance {
@@ -222,7 +222,7 @@ func (m *Manager) originOf(ri *RepoInstance) (*Origin, error) {
 }
 
 // RegisterFleet joins the fleet at url: mount it (clone, with an agent
-// branch), refuse unless its ontology is the fleet preset, write this
+// branch), refuse unless its ontology is the fleet ontology, write this
 // instance's member record on the agent branch, push. A human accepts by
 // merging the agent branch into the fleet's main. The same URL again refreshes
 // the record (for example after a key rotation).
@@ -235,7 +235,7 @@ func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken 
 	case FleetRegistering:
 		return FleetStatus{}, fleetErr(http.StatusConflict, "registration_pending", "a registration is still being pushed; wait for it or check last_error")
 	case FleetUnregistering:
-		return FleetStatus{}, fleetErr(http.StatusConflict, "unregistration_pending", "an unregistration is still being pushed; it must finish (or the fleet repository be archived) before registering again")
+		return FleetStatus{}, fleetErr(http.StatusConflict, "unregistration_pending", "an unregistration is still being pushed; it is retried on every sync and must finish before registering again")
 	}
 	db := m.ControlDB()
 	ri := m.fleetRepo()
@@ -246,14 +246,14 @@ func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken 
 		}
 	} else {
 		name := m.freeFleetName(url)
-		created, cerr := m.Create(ctx, CreateSpec{Name: name, Mode: "clone", Origin: &OriginSpec{URL: url, AuthMethod: authMethod, AuthToken: authToken}}, func(Event) {})
+		created, cerr := m.Create(ctx, CreateSpec{Name: name, Mode: "clone", Origin: &OriginSpec{URL: url, AuthMethod: authMethod, AuthToken: authToken}, fleetDoor: true}, func(Event) {})
 		if cerr != nil {
 			_ = recordFleetAttempt(db, cerr, time.Now())
 			return FleetStatus{}, fleetErr(http.StatusBadGateway, "clone_failed", cerr.Error())
 		}
 		if !fact.IsFleetOntology(created.Ontology()) {
-			msg := "the repository's ontology is not the fleet preset"
-			if derr := m.deleteRepo(created.Name(), "fleet registration: the repository's ontology is not the fleet preset"); derr != nil {
+			msg := "the repository's ontology is not the fleet ontology"
+			if derr := m.deleteRepo(created.Name(), "fleet registration: the repository's ontology is not the fleet ontology"); derr != nil {
 				log.Warn().Err(derr).Str("repo", created.Name()).Msg("fleet: removing a non-fleet mount failed")
 				msg += fmt.Sprintf("; removing the mount %q failed (%v): archive it by hand", created.Name(), derr)
 				_ = recordFleetAttempt(db, errors.New(msg), time.Now())
@@ -275,8 +275,7 @@ func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken 
 // UnregisterFleet leaves the fleet: commit this instance's record with state
 // left on the agent branch, enter unregistering, push. Only a SUCCESSFUL push
 // unmounts the fleet repository and returns to standalone; a failed push is
-// retried on the sync loop until it succeeds or the user archives the fleet
-// repository by hand. A departure is never silent.
+// retried on the sync loop until it succeeds. A departure is never silent.
 func (m *Manager) UnregisterFleet(ctx context.Context) (FleetStatus, error) {
 	row, err := m.fleetDB()
 	if err != nil {
@@ -378,40 +377,15 @@ func (m *Manager) FleetRetry(ctx context.Context) {
 	}
 }
 
-// guardFleetRemoval refuses a bare archive or delete of the fleet repository
-// while registered (the departure must be pushed first, through unregister).
-// While unregistering, archiving by hand is the user's escape hatch: it ends
-// the retries and returns to standalone.
+// guardFleetRemoval refuses an archive or delete of the fleet repository
+// through the generic doors, in every fleet state and for every role: the
+// fleet repository is removed only by knomit's fleet code, which uses the
+// unguarded deleteRepo.
 func (m *Manager) guardFleetRemoval(name string) error {
 	if !m.IsFleetRepo(name) {
 		return nil
 	}
-	db := m.ControlDB()
-	if db == nil {
-		return nil
-	}
-	row, err := readFleetRow(db)
-	if err != nil {
-		return nil
-	}
-	switch row.State {
-	case FleetUnregistering, FleetStandalone:
-		return nil
-	}
-	return fleetErr(http.StatusConflict, "use_unregister", "this is the fleet repository: unregister (DELETE /api/v1/fleet, knomit fleet unregister) so the departure is pushed")
-}
-
-// fleetRemoved is called after the fleet repository was archived or deleted:
-// whatever the state was, the instance is standalone now.
-func (m *Manager) fleetRemoved(wasFleet bool) {
-	if !wasFleet {
-		return
-	}
-	if db := m.ControlDB(); db != nil {
-		if err := setFleetState(db, FleetStandalone, time.Now()); err != nil {
-			log.Warn().Err(err).Msg("fleet: entering standalone after removal failed")
-		}
-	}
+	return fleetErr(http.StatusConflict, "fleet_repository", "this is the fleet repository: it is never archived or deleted directly; leave the fleet with `knomit fleet unregister` (DELETE /api/v1/fleet)")
 }
 
 // writeOwnRecord writes this instance's member record on the fleet

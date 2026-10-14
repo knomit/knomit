@@ -121,7 +121,7 @@ func TestMount_BackgroundsHeavyIndex(t *testing.T) {
 	_ = dbPath
 	addDone := make(chan error, 1)
 	go func() {
-		ri, err := m.mountExisting("kb", "kb", nil)
+		ri, err := m.mountExisting("kb", "kb", nil, false)
 		if err == nil {
 			m.Set("kb", ri)
 		}
@@ -171,7 +171,7 @@ func TestManagerClose_WaitsForBackgroundIndex(t *testing.T) {
 	t.Cleanup(func() { releaseOnce() })
 
 	_ = dbPath
-	ri, err := m.mountExisting("kb", "kb", nil)
+	ri, err := m.mountExisting("kb", "kb", nil, false)
 	require.NoError(t, err)
 	m.Set("kb", ri)
 
@@ -225,7 +225,7 @@ func TestMount_FailedBackgroundIndexReportsError(t *testing.T) {
 	t.Cleanup(func() { _ = m.Close() })
 
 	_ = dbPath
-	ri, err := m.mountExisting("kb", "kb", nil)
+	ri, err := m.mountExisting("kb", "kb", nil, false)
 	require.NoError(t, err)
 	m.Set("kb", ri)
 

@@ -84,7 +84,7 @@ export function registerBlocked(st: FleetStatus): string {
     case 'registering':
       return 'A registration is still being pushed; it is retried on every sync.';
     case 'unregistering':
-      return 'An unregistration is still being pushed; it must finish (or the fleet repository be archived) before registering again.';
+      return 'An unregistration is still being pushed; it is retried on every sync and must finish before registering again.';
     case 'registered':
       return `Registered with ${st.fleet_repo ?? 'a fleet'}: unregister first to join another.`;
   }
@@ -303,9 +303,6 @@ export function FleetPage() {
             Unregister
           </button>
           {unregWhy && <div data-testid="fleet-unregister-why" style={dim}>{unregWhy}</div>}
-          {st.state === 'unregistering' && (
-            <div style={dim}>To stop retrying, archive the fleet repository by hand.</div>
-          )}
           {actErrNode}
         </div>
       ),

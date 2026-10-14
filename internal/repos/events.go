@@ -267,9 +267,19 @@ func guardSwap(ctx context.Context, r *RepoInstance, s SwapSpec) error {
 	if branch == "" {
 		branch = r.ReadBranch()
 	}
-	root, ontErr, err := inspectIncomingStore(ctx, s.TempDB, branch, r.ReadBranch())
+	// The fleet repository is never connected, and a fleet-id store never
+	// arrives by connect (fleet_chokepoint.go): Identify would refuse the
+	// swapped store and turn this repo Unavailable. Refused here, while
+	// refusing is still free.
+	if r.IsFleet() {
+		return fmt.Errorf("%w: repo %q is the fleet repository and is never connected; connect aborted before any change was made", ErrFleetOntologyReserved, r.Name())
+	}
+	root, ontErr, incomingFleet, err := inspectIncomingStore(ctx, s.TempDB, branch, r.ReadBranch())
 	if err != nil {
 		return fmt.Errorf("read the incoming store's identity: %w", err)
+	}
+	if incomingFleet {
+		return fmt.Errorf("%w: the incoming store's ontology id is \"fleet\"; connect aborted before any change was made", ErrFleetOntologyReserved)
 	}
 	// A symlinked ontology refuses the repo at Identify (stages.go), so
 	// installing this store would turn a working repo Unavailable. Refused
@@ -299,31 +309,38 @@ func guardSwap(ctx context.Context, r *RepoInstance, s SwapSpec) error {
 // reachable from branch, and closes it again on every path. symlinkErr is
 // non-nil (wrapping fact.ErrSymlinkNotFollowed) when the ontology on branch
 // or on readBranch — the branch Identify reads once the store is installed —
-// is a symlink. Any other ontology read error (a branch the store does not
-// have, no ontology at all) is not this guard's business: Identify reports
+// is a symlink. fleet is true when the ontology on either branch has the
+// reserved id `fleet`. Any other ontology read error (a branch the store does
+// not have, no ontology at all) is not this guard's business: Identify reports
 // those as OntologyError on a mounted repo.
-func inspectIncomingStore(ctx context.Context, dbPath, branch, readBranch string) (root string, symlinkErr, err error) {
+func inspectIncomingStore(ctx context.Context, dbPath, branch, readBranch string) (root string, symlinkErr error, fleet bool, err error) {
 	svc, err := store.Open(dbPath)
 	if err != nil {
-		return "", nil, fmt.Errorf("open: %w", err)
+		return "", nil, false, fmt.Errorf("open: %w", err)
 	}
 	defer svc.Close()
 	if err := svc.OpenRepo(); err != nil {
-		return "", nil, fmt.Errorf("open git: %w", err)
+		return "", nil, false, fmt.Errorf("open git: %w", err)
 	}
 	root, err = svc.RootCommit(ctx, branch)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	for _, b := range []string{branch, readBranch} {
 		if b == "" {
 			continue
 		}
-		if _, _, oerr := svc.OntologyFileAt(ctx, b); errors.Is(oerr, fact.ErrSymlinkNotFollowed) {
-			return root, fmt.Errorf("on %s: %w", b, oerr), nil
+		_, data, oerr := svc.OntologyFileAt(ctx, b)
+		if errors.Is(oerr, fact.ErrSymlinkNotFollowed) {
+			return root, fmt.Errorf("on %s: %w", b, oerr), false, nil
+		}
+		if oerr == nil && len(data) > 0 {
+			if o, perr := fact.ParseOntology(data); perr == nil && fact.IsFleetOntology(o) {
+				fleet = true
+			}
 		}
 	}
-	return root, nil, nil
+	return root, nil, fleet, nil
 }
 
 // apply runs after the exits and before the walk, on the driver goroutine.

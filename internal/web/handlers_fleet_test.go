@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, "git %v: %s", args, out)
 }
 
-// seedFleetBare is a bare fleet repository whose main holds the fleet preset.
+// seedFleetBare is a bare fleet repository whose main holds the fleet ontology.
 func seedFleetBare(t *testing.T, dir string) string {
 	t.Helper()
 	bare := filepath.Join(dir, "fleet.git")
@@ -111,4 +112,48 @@ func TestFleetMemberRow(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &m))
 	require.Equal(t, []any{}, m["addresses"], "an F09 record without addresses is []")
 	require.Equal(t, map[string]any{}, m["capabilities"])
+}
+
+// The fleet repository is read-only for the fact REST routes: a create on its
+// own agent branch is refused 403 with the one fleet message, and so is an
+// experiment open; an ordinary repo's create is not (control).
+// SABOTAGE: drop the IsFleet arm of RepoInstance.WritableBranch -> the create
+// is accepted -> red.
+func TestFleetREST_FactWritesRefused(t *testing.T) {
+	dir := t.TempDir()
+	url := seedFleetBare(t, dir)
+	home := filepath.Join(dir, "home")
+	require.NoError(t, os.MkdirAll(home, 0o755))
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), Machine: repos.Options{Synchronous: true},
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+	_, err := m.RegisterFleet(context.Background(), url, "", "")
+	require.NoError(t, err)
+	_, err = m.Create(context.Background(), repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
+	require.NoError(t, err)
+	st, err := m.FleetStatus(context.Background())
+	require.NoError(t, err)
+	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := fromLoopback(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+	const fact = `{"title":"T","body":"b","domain":["x"]}`
+	rec := post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+
+	rec = post("/repos/"+st.FleetRepo+"/experiments", `{"name":"exp-a"}`)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Fleet repository is read-only")
+
+	rec = post("/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
+	require.Equal(t, http.StatusCreated, rec.Code, "control: %s", rec.Body.String())
 }

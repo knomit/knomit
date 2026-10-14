@@ -363,7 +363,7 @@ func TestCreateFromTemplate_Refusals(t *testing.T) {
 			"kb/templates/twice/aaaa1111.md":                       templateFactBody("twice", "one"),
 			"kb/templates/twice/bbbb2222.md":                       templateFactBody("twice", "two"),
 			"kb/templates/fact-only/cccc3333.md":                   templateFactBody("fact-only", "no folder"),
-			".knomit/templates/fleet/.knomit/ontology.yaml":        mustPresetYAML(t, "fleet"),
+			".knomit/templates/fleet/.knomit/ontology.yaml":        fleetOntologyYAML(t),
 		},
 		links: map[string]string{".knomit/templates/symlink/.knomit/link.md": "../README.md"},
 		execs: []string{".knomit/templates/exec/.knomit/recipes/run.js"},
@@ -397,7 +397,7 @@ func TestCreateFromTemplate_Refusals(t *testing.T) {
 		{TemplateRef{Repo: "src", Name: "symlink"}, ErrTemplateNotRegular},
 		{TemplateRef{Repo: "src", Name: "exec"}, ErrTemplateNotRegular},
 		{TemplateRef{Repo: "src", Name: "twice"}, ErrTemplateDescribedTwice},
-		{TemplateRef{Repo: "src", Name: "fleet"}, ErrTemplateFleetLocal},
+		{TemplateRef{Repo: "src", Name: "fleet"}, ErrFleetOntologyReserved},
 	} {
 		t.Run(tc.ref.Repo+"/"+tc.ref.Name, func(t *testing.T) {
 			before := repoFiles(t, m)
@@ -618,89 +618,6 @@ func TestCreateFromTemplate_InitializeWritesTreeOnAgentBranchOnly(t *testing.T) 
 	_, err = m.Create(context.Background(), CreateSpec{Name: "proj2", Mode: "initialize",
 		Template: &TemplateRef{Repo: "playbooks", Name: "mission"}, Origin: &OriginSpec{URL: kbRemote}}, nil)
 	require.ErrorIs(t, err, ErrRemoteAlreadyInitialized)
-}
-
-// ── Fleet ─────────────────────────────────────────────────────────────────
-
-// F24 (user ruling 4): the fleet template creates the fleet repository only
-// with initialize on the fleet's git URL — refused as a local repo, and
-// refused while this instance already has a fleet. A repo created from it is
-// the instance's fleet (IsFleetOntology).
-func TestCreateFromTemplate_Fleet(t *testing.T) {
-	root := t.TempDir()
-	m := tmplManager(t, root, "tmpl-host")
-	playbooksSource(t, m, root, "clone")
-	ref := &TemplateRef{Repo: "playbooks", Name: "fleet"}
-
-	_, err := m.Create(context.Background(), CreateSpec{Name: "fleet", Mode: "template", Template: ref}, nil)
-	require.ErrorIs(t, err, ErrTemplateFleetLocal)
-	require.NotErrorIs(t, err, ErrTemplateFleetPresent, "a local fleet template is told to use initialize")
-
-	fleetURL := sourceRepo(t, root, "fleet", sourceSpec{noOntol: true, files: map[string]string{"x.txt": "x"}})
-	spec := CreateSpec{Name: "fleet", Mode: "initialize", Template: ref, Origin: &OriginSpec{URL: fleetURL}}
-
-	// N2 (#433 review): a fleet registration or unregistration in flight
-	// refuses the initialize, from preflight and from Create, and names the
-	// state: a fleet repo is not mounted yet, so only the in-flight check can
-	// refuse it.
-	// SABOTAGE: drop the in-flight case → both rows red; keep only
-	// registering → the unregistering row red.
-	db := m.ControlDB()
-	for _, state := range []string{FleetRegistering, FleetUnregistering} {
-		require.NoError(t, setFleetState(db, state, fixedNow()))
-		row, err := m.fleetDB()
-		require.NoError(t, err)
-		require.Equal(t, state, row.State, "reached: the row the check reads is %s", state)
-		require.Nil(t, m.fleetRepo())
-		// Preflight first, and Create only once it refused: a Create that
-		// got past a missing check would mount a fleet repo mid-
-		// unregistration and block, so the sabotage must fail here, fast.
-		err = m.CreatePreflight(context.Background(), spec)
-		require.ErrorIs(t, err, ErrTemplateFleetPresent, "preflight, %s", state)
-		require.ErrorContains(t, err, "a fleet registration is "+state)
-		_, err = m.Create(context.Background(), spec, nil)
-		require.ErrorIs(t, err, ErrTemplateFleetPresent, "create, %s", state)
-		require.ErrorIs(t, err, ErrTemplateFleetLocal, "every fleet refusal still matches ErrTemplateFleetLocal")
-		require.ErrorContains(t, err, "a fleet registration is "+state)
-		require.Nil(t, m.Get("fleet"))
-	}
-
-	// Added in review: a fleet state that cannot be READ refuses (fail
-	// closed) with its own sentinel, never as a fleet that is present.
-	// SABOTAGE: restore `err == nil &&` (fail open) → this row creates the
-	// fleet → red.
-	_, err = db.Exec(`ALTER TABLE instance_identity RENAME TO instance_identity_away`)
-	require.NoError(t, err)
-	_, err = m.Create(context.Background(), spec, nil)
-	require.ErrorIs(t, err, ErrTemplateFleetStateUnavailable)
-	require.NotErrorIs(t, err, ErrTemplateFleetLocal)
-	require.Nil(t, m.Get("fleet"))
-	_, err = db.Exec(`ALTER TABLE instance_identity_away RENAME TO instance_identity`)
-	require.NoError(t, err)
-
-	// A MISSING identity row is unreadable too, not "nothing in flight":
-	// Manager.Start (and app.New) write it, so a row that is not there was
-	// lost. SABOTAGE: treat sql.ErrNoRows as nothing in flight → red.
-	_, err = db.Exec(`DELETE FROM instance_identity WHERE id = 1`)
-	require.NoError(t, err)
-	_, err = m.Create(context.Background(), spec, nil)
-	require.ErrorIs(t, err, ErrTemplateFleetStateUnavailable, "no identity row")
-	require.ErrorContains(t, err, "no rows")
-	require.Nil(t, m.Get("fleet"))
-	_, err = resolveIdentity(db, Identity{AgentID: "test-abc", Branch: tmplAgent}, fixedNow())
-	require.NoError(t, err)
-
-	require.NoError(t, setFleetState(db, FleetStandalone, fixedNow()))
-	ri, err := m.Create(context.Background(), CreateSpec{Name: "fleet", Mode: "initialize", Template: ref, Origin: &OriginSpec{URL: fleetURL}}, nil)
-	require.NoError(t, err)
-	require.True(t, fact.IsFleetOntology(ri.Ontology()))
-	require.True(t, m.IsFleetRepo("fleet"))
-
-	other := sourceRepo(t, root, "fleet2", sourceSpec{noOntol: true, files: map[string]string{"x.txt": "x"}})
-	_, err = m.Create(context.Background(), CreateSpec{Name: "fleet2", Mode: "initialize", Template: ref, Origin: &OriginSpec{URL: other}}, nil)
-	require.ErrorIs(t, err, ErrTemplateFleetLocal, "a second fleet repository is refused")
-	require.ErrorIs(t, err, ErrTemplateFleetPresent, "and as a fleet that is present, not as a mode error")
-	require.ErrorContains(t, err, `its fleet repository is "fleet"`)
 }
 
 // ── Listing ───────────────────────────────────────────────────────────────

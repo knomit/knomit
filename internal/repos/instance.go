@@ -109,6 +109,12 @@ type RepoInstance struct {
 	// nothing failing. NewTestInstanceWithDeps enforces the pairing; a
 	// production constructor has to uphold it itself.
 	subscribed bool
+	// fleetDoor admits an ontology with id `fleet` at Identify: the mount was
+	// opened by knomit's fleet code (RegisterFleet), or it is a registered
+	// repo mounted at boot. Every other mount of a fleet-id store is refused
+	// there with ErrFleetOntologyReserved (fleet_chokepoint.go). Fixed for the
+	// instance's whole life, so a later walk (an origin change) re-admits it.
+	fleetDoor bool
 	// uid is the registry identity: stable for the repo's whole life, minted at
 	// create, and unchanged by rename or by a store swap. Distinct from id (the
 	// root-commit hash), which is MUTABLE — a disjoint-history connect replaces
@@ -366,6 +372,12 @@ func (ri *RepoInstance) setReadBranch(b string) { ri.readBranch.Store(&b) }
 // Subscribed reports whether this repo is a subscription (see readBranch).
 func (ri *RepoInstance) Subscribed() bool { return ri.subscribed }
 
+// IsFleet reports whether this repo is a fleet repository: its ontology id is
+// `fleet` (fact.IsFleetOntology, the recognition rule). A fleet repository
+// changes only through knomit's fleet code, so no branch of it is writable
+// through MCP or the fact REST routes (WritableBranch).
+func (ri *RepoInstance) IsFleet() bool { return fact.IsFleetOntology(ri.Ontology()) }
+
 // ID returns the repo's stable identity — the root commit hash, identical in
 // every clone and unaffected by renames (lenses RFC decision 11). Caches only
 // successful resolution; failures are retried on the next call and return ""
@@ -423,6 +435,12 @@ func (ri *RepoInstance) WritableBranch(branch string) bool {
 	// skips validation entirely, and both write data the repo cannot vouch
 	// for.
 	if ri.OntologyError() != nil {
+		return false
+	}
+	// THE FLEET REPOSITORY IS READ-ONLY for every authored write (MCP, the
+	// fact REST routes, experiments). It changes only through knomit's fleet
+	// code, which writes through the store and never asks this function.
+	if ri.IsFleet() {
 		return false
 	}
 	// Both sides must be non-empty, and that is load-bearing rather than

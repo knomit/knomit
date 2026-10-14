@@ -228,6 +228,11 @@ var ErrReplicaInLens = errors.New("lens mounts two replicas of the same repo")
 // lens writing through it could never commit anything.
 var ErrLensWriteSubscribed = errors.New("lens write repo is a subscription (read-only)")
 
+// ErrLensWriteFleet is returned when a lens names the fleet repository as its
+// write repo. The fleet repository changes only through `knomit fleet`
+// (ErrFleetReadOnly); a lens may hold it as a read mount only.
+var ErrLensWriteFleet = errors.New("lens write repo is the fleet repository (read-only); a lens may only read it")
+
 // ErrLensBranchUnknown rejects a lens read pinned to a branch its member repo
 // does not have. Failing at create beats mysteriously empty federated reads.
 var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
@@ -320,6 +325,11 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	// branch instead of the real cause.
 	if ris[l.WriteUID].Subscribed() {
 		return fmt.Errorf("%w: %q", ErrLensWriteSubscribed, l.WriteUID)
+	}
+	// The fleet repository accepts no authored writes (WritableBranch), so a
+	// lens writing through it never could; it may be a READ mount.
+	if ris[l.WriteUID].IsFleet() {
+		return fmt.Errorf("%w: %q", ErrLensWriteFleet, l.WriteUID)
 	}
 	if err := checkMemberIDCollision(ids); err != nil {
 		return err
@@ -940,6 +950,7 @@ func (m *Manager) Start() error {
 	}
 	boot.Wait()
 	m.autoArchiveRefused()
+	m.leaveRivalFleetsUnmounted()
 	// Archived repos are registered too — their database stays at
 	// RepoPath(uid) and Restore reopens it in place. Counting only the active
 	// ones would report every archived repo's file as an orphan, inviting an
@@ -977,9 +988,13 @@ func (m *Manager) Start() error {
 // refusing a lens-name collision here would DROP a repo whose collision
 // predates that guard. The invariant is enforced loud at the user-facing
 // creation boundary (CreatePreflight/Create/Restore) and soft here.
-func (m *Manager) mountExisting(name, uid string, origin *Origin) (*RepoInstance, error) {
+//
+// fleetDoor admits a fleet repository at Identify (fleet_chokepoint.go): boot
+// passes true for every registered repo, Restore false.
+func (m *Manager) mountExisting(name, uid string, origin *Origin, fleetDoor bool) (*RepoInstance, error) {
 	subscribed := origin != nil && origin.Mode == OriginModeSubscribe
 	ri := m.newInstance(name, uid, subscribed)
+	ri.fleetDoor = fleetDoor
 	if _, err := m.Send(context.Background(), ri, Mount(MountSpec{Mode: MountExisting})); err != nil {
 		unmount(ri, "mount failed")
 		return nil, err
@@ -1157,7 +1172,7 @@ func (m *Manager) openRegistered(rec RepoRecord) {
 		m.markUnavailable(rec, "unopenable", fmt.Sprintf("read origin: %v", err))
 		return
 	}
-	ri, err := m.mountExisting(rec.Name, rec.UID, origin)
+	ri, err := m.mountExisting(rec.Name, rec.UID, origin, true)
 	if err != nil {
 		reason, cause, detail := unavailableReason(err)
 		m.markUnavailableCause(rec, reason, cause, detail)

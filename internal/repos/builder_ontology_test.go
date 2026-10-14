@@ -3,6 +3,8 @@ package repos
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -11,6 +13,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/pki"
 )
 
 // A repo whose Identify stage has not run (or has exited for a swap)
@@ -590,36 +593,56 @@ func TestRefreshDivergence_NeverAddsOrChangesRootAttributes(t *testing.T) {
 	require.Equal(t, "", refreshDivergence(withLog, presetLog), "an identical root block is preserved, so the refresh may run")
 }
 
-// R7: the artifact rules are repository policy, like the root attributes, so
-// refreshDivergence treats them the same way: a stored fleet ontology whose
-// taxonomy is a subset of the preset but whose root attribute or artifacts
-// section differs is divergence (the refresh, a commit this instance signs,
-// never adds, changes or drops policy, 77ad0332). The same rule is the
-// template preset-identity check (ErrTemplatePresetID). One identical to the
-// preset refreshes.
-func TestRefreshDivergence_FleetPolicyIsNeverAddedByRefresh(t *testing.T) {
-	const bare = "id: fleet\nname: Fleet\ntopics:\n  members:\n    description: d\n"
-	noPolicy, err := fact.ParseOntology([]byte(bare))
-	require.NoError(t, err)
-	preset := fact.FleetOntology()
-	require.Equal(t, "", noPolicy.SubsetDivergence(preset), "the taxonomy alone is a subset")
-	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(noPolicy, preset))
+// staleFleetYAML is a fleet ontology an older release could have written: the
+// members topic only, none of the policy the built-in one declares. The
+// presets' subset rule would never replace it (adding verify_signatures is
+// divergence), which is exactly why the fleet's refresh is not that rule.
+const staleFleetYAML = "id: fleet\nname: Fleet\ntopics:\n  members:\n    description: d\n"
 
-	raw, err := preset.Serialize()
-	require.NoError(t, err)
-	logMode, err := fact.ParseOntology(bytes.Replace(raw, []byte("verify_signatures: enforce\n"), []byte("verify_signatures: log\n"), 1))
-	require.NoError(t, err)
-	require.True(t, fact.ArtifactRulesEqual(logMode, preset), "fixture: only the root attribute differs")
-	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(logMode, preset))
+// bootFleetRepo reboots a home whose one repo holds staleFleetYAML, with or
+// without the fleet root key file in <home>/fleet, and returns the mounted
+// repo and its agent branch.
+func bootFleetRepo(t *testing.T, master bool) (*RepoInstance, string) {
+	t.Helper()
+	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, staleFleetYAML)
+	if master {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, fleetRootDirName), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, fleetRootDirName, pki.RootKeyFile), []byte("key"), 0o600))
+	}
+	m := New(context.Background(), Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+	require.Equal(t, master, m.isFleetMaster(), "fixture: master iff the root key file is there")
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri, "a registered fleet repository mounts at boot")
+	return ri, agentBranch
+}
 
-	// The same root attribute but no artifacts section: only the artifact
-	// guard (ArtifactRulesEqual) stops the preset ADDING the rules.
-	noRules, err := fact.ParseOntology([]byte("id: fleet\nname: Fleet\nattributes:\n  verify_signatures: enforce\ntopics:\n  members:\n    description: d\n"))
+// The fleet ontology is knomit's own: on the MASTER (the fleet root key file
+// is in <home>/fleet) a stored fleet ontology that differs from the built-in
+// one is replaced by it wholesale at boot, policy included.
+// SABOTAGE: return before the write in refreshFleetOntology -> the stored
+// file stays stale -> red.
+func TestFleetOntologyRefresh_MasterReplacesItWholesale(t *testing.T) {
+	ri, agentBranch := bootFleetRepo(t, true)
+	builtIn, err := fact.FleetOntology().Serialize()
 	require.NoError(t, err)
-	require.True(t, fact.RootAttributesEqual(noRules, preset), "fixture: only the artifacts section differs")
-	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(noRules, preset))
+	got, err := testService(t, ri).Facts().ReadFact(context.Background(), agentBranch, OntologyPath, nil)
+	require.NoError(t, err)
+	require.Equal(t, string(builtIn), got.Content, "the master writes the built-in fleet ontology")
+	require.Same(t, fact.FleetOntology(), ri.Ontology(), "and the built-in one is in force")
+	require.Equal(t, "enforce", ri.Ontology().Attributes[fact.AttrVerifySignatures])
+}
 
-	same, err := fact.ParseOntology(raw)
+// A member (no fleet root key file) never refreshes the fleet ontology: it
+// never writes a dot path on the fleet repository.
+// SABOTAGE: drop the isFleetMaster condition -> the member rewrites the file
+// -> red.
+func TestFleetOntologyRefresh_MemberLeavesItAlone(t *testing.T) {
+	ri, agentBranch := bootFleetRepo(t, false)
+	got, err := testService(t, ri).Facts().ReadFact(context.Background(), agentBranch, OntologyPath, nil)
 	require.NoError(t, err)
-	require.Equal(t, "", refreshDivergence(same, preset), "control: the preset itself refreshes")
+	require.Equal(t, staleFleetYAML, got.Content, "the stored file is left byte for byte")
+	require.True(t, ri.IsFleet(), "reached: the repo is the fleet repository")
+	require.NotContains(t, ri.Ontology().Attributes, fact.AttrVerifySignatures, "the stored ontology is in force")
 }

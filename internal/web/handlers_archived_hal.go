@@ -110,7 +110,7 @@ func handleHALRepoArchive(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		info, err := m.ArchiveWith(name, repos.ArchiveReason{Source: repos.ArchiveByUser, Note: note})
 		var fe *repos.FleetError
 		if errors.As(err, &fe) {
-			writeFleetError(w, r, err) // use_unregister: 409 with the hint
+			writeFleetError(w, r, err) // fleet_repository: 409 with the hint
 			return
 		}
 		if err != nil {
@@ -217,6 +217,11 @@ func archiveErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Knowledge base already registered"
 	case errors.Is(err, repos.ErrCreateInFlight):
 		return http.StatusConflict, "Operation in flight"
+	case errors.Is(err, repos.ErrFleetOntologyReserved):
+		// Restoring a fleet repository: Identify refuses it (only knomit's
+		// fleet code mounts one) and the restore is undone. Fleet
+		// repositories are never restored.
+		return http.StatusUnprocessableEntity, "Fleet ontology reserved"
 	case errors.Is(err, fact.ErrSymlinkNotFollowed):
 		// Restoring a repo whose ontology is a symlink: Identify refuses it,
 		// the restore is undone, and the message names the file. The content

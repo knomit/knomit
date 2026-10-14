@@ -65,13 +65,17 @@ var (
 	fleetOntologyOnce sync.Once
 )
 
-// FleetOntologyID is the id of the fleet preset. A repository whose ontology
+// FleetOntologyID is the id of the fleet ontology. A repository whose ontology
 // has this id IS a fleet repository (F09): that is how an instance recognises
 // it, with no reserved name and nothing in any other repository's ontology.
+// The id is reserved: no generic create door accepts it (internal/repos,
+// ErrFleetOntologyReserved), so only knomit's fleet code mounts one.
 const FleetOntologyID = "fleet"
 
-// FleetOntology returns the embedded fleet ontology preset.
-// It panics if the embedded YAML is invalid.
+// FleetOntology returns the fleet ontology built into knomit. It is not a
+// preset: no create mode offers it, and only the fleet code reaches it. It
+// changes only with a knomit release. It panics if the embedded YAML is
+// invalid.
 func FleetOntology() *Ontology {
 	fleetOntologyOnce.Do(func() {
 		o, err := ParseOntology(fleetOntologyYAML)
@@ -87,15 +91,13 @@ func FleetOntology() *Ontology {
 func IsFleetOntology(o *Ontology) bool { return o != nil && o.ID == FleetOntologyID }
 
 // OntologyByPreset returns one of the embedded ontology presets by name.
-// Known presets: "default", "code", "fleet".
+// Known presets: "default", "code".
 func OntologyByPreset(name string) (*Ontology, error) {
 	switch name {
 	case "default":
 		return DefaultOntology(), nil
 	case "code":
 		return CodeOntology(), nil
-	case "fleet":
-		return FleetOntology(), nil
 	default:
 		return nil, fmt.Errorf("unknown ontology preset: %q", name)
 	}
@@ -111,8 +113,6 @@ func EmbeddedPresetByID(id string) *Ontology {
 		return DefaultOntology()
 	case "source-code":
 		return CodeOntology()
-	case FleetOntologyID:
-		return FleetOntology()
 	default:
 		return nil
 	}

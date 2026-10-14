@@ -315,6 +315,12 @@ func (identifyStage) Enter(ctx context.Context, _ *Life, r *RepoInstance) error 
 	if errors.Is(ontErr, fact.ErrSymlinkNotFollowed) {
 		return ontErr
 	}
+	// The reserved fleet id (fleet_chokepoint.go): a fleet repository is
+	// mounted only through the fleet code's door or at boot; every other
+	// mount — clone, subscribe, restore, a swapped store — is refused here.
+	if err := admitFleetOntology(r, ont); err != nil {
+		return err
+	}
 	r.ident.Store(&identity{ontology: ont, ontologyErr: ontErr})
 	r.seedWatermarks(ctx, svc)
 
@@ -470,6 +476,9 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 			Msg("ontology does not parse: this repository will not accept writes until it does")
 		return nil, fmt.Errorf("ontology at %s does not parse: %w", srcPath, err)
 	}
+	if fact.IsFleetOntology(ont) {
+		return r.refreshFleetOntology(ctx, svc, read, srcPath, ont), nil
+	}
 	if preset := fact.EmbeddedPresetByID(ont.ID); !r.subscribed && preset != nil {
 		if divergence := refreshDivergence(ont, preset); divergence == "" {
 			storedY, sErr := ont.Serialize()
@@ -492,16 +501,44 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 	return ont, nil
 }
 
+// refreshFleetOntology is the fleet repository's ontology refresh: the fleet
+// ontology is knomit's own and changes only with a release, so on the MASTER
+// (the fleet root key is on this machine, isFleetMaster) a stored ontology
+// that differs from the built-in one is replaced by it wholesale — not the
+// presets' subset rule. Every other instance leaves it alone: a member never
+// writes a dot path on the fleet repository (the master's push gate refuses
+// one, and the member's branch would be stuck behind the refused commit). A
+// mount that is not admitted (admitFleetOntology) writes nothing either. It
+// returns the ontology in force.
+func (r *RepoInstance) refreshFleetOntology(ctx context.Context, svc *store.Service, read, srcPath string, ont *fact.Ontology) *fact.Ontology {
+	if r.subscribed || !r.fleetDoor || !r.env.m.isFleetMaster() {
+		return ont
+	}
+	builtIn := fact.FleetOntology()
+	storedY, sErr := ont.Serialize()
+	builtInY, bErr := builtIn.Serialize()
+	if sErr != nil || bErr != nil || bytes.Equal(storedY, builtInY) {
+		return ont
+	}
+	log.Info().Str("repo", r.Name()).Str("path", srcPath).
+		Msg("fleet ontology refresh: this instance is the master; replacing the stored fleet ontology with the built-in one")
+	if _, err := svc.Facts().WriteFact(ctx, read, srcPath, string(builtInY),
+		"ontology: refresh to the built-in fleet ontology", "updated"); err != nil {
+		log.Warn().Err(err).Str("repo", r.Name()).Msg("fleet ontology refresh: write failed, keeping stored")
+		return ont
+	}
+	return builtIn
+}
+
 // refreshDivergence is SubsetDivergence plus one rule of its own: the refresh
-// never ADDS or CHANGES a repository-level (root) attribute, nor an artifact
-// rule (R7: the trust-file rules are repository policy too). The refresh
+// never ADDS or CHANGES a repository-level (root) attribute. The refresh
 // commit is signed by this instance, and a change to verify_signatures is a
 // policy decision for whoever merges to the repo's main, never an upgrade's.
 func refreshDivergence(stored, preset *fact.Ontology) string {
 	if d := stored.SubsetDivergence(preset); d != "" {
 		return d
 	}
-	if !fact.RootAttributesEqual(stored, preset) || !fact.ArtifactRulesEqual(stored, preset) {
+	if !fact.RootAttributesEqual(stored, preset) {
 		return fact.DivergenceAttributes
 	}
 	return ""
