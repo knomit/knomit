@@ -117,8 +117,7 @@ func signFlags(c *cobra.Command, o *signOpts) {
 	c.Flags().StringVar(&o.issuer, "sign", "", "sign with the fleet root key instead, for the instance at this issuer URL (run on the fleet root's machine)")
 	c.Flags().StringVar(&o.dir, "dir", "", "with --sign: the fleet root directory (root.crt, issued.jsonl; default <home>/fleet)")
 	c.Flags().StringVar(&o.instance, "instance", "", "with --sign: the instance's full fingerprint; it must be issued by this fleet root and not revoked")
-	c.Flags().StringVar(&o.passFile, "passphrase-file", "", "with --sign: file holding the fleet root passphrase, used only when the key is in root.key (- = stdin, read AFTER the request is shown)")
-	c.Flags().BoolVar(&o.yes, "yes", false, "with --sign: sign without a confirmation (required with a passphrase FILE)")
+	c.Flags().BoolVar(&o.yes, "yes", false, "with --sign: sign without asking \"sign this statement?\" after the request is shown")
 }
 
 // localAPIBase is the URL the local API client addresses. The host is never

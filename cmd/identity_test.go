@@ -62,23 +62,20 @@ func useHome(t *testing.T, home string) {
 	}
 }
 
-func fleetRoot(t *testing.T) (dir, passFile string) {
+func fleetRoot(t *testing.T) string {
 	t.Helper()
-	base := t.TempDir()
-	dir = filepath.Join(base, "fleet")
-	passFile = filepath.Join(base, "pass")
-	os.WriteFile(passFile, []byte("correct horse\n"), 0o600)
-	out, err := run(t, "", "identity", "init-root", "--dir", dir, "--cn", "knomit-fleet-root-test", "--passphrase-file", passFile)
+	dir := filepath.Join(t.TempDir(), "fleet")
+	out, err := run(t, "", "identity", "init-root", "--dir", dir, "--cn", "knomit-fleet-root-test")
 	if err != nil || !strings.Contains(out, "BEGIN CERTIFICATE") {
 		t.Fatalf("init-root: %v\n%s", err, out)
 	}
-	return dir, passFile
+	return dir
 }
 
-func enroll(t *testing.T, dir, passFile, pubPath string) string {
+func enroll(t *testing.T, dir, pubPath string) string {
 	t.Helper()
 	bundle := filepath.Join(t.TempDir(), "bundle.pem")
-	if out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", passFile, "--out", bundle); err != nil {
+	if out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--out", bundle); err != nil {
 		t.Fatalf("enroll: %v\n%s", err, out)
 	}
 	return bundle
@@ -88,9 +85,9 @@ func enroll(t *testing.T, dir, passFile, pubPath string) string {
 // key → install on the instance → show names the same fingerprint the branch
 // name carries → revoke → the reissued CRL lists the serial.
 func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
-	dir, passFile := fleetRoot(t)
+	dir := fleetRoot(t)
 	home, pub, pubPath := instanceHome(t, "laptop")
-	bundle := enroll(t, dir, passFile, pubPath)
+	bundle := enroll(t, dir, pubPath)
 
 	useHome(t, home)
 	out, err := run(t, "", "identity", "install", "--bundle", bundle, "--yes")
@@ -134,7 +131,7 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 	}
 
 	// revoke by fingerprint; the reissued CRL lists its serial.
-	out, err = run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp, "--passphrase-file", passFile)
+	out, err = run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp)
 	if err != nil {
 		t.Fatalf("revoke: %v\n%s", err, out)
 	}
@@ -148,7 +145,7 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 		t.Fatalf("CRL Number %v, lists serial: %v", crl.Number, pki.IsRevoked(crl, leaf.SerialNumber))
 	}
 	// A serial the fleet root never issued is refused rather than revoking nothing.
-	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", "abc123", "--passphrase-file", passFile); err == nil {
+	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", "abc123"); err == nil {
 		t.Fatal("revoke of an unknown serial succeeded")
 	}
 }
@@ -157,10 +154,10 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 // --serial, `revoke --fingerprint` must skip it and still revoke the live one
 // (review M1: it used to stop at the already-revoked serial with an error).
 func TestIdentity_RevokeByFingerprintSkipsAnAlreadyRevokedSerial(t *testing.T) {
-	dir, passFile := fleetRoot(t)
+	dir := fleetRoot(t)
 	_, pub, pubPath := instanceHome(t, "laptop")
-	enroll(t, dir, passFile, pubPath)
-	enroll(t, dir, passFile, pubPath) // re-issue to the same key
+	enroll(t, dir, pubPath)
+	enroll(t, dir, pubPath) // re-issue to the same key
 	fp := pki.Fingerprint(pub)
 	issued, err := readIssued(dir)
 	if err != nil {
@@ -177,10 +174,10 @@ func TestIdentity_RevokeByFingerprintSkipsAnAlreadyRevokedSerial(t *testing.T) {
 		t.Fatalf("want 2 issuances for the key, got %d", len(serials))
 	}
 	old, live := serials[0], serials[1]
-	if out, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", old.Text(16), "--passphrase-file", passFile); err != nil {
+	if out, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", old.Text(16)); err != nil {
 		t.Fatalf("revoke --serial: %v\n%s", err, out)
 	}
-	out, err := run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp, "--passphrase-file", passFile)
+	out, err := run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp)
 	if err != nil {
 		t.Fatalf("revoke --fingerprint after one serial was revoked: %v\n%s", err, out)
 	}
@@ -196,7 +193,7 @@ func TestIdentity_RevokeByFingerprintSkipsAnAlreadyRevokedSerial(t *testing.T) {
 	}
 	// Everything for the key is now revoked: a repeat is not an error and
 	// leaves the CRL alone.
-	out, err = run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp, "--passphrase-file", passFile)
+	out, err = run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp)
 	if err != nil || !strings.Contains(out, "nothing new to revoke") {
 		t.Fatalf("repeat revoke --fingerprint: %v\n%s", err, out)
 	}
@@ -204,35 +201,35 @@ func TestIdentity_RevokeByFingerprintSkipsAnAlreadyRevokedSerial(t *testing.T) {
 		t.Fatalf("a no-op revoke reissued the CRL: #%v", again.Number)
 	}
 	// --serial on an already-revoked serial stays an error.
-	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", old.Text(16), "--passphrase-file", passFile); !errors.Is(err, pki.ErrAlreadyRevoked) {
+	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", old.Text(16)); !errors.Is(err, pki.ErrAlreadyRevoked) {
 		t.Fatalf("revoke --serial of a revoked serial: %v", err)
 	}
 }
 
 func TestIdentity_InstallRefusals(t *testing.T) {
-	dir, passFile := fleetRoot(t)
+	dir := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	_, _, otherPub := instanceHome(t, "other")
 	useHome(t, home)
 
 	// 1. A bundle for ANOTHER instance's key.
-	if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, otherPub)); err == nil || !strings.Contains(err.Error(), "not this instance's") {
+	if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, otherPub)); err == nil || !strings.Contains(err.Error(), "not this instance's") {
 		t.Fatalf("installed a bundle for another key: %v\n%s", err, out)
 	}
 
 	// 2. Positive control, then an OLDER CRL than the one already held.
-	oldBundle := enroll(t, dir, passFile, pubPath) // carries CRL #1
+	oldBundle := enroll(t, dir, pubPath) // carries CRL #1
 	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle, "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	// Revoke some unrelated certificate so the fleet root's CRL moves to #2,
 	// enroll again (bundle carries #2), install it, then try the #1 bundle.
 	_, _, strayPub := instanceHome(t, "stray")
-	stray := parseCert(t, readFirstCert(t, enroll(t, dir, passFile, strayPub)))
-	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", stray.SerialNumber.Text(16), "--passphrase-file", passFile); err != nil {
+	stray := parseCert(t, readFirstCert(t, enroll(t, dir, strayPub)))
+	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", stray.SerialNumber.Text(16)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath)); err != nil {
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, pubPath)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle); err == nil || !strings.Contains(err.Error(), "older") {
@@ -240,8 +237,8 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 	}
 
 	// 3. A bundle from a DIFFERENT fleet root: refused unless --replace-root.
-	dir2, pass2 := fleetRoot(t)
-	foreign := enroll(t, dir2, pass2, pubPath)
+	dir2 := fleetRoot(t)
+	foreign := enroll(t, dir2, pubPath)
 	if _, err := run(t, "", "identity", "install", "--bundle", foreign); err == nil || !strings.Contains(err.Error(), "--replace-root") {
 		t.Fatalf("switched fleets without --replace-root: %v", err)
 	}
@@ -258,7 +255,7 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 		t.Fatalf("A -> B -> old A bundle was accepted: %v", err)
 	}
 	// Positive control: a CURRENT bundle of the first fleet (CRL #2) moves back.
-	if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--replace-root", "--yes"); err != nil {
+	if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, pubPath), "--replace-root", "--yes"); err != nil {
 		t.Fatalf("moving back with a current bundle: %v\n%s", err, out)
 	}
 
@@ -279,18 +276,18 @@ func TestIdentity_RefusedInstallLeavesThePKIDirAlone(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits")
 	}
-	dir, passFile := fleetRoot(t)
+	dir := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
-	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, pubPath), "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	pkiDir := filepath.Join(home, "pki")
 	if err := os.Chmod(pkiDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	dir2, pass2 := fleetRoot(t)
-	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir2, pass2, pubPath)); err == nil || !strings.Contains(err.Error(), "--replace-root") {
+	dir2 := fleetRoot(t)
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir2, pubPath)); err == nil || !strings.Contains(err.Error(), "--replace-root") {
 		t.Fatalf("switched fleets without --replace-root: %v", err)
 	}
 	if fi, _ := os.Stat(pkiDir); fi.Mode().Perm() != 0o750 {
@@ -304,10 +301,10 @@ func TestIdentity_RefusedInstallLeavesThePKIDirAlone(t *testing.T) {
 // --root or --yes, it refuses, naming the fingerprint and the flags, and
 // writes nothing.
 func TestIdentity_FirstInstallConfirmsTheRoot(t *testing.T) {
-	dir, passFile := fleetRoot(t)
+	dir := fleetRoot(t)
 	home, pub, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
-	bundle := enroll(t, dir, passFile, pubPath)
+	bundle := enroll(t, dir, pubPath)
 	rootCert, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile))
 	if err != nil {
 		t.Fatal(err)
@@ -352,7 +349,7 @@ func TestIdentity_FirstInstallConfirmsTheRoot(t *testing.T) {
 			t.Fatalf("--root %s: %v\n%s", rootFP, err, out)
 		}
 		// A renewal under the installed root asks nothing.
-		if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath)); err != nil {
+		if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, pubPath)); err != nil {
 			t.Fatalf("renewal: %v\n%s", err, out)
 		}
 	})
@@ -363,7 +360,7 @@ func TestIdentity_FirstInstallConfirmsTheRoot(t *testing.T) {
 // injected reader, which is what the command passes when stdin is a
 // terminal and --bundle is a file.
 func TestIdentity_InstallPromptsOnATerminal(t *testing.T) {
-	dir, passFile := fleetRoot(t)
+	dir := fleetRoot(t)
 	for _, tc := range []struct {
 		name, answer string
 		yes, ok      bool
@@ -378,7 +375,7 @@ func TestIdentity_InstallPromptsOnATerminal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home, _, pubPath := instanceHome(t, "laptop")
 			useHome(t, home)
-			raw, _ := os.ReadFile(enroll(t, dir, passFile, pubPath))
+			raw, _ := os.ReadFile(enroll(t, dir, pubPath))
 			cfg, err := config.Load()
 			if err != nil {
 				t.Fatal(err)
@@ -414,17 +411,17 @@ func TestIdentity_IsTerminal(t *testing.T) {
 // An installed root.crt that does not load is refused before the bundle's
 // root is shown or asked about, naming the file.
 func TestIdentity_UnreadableRootIsRefusedBeforeAsking(t *testing.T) {
-	dir, passFile := fleetRoot(t)
+	dir := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
-	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, pubPath), "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	rootFile := filepath.Join(home, "pki", pki.RootCertFile)
 	if err := os.WriteFile(rootFile, []byte("garbled"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes")
+	out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, pubPath), "--yes")
 	if err == nil || !strings.Contains(err.Error(), rootFile) {
 		t.Fatalf("installed over an unreadable root.crt: %v\n%s", err, out)
 	}
@@ -436,14 +433,14 @@ func TestIdentity_UnreadableRootIsRefusedBeforeAsking(t *testing.T) {
 // --replace-root is the permission to move; the new root still needs the
 // same confirmation as a first install.
 func TestIdentity_ReplaceRootNeedsConfirmationToo(t *testing.T) {
-	dir, passFile := fleetRoot(t)
+	dir := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
-	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, pubPath), "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	dir2, pass2 := fleetRoot(t)
-	foreign := enroll(t, dir2, pass2, pubPath)
+	dir2 := fleetRoot(t)
+	foreign := enroll(t, dir2, pubPath)
 	out, err := run(t, "", "identity", "install", "--bundle", foreign, "--replace-root")
 	if err == nil || !strings.Contains(err.Error(), "--root") || !strings.Contains(out, "installed fleet root: ") {
 		t.Fatalf("replaced the root without confirmation: %v\n%s", err, out)
@@ -509,23 +506,46 @@ func TestIdentity_EnrollEmailFromFlags(t *testing.T) {
 	}
 }
 
-// With no usable keychain the root key is in the passphrase-encrypted
-// root.key, and enroll needs the right passphrase to open it.
-func TestIdentity_EnrollNeedsAPassphraseAndTheRightOne(t *testing.T) {
-	useKeychain(t, &cliKeychain{items: map[string]string{}, setErr: errors.New("no Secret Service")})
-	dir, _ := fleetRoot(t)
-	if _, err := os.Stat(filepath.Join(dir, pki.RootKeyFile)); err != nil {
-		t.Fatalf("init-root without a keychain wrote no root.key: %v", err)
+// init-root writes the root key as a plain file and enroll opens it with
+// no input at all; a fleet root directory without root.key is "not the
+// master" (pki.ErrNoRootKey) for enroll and revoke alike, and nothing is
+// issued or revoked. The passphrase flag and export-root/import-root are
+// gone.
+func TestIdentity_RootKeyIsAPlainFileEnrollAsksNothing(t *testing.T) {
+	dir := fleetRoot(t)
+	raw, err := os.ReadFile(filepath.Join(dir, pki.RootKeyFile))
+	if err != nil || !strings.Contains(string(raw), "OPENSSH PRIVATE KEY") {
+		t.Fatalf("init-root wrote no plain root.key: %v", err)
 	}
-	_, _, pubPath := instanceHome(t, "laptop")
-	if _, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath); err == nil {
-		t.Fatal("enroll without --passphrase-file succeeded")
+	_, pub, pubPath := instanceHome(t, "laptop")
+	if out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath); err != nil || !strings.Contains(out, "BEGIN X509 CRL") {
+		t.Fatalf("enroll with empty stdin: %v\n%s", err, out)
 	}
-	if _, err := run(t, "wrong\n", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err == nil {
-		t.Fatal("enroll with the wrong passphrase succeeded")
+	issued, _ := os.ReadFile(filepath.Join(dir, pki.IssuedLogFile))
+	crl, _ := os.ReadFile(filepath.Join(dir, pki.CRLFile))
+	if err := os.Remove(filepath.Join(dir, pki.RootKeyFile)); err != nil {
+		t.Fatal(err)
 	}
-	if out, err := run(t, "correct horse\n", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err != nil || !strings.Contains(out, "BEGIN X509 CRL") {
-		t.Fatalf("enroll with the passphrase on stdin: %v\n%s", err, out)
+	if _, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath); !errors.Is(err, pki.ErrNoRootKey) {
+		t.Fatalf("enroll without root.key: %v, want ErrNoRootKey", err)
+	}
+	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", pki.Fingerprint(pub)); !errors.Is(err, pki.ErrNoRootKey) {
+		t.Fatalf("revoke without root.key: %v, want ErrNoRootKey", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, pki.IssuedLogFile)); string(after) != string(issued) {
+		t.Fatal("a refused enroll wrote to issued.jsonl")
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, pki.CRLFile)); string(after) != string(crl) {
+		t.Fatal("a refused revoke reissued the CRL")
+	}
+	for _, args := range [][]string{
+		{"identity", "init-root", "--dir", filepath.Join(t.TempDir(), "f"), "--cn", "x", "--passphrase-file", "-"},
+		{"identity", "export-root", "--dir", dir, "--out", filepath.Join(t.TempDir(), "x")},
+		{"identity", "import-root", "x", "--dir", dir},
+	} {
+		if _, err := run(t, "", args...); err == nil {
+			t.Fatalf("%v: accepted; the passphrase flag and the export/import commands are gone", args)
+		}
 	}
 }
 
@@ -615,13 +635,8 @@ func parseCert(t *testing.T, raw []byte) *x509.Certificate {
 // get "is not the bundle's fleet root" instead of the form), or drop the
 // init-root line (red).
 func TestIdentity_RootFingerprintForm(t *testing.T) {
-	base := t.TempDir()
-	dir := filepath.Join(base, "fleet")
-	passFile := filepath.Join(base, "pass")
-	if err := os.WriteFile(passFile, []byte("correct horse\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	initOut, err := run(t, "", "identity", "init-root", "--dir", dir, "--cn", "knomit-fleet-root-test", "--passphrase-file", passFile)
+	dir := filepath.Join(t.TempDir(), "fleet")
+	initOut, err := run(t, "", "identity", "init-root", "--dir", dir, "--cn", "knomit-fleet-root-test")
 	if err != nil {
 		t.Fatalf("init-root: %v\n%s", err, initOut)
 	}
@@ -649,7 +664,7 @@ func TestIdentity_RootFingerprintForm(t *testing.T) {
 
 	home, _, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
-	bundle := enroll(t, dir, passFile, pubPath)
+	bundle := enroll(t, dir, pubPath)
 	pkiDir := filepath.Join(home, "pki")
 
 	malformed := map[string]string{

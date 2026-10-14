@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/platform/privdir"
 )
 
 // Root is the fleet's trust anchor: the fleet root certificate and, on the
-// operator's machine only, its signer. Instances hold the certificate alone
-// (LoadRootCert); the private half never lives on a fleet machine.
+// master only (the machine whose fleet root directory holds root.key), its
+// signer. Every other instance holds the certificate alone (LoadRootCert).
 type Root struct {
 	Cert   *x509.Certificate
 	Signer crypto.Signer
@@ -30,32 +32,45 @@ type Root struct {
 // bound, not a measured property of any fleet.
 const clockSkew = 5 * time.Minute
 
-// NewRoot creates the fleet root in dir with FILE custody: a self-signed
-// Ed25519 CA whose key is written ONLY passphrase-encrypted (OpenSSH format,
-// 0600) and whose certificate is written beside it. It refuses to run over
-// an existing root — replacing a root orphans every certificate in the
-// fleet — and refuses an empty passphrase, since this key signs every
-// identity. `identity init-root` uses CreateRoot, which prefers the OS
-// keychain; NewRoot is the file-only form fixtures build on.
-func NewRoot(dir, cn string, passphrase []byte, validity time.Duration) (Root, error) {
-	if len(passphrase) == 0 {
-		return Root{}, errors.New("pki: the root key requires a passphrase")
+// ErrNoRootKey: the fleet root directory holds no root.key, so this machine
+// is not the one that signs for the fleet (it is not the master).
+var ErrNoRootKey = errors.New("pki: the fleet root key is not on this machine")
+
+// NewRoot creates the fleet root in dir: a self-signed Ed25519 CA whose key
+// is written as a plain, unencrypted OpenSSH private key (root.key, 0600),
+// like an SSH key, and whose certificate is written beside it (root.crt).
+// dir is made private to the user first (privdir.Ensure: 0700 on unix, a
+// protected owner-only DACL on Windows), so everything written inside it
+// inherits owner-only access on every OS. There is no keychain and no
+// passphrase: whoever can read dir can sign for the fleet, exactly as with
+// ~/.ssh/id_ed25519.
+//
+// It refuses to run over an existing root.key or root.crt: replacing a root
+// orphans every certificate in the fleet. root.key is created O_EXCL, which
+// is the check that holds under a race with a second writer.
+func NewRoot(dir, cn string, validity time.Duration) (Root, error) {
+	for _, f := range []string{RootKeyFile, RootCertFile} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			return Root{}, fmt.Errorf("pki: %s already exists; refusing to replace the fleet root", filepath.Join(dir, f))
+		}
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := privdir.Ensure(dir); err != nil {
 		return Root{}, fmt.Errorf("pki: create fleet root dir: %w", err)
-	}
-	keyPath := filepath.Join(dir, RootKeyFile)
-	if _, err := os.Stat(keyPath); err == nil {
-		return Root{}, fmt.Errorf("pki: %s already exists; refusing to replace the fleet root", keyPath)
 	}
 	root, priv, err := generateRoot(cn, validity)
 	if err != nil {
 		return Root{}, err
 	}
-	if err := writeEncryptedRootKey(keyPath, priv, cn, passphrase); err != nil {
-		return Root{}, err
+	block, err := ssh.MarshalPrivateKey(priv, cn)
+	if err != nil {
+		return Root{}, fmt.Errorf("pki: encode root key: %w", err)
 	}
-	if err := writeFileAtomic(filepath.Join(dir, RootCertFile), certPEM(root.Cert.Raw), 0o644); err != nil {
+	keyPath := filepath.Join(dir, RootKeyFile)
+	if err := writeExclusive(keyPath, pem.EncodeToMemory(block), 0o600); err != nil {
+		return Root{}, fmt.Errorf("pki: write root key: %w", err)
+	}
+	if err := writeExclusive(filepath.Join(dir, RootCertFile), certPEM(root.Cert.Raw), 0o644); err != nil {
+		os.Remove(keyPath)
 		return Root{}, err
 	}
 	return root, nil
@@ -93,33 +108,21 @@ func generateRoot(cn string, validity time.Duration) (Root, ed25519.PrivateKey, 
 	return Root{Cert: cert, Signer: priv}, priv, nil
 }
 
-// writeEncryptedRootKey writes priv passphrase-encrypted (OpenSSH format) to
-// a NEW file at path, 0600. O_EXCL is the check that holds under a race
-// with a second writer.
-func writeEncryptedRootKey(path string, priv ed25519.PrivateKey, cn string, passphrase []byte) error {
-	if len(passphrase) == 0 {
-		return errors.New("pki: the root key requires a passphrase")
+// LoadRoot opens the fleet root in dir: the plain root.key and root.crt
+// beside it. It asks for nothing. A missing root.key is ErrNoRootKey (this
+// machine is not the master); a pair whose halves do not match is refused.
+func LoadRoot(dir string) (Root, error) {
+	keyPath := filepath.Join(dir, RootKeyFile)
+	raw, err := os.ReadFile(keyPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return Root{}, fmt.Errorf("%w: %s is absent", ErrNoRootKey, keyPath)
 	}
-	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, cn, passphrase)
-	if err != nil {
-		return fmt.Errorf("pki: encrypt root key: %w", err)
-	}
-	if err := writeExclusive(path, pem.EncodeToMemory(block), 0o600); err != nil {
-		return fmt.Errorf("pki: write root key: %w", err)
-	}
-	return nil
-}
-
-// LoadRoot reads the root key (decrypting it with passphrase) and its
-// certificate, and refuses a pair whose halves do not match.
-func LoadRoot(dir string, passphrase []byte) (Root, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, RootKeyFile))
 	if err != nil {
 		return Root{}, fmt.Errorf("pki: read root key: %w", err)
 	}
-	k, err := ssh.ParseRawPrivateKeyWithPassphrase(raw, passphrase)
+	k, err := ssh.ParseRawPrivateKey(raw)
 	if err != nil {
-		return Root{}, fmt.Errorf("pki: decrypt root key: %w", err)
+		return Root{}, fmt.Errorf("pki: %s: %w", keyPath, err)
 	}
 	priv, err := asEd25519(k)
 	if err != nil {
@@ -133,6 +136,39 @@ func LoadRoot(dir string, passphrase []byte) (Root, error) {
 		return Root{}, errors.New("pki: root.key and root.crt are not a pair")
 	}
 	return Root{Cert: cert, Signer: priv}, nil
+}
+
+func asEd25519(k any) (ed25519.PrivateKey, error) {
+	switch v := k.(type) {
+	case *ed25519.PrivateKey:
+		return *v, nil
+	case ed25519.PrivateKey:
+		return v, nil
+	}
+	return nil, fmt.Errorf("pki: root key is %T, want ed25519", k)
+}
+
+// writeExclusive creates path with data, refusing an existing file.
+func writeExclusive(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return fmt.Errorf("pki: write %s: %w", path, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(path)
+		return fmt.Errorf("pki: write %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(path)
+		return fmt.Errorf("pki: write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return fmt.Errorf("pki: write %s: %w", path, err)
+	}
+	return nil
 }
 
 // LoadRootCert reads the public half: what every instance holds.
