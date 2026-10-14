@@ -115,6 +115,13 @@ func fakeServerMain() int {
 		return 2
 	case "exit3":
 		fmt.Fprintln(os.Stderr, "Error: local listener: the path is held by another live process")
+		// Linger as a real process does between deciding to exit and being
+		// reaped (Windows teardown is slow enough that CI hit it): the spawn
+		// is recorded but the child is still alive, which is the window in
+		// which TestSupervisor_Exit3SwitchesToAttach's holder must NOT be
+		// answering yet. Fixed rather than left to the platform, so the
+		// test exercises that window everywhere.
+		time.Sleep(300 * time.Millisecond)
 		return 3
 	case "crash":
 		fmt.Fprintln(os.Stderr, "panic: boom\n\ngoroutine 1 [running]:\nmain.main()")

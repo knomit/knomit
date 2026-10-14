@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,12 +191,19 @@ func TestSupervisor_RecoversAfterACrash(t *testing.T) {
 // first probe. The supervisor attaches to it instead of retrying the spawn.
 func TestSupervisor_Exit3SwitchesToAttach(t *testing.T) {
 	e, s := newFakeEnv(t, "exit3")
-	var spawned atomic.Bool
+	// The holder starts answering only once our spawn has been tried AND has
+	// exited (the supervisor holds no child). Answering as soon as the spawn
+	// was recorded let runChild's readiness probe reach the holder while the
+	// doomed child was still alive, marking it ready as our own server before
+	// exit 3 was seen; the fake's exit3 lingers so that window is real on
+	// every platform, not only on Windows.
 	externalServer(t, e.socket, "0.5.3.cli", func() bool {
-		if !spawned.Load() && len(e.spawns(t)) > 0 {
-			spawned.Store(true)
+		if len(e.spawns(t)) == 0 {
+			return false
 		}
-		return spawned.Load()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.child == nil
 	})
 	s.start(context.Background())
 	waitReady(t, s)
