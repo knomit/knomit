@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type FleetMember, type FleetStatus } from './api';
 import { btn } from './manageStyles';
+import { CopyIcon } from './icons';
 import { SettingsPage, type Section } from './SettingsPage';
 
 // The Fleet server page: this instance's fleet membership (F09): the state machine
@@ -21,6 +22,26 @@ const mono: React.CSSProperties = { fontFamily: 'ui-monospace, monospace', fontS
 const dim: React.CSSProperties = { color: '#888', fontSize: 12 };
 const errText: React.CSSProperties = { color: '#f87171', fontSize: 12, marginTop: 6 };
 const input: React.CSSProperties = { background: '#000', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '4px 6px', minWidth: 280 };
+
+const copyBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', flexShrink: 0 };
+
+// AgentIdCopy copies this instance's agent id (e.g. for `knomit identity
+// enroll`) exactly as the server reports it: the id is opaque, so nothing is
+// trimmed or reformatted. Same affordance as the connect panel's copy buttons.
+function AgentIdCopy({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(id)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => { /* clipboard unavailable — nothing to recover */ });
+  };
+  return (
+    <button type="button" data-testid="fleet-agent-id-copy" title={copied ? 'Copied' : 'Copy'} aria-label="Copy agent id"
+      style={copyBtn} onClick={copy}>
+      <CopyIcon color={copied ? '#7c9' : '#888'} size={13} />
+    </button>
+  );
+}
 
 function when(iso?: string): string {
   if (!iso) return '';
@@ -167,7 +188,10 @@ export function FleetPage() {
         </div>
         <div style={kvGrid}>
           <span style={kvKey}>Agent id</span>
-          <span style={mono}>{st.agent_id}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={mono}>{st.agent_id}</span>
+            <AgentIdCopy id={st.agent_id} />
+          </span>
           {st.fleet_repo && (
             <>
               <span style={kvKey}>Fleet repository</span>

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -596,5 +597,189 @@ func TestIdentity_RootFingerprintForm(t *testing.T) {
 	show, err := run(t, "", "identity", "show")
 	if err != nil || !strings.Contains(show, "root: "+rootFP+` ("knomit-fleet-root-test")`) {
 		t.Fatalf("show does not print the installed root: %v\n%s", err, show)
+	}
+}
+
+// show prints the agent id the instance persisted in control.db — the one
+// app.New resolves and authors commits as — not anything built from the key.
+// The stored id here deliberately shares nothing with the key's fingerprint,
+// so a show that re-derived <host>-<fp8> would print a different id.
+func TestIdentityShow_PrintsPersistedAgentID(t *testing.T) {
+	home, pub, _ := instanceHome(t, "laptop")
+	const stored = "opaque-agent-0001"
+	if _, err := repos.ResolveIdentity(home, repos.Identity{AgentID: stored, Branch: "agent/" + stored, Host: "laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "agent_id: "+stored+"\n") {
+		t.Fatalf("show does not print the persisted agent id %q:\n%s", stored, out)
+	}
+	sshPub, _ := ssh.NewPublicKey(pub)
+	h := sha256.Sum256(sshPub.Marshal())
+	if fp8 := hex.EncodeToString(h[:])[:8]; strings.Contains(out, "agent_id: laptop-"+fp8) {
+		t.Fatalf("show printed an id derived from the key:\n%s", out)
+	}
+}
+
+// With no control.db yet (the instance never served), show says there is no
+// agent id and does NOT create control.db as a side effect.
+func TestIdentityShow_NoAgentIDBeforeFirstBoot(t *testing.T) {
+	home, _, _ := instanceHome(t, "laptop")
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "control.db")); !os.IsNotExist(err) {
+		t.Fatalf("show created control.db (stat err %v)", err)
+	}
+	if !strings.Contains(out, "agent_id: none") {
+		t.Fatalf("show without control.db:\n%s", out)
+	}
+}
+
+// seedControlDB writes home/control.db holding exactly the given DDL/DML and
+// nothing else — no repos table, no schema_migrations — so a test can tell
+// afterwards whether anything migrated it.
+func seedControlDB(t *testing.T, home string, stmts ...string) string {
+	t.Helper()
+	path := filepath.Join(home, "control.db")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatalf("seed %q: %v", s, err)
+		}
+	}
+	return path
+}
+
+// controlTables lists the tables in the control.db at path.
+func controlTables(t *testing.T, path string) []string {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
+const seedInstanceIdentityTable = `CREATE TABLE instance_identity (
+	id INTEGER PRIMARY KEY CHECK (id = 1), agent_id TEXT NOT NULL, branch TEXT NOT NULL,
+	created_at INTEGER NOT NULL)`
+
+// show must read the agent id WITHOUT migrating control.db: a newer CLI must
+// not run controlUp (lens re-key, migrate.Control) behind the back of an
+// instance that last booted, or is running, on an older binary. The seeded
+// file holds only instance_identity; after show it must hold only that still.
+func TestIdentityShow_DoesNotMigrateControlDB(t *testing.T) {
+	home, _, _ := instanceHome(t, "laptop")
+	const stored = "opaque-agent-unmigrated"
+	path := seedControlDB(t, home, seedInstanceIdentityTable,
+		`INSERT INTO instance_identity (id, agent_id, branch, created_at) VALUES (1, '`+stored+`', 'agent/`+stored+`', 1)`)
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "agent_id: "+stored+"\n") {
+		t.Fatalf("show does not print the stored agent id %q:\n%s", stored, out)
+	}
+	if got := strings.Join(controlTables(t, path), ","); got != "instance_identity" {
+		t.Fatalf("show changed control.db's tables to [%s], want only [instance_identity] (no repos, no schema_migrations)", got)
+	}
+}
+
+// A home last booted by a binary from before migration 000012 has a
+// control.db with no instance_identity table: show says there is no id yet,
+// rather than "unreadable: no such table", and creates no table.
+func TestIdentityShow_NoInstanceIdentityTable(t *testing.T) {
+	home, _, _ := instanceHome(t, "laptop")
+	path := seedControlDB(t, home, `CREATE TABLE pre_000012 (x INTEGER)`)
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if !strings.HasPrefix(out, "agent_id: none (assigned when the instance first starts)\nkey: ") {
+		t.Fatalf("show with no instance_identity table:\n%s", out)
+	}
+	if got := strings.Join(controlTables(t, path), ","); got != "pre_000012" {
+		t.Fatalf("show changed control.db's tables to [%s]", got)
+	}
+}
+
+// show reads through the read-only opener, not merely a non-migrating one.
+// A read-write open (OpenRegistryNoSchema) of a rollback-journal control.db
+// persistently switches it to WAL — header bytes 18-19 go from 1,1 to 2,2 —
+// so a show that still reports 1,1 afterwards never opened it for writing.
+func TestIdentityShow_OpensControlDBReadOnly(t *testing.T) {
+	home, _, _ := instanceHome(t, "laptop")
+	const stored = "opaque-agent-readonly"
+	path := seedControlDB(t, home, seedInstanceIdentityTable,
+		`INSERT INTO instance_identity (id, agent_id, branch, created_at) VALUES (1, '`+stored+`', 'agent/`+stored+`', 1)`)
+	header := func() [2]byte {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(b) < 20 {
+			t.Fatalf("control.db is %d bytes, no SQLite header", len(b))
+		}
+		return [2]byte{b[18], b[19]}
+	}
+	if got := header(); got != [2]byte{1, 1} {
+		t.Fatalf("seeded control.db header bytes 18-19 = %v, want [1 1] (rollback journal)", got)
+	}
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "agent_id: "+stored+"\n") {
+		t.Fatalf("show does not print the stored agent id %q:\n%s", stored, out)
+	}
+	if got := header(); got != [2]byte{1, 1} {
+		t.Fatalf("show changed control.db header bytes 18-19 to %v, want [1 1]: it opened control.db read-write", got)
+	}
+}
+
+// instance_identity exists but holds no row (a boot that failed between the
+// migration and the identity insert): show says there is no id yet.
+func TestIdentityShow_NoInstanceIdentityRow(t *testing.T) {
+	home, _, _ := instanceHome(t, "laptop")
+	seedControlDB(t, home, seedInstanceIdentityTable)
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if !strings.HasPrefix(out, "agent_id: none (assigned when the instance first starts)\nkey: ") {
+		t.Fatalf("show with an empty instance_identity:\n%s", out)
 	}
 }

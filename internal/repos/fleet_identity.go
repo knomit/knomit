@@ -4,8 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
+
+	"knomit/internal/platform/fileuri"
 )
 
 // Identity is this instance's persisted identity (control.db
@@ -41,6 +44,74 @@ func ResolveIdentity(home string, fresh Identity) (Identity, error) {
 	}
 	defer reg.Close()
 	return resolveIdentity(reg.DB(), fresh, time.Now())
+}
+
+// StoredAgentID returns the agent id persisted in home's control.db — the id
+// app.New resolves at boot and every commit is authored as — for display
+// (`knomit identity show`). It never creates or migrates control.db: the file
+// is opened read-only (openControlReadOnly), so neither is possible whatever
+// state the file is in. found is false when control.db, its instance_identity
+// table (a home last booted before migration 000012) or its row does not exist
+// yet. The id is returned as stored; it is opaque and nothing may parse it
+// (D18).
+//
+// It deliberately does NOT go through controlUp: a display command run by a
+// newer CLI must not migrate the control.db of an instance that last booted,
+// or is still running, on an older binary.
+func StoredAgentID(home string) (id string, found bool, err error) {
+	path := filepath.Join(home, "control.db")
+	// Only chooses the "none" answer; the read-only open is what keeps a
+	// missing control.db from being created.
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("instance identity: %w", err)
+	}
+	db, err := openControlReadOnly(path)
+	if err != nil {
+		return "", false, fmt.Errorf("instance identity: %w", err)
+	}
+	defer db.Close()
+	if ok, err := tableExists(db, "instance_identity"); err != nil || !ok {
+		return "", false, err
+	}
+	err = db.QueryRow(`SELECT agent_id FROM instance_identity WHERE id = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("instance identity: read: %w", err)
+	}
+	return id, true, nil
+}
+
+// openControlReadOnly opens control.db at path with SQLite's mode=ro: the
+// handle can neither create a missing file nor write — and so never migrate —
+// an existing one. A missing file surfaces as an error on first use.
+//
+// path is made absolute first: fileuri.New keeps a relative path relative,
+// and go-sqlite3 DROPS the query string of a DSN that does not start with
+// "file:", so mode=ro would silently become the default read-write-create.
+func openControlReadOnly(path string) (*sql.DB, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("open control.db read-only: %w", err)
+	}
+	db, err := sql.Open("sqlite3", controlReadOnlyDSN(abs))
+	if err != nil {
+		return nil, fmt.Errorf("open control.db read-only: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
+}
+
+// controlReadOnlyDSN is the SQLite URI for an absolute control.db path. It
+// goes through fileuri.New because a hand-built url.URL{Scheme: "file",
+// Path: ...} renders a Windows drive path as file://C:/..., where "C:" is the
+// URI authority and SQLite rejects it ("invalid uri authority: C:").
+func controlReadOnlyDSN(absPath string) string {
+	return fileuri.New(absPath) + "?mode=ro&_busy_timeout=5000"
 }
 
 func resolveIdentity(db *sql.DB, fresh Identity, now time.Time) (Identity, error) {
