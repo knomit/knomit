@@ -31,9 +31,10 @@ import (
 //     lists (crlNewer);
 //   - max_size: the new blob is no larger;
 //   - a declared path holds a regular file: a tree, symlink or submodule AT a
-//     declared path, or any entry UNDER one (a directory squatting the name a
-//     declared file takes, such as certs/<id>.pem/x), is refused
-//     (RuleArtifactNotAFile);
+//     declared path, or any entry UNDER a directory a pattern declares a file
+//     (one the pattern matches while not matching the entry, such as
+//     certs/<id>.pem/x; fleet/** matches both and declares no file), is
+//     refused (RuleArtifactNotAFile);
 //   - a pki file that is ADDED must hold as its role (pkiAdd): a root that is
 //     a CA certificate, a CRL the root signed, a leaf that chains to the root,
 //     is not revoked and is issued to the id its file name stands for, an
@@ -225,21 +226,19 @@ func (a *artifactCheck) change(ch *object.Change) (rule, reason string) {
 	return RuleArtifactRules, fmt.Sprintf("%s: unknown change rule %q", name, attrs.Change)
 }
 
-// squat refuses an entry UNDER a declared artifact path: when any proper
-// ancestor directory of name (below artifacts/) is itself matched by a
-// declared pattern, that name is declared a FILE, and this tree squats it —
-// certs/<id>.pem/x would keep <id>'s leaf from ever being added, and a
-// reader that skips non-files would see no leaf at all.
+// squat refuses an entry UNDER a declared artifact file: when a declared
+// pattern matches a proper ancestor directory of name (below artifacts/) but
+// NOT name itself, that directory is declared a FILE, and this tree squats it
+// — certs/<id>.pem/x would keep <id>'s leaf from ever being added, and a
+// reader that skips non-files would see no leaf at all. A pattern that also
+// matches name (fleet/**) declares a family of paths, not a file, and squats
+// nothing (fact.Ontology.ArtifactFileAt).
 func (a *artifactCheck) squat(name string) (rule, reason string) {
 	rel := strings.TrimPrefix(name, fact.ArtifactsRoot+"/")
 	for i := strings.IndexByte(rel, '/'); i >= 0; {
 		dir := fact.ArtifactsRoot + "/" + rel[:i]
-		attrs, err := a.j.ont.ArtifactAttrs(dir)
-		if err != nil {
-			return RuleArtifactRules, err.Error()
-		}
-		if attrs.Matched {
-			return RuleArtifactNotAFile, fmt.Sprintf("%s is under %s, which is a declared artifact file, not a directory", name, dir)
+		if pattern, ok := a.j.ont.ArtifactFileAt(dir, name); ok {
+			return RuleArtifactNotAFile, fmt.Sprintf("%s is under %s, which is a declared artifact file (%s), not a directory", name, dir, pattern)
 		}
 		next := strings.IndexByte(rel[i+1:], '/')
 		if next < 0 {

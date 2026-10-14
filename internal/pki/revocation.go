@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
@@ -207,8 +208,10 @@ func printableOrSpace(s string) bool {
 var ErrIssuanceInvalid = errors.New("pki: issuance record invalid")
 
 // CheckIssuance verifies an issuance file — the issued leaf's PEM — against
-// the fleet root: exactly one CERTIFICATE block, not a CA, chaining to a pool
-// holding ONLY rootCert for client authentication at a moment inside the
+// the fleet root: exactly one CERTIFICATE block and nothing else, byte-equal
+// to that block's own PEM encoding (what IssueLeaf writes), not a CA,
+// chaining to a pool holding ONLY rootCert for client authentication at a
+// moment inside the
 // leaf's own validity (the record is historical: expiry and the CRL are not
 // judged, as a later revocation does not unmake an issuance), an ed25519 key,
 // no URI SAN (R1), and IssueLeaf's email SAN rules (R1/R2): an address in the
@@ -224,7 +227,15 @@ func CheckIssuance(raw []byte, rootCert *x509.Certificate) (Identity, error) {
 	if rootCert == nil {
 		return bad("no root to check it against")
 	}
-	leaf, err := parseOneCert(raw)
+	// Canonical, like the revocation file: the file must be exactly the
+	// block's own encoding, so nothing rides along before or after it (no
+	// junk, no second block, no headers, no other line endings).
+	blk, _ := pem.Decode(raw)
+	if blk == nil || blk.Type != "CERTIFICATE" ||
+		!bytes.Equal(raw, pem.EncodeToMemory(&pem.Block{Type: blk.Type, Bytes: blk.Bytes})) {
+		return bad("the file is not exactly one CERTIFICATE PEM block, encoded as IssueLeaf encodes it, and nothing else")
+	}
+	leaf, err := x509.ParseCertificate(blk.Bytes)
 	if err != nil {
 		return bad("%v", err)
 	}

@@ -68,6 +68,53 @@ func TestAudit_FlagsRevokedAndOtherAgent(t *testing.T) {
 	require.Equal(t, map[string]string{c1.Hash.String(): AuditRevoked, c2.Hash.String(): AuditOtherAgent}, rules)
 }
 
+// The audit compares agent ids exactly, as the gate does (round-3 ruling 3,
+// review L1): a record for agent "Vic" does not make a commit by
+// vic@agents.knomit.io, signed with Vic's key, vic's own. The gate refuses
+// that commit (no record at id "vic"); the audit flags it as another agent's
+// key. With the audit folding case, it attributed the commit to vic and
+// raised nothing.
+//
+// SABOTAGE: put strings.ToLower back on the record's agent in Audit → no
+// finding → red.
+func TestAudit_AgentIDsAreExactLikeTheGate(t *testing.T) {
+	f := newRangeFixture(t)
+	k := namedSigner(t, "k")
+	f.setFleet(map[string]string{"Vic/1.md": memberFile("Vic", fact.MemberActive, k.PublicKey())})
+	c := f.kbWith(VerifyEnforce, "vic", k)
+
+	v, err := f.check(VerifyEnforce)
+	require.NoError(t, err)
+	require.Equal(t, RuleNoRecord, refusedRule(t, v), "the gate: no record at id vic")
+
+	// The audit walks the whole branch; main's root is unsigned (its own
+	// finding). Only the candidate commit's finding is under test.
+	of := func(rep AuditReport, h string) []Refusal {
+		var out []Refusal
+		for _, r := range rep.Findings {
+			if r.Commit == h {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	rep, err := Audit(AuditInput{KBDir: f.kbDir, Branch: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	require.NoError(t, err)
+	got := of(rep, c.Hash.String())
+	require.Len(t, got, 1, "%+v", rep.Findings)
+	require.Equal(t, AuditOtherAgent, got[0].Rule)
+	require.Contains(t, got[0].Reason, `the key belonged to "Vic", the author claims "vic"`)
+
+	// Control: the record's own id is attributed, and not flagged.
+	g := newRangeFixture(t)
+	g.setFleet(map[string]string{"vic/1.md": memberFile("vic", fact.MemberActive, k.PublicKey())})
+	gc := g.kbWith(VerifyEnforce, "vic", k)
+	rep, err = Audit(AuditInput{KBDir: g.kbDir, Branch: "cand", FleetDir: g.fleetDir, FleetRev: "main"})
+	require.NoError(t, err)
+	require.Equal(t, 2, rep.Commits)
+	require.Empty(t, of(rep, gc.Hash.String()), "%+v", rep.Findings)
+}
+
 // A symlinked fleet ontology is the named error (fact.ErrSymlinkNotFollowed),
 // as at LoadFleet and FleetMembersAt, never "not a fleet": the symlink's link
 // TEXT is the real fleet preset, so a reader that parsed it would audit

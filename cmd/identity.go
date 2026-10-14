@@ -526,10 +526,23 @@ func identityRevokeCmd() *cobra.Command {
 			}
 			var num *big.Int
 			for _, s := range serials {
-				if num, err = pki.Revoke(dir, root, pki.Revoked{Serial: s, At: time.Now().UTC(), Reason: reason}, time.Now().Add(crlValidity)); err != nil {
+				n, err := pki.Revoke(dir, root, pki.Revoked{Serial: s, At: time.Now().UTC(), Reason: reason}, time.Now().Add(crlValidity))
+				// --fingerprint names every serial the key was ever issued:
+				// one revoked earlier is skipped, so the live ones still are.
+				// --serial names one, and re-revoking it stays an error.
+				if fp != "" && errors.Is(err, pki.ErrAlreadyRevoked) {
+					fmt.Fprintf(cmd.OutOrStdout(), "serial %s is already revoked\n", s.Text(16))
+					continue
+				}
+				if err != nil {
 					return err
 				}
+				num = n
 				fmt.Fprintf(cmd.OutOrStdout(), "revoked serial %s\n", s.Text(16))
+			}
+			if num == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "every certificate for %s is already revoked; nothing new to revoke, %s is unchanged\n", fp, filepath.Join(dir, pki.CRLFile))
+				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "CRL %s is now Number %s; copy it to every instance's [tls].dir\n", filepath.Join(dir, pki.CRLFile), num)
 			return nil

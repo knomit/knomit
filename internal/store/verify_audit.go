@@ -97,7 +97,9 @@ func Audit(in AuditInput) (AuditReport, error) {
 			}
 			seenBlob[m.Blob] = true
 			k := string(m.Key.Marshal())
-			versions[k] = append(versions[k], keyVersion{agent: strings.ToLower(m.Agent), state: m.State})
+			// The id as written, compared exactly as the gate compares it:
+			// agent ids are never case folded.
+			versions[k] = append(versions[k], keyVersion{agent: m.Agent, state: m.State})
 		}
 	})
 	if err != nil {

@@ -128,8 +128,8 @@ func EmbeddedPresetByID(id string) *Ontology {
 // existing rules).
 //
 // Attributes ARE compared, by value: a subset here means "safe to OVERWRITE
-// with other", and the refresh in repos/builder.go writes the preset over the
-// stored file. A repo that flags a preset topic `learn_dedup: off` has the
+// with other", and the boot refresh (refreshDivergence in repos/stages.go)
+// writes the preset over the stored file. A repo that flags a preset topic `learn_dedup: off` has the
 // same taxonomy as the preset, but overwriting it would erase the flag on
 // every boot. So a stored attribute the preset does not carry, with the same
 // value, is divergence (a value that behaves as absent, like learn_dedup: on,

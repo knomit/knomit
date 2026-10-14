@@ -152,6 +152,62 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 	}
 }
 
+// A key enrolled twice has two serials. After the first was revoked by
+// --serial, `revoke --fingerprint` must skip it and still revoke the live one
+// (review M1: it used to stop at the already-revoked serial with an error).
+func TestIdentity_RevokeByFingerprintSkipsAnAlreadyRevokedSerial(t *testing.T) {
+	dir, passFile := fleetRoot(t)
+	_, pub, pubPath := instanceHome(t, "laptop")
+	enroll(t, dir, passFile, pubPath)
+	enroll(t, dir, passFile, pubPath) // re-issue to the same key
+	fp := pki.Fingerprint(pub)
+	issued, err := readIssued(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serials []*big.Int
+	for _, rec := range issued {
+		if rec.Fingerprint == fp {
+			s, _ := new(big.Int).SetString(rec.Serial, 16)
+			serials = append(serials, s)
+		}
+	}
+	if len(serials) != 2 {
+		t.Fatalf("want 2 issuances for the key, got %d", len(serials))
+	}
+	old, live := serials[0], serials[1]
+	if out, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", old.Text(16), "--passphrase-file", passFile); err != nil {
+		t.Fatalf("revoke --serial: %v\n%s", err, out)
+	}
+	out, err := run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp, "--passphrase-file", passFile)
+	if err != nil {
+		t.Fatalf("revoke --fingerprint after one serial was revoked: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "serial "+old.Text(16)+" is already revoked") || !strings.Contains(out, "revoked serial "+live.Text(16)) {
+		t.Fatalf("revoke --fingerprint output:\n%s", out)
+	}
+	crl, err := pki.LoadCRL(filepath.Join(dir, pki.CRLFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pki.IsRevoked(crl, live) || !pki.IsRevoked(crl, old) || crl.Number.Cmp(big.NewInt(3)) != 0 {
+		t.Fatalf("CRL #%v: live revoked=%v old revoked=%v", crl.Number, pki.IsRevoked(crl, live), pki.IsRevoked(crl, old))
+	}
+	// Everything for the key is now revoked: a repeat is not an error and
+	// leaves the CRL alone.
+	out, err = run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp, "--passphrase-file", passFile)
+	if err != nil || !strings.Contains(out, "nothing new to revoke") {
+		t.Fatalf("repeat revoke --fingerprint: %v\n%s", err, out)
+	}
+	if again, _ := pki.LoadCRL(filepath.Join(dir, pki.CRLFile)); again.Number.Cmp(big.NewInt(3)) != 0 {
+		t.Fatalf("a no-op revoke reissued the CRL: #%v", again.Number)
+	}
+	// --serial on an already-revoked serial stays an error.
+	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", old.Text(16), "--passphrase-file", passFile); !errors.Is(err, pki.ErrAlreadyRevoked) {
+		t.Fatalf("revoke --serial of a revoked serial: %v", err)
+	}
+}
+
 func TestIdentity_InstallRefusals(t *testing.T) {
 	dir, passFile := fleetRoot(t)
 	home, _, pubPath := instanceHome(t, "laptop")

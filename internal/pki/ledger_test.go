@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -242,6 +243,53 @@ func TestRevoke_MissingCRLWithALoggedRevocationIsRefused(t *testing.T) {
 	}
 	if _, err := Revoke(dir, root, Revoked{Serial: big.NewInt(2), At: time.Now()}, time.Now().Add(time.Hour)); err == nil {
 		t.Fatal("a CRL #1 that drops a logged revocation was signed")
+	}
+}
+
+// A present crl.pem that lags the local log (an older CRL restored from a
+// backup) is refused too (review L3): the new CRL is built from the current
+// one, so it would silently drop the logged revocation the old CRL lacks.
+// Nothing is written: the log and crl.pem are as they were. With the CRL
+// that lists every logged serial back in place, the revocation goes through.
+//
+// SABOTAGE: drop the lag check in Revoke → the revocation against the old
+// CRL succeeds → red.
+func TestRevoke_CRLLaggingTheLocalLogIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	root, err := NewRoot(dir, "knomit-fleet-root-test", custodyPass, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := time.Now().Add(time.Hour)
+	if _, err := Revoke(dir, root, Revoked{Serial: big.NewInt(1), At: time.Now()}, next); err != nil {
+		t.Fatal(err)
+	}
+	crlPath, logPath := filepath.Join(dir, CRLFile), filepath.Join(dir, RevokedLogFile)
+	old, _ := os.ReadFile(crlPath)
+	if _, err := Revoke(dir, root, Revoked{Serial: big.NewInt(2), At: time.Now()}, next); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := os.ReadFile(crlPath)
+	if err := os.WriteFile(crlPath, old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logBefore, _ := os.ReadFile(logPath)
+	_, err = Revoke(dir, root, Revoked{Serial: big.NewInt(3), At: time.Now()}, next)
+	if err == nil || !strings.Contains(err.Error(), "does not list serial 2") {
+		t.Fatalf("revoke against a CRL lagging the log: %v", err)
+	}
+	if got, _ := os.ReadFile(crlPath); !bytes.Equal(got, old) {
+		t.Fatal("the refused revoke rewrote crl.pem")
+	}
+	if got, _ := os.ReadFile(logPath); !bytes.Equal(got, logBefore) {
+		t.Fatal("the refused revoke appended to the log")
+	}
+	// Control: with the CRL that lists every logged serial, it goes through.
+	if err := os.WriteFile(crlPath, current, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := Revoke(dir, root, Revoked{Serial: big.NewInt(3), At: time.Now()}, next); err != nil || n.Cmp(big.NewInt(3)) != 0 {
+		t.Fatalf("control: revoke against the current CRL: #%v %v", n, err)
 	}
 }
 

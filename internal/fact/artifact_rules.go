@@ -61,8 +61,14 @@ import (
 //
 // A first ADD of any declared file is allowed (bootstrap); a file declared
 // with a pki role must still hold as that role when added. A declared path
-// must hold a regular file: a tree, symlink or submodule AT a declared path,
-// or anything UNDER one (a directory squatting a file's name), is refused.
+// must hold a regular file: a tree, symlink or submodule AT a declared path
+// is refused, and so is anything UNDER a directory that a pattern declares a
+// file (a directory squatting a file's name). A pattern declares a directory
+// d a file for a path p beneath it when it matches d but NOT p
+// (ArtifactFileAt): "fleet/certs/*.pem" makes certs/x.pem/y a squat, while
+// "fleet/**", which matches fleet and everything beneath it, declares a
+// family of paths and squats nothing; "fleet/*" matches the directory
+// fleet/issued but not fleet/issued/x, so it declares fleet/issued a file.
 //
 // PATTERNS are relative to ArtifactsRoot and use the trigger glob syntax
 // (glob.go): '*' and '?' inside one segment, "**" as a whole segment for any
@@ -233,6 +239,26 @@ func (o *Ontology) ArtifactAttrs(repoPath string) (ArtifactAttrs, error) {
 		out.Change, out.ReplaceWhen, out.RevokedSet = changeFrom.change, changeFrom.replaceWhen, changeFrom.revokedSet
 	}
 	return out, nil
+}
+
+// ArtifactFileAt reports a declared pattern that makes dir a FILE for the
+// path beneath it: one that matches dir but NOT beneath (both repo-root
+// paths, beneath under dir). A pattern that matches both, such as
+// "fleet/**", declares a family of paths, not a file at dir, and so does not
+// count. ok is false when no pattern declares dir a file for beneath.
+func (o *Ontology) ArtifactFileAt(dir, beneath string) (pattern string, ok bool) {
+	relDir, okDir := strings.CutPrefix(dir, ArtifactsRoot+"/")
+	rel, okRel := strings.CutPrefix(beneath, ArtifactsRoot+"/")
+	if o == nil || !okDir || !okRel || relDir == "" {
+		return "", false
+	}
+	for i := range o.cache.artifacts.rules {
+		r := &o.cache.artifacts.rules[i]
+		if r.glob.Match(relDir) && !r.glob.Match(rel) {
+			return r.pattern, true
+		}
+	}
+	return "", false
 }
 
 func rankLess(a, b [3]int) bool {

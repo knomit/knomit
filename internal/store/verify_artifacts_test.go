@@ -398,6 +398,51 @@ func TestArtifactRules_DirectorySquatRefused(t *testing.T) {
 	}
 }
 
+// A pattern that matches a directory AND the paths beneath it (fleet/**) is a
+// family pattern, not a file declaration: with it declared, the issuance
+// record, the newer CRL and an undeclared note beneath are admitted (review
+// M2: every add under fleet/ was refused artifact-not-a-file). A pattern that
+// matches the directory but NOT the path beneath it still declares a file
+// there: fleet/* declares fleet/issued a file, so fleet/issued/x squats it,
+// and certs/<id>.pem/x still squats a leaf with fleet/** declared too.
+//
+// SABOTAGE: let squat count any matching pattern again (drop the
+// beneath-check) → the fleet/** admitted rows are refused → red.
+func TestArtifactRules_FamilyPatternIsNotASquat(t *testing.T) {
+	withCap := func(t *testing.T, line string) *artFleet {
+		a := newArtFleet(t)
+		ont := strings.Replace(a.base[fact.OntologyFile], "artifacts:\n", "artifacts:\n  "+line+"\n", 1)
+		require.Contains(t, ont, "artifacts:\n  "+line+"\n", "fixture: the line is in the artifacts section")
+		a.base = with(a.base, fact.OntologyFile, ont)
+		a.main = a.f.fleetMain(a.base)
+		return a
+	}
+	a := withCap(t, "fleet/**: { max_size: 1MiB }")
+	newer := a.p.crl(big.NewInt(0x5))
+	for _, r := range []struct {
+		name, rule, reason string
+		kv                 []string
+	}{
+		{"fleet/**: a new issuance record", "", "", []string{issuedDir + "0003-boss.pem", a.base[a.l.LeafPath("boss")]}},
+		{"fleet/**: a newer CRL", "", "", []string{a.l.CRL, newer}},
+		{"fleet/**: an undeclared note", "", "", []string{"artifacts/fleet/notes/x.md", "ok"}},
+		{"fleet/**: its cap still applies", RuleArtifactSize, "larger than its max_size of 1048576", []string{"artifacts/fleet/notes/x.md", strings.Repeat("x", 1<<20+1)}},
+		{"fleet/**: a directory at a leaf's path", RuleArtifactNotAFile, "certs/newbie.pem, which is a declared artifact file", []string{a.l.LeafPath("newbie") + "/x", "junk"}},
+	} {
+		v := a.cand("boss", a.boss, r.kv...)
+		if r.rule == "" {
+			require.Equal(t, 1, v.Checked, r.name)
+			require.Empty(t, v.Refused, r.name)
+			continue
+		}
+		requireArtifactRefusal(t, v, r.rule, r.reason, r.name)
+	}
+
+	b := withCap(t, "fleet/*: { max_size: 1MiB }")
+	requireArtifactRefusal(t, b.cand("boss", b.boss, issuedDir+"0003-boss.pem", b.base[b.l.LeafPath("boss")]),
+		RuleArtifactNotAFile, "under artifacts/fleet/issued, which is a declared artifact file", "fleet/*: declares fleet/issued a file")
+}
+
 // Agent ids are lower case everywhere and compared exactly: an author
 // address with an upper-case id (Vic+learn@agents.knomit.io) is no agent
 // address, so vic's own key does not make it vic's commit.

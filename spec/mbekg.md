@@ -539,14 +539,18 @@ topics:
 ```
 
 Schema: the root carries `id`, `name`, `description`, `topics`, an
-optional `validations` list and an optional `guidance` block; each node
+optional `validations` list, an optional `guidance` block, an optional
+`attributes` block (repository-level settings, below) and an optional
+`artifacts` section (rules for files under `artifacts/`, below); each node
 carries `description`, optional `children`, optional `validations`, optional
 `attributes`, optional `context` and optional `guidance`; each
 validation carries `name`, `message`, and `rule` (§3.4). Required: `id`,
 `name`, and at least one topic.
 
-`attributes` is a map on a topic or child node (not the root) that switches
-store behaviour for facts under that node. It resolves by the same walk as
+`attributes` on a topic or child node switches store behaviour for facts
+under that node. (The root's `attributes` block is a different set of keys:
+repository-level settings, described after the topic keys.) It resolves by
+the same walk as
 validation rules: root → topic → each declared child, stopping at the first
 undeclared segment; the nearest declared value wins, so an undeclared deeper
 category inherits from its deepest declared ancestor, and a child may
@@ -582,6 +586,150 @@ reported as a warning and ignored, so an ontology written by a newer
 implementation still opens. It follows that each key's value set is CLOSED:
 a new behaviour is introduced as a new key, never as a new value of an
 existing key, which an older reader would reject.
+
+The ROOT `attributes` block holds repository-level settings: one value for
+the whole repository, never inherited or overridden by a topic. Four keys
+are defined:
+
+- `verify_signatures` — `off` (the default), `log` or `enforce`. Switches
+  the acceptance gate (§4.3) for this repository: `off` judges nothing, `log`
+  judges every commit that enters main and reports refusals without blocking,
+  `enforce` refuses them. It is read at the tip of the branch the gate judges
+  against (main for `knomit verify ci`, the host's upstream in receive-pack),
+  never from the commits being judged. It is the only verification setting in an ontology: who may
+  sign comes from the fleet repository's member records, never from here.
+- `consensus` — `off` (the default) or `auto`. On the instance that hosts the
+  repository with no origin, `auto` merges every branch a peer pushes into
+  that instance's agent branch as soon as it lands; a repository with an
+  origin ignores it.
+- `conflicts` — a mapping with `facts` (`off`, `merge`, `merge:consensus` or
+  `consensus`) and/or `state` (`off` or `consensus`): how a merge settles a
+  path both sides changed — a fact (`facts`), or any other path and a fact
+  that cannot be merged without loss (`state`). Each key reads `off` when
+  absent, except under `consensus: auto`, where they read `merge` and
+  `consensus`. Read at the tip of the consensus branch.
+- `sync` — a mapping with `push` and/or `pull`, each `realtime` or
+  `interval` (the default): `push: realtime` pushes this instance's agent
+  branch after each of its commits; `pull: realtime` runs a full sync round
+  at `[git].realtime_pull_interval` instead of the loop's own interval. A
+  subscription ignores both. Read at the tip of the consensus branch.
+
+```yaml
+attributes:
+  verify_signatures: enforce
+  sync: { push: realtime, pull: realtime }
+```
+
+The root block is checked like a node's, except that nothing in it is fatal
+when an existing repository opens. An unknown key is a warning and is
+preserved. A topic key (`learn_dedup`) in the root block, or a bad value for
+a root key, is a warning when an existing repository opens and refuses a new
+ontology. A bad value is never read as a setting: a `verify_signatures` the
+gate cannot read stops the gate (the push is refused with an error, never
+judged as `off`), and the readers of `consensus`, `conflicts` and `sync` read
+a bad value as off or absent and warn. These are set once, when the
+repository is created; nothing coordinates a change across instances.
+
+`artifacts` is a root section that declares rules for files under
+`artifacts/` (§3.8), by path PATTERN relative to `artifacts/`. Topic
+attributes cannot reach those files: the attribute walk covers the ontology
+root only. Each pattern maps to a block of keys:
+
+```yaml
+artifacts:
+  fleet/root.crt:          { pki: root, change: write-once, max_size: 16KiB }
+  fleet/crl.pem:           { pki: crl, change: replace, replace_when: crl-newer, revoked_set: superset }
+  fleet/certs/*.pem:       { pki: leaf, change: replace, replace_when: leaf-renewal, max_size: 16KiB }
+  fleet/issued/*.pem:      { pki: issuance, change: write-once, max_size: 16KiB }
+  fleet/revocations/*.txt: { pki: revocation, change: write-once, max_size: 4KiB }
+```
+
+Keys and their closed value sets:
+
+- `change` — `write-once`: may be added, never modified or deleted.
+  `append-only`: the new content holds the old as an exact byte prefix; never
+  deleted. `replace`: modified only when `replace_when` holds; never deleted.
+- `replace_when` (only with `change: replace`, which requires it) —
+  `crl-newer` (needs `pki: crl`): the new CRL is signed by the declared root
+  and its Number is strictly greater than the old one's. `leaf-renewal`
+  (needs `pki: leaf`): the new leaf chains to the root, is not revoked by the
+  CRL, its email SAN's agent id equals the file's id, its key is that agent's
+  member record's current key, and its NotBefore is strictly later than the
+  old leaf's.
+- `revoked_set` — `superset` (only with `pki: crl`): a replacing CRL also
+  lists every serial the one it replaces lists, so a reissue never undoes a
+  revocation.
+- `pki` — the file's role. `root` (needs `change: write-once`): the fleet
+  root CA certificate. `crl` (needs `change: replace` with `crl-newer`): the
+  CRL. `leaf` (needs `change: replace` with `leaf-renewal`): a member's
+  certificate; the pattern is literal except its last segment, which holds
+  exactly one `*` standing for the agent id (the file name is a lookup key;
+  nothing parses the id). `issuance` (needs `change: write-once`): one file
+  per issuance holding exactly the issued leaf's PEM, which must chain to the
+  root. `revocation` (needs `change: write-once`): one file per revocation
+  holding a root-signed revocation statement. At most one `root`, one `crl`
+  and one `leaf` pattern, and the `root` and `crl` patterns name one file (no
+  wildcards). The names of issuance and revocation files carry no meaning;
+  nothing reads order or identity from them. The fleet's readers find the
+  root, the CRL and the leaves from these declarations, never from fixed
+  paths.
+- `max_size` — the largest blob a matching file may hold: a positive integer
+  of bytes, or `<n>B`, `<n>KiB`, `<n>MiB`, at most 1 GiB. Never declare it on
+  a file that only grows (the CRL): a legitimate update would then be refused
+  for good.
+
+PATTERNS use the trigger glob syntax: `*` and `?` within one segment, `**` as
+a whole segment for any number of segments, everything else literal, matched
+ASCII case-insensitively. No segment may begin with `.`. An undeclared path
+has no rule. When several patterns match one path, `max_size` is the
+SMALLEST any of them declares; `pki`, and `change` together with
+`replace_when` and `revoked_set`, come from the MOST SPECIFIC pattern that
+declares them (fewer `**` segments first, then fewer wildcard segments, then
+more segments). Two equally specific patterns that give one path different
+values make that path ambiguous, and a commit that changes it is refused.
+
+A declared path must hold a regular file: a tree, symlink or submodule AT a
+declared path is refused. So is anything UNDER a directory that a pattern
+declares a file, which a pattern does when it matches the directory but NOT
+the path beneath it: with `fleet/certs/*.pem` declared, `certs/x.pem/y`
+squats a leaf's name and is refused. A pattern that also matches the paths
+beneath (`fleet/**`) declares a family of paths, not a file, and squats
+nothing; `fleet/*` matches the directory `fleet/issued` but not
+`fleet/issued/x`, so it declares `fleet/issued` a file.
+
+STRICTNESS: a bad value, a malformed pattern, or an inconsistent block
+(`replace` without `replace_when`, a `pki` file without its change rule, a
+second root) makes the ontology invalid on every path, the open path
+included: the repository refuses writes until it is fixed, because guessing
+a security rule is worse. An UNKNOWN key is a warning when an existing
+repository opens (a newer implementation may have written it; it is
+preserved) and refuses a new ontology, where a typo would silently drop a
+rule.
+
+ENFORCEMENT: the rules are applied by the acceptance gate — on a knomit host
+in receive-pack, and on a forge by `knomit verify ci` — and by nothing else.
+They are read from the judged repository's ontology at the tip of main (the
+host's upstream in receive-pack), the same file and commit
+`verify_signatures` is read from, and they apply only
+when that is `log` or `enforce` (`off` judges nothing; `log` reports and
+blocks nothing). Every commit that enters main is diffed against EVERY parent
+(a root commit against the empty tree), and each changed path under
+`artifacts/` must keep its rules. A first add of a declared file is allowed
+(bootstrap), but a file with a `pki` role must hold as that role when added.
+The ontology itself is under `.knomit/`, which a push cannot change, so a
+member cannot strip the rules. A refusal names one rule:
+
+- `artifact-write-once` — a write-once file modified or deleted;
+- `artifact-append-only` — an append-only file not extended by an exact
+  prefix, or deleted;
+- `artifact-replace` — a replace file deleted, or replaced without its
+  `replace_when` (or dropping a serial under `revoked_set: superset`);
+- `artifact-size` — a blob larger than its `max_size`;
+- `artifact-pki` — a `pki` file added that does not hold as its role;
+- `artifact-rules` — the rules for a path are ambiguous, or a blob cannot be
+  read;
+- `artifact-not-a-file` — a tree, symlink or submodule at a declared path,
+  or anything under a declared file.
 
 `context` is a map on a topic or child node (not the root) that DECLARES the
 `context` keys a fact under that node may carry (§2.13), each with its type.
@@ -727,9 +875,21 @@ the stored file, so a stored attribute that the preset does not carry with an
 equal value would be erased; the stored ontology is therefore NOT a subset,
 and the implementation logs the skipped upgrade with reason `attributes`. A
 value that behaves as absent (`learn_dedup: on`) is compared as absent.
-Attributes the preset carries and the stored file lacks do not block a
+TOPIC attributes the preset carries and the stored file lacks do not block a
 refresh. A repository that sets an attribute on a preset topic therefore stops
 receiving preset refreshes.
+
+ROOT attributes and `artifacts` rules (§3.2) are held to more: they must be
+EQUAL in the stored file and the preset, both ways. A refresh may preserve a
+repository-level setting or an artifact rule, never add, change or drop one,
+because the refresh is written by the instance itself and would otherwise
+switch, say, `verify_signatures` across a whole fleet with a release. So a
+root attribute or an artifact rule that the preset carries and the stored
+file lacks (or carries with another value) DOES block a refresh, as does one
+the stored file carries and the preset lacks; the skipped upgrade is logged
+with reason `attributes`. A repository created from an older preset that
+lacks a root attribute or artifact rule the newer preset declares therefore
+keeps its stored file; adopting them is a change made through git.
 
 ### 3.4 Validation Rules
 

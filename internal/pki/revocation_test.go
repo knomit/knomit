@@ -179,3 +179,44 @@ func TestCheckIssuance_ChainsAndFollowsTheEmailRules(t *testing.T) {
 		}
 	}
 }
+
+// An issuance file holds exactly one CERTIFICATE block, encoded as IssueLeaf
+// encodes it, and nothing else (review L2): a real leaf with junk before or
+// after it, a second certificate behind it, PEM headers or CRLF line endings
+// is refused by the canonical-form check, not admitted on the strength of its
+// first block.
+//
+// SABOTAGE: drop the canonical-form check in CheckIssuance → every refused
+// row is admitted → red.
+func TestCheckIssuance_ExactlyOneCanonicalBlock(t *testing.T) {
+	f := newFleet(t)
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	is, err := IssueLeaf(f.root, pub, "laptop@agents.knomit.io", time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := is.CertPEM
+	rogue := certPEM(f.crafted(t, pub, []string{"rogue@agents.knomit.io"}).Raw)
+	cat := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	if _, err := CheckIssuance(leaf, f.root.Cert); err != nil {
+		t.Fatalf("control: the leaf as issued is refused: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		raw  []byte
+	}{
+		{"leading junk", cat([]byte("junk\n"), leaf)},
+		{"trailing junk", cat(leaf, []byte("junk\n"))},
+		{"trailing 10KiB", cat(leaf, bytes.Repeat([]byte("x"), 10<<10))},
+		{"a second certificate", cat(leaf, rogue)},
+		{"the same block twice", cat(leaf, leaf)},
+		{"no final newline", bytes.TrimSuffix(leaf, []byte("\n"))},
+		{"CRLF line endings", bytes.ReplaceAll(leaf, []byte("\n"), []byte("\r\n"))},
+		{"a PEM header", bytes.Replace(leaf, []byte("-----\n"), []byte("-----\nNote: x\n\n"), 1)},
+	} {
+		_, err := CheckIssuance(c.raw, f.root.Cert)
+		if !errors.Is(err, ErrIssuanceInvalid) || !strings.Contains(err.Error(), "exactly one CERTIFICATE PEM block") {
+			t.Errorf("%s: err %v, want the canonical-form refusal", c.name, err)
+		}
+	}
+}

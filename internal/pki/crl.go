@@ -142,20 +142,27 @@ func RevokeSerial(root Root, current *x509.RevocationList, r Revoked, thisUpdate
 // Revoke is RevokeSerial against the fleet root directory: it reissues
 // <dir>/crl.pem from the CURRENT <dir>/crl.pem plus r, with a Number one
 // higher (1 if there is none), and appends r to the local log
-// <dir>/revoked.jsonl. A missing crl.pem while the local log already holds
-// revocations is refused: a CRL #1 listing r alone would drop them.
+// <dir>/revoked.jsonl. The current crl.pem must list every serial the local
+// log holds: a missing crl.pem while the log holds revocations, or a present
+// one that lags it (an older CRL restored from a backup), is refused, as the
+// CRL built from it would silently drop them. Nothing is written then.
 func Revoke(dir string, root Root, r Revoked, next time.Time) (*big.Int, error) {
+	prior, err := LoadRevoked(dir)
+	if err != nil {
+		return nil, err
+	}
 	var current *x509.RevocationList
 	switch cur, err := LoadCRL(filepath.Join(dir, CRLFile)); {
 	case err == nil:
 		current = cur
+		for _, p := range prior {
+			if p.Serial == nil || !IsRevoked(current, p.Serial) {
+				return nil, fmt.Errorf("pki: %s (Number %v) does not list serial %s, which %s records as revoked; refusing to sign a CRL that drops it (restore the newest CRL)", CRLFile, current.Number, p.Serial.Text(16), RevokedLogFile)
+			}
+		}
 	case !errors.Is(err, ErrCRLMissing):
 		return nil, fmt.Errorf("pki: current CRL unreadable, refusing to guess what it lists: %w", err)
 	default:
-		prior, lerr := LoadRevoked(dir)
-		if lerr != nil {
-			return nil, lerr
-		}
 		if len(prior) > 0 {
 			return nil, fmt.Errorf("pki: %s is missing but %s lists %d revocations; refusing to sign a CRL that drops them", CRLFile, RevokedLogFile, len(prior))
 		}
