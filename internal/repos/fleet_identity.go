@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -46,27 +47,35 @@ func ResolveIdentity(home string, fresh Identity) (Identity, error) {
 
 // StoredAgentID returns the agent id persisted in home's control.db — the id
 // app.New resolves at boot and every commit is authored as — for display
-// (`knomit identity show`). It never creates or migrates control.db: found is
-// false when control.db or its instance_identity row does not exist yet (the
-// instance has not started on a binary that persists it). The id is returned
-// as stored; it is opaque and nothing may parse it (D18).
+// (`knomit identity show`). It never creates or migrates control.db: the file
+// is opened read-only (openControlReadOnly), so neither is possible whatever
+// state the file is in. found is false when control.db, its instance_identity
+// table (a home last booted before migration 000012) or its row does not exist
+// yet. The id is returned as stored; it is opaque and nothing may parse it
+// (D18).
+//
+// It deliberately does NOT go through controlUp: a display command run by a
+// newer CLI must not migrate the control.db of an instance that last booted,
+// or is still running, on an older binary.
 func StoredAgentID(home string) (id string, found bool, err error) {
 	path := filepath.Join(home, "control.db")
+	// Only chooses the "none" answer; the read-only open is what keeps a
+	// missing control.db from being created.
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", false, nil
 		}
 		return "", false, fmt.Errorf("instance identity: %w", err)
 	}
-	reg, err := OpenRegistryNoSchema(path)
+	db, err := openControlReadOnly(path)
 	if err != nil {
 		return "", false, fmt.Errorf("instance identity: %w", err)
 	}
-	defer reg.Close()
-	if ok, err := tableExists(reg.DB(), "instance_identity"); err != nil || !ok {
+	defer db.Close()
+	if ok, err := tableExists(db, "instance_identity"); err != nil || !ok {
 		return "", false, err
 	}
-	err = reg.DB().QueryRow(`SELECT agent_id FROM instance_identity WHERE id = 1`).Scan(&id)
+	err = db.QueryRow(`SELECT agent_id FROM instance_identity WHERE id = 1`).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -74,6 +83,19 @@ func StoredAgentID(home string) (id string, found bool, err error) {
 		return "", false, fmt.Errorf("instance identity: read: %w", err)
 	}
 	return id, true, nil
+}
+
+// openControlReadOnly opens control.db at path with SQLite's mode=ro: the
+// handle can neither create a missing file nor write — and so never migrate —
+// an existing one. A missing file surfaces as an error on first use.
+func openControlReadOnly(path string) (*sql.DB, error) {
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: "mode=ro&_busy_timeout=5000"}
+	db, err := sql.Open("sqlite3", u.String())
+	if err != nil {
+		return nil, fmt.Errorf("open control.db read-only: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
 }
 
 func resolveIdentity(db *sql.DB, fresh Identity, now time.Time) (Identity, error) {
