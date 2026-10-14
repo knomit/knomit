@@ -136,8 +136,8 @@ func TestNewRoot_RefusesToReplaceARoot(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, RootKeyFile)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRoot(dir, "again", time.Hour); err == nil {
-		t.Fatal("NewRoot ran over an existing root.crt")
+	if _, err := NewRoot(dir, "again", time.Hour); err == nil || !strings.Contains(err.Error(), "refusing to replace the fleet root") {
+		t.Fatalf("NewRoot over an existing root.crt: %v, want a refusal", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, RootKeyFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a refused NewRoot wrote root.key: %v", err)
