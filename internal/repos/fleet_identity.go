@@ -4,10 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
+
+	"knomit/internal/platform/fileuri"
 )
 
 // Identity is this instance's persisted identity (control.db
@@ -88,14 +89,29 @@ func StoredAgentID(home string) (id string, found bool, err error) {
 // openControlReadOnly opens control.db at path with SQLite's mode=ro: the
 // handle can neither create a missing file nor write — and so never migrate —
 // an existing one. A missing file surfaces as an error on first use.
+//
+// path is made absolute first: fileuri.New keeps a relative path relative,
+// and go-sqlite3 DROPS the query string of a DSN that does not start with
+// "file:", so mode=ro would silently become the default read-write-create.
 func openControlReadOnly(path string) (*sql.DB, error) {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: "mode=ro&_busy_timeout=5000"}
-	db, err := sql.Open("sqlite3", u.String())
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("open control.db read-only: %w", err)
+	}
+	db, err := sql.Open("sqlite3", controlReadOnlyDSN(abs))
 	if err != nil {
 		return nil, fmt.Errorf("open control.db read-only: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 	return db, nil
+}
+
+// controlReadOnlyDSN is the SQLite URI for an absolute control.db path. It
+// goes through fileuri.New because a hand-built url.URL{Scheme: "file",
+// Path: ...} renders a Windows drive path as file://C:/..., where "C:" is the
+// URI authority and SQLite rejects it ("invalid uri authority: C:").
+func controlReadOnlyDSN(absPath string) string {
+	return fileuri.New(absPath) + "?mode=ro&_busy_timeout=5000"
 }
 
 func resolveIdentity(db *sql.DB, fresh Identity, now time.Time) (Identity, error) {

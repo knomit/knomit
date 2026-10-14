@@ -733,6 +733,42 @@ func TestIdentityShow_NoInstanceIdentityTable(t *testing.T) {
 	}
 }
 
+// show reads through the read-only opener, not merely a non-migrating one.
+// A read-write open (OpenRegistryNoSchema) of a rollback-journal control.db
+// persistently switches it to WAL — header bytes 18-19 go from 1,1 to 2,2 —
+// so a show that still reports 1,1 afterwards never opened it for writing.
+func TestIdentityShow_OpensControlDBReadOnly(t *testing.T) {
+	home, _, _ := instanceHome(t, "laptop")
+	const stored = "opaque-agent-readonly"
+	path := seedControlDB(t, home, seedInstanceIdentityTable,
+		`INSERT INTO instance_identity (id, agent_id, branch, created_at) VALUES (1, '`+stored+`', 'agent/`+stored+`', 1)`)
+	header := func() [2]byte {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(b) < 20 {
+			t.Fatalf("control.db is %d bytes, no SQLite header", len(b))
+		}
+		return [2]byte{b[18], b[19]}
+	}
+	if got := header(); got != [2]byte{1, 1} {
+		t.Fatalf("seeded control.db header bytes 18-19 = %v, want [1 1] (rollback journal)", got)
+	}
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "agent_id: "+stored+"\n") {
+		t.Fatalf("show does not print the stored agent id %q:\n%s", stored, out)
+	}
+	if got := header(); got != [2]byte{1, 1} {
+		t.Fatalf("show changed control.db header bytes 18-19 to %v, want [1 1]: it opened control.db read-write", got)
+	}
+}
+
 // instance_identity exists but holds no row (a boot that failed between the
 // migration and the identity insert): show says there is no id yet.
 func TestIdentityShow_NoInstanceIdentityRow(t *testing.T) {
