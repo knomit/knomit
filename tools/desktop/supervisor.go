@@ -73,8 +73,8 @@ type supervisorConfig struct {
 	socket string
 	// home is cfg.Home, passed to the child as KNOMIT_HOME.
 	home string
-	// lockPath is this home's server.json, read only to name an attached
-	// server's pid.
+	// lockPath is this home's server.json, read to name an attached server's
+	// pid and to tell our own child's answer from another server's.
 	lockPath string
 	// logFile is passed as --log-file: the server owns the configured log file,
 	// so Reveal and Settings name the file being written.
@@ -472,7 +472,18 @@ func (s *supervisor) runChild(ctx context.Context, bin string) childExit {
 	// Readiness: the socket answering GET /api/v1/version, polled until the
 	// child answers or exits. "knomit ready" in its log means the same thing,
 	// but the socket is what the UI will actually use.
-	for ready := false; !ready; {
+	//
+	// An answer is our child's only when server.json names its pid. The
+	// probe cannot tell who answered: a child that lost the socket to another
+	// server (and is about to exit 3) is still alive while that server
+	// answers, and taking that answer as ours reported owned-ready and let
+	// "Restart server" act on the dying child instead of refusing as attached
+	// (kb gotcha desktop/supervisor/readiness-probe-meets-holder). The server
+	// writes server.json with its own pid after binding and BEFORE serving
+	// anything, a supervised server that cannot write it exits 2, and one that
+	// does not hold the socket writes none (cmd/serve.go, Listeners.Advertise),
+	// so our child's first answer always finds its own pid there.
+	for ready, foreign := false, false; !ready; {
 		select {
 		case <-c.exited:
 			ready = true
@@ -480,10 +491,16 @@ func (s *supervisor) runChild(ctx context.Context, bin string) childExit {
 		default:
 		}
 		if _, err := s.probe(ctx); err == nil {
-			log.Info().Int("pid", c.pid).Msg("knomit server is answering on its socket")
-			s.setReady()
-			ready = true
-			continue
+			if s.answeredByChild(c) {
+				log.Info().Int("pid", c.pid).Msg("knomit server is answering on its socket")
+				s.setReady()
+				ready = true
+				continue
+			}
+			if !foreign {
+				foreign = true
+				log.Info().Int("pid", c.pid).Msg("a server answers on the socket that is not our child; waiting for our child to answer or exit")
+			}
 		}
 		select {
 		case <-c.exited:
@@ -500,6 +517,14 @@ func (s *supervisor) runChild(ctx context.Context, bin string) childExit {
 	s.restarting = false
 	s.mu.Unlock()
 	return ex
+}
+
+// answeredByChild reports whether the server that just answered on the socket
+// is c: this home's server.json names c's pid. A missing or unreadable file is
+// "not ours yet"; the readiness loop probes again.
+func (s *supervisor) answeredByChild(c *serverChild) bool {
+	info, err := serveraddr.ReadLock(s.cfg.lockPath)
+	return err == nil && info.PID == c.pid
 }
 
 // exitCode maps Wait's error to an exit code: 0 for nil, the code for an
@@ -572,7 +597,9 @@ func (e errAttachedServer) Error() string {
 
 // restartServer stops the spawned server and waits for its replacement to
 // answer. The replacement is started at once (no backoff; it does not count
-// as a crash). Refused for an attached server and when none is running.
+// as a crash). Refused for an attached server and when none is running, and
+// answered with the same attached refusal when the server that answers
+// afterwards is one the supervisor attached to instead of its own.
 func (s *supervisor) restartServer(ctx context.Context) error {
 	s.mu.Lock()
 	if s.attached {
@@ -606,6 +633,16 @@ func (s *supervisor) restartServer(ctx context.Context) error {
 			return failed
 		}
 		if ok {
+			if s.isAttached() {
+				// What answers now is a server started outside the app (our
+				// child lost the socket to it): nothing of ours was
+				// restarted, and that server is not ours to restart.
+				pid := 0
+				if info, err := serveraddr.ReadLock(s.cfg.lockPath); err == nil {
+					pid = info.PID
+				}
+				return errAttachedServer{pid: pid}
+			}
 			return nil
 		}
 		if err := sleepCtx(ctx, 100*time.Millisecond); err != nil {
