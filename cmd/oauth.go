@@ -55,7 +55,7 @@ func oauthCmd() *cobra.Command {
 			"for, limited to read and write; read if it asked for neither). The subject's grants are\n" +
 			"written for the ceiling; `knomit grants` can narrow them later.\n\n" +
 			"On the instance this talks to the local listener. From ANOTHER machine, with the fleet\n" +
-			"master key: `approve <id> --sign <issuer> --dir <master> --instance <fingerprint> --as ...`\n" +
+			"fleet root key: `approve <id> --sign <issuer> --dir <fleet-root-dir> --instance <fingerprint> --as ...`\n" +
 			"prints the request for you to read, then a signed statement; `approve --signed <file|->`\n" +
 			"delivers it (so does one POST of that JSON to <issuer>/oauth/approve).",
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -111,13 +111,13 @@ func oauthCmd() *cobra.Command {
 	return c
 }
 
-// signFlags adds the master-key signing flags (consent path 2) to approve
+// signFlags adds the fleet-root-key signing flags (consent path 2) to approve
 // and deny.
 func signFlags(c *cobra.Command, o *signOpts) {
-	c.Flags().StringVar(&o.issuer, "sign", "", "sign with the fleet master key instead, for the instance at this issuer URL (run on the master's machine)")
-	c.Flags().StringVar(&o.dir, "dir", "", "with --sign: the master directory (root.crt, issued.jsonl; default <home>/master)")
-	c.Flags().StringVar(&o.instance, "instance", "", "with --sign: the instance's full fingerprint; it must be issued by this master and not revoked")
-	c.Flags().StringVar(&o.passFile, "passphrase-file", "", "with --sign: file holding the master passphrase, used only when the key is in root.key (- = stdin, read AFTER the request is shown)")
+	c.Flags().StringVar(&o.issuer, "sign", "", "sign with the fleet root key instead, for the instance at this issuer URL (run on the fleet root's machine)")
+	c.Flags().StringVar(&o.dir, "dir", "", "with --sign: the fleet root directory (root.crt, issued.jsonl; default <home>/fleet)")
+	c.Flags().StringVar(&o.instance, "instance", "", "with --sign: the instance's full fingerprint; it must be issued by this fleet root and not revoked")
+	c.Flags().StringVar(&o.passFile, "passphrase-file", "", "with --sign: file holding the fleet root passphrase, used only when the key is in root.key (- = stdin, read AFTER the request is shown)")
 	c.Flags().BoolVar(&o.yes, "yes", false, "with --sign: sign without a confirmation (required with a passphrase FILE)")
 }
 

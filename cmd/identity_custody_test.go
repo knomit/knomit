@@ -74,20 +74,20 @@ func rootItem(t *testing.T, dir string) string {
 	return pki.KeychainService + "/" + pki.KeychainAccount(id)
 }
 
-// The custody flow end to end on the CLI: init-master puts the key in the
+// The custody flow end to end on the CLI: init-root puts the key in the
 // keychain (no root.key), enroll works with no passphrase, export-root
 // moves the key out so enroll then fails, import-root brings it back into
-// another master directory, and enroll works there.
+// another fleet root directory, and enroll works there.
 func TestIdentity_RootCustodyExportMovesImportRestores(t *testing.T) {
 	kc := &cliKeychain{items: map[string]string{}}
 	useKeychain(t, kc)
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	item := rootItem(t, dir)
 	if _, ok := kc.items[item]; !ok || len(kc.items) != 1 {
-		t.Fatalf("keychain after init-master: %v; want only %s", kc.items, item)
+		t.Fatalf("keychain after init-root: %v; want only %s", kc.items, item)
 	}
 	if _, err := os.Stat(filepath.Join(dir, pki.RootKeyFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("init-master with a keychain wrote root.key: %v", err)
+		t.Fatalf("init-root with a keychain wrote root.key: %v", err)
 	}
 	_, _, pubPath := instanceHome(t, "laptop")
 	out, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath)
@@ -119,7 +119,7 @@ func TestIdentity_RootCustodyExportMovesImportRestores(t *testing.T) {
 		t.Fatalf("enroll after the key moved away: %v, want ErrNoRootKey", err)
 	}
 
-	newDir := filepath.Join(t.TempDir(), "master")
+	newDir := filepath.Join(t.TempDir(), "fleet")
 	out, err = run(t, "", "identity", "import-root", export, "--dir", newDir, "--passphrase-file", passFile)
 	if err != nil || !strings.Contains(out, "OS keychain") {
 		t.Fatalf("import-root: %v\n%s", err, out)
@@ -127,7 +127,7 @@ func TestIdentity_RootCustodyExportMovesImportRestores(t *testing.T) {
 	if _, ok := kc.items[item]; !ok {
 		t.Fatalf("import-root did not file the key under %s: %v", item, kc.items)
 	}
-	// enroll in the new master dir needs the ledgers it does not have yet
+	// enroll in the new fleet root dir needs the ledgers it does not have yet
 	// only for the CRL; give it the old CRL, as a takeover would from main.
 	crl, _ := os.ReadFile(filepath.Join(dir, pki.CRLFile))
 	os.WriteFile(filepath.Join(newDir, pki.CRLFile), crl, 0o644)
@@ -140,7 +140,7 @@ func TestIdentity_ExportRootKeepLeavesTheKey(t *testing.T) {
 	kc := &cliKeychain{items: map[string]string{}}
 	useKeychain(t, kc)
 	onTerminal(t)
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	out, err := run(t, "correct horse\n", "identity", "export-root", "--dir", dir, "--keep", "--out", filepath.Join(t.TempDir(), "backup"), "--passphrase-file", passFile)
 	if err != nil || !strings.Contains(out, "kept the local copy") {
 		t.Fatalf("export --keep: %v\n%s", err, out)
@@ -150,16 +150,24 @@ func TestIdentity_ExportRootKeepLeavesTheKey(t *testing.T) {
 	}
 }
 
-// --dir is optional: the master directory defaults to <home>/master.
-func TestIdentity_MasterDirDefaultsUnderHome(t *testing.T) {
+// --dir is optional: the fleet root directory defaults to <home>/fleet.
+func TestIdentity_FleetRootDirDefaultsUnderHome(t *testing.T) {
 	useKeychain(t, &cliKeychain{items: map[string]string{}})
 	home := t.TempDir()
 	useHome(t, home)
-	if out, err := run(t, "", "identity", "init-master", "--cn", "knomit-master-test"); err != nil {
-		t.Fatalf("init-master without --dir: %v\n%s", err, out)
+	if out, err := run(t, "", "identity", "init-root", "--cn", "knomit-fleet-root-test"); err != nil {
+		t.Fatalf("init-root without --dir: %v\n%s", err, out)
 	}
-	if _, err := os.Stat(filepath.Join(home, masterDirName, pki.RootCertFile)); err != nil {
-		t.Fatalf("no root.crt under <home>/%s: %v", masterDirName, err)
+	// The literal, not the const: the default directory is <home>/fleet.
+	if _, err := os.Stat(filepath.Join(home, "fleet", pki.RootCertFile)); err != nil {
+		t.Fatalf("no root.crt under <home>/fleet: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "master")); !os.IsNotExist(err) {
+		t.Fatalf("<home>/master must not be created: %v", err)
+	}
+	// init-master is gone, with no alias (pre-release).
+	if out, err := run(t, "", "identity", "init-master", "--cn", "x"); err == nil {
+		t.Fatalf("identity init-master still runs:\n%s", out)
 	}
 	_, _, pubPath := instanceHome(t, "laptop")
 	if out, err := run(t, "", "identity", "enroll", "--pubkey", pubPath); err != nil || !strings.Contains(out, "BEGIN CERTIFICATE") {

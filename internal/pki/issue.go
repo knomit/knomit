@@ -68,7 +68,7 @@ func validHost(host string) bool {
 	return true
 }
 
-// Issued is one line of the master's issuance log. Revocation references the
+// Issued is one line of the fleet root's issuance log. Revocation references the
 // serial, so an issuance that could not be logged is not returned.
 type Issued struct {
 	Serial      string    `json:"serial"` // lowercase hex, as big.Int.Text(16)
@@ -80,7 +80,7 @@ type Issued struct {
 }
 
 // Issuance is one signed leaf as bytes: what IssueLeaf returns and the
-// caller places (a file in the master directory, or an artifact in the
+// caller places (a file in the fleet root directory, or an artifact in the
 // fleet repo).
 type Issuance struct {
 	CertPEM []byte
@@ -94,7 +94,7 @@ type Issuance struct {
 // compare two issuances field by field; production never reassigns it.
 var newSerial = randomSerial
 
-// IssueLeaf signs pub — the instance's EXISTING key; the master never
+// IssueLeaf signs pub — the instance's EXISTING key; the fleet root never
 // generates instance keys — into a leaf certificate usable for both client
 // and server authentication, valid from now, and returns it with its ledger
 // line. It writes nothing. There is no CSR: the operator hands over the
@@ -153,7 +153,7 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validit
 }
 
 // IssueInstance is IssueLeaf as of time.Now() that also appends the ledger
-// line to <dir>/issued.jsonl: the master-directory form `identity enroll`
+// line to <dir>/issued.jsonl: the fleet-root-directory form `identity enroll`
 // uses. A certificate whose line could not be logged is not returned, since
 // revocation finds serials in that log.
 func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, role Role, validity time.Duration) ([]byte, Issued, error) {
@@ -168,7 +168,7 @@ func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, ro
 }
 
 // appendLine appends one ledger line (already newline-terminated), 0600.
-// The master's logs are append-only files; history is the audit trail.
+// The fleet root's logs are append-only files; history is the audit trail.
 func appendLine(path string, line []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {

@@ -16,7 +16,7 @@ func TestIdentity_ExportPassphraseMustBeConfirmed(t *testing.T) {
 	kc := &cliKeychain{items: map[string]string{}}
 	useKeychain(t, kc)
 	onTerminal(t)
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	item := rootItem(t, dir)
 	export := filepath.Join(t.TempDir(), "root.export")
 
@@ -51,13 +51,13 @@ func TestIdentity_ExportPassphraseMustBeConfirmed(t *testing.T) {
 	}
 }
 
-// Review finding 1 at the CLI: --out naming the master's root.key is refused
+// Review finding 1 at the CLI: --out naming the fleet root's root.key is refused
 // and the key still opens.
 func TestIdentity_ExportOntoRootKeyIsRefused(t *testing.T) {
 	kc := &cliKeychain{items: map[string]string{}}
 	useKeychain(t, kc)
 	onTerminal(t)
-	dir, passFile := master(t)
+	dir, passFile := fleetRoot(t)
 	_, err := run(t, "correct horse\n", "identity", "export-root", "--dir", dir, "--out", filepath.Join(dir, pki.RootKeyFile), "--passphrase-file", passFile)
 	if !errors.Is(err, pki.ErrExportOntoRootKey) {
 		t.Fatalf("export onto root.key: %v", err)
@@ -74,7 +74,7 @@ func TestIdentity_ExportWarnsWhenTheKeychainMayStillHoldTheKey(t *testing.T) {
 	kc := &cliKeychain{items: map[string]string{}, setErr: errors.New("no Secret Service")}
 	useKeychain(t, kc)
 	onTerminal(t)
-	dir, passFile := master(t) // file custody: root.key
+	dir, passFile := fleetRoot(t) // file custody: root.key
 	kc.getErr = errors.New("keychain locked")
 	kc.delErr = errors.New("keychain locked")
 	out, err := run(t, "correct horse\n", "identity", "export-root", "--dir", dir, "--out", filepath.Join(t.TempDir(), "x"), "--passphrase-file", passFile)
@@ -96,7 +96,7 @@ func TestIdentity_ExportWarnsWhenTheKeychainMayStillHoldTheKey(t *testing.T) {
 func TestIdentity_RootFingerprintNeedsOnlyRootCrt(t *testing.T) {
 	kc := &cliKeychain{items: map[string]string{}}
 	useKeychain(t, kc)
-	dir, _ := master(t)
+	dir, _ := fleetRoot(t)
 	c, _ := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile))
 	want, _ := pki.RootID(c)
 	kc.items = map[string]string{} // no key anywhere
@@ -122,11 +122,11 @@ func TestOAuthSign_KeychainCustodyAsksYesNoNotAPassphrase(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not confirmed") || strings.Contains(stdout, `"signature"`) {
 		t.Fatalf("answer n: %v\nstdout %s", err, stdout)
 	}
-	if strings.Contains(stderr, "Type the master passphrase") || !strings.Contains(stderr, "[y/N]") {
+	if strings.Contains(stderr, "Type the fleet root passphrase") || !strings.Contains(stderr, "[y/N]") {
 		t.Fatalf("keychain custody prompted for a passphrase or asked nothing:\n%s", stderr)
 	}
 	stdout, stderr, err = runSplit(t, "y\n", args...)
-	if err != nil || !strings.Contains(stdout, `"signature"`) || strings.Contains(stderr, "Type the master passphrase") {
+	if err != nil || !strings.Contains(stdout, `"signature"`) || strings.Contains(stderr, "Type the fleet root passphrase") {
 		t.Fatalf("answer y: %v\nstdout %s\nstderr %s", err, stdout, stderr)
 	}
 	// --passphrase-file - is accepted and ignored for the key: still a y/N.

@@ -18,39 +18,39 @@ import (
 	"knomit/internal/auth"
 )
 
-// Master-key approval (F19 phase 3b, Task 3; consent path 2). The operator
-// signs a canonical statement with the fleet master key on their own
+// Fleet-root-key approval (F19 phase 3b, Task 3; consent path 2). The operator
+// signs a canonical statement with the fleet root key on their own
 // machine; the instance verifies it against the root public key it holds
 // and applies the decision. Every refusal is a named error.
 
 const ownFP = "1111111111111111111111111111111111111111111111111111111111111111"
 
-type masterKey struct {
+type fleetRootKey struct {
 	pub  ed25519.PublicKey
 	priv ed25519.PrivateKey
 }
 
-func newMasterKey(t *testing.T) masterKey {
+func newFleetRootKey(t *testing.T) fleetRootKey {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return masterKey{pub, priv}
+	return fleetRootKey{pub, priv}
 }
 
 // signedFixture is the issuer fixture with a fleet root and an instance
 // fingerprint, and one parked request.
 type signedFixture struct {
 	*issuerFixture
-	root masterKey
+	root fleetRootKey
 	id   string
 	row  Pending
 }
 
 func newSignedFixture(t *testing.T) *signedFixture {
 	t.Helper()
-	f := &signedFixture{issuerFixture: newIssuerFixture(t), root: newMasterKey(t)}
+	f := &signedFixture{issuerFixture: newIssuerFixture(t), root: newFleetRootKey(t)}
 	f.iss.instanceFP = ownFP
 	f.iss.fleetRoot = func() (ed25519.PublicKey, error) { return f.root.pub, nil }
 	_, ch := pkce()
@@ -117,7 +117,7 @@ func TestStatementBytes_Canonical(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("deny bytes:\n%q\nwant\n%q", got, want)
 	}
-	// S2: the master key also signs X.509 TBS structures and CRLs, which
+	// S2: the fleet root key also signs X.509 TBS structures and CRLs, which
 	// are DER and begin with 0x30. A statement never does.
 	if got[0] == 0x30 || !bytes.HasPrefix(got, []byte("knomit-oauth-")) {
 		t.Fatal("a statement is not domain-separated from DER")
@@ -165,7 +165,7 @@ func TestSignedApprove_ApprovesAndTheBrowserCollects(t *testing.T) {
 		t.Fatalf("approve: %d %s", code, body)
 	}
 	p, _ := f.store.GetPending(context.Background(), f.id)
-	wantBy := "master:" + FleetRootLabel(f.root.pub)
+	wantBy := "fleet-root:" + FleetRootLabel(f.root.pub)
 	if p.Decision != DecisionApproved || p.Subject != "laptop" || strings.Join(p.Ceiling, ",") != "read,write" || p.DecidedBy != wantBy {
 		t.Fatalf("pending after signed approve: %+v", p)
 	}
@@ -218,7 +218,7 @@ func TestSignedApprove_Refusals(t *testing.T) {
 		err    error
 	}{
 		{"wrong key", func(f *signedFixture, t *testing.T) SignedStatement {
-			return f.sign(t, f.statement(VerbApprove), newMasterKey(t).priv)
+			return f.sign(t, f.statement(VerbApprove), newFleetRootKey(t).priv)
 		}, http.StatusForbidden, ErrBadSignature},
 		{"tampered subject", func(f *signedFixture, t *testing.T) SignedStatement {
 			ss := f.sign(t, f.statement(VerbApprove), f.root.priv)
@@ -384,11 +384,11 @@ func TestSignedApprove_BodyBounded(t *testing.T) {
 // The approving principal's spelling is not an auth.Principal a request
 // could ever present, so it can never match a grants row by accident.
 func TestFleetRootLabel(t *testing.T) {
-	l := FleetRootLabel(newMasterKey(t).pub)
+	l := FleetRootLabel(newFleetRootKey(t).pub)
 	if len(l) != 8 || strings.Trim(l, "0123456789abcdef") != "" {
 		t.Fatalf("label %q", l)
 	}
-	if _, err := auth.ParsePrincipal("master:" + l); err == nil {
-		t.Fatal("master:<fp8> parses as a principal")
+	if _, err := auth.ParsePrincipal("fleet-root:" + l); err == nil {
+		t.Fatal("fleet-root:<fp8> parses as a principal")
 	}
 }

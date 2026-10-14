@@ -25,7 +25,7 @@ import (
 // Passphrase is the root passphrase every test fleet uses.
 var Passphrase = []byte("pkitest passphrase")
 
-// Fleet is a root with a published CRL, in its own master dir.
+// Fleet is a root with a published CRL, in its own fleet root dir.
 type Fleet struct {
 	Dir  string
 	Root pki.Root
@@ -45,8 +45,8 @@ func (m Member) Fingerprint() string { return pki.Fingerprint(m.Pub) }
 // New creates a fleet whose CRL (Number 1) lists nothing.
 func New(t testing.TB) *Fleet {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "master")
-	root, err := pki.NewRoot(dir, "knomit-master-test", Passphrase, 24*time.Hour)
+	dir := filepath.Join(t.TempDir(), "fleet")
+	root, err := pki.NewRoot(dir, "knomit-fleet-root-test", Passphrase, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func (f *Fleet) Install(t testing.TB, m Member, dir string) {
 	}
 }
 
-// Revoke revokes m on the master and copies the new CRL into each dir.
+// Revoke revokes m on the fleet root and copies the new CRL into each dir.
 func (f *Fleet) Revoke(t testing.TB, m Member, dirs ...string) {
 	t.Helper()
 	if _, err := pki.Revoke(f.Dir, f.Root, pki.Revoked{Serial: m.Cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
@@ -147,7 +147,7 @@ func (f *Fleet) Revoke(t testing.TB, m Member, dirs ...string) {
 }
 
 // Client is an HTTPS client presenting m's certificate that verifies the
-// server against f's root and CURRENT master CRL with pki.VerifyInstanceChain
+// server against f's root and CURRENT fleet root CRL with pki.VerifyInstanceChain
 // — the same fail-closed shape as pki.ClientConfig. Keep-alives are off so
 // every request is a fresh handshake.
 func (f *Fleet) Client(t testing.TB, m Member) *http.Client {

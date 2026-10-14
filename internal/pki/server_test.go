@@ -113,7 +113,7 @@ func (f fleet) install(t *testing.T, m member) string {
 	return dir
 }
 
-// publishCRL copies the master's current crl.pem to an instance dir, the
+// publishCRL copies the fleet root's current crl.pem to an instance dir, the
 // operator's distribution step.
 func (f fleet) publishCRL(t *testing.T, instDir string) {
 	t.Helper()
@@ -494,7 +494,7 @@ func TestServerConfig_TornInstallKeepsThePreviousSetAndLogsOnce(t *testing.T) {
 	}
 }
 
-// Revoke revokes m on the master and publishes the CRL into each dir.
+// Revoke revokes m on the fleet root and publishes the CRL into each dir.
 func (f fleet) Revoke(t *testing.T, m member, dirs ...string) {
 	t.Helper()
 	if _, err := Revoke(f.dir, f.root, Revoked{Serial: m.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {

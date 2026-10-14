@@ -41,7 +41,7 @@ func ParseSet(names []string) (Set, error) {
 
 // Grants answers what a principal holds. Implementations: StaticGrants
 // (config/tests) and SQLGrants (control.db). A later phase merges the
-// master-signed fleet policy here as well.
+// fleet-root-signed fleet policy here as well.
 type Grants interface {
 	For(ctx context.Context, p Principal) (Set, error)
 }

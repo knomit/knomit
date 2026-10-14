@@ -278,7 +278,7 @@ func TestReceivePack_RefusesOutsideOwnBranch(t *testing.T) {
 	mainBefore, hostBefore, objsBefore := h.ref("main"), h.ref(hostBranch), h.objects()
 
 	for _, tc := range []struct{ dst, want string }{
-		{"refs/heads/main", "only agent branches may be pushed; refs/heads/main is not an agent branch"},
+		{"refs/heads/main", "refs/heads/main is this repo's upstream branch; it is never pushed"},
 		{"refs/heads/foo", "only agent branches may be pushed; refs/heads/foo is not an agent branch"},
 		{"refs/heads/exp/x", "refs/heads/exp/x is not an agent branch"},
 		{"refs/heads/" + hostBranch, "is this host's own branch; it is written only by this host"},
@@ -580,7 +580,7 @@ func TestReceivePack_RealGit(t *testing.T) {
 	cmd.Dir = c
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	require.Contains(t, string(out), "remote error: knomit: only agent branches may be pushed")
+	require.Contains(t, string(out), "remote error: knomit: refs/heads/main is this repo's upstream branch; it is never pushed")
 }
 
 // T14: a client that asked for no sideband still reads the refusal.
@@ -591,7 +591,7 @@ func TestReceivePack_RefusalWithoutSideband(t *testing.T) {
 	p.setBranch("work", c)
 	err := p.push(h.srv.URL, nil, "+refs/heads/work:refs/heads/main")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "only agent branches may be pushed")
+	require.Contains(t, err.Error(), "is this repo's upstream branch; it is never pushed")
 }
 
 // T16: a client that goes away once the push is accepted cannot abort the

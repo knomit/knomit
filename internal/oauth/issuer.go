@@ -51,7 +51,7 @@ type Options struct {
 	// "still waiting" (the page then polls again). Zero means 30 s.
 	WaitTimeout time.Duration
 	// InstanceFingerprint is this instance's pki.Fingerprint, which a
-	// master-key approval statement must name (phase 3b, Task 3).
+	// fleet-root-key approval statement must name (phase 3b, Task 3).
 	InstanceFingerprint string
 	// FleetRoot returns the fleet root's public key, read fresh on every
 	// signed approval so a root installed or swapped after boot is used at
@@ -104,7 +104,7 @@ func NewIssuer(o Options) *Issuer {
 func (i *Issuer) Name() string { return i.issuer }
 
 // Routes serves the PUBLIC surface: both discovery documents, authorize,
-// wait, a waiting request's description, a master-key signed decision, token
+// wait, a waiting request's description, a fleet-root-key signed decision, token
 // and revoke. It carries no authentication by construction —
 // the OAuth listener mounts it beside, never under, the bearer middleware.
 //

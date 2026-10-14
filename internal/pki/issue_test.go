@@ -25,8 +25,8 @@ var posixModes = runtime.GOOS != "windows"
 
 func newTestRoot(t *testing.T) (string, Root) {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "master")
-	r, err := NewRoot(dir, "knomit-master-test", testPass, 24*time.Hour)
+	dir := filepath.Join(t.TempDir(), "fleet")
+	r, err := NewRoot(dir, "knomit-fleet-root-test", testPass, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

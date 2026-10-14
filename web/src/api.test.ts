@@ -225,19 +225,25 @@ describe('api.getAgentBranch', () => {
     expect(branch).toBe('agent/mindev.local-8ef0cd32');
   });
 
-  it('falls back to the branch-list heuristic when the server omits agent_branch', async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+  // D18: without the server's answer an agent/* branch is NOT taken as this
+  // machine's: on a host holding peers' pushed branches it may be a peer's.
+  // Both a missing agent_branch and a failing repo-details call must throw.
+  // SABOTAGE: restore `branches.find(b => b.name.startsWith('agent/'))` →
+  // resolves 'agent/peer-1' → red.
+  it('never takes an agent/* branch as its own without the server', async () => {
+    const serve = (details: () => any) => vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith('/branches')) {
         return { ok: true, status: 200, json: async () => ({ _embedded: { branches: [
           { name: 'main' },
-          { name: 'agent/host-1' },
+          { name: 'agent/peer-1' },
         ] } }) };
       }
-      return { ok: true, status: 200, json: async () => ({ name: 'core' }) }; // no agent_branch
+      return details();
     });
-
-    const branch = await api.getAgentBranch('core');
-    expect(branch).toBe('agent/host-1');
+    globalThis.fetch = serve(() => ({ ok: true, status: 200, json: async () => ({ name: 'core' }) })); // no agent_branch
+    await expect(api.getAgentBranch('core')).rejects.toThrow(/cannot tell which branch/);
+    globalThis.fetch = serve(() => ({ ok: false, status: 503, json: async () => ({ message: 'busy' }), text: async () => 'busy' }));
+    await expect(api.getAgentBranch('core')).rejects.toThrow(/cannot tell which branch/);
   });
 
   // With no agent branch and several others, there is no answer: it throws

@@ -274,8 +274,12 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 	case seeded:
 		ev.Msg("receive-pack: registered")
 	case res.Mode == ModeRewound:
-		// A real non-fast-forward of an existing peer branch: allowed (the
-		// peer's own reconcile force-pushes), and worth one line above INFO.
+		// A real non-fast-forward of an existing agent/ branch: allowed, by
+		// design. No branch is owned (D18/D19), so ANY authenticated pusher
+		// may update or rewind ANY peer's agent/ branch here, not only the
+		// peer whose commits are on it; commits the host had not merged yet
+		// disappear from this branch until someone pushes them again. Worth
+		// one line above INFO, naming the pusher (on lg).
 		lg.Warn().Str("old", shortRefHash(cmd.Old)).Str("new", shortRefHash(cmd.New)).
 			Int("commits", len(commits)).Int("objects", len(objs)).
 			Msg("receive-pack: force-updated (not a descendant of the previous tip)")
@@ -324,6 +328,11 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 	switch {
 	case cmd.Action() == packp.Delete:
 		return nil, fmt.Sprintf("knomit: branch deletion is not allowed: %s", name)
+	case name == "refs/heads/"+rp.upstream():
+		// Checked on its own, before the agent/ prefix: the upstream (the
+		// consensus/default branch) is never pushed, even when its recorded
+		// name happens to sit under agent/.
+		return nil, fmt.Sprintf("knomit: %s is this repo's upstream branch; it is never pushed", name)
 	case !strings.HasPrefix(name, "refs/heads/agent/"):
 		return nil, fmt.Sprintf("knomit: only agent branches may be pushed; %s is not an agent branch", name)
 	case pol.OwnBranch != "" && name == "refs/heads/"+pol.OwnBranch:

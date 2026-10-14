@@ -2,11 +2,13 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -71,6 +73,33 @@ func TestReceivePack_BranchNameCarriesNoOwnership(t *testing.T) {
 	p.setBranch("work", own)
 	err := p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/main")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "refs/heads/main is not an agent branch")
+	require.Contains(t, err.Error(), "refs/heads/main is this repo's upstream branch; it is never pushed")
 	require.Equal(t, mainBefore, h.ref("main"))
+}
+
+// F6: the upstream is refused by its own rule, not only because "main" fails
+// the agent/ prefix. A repo whose recorded upstream sits under agent/ would
+// otherwise let any enrolled pusher move the consensus branch directly.
+// SABOTAGE: drop the `name == "refs/heads/"+rp.upstream()` case → the
+// agent/consensus request passes → red.
+func TestReceivePack_UpstreamRefusedEvenUnderAgentPrefix(t *testing.T) {
+	h := newPushHost(t, "", 1)
+	ctx := context.Background()
+	const upstream = "agent/consensus"
+	require.NoError(t, h.svc.Branches().CreateBranch(ctx, upstream, "main"))
+	rp := &receivePack{rh: h.svc.rh, upstream: func() string { return upstream }}
+	req := packp.NewReferenceUpdateRequest()
+	req.Commands = []*packp.Command{{Name: plumbing.NewBranchReferenceName(upstream), Old: h.ref(upstream), New: h.ref("main")}}
+	pctx := WithPushPolicy(ctx, PushPolicy{Pusher: pushFP, OwnBranch: hostBranch})
+
+	cmd, refusal := rp.judgeRequest(pctx, req)
+	require.Nil(t, cmd)
+	require.Equal(t, "knomit: refs/heads/agent/consensus is this repo's upstream branch; it is never pushed", refusal)
+
+	// Control: another agent/ ref passes the same request rules.
+	req.Commands[0].Name = plumbing.NewBranchReferenceName("agent/other")
+	req.Commands[0].Old = plumbing.ZeroHash
+	cmd, refusal = rp.judgeRequest(pctx, req)
+	require.Empty(t, refusal)
+	require.NotNil(t, cmd)
 }

@@ -27,7 +27,7 @@ import (
 // takes — so the item name is stable for the life of the root and two roots
 // can never share an item. Where no keychain is usable (headless Linux with
 // no Secret Service, a locked macOS keychain over SSH) the key falls back to
-// the passphrase-encrypted root.key file in the master directory.
+// the passphrase-encrypted root.key file in the fleet root directory.
 //
 // The root CERTIFICATE (public) always stays in <dir>/root.crt: it is what
 // OpenRoot reads first, to learn which keychain item to open.
@@ -48,7 +48,7 @@ func KeychainAccount(rootID string) string { return "fleet-root/" + rootID }
 // for a root held in the file, distinct from a keychain that is unusable.
 var ErrKeychainItemNotFound = errors.New("pki: keychain item not found")
 
-// ErrNoRootKey: neither the keychain nor the master directory holds the
+// ErrNoRootKey: neither the keychain nor the fleet root directory holds the
 // key of the root in <dir>/root.crt (exported elsewhere, or never imported
 // here).
 var ErrNoRootKey = errors.New("pki: the fleet root key is not on this machine")
@@ -109,7 +109,7 @@ type Passphrase func() ([]byte, error)
 func OpenRoot(dir string, kc Keychain, pass Passphrase) (Root, RootSource, error) {
 	cert, err := LoadRootCert(filepath.Join(dir, RootCertFile))
 	if err != nil {
-		return Root{}, "", fmt.Errorf("pki: no fleet root in %s (run `knomit identity init-master` or `import-root`): %w", dir, err)
+		return Root{}, "", fmt.Errorf("pki: no fleet root in %s (run `knomit identity init-root` or `import-root`): %w", dir, err)
 	}
 	id, err := RootID(cert)
 	if err != nil {
@@ -145,7 +145,7 @@ func OpenRoot(dir string, kc Keychain, pass Passphrase) (Root, RootSource, error
 	return root, RootFromFile, nil
 }
 
-// CreateRoot is `identity init-master`: it mints a new fleet root in dir and
+// CreateRoot is `identity init-root`: it mints a new fleet root in dir and
 // stores its key in the keychain, or — when the keychain refuses — in the
 // passphrase-encrypted <dir>/root.key (pass is called only then). It refuses
 // to run over an existing root.crt or root.key: replacing a root orphans
@@ -157,7 +157,7 @@ func CreateRoot(dir, cn string, validity time.Duration, kc Keychain, pass Passph
 		}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return Root{}, "", fmt.Errorf("pki: create master dir: %w", err)
+		return Root{}, "", fmt.Errorf("pki: create fleet root dir: %w", err)
 	}
 	root, priv, err := generateRoot(cn, validity)
 	if err != nil {
@@ -169,7 +169,7 @@ func CreateRoot(dir, cn string, validity time.Duration, kc Keychain, pass Passph
 	}
 	certPath := filepath.Join(dir, RootCertFile)
 	// O_EXCL: the Stat above is advisory; this holds under a race with a
-	// second init-master.
+	// second init-root.
 	if err := writeExclusive(certPath, certPEM(root.Cert.Raw), 0o644); err != nil {
 		return Root{}, "", err
 	}
@@ -209,9 +209,9 @@ type ExportResult struct {
 	KeychainErr error
 }
 
-// ErrExportOntoRootKey: --out names the master directory's own root.key. A
+// ErrExportOntoRootKey: --out names the fleet root directory's own root.key. A
 // move would delete the file it just wrote, and with it the only copy.
-var ErrExportOntoRootKey = errors.New("pki: the export file is the master directory's root.key")
+var ErrExportOntoRootKey = errors.New("pki: the export file is the fleet root directory's root.key")
 
 // sameDestination reports whether out and keyPath name the same location
 // before either exists: cleaned absolute paths, and again with the parent
@@ -241,7 +241,7 @@ func sameDestination(out, keyPath string) bool {
 //
 // The export is a MOVE unless keep is set: after the written file has been
 // read back and decrypted to the same key, the keychain item and
-// <dir>/root.key are removed, so two masters never coexist by accident. The
+// <dir>/root.key are removed, so two fleet roots never coexist by accident. The
 // root certificate and the ledgers stay in dir.
 func ExportRoot(dir, out string, kc Keychain, passphrase []byte, keep bool) (ExportResult, error) {
 	if len(passphrase) == 0 {
@@ -252,7 +252,7 @@ func ExportRoot(dir, out string, kc Keychain, passphrase []byte, keep bool) (Exp
 	// would be removed with it, the keychain item too, and the key would be
 	// gone: refuse that spelling before writing anything.
 	if sameDestination(out, keyPath) {
-		return ExportResult{}, fmt.Errorf("%w (%s); export to a file outside the master directory", ErrExportOntoRootKey, keyPath)
+		return ExportResult{}, fmt.Errorf("%w (%s); export to a file outside the fleet root directory", ErrExportOntoRootKey, keyPath)
 	}
 	root, src, err := OpenRoot(dir, kc, func() ([]byte, error) { return passphrase, nil })
 	if err != nil {
@@ -347,7 +347,7 @@ func ImportRoot(dir, file string, kc Keychain, passphrase []byte) (Root, RootSou
 		return Root{}, "", err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return Root{}, "", fmt.Errorf("pki: create master dir: %w", err)
+		return Root{}, "", fmt.Errorf("pki: create fleet root dir: %w", err)
 	}
 	// A failed import leaves no root.crt of its own behind: a new root.crt
 	// beside an older root.key would make every later open fail as "not a

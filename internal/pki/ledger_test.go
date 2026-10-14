@@ -46,7 +46,7 @@ func pinSerial(t *testing.T, n int64) {
 // the comparison must not depend on it.
 func TestIssueLeaf_EquivalentToIssueInstance(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-master-test", custodyPass, time.Hour)
+	root, err := NewRoot(dir, "knomit-fleet-root-test", custodyPass, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func crlFields(c *x509.RevocationList) []any {
 // Number, times and entries as the file variant Revoke.
 func TestRevokeSerial_EquivalentToRevoke(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-master-test", custodyPass, time.Hour)
+	root, err := NewRoot(dir, "knomit-fleet-root-test", custodyPass, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func signedCRL(t *testing.T, root Root, n int64, serials ...int64) []byte {
 }
 
 func TestInstallCRL_OnlyAboveTheWatermark(t *testing.T) {
-	root, err := NewRoot(t.TempDir(), "knomit-master-test", custodyPass, time.Hour)
+	root, err := NewRoot(t.TempDir(), "knomit-fleet-root-test", custodyPass, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
