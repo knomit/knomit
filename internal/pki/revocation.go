@@ -231,8 +231,10 @@ func CheckIssuance(raw []byte, rootCert *x509.Certificate) (Identity, error) {
 	// block's own encoding, so nothing rides along before or after it (no
 	// junk, no second block, no headers, no other line endings).
 	blk, _ := pem.Decode(raw)
-	if blk == nil || blk.Type != "CERTIFICATE" ||
-		!bytes.Equal(raw, pem.EncodeToMemory(&pem.Block{Type: blk.Type, Bytes: blk.Bytes})) {
+	if blk == nil || blk.Type != "CERTIFICATE" {
+		return bad("no CERTIFICATE PEM block")
+	}
+	if !bytes.Equal(raw, pem.EncodeToMemory(&pem.Block{Type: blk.Type, Bytes: blk.Bytes})) {
 		return bad("the file is not exactly one CERTIFICATE PEM block, encoded as IssueLeaf encodes it, and nothing else")
 	}
 	leaf, err := x509.ParseCertificate(blk.Bytes)
