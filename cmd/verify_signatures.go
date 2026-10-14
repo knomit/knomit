@@ -181,6 +181,15 @@ exactly one member record; the signing key is that record's current key and no
 other record's; the agent is active. An unsigned merge passes only if it adds
 nothing beyond its parents.
 
+When the fleet checkout holds the fleet's certificate artifacts
+(artifacts/fleet/root.crt, crl.pem, certs/<agent id>.pem), two more rules
+apply, read at the same --fleet-rev. A member whose certificate for its key
+is on the CRL is refused (revoked). In the fleet repository itself, a commit
+that only writes its author's own members/<agent id>/ folder is admitted
+without a record when certs/<agent id>.pem holds the signing key, chains to
+root.crt and is not revoked: a new member's first record. Expiry is not
+judged. Without root.crt the rules are exactly the ones above.
+
   knomit verify ci --candidate "$TIP" --fleet ../fleet
 
 --upstream defaults to the branch origin's HEAD names (refs/remotes/origin/HEAD;

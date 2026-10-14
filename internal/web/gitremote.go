@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -126,7 +125,7 @@ func pushPolicy(r *http.Request, rm *repos.Manager, ri *repos.RepoInstance) stor
 	p, _ := auth.FromContext(r.Context())
 	pol := store.PushPolicy{
 		OwnBranch: ri.AgentBranch(),
-		Members:   func(ctx context.Context) ([]store.FleetMember, error) { return rm.FleetMembers(ctx) },
+		Fleet:     rm.FleetAtMain,
 	}
 	switch {
 	case p.Kind != auth.KindInstance || p.Via != auth.ViaCert || p.ID == "":

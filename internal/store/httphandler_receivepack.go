@@ -45,10 +45,11 @@ type PushPolicy struct {
 	// OwnBranch is this host's own agent branch, which is never written
 	// through receive-pack.
 	OwnBranch string
-	// Members returns the fleet repository's member records. Called only when
+	// Fleet returns the fleet repository's member records and certificate
+	// artifacts, both read from its main at ONE revision. Called only when
 	// verify_signatures is log or enforce; nil or an error means this instance
 	// has no fleet to judge against.
-	Members func(context.Context) ([]FleetMember, error)
+	Fleet func(context.Context) (Fleet, error)
 }
 
 type pushPolicyKey struct{}
@@ -356,18 +357,18 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 // signer rule there would stop nobody.
 func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*object.Commit, lg zerolog.Logger) string {
 	upstream := rp.upstream()
-	mode, err := rp.rh.verifyModeAt(ctx, upstream)
+	mode, isFleet, err := rp.rh.verifyModeAt(ctx, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: verify_signatures at %s could not be read: %v", upstream, err)
 	}
 	if mode == VerifyOff || len(commits) == 0 {
 		return ""
 	}
-	var members []FleetMember
-	if pol.Members == nil {
+	var fleet Fleet
+	if pol.Fleet == nil {
 		err = ErrNoFleet
 	} else {
-		members, err = pol.Members(ctx)
+		fleet, err = pol.Fleet(ctx)
 	}
 	if err != nil {
 		if mode == VerifyEnforce {
@@ -376,9 +377,18 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 		lg.Warn().Err(err).Msg("receive-pack: verify_signatures is log but there is no fleet repository; commits not judged")
 		return ""
 	}
-	idx := indexMembers(members)
+	// Rule A (self-registration) exists only where member records live: this
+	// repository must itself be the fleet repository (its ontology at the
+	// upstream is the fleet preset).
+	selfRoot := ""
+	if isFleet {
+		if selfRoot = rp.rh.factRoot; selfRoot == "" {
+			selfRoot = "kb"
+		}
+	}
+	gate := newJudge(fleet, selfRoot)
 	for _, c := range commits {
-		ref, ok := idx.judgeCommit(c)
+		ref, ok := gate.judgeCommit(c)
 		if ok {
 			ref, ok = signerIsPusher(c, pol.Pusher)
 		}
@@ -577,29 +587,31 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 // client must no longer be able to abort.
 var pushRegisterHook func()
 
-// verifyModeAt reads verify_signatures from the ontology at branch's tip.
-func (rh *repoHandler) verifyModeAt(ctx context.Context, branch string) (string, error) {
+// verifyModeAt reads verify_signatures from the ontology at branch's tip, and
+// whether that ontology is the fleet preset (this repository is the fleet).
+func (rh *repoHandler) verifyModeAt(ctx context.Context, branch string) (mode string, isFleet bool, err error) {
 	h, err := rh.resolveRef(ctx, branch)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	c, err := object.GetCommit(rh.gits, h)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	raw, err := treeOntology(c)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if raw == nil {
-		return VerifyOff, nil
+		return VerifyOff, false, nil
 	}
 	vs, err := fact.ReadVerifySettings(raw)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if !vs.Valid {
-		return "", errors.New("unknown value")
+		return "", false, errors.New("unknown value")
 	}
-	return vs.Mode, nil
+	ont, perr := fact.ParseOntology(raw)
+	return vs.Mode, perr == nil && fact.IsFleetOntology(ont), nil
 }

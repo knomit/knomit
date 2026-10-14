@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"path"
@@ -15,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/pki"
 )
 
 // ErrNotFleet: the repository's ontology is not the fleet preset.
@@ -126,53 +129,220 @@ func loadMembers(fleetID string, c *object.Commit, root string) ([]FleetMember, 
 // rev) is the fleet preset, and returns the member records at rev. root is the
 // repository's fact root ("" = "kb").
 func LoadFleet(dir, rev, root string) ([]FleetMember, error) {
-	if root == "" {
-		root = "kb"
-	}
+	f, err := LoadFleetAt(dir, rev, root)
+	return f.Members, err
+}
+
+// LoadFleetAt is LoadFleet also returning the certificate artifacts at rev,
+// read from the same commit.
+func LoadFleetAt(dir, rev, root string) (Fleet, error) {
 	repo, err := openGitDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("fleet: %w", err)
+		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
 	c, err := resolveCommit(repo, rev)
 	if err != nil {
-		return nil, fmt.Errorf("fleet: %w", err)
+		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
-	raw, err := treeOntology(c)
-	if err != nil {
-		return nil, fmt.Errorf("fleet: ontology: %w", err)
-	}
-	ont, err := fact.ParseOntology(raw)
-	if raw == nil || err != nil || !fact.IsFleetOntology(ont) {
-		return nil, ErrNotFleet
-	}
-	return loadMembers(dir, c, root)
+	return loadFleetAt(dir, c, root)
 }
 
 // FleetMembersAt returns the member records at branch in THIS store (a
 // mounted fleet repository), after checking that its ontology there is the
 // fleet preset. root is the store's fact root.
 func (s *Service) FleetMembersAt(branch string) ([]FleetMember, error) {
+	f, err := s.FleetAt(branch)
+	return f.Members, err
+}
+
+// FleetPKIAt returns the fleet's certificate artifacts at branch in THIS store
+// (a mounted fleet repository): nil, nil when that revision holds no
+// artifacts/fleet/root.crt.
+func (s *Service) FleetPKIAt(branch string) (*FleetPKI, error) {
+	f, err := s.FleetAt(branch)
+	return f.PKI, err
+}
+
+// FleetAt returns everything the judge reads from THIS store (a mounted fleet
+// repository) at branch, all from the ONE commit branch names: the member
+// records and the certificate artifacts. Reading them separately could pair
+// the records of one revision with the CRL of another.
+func (s *Service) FleetAt(branch string) (Fleet, error) {
 	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
-		return nil, fmt.Errorf("fleet: %s: %w", branch, err)
+		return Fleet{}, fmt.Errorf("fleet: %s: %w", branch, err)
 	}
 	c, err := object.GetCommit(s.rh.gits, ref.Hash())
 	if err != nil {
-		return nil, fmt.Errorf("fleet: %w", err)
+		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
-	raw, err := treeOntology(c)
-	if err != nil {
-		return nil, fmt.Errorf("fleet: ontology: %w", err)
-	}
-	ont, perr := fact.ParseOntology(raw)
-	if raw == nil || perr != nil || !fact.IsFleetOntology(ont) {
-		return nil, ErrNotFleet
-	}
-	root := s.rh.factRoot
+	return loadFleetAt("mounted", c, s.rh.factRoot)
+}
+
+// Fleet is the judge's input from a fleet repository at ONE revision.
+type Fleet struct {
+	Members []FleetMember
+	PKI     *FleetPKI // nil: the revision holds no artifacts/fleet/root.crt
+}
+
+// loadFleetAt checks that c's ontology is the fleet preset and reads its
+// member records (under <root>/members/) and certificate artifacts.
+func loadFleetAt(fleetID string, c *object.Commit, root string) (Fleet, error) {
 	if root == "" {
 		root = "kb"
 	}
-	return loadMembers("mounted", c, root)
+	raw, err := treeOntology(c)
+	if err != nil {
+		return Fleet{}, fmt.Errorf("fleet: ontology: %w", err)
+	}
+	ont, perr := fact.ParseOntology(raw)
+	if raw == nil || perr != nil || !fact.IsFleetOntology(ont) {
+		return Fleet{}, ErrNotFleet
+	}
+	members, err := loadMembers(fleetID, c, root)
+	if err != nil {
+		return Fleet{}, err
+	}
+	p, err := loadFleetPKI(c)
+	if err != nil {
+		return Fleet{}, fmt.Errorf("fleet: %w", err)
+	}
+	return Fleet{Members: members, PKI: p}, nil
+}
+
+// The fleet's certificate artifacts (D7): plain files on the fleet's main,
+// written by the fleet root's holder. Repo-root paths, not under the fact root.
+const (
+	fleetRootCertPath = fact.ArtifactsRoot + "/fleet/root.crt"
+	fleetCRLPath      = fact.ArtifactsRoot + "/fleet/crl.pem"
+	fleetCertsDir     = fact.ArtifactsRoot + "/fleet/certs"
+)
+
+// FleetPKI is the fleet's certificate artifacts at one revision: the root
+// certificate, the CRL, and the leaf for each agent id at
+// artifacts/fleet/certs/<id>.pem.
+//
+// A file that is present but does not parse never fails the load: a broken
+// artifact on main must not refuse every push, including the one that fixes
+// it. It is kept as an error instead, and every rule that needs it fails
+// CLOSED: a self-registration is never admitted on a root, CRL or leaf
+// nobody can read, and a revocation is believed only from a CRL the root
+// signed, about a leaf the root signed.
+type FleetPKI struct {
+	Root    *x509.Certificate    // nil when RootErr is set
+	RootErr error                // root.crt present but unusable
+	CRL     *x509.RevocationList // nil when CRLErr is set
+	CRLErr  error                // crl.pem absent or unparseable
+	certs   map[string][]byte    // lowercased <id> -> raw PEM (nil: two spellings of one id)
+}
+
+// Cert returns the leaf artifact for agent id, looked up by the id as a file
+// name and never parsed: nil, nil when there is none.
+func (p *FleetPKI) Cert(id string) (*x509.Certificate, error) {
+	raw, ok := p.certs[strings.ToLower(id)]
+	if !ok {
+		return nil, nil
+	}
+	name := fleetCertsDir + "/" + id + ".pem"
+	if raw == nil {
+		return nil, fmt.Errorf("%s: more than one file for this id (case differs)", name)
+	}
+	blk, _ := pem.Decode(raw)
+	if blk == nil || blk.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("%s: no CERTIFICATE PEM block", name)
+	}
+	c, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	return c, nil
+}
+
+// loadFleetPKI reads the certificate artifacts from c's tree: nil, nil when
+// there is no root.crt (no PKI: the judge's rules are what they were before
+// the artifacts existed). The leaves are read as raw bytes here and parsed
+// per author id on demand. They are read eagerly because a caller may judge
+// after its read handle on the store is released (receive-pack's policy
+// callback), so nothing may touch the store lazily; the cost is the same
+// order as the member records, which are all read and parsed already.
+func loadFleetPKI(c *object.Commit) (*FleetPKI, error) {
+	tree, err := c.Tree()
+	if err != nil {
+		return nil, err
+	}
+	rootRaw, ok, err := treeBytes(tree, fleetRootCertPath)
+	if err != nil || !ok {
+		return nil, err
+	}
+	p := &FleetPKI{certs: map[string][]byte{}}
+	if blk, _ := pem.Decode(rootRaw); blk == nil || blk.Type != "CERTIFICATE" {
+		p.RootErr = fmt.Errorf("%s: no CERTIFICATE PEM block", fleetRootCertPath)
+	} else if rc, perr := x509.ParseCertificate(blk.Bytes); perr != nil {
+		p.RootErr = fmt.Errorf("%s: %w", fleetRootCertPath, perr)
+	} else if !rc.IsCA {
+		p.RootErr = fmt.Errorf("%s is not a CA certificate", fleetRootCertPath)
+	} else {
+		p.Root = rc
+	}
+	crlRaw, ok, err := treeBytes(tree, fleetCRLPath)
+	switch {
+	case err != nil:
+		return nil, err
+	case !ok:
+		p.CRLErr = fmt.Errorf("%w: no %s", pki.ErrCRLMissing, fleetCRLPath)
+	default:
+		if blk, _ := pem.Decode(crlRaw); blk == nil || blk.Type != "X509 CRL" {
+			p.CRLErr = fmt.Errorf("%w: %s: no X509 CRL PEM block", pki.ErrCRLInvalid, fleetCRLPath)
+		} else if crl, perr := x509.ParseRevocationList(blk.Bytes); perr != nil {
+			p.CRLErr = fmt.Errorf("%w: %s: %v", pki.ErrCRLInvalid, fleetCRLPath, perr)
+		} else {
+			p.CRL = crl
+		}
+	}
+	certs, err := tree.Tree(fleetCertsDir)
+	if errors.Is(err, object.ErrDirectoryNotFound) {
+		return p, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range certs.Entries {
+		id, isPEM := strings.CutSuffix(e.Name, ".pem")
+		if !isPEM || id == "" || !e.Mode.IsFile() || e.Mode == filemode.Symlink {
+			continue
+		}
+		raw, _, err := treeBytes(certs, e.Name)
+		if err != nil {
+			return nil, err
+		}
+		key := strings.ToLower(id)
+		if _, dup := p.certs[key]; dup {
+			p.certs[key] = nil // two spellings of one id: neither is believed
+			continue
+		}
+		p.certs[key] = raw
+	}
+	return p, nil
+}
+
+// treeBytes reads a regular file from tree: ok=false when absent. A symlink
+// counts as absent: its link text is not the file.
+func treeBytes(tree *object.Tree, p string) ([]byte, bool, error) {
+	f, err := tree.File(p)
+	if errors.Is(err, object.ErrFileNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if f.Mode == filemode.Symlink {
+		return nil, false, nil
+	}
+	s, err := f.Contents()
+	if err != nil {
+		return nil, false, err
+	}
+	return []byte(s), true, nil
 }
 
 // FleetKeysOf returns every key agentID's member record has held in this

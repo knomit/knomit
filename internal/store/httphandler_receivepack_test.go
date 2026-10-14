@@ -59,10 +59,16 @@ func (h *pushHost) setPolicy(p PushPolicy) { h.mu.Lock(); h.pol = p; h.mu.Unlock
 
 func newPushHost(t *testing.T, mode string, facts int) *pushHost {
 	t.Helper()
+	return newPushHostWith(t, map[string]string{fact.OntologyFile: kbOntology(mode)}, facts)
+}
+
+// newPushHostWith is newPushHost over the given initial files.
+func newPushHostWith(t *testing.T, files map[string]string, facts int) *pushHost {
+	t.Helper()
 	svc, err := Open(filepath.Join(t.TempDir(), "host.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{fact.OntologyFile: kbOntology(mode)}, hostBranch))
+	require.NoError(t, svc.InitRepo(context.Background(), files, hostBranch))
 	ctx := context.Background()
 	for i := range facts {
 		_, err := svc.Facts().WriteFact(ctx, "main", fmt.Sprintf("kb/notes/host-%02d.md", i),
@@ -87,11 +93,16 @@ func newPushHost(t *testing.T, mode string, facts int) *pushHost {
 	return h
 }
 
-// members makes the policy's fleet answer ms (counting calls).
-func (h *pushHost) members(ms []FleetMember, err error) func(context.Context) ([]FleetMember, error) {
-	return func(context.Context) ([]FleetMember, error) {
+// members makes the policy's fleet answer ms and no PKI (counting calls).
+func (h *pushHost) members(ms []FleetMember, err error) func(context.Context) (Fleet, error) {
+	return h.fleet(Fleet{Members: ms}, err)
+}
+
+// fleet makes the policy's fleet answer f (counting calls).
+func (h *pushHost) fleet(f Fleet, err error) func(context.Context) (Fleet, error) {
+	return func(context.Context) (Fleet, error) {
 		h.membersCalls.Add(1)
-		return ms, err
+		return f, err
 	}
 }
 
@@ -367,7 +378,7 @@ func TestReceivePack_RefusesStaleOldHash(t *testing.T) {
 // TestReceivePack_ClosureRefusesKnomitChange).
 func TestReceivePack_EnforceRefusesUnacceptedSigner(t *testing.T) {
 	h := newPushHost(t, VerifyEnforce, 1)
-	h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Members: h.members([]FleetMember{}, nil)})
+	h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Fleet: h.members([]FleetMember{}, nil)})
 	p := newPeer(t, h.srv.URL)
 	k := newTestSigner(t)
 	c1 := p.commit(p.head(), k, "kb/notes/w.md", testFactBody("w", 0.9, nil))
@@ -390,7 +401,7 @@ func TestReceivePack_EnforceAcceptsMemberKey(t *testing.T) {
 	k := newTestSigner(t)
 	m := FleetMember{Member: fact.Member{Agent: "peer-abcd1234", State: fact.MemberActive, Key: k.PublicKey()}}
 	fp, branch := pusherOf(t, k)
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Members: h.members([]FleetMember{m}, nil)})
+	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: h.members([]FleetMember{m}, nil)})
 	p := newPeer(t, h.srv.URL)
 	c := p.commit(p.head(), k, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	p.setBranch("work", c)
@@ -403,7 +414,7 @@ func TestReceivePack_OffAndLogAccept(t *testing.T) {
 	for _, mode := range []string{"", VerifyOff, VerifyLog} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			h := newPushHost(t, mode, 1)
-			h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Members: h.members([]FleetMember{}, nil)})
+			h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Fleet: h.members([]FleetMember{}, nil)})
 			p := newPeer(t, h.srv.URL)
 			c := p.commit(p.head(), nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 			p.setBranch("work", c)
@@ -425,7 +436,7 @@ func TestReceivePack_OffAndLogAccept(t *testing.T) {
 func TestReceivePack_EnforceWithoutFleetRefuses(t *testing.T) {
 	h := newPushHost(t, VerifyEnforce, 1)
 	h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch,
-		Members: h.members(nil, fmt.Errorf("this instance is standalone"))})
+		Fleet: h.members(nil, fmt.Errorf("this instance is standalone"))})
 	p := newPeer(t, h.srv.URL)
 	c := p.commit(p.head(), newTestSigner(t), "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	p.setBranch("work", c)

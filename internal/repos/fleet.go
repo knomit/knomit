@@ -173,11 +173,28 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]store.FleetMember, error)
 	return m.fleetMembersAtMain(ri)
 }
 
+// FleetAtMain returns what the commit judge reads from the fleet repository's
+// main: the member records and the certificate artifacts, from one revision.
+func (m *Manager) FleetAtMain(ctx context.Context) (store.Fleet, error) {
+	ri := m.fleetRepo()
+	if ri == nil {
+		return store.Fleet{}, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone: no fleet repository is mounted")
+	}
+	return m.fleetAtMain(ri)
+}
+
 // fleetMembersAtMain reads the member records at the fleet repository's
-// consensus branch: the origin's branch, else the one recorded with the repo
-// (store.UpstreamBranch). Never a name assumed for it.
+// consensus branch (fleetAtMain).
 func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, error) {
-	var out []store.FleetMember
+	f, err := m.fleetAtMain(ri)
+	return f.Members, err
+}
+
+// fleetAtMain reads the fleet at the fleet repository's consensus branch: the
+// origin's branch, else the one recorded with the repo
+// (store.UpstreamBranch). Never a name assumed for it.
+func (m *Manager) fleetAtMain(ri *RepoInstance) (store.Fleet, error) {
+	var out store.Fleet
 	var lerr error
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -189,9 +206,9 @@ func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, err
 			lerr = fmt.Errorf("fleet repository: %w", store.ErrNoConsensusBranch)
 			return
 		}
-		out, lerr = svc.FleetMembersAt(upstream)
+		out, lerr = svc.FleetAt(upstream)
 	}); err != nil {
-		return nil, err
+		return store.Fleet{}, err
 	}
 	return out, lerr
 }

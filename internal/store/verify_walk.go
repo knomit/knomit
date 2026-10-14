@@ -37,6 +37,10 @@ const (
 	RuleDuplicateKey = "duplicate-key" // the signing key is the current key of more than one record
 	RuleInactive     = "inactive"      // the record's state is not active
 	RuleMerge        = "merge"         // an unsigned merge that fails M3
+	// RuleRevoked: the leaf artifact for the author's id at the fleet revision
+	// is for the signing key, chains to the fleet root, and its serial is on
+	// the fleet CRL (rule B; or a self-registration on a revoked leaf).
+	RuleRevoked = "revoked"
 	// RuleNotPusher: receive-pack only — a new commit signed by a key other
 	// than the pushing instance's certificate key. CheckRange has no pusher.
 	RuleNotPusher = "not-pusher"

@@ -53,7 +53,7 @@ func TestReceivePack_ClosureRefusesKnomitChange(t *testing.T) {
 	k := newTestSigner(t)
 	fp, branch := pusherOf(t, k)
 	m := FleetMember{Member: fact.Member{Agent: "peer-abcd1234", State: fact.MemberActive, Key: k.PublicKey()}}
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Members: h.members([]FleetMember{m}, nil)})
+	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: h.members([]FleetMember{m}, nil)})
 	p := newPeer(t, h.srv.URL)
 	c1 := p.commit(p.head(), k, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	c2 := p.commit(c1, k, fact.OntologyFile, kbOntology(VerifyOff))
@@ -113,7 +113,7 @@ func TestReceivePack_MergeOfMainWithKnomitChangeAccepted(t *testing.T) {
 	k := newTestSigner(t)
 	fp, branch := pusherOf(t, k)
 	m := FleetMember{Member: fact.Member{Agent: "peer-abcd1234", State: fact.MemberActive, Key: k.PublicKey()}}
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Members: h.members([]FleetMember{m}, nil)})
+	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: h.members([]FleetMember{m}, nil)})
 	p := newPeer(t, h.srv.URL)
 	own := p.commit(p.head(), k, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 
@@ -210,7 +210,7 @@ func TestReceivePack_SignerMustBePusher(t *testing.T) {
 
 	t.Run("enforce", func(t *testing.T) {
 		h := newPushHost(t, VerifyEnforce, 1)
-		h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Members: h.members(members, nil)})
+		h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: h.members(members, nil)})
 		p := newPeer(t, h.srv.URL)
 		o1 := p.commitAs("other-0000", []*object.Commit{p.head()}, kO, with(p.files(p.head()), "kb/notes/x.md", testFactBody("x", 0.9, nil)))
 		o2 := p.commitAs("other-0000", []*object.Commit{o1}, kO, with(p.files(o1), "kb/notes/y.md", testFactBody("y", 0.9, nil)))
@@ -234,7 +234,7 @@ func TestReceivePack_SignerMustBePusher(t *testing.T) {
 
 	t.Run("log", func(t *testing.T) {
 		h := newPushHost(t, VerifyLog, 1)
-		h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Members: h.members(members, nil)})
+		h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: h.members(members, nil)})
 		p := newPeer(t, h.srv.URL)
 		o1 := p.commitAs("other-0000", []*object.Commit{p.head()}, kO, with(p.files(p.head()), "kb/notes/x.md", testFactBody("x", 0.9, nil)))
 		p.setBranch("work", o1)
