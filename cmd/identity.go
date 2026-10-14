@@ -174,61 +174,84 @@ func identityInitRootCmd() *cobra.Command {
 
 // parseInstancePubkey reads an authorized_keys line (the instance's
 // id_ed25519.pub, or the line `knomit serve` prints at first start) from a
-// file path or inline, and returns the key and the host from its
-// "knomit@<host>" comment, if any.
-func parseInstancePubkey(arg string) (ed25519.PublicKey, string, error) {
+// file path or inline, and returns the key. Its comment is ignored: the
+// certificate's identity is the agent id the operator names (--agent-id),
+// never a name read off the key line (D18).
+func parseInstancePubkey(arg string) (ed25519.PublicKey, error) {
 	line := []byte(arg)
 	if b, err := os.ReadFile(arg); err == nil {
 		line = b
 	}
-	pk, comment, _, _, err := ssh.ParseAuthorizedKey(line)
+	pk, _, _, _, err := ssh.ParseAuthorizedKey(line)
 	if err != nil {
-		return nil, "", fmt.Errorf("--pubkey: not an authorized_keys line or a file holding one: %w", err)
+		return nil, fmt.Errorf("--pubkey: not an authorized_keys line or a file holding one: %w", err)
 	}
 	cpk, ok := pk.(ssh.CryptoPublicKey)
 	if !ok {
-		return nil, "", errors.New("--pubkey: unsupported key")
+		return nil, errors.New("--pubkey: unsupported key")
 	}
 	pub, ok := cpk.CryptoPublicKey().(ed25519.PublicKey)
 	if !ok {
-		return nil, "", fmt.Errorf("--pubkey: %s key, want ssh-ed25519", pk.Type())
+		return nil, fmt.Errorf("--pubkey: %s key, want ssh-ed25519", pk.Type())
 	}
-	host, _ := strings.CutPrefix(comment, "knomit@")
-	if host == comment {
-		host = ""
+	return pub, nil
+}
+
+// enrollEmail is the email SAN `identity enroll` issues: <agent id>@agents.knomit.io
+// for an instance (the address it commits as), else the operator's address,
+// or "" for an operator certificate with none.
+func enrollEmail(agentID string, operator bool, email string) (string, error) {
+	switch {
+	case agentID != "" && operator:
+		return "", errors.New("--agent-id and --operator are exclusive: an instance certificate names its agent id, an operator certificate does not")
+	case agentID != "":
+		if email != "" {
+			return "", errors.New("--email is for an operator certificate; an instance certificate's address is <agent id>@" + pki.AgentEmailDomain)
+		}
+		return pki.AgentEmail(agentID)
+	case !operator:
+		return "", errors.New("--agent-id is required (the instance's agent id, as its member record's agent: names it), or --operator for an operator certificate")
+	case pki.AgentIDOfEmail(email) != "":
+		return "", fmt.Errorf("--email %q is an agent address: that is an instance certificate, issue it with --agent-id", email)
 	}
-	return pub, host, nil
+	return email, nil
 }
 
 func identityEnrollCmd() *cobra.Command {
-	var dir, pubArg, host, role, passFile, outPath string
+	var dir, pubArg, agentID, email, passFile, outPath string
+	var operator bool
 	var validity time.Duration
 	c := &cobra.Command{
 		Use:   "enroll",
 		Short: "Sign an instance's EXISTING public key into a certificate bundle (fleet root side)",
+		Long: `Sign an EXISTING public key into a certificate bundle (fleet root side).
+
+The certificate's identity is its email address. An instance certificate
+(--agent-id <id>) carries <id>@agents.knomit.io, the address the instance
+commits as; it holds read and push:own implicitly. An operator certificate
+(--operator, optionally --email <address>) carries any other address, or none;
+it holds only the grants rows of its principal.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if pubArg == "" {
 				return errors.New("--pubkey is required")
+			}
+			san, err := enrollEmail(agentID, operator, email)
+			if err != nil {
+				return err
 			}
 			dir, err := resolveFleetRootDir(dir)
 			if err != nil {
 				return err
 			}
-			pub, commentHost, err := parseInstancePubkey(pubArg)
+			pub, err := parseInstancePubkey(pubArg)
 			if err != nil {
 				return err
-			}
-			if host == "" {
-				host = commentHost
-			}
-			if host == "" {
-				return errors.New("--host is required (the public key carries no knomit@<host> comment)")
 			}
 			root, err := openFleetRoot(cmd, dir, passFile)
 			if err != nil {
 				return err
 			}
-			certPEM, rec, err := pki.IssueInstance(dir, root, pub, host, pki.Role(role), validity)
+			certPEM, rec, err := pki.IssueInstance(dir, root, pub, san, validity)
 			if err != nil {
 				return err
 			}
@@ -250,15 +273,20 @@ func identityEnrollCmd() *cobra.Command {
 			} else if _, err := w.Write(bundle.Bytes()); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "enrolled %s serial=%s principal=%s@cert not_after=%s\n",
-				rec.SAN, rec.Serial, pki.PrincipalKind(pki.Role(role))+":"+rec.Fingerprint, rec.NotAfter.Format(time.RFC3339))
+			kind := "instance"
+			if agentID == "" {
+				kind = "operator"
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "enrolled email=%q serial=%s principal=%s:%s@cert not_after=%s\n",
+				rec.Email, rec.Serial, kind, rec.Fingerprint, rec.NotAfter.Format(time.RFC3339))
 			return nil
 		},
 	}
 	c.Flags().StringVar(&dir, "dir", "", "fleet root directory (default <home>/fleet)")
 	c.Flags().StringVar(&pubArg, "pubkey", "", "the instance's public key: a file (id_ed25519.pub) or the line itself")
-	c.Flags().StringVar(&host, "host", "", "host label for the SAN (default: from the key's knomit@<host> comment)")
-	c.Flags().StringVar(&role, "role", string(pki.RoleInstance), "instance or operator")
+	c.Flags().StringVar(&agentID, "agent-id", "", "issue an INSTANCE certificate for this agent id (email SAN <id>@"+pki.AgentEmailDomain+")")
+	c.Flags().BoolVar(&operator, "operator", false, "issue an OPERATOR certificate instead (no agent id)")
+	c.Flags().StringVar(&email, "email", "", "with --operator: the operator's email address for the certificate (optional)")
 	c.Flags().StringVar(&passFile, "passphrase-file", "", "file holding the root passphrase (- = stdin)")
 	c.Flags().StringVar(&outPath, "out", "", "write the bundle here instead of stdout")
 	c.Flags().DurationVar(&validity, "validity", 90*24*time.Hour, "certificate validity")
@@ -389,8 +417,8 @@ func installBundle(out io.Writer, cfg config.Config, raw []byte, opts installOpt
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "installed in %s\nprincipal: %s:%s@cert\nsan: %s\nnot_after: %s\n",
-		dir, pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host), id.NotAfter.Format(time.RFC3339))
+	fmt.Fprintf(out, "installed in %s\nprincipal: %s:%s@cert\nemail: %q\nnot_after: %s\n",
+		dir, id.PrincipalKind(), id.Fingerprint, id.Email, id.NotAfter.Format(time.RFC3339))
 	if cfg.TLS.Addr == "" {
 		fmt.Fprintln(out, "the TLS listener is off; to accept enrolled peers add to knomit.toml:\n  [tls]\n  addr = \"0.0.0.0:19279\"")
 	} else {
@@ -499,10 +527,23 @@ func identityRevokeCmd() *cobra.Command {
 			}
 			var num *big.Int
 			for _, s := range serials {
-				if num, err = pki.Revoke(dir, root, pki.Revoked{Serial: s, At: time.Now().UTC(), Reason: reason}, time.Now().Add(crlValidity)); err != nil {
+				n, err := pki.Revoke(dir, root, pki.Revoked{Serial: s, At: time.Now().UTC(), Reason: reason}, time.Now().Add(crlValidity))
+				// --fingerprint names every serial the key was ever issued:
+				// one revoked earlier is skipped, so the live ones still are.
+				// --serial names one, and re-revoking it stays an error.
+				if fp != "" && errors.Is(err, pki.ErrAlreadyRevoked) {
+					fmt.Fprintf(cmd.OutOrStdout(), "serial %s is already revoked\n", s.Text(16))
+					continue
+				}
+				if err != nil {
 					return err
 				}
+				num = n
 				fmt.Fprintf(cmd.OutOrStdout(), "revoked serial %s\n", s.Text(16))
+			}
+			if num == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "every certificate for %s is already revoked; nothing new to revoke, %s is unchanged\n", fp, filepath.Join(dir, pki.CRLFile))
+				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "CRL %s is now Number %s; copy it to every instance's [tls].dir\n", filepath.Join(dir, pki.CRLFile), num)
 			return nil
@@ -567,7 +608,14 @@ func showIdentity(out io.Writer, cfg config.Config) error {
 	case !found:
 		fmt.Fprintln(out, "agent_id: none (assigned when the instance first starts)")
 	default:
-		fmt.Fprintf(out, "agent_id: %s\n", agentID)
+		// A stored id that is no longer valid (upper case, from before agent
+		// ids were lower case) is shown as stored, with the reason boot will
+		// refuse it and the remedy. show never rewrites it.
+		if verr := pki.ValidAgentID(agentID); verr != nil {
+			fmt.Fprintf(out, "agent_id: %s (invalid: %v; boot refuses it: %v)\n", agentID, verr, repos.ErrStoredAgentIDInvalid)
+		} else {
+			fmt.Fprintf(out, "agent_id: %s\n", agentID)
+		}
 	}
 	fmt.Fprintf(out, "key: %s\nfingerprint: %s\nshort: %s\n", st.KeyPath, st.Fingerprint, pki.Short(st.Fingerprint))
 	switch {
@@ -577,8 +625,8 @@ func showIdentity(out io.Writer, cfg config.Config) error {
 		fmt.Fprintf(out, "certificate: unreadable identity: %v\n", st.IdentityErr)
 	case st.Cert != nil:
 		id := st.Cert
-		fmt.Fprintf(out, "principal: %s:%s@cert\nsan: %s\nserial: %s\nnot_after: %s\n",
-			pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host), id.Serial.Text(16), id.NotAfter.Format(time.RFC3339))
+		fmt.Fprintf(out, "principal: %s:%s@cert\nemail: %q\nserial: %s\nnot_after: %s\n",
+			id.PrincipalKind(), id.Fingerprint, id.Email, id.Serial.Text(16), id.NotAfter.Format(time.RFC3339))
 	}
 	if st.Root != nil {
 		fmt.Fprintf(out, "root: %s (%q)\n", st.Root.Fingerprint, st.Root.CommonName)

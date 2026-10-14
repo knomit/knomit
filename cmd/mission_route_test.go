@@ -190,7 +190,7 @@ func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
 			}
 			hMgr := newHost()
 			hSrv := &web.Server{Manager: hMgr, GitHandler: web.GitRemoteHandler(hMgr), APIOnly: true, Auth: hCfg.Auth, Grants: auth.NewSQLGrants(hMgr.ControlDB())}
-			f.Install(t, f.Enroll(t, "bravo", pki.RoleInstance, hKey), hCfg.TLS.Dir)
+			f.Install(t, f.Enroll(t, "bravo@agents.knomit.io", hKey), hCfg.TLS.Dir)
 			plain, tlsAddr := serveFleetNode(t, hSrv.Handler(), hKey, hCfg.TLS)
 
 			// Step 2: clone the prepared repository, then remove its origin.

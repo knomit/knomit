@@ -12,7 +12,6 @@ import (
 	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/oauth"
-	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 )
 
@@ -150,7 +149,7 @@ func TestPendingAPI_OnlyLocalPrincipals(t *testing.T) {
 	// An operator CERTIFICATE holding admin by row: a verified principal
 	// with an id, and still not a local one.
 	pk := pkitest.New(t)
-	op := pk.Enroll(t, "op", pki.RoleOperator)
+	op := pk.Enroll(t, "op@example.com")
 	opP := auth.OperatorPrincipal(op.Fingerprint())
 	for _, perm := range []auth.Permission{auth.Read, auth.Write, auth.Admin} {
 		if err := f.grants.Grant(context.Background(), opP, perm, "test"); err != nil {

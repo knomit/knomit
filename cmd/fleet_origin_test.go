@@ -233,7 +233,7 @@ func newFleetServerOpts(t *testing.T, f *pkitest.Fleet, signed bool) *fleetServe
 		Grants:     auth.NewSQLGrants(bMgr.ControlDB()),
 	}
 	hdrs := &headerLog{}
-	f.Install(t, f.Enroll(t, "bravo", pki.RoleInstance, bKey), bCfg.TLS.Dir)
+	f.Install(t, f.Enroll(t, "bravo@agents.knomit.io", bKey), bCfg.TLS.Dir)
 	plain, tlsAddr := serveFleetNode(t, hdrs.wrap(bSrv.Handler()), bKey, bCfg.TLS)
 
 	kb, err := bMgr.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
@@ -271,7 +271,7 @@ func newFleetFetcherHome(t *testing.T, f *pkitest.Fleet, host string) (dir, key 
 	home := t.TempDir()
 	key, _ = pkitest.NewKey(t)
 	dir = filepath.Join(home, "pki")
-	m = f.Enroll(t, host, pki.RoleInstance, key)
+	m = f.Enroll(t, host+"@"+pki.AgentEmailDomain, key)
 	f.Install(t, m, dir)
 	return dir, key, m, auth.InstancePrincipal(m.Fingerprint()).String()
 }

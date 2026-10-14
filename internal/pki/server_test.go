@@ -20,7 +20,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,7 +68,7 @@ type member struct {
 func (f fleet) enroll(t *testing.T, host string) member {
 	t.Helper()
 	keyPath, pub := writeOpenSSHKey(t)
-	p, _, err := IssueInstance(f.dir, f.root, pub, host, RoleInstance, time.Hour)
+	p, _, err := IssueInstance(f.dir, f.root, pub, host+"@"+AgentEmailDomain, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,13 +80,12 @@ func (f fleet) enrollWindow(t *testing.T, host string, notBefore, notAfter time.
 	t.Helper()
 	keyPath, pub := writeOpenSSHKey(t)
 	serial, _ := randomSerial()
-	u, _ := parseURL(SAN(RoleInstance, host))
 	tmpl := &x509.Certificate{
 		SerialNumber: serial, Subject: pkix.Name{CommonName: host},
 		NotBefore: notBefore, NotAfter: notAfter,
 		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		URIs:        u,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		EmailAddresses: []string{host + "@" + AgentEmailDomain},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, f.root.Cert, pub, f.root.Signer)
 	if err != nil {
@@ -233,9 +231,8 @@ func TestServerConfig_SelfSignedClientRefusedWithReason(t *testing.T) {
 	f, _, _, rec, addr := serverSide(t)
 	keyPath, pub := writeOpenSSHKey(t)
 	signer, _, _ := LoadSigner(keyPath)
-	u, _ := parseURL(SAN(RoleInstance, "rogue"))
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(9), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, URIs: u}
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, EmailAddresses: []string{"rogue@agents.knomit.io"}}
 	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)
 	c, _ := x509.ParseCertificate(der)
 	mustRefuse(t, f.clientFor(t, member{keyPath: keyPath, pub: pub, cert: c}, nil), addr, rec, ErrUntrustedRoot)
@@ -405,14 +402,6 @@ func staleCRLNumbered(t *testing.T, root Root, number *big.Int, serials ...*big.
 	return crlPEM(der)
 }
 
-func parseURL(s string) ([]*url.URL, error) {
-	u, err := url.Parse(s)
-	if err != nil {
-		return nil, err
-	}
-	return []*url.URL{u}, nil
-}
-
 // discardLogger swallows net/http's own "TLS handshake error" lines; the
 // assertions read the recorder, which carries the named reason.
 func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
@@ -456,7 +445,7 @@ func TestServerConfig_TornInstallKeepsThePreviousSetAndLogsOnce(t *testing.T) {
 	// Re-enroll the SAME server key under a different root; write ONLY
 	// instance.crt (the first of install's three renames).
 	g := newFleet(t)
-	newPEM, _, err := IssueInstance(g.dir, g.root, srvM.pub, "server", RoleInstance, time.Hour)
+	newPEM, _, err := IssueInstance(g.dir, g.root, srvM.pub, "server@agents.knomit.io", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +512,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 	fa.publishCRL(t, dir)
 	rec := &recorder{}
 	addr := startServer(t, dir, srvM.keyPath, rec)
-	peerA := fa.enroll(t, "peerA")
+	peerA := fa.enroll(t, "peer-a")
 	if _, err := get(fa.clientFor(t, peerA, nil), addr); err != nil {
 		t.Fatalf("control: fleet A peer before the move: %v", err)
 	}
@@ -531,7 +520,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 	// Exactly what installBundle --replace-root writes, in its order. It no
 	// longer removes crl.number: fleet A's watermark must SURVIVE the move.
 	fb := newFleet(t)
-	certB, _, err := IssueInstance(fb.dir, fb.root, srvM.pub, "server", RoleInstance, time.Hour)
+	certB, _, err := IssueInstance(fb.dir, fb.root, srvM.pub, "server@agents.knomit.io", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +538,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	peerB := fb.enroll(t, "peerB")
+	peerB := fb.enroll(t, "peer-b")
 	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
 		t.Fatalf("fleet B peer refused after --replace-root, no restart: %v\nserver log:\n%s", err, rec)
 	}
@@ -597,17 +586,17 @@ func TestServerConfig_WatermarkIsPerRootSoABounceCannotRollBack(t *testing.T) {
 	rootB, _ := os.ReadFile(filepath.Join(fb.dir, RootCertFile))
 
 	// Move to B while running.
-	certB, _, _ := IssueInstance(fb.dir, fb.root, srvM.pub, "server", RoleInstance, time.Hour)
+	certB, _, _ := IssueInstance(fb.dir, fb.root, srvM.pub, "server@agents.knomit.io", time.Hour)
 	crlB1, _ := os.ReadFile(filepath.Join(fb.dir, CRLFile))
 	installSet(t, dir, rootB, crlB1, certB)
-	peerA, peerB := fa.enroll(t, "peerA"), fb.enroll(t, "peerB")
+	peerA, peerB := fa.enroll(t, "peer-a"), fb.enroll(t, "peer-b")
 	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
 		t.Fatalf("after moving to B, B's peer refused: %v\n%s", err, rec)
 	}
 	mustRefuse(t, fb.clientFor(t, peerA, nil), addr, rec, ErrUntrustedRoot)
 
 	// Back to A with an OLD CRL (#3 < A's watermark 7): refused, B stays.
-	certA, _, _ := IssueInstance(fa.dir, fa.root, srvM.pub, "server", RoleInstance, time.Hour)
+	certA, _, _ := IssueInstance(fa.dir, fa.root, srvM.pub, "server@agents.knomit.io", time.Hour)
 	crlA3, _ := IssueCRL(fa.dir, fa.root, nil, big.NewInt(3), time.Now().Add(time.Hour))
 	installSet(t, dir, rootA, crlA3, certA)
 	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {

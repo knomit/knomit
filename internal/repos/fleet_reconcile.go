@@ -76,7 +76,7 @@ func (m *Manager) ownRecordAt(ri *RepoInstance, branch string) (rec store.FleetM
 		var ms []store.FleetMember
 		ms, err = svc.FleetMembersAt(branch)
 		for _, mem := range ms {
-			if strings.EqualFold(mem.Agent, id) {
+			if mem.Agent == id {
 				rec, found = mem, true
 				return
 			}

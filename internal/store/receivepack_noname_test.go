@@ -33,7 +33,7 @@ func TestReceivePack_BranchNameCarriesNoOwnership(t *testing.T) {
 		{Member: fact.Member{Agent: "alpha", State: fact.MemberActive, Key: alpha.PublicKey()}},
 		{Member: fact.Member{Agent: "beta", State: fact.MemberActive, Key: beta.PublicKey()}},
 	}
-	h.setPolicy(PushPolicy{Pusher: alphaFP, OwnBranch: hostBranch, Members: h.members(members, nil)})
+	h.setPolicy(PushPolicy{Pusher: alphaFP, OwnBranch: hostBranch, Fleet: h.members(members, nil)})
 	p := newPeer(t, h.srv.URL)
 	base := p.head()
 

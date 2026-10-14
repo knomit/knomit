@@ -181,6 +181,30 @@ exactly one member record; the signing key is that record's current key and no
 other record's; the agent is active. An unsigned merge passes only if it adds
 nothing beyond its parents.
 
+When the fleet checkout holds the fleet's certificate artifacts — the root,
+CRL and leaf files its ontology's artifacts section declares (pki: root, crl,
+leaf; the fleet preset puts them under artifacts/fleet/) — two more rules
+apply, read at the same --fleet-rev. Every member also needs the leaf for its
+agent id: issued to that id (its email address is <agent id>@agents.knomit.io),
+for its record's key, chaining to the root and not on the CRL (else no-cert,
+key-mismatch or revoked). In the fleet repository itself, a commit that only
+writes its author's own members/<agent id>/ folder is admitted without a
+record when the agent id has no active record, the signing key is not the
+current key of another id's record, and the leaf for the id holds the signing key, chains to the root
+and is not revoked; the folder must then hold exactly one active record for
+that agent and that key: a new member's first record. Expiry is not judged.
+Without a root the rules are exactly the ones above.
+
+The upstream's ontology may also declare rules for files under artifacts/
+(change: write-once, append-only, or replace with replace_when; revoked_set;
+max_size; pki roles, including the fleet's per-operation issuance and
+revocation records). Every commit is judged against them as well, against
+every parent: a commit that deletes or rewrites a protected file, adds a pki
+file that does not hold as its role, or puts a directory, symlink or
+submodule at or under a declared path is refused with the rule it broke
+(artifact-write-once, artifact-append-only, artifact-replace, artifact-size,
+artifact-pki, artifact-not-a-file).
+
   knomit verify ci --candidate "$TIP" --fleet ../fleet
 
 --upstream defaults to the branch origin's HEAD names (refs/remotes/origin/HEAD;

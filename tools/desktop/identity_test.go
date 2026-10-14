@@ -133,7 +133,7 @@ func tree(t *testing.T, dir string) map[string]string {
 func TestFleetIdentity_BindingsRefuseAnyCallerButTheSettingsWindow(t *testing.T) {
 	home, keyPath := fleetHome(t)
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
+	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
 	n := fleetService(t, home)
 	pkiDir := filepath.Join(home, "pki")
 	toml := filepath.Join(home, "knomit.toml")
@@ -190,7 +190,7 @@ func TestFleetIdentity_SettingsWindowCarriesTheCheckedName(t *testing.T) {
 func TestFleetIdentity_InstallWritesWhatPKIWrites(t *testing.T) {
 	home, keyPath := fleetHome(t)
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
+	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
 	n := fleetService(t, home)
 
 	res := installConfirmed(t, n, bundle(t, f, m))
@@ -215,7 +215,7 @@ func TestFleetIdentity_InstallWritesWhatPKIWrites(t *testing.T) {
 func TestFleetIdentity_RefusalsAreClassesAndWriteNothing(t *testing.T) {
 	home, keyPath := fleetHome(t)
 	f, f1 := pkitest.New(t), pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
+	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
 	n := fleetService(t, home)
 	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
 		t.Fatalf("first install: %+v", res)
@@ -228,8 +228,8 @@ func TestFleetIdentity_RefusalsAreClassesAndWriteNothing(t *testing.T) {
 	if res, err := n.InstallBundle(fromSettings, bundle(t, f, m), "", ""); err != nil || !res.Installed {
 		t.Fatalf("CRL #2 install: %+v %v", res, err)
 	}
-	other := f.Enroll(t, "other", pki.RoleInstance)
-	foreignLeaf := f1.Enroll(t, "laptop", pki.RoleInstance, keyPath)
+	other := f.Enroll(t, "other@agents.knomit.io")
+	foreignLeaf := f1.Enroll(t, "laptop@agents.knomit.io", keyPath)
 	rootPEM, _ := os.ReadFile(filepath.Join(f.Dir, pki.RootCertFile))
 	crlPEM, _ := os.ReadFile(filepath.Join(f.Dir, pki.CRLFile))
 	untrusted := string(foreignLeaf.CertPEM) + string(rootPEM) + string(crlPEM) // f1's leaf, f's root
@@ -271,10 +271,10 @@ func TestFleetIdentity_ReplaceRootNeedsTheFingerprintsThatWereShown(t *testing.T
 	f, f1, f2 := pkitest.New(t), pkitest.New(t), pkitest.New(t)
 	n := fleetService(t, home)
 	pkiDir := filepath.Join(home, "pki")
-	if res := installConfirmed(t, n, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath))); !res.Installed {
+	if res := installConfirmed(t, n, bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath))); !res.Installed {
 		t.Fatalf("first install: %+v", res)
 	}
-	foreign := bundle(t, f1, f1.Enroll(t, "laptop", pki.RoleInstance, keyPath))
+	foreign := bundle(t, f1, f1.Enroll(t, "laptop@agents.knomit.io", keyPath))
 	oldFP, newFP := rootFP(t, f), rootFP(t, f1)
 
 	// The preview: refused, naming both.
@@ -305,7 +305,7 @@ func TestFleetIdentity_ReplaceRootNeedsTheFingerprintsThatWereShown(t *testing.T
 	// The installed root changes between the preview and the confirmation
 	// (another fleet installed underneath, e.g. by the CLI): the confirmed
 	// pair no longer describes the move, so it is refused.
-	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop", pki.RoleInstance, keyPath))),
+	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop@agents.knomit.io", keyPath))),
 		pki.InstallOptions{ExpectInstalledRoot: oldFP}); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestFleetIdentity_ReplaceRootNeedsTheFingerprintsThatWereShown(t *testing.T
 func TestFleetIdentity_FirstInstallNeedsTheRootThatWasShown(t *testing.T) {
 	home, keyPath := fleetHome(t)
 	f, f2 := pkitest.New(t), pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
+	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
 	n := fleetService(t, home)
 	pkiDir := filepath.Join(home, "pki")
 	raw := bundle(t, f, m)
@@ -366,7 +366,7 @@ func TestFleetIdentity_FirstInstallNeedsTheRootThatWasShown(t *testing.T) {
 
 	// Another process enrols this home under f2 between the preview and the
 	// confirmation: the confirmed "no root installed" is no longer true.
-	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop", pki.RoleInstance, keyPath))), pki.InstallOptions{}); err != nil {
+	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop@agents.knomit.io", keyPath))), pki.InstallOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	before := tree(t, pkiDir)
@@ -381,12 +381,12 @@ func TestFleetIdentity_FirstInstallNeedsTheRootThatWasShown(t *testing.T) {
 	// On a fresh home, the shown root installs.
 	home2, keyPath2 := fleetHome(t)
 	n2 := fleetService(t, home2)
-	raw2 := bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath2))
+	raw2 := bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath2))
 	if res, err := n2.InstallBundle(fromSettings, raw2, "", fp); err != nil || !res.Installed {
 		t.Fatalf("confirmed first install: %+v %v", res, err)
 	}
 	// A renewal under the installed root needs no confirmation.
-	if res, err := n2.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath2)), "", ""); err != nil || !res.Installed {
+	if res, err := n2.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath2)), "", ""); err != nil || !res.Installed {
 		t.Fatalf("renewal: %+v %v", res, err)
 	}
 }
@@ -399,14 +399,14 @@ func TestFleetIdentity_UnreadableRootIsRefusedBeforeAsking(t *testing.T) {
 	f := pkitest.New(t)
 	n := fleetService(t, home)
 	pkiDir := filepath.Join(home, "pki")
-	if res := installConfirmed(t, n, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath))); !res.Installed {
+	if res := installConfirmed(t, n, bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath))); !res.Installed {
 		t.Fatalf("install: %+v", res)
 	}
 	if err := os.WriteFile(filepath.Join(pkiDir, pki.RootCertFile), []byte("garbled"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before := tree(t, pkiDir)
-	res, err := n.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath)), "", "")
+	res, err := n.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath)), "", "")
 	if err != nil || res.Installed || res.Class != classError || !strings.Contains(res.Message, pki.RootCertFile) ||
 		res.BundleRootFingerprint != "" {
 		t.Fatalf("unreadable root: %+v %v", res, err)
@@ -423,8 +423,8 @@ func TestFleetIdentity_TheBundleIsNeverLogged(t *testing.T) {
 	home, keyPath := fleetHome(t)
 	f, f1 := pkitest.New(t), pkitest.New(t)
 	n := fleetService(t, home)
-	good := bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath))
-	foreign := bundle(t, f1, f1.Enroll(t, "laptop", pki.RoleInstance, keyPath))
+	good := bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath))
+	foreign := bundle(t, f1, f1.Enroll(t, "laptop@agents.knomit.io", keyPath))
 	installConfirmed(t, n, good)
 	n.InstallBundle(fromSettings, foreign, "", "")
 	n.InstallBundle(fromSettings, "junk "+good[40:120], "", "")
@@ -463,7 +463,7 @@ func TestFleetIdentity_GetIdentityStates(t *testing.T) {
 		t.Fatalf("not enrolled: %+v %v", id, err)
 	}
 	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
+	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
 	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
 		t.Fatalf("install: %+v", res)
 	}
@@ -480,7 +480,7 @@ func TestFleetIdentity_GetIdentityStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !id.Enrolled || id.Principal != "instance:"+m.Fingerprint()+"@cert" || id.SAN != pki.SAN(pki.RoleInstance, "laptop") ||
+	if !id.Enrolled || id.Principal != "instance:"+m.Fingerprint()+"@cert" || id.SAN != "laptop@agents.knomit.io" ||
 		id.Serial != m.Cert.SerialNumber.Text(16) || id.RootFingerprint != rootFP(t, f) || id.CRLNumber != "1" || id.Dir != filepath.Join(home, "pki") {
 		t.Fatalf("enrolled: %+v", id)
 	}

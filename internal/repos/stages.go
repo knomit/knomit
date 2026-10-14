@@ -493,14 +493,15 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 }
 
 // refreshDivergence is SubsetDivergence plus one rule of its own: the refresh
-// never ADDS or CHANGES a repository-level (root) attribute. The refresh
+// never ADDS or CHANGES a repository-level (root) attribute, nor an artifact
+// rule (R7: the trust-file rules are repository policy too). The refresh
 // commit is signed by this instance, and a change to verify_signatures is a
 // policy decision for whoever merges to the repo's main, never an upgrade's.
 func refreshDivergence(stored, preset *fact.Ontology) string {
 	if d := stored.SubsetDivergence(preset); d != "" {
 		return d
 	}
-	if !fact.RootAttributesEqual(stored, preset) {
+	if !fact.RootAttributesEqual(stored, preset) || !fact.ArtifactRulesEqual(stored, preset) {
 		return fact.DivergenceAttributes
 	}
 	return ""

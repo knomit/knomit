@@ -63,7 +63,7 @@ func TestIdentity_ExportOntoRootKeyIsRefused(t *testing.T) {
 		t.Fatalf("export onto root.key: %v", err)
 	}
 	_, _, pubPath := instanceHome(t, "laptop")
-	if out, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath); err != nil || !strings.Contains(out, "from the OS keychain") {
+	if out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath); err != nil || !strings.Contains(out, "from the OS keychain") {
 		t.Fatalf("the root no longer opens after the refused export: %v\n%s", err, out)
 	}
 }

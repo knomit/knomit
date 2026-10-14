@@ -78,7 +78,7 @@ func fleetRoot(t *testing.T) (dir, passFile string) {
 func enroll(t *testing.T, dir, passFile, pubPath string) string {
 	t.Helper()
 	bundle := filepath.Join(t.TempDir(), "bundle.pem")
-	if out, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", passFile, "--out", bundle); err != nil {
+	if out, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", passFile, "--out", bundle); err != nil {
 		t.Fatalf("enroll: %v\n%s", err, out)
 	}
 	return bundle
@@ -98,7 +98,7 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
 	fp := pki.Fingerprint(pub)
-	if !strings.Contains(out, "principal: instance:"+fp+"@cert") || !strings.Contains(out, "san: knomit://instance/laptop\n") {
+	if !strings.Contains(out, "principal: instance:"+fp+"@cert") || !strings.Contains(out, "email: \"laptop@agents.knomit.io\"\n") {
 		t.Fatalf("install output:\n%s", out)
 	}
 	if !strings.Contains(out, "[tls]") { // addr unset: it tells the operator what to add
@@ -150,6 +150,62 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 	// A serial the fleet root never issued is refused rather than revoking nothing.
 	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", "abc123", "--passphrase-file", passFile); err == nil {
 		t.Fatal("revoke of an unknown serial succeeded")
+	}
+}
+
+// A key enrolled twice has two serials. After the first was revoked by
+// --serial, `revoke --fingerprint` must skip it and still revoke the live one
+// (review M1: it used to stop at the already-revoked serial with an error).
+func TestIdentity_RevokeByFingerprintSkipsAnAlreadyRevokedSerial(t *testing.T) {
+	dir, passFile := fleetRoot(t)
+	_, pub, pubPath := instanceHome(t, "laptop")
+	enroll(t, dir, passFile, pubPath)
+	enroll(t, dir, passFile, pubPath) // re-issue to the same key
+	fp := pki.Fingerprint(pub)
+	issued, err := readIssued(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serials []*big.Int
+	for _, rec := range issued {
+		if rec.Fingerprint == fp {
+			s, _ := new(big.Int).SetString(rec.Serial, 16)
+			serials = append(serials, s)
+		}
+	}
+	if len(serials) != 2 {
+		t.Fatalf("want 2 issuances for the key, got %d", len(serials))
+	}
+	old, live := serials[0], serials[1]
+	if out, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", old.Text(16), "--passphrase-file", passFile); err != nil {
+		t.Fatalf("revoke --serial: %v\n%s", err, out)
+	}
+	out, err := run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp, "--passphrase-file", passFile)
+	if err != nil {
+		t.Fatalf("revoke --fingerprint after one serial was revoked: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "serial "+old.Text(16)+" is already revoked") || !strings.Contains(out, "revoked serial "+live.Text(16)) {
+		t.Fatalf("revoke --fingerprint output:\n%s", out)
+	}
+	crl, err := pki.LoadCRL(filepath.Join(dir, pki.CRLFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pki.IsRevoked(crl, live) || !pki.IsRevoked(crl, old) || crl.Number.Cmp(big.NewInt(3)) != 0 {
+		t.Fatalf("CRL #%v: live revoked=%v old revoked=%v", crl.Number, pki.IsRevoked(crl, live), pki.IsRevoked(crl, old))
+	}
+	// Everything for the key is now revoked: a repeat is not an error and
+	// leaves the CRL alone.
+	out, err = run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp, "--passphrase-file", passFile)
+	if err != nil || !strings.Contains(out, "nothing new to revoke") {
+		t.Fatalf("repeat revoke --fingerprint: %v\n%s", err, out)
+	}
+	if again, _ := pki.LoadCRL(filepath.Join(dir, pki.CRLFile)); again.Number.Cmp(big.NewInt(3)) != 0 {
+		t.Fatalf("a no-op revoke reissued the CRL: #%v", again.Number)
+	}
+	// --serial on an already-revoked serial stays an error.
+	if _, err := run(t, "", "identity", "revoke", "--dir", dir, "--serial", old.Text(16), "--passphrase-file", passFile); !errors.Is(err, pki.ErrAlreadyRevoked) {
+		t.Fatalf("revoke --serial of a revoked serial: %v", err)
 	}
 }
 
@@ -400,24 +456,56 @@ func TestIdentity_ReplaceRootNeedsConfirmationToo(t *testing.T) {
 }
 
 // The desktop's "Copy public key" line (pki.PublicKeyLine) is accepted by
-// `enroll --pubkey` as the same key, and carries the host enroll would put in
-// the SAN — so an operator given only that line needs no --host.
+// `enroll --pubkey` as the same key. Its knomit@<host> comment names nothing:
+// the certificate's identity is the --agent-id the operator gives (D18).
 func TestIdentity_DesktopPublicKeyLineRoundTripsThroughEnroll(t *testing.T) {
 	home, pub, _ := instanceHome(t, "laptop")
 	line, err := pki.PublicKeyLine(filepath.Join(home, "id_ed25519"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, host, err := parseInstancePubkey(line)
+	got, err := parseInstancePubkey(line)
 	if err != nil {
 		t.Fatalf("enroll --pubkey refuses the desktop's line %q: %v", line, err)
 	}
-	want, _ := os.Hostname()
-	if want == "" {
-		want = "local"
+	if !got.Equal(pub) {
+		t.Fatal("round trip: a different key")
 	}
-	if !got.Equal(pub) || host != want {
-		t.Fatalf("round trip: key equal %v, host %q, want %q", got.Equal(pub), host, want)
+}
+
+// R1/R3 at the CLI: --agent-id issues the instance address, --operator any
+// other address or none; an id holding '+' is refused (it would read back as
+// a shorter id), and so is an agent address passed as an operator's --email.
+func TestIdentity_EnrollEmailFromFlags(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		agentID  string
+		operator bool
+		email    string
+		want     string // "" with wantErr
+		wantErr  string
+	}{
+		{name: "instance", agentID: "laptop-ab12cd34", want: "laptop-ab12cd34@agents.knomit.io"},
+		{name: "operator with address", operator: true, email: "ops@example.com", want: "ops@example.com"},
+		{name: "operator without address", operator: true, want: ""},
+		{name: "plus in id refused", agentID: "a+b", wantErr: "holds '+'"},
+		{name: "neither", wantErr: "--agent-id is required"},
+		{name: "both", agentID: "x", operator: true, wantErr: "exclusive"},
+		{name: "agent address as operator", operator: true, email: "x@agents.knomit.io", wantErr: "is an agent address"},
+		{name: "email on instance", agentID: "x", email: "x@example.com", wantErr: "--email is for an operator"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := enrollEmail(c.agentID, c.operator, c.email)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("enrollEmail = %q, %v; want error containing %q", got, err, c.wantErr)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("enrollEmail = %q, %v; want %q", got, err, c.want)
+			}
+		})
 	}
 }
 
@@ -430,13 +518,13 @@ func TestIdentity_EnrollNeedsAPassphraseAndTheRightOne(t *testing.T) {
 		t.Fatalf("init-root without a keychain wrote no root.key: %v", err)
 	}
 	_, _, pubPath := instanceHome(t, "laptop")
-	if _, err := run(t, "", "identity", "enroll", "--dir", dir, "--pubkey", pubPath); err == nil {
+	if _, err := run(t, "", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath); err == nil {
 		t.Fatal("enroll without --passphrase-file succeeded")
 	}
-	if _, err := run(t, "wrong\n", "identity", "enroll", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err == nil {
+	if _, err := run(t, "wrong\n", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err == nil {
 		t.Fatal("enroll with the wrong passphrase succeeded")
 	}
-	if out, err := run(t, "correct horse\n", "identity", "enroll", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err != nil || !strings.Contains(out, "BEGIN X509 CRL") {
+	if out, err := run(t, "correct horse\n", "identity", "enroll", "--agent-id", "laptop", "--dir", dir, "--pubkey", pubPath, "--passphrase-file", "-"); err != nil || !strings.Contains(out, "BEGIN X509 CRL") {
 		t.Fatalf("enroll with the passphrase on stdin: %v\n%s", err, out)
 	}
 }
@@ -781,5 +869,43 @@ func TestIdentityShow_NoInstanceIdentityRow(t *testing.T) {
 	}
 	if !strings.HasPrefix(out, "agent_id: none (assigned when the instance first starts)\nkey: ") {
 		t.Fatalf("show with an empty instance_identity:\n%s", out)
+	}
+}
+
+// A stored agent id that is no longer valid (one holding an upper-case
+// letter, minted before agent ids were lower case) is one boot refuses with
+// repos.ErrStoredAgentIDInvalid. show must still succeed, print the id AS
+// STORED, say it is invalid and that a fresh start is needed, and leave
+// control.db byte-for-byte unchanged: nothing rewrites a stored id.
+func TestIdentityShow_InvalidStoredAgentID(t *testing.T) {
+	home, _, _ := instanceHome(t, "laptop")
+	const stored = "Opaque-Agent-UPPER"
+	path := seedControlDB(t, home, seedInstanceIdentityTable,
+		`INSERT INTO instance_identity (id, agent_id, branch, created_at) VALUES (1, '`+stored+`', 'agent/`+stored+`', 1)`)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	useHome(t, home)
+	out, err := run(t, "", "identity", "show")
+	if err != nil {
+		t.Fatalf("show with an invalid stored agent id failed: %v\n%s", err, out)
+	}
+	first, rest, _ := strings.Cut(out, "\n")
+	if !strings.HasPrefix(first, "agent_id: "+stored+" (invalid: ") {
+		t.Fatalf("show's first line does not print the stored id as invalid: %q", first)
+	}
+	if !strings.Contains(first, "upper-case") || !strings.Contains(first, "fresh start") {
+		t.Fatalf("show's invalid-id line names neither the reason nor the remedy: %q", first)
+	}
+	if !strings.HasPrefix(rest, "key: ") {
+		t.Fatalf("show stopped after the invalid agent id:\n%s", out)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("show changed control.db while reporting an invalid stored agent id")
 	}
 }

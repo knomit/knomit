@@ -11,7 +11,6 @@ import (
 	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/oauth"
-	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 )
 
@@ -260,7 +259,7 @@ func TestBrowserGate_OnlyAnonymousLoopback(t *testing.T) {
 	f := newKBFixture(t)
 	id := f.park(t)
 	pk := pkitest.New(t)
-	op := pk.Enroll(t, "op", pki.RoleOperator)
+	op := pk.Enroll(t, "op@example.com")
 	opP := auth.OperatorPrincipal(op.Fingerprint())
 	for _, perm := range []auth.Permission{auth.Read, auth.Write, auth.Admin} {
 		if err := f.grants.Grant(context.Background(), opP, perm, "test"); err != nil {

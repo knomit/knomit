@@ -3,11 +3,34 @@ package app
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"knomit/internal/config"
+	"knomit/internal/pki"
 	"knomit/test/testenv"
 )
+
+// Agent ids are minted lower case, the hostname part included: a macOS
+// default hostname (mixed case) yields a lower-case host label and id, which
+// pki.ValidAgentID accepts. SABOTAGE: drop the ToLower in sanitizeHostname →
+// red.
+func TestNewIdentity_MintsALowerCaseID(t *testing.T) {
+	if got := sanitizeHostname("Pauls-MacBook-Pro.local"); got != "pauls-macbook-pro.local" {
+		t.Fatalf("sanitizeHostname = %q, want pauls-macbook-pro.local", got)
+	}
+	host := sanitizeHostname("Büro PC+1")
+	if host != "büro-pc-1" {
+		t.Fatalf("sanitizeHostname = %q, want büro-pc-1", host)
+	}
+	id := newIdentity("ab12cd34")
+	if err := pki.ValidAgentID(id.AgentID); err != nil {
+		t.Fatalf("minted id %q: %v", id.AgentID, err)
+	}
+	if strings.ToLower(id.AgentID) != id.AgentID || strings.ToLower(id.Host) != id.Host {
+		t.Fatalf("minted identity is not lower case: %+v", id)
+	}
+}
 
 // TestBoot_AgentIdentityIsPersisted (F09 PR 5, D1): the agent branch is
 // computed once and read from control.db on every later boot. A new key (the

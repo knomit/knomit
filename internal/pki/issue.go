@@ -6,82 +6,120 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 )
 
-// Role is the certificate's coarse TYPE. It is not a permission set:
-// permissions resolve from grants by principal, because a certificate lives
-// for months and a permission baked into it is stale the day the operator
-// changes their mind.
-//
-// The role is carried in the URI SAN — knomit://<role>/<label> — and NOT in
-// a private extension. A private OID under a 2.25 UUID arc cannot be written
-// in Go (pkix.Extension.Id is []int) and is refused on parse
-// (crypto/x509/parser.go:233, "malformed extension OID field"); an IANA
-// enterprise number costs days of latency for one integer; the SAN is
-// already parsed by VerifyInstanceChain.
-type Role string
+// AgentEmailDomain is the domain of every agent address: a commit's author
+// <id>+<op>@agents.knomit.io, its committer <id>@agents.knomit.io, and an
+// INSTANCE certificate's one email SAN <id>@agents.knomit.io.
+const AgentEmailDomain = "agents.knomit.io"
 
-const (
-	RoleInstance Role = "instance"
-	RoleOperator Role = "operator"
-)
-
-func (r Role) known() bool { return r == RoleInstance || r == RoleOperator }
-
-// SANScheme is the URI scheme of every knomit certificate name.
-const SANScheme = "knomit"
-
-// SAN is the certificate name: knomit://<role>/<label>.
-//
-// Go's url.Parse puts <role> in the URI AUTHORITY (u.Host), not the path;
-// the path is exactly "/<label>". The label is a free display name (the
-// host the operator typed); it carries no fingerprint and nothing compares
-// it to anything (D18: no identity is inferred from a name). The identity of
-// a certificate is its KEY: Identity.Fingerprint is computed from the leaf's
-// public key. The role is deliberately not "agent": the SAN names a ROLE,
-// the branch names a namespace, and reusing the word would invite reading
-// the SAN's path as a branch name.
-func SAN(role Role, label string) string {
-	return SANScheme + "://" + string(role) + "/" + label
+// AgentIDOfEmail returns the agent id in an agent address,
+// <id>[+<op>]@agents.knomit.io, or "" for any other address. It is the ONE
+// string operation on an identity (D18): require the domain to be exactly
+// agents.knomit.io, take the local part, drop any +<op>, and require what is
+// left to be a valid agent id (ValidAgentID: lower case, no '@', no white
+// space). NOTHING is case folded: Vic@agents.knomit.io and
+// vic@AGENTS.KNOMIT.IO are not agent addresses at all. The id it returns is
+// OPAQUE: it is only compared for equality, byte for byte, never parsed
+// further.
+func AgentIDOfEmail(email string) string {
+	local, ok := strings.CutSuffix(email, "@"+AgentEmailDomain)
+	if !ok {
+		return ""
+	}
+	id, _, _ := strings.Cut(local, "+")
+	if ValidAgentID(id) != nil {
+		return ""
+	}
+	return id
 }
 
-// validHost reports whether a label is safe as the single path segment of
-// the SAN: non-empty, and only hostname characters. Anything else would either
-// change what url.Parse returns (a '/', '?', '#') or need escaping, and an
-// escaped name is two spellings of one identity.
-func validHost(host string) bool {
-	if host == "" {
-		return false
+// ErrAgentIDInvalid: an agent id that cannot be written as the local part of
+// an agent address and read back unchanged by AgentIDOfEmail.
+var ErrAgentIDInvalid = errors.New("pki: invalid agent id")
+
+// ValidAgentID refuses an agent id that AgentIDOfEmail would not return from
+// <id>@agents.knomit.io as itself: empty, holding an UPPER-CASE letter (agent
+// ids are lower case everywhere, and every comparison of one is exact, so an
+// upper-case id could never equal the lower-case member folder, file name or
+// record that names it), '+' (everything after it would be read as an
+// operation, so a+b would be judged as a), '@', or white space or a control
+// character. Every id it accepts reads back as itself. It is checked where an
+// id is MINTED (repos.ResolveIdentity), where a stored id is read back at boot,
+// and where a certificate is issued for one; it never extracts anything from
+// an id. IssueLeaf additionally needs the whole address to be printable ASCII
+// (an email SAN is an IA5String).
+func ValidAgentID(id string) error {
+	if id == "" {
+		return fmt.Errorf("%w: empty", ErrAgentIDInvalid)
 	}
-	for _, c := range host {
+	if strings.ContainsAny(id, "+@") {
+		return fmt.Errorf("%w: %q holds '+' or '@'", ErrAgentIDInvalid, id)
+	}
+	for _, c := range id {
 		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '-', c == '_':
-		default:
+		case unicode.IsSpace(c) || unicode.IsControl(c):
+			return fmt.Errorf("%w: %q holds white space or a control character", ErrAgentIDInvalid, id)
+		case unicode.IsUpper(c):
+			return fmt.Errorf("%w: %q holds an upper-case letter (agent ids are lower case)", ErrAgentIDInvalid, id)
+		}
+	}
+	return nil
+}
+
+func printableASCII(s string) bool {
+	for _, c := range s {
+		if c <= ' ' || c > '~' {
 			return false
 		}
 	}
 	return true
 }
 
+// AgentEmail is the email SAN of an INSTANCE certificate for agent id:
+// <id>@agents.knomit.io, the same address the instance commits as. It refuses
+// an id ValidAgentID refuses.
+func AgentEmail(id string) (string, error) {
+	if err := ValidAgentID(id); err != nil {
+		return "", err
+	}
+	return id + "@" + AgentEmailDomain, nil
+}
+
+// agentDomainSpelling refuses a domain that is the agent domain in another
+// case spelling (AGENTS.knomit.io). Such an address is no agent address
+// (AgentIDOfEmail is exact), so a certificate carrying it would silently be
+// an OPERATOR certificate for what was meant as an instance: refusing it is
+// louder. It folds case only to refuse; it never makes two spellings equal.
+func agentDomainSpelling(domain string) error {
+	if domain != AgentEmailDomain && strings.EqualFold(domain, AgentEmailDomain) {
+		return fmt.Errorf("%w: the agent domain is written %q; it is %q, lower case", ErrAgentIDInvalid, domain, AgentEmailDomain)
+	}
+	return nil
+}
+
 // Issued is one line of the fleet root's issuance log. Revocation references the
 // serial, so an issuance that could not be logged is not returned.
 type Issued struct {
-	Serial      string    `json:"serial"` // lowercase hex, as big.Int.Text(16)
-	SAN         string    `json:"san"`
-	Label       string    `json:"label"`       // the host label given at issue, for display only
-	Fingerprint string    `json:"fingerprint"` // full 64 hex
+	Serial      string    `json:"serial"`          // lowercase hex, as big.Int.Text(16)
+	Email       string    `json:"email,omitempty"` // the email SAN; "" for an operator certificate with none
+	Fingerprint string    `json:"fingerprint"`     // full 64 hex
 	NotAfter    time.Time `json:"not_after"`
 	IssuedAt    time.Time `json:"issued_at"`
 }
 
 // Issuance is one signed leaf as bytes: what IssueLeaf returns and the
-// caller places (a file in the fleet root directory, or an artifact in the
-// fleet repo).
+// caller places. In the fleet repository, CertPEM is BOTH the member's leaf
+// (certs/<id>.pem) and the issuance record (issued/<name>.pem, one file per
+// issuance, CheckIssuance); there is no ledger there. Line is for the fleet
+// root directory's LOCAL issuance log only.
 type Issuance struct {
 	CertPEM []byte
 	Record  Issued
@@ -98,36 +136,52 @@ var newSerial = randomSerial
 // generates instance keys — into a leaf certificate usable for both client
 // and server authentication, valid from now, and returns it with its ledger
 // line. It writes nothing. There is no CSR: the operator hands over the
-// public key. The SAN carries the role and the host as a free label only.
-func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validity time.Duration, now time.Time) (Issuance, error) {
-	if !role.known() {
-		return Issuance{}, fmt.Errorf("pki: unknown role %q", role)
-	}
-	if !validHost(host) {
-		return Issuance{}, fmt.Errorf("pki: host %q must be non-empty and use only [A-Za-z0-9._-]", host)
-	}
+// public key.
+//
+// The certificate's identity is its one email SAN (R1). For an INSTANCE it is
+// AgentEmail(id), the address the instance commits as; any other address, or
+// email "" (no email SAN at all), makes an OPERATOR certificate. There is no
+// role field and no knomit:// URI: IdentityOf reads the kind from the
+// address, and the principal is always the KEY's fingerprint.
+func IssueLeaf(root Root, pub ed25519.PublicKey, email string, validity time.Duration, now time.Time) (Issuance, error) {
 	if len(pub) != ed25519.PublicKeySize {
 		return Issuance{}, fmt.Errorf("pki: public key is %d bytes, want %d", len(pub), ed25519.PublicKeySize)
 	}
-	fp := Fingerprint(pub)
-	san, err := url.Parse(SAN(role, host))
-	if err != nil {
-		return Issuance{}, fmt.Errorf("pki: SAN: %w", err)
+	if email != "" {
+		local, domain, ok := strings.Cut(email, "@")
+		if !ok || local == "" || domain == "" || strings.Contains(domain, "@") || !printableASCII(email) {
+			return Issuance{}, fmt.Errorf("pki: %q is not an email address", email)
+		}
+		if err := agentDomainSpelling(domain); err != nil {
+			return Issuance{}, err
+		}
+		if domain == AgentEmailDomain {
+			if err := ValidAgentID(local); err != nil {
+				return Issuance{}, err
+			}
+		}
 	}
+	fp := Fingerprint(pub)
 	serial, err := newSerial()
 	if err != nil {
 		return Issuance{}, err
 	}
+	cn := email
+	if cn == "" {
+		cn = "knomit operator " + Short(fp)
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: host},
+		Subject:               pkix.Name{CommonName: cn},
 		NotBefore:             now.Add(-clockSkew),
 		NotAfter:              now.Add(validity),
 		BasicConstraintsValid: true,
 		IsCA:                  false,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		URIs:                  []*url.URL{san},
+	}
+	if email != "" {
+		tmpl.EmailAddresses = []string{email}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, root.Cert, pub, root.Signer)
 	if err != nil {
@@ -139,8 +193,7 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validit
 	}
 	rec := Issued{
 		Serial:      cert.SerialNumber.Text(16),
-		SAN:         san.String(),
-		Label:       host,
+		Email:       email,
 		Fingerprint: fp,
 		NotAfter:    cert.NotAfter,
 		IssuedAt:    now.UTC(),
@@ -156,8 +209,8 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, host string, role Role, validit
 // line to <dir>/issued.jsonl: the fleet-root-directory form `identity enroll`
 // uses. A certificate whose line could not be logged is not returned, since
 // revocation finds serials in that log.
-func IssueInstance(dir string, root Root, pub ed25519.PublicKey, host string, role Role, validity time.Duration) ([]byte, Issued, error) {
-	is, err := IssueLeaf(root, pub, host, role, validity, time.Now())
+func IssueInstance(dir string, root Root, pub ed25519.PublicKey, email string, validity time.Duration) ([]byte, Issued, error) {
+	is, err := IssueLeaf(root, pub, email, validity, time.Now())
 	if err != nil {
 		return nil, Issued{}, err
 	}

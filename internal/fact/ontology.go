@@ -128,8 +128,8 @@ func EmbeddedPresetByID(id string) *Ontology {
 // existing rules).
 //
 // Attributes ARE compared, by value: a subset here means "safe to OVERWRITE
-// with other", and the refresh in repos/builder.go writes the preset over the
-// stored file. A repo that flags a preset topic `learn_dedup: off` has the
+// with other", and the boot refresh (refreshDivergence in repos/stages.go)
+// writes the preset over the stored file. A repo that flags a preset topic `learn_dedup: off` has the
 // same taxonomy as the preset, but overwriting it would erase the flag on
 // every boot. So a stored attribute the preset does not carry, with the same
 // value, is divergence (a value that behaves as absent, like learn_dedup: on,
@@ -172,7 +172,9 @@ func (o *Ontology) SubsetDivergence(other *Ontology) string {
 	// otherwise write a preset without them over the stored file and erase a
 	// repository-level setting (verify_signatures) on every boot.
 	d := behaviourDivergence{
-		attrs:    attrsNotSubset(o.Attributes, other.Attributes),
+		// Artifact rules (R7) likewise: a stored rule the preset does not
+		// declare identically would be erased by the overwrite.
+		attrs:    attrsNotSubset(o.Attributes, other.Attributes) || artifactsNotSubset(o.Artifacts, other.Artifacts),
 		guidance: !guidanceSubset(o.Guidance, other.Guidance),
 	}
 	for key, node := range o.Topics {
@@ -324,6 +326,10 @@ type Ontology struct {
 	// Guidance (F23) names, by path, the guidance files every topic's
 	// synthesis prompts get. See guidance.go.
 	Guidance GuidanceBlock `yaml:"guidance,omitempty"`
+	// Artifacts declares rules for files under ArtifactsRoot, by pattern
+	// relative to it (R7): see artifact_rules.go. Resolve with
+	// ArtifactAttrs and PKILayout, never by reading this map.
+	Artifacts map[string]map[string]any `yaml:"artifacts,omitempty"`
 
 	cache compiledRulesCache
 }
@@ -353,6 +359,10 @@ type compiledRulesCache struct {
 	// guidance (F23): its own block laid over its ancestors'. The root block
 	// is not in it (GuidanceFor adds it). Same sharing rule — never write.
 	guidanceByTopic map[string]resolvedGuidance
+
+	// artifacts is the compiled artifacts section (artifact_rules.go), built
+	// by ValidateOntologyYAML; read-only afterwards.
+	artifacts compiledArtifacts
 }
 
 // buildRulesCache compiles every Validation rule in the ontology (root +
@@ -827,6 +837,11 @@ func (o *Ontology) Serialize() ([]byte, error) {
 	}
 	if len(o.Attributes) > 0 {
 		if err := serializeAttributes(root, o.Attributes); err != nil {
+			return nil, fmt.Errorf("serialize ontology: %w", err)
+		}
+	}
+	if len(o.Artifacts) > 0 {
+		if err := serializeArtifacts(root, o.Artifacts); err != nil {
 			return nil, fmt.Errorf("serialize ontology: %w", err)
 		}
 	}

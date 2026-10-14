@@ -101,10 +101,10 @@ func TestNewRoot_RefusesToOverwriteAndRefusesEmptyPassphrase(t *testing.T) {
 	}
 }
 
-func TestIssueInstance_LeafChainsToRootWithRoleInSANAndIsLogged(t *testing.T) {
+func TestIssueInstance_LeafChainsToRootWithEmailSANAndIsLogged(t *testing.T) {
 	dir, root := newTestRoot(t)
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	certPEM, rec, err := IssueInstance(dir, root, pub, "laptop.local", RoleInstance, time.Hour)
+	certPEM, rec, err := IssueInstance(dir, root, pub, "laptop.local@agents.knomit.io", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,19 +124,15 @@ func TestIssueInstance_LeafChainsToRootWithRoleInSANAndIsLogged(t *testing.T) {
 		t.Fatalf("KeyUsage = %v", c.KeyUsage)
 	}
 	fp := Fingerprint(pub)
-	wantSAN := "knomit://instance/laptop.local"
-	if len(c.URIs) != 1 || c.URIs[0].String() != wantSAN {
-		t.Fatalf("URIs = %v, want [%s]", c.URIs, wantSAN)
+	wantSAN := "laptop.local@agents.knomit.io"
+	if len(c.URIs) != 0 || len(c.EmailAddresses) != 1 || c.EmailAddresses[0] != wantSAN {
+		t.Fatalf("URIs = %v emails = %v, want only the email SAN %s", c.URIs, c.EmailAddresses, wantSAN)
 	}
-	if SAN(RoleInstance, "laptop.local") != wantSAN {
-		t.Fatalf("SAN() = %s", SAN(RoleInstance, "laptop.local"))
-	}
-	// No private extension: the role lives in the SAN (Go cannot parse a
-	// 2.25 UUID-arc extension OID, crypto/x509/parser.go:233).
+	// No private extension: the identity lives in the email SAN (R1).
 	allowed := map[string]bool{
 		"2.5.29.14": true, // subjectKeyIdentifier
 		"2.5.29.15": true, // keyUsage
-		"2.5.29.17": true, // subjectAltName (the URI carrying the role)
+		"2.5.29.17": true, // subjectAltName (the email address)
 		"2.5.29.19": true, // basicConstraints
 		"2.5.29.35": true, // authorityKeyIdentifier
 		"2.5.29.37": true, // extKeyUsage
@@ -182,7 +178,7 @@ func TestIssueInstance_LeafChainsToRootWithRoleInSANAndIsLogged(t *testing.T) {
 	if lines[0].Serial != c.SerialNumber.Text(16) || lines[0].Serial != rec.Serial {
 		t.Fatalf("logged serial %s, cert %s, returned %s", lines[0].Serial, c.SerialNumber.Text(16), rec.Serial)
 	}
-	if lines[0].Fingerprint != fp || lines[0].SAN != wantSAN || lines[0].Label != "laptop.local" || !lines[0].NotAfter.Equal(c.NotAfter) {
+	if lines[0].Fingerprint != fp || lines[0].Email != wantSAN || !lines[0].NotAfter.Equal(c.NotAfter) {
 		t.Fatalf("log record %+v", lines[0])
 	}
 	if fi, _ := os.Stat(filepath.Join(dir, IssuedLogFile)); posixModes && fi.Mode().Perm() != 0o600 {
@@ -191,7 +187,7 @@ func TestIssueInstance_LeafChainsToRootWithRoleInSANAndIsLogged(t *testing.T) {
 
 	// A second issuance APPENDS.
 	pub2, _, _ := ed25519.GenerateKey(rand.Reader)
-	if _, _, err := IssueInstance(dir, root, pub2, "other", RoleOperator, time.Hour); err != nil {
+	if _, _, err := IssueInstance(dir, root, pub2, "other@example.com", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, IssuedLogFile))
@@ -200,19 +196,16 @@ func TestIssueInstance_LeafChainsToRootWithRoleInSANAndIsLogged(t *testing.T) {
 	}
 }
 
-func TestIssueInstance_RefusesUnknownRoleAndUnsafeHost(t *testing.T) {
+func TestIssueInstance_RefusesAnUnusableEmail(t *testing.T) {
 	dir, root := newTestRoot(t)
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	if _, _, err := IssueInstance(dir, root, pub, "h", Role("agent"), time.Hour); err == nil {
-		t.Fatal("issued a certificate for an unknown role")
-	}
-	for _, host := range []string{"", "a/b", "a b", "x?y"} {
-		if _, _, err := IssueInstance(dir, root, pub, host, RoleInstance, time.Hour); err == nil {
-			t.Fatalf("issued a certificate for host %q", host)
+	for _, email := range []string{"h", "a+b@agents.knomit.io", "a b@agents.knomit.io", "@example.com"} {
+		if _, _, err := IssueInstance(dir, root, pub, email, time.Hour); err == nil {
+			t.Fatalf("issued a certificate for email %q", email)
 		}
 	}
-	// Positive control: a hyphenated host is fine (fp8 is taken from the END).
-	if _, _, err := IssueInstance(dir, root, pub, "my-lap-top", RoleInstance, time.Hour); err != nil {
+	// Positive control: a hyphenated id is fine.
+	if _, _, err := IssueInstance(dir, root, pub, "my-lap-top@agents.knomit.io", time.Hour); err != nil {
 		t.Fatalf("hyphenated host refused: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, IssuedLogFile)); err != nil {

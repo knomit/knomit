@@ -35,7 +35,7 @@ func TestDial_ReturnsTheServersVerifiedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\nserver log:\n%s", err, rec)
 	}
-	if id.Fingerprint != Fingerprint(srvM.pub) || id.Host != "server" || id.Role != RoleInstance {
+	if id.Fingerprint != Fingerprint(srvM.pub) || id.AgentID != "server" || !id.IsInstance() {
 		t.Fatalf("identity %+v, want server's %s", id, Fingerprint(srvM.pub))
 	}
 	// And HTTPClient carries the client's identity to the handler.
@@ -96,16 +96,20 @@ func TestHTTPClient_PicksUpANewCRLWithoutRebuild(t *testing.T) {
 	}
 }
 
-func TestDial_ServerCertificateWithoutSANIsRefused(t *testing.T) {
+// R3: a server certificate with no email SAN chains and is admitted; it is an
+// OPERATOR certificate, and Dial reports it as one (the kind comes from the
+// address alone, never from a role field).
+func TestDial_ServerCertificateWithoutEmailIsAnOperator(t *testing.T) {
 	f := newFleet(t)
 	srvM := f.enroll(t, "server")
-	bare := f.crafted(t, srvM.pub) // chains to the root, wraps the server key, NO SAN
+	bare := f.crafted(t, srvM.pub, nil) // chains to the root, wraps the server key, NO SAN
 	srvM.certPEM = certPEM(bare.Raw)
 	sdir := f.install(t, srvM)
 	addr := startServer(t, sdir, srvM.keyPath, &recorder{})
 	peer, dir := f.clientSide(t, "peer")
-	if _, err := dial(t, addr, dir, peer.keyPath); !errors.Is(err, ErrSANMissing) {
-		t.Fatalf("err=%v, want ErrSANMissing", err)
+	id, err := dial(t, addr, dir, peer.keyPath)
+	if err != nil || id.IsInstance() || id.PrincipalKind() != "operator" || id.Fingerprint != Fingerprint(srvM.pub) {
+		t.Fatalf("identity %+v err=%v, want the server key as an operator", id, err)
 	}
 }
 

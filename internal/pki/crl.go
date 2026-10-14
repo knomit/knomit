@@ -68,63 +68,106 @@ func crlPEM(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
 }
 
-// Revocation is one revocation as bytes: the ledger line to append and the
-// CRL that replaces the current one. The caller places both.
+// Revocation is one revocation as bytes. The caller places them: the
+// statement and the CRL in the fleet repository, the line in the fleet root
+// directory's local log.
 type Revocation struct {
-	// Line is the revoked.jsonl line for r: JSON and a trailing newline.
-	Line   []byte
+	// Statement is the root-signed revocation file (SignRevocation): the
+	// fleet repository's per-operation record of this revocation.
+	Statement []byte
+	// CRLPEM is the CRL that replaces the current one: every serial the
+	// current CRL lists, and r's.
 	CRLPEM []byte
 	Number *big.Int
+	// Line is r as one line of the fleet root directory's LOCAL revocation
+	// log (revoked.jsonl): JSON and a trailing newline. That log is the
+	// master's own audit file; the fleet repository holds no ledger.
+	Line []byte
 }
 
-// RevokeSerial records r against the revocation ledger so far (prior, as
-// ParseRevokedLedger reads it) and signs the CRL that lists prior AND r,
-// numbered one above current — the Number of the CRL now published, nil
-// when there is none (the new CRL is then #1). It writes nothing. The CRL is
-// a projection of the whole ledger, so a reissue can never drop an earlier
-// revocation.
-func RevokeSerial(root Root, prior []Revoked, current *big.Int, r Revoked, thisUpdate, next time.Time) (Revocation, error) {
+// ErrAlreadyRevoked: the serial is already on the current CRL.
+var ErrAlreadyRevoked = errors.New("pki: serial already revoked")
+
+// RevokeSerial revokes r.Serial: it signs the revocation statement for it,
+// and the CRL that lists every serial the CURRENT CRL lists (with their
+// revocation times) AND r, numbered one above the current CRL's. current is
+// the CRL now published, nil when there is none (the new CRL is then #1 and
+// lists r alone); it must be signed by root. It writes nothing. The new CRL is
+// built from the current CRL, never from a ledger, so it is a superset of the
+// CRL it replaces: the fleet repository's crl-superset rule holds by
+// construction. r.At is taken as UTC whole seconds (the statement's and the
+// CRL's resolution); a serial already on the current CRL is ErrAlreadyRevoked.
+func RevokeSerial(root Root, current *x509.RevocationList, r Revoked, thisUpdate, next time.Time) (Revocation, error) {
 	if r.Serial == nil || r.Serial.Sign() <= 0 {
 		return Revocation{}, errors.New("pki: revoke needs a positive serial")
 	}
+	if r.At.IsZero() {
+		return Revocation{}, errors.New("pki: revoke needs a revocation time")
+	}
+	r.At = r.At.UTC().Truncate(time.Second)
 	number := big.NewInt(1)
+	var all []Revoked
 	if current != nil {
-		number = new(big.Int).Add(current, big.NewInt(1))
+		if _, err := CheckCRL(current, root.Cert, nil); err != nil {
+			return Revocation{}, fmt.Errorf("pki: the current CRL: %w", err)
+		}
+		if IsRevoked(current, r.Serial) {
+			return Revocation{}, fmt.Errorf("%w: %s", ErrAlreadyRevoked, r.Serial.Text(16))
+		}
+		number = new(big.Int).Add(current.Number, big.NewInt(1))
+		for _, e := range current.RevokedCertificateEntries {
+			all = append(all, Revoked{Serial: e.SerialNumber, At: e.RevocationTime})
+		}
+	}
+	all = append(all, r)
+	crl, err := SignCRL(root, all, number, thisUpdate, next)
+	if err != nil {
+		return Revocation{}, err
+	}
+	rootID, err := RootID(root.Cert)
+	if err != nil {
+		return Revocation{}, err
+	}
+	st, err := SignRevocation(root, RevocationStatement{Root: rootID, Serial: r.Serial, At: r.At, Reason: r.Reason})
+	if err != nil {
+		return Revocation{}, err
 	}
 	line, err := json.Marshal(r)
 	if err != nil {
 		return Revocation{}, err
 	}
-	// The entry is listed as the ledger will read it back, so the CRL a
-	// later reissue signs from the ledger lists the same time.
-	var back Revoked
-	if err := json.Unmarshal(line, &back); err != nil {
-		return Revocation{}, err
-	}
-	all := append(append(make([]Revoked, 0, len(prior)+1), prior...), back)
-	crl, err := SignCRL(root, all, number, thisUpdate, next)
-	if err != nil {
-		return Revocation{}, err
-	}
-	return Revocation{Line: append(line, '\n'), CRLPEM: crl, Number: number}, nil
+	return Revocation{Statement: st, CRLPEM: crl, Number: number, Line: append(line, '\n')}, nil
 }
 
-// Revoke is RevokeSerial against the fleet root directory: it appends r to
-// <dir>/revoked.jsonl and reissues <dir>/crl.pem from the WHOLE log with a
-// Number one higher than the current crl.pem's (1 if none).
+// Revoke is RevokeSerial against the fleet root directory: it reissues
+// <dir>/crl.pem from the CURRENT <dir>/crl.pem plus r, with a Number one
+// higher (1 if there is none), and appends r to the local log
+// <dir>/revoked.jsonl. The current crl.pem must list every serial the local
+// log holds: a missing crl.pem while the log holds revocations, or a present
+// one that lags it (an older CRL restored from a backup), is refused, as the
+// CRL built from it would silently drop them. Nothing is written then.
 func Revoke(dir string, root Root, r Revoked, next time.Time) (*big.Int, error) {
-	var current *big.Int
-	switch cur, err := LoadCRL(filepath.Join(dir, CRLFile)); {
-	case err == nil:
-		current = cur.Number
-	case !errors.Is(err, ErrCRLMissing):
-		return nil, fmt.Errorf("pki: current CRL unreadable, refusing to guess its Number: %w", err)
-	}
 	prior, err := LoadRevoked(dir)
 	if err != nil {
 		return nil, err
 	}
-	rv, err := RevokeSerial(root, prior, current, r, time.Now(), next)
+	var current *x509.RevocationList
+	switch cur, err := LoadCRL(filepath.Join(dir, CRLFile)); {
+	case err == nil:
+		current = cur
+		for _, p := range prior {
+			if p.Serial == nil || !IsRevoked(current, p.Serial) {
+				return nil, fmt.Errorf("pki: %s (Number %v) does not list serial %s, which %s records as revoked; refusing to sign a CRL that drops it (restore the newest CRL)", CRLFile, current.Number, p.Serial.Text(16), RevokedLogFile)
+			}
+		}
+	case !errors.Is(err, ErrCRLMissing):
+		return nil, fmt.Errorf("pki: current CRL unreadable, refusing to guess what it lists: %w", err)
+	default:
+		if len(prior) > 0 {
+			return nil, fmt.Errorf("pki: %s is missing but %s lists %d revocations; refusing to sign a CRL that drops them", CRLFile, RevokedLogFile, len(prior))
+		}
+	}
+	rv, err := RevokeSerial(root, current, r, time.Now(), next)
 	if err != nil {
 		return nil, err
 	}

@@ -151,7 +151,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	members, lerr := m.fleetMembersAtMain(ri)
 	if lerr == nil {
 		for _, mem := range members {
-			if strings.EqualFold(mem.Agent, row.AgentID) {
+			if mem.Agent == row.AgentID {
 				st.RecordState = mem.State
 				// The RECORD differs, not "the branch is ahead": the sync
 				// loop merges main into the agent branch, so the branch is
@@ -173,11 +173,28 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]store.FleetMember, error)
 	return m.fleetMembersAtMain(ri)
 }
 
+// FleetAtMain returns what the commit judge reads from the fleet repository's
+// main: the member records and the certificate artifacts, from one revision.
+func (m *Manager) FleetAtMain(ctx context.Context) (store.Fleet, error) {
+	ri := m.fleetRepo()
+	if ri == nil {
+		return store.Fleet{}, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone: no fleet repository is mounted")
+	}
+	return m.fleetAtMain(ri)
+}
+
 // fleetMembersAtMain reads the member records at the fleet repository's
-// consensus branch: the origin's branch, else the one recorded with the repo
-// (store.UpstreamBranch). Never a name assumed for it.
+// consensus branch (fleetAtMain).
 func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, error) {
-	var out []store.FleetMember
+	f, err := m.fleetAtMain(ri)
+	return f.Members, err
+}
+
+// fleetAtMain reads the fleet at the fleet repository's consensus branch: the
+// origin's branch, else the one recorded with the repo
+// (store.UpstreamBranch). Never a name assumed for it.
+func (m *Manager) fleetAtMain(ri *RepoInstance) (store.Fleet, error) {
+	var out store.Fleet
 	var lerr error
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -189,9 +206,9 @@ func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, err
 			lerr = fmt.Errorf("fleet repository: %w", store.ErrNoConsensusBranch)
 			return
 		}
-		out, lerr = svc.FleetMembersAt(upstream)
+		out, lerr = svc.FleetAt(upstream)
 	}); err != nil {
-		return nil, err
+		return store.Fleet{}, err
 	}
 	return out, lerr
 }
@@ -462,7 +479,7 @@ func sameFleetURL(a, b string) bool {
 // uuid8 shape, derived from the id instead of random.
 func memberRecordPath(root, agentID string) string {
 	sum := sha256.Sum256([]byte(agentID))
-	return path.Join(root, fact.MembersTopic, strings.ToLower(agentID), hex.EncodeToString(sum[:4])+".md")
+	return path.Join(root, fact.MembersTopic, agentID, hex.EncodeToString(sum[:4])+".md")
 }
 
 // ownFleetKeys is every key this instance's member record has held in its

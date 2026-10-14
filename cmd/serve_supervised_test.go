@@ -23,7 +23,6 @@ import (
 	"knomit/internal/app"
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/serveraddr"
@@ -328,7 +327,7 @@ func tlsHome(t *testing.T, home string, wrapOwnKey bool) string {
 		certKey, _ = pkitest.NewKey(t)
 	}
 	f := pkitest.New(t)
-	f.Install(t, f.Enroll(t, "serve", pki.RoleInstance, certKey), filepath.Join(home, "pki"))
+	f.Install(t, f.Enroll(t, "serve@agents.knomit.io", certKey), filepath.Join(home, "pki"))
 	addr := "127.0.0.1:" + freePort(t)
 	t.Setenv("KNOMIT_TLS_ADDR", addr)
 	return addr

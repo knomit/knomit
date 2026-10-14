@@ -1,14 +1,19 @@
 package store
 
 import (
+	"crypto/ed25519"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/pki"
 )
 
 // ErrNoFleet: verification is on in the knowledge base but no fleet
@@ -46,16 +51,11 @@ func (v RangeVerdict) ExitCode() int {
 }
 
 // agentIDOfAuthor returns the agent id in an agent author address,
-// <id>[+<op>]@agents.knomit.io, or "" for any other address. The id is OPAQUE:
-// it is looked up, never parsed further.
-func agentIDOfAuthor(email string) string {
-	local, ok := strings.CutSuffix(strings.ToLower(strings.TrimSpace(email)), "@agents.knomit.io")
-	if !ok || local == "" {
-		return ""
-	}
-	id, _, _ := strings.Cut(local, "+")
-	return id
-}
+// <id>[+<op>]@agents.knomit.io, or "" for any other address. It is
+// pki.AgentIDOfEmail, the ONE string operation on an identity, shared with the
+// certificate's email SAN so the two can never disagree (R2). The id is
+// OPAQUE: it is looked up and compared, never parsed further.
+func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
 
 // CheckRange is F09's acceptance gate: it runs ONCE, where a change enters a
 // knowledge base's main (the merge job, via `knomit verify ci`), over plain git
@@ -63,9 +63,11 @@ func agentIDOfAuthor(email string) string {
 //
 //  1. verify_signatures is read at Main's tip FIRST. Off or absent: the verdict
 //     is off and nothing else runs; the fleet is never touched.
-//  2. The fleet's member records are loaded (malformed ones skipped and
-//     logged). A missing or unreadable fleet, or one whose ontology is not the
-//     fleet preset, is an error: the gate could not run.
+//  2. The fleet's member records and certificate artifacts (the files its
+//     ontology declares pki: root, crl and leaf) are loaded from the ONE fleet
+//     revision (malformed records skipped and logged). A missing or unreadable
+//     fleet, or one whose ontology is not the fleet preset, is an error: the
+//     gate could not run. Missing artifacts are not an error: no PKI.
 //  3. Every commit in Candidate ∖ Main is judged by judgeCommit.
 func CheckRange(in RangeInput) (RangeVerdict, error) {
 	kb, err := openGitDir(in.KBDir)
@@ -93,6 +95,15 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	if settings.Mode == VerifyOff {
 		return out, nil
 	}
+	// The artifact rules (R7) are read from the SAME ontology, at main's tip.
+	// One that does not parse cannot say which rules hold: the gate could not
+	// run, never a pass.
+	var ont *fact.Ontology
+	if raw != nil {
+		if ont, err = fact.ParseOntology(raw); err != nil {
+			return RangeVerdict{}, fmt.Errorf("verify: ontology at %s: %w", in.Main, err)
+		}
+	}
 
 	if in.FleetDir == "" {
 		return RangeVerdict{}, ErrNoFleet
@@ -101,11 +112,19 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	if rev == "" {
 		rev = "HEAD"
 	}
-	members, err := LoadFleet(in.FleetDir, rev, in.FleetRoot)
+	fleet, err := LoadFleetAt(in.FleetDir, rev, in.FleetRoot)
 	if err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
-	idx := indexMembers(members)
+	// Rule A (self-registration) exists only where member records live: the
+	// knowledge base being judged must itself be the fleet repository.
+	selfRoot := ""
+	if fact.IsFleetOntology(ont) {
+		if selfRoot = in.FleetRoot; selfRoot == "" {
+			selfRoot = "kb"
+		}
+	}
+	gate := newJudge(fleet, selfRoot, ont, in.FleetRoot)
 
 	candC, err := resolveCommit(kb, in.Candidate)
 	if err != nil {
@@ -120,7 +139,7 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	}
 	err = walkHistory(kb.Storer, candC.Hash, onMain, func(c *object.Commit) {
 		out.Checked++
-		if r, ok := idx.judgeCommit(c); !ok {
+		if r, ok := gate.judgeCommit(c); !ok {
 			out.Refused = append(out.Refused, r)
 		}
 	})
@@ -139,11 +158,71 @@ type memberIndex struct {
 func indexMembers(ms []FleetMember) memberIndex {
 	idx := memberIndex{byAgent: map[string][]FleetMember{}, byKey: map[string][]FleetMember{}}
 	for _, m := range ms {
-		idx.byAgent[strings.ToLower(m.Agent)] = append(idx.byAgent[strings.ToLower(m.Agent)], m)
+		idx.byAgent[m.Agent] = append(idx.byAgent[m.Agent], m)
 		k := string(m.Key.Marshal())
 		idx.byKey[k] = append(idx.byKey[k], m)
 	}
 	return idx
+}
+
+// judge is everything judgeCommit reads: the fleet at ONE revision (member
+// records, certificate artifacts), where the judged repository's member
+// records live, and the judged repository's ontology at main (its artifact
+// rules).
+type judge struct {
+	memberIndex
+	pki *FleetPKI // nil: the fleet revision declares or holds no root
+	// membersDir is "<root>/members/" of the JUDGED repository when that
+	// repository is the fleet repository itself, else "" (rule A off: there
+	// is nothing to self-register into).
+	membersDir string
+	// ont is the JUDGED repository's ontology at main, read at the same
+	// revision as verify_signatures; its artifacts section is enforced on
+	// every commit (artifactRules). nil: no rules.
+	ont *fact.Ontology
+	// kbRoot is the judged repository's fact root, where leaf-renewal reads
+	// the member records of the commit's own tree.
+	kbRoot string
+}
+
+// newJudge builds the judge for one fleet revision. selfRoot is the judged
+// repository's fact root when that repository is the fleet repository, and
+// "" when it is not (rule A off). ont is the judged repository's ontology at
+// main and kbRoot its fact root ("" = "kb").
+func newJudge(f Fleet, selfRoot string, ont *fact.Ontology, kbRoot string) judge {
+	if kbRoot == "" {
+		kbRoot = "kb"
+	}
+	j := judge{memberIndex: indexMembers(f.Members), pki: f.PKI, ont: ont, kbRoot: kbRoot}
+	if selfRoot != "" {
+		j.membersDir = path.Join(selfRoot, fact.MembersTopic) + "/"
+	}
+	return j
+}
+
+// mayRegister is R4's gate on rule A: the id has NO active record, and the
+// signing key is not the current key of a record for a DIFFERENT id (in any
+// state). Rule A is a join or a rejoin; it never takes over an id an active
+// record holds, and it never makes one key the current key of two ids.
+//
+// The id's OWN inactive record holding the signing key does not block: that
+// is a same-key rejoin. Leave = revoke, so the leaf that held the key is on
+// the CRL, and rule A admits the rejoin only on a fresh leaf the master
+// issued after the leave (selfRegistration) — that leaf is the approval.
+// MISREADING: this is not "any record's key" (that refuses every same-key
+// rejoin), and not "an active record's key" (that lets two ids share a key).
+func (j judge) mayRegister(id string, s CommitSigner) bool {
+	for _, m := range j.byAgent[id] {
+		if m.State == fact.MemberActive {
+			return false
+		}
+	}
+	for _, m := range j.byKey[string(s.Key.Marshal())] {
+		if m.Agent != id {
+			return false
+		}
+	}
+	return true
 }
 
 // judgeCommit applies the gate's rules to one commit:
@@ -152,8 +231,32 @@ func indexMembers(ms []FleetMember) memberIndex {
 //   - the author address's agent id must have exactly ONE member record;
 //   - the signing key (the full key) must be that record's CURRENT key, and no
 //     other record's;
-//   - the record's state must be active.
-func (idx memberIndex) judgeCommit(c *object.Commit) (Refusal, bool) {
+//   - the record's state must be active;
+//   - rule B (only when the fleet revision holds root.crt): the leaf artifact
+//     for the id must name that key, chain to the root and not be on the CRL
+//     (certified: RuleNoCert, RuleKeyMismatch, RuleRevoked);
+//   - rule A: a commit refused above for having no record, a record for
+//     another key, or an inactive record is ADMITTED when it is a
+//     self-registration backed by a valid leaf artifact (selfRegistration) —
+//     only when the id has no active record and the signing key is not the
+//     current key of another id's record (R4, mayRegister);
+//   - the artifact rules (R7): every commit the rules above admit, signed or
+//     an M3 merge, must also keep every artifact rule of the judged
+//     repository's ontology at main (artifactRules).
+//
+// Nothing is derived from the id's text (D18): it is only the key under which
+// a record or a leaf file is looked up, and compared for equality with the
+// leaf's email SAN id.
+func (j judge) judgeCommit(c *object.Commit) (Refusal, bool) {
+	r, ok := j.judgeSigner(c)
+	if !ok {
+		return r, false
+	}
+	return j.artifactRules(c)
+}
+
+// judgeSigner is every rule of judgeCommit but the artifact rules.
+func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 	h := c.Hash.String()
 	s, serr := verifyCommitSignature(c)
 	if serr != nil {
@@ -174,7 +277,21 @@ func (idx memberIndex) judgeCommit(c *object.Commit) (Refusal, bool) {
 	if id == "" {
 		return Refusal{Commit: h, Rule: RuleNoRecord, SignerFP: fp, Reason: fmt.Sprintf("author %q is not an agent address", c.Author.Email)}, false
 	}
-	recs := idx.byAgent[id]
+	r, ok := j.judgeRecord(h, id, s)
+	switch {
+	case ok:
+		return j.certified(h, id, s)
+	case (r.Rule == RuleNoRecord || r.Rule == RuleKeyMismatch || r.Rule == RuleInactive) && j.mayRegister(id, s):
+		return j.selfRegistration(c, id, s, r)
+	}
+	return r, false
+}
+
+// judgeRecord is the record rules: exactly one record at id, whose current key
+// is the signing key and no other record's, in state active.
+func (j judge) judgeRecord(h, id string, s CommitSigner) (Refusal, bool) {
+	fp := s.Fingerprint
+	recs := j.byAgent[id]
 	switch len(recs) {
 	case 0:
 		return Refusal{Commit: h, Rule: RuleNoRecord, SignerFP: fp, Reason: fmt.Sprintf("no member record for agent %q", id)}, false
@@ -186,11 +303,233 @@ func (idx memberIndex) judgeCommit(c *object.Commit) (Refusal, bool) {
 	if !fact.SameKey(rec.Key, s.Key) {
 		return Refusal{Commit: h, Rule: RuleKeyMismatch, SignerFP: fp, Reason: fmt.Sprintf("signing key is not the current key of %q", id)}, false
 	}
-	if n := len(idx.byKey[string(s.Key.Marshal())]); n > 1 {
+	if n := len(j.byKey[string(s.Key.Marshal())]); n > 1 {
 		return Refusal{Commit: h, Rule: RuleDuplicateKey, SignerFP: fp, Reason: fmt.Sprintf("the signing key is the current key of %d records", n)}, false
 	}
 	if rec.State != fact.MemberActive {
 		return Refusal{Commit: h, Rule: RuleInactive, SignerFP: fp, Reason: fmt.Sprintf("agent %q is %s", id, rec.State)}, false
 	}
 	return Refusal{}, true
+}
+
+// certified is rule B, for a commit the record rules accepted (so the
+// record's key IS the signing key). With no PKI at the fleet revision it
+// accepts: the rules are exactly what they were before the artifacts existed.
+// With PKI it FAILS CLOSED: the commit is accepted only when the leaf
+// artifact for id names the record's key, chains to the root, and is not on
+// a CRL the root signed. Otherwise:
+//   - no leaf, a leaf the root did not sign, or a root or CRL nobody can
+//     read: RuleNoCert;
+//   - a leaf for another key: RuleKeyMismatch;
+//   - a listed serial: RuleRevoked.
+//
+// Failing open here would let a record keep signing after its key's leaf
+// was revoked, simply because the leaf at certs/<id>.pem names some other
+// key (or is gone).
+func (j judge) certified(h, id string, s CommitSigner) (Refusal, bool) {
+	if j.pki == nil {
+		return Refusal{}, true
+	}
+	leaf, err := j.leafFor(id, s)
+	r := Refusal{Commit: h, SignerFP: s.Fingerprint}
+	switch {
+	case err == nil && leaf != nil:
+		return Refusal{}, true
+	case err == nil:
+		r.Rule, r.Reason = RuleNoCert, fmt.Sprintf("the fleet has certificates but no %s at the fleet revision", j.pki.Layout.LeafPath(id))
+	case errors.Is(err, errLeafOtherKey):
+		r.Rule, r.Reason = RuleKeyMismatch, fmt.Sprintf("%s is for another key than the member record's", j.pki.Layout.LeafPath(id))
+	case errors.Is(err, pki.ErrRevoked):
+		r.Rule, r.Reason = RuleRevoked, fmt.Sprintf("the certificate for agent %q (serial %s) is on the fleet CRL", id, leaf.SerialNumber.Text(16))
+	default:
+		r.Rule, r.Reason = RuleNoCert, fmt.Sprintf("the certificate for agent %q does not hold: %v", id, err)
+	}
+	return r, false
+}
+
+// selfRegistration is rule A. The commit was refused by the record rules
+// with refusal; it is ADMITTED instead when:
+//   - every path it changes, against EVERY parent, is under the judged fleet
+//     repository's members/<id>/ (the author writing its own record and
+//     nothing else), and
+//   - the leaf artifact certs/<id>.pem at the fleet revision exists, its key
+//     equals the SIGNING key (full key), it chains to root.crt and its serial
+//     is not on crl.pem, and
+//   - the folder it leaves holds exactly ONE member record, for agent id, in
+//     state active, whose key is that same key (selfRecord). The leaf vouches
+//     for one key; without this a holder could register ANOTHER key K2 under
+//     its id and sign with K2 from then on, out of reach of a revocation of
+//     the leaf's key.
+//
+// Only "active" may be written this way: rule A runs only for an id with no
+// active record for the signing key, so the one thing it can mean is a join
+// or a rejoin. Leaving is a change an active member makes to its own record,
+// under the ordinary rules.
+//
+// A commit of any other shape keeps refusal unchanged. A self-registration
+// with no leaf, one that does not chain, or one whose record does not match
+// keeps refusal's rule with the reason; a leaf for another key is
+// RuleKeyMismatch; a revoked leaf is RuleRevoked.
+func (j judge) selfRegistration(c *object.Commit, id string, s CommitSigner, refusal Refusal) (Refusal, bool) {
+	dir := j.membersDir + id + "/"
+	if j.pki == nil || j.membersDir == "" || !onlyUnder(c, dir) {
+		return refusal, false
+	}
+	leaf, err := j.leafFor(id, s)
+	if err == nil && leaf != nil {
+		err = selfRecord(c, dir, id, s)
+	}
+	switch {
+	case leaf == nil && err == nil:
+		refusal.Reason += fmt.Sprintf("; self-registration not admitted: no %s at the fleet revision", j.pki.Layout.LeafPath(id))
+	case errors.Is(err, errLeafOtherKey):
+		refusal.Rule = RuleKeyMismatch
+		refusal.Reason = fmt.Sprintf("self-registration not admitted: %s is for another key than the signing key", j.pki.Layout.LeafPath(id))
+	case errors.Is(err, pki.ErrRevoked):
+		refusal.Rule = RuleRevoked
+		refusal.Reason = fmt.Sprintf("self-registration not admitted: the certificate for agent %q (serial %s) is on the fleet CRL", id, leaf.SerialNumber.Text(16))
+	case err != nil:
+		refusal.Reason += fmt.Sprintf("; self-registration not admitted: %v", err)
+	default:
+		return Refusal{}, true
+	}
+	return refusal, false
+}
+
+// selfRecord checks what a self-registration leaves in its folder dir
+// (ending in "/", compared exactly) in c's tree: exactly one file, a member record
+// that parses, for agent id, in state active, holding the signing key.
+func selfRecord(c *object.Commit, dir, id string, s CommitSigner) error {
+	tree, err := c.Tree()
+	if err != nil {
+		return err
+	}
+	var recs []fact.Member
+	files := 0
+	err = tree.Files().ForEach(func(f *object.File) error {
+		if !strings.HasPrefix(f.Name, dir) {
+			return nil
+		}
+		files++
+		content, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		ff, err := fact.ParseFact(f.Name, content)
+		if err != nil {
+			return fmt.Errorf("the record %s does not parse: %w", f.Name, err)
+		}
+		m, err := fact.ParseMember(ff.Body)
+		if err != nil {
+			return fmt.Errorf("the record %s does not parse: %w", f.Name, err)
+		}
+		recs = append(recs, m)
+		return nil
+	})
+	switch {
+	case err != nil:
+		return err
+	case files != 1:
+		return fmt.Errorf("%s holds %d files, want exactly one member record", dir, files)
+	case recs[0].Agent != id:
+		return fmt.Errorf("the record names agent %q, not the author %q", recs[0].Agent, id)
+	case recs[0].State != fact.MemberActive:
+		return fmt.Errorf("the record's state is %q; a self-registration may only write %q", recs[0].State, fact.MemberActive)
+	case !fact.SameKey(recs[0].Key, s.Key):
+		return errors.New("the record's key is not the signing key the certificate names")
+	}
+	return nil
+}
+
+// errLeafOtherKey: the leaf artifact for the id names another key than the
+// signing key.
+var errLeafOtherKey = errors.New("the certificate is for another key")
+
+// leafFor reads the leaf artifact for id and verifies it for the signing key.
+// (nil, nil): no leaf. (leaf, nil): the leaf names the signing key, chains to
+// the root and is not revoked. Otherwise the leaf (when it parsed) and why it
+// does not hold: errLeafOtherKey, pki.ErrRevoked (it chains and a CRL the
+// root signed lists it), or any other chain or CRL failure.
+//
+// Expiry is NOT judged (designer, Q2): the judge is historical — the same
+// commit must get the same verdict whenever the gate runs, in CI or on
+// replay — and TLS already refuses an expired certificate on every
+// connection. The chain is therefore verified at a moment inside the leaf's
+// own validity, never at the current time.
+func (j judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
+	if j.pki == nil {
+		return nil, nil
+	}
+	leaf, err := j.pki.Cert(id)
+	if leaf == nil || err != nil {
+		return nil, err
+	}
+	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return leaf, fmt.Errorf("%w: %T", pki.ErrNotEd25519, leaf.PublicKey)
+	}
+	certKey, err := ssh.NewPublicKey(pub)
+	if err != nil || !fact.SameKey(certKey, s.Key) {
+		return leaf, errLeafOtherKey
+	}
+	if j.pki.Root == nil {
+		return leaf, j.pki.RootErr
+	}
+	if j.pki.CRL == nil {
+		return leaf, j.pki.CRLErr
+	}
+	at := leaf.NotBefore
+	if j.pki.Root.NotBefore.After(at) {
+		at = j.pki.Root.NotBefore
+	}
+	ident, err := pki.VerifyInstanceChain(leaf, nil, j.pki.Root, j.pki.CRL, at, pki.UsageClient)
+	if err != nil {
+		return leaf, err
+	}
+	// R2: the leaf's email SAN id must EQUAL the id it is filed under (and
+	// the author's): a leaf the root issued to another agent, planted at this
+	// id's path, vouches for nothing here. Equality only; nothing is parsed.
+	if ident.AgentID != id {
+		return leaf, fmt.Errorf("%w: its email SAN %q names agent %q, not %q", errLeafOtherID, ident.Email, ident.AgentID, id)
+	}
+	return leaf, nil
+}
+
+// errLeafOtherID: the leaf artifact at an id's path was issued to another
+// agent id (or is an operator certificate).
+var errLeafOtherID = errors.New("the certificate is not issued to this agent id")
+
+// onlyUnder reports whether c changes at least one path and every path it
+// changes against EVERY parent (the empty tree for a root commit) is under
+// dir (ending in "/", compared exactly). A merge that brings in anything else from
+// one side is not under dir against the other side. An unreadable tree is
+// "no": the commit falls back to the record rules.
+func onlyUnder(c *object.Commit, dir string) bool {
+	tree, err := c.Tree()
+	if err != nil {
+		return false
+	}
+	parents, err := parentTrees(c)
+	if err != nil {
+		return false
+	}
+	changed := false
+	for _, pt := range parents {
+		changes, err := object.DiffTree(pt, tree)
+		if err != nil {
+			return false
+		}
+		for _, ch := range changes {
+			for _, name := range []string{ch.From.Name, ch.To.Name} {
+				if name == "" {
+					continue
+				}
+				if !strings.HasPrefix(name, dir) {
+					return false
+				}
+				changed = true
+			}
+		}
+	}
+	return changed
 }

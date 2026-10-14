@@ -147,6 +147,10 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 		diags = append(diags, attributeDiags(key, o.Topics[key], valueForKey(topicsNode, key))...)
 	}
 	diags = append(diags, rootAttributeDiags(o.Attributes, valueForKey(documentRoot(&doc), "attributes"))...)
+	// The artifacts section (R7): an unknown key is a newOnly warning, every
+	// other problem is fatal (artifact_rules.go).
+	arts, artDiags := compileArtifacts(o.Artifacts, valueForKey(documentRoot(&doc), "artifacts"))
+	diags = append(diags, artDiags...)
 	// Context declarations (F22): every problem is a warning on the open path
 	// and fatal for a new ontology; the bad declaration is poisoned, never
 	// dropped (see compiledContextDecl).
@@ -173,6 +177,7 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 		// unknown key that is usually the reason the rules did not compile.
 		return nil, append(diags, Diagnostic{Message: err.Error()})
 	}
+	o.cache.artifacts = arts
 	return &o, diags
 }
 
