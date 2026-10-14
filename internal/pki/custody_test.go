@@ -219,7 +219,9 @@ func TestExportImport_RoundTripMovesTheKey(t *testing.T) {
 	if _, _, err := OpenRoot(dir, kc, nil); !errors.Is(err, ErrNoRootKey) {
 		t.Fatalf("the old fleet root can still open the root after a move: %v", err)
 	}
-	if fi, err := os.Stat(out); err != nil || fi.Mode().Perm() != 0o600 {
+	// Mode bits only on POSIX: Windows reports 0666 (0444 if read-only)
+	// whatever mode the file was created with.
+	if fi, err := os.Stat(out); err != nil || (posixModes && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("export file: %v %v", fi, err)
 	}
 	// An export never overwrites a file.
