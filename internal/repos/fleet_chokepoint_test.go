@@ -25,13 +25,15 @@ func fleetOntologyYAML(t *testing.T) string {
 }
 
 // mountFleetByDoor mounts the fleet remote at url as name through the fleet
-// code's door (what RegisterFleet does), and fails the test unless it is the
-// fleet repository.
+// code's door and records it as this instance's fleet repository (what
+// RegisterFleet does, without the record and push), and fails the test
+// unless it is the fleet repository.
 func mountFleetByDoor(t *testing.T, m *Manager, name, url string) *RepoInstance {
 	t.Helper()
 	ri, err := m.Create(context.Background(), CreateSpec{Name: name, Mode: "clone", Origin: &OriginSpec{URL: url}, fleetDoor: true}, nil)
 	require.NoError(t, err)
 	require.True(t, ri.IsFleet(), "fixture: %s is a fleet repository", name)
+	require.NoError(t, recordFleetRepo(m.ControlDB(), ri.UID()))
 	return ri
 }
 
@@ -188,49 +190,145 @@ func TestFleetReserved_SwapRefused(t *testing.T) {
 	require.True(t, fl.IsFleet(), "the fleet repository keeps its store")
 }
 
-// Two registered fleet repositories at boot (a hand-edited control.db, an
-// older build): the first by name is mounted, the other is left unmounted and
-// listed unavailable with CauseFleetConflict; nothing is archived.
-// SABOTAGE: drop leaveRivalFleetsUnmounted from Start -> both mounted -> red.
-func TestFleetReserved_BootLeavesTheSecondFleetUnmounted(t *testing.T) {
-	dir := t.TempDir()
-	home := filepath.Join(dir, "home")
-	require.NoError(t, os.MkdirAll(home, 0o755))
-	deps := Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
+// fleetTestDeps is newFleetManager's Deps, for a test that restarts the
+// manager on the same home.
+func fleetTestDeps(dir string) Deps {
+	return Deps{
+		Cfg:         config.Config{Home: filepath.Join(dir, "home"), OntologyRoot: "kb", LocalOriginRoot: dir},
 		AgentBranch: "agent/test-fleet",
 		Signer:      testsigner.Named("fleet-test"),
 		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	}
-	m := New(context.Background(), deps)
+}
+
+// restartManager closes m and starts a new manager on the same home.
+func restartManager(t *testing.T, m *Manager, dir string) *Manager {
+	t.Helper()
+	require.NoError(t, m.Close())
+	m = New(context.Background(), fleetTestDeps(dir))
 	require.NoError(t, m.Start())
-	mountFleetByDoor(t, m, "fleet-b", seedFleetRemote(t, filepath.Join(dir, "b.git")))
+	t.Cleanup(func() { m.Close() })
+	return m
+}
+
+// requireUnavailableFleetConflict asserts name is registered, not mounted,
+// and listed unavailable with CauseFleetConflict and the reserved-id refusal.
+func requireUnavailableFleetConflict(t *testing.T, m *Manager, name string) {
+	t.Helper()
+	require.True(t, m.Get(name) == nil, "%s is not mounted", name)
+	for _, u := range m.Unavailable() {
+		if u.Record.Name == name {
+			require.Equal(t, CauseFleetConflict, u.Cause, "%s", name)
+			require.Contains(t, u.Detail, ErrFleetOntologyReserved.Error(), "%s: refused through the reserved-id path", name)
+			return
+		}
+	}
+	t.Fatalf("%s is not listed unavailable", name)
+}
+
+// The reviewer's scenario (PR #520 F1): an ordinary knowledge base is cloned,
+// its upstream later switches its ontology to id `fleet`, the sync brings
+// that onto the agent branch, and the instance restarts. Boot admits a
+// fleet-id ontology only for THIS instance's recorded fleet repository, so the
+// switched repo is refused through the reserved-id path: unmounted, listed
+// unavailable, not the fleet repository, and still archivable and purgeable
+// as an ordinary repo. The instance's real fleet repository (registered
+// through the fleet door, which records it) mounts as before.
+// SABOTAGE: make openRegistered pass fleetDoor true for every row -> the
+// switched repo is admitted as a second fleet -> red.
+func TestFleetReserved_BootAdmitsOnlyTheRecordedFleet(t *testing.T) {
+	for _, withFleet := range []bool{false, true} {
+		t.Run(map[bool]string{false: "standalone", true: "registered"}[withFleet], func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+
+			// An ordinary knowledge base upstream.
+			bare := filepath.Join(dir, "kb.git")
+			require.NoError(t, os.MkdirAll(bare, 0o755))
+			runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+			work := t.TempDir()
+			runGit(t, "", "clone", bare, work)
+			require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(OntologyPath)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(work, OntologyPath),
+				[]byte("id: general\nname: General\ntopics:\n  notes:\n    description: d\n"), 0o644))
+			runGit(t, work, "add", "-A")
+			runGit(t, work, "commit", "-q", "-m", "kb")
+			runGit(t, work, "push", "-q", "origin", "main")
+			runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+
+			m := newFleetManager(t, dir)
+			fleetName := ""
+			if withFleet {
+				_, err := m.RegisterFleet(ctx, seedFleetRemote(t, filepath.Join(dir, "fleet.git")), "", "")
+				require.NoError(t, err)
+				fleetName = m.fleetRepo().Name()
+			}
+			kb, err := m.Create(ctx, CreateSpec{Name: "kb", Mode: "clone", Origin: &OriginSpec{URL: fileuri.New(bare)}}, nil)
+			require.NoError(t, err)
+			require.Equal(t, "general", kb.Ontology().ID, "fixture: an ordinary clone")
+
+			// Upstream switches the ontology to the fleet's; the sync merges it.
+			require.NoError(t, os.WriteFile(filepath.Join(work, OntologyPath), []byte(fleetOntologyYAML(t)), 0o644))
+			runGit(t, work, "commit", "-q", "-am", "now a fleet")
+			runGit(t, work, "push", "-q", "origin", "main")
+			require.NoError(t, kb.WithRead(func(svc *store.Service) {
+				remote, err := svc.Remote().GetRemote("origin")
+				require.NoError(t, err)
+				auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+				require.NoError(t, err)
+				_, err = svc.Remote().Sync(ctx, kb.AgentBranch(), auth)
+				require.NoError(t, err)
+				raw, err := svc.OntologyAt(ctx, kb.AgentBranch())
+				require.NoError(t, err)
+				o, err := fact.ParseOntology(raw)
+				require.NoError(t, err)
+				require.True(t, fact.IsFleetOntology(o), "reached: the agent branch now holds a fleet ontology")
+			}))
+
+			m = restartManager(t, m, dir)
+			requireUnavailableFleetConflict(t, m, "kb")
+			if withFleet {
+				require.NotNil(t, m.Get(fleetName), "the recorded fleet repository mounts")
+				require.Equal(t, fleetName, m.fleetRepo().Name(), "and it is the fleet repository")
+			} else {
+				require.Nil(t, m.fleetRepo(), "a standalone instance has no fleet repository")
+			}
+
+			info, err := m.Archive("kb")
+			require.NoError(t, err, "the switched repo archives as an ordinary repo")
+			require.NoError(t, m.Purge(info.ID), "and purges")
+			if withFleet {
+				require.NotNil(t, m.Get(fleetName), "the fleet repository is untouched")
+			}
+		})
+	}
+}
+
+// Two registered fleet-id repositories at boot (a hand-edited control.db, a
+// home from an older build): only the recorded one is mounted; the other is
+// left unmounted and listed unavailable with CauseFleetConflict, and nothing
+// is archived.
+// SABOTAGE: make openRegistered pass fleetDoor true for every row -> both
+// mounted -> red.
+func TestFleetReserved_BootLeavesAnUnrecordedFleetUnmounted(t *testing.T) {
+	dir := t.TempDir()
+	m := newFleetManager(t, dir)
+	mountFleetByDoor(t, m, "fleet-a", seedFleetRemote(t, filepath.Join(dir, "a.git")))
 	// A second fleet with its own root commit (the same seed in the same
-	// second would be the same knowledge base, refused as a local copy).
-	other := filepath.Join(dir, "a.git")
+	// second would be the same knowledge base, refused as a local copy),
+	// mounted last, so it is the recorded one.
+	other := filepath.Join(dir, "b.git")
 	seedFleetRemote(t, other)
 	work := t.TempDir()
 	runGit(t, "", "clone", other, work)
 	runGit(t, work, "commit", "--amend", "-q", "-m", "another fleet")
 	runGit(t, work, "push", "-q", "-f", "origin", "main")
-	mountFleetByDoor(t, m, "fleet-a", fileuri.New(other))
-	require.NoError(t, m.Close())
+	mountFleetByDoor(t, m, "fleet-b", fileuri.New(other))
 
-	m = New(context.Background(), deps)
-	require.NoError(t, m.Start())
-	t.Cleanup(func() { m.Close() })
-	require.NotNil(t, m.Get("fleet-a"), "the first by name is mounted")
-	require.Equal(t, "fleet-a", m.fleetRepo().Name())
-	require.Nil(t, m.Get("fleet-b"), "the second is not")
-	var found bool
-	for _, u := range m.Unavailable() {
-		if u.Record.Name == "fleet-b" {
-			found = true
-			require.Equal(t, CauseFleetConflict, u.Cause)
-			require.Contains(t, u.Detail, `"fleet-a" is mounted`)
-		}
-	}
-	require.True(t, found, "fleet-b is listed unavailable")
+	m = restartManager(t, m, dir)
+	require.NotNil(t, m.Get("fleet-b"), "the recorded fleet repository is mounted")
+	require.Equal(t, "fleet-b", m.fleetRepo().Name())
+	requireUnavailableFleetConflict(t, m, "fleet-a")
 	archived, err := m.ListArchived()
 	require.NoError(t, err)
 	require.Empty(t, archived, "nothing is archived")

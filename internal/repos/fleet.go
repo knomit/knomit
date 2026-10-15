@@ -260,6 +260,13 @@ func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken 
 			}
 			return FleetStatus{}, fleetErr(http.StatusUnprocessableEntity, "not_a_fleet", msg)
 		}
+		// Boot admits a fleet-id ontology only for the recorded repository.
+		if rerr := recordFleetRepo(db, created.UID()); rerr != nil {
+			if derr := m.deleteRepo(created.Name(), "fleet registration: recording the fleet repository failed"); derr != nil {
+				log.Warn().Err(derr).Str("repo", created.Name()).Msg("fleet: removing an unrecorded fleet mount failed")
+			}
+			return FleetStatus{}, fleetErr(http.StatusInternalServerError, "record_failed", rerr.Error())
+		}
 		ri = created
 	}
 	if err := m.registerOwnRecord(ctx, ri); err != nil {

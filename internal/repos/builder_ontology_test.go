@@ -599,12 +599,13 @@ func TestRefreshDivergence_NeverAddsOrChangesRootAttributes(t *testing.T) {
 // divergence), which is exactly why the fleet's refresh is not that rule.
 const staleFleetYAML = "id: fleet\nname: Fleet\ntopics:\n  members:\n    description: d\n"
 
-// bootFleetRepo reboots a home whose one repo holds staleFleetYAML, with or
-// without the fleet root key file in <home>/fleet, and returns the mounted
-// repo and its agent branch.
+// bootFleetRepo reboots a home whose one repo holds staleFleetYAML and is
+// recorded as the instance's fleet repository, with or without the fleet root
+// key file in <home>/fleet, and returns the mounted repo and its agent branch.
 func bootFleetRepo(t *testing.T, master bool) (*RepoInstance, string) {
 	t.Helper()
 	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, staleFleetYAML)
+	recordOnlyRepoAsFleet(t, dir)
 	if master {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, fleetRootDirName), 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, fleetRootDirName, pki.RootKeyFile), []byte("key"), 0o600))
@@ -616,6 +617,19 @@ func bootFleetRepo(t *testing.T, master bool) (*RepoInstance, string) {
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri, "a registered fleet repository mounts at boot")
 	return ri, agentBranch
+}
+
+// recordOnlyRepoAsFleet records the one active repo of the stopped home dir
+// as its fleet repository, as RegisterFleet does.
+func recordOnlyRepoAsFleet(t *testing.T, dir string) {
+	t.Helper()
+	reg, err := OpenRegistry(filepath.Join(dir, "control.db"))
+	require.NoError(t, err)
+	defer reg.Close()
+	recs, err := reg.List(StateActive)
+	require.NoError(t, err)
+	require.Len(t, recs, 1, "fixture: one repo")
+	require.NoError(t, recordFleetRepo(reg.DB(), recs[0].UID))
 }
 
 // The fleet ontology is knomit's own: on the MASTER (the fleet root key file
