@@ -249,7 +249,7 @@ func TestVerifyInstanceChain_Revoked(t *testing.T) {
 	if _, err := f.verify(c, UsageClient); err != nil { // positive control: fine before revocation
 		t.Fatal(err)
 	}
-	if _, err := Revoke(f.dir, f.root, Revoked{Serial: c.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+	if _, err := revokeDir(f.dir, f.root, Revoked{Serial: c.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	crl, _ := LoadCRL(filepath.Join(f.dir, CRLFile))

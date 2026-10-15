@@ -141,13 +141,18 @@ func (f *Fleet) Install(t testing.TB, m Member, dir string) {
 // Revoke revokes m on the fleet root and copies the new CRL into each dir.
 func (f *Fleet) Revoke(t testing.TB, m Member, dirs ...string) {
 	t.Helper()
-	if _, err := pki.Revoke(f.Dir, f.Root, pki.Revoked{Serial: m.Cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(filepath.Join(f.Dir, pki.CRLFile))
+	current, err := pki.LoadCRL(filepath.Join(f.Dir, pki.CRLFile))
 	if err != nil {
 		t.Fatal(err)
 	}
+	rv, err := pki.RevokeSerial(f.Root, current, pki.Revoked{Serial: m.Cert.SerialNumber, At: time.Now()}, time.Now(), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pki.RecordRevocation(f.Dir, rv); err != nil {
+		t.Fatal(err)
+	}
+	b := rv.CRLPEM
 	for _, d := range dirs {
 		tmp := filepath.Join(d, "."+pki.CRLFile+".tmp")
 		if err := os.WriteFile(tmp, b, 0o600); err != nil {

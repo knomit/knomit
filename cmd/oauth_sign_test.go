@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -117,8 +118,18 @@ func revokeIssued(dir string) error {
 	if !ok {
 		return fmt.Errorf("serial %q", rec.Serial)
 	}
-	_, err = pki.Revoke(dir, root, pki.Revoked{Serial: serial, At: time.Now()}, time.Now().Add(time.Hour))
-	return err
+	// No crl.pem yet: the revocation signs CRL #1.
+	var current *x509.RevocationList
+	if c, err := pki.LoadCRL(filepath.Join(dir, pki.CRLFile)); err == nil {
+		current = c
+	} else if !errors.Is(err, pki.ErrCRLMissing) {
+		return err
+	}
+	rv, err := pki.RevokeSerial(root, current, pki.Revoked{Serial: serial, At: time.Now()}, time.Now(), time.Now().Add(time.Hour))
+	if err != nil {
+		return err
+	}
+	return pki.RecordRevocation(dir, rv)
 }
 
 func rootPub(t *testing.T, dir string) ed25519.PublicKey {

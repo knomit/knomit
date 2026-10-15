@@ -146,7 +146,7 @@ func (rc *rawConn) cutWithin(d time.Duration) bool {
 
 func (f fleet) revoke(t *testing.T, m member, instDir string) {
 	t.Helper()
-	if _, err := Revoke(f.dir, f.root, Revoked{Serial: m.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+	if _, err := revokeDir(f.dir, f.root, Revoked{Serial: m.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	f.publishCRL(t, instDir)

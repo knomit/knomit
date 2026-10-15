@@ -13,6 +13,24 @@ import (
 	"time"
 )
 
+// revokeDir is a revocation in a test fleet root directory, as the revoke
+// route does it against main: RevokeSerial from the CURRENT <dir>/crl.pem
+// (none: CRL #1), then RecordRevocation. It returns the new CRL's Number.
+func revokeDir(dir string, root Root, r Revoked, next time.Time) (*big.Int, error) {
+	current, err := LoadCRL(filepath.Join(dir, CRLFile))
+	if errors.Is(err, ErrCRLMissing) {
+		current, err = nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rv, err := RevokeSerial(root, current, r, time.Now(), next)
+	if err != nil {
+		return nil, err
+	}
+	return rv.Number, RecordRevocation(dir, rv)
+}
+
 // staleCRL signs a CRL whose NextUpdate is already past. IssueCRL cannot
 // produce one (ThisUpdate is always now), so the test builds it directly.
 func staleCRL(t *testing.T, root Root, serials ...*big.Int) *x509.RevocationList {
@@ -133,7 +151,7 @@ func TestRevoke_AppendsAndTheNextCRLCarriesEveryPriorEntry(t *testing.T) {
 		}
 		s, _ := new(big.Int).SetString(rec.Serial, 16)
 		serials = append(serials, s)
-		num, err := Revoke(dir, root, Revoked{Serial: s, At: time.Now(), Reason: "test"}, time.Now().Add(time.Hour))
+		num, err := revokeDir(dir, root, Revoked{Serial: s, At: time.Now(), Reason: "test"}, time.Now().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -147,7 +165,7 @@ func TestRevoke_AppendsAndTheNextCRLCarriesEveryPriorEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if crl.Number.Cmp(lastNum) != 0 {
-		t.Fatalf("crl.pem Number %v, Revoke returned %v", crl.Number, lastNum)
+		t.Fatalf("crl.pem Number %v, the revocation returned %v", crl.Number, lastNum)
 	}
 	for _, s := range serials {
 		if !IsRevoked(crl, s) {

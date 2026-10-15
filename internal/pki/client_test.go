@@ -69,7 +69,7 @@ func TestDial_RevokedServerIsRefused(t *testing.T) {
 	if _, err := dial(t, addr, dir, peer.keyPath); err != nil { // positive control
 		t.Fatal(err)
 	}
-	if _, err := Revoke(f.dir, f.root, Revoked{Serial: srvM.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+	if _, err := revokeDir(f.dir, f.root, Revoked{Serial: srvM.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	f.publishCRL(t, dir) // the CLIENT's CRL now lists the server

@@ -536,11 +536,8 @@ func (m *Manager) RevokeFleetMember(ctx context.Context, agentID, reason string)
 	out := FleetRevocation{AgentID: agentID, Serial: serial, CRLNumber: rv.Number.String(), Published: true}
 	// The master's own copies: its local audit log and CRL (what GET
 	// /fleet/root hands a new master), and its installed CRL.
-	if err := appendFleetLog(filepath.Join(m.fleetRootDir(), pki.RevokedLogFile), rv.Line); err != nil {
-		log.Warn().Err(err).Msg("fleet revoke: the local revocation log was not written")
-	}
-	if err := os.WriteFile(filepath.Join(m.fleetRootDir(), pki.CRLFile), rv.CRLPEM, 0o644); err != nil {
-		log.Warn().Err(err).Msg("fleet revoke: the local CRL copy was not written")
+	if err := pki.RecordRevocation(m.fleetRootDir(), rv); err != nil {
+		log.Warn().Err(err).Msg("fleet revoke: the local revocation log or CRL copy was not written")
 	}
 	if _, err := pki.InstallCRL(m.deps.Cfg.TLS.Dir, root.Cert, rv.CRLPEM); err != nil {
 		out.InstallError = err.Error()
@@ -550,18 +547,6 @@ func (m *Manager) RevokeFleetMember(ctx context.Context, agentID, reason string)
 	}
 	log.Info().Str("agent", agentID).Str("serial", serial).Msg("fleet: member revoked")
 	return out, nil
-}
-
-func appendFleetLog(path string, line []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(line); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
 }
 
 // DecommissionFleet ends the fleet (master only): the fleet repository here
