@@ -148,6 +148,64 @@ func TestFleetOrigin_AttachDecidesThePeerOnce(t *testing.T) {
 	}
 }
 
+// The Connect wizard's commit (a store swap carrying an origin) classifies
+// its origin like an attach: a peer's https URL with a token is refused by
+// name and nothing is stored; with no auth it is stored with method cert and
+// the derived git config holds the internal form.
+// SABOTAGE: Manager.Send not classifying evSwapStore -> the token swap
+// succeeds and the method stays "" -> red.
+func TestFleetOrigin_SwapDecidesThePeerOnce(t *testing.T) {
+	ctx := context.Background()
+	f := pkitest.New(t)
+	b := newFleetServer(t, f)
+	a := newFetcher(t, f)
+	url := "https://" + b.tlsAddr + "/git/kb"
+
+	ri, err := a.mgr.Create(ctx, repos.CreateSpec{Name: "local", Mode: "preset"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.mgr.Send(ctx, ri, repos.SwapStore(repos.SwapSpec{TempDB: copyOwnDB(t, a.mgr, ri),
+		Origin: repos.OriginSpec{URL: url, Branch: "main", AuthMethod: "token", AuthToken: "ghp_x"}}))
+	if !errors.Is(err, repos.ErrPeerCredential) {
+		t.Fatalf("swap with a token: %v, want ErrPeerCredential", err)
+	}
+	if o, err := a.mgr.Origins().Get(ri.UID()); err != nil || o != nil {
+		t.Fatalf("a refused swap stored %+v (%v)", o, err)
+	}
+	if n := b.hdrs.count("tls"); n != 0 {
+		t.Fatalf("%d requests carried an Authorization header to the peer: %v", n, b.hdrs.hits)
+	}
+
+	if _, err := a.mgr.Send(ctx, ri, repos.SwapStore(repos.SwapSpec{TempDB: copyOwnDB(t, a.mgr, ri),
+		Origin: repos.OriginSpec{URL: url, Branch: "main"}})); err != nil {
+		t.Fatalf("swap: %v", err)
+	}
+	requireCertOrigin(t, a.mgr, ri, url)
+	if n := b.hdrs.count("tls"); n != 0 {
+		t.Fatalf("%d requests carried an Authorization header to the peer: %v", n, b.hdrs.hits)
+	}
+}
+
+// copyOwnDB checkpoints ri and copies its database: a valid swap source with
+// the same root commit.
+func copyOwnDB(t *testing.T, mgr *repos.Manager, ri *repos.RepoInstance) string {
+	t.Helper()
+	var cerr error
+	if err := ri.WithRead(func(s *store.Service) { cerr = s.Checkpoint() }); err != nil || cerr != nil {
+		t.Fatalf("checkpoint: %v %v", err, cerr)
+	}
+	raw, err := os.ReadFile(mgr.RepoPath(ri.UID()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(t.TempDir(), "swap.db")
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return tmp
+}
+
 // A stored cert origin is never re-classified: once its peer is revoked (or
 // this instance's trust is uninstalled) the sync round fails with the named
 // error, the method stays cert, and go-git's stock https transport is never
