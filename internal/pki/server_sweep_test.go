@@ -47,6 +47,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -407,8 +408,18 @@ func TestServer_UninstallTakesTheListenerOutOfTheFleetWithoutARestart(t *testing
 	if !rc.cutWithin(2 * time.Second) {
 		t.Fatalf("one tick after the uninstall, the peer's connection is still open\n%s", ss.rec)
 	}
-	if !ss.rec.has("tls_uninstalled") || !ss.rec.has("tls_conn_closed") {
-		t.Fatalf("want the uninstall and the close logged:\n%s", ss.rec)
+	if !ss.rec.has("tls_uninstalled") {
+		t.Fatalf("want the uninstall logged:\n%s", ss.rec)
+	}
+	// The close names the uninstall, not a generic "no certificate".
+	closedForUninstall := false
+	for _, l := range strings.Split(ss.rec.String(), "\n") {
+		if strings.Contains(l, "tls_conn_closed") && strings.Contains(l, "no fleet trust material is installed") {
+			closedForUninstall = true
+		}
+	}
+	if !closedForUninstall {
+		t.Fatalf("want the close logged with the uninstall as its reason:\n%s", ss.rec)
 	}
 	if body, err := get(f.clientFor(t, peer, nil), ss.addr); err == nil {
 		t.Fatalf("a fresh connection after the uninstall was served (%q)\n%s", body, ss.rec)
