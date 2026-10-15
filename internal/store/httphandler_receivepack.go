@@ -428,8 +428,9 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 // corrupt the signature and the same merge is admitted (the S2 ruling in
 // judgeSigner). That is harmless, because a clean merge carries no content
 // beyond its parents, and its parents are either new in this push (judged
-// on their own) or commits the host already holds; the check matters for
-// every other signed commit.
+// on their own) or held commits reachable from main or an admitted agent
+// branch (on the fleet repository newCommits judges any other held commit as
+// if new); the check matters for every other signed commit.
 //
 // Only the commits newCommits returns reach this: those the push sent, and on
 // the fleet repository also every held commit that is NOT reachable from main

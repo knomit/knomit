@@ -400,14 +400,16 @@ func TestFleetMaster_RoundPublishesAMainCreateFailedToPublish(t *testing.T) {
 
 // A fetched member tip that edits ANOTHER member's folder is refused, as a
 // pushed one is: the fetch judge runs the fleet repository's record rules
-// (selfRoot is the fleet's fact root). Today that is rule A's shape check
-// (a joiner may touch only members/<own id>/); with the record-owner rule
-// (#523) the rule is not-owner. The rule name is not asserted.
+// (selfRoot is the fleet's fact root). For a joiner, as here, that is rule
+// A's shape check (a joiner may touch only members/<own id>/); for an
+// existing member it is the record-owner rule (not-owner), pinned by
+// TestFleetMaster_FetchedEditByAnExistingMemberIsRefusedNotOwner. The rule
+// name is not asserted.
 //
-// Alpha must still be a JOINER when the edit is judged (on this base rule
-// A's shape check binds a joiner only), so the control admits alpha's record
-// while the merger is inert (the root key is out): main never gains the
-// record, whatever the merger's timing.
+// This test pins the joiner case, so alpha must still be a JOINER when the
+// edit is judged: the control admits alpha's record while the merger is
+// inert (the root key is out), and main never gains the record, whatever the
+// merger's timing.
 // SABOTAGE: pass selfRoot "" to newJudge in judgeIncoming -> rule A does not
 // run and even alpha's own record is refused (the control), red.
 func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
@@ -444,6 +446,48 @@ func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
 	require.Empty(t, localTip(t, f.mri, "agent/alpha"),
 		"the branch's latest verdict is a refusal: its local branch, admitted earlier, is demoted (N3)")
 	require.NotEqual(t, admitted, r.Tip)
+}
+
+// An EXISTING member's fetched edit of another member's folder is refused
+// not-owner by the master's fetch judge (the record-owner rule, #523): alpha
+// joins, the master admits, merges and publishes alpha's record, so alpha is
+// a member on main. Alpha then writes under beta's folder and pushes; the
+// master's round refuses the tip naming the rule and the path, and the edit
+// never reaches the forge's main, not even after a merger run and another
+// round.
+// SABOTAGE: in store.judge.judgeSigner return (Refusal{}, true) in place of
+// j.recordOwner(c, id) -> the edit is admitted and merged, red.
+func TestFleetMaster_FetchedEditByAnExistingMemberIsRefusedNotOwner(t *testing.T) {
+	ctx := context.Background()
+	alpha := testsigner.Named("alpha")
+	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
+	_, ari := f.join(t, "alpha", alpha)
+	round(t, f.mri)
+	settleMerger(t, f.mri)
+	round(t, f.mri)
+	require.True(t, f.onForgeMain(t, memberRecordPath("kb", "alpha")), "fixture: alpha is a member on main")
+	require.NotContains(t, f.mri.peers.Refusals(), "agent/alpha", "fixture: alpha's record was admitted")
+
+	const betaPath = "kb/members/beta/0000beta.md"
+	require.NoError(t, ari.WithRead(func(svc *store.Service) {
+		_, err := svc.Facts().WriteFact(ctx, ari.AgentBranch(), betaPath,
+			"---\nkind: pragmatic\ntype: policy\n---\n# beta\n\nnot alpha's to write\n", "beta's folder", "created")
+		require.NoError(t, err)
+	}))
+	round(t, ari)
+	require.NoError(t, exec.Command("git", "-C", f.bare, "cat-file", "-e", "agent/alpha:"+betaPath).Run(),
+		"fixture: the edit is on the forge")
+
+	round(t, f.mri)
+	r := f.mri.peers.Refusals()["agent/alpha"]
+	require.Equal(t, f.rev(t, "agent/alpha"), r.Tip, "the refusal is of the pushed tip")
+	require.Contains(t, r.Reason, "not-owner")
+	require.Contains(t, r.Reason, `agent "alpha" changes `+betaPath)
+	require.NotContains(t, r.Reason, "no-record", "alpha is judged as a member, not a joiner")
+
+	settleMerger(t, f.mri)
+	round(t, f.mri)
+	require.False(t, f.onForgeMain(t, betaPath), "the edit never reaches the forge's main")
 }
 
 // R-visibility applies to a member's FIRST clone too (PR #524 S2): beta's
@@ -514,8 +558,9 @@ func editOwnRecord(t *testing.T, ri *RepoInstance, id, line string) {
 // of another member's folder) and then Y (an edit of its own record). Y is
 // admissible on its own: the control judges a branch of the record and such
 // an edit, without promoting it, so main never gains alpha's record and
-// alpha stays a joiner (rule A's shape check binds a joiner; an existing
-// member's edit of another folder is the record-owner rule's, #523). The tip
+// alpha stays a joiner, so X is refused by rule A's shape check (an
+// existing member's X would be refused not-owner instead; that case is
+// TestFleetMaster_FetchedEditByAnExistingMemberIsRefusedNotOwner). The tip
 // Y is refused, naming X, and no local branch is left.
 // SABOTAGE: in store.JudgePeerBranch judge the tip commit only -> Y alone is
 // admitted and agent/alpha becomes a local branch, red.
