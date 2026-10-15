@@ -2,7 +2,9 @@ package repos
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/pem"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
@@ -372,4 +374,77 @@ func TestAgentBranchAlreadyPushed_FleetIsNotOfferedToAdopt(t *testing.T) {
 	require.Contains(t, repo.Error(), "adopt that branch")
 	require.NotContains(t, flt.Error(), "adopt")
 	require.Contains(t, flt.Error(), "rollback deletes that branch on the forge")
+}
+
+// B1 (PR #525 review): an enroll over an id that already has a leaf on main.
+// Refused while that leaf is not on main's CRL (`enrolled`), and for a
+// different key at any time (`rekey_unsupported`, §1.5: a lost or rotated key
+// is a fresh start under a new id); the SAME key once its old leaf is
+// revoked is the §1.5 Rejoin, admitted. A refusal changes nothing: the leaf
+// on main and the local audit log are as before. Enroll, enroll, revoke never
+// leaves a serial that no revoke can reach: every leaf ever on main ends on
+// its CRL.
+// SABOTAGE: drop the `enrolled` refusal -> the second enroll replaces serial
+// A, the revoke reaches only B -> red; drop the key comparison -> the other
+// key is enrolled after the revoke -> red.
+func TestFleetMembership_EnrollOverAnExistingID(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	leafOnMain := func() string {
+		out, err := runGitOut(f.bare, "show", "main:artifacts/fleet/certs/alpha.pem")
+		require.NoError(t, err)
+		return out
+	}
+	issuedLines := func() int {
+		b, err := os.ReadFile(filepath.Join(f.master.fleetRootDir(), pki.IssuedLogFile))
+		require.NoError(t, err)
+		return strings.Count(string(b), "\n")
+	}
+	refused := func(key, want string) {
+		t.Helper()
+		leaf, lines := leafOnMain(), issuedLines()
+		_, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine(key))
+		status, code := fleetCode(t, err)
+		require.Equal(t, http.StatusConflict, status)
+		require.Equal(t, want, code)
+		require.Equal(t, leaf, leafOnMain(), "a refused enroll leaves the leaf on main as it was")
+		require.Equal(t, lines, issuedLines(), "and logs no issuance")
+	}
+	crlOnMain := func() *x509.RevocationList {
+		out, err := runGitOut(f.bare, "show", "main:artifacts/fleet/crl.pem")
+		require.NoError(t, err)
+		p := filepath.Join(t.TempDir(), "crl.pem")
+		require.NoError(t, os.WriteFile(p, []byte(out), 0o644))
+		crl, err := pki.LoadCRL(p)
+		require.NoError(t, err)
+		return crl
+	}
+
+	a, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"))
+	require.NoError(t, err)
+	require.True(t, a.Published, a.PublishError)
+
+	refused("alpha", "enrolled")
+	refused("alpha-other-key", "rekey_unsupported")
+
+	rv, err := f.master.RevokeFleetMember(ctx, "alpha", "rejoin")
+	require.NoError(t, err)
+	require.Equal(t, a.Serial, rv.Serial, "the revoke reaches the first leaf")
+
+	refused("alpha-other-key", "rekey_unsupported")
+
+	b, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"))
+	require.NoError(t, err, "the same key with its old leaf on the CRL is the rejoin")
+	require.True(t, b.Published, b.PublishError)
+	require.NotEqual(t, a.Serial, b.Serial)
+
+	rv, err = f.master.RevokeFleetMember(ctx, "alpha", "left again")
+	require.NoError(t, err)
+	require.Equal(t, b.Serial, rv.Serial)
+	crl := crlOnMain()
+	for _, s := range []string{a.Serial, b.Serial} {
+		n, ok := new(big.Int).SetString(s, 16)
+		require.True(t, ok)
+		require.True(t, pki.IsRevoked(crl, n), "serial %s is on main's CRL", s)
+	}
 }

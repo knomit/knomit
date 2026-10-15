@@ -223,6 +223,9 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine string
 	if f.PKI == nil || f.PKI.CRL == nil {
 		return FleetEnrollment{}, errors.New("fleet enroll: the fleet's main holds no usable CRL")
 	}
+	if err := refuseEnrolledID(f.PKI, agentID, pub); err != nil {
+		return FleetEnrollment{}, err
+	}
 	email, err := pki.AgentEmail(agentID)
 	if err != nil {
 		return FleetEnrollment{}, err
@@ -236,15 +239,21 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine string
 	if err != nil {
 		return FleetEnrollment{}, err
 	}
-	certPEM, rec, err := pki.IssueInstance(m.fleetRootDir(), root, pub, email, fleetLeafValidity)
+	is, err := pki.IssueLeaf(root, pub, email, fleetLeafValidity, time.Now())
 	if err != nil {
 		return FleetEnrollment{}, err
 	}
+	certPEM, rec := is.CertPEM, is.Record
 	if err := m.writeFleetArtifacts(ctx, ri, map[string]string{
 		layout.LeafPath(agentID):                    string(certPEM),
 		strings.Replace(issued, "*", rec.Serial, 1): string(certPEM),
 	}, "fleet: "+agentID+"'s certificate (serial "+rec.Serial+")"); err != nil {
 		return FleetEnrollment{}, err
+	}
+	// The audit line only for a leaf the fleet repository holds (revoke
+	// finds the serial in certs/<id>.pem on main, not in this log).
+	if err := pki.RecordIssuance(m.fleetRootDir(), is); err != nil {
+		log.Warn().Err(err).Str("agent", agentID).Str("serial", rec.Serial).Msg("fleet enroll: the local issuance log was not written")
 	}
 	rootID, err := pki.RootID(root.Cert)
 	if err != nil {
@@ -261,6 +270,29 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine string
 	}
 	log.Info().Str("agent", agentID).Str("serial", rec.Serial).Msg("fleet: member enrolled")
 	return out, nil
+}
+
+// refuseEnrolledID refuses an enroll of agentID while main holds a leaf for
+// it that a revoke could still reach: the enroll would replace certs/<id>.pem,
+// revoke finds the serial only there, so the old leaf could never be revoked.
+// A different key under an id that has a leaf is refused always (§1.5: a lost
+// or rotated key is a fresh start under a new agent id). The same key with
+// its old leaf on main's CRL is the §1.5 Rejoin.
+func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) error {
+	leaf, err := p.Cert(agentID)
+	if err != nil {
+		return err
+	}
+	if leaf == nil {
+		return nil
+	}
+	if !pub.Equal(leaf.PublicKey) {
+		return fleetErr(http.StatusConflict, "rekey_unsupported", "agent "+agentID+" already has a certificate for another key: a lost or rotated key is a fresh start under a new agent id (a same-id rekey is not supported)")
+	}
+	if !pki.IsRevoked(p.CRL, leaf.SerialNumber) {
+		return fleetErr(http.StatusConflict, "enrolled", "agent "+agentID+" is enrolled (serial "+leaf.SerialNumber.Text(16)+" is not revoked): revoke it first (POST /api/v1/fleet/revoke)")
+	}
+	return nil
 }
 
 // JoinFleet joins the fleet at spec.URL with the bundle the master's enroll
