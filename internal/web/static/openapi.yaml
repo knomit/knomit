@@ -2275,7 +2275,8 @@ paths:
         forge, or the hub when this master is not it), that origin's URL, and
         `address` is refused (`address_not_applicable`, 422). When this
         instance is the hub, `https://<address>/git/<repo>` at one of this
-        instance's `external_addresses`: with exactly one configured,
+        instance's `external_addresses`: with none configured, the enroll is
+        refused (`addresses_required`, 422); with exactly one configured,
         `address` may be omitted; with several, it is required
         (`address_required`, 422, whose `choices` lists them); one that is not
         configured is `address_unknown` (422, with `choices`), and one that is
@@ -2316,7 +2317,7 @@ paths:
         "403": { description: Not the local authenticated listener }
         "409": { description: "not_registered, not_master, own_id, enrolled or rekey_unsupported" }
         "422":
-          description: "invalid_agent_id, invalid_key, address_required, address_unknown, address_not_https or address_not_applicable; address_required and address_unknown carry choices"
+          description: "invalid_agent_id, invalid_key, addresses_required, address_required, address_unknown, address_not_https or address_not_applicable; address_required and address_unknown carry choices"
           content:
             application/problem+json:
               schema:
@@ -2348,7 +2349,10 @@ paths:
         bundle's root (`root_differs`, 422), it is recorded (it mounts again
         after a restart), and this instance's record (state `active`) is
         written and pushed ONCE. A push the fleet refuses (`join_refused`,
-        409: on a knomit host, a leaf not on `main` yet) or any other refusal
+        409: on a knomit host, a leaf not on `main` yet), a host of the
+        fleet reached that refuses the bundle's certificate, or whose
+        certificate the bundle refuses (`bundle_refused`, 422: ask the
+        fleet's master for a new bundle), or any other refusal
         (`clone_failed`, 502) undoes all of it: no repository, no recorded
         uid, no installed material, no agent branch left on the origin,
         state standalone. 200 with state `registered` and the installed
@@ -2363,7 +2367,7 @@ paths:
               type: object
               required: [bundle]
               properties:
-                bundle: { type: string, description: "PEM, as POST /fleet/enroll returned it; it names the fleet repository URL" }
+                bundle: { type: string, description: "The bundle document POST /fleet/enroll returned; it names the fleet repository URL" }
                 auth_method: { type: string, description: "The joiner's own credential for a forge-hosted fleet only" }
                 auth_token: { type: string }
       responses:
@@ -2381,7 +2385,7 @@ paths:
         "400": { description: bundle_required }
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present, trust_installed, join_refused or create_unfinished" }
-        "422": { description: "bundle_invalid, key_mismatch, agent_mismatch, auth_invalid, not_a_fleet or root_differs" }
+        "422": { description: "bundle_invalid, key_mismatch, agent_mismatch, auth_invalid, bundle_refused, not_a_fleet or root_differs" }
         "502": { description: clone_failed }
   /fleet/join:check:
     post:
@@ -2400,9 +2404,11 @@ paths:
         A server of that fleet is `hosting: master` (a credential for it is
         `auth_invalid`); anything else is `hosting: forge`, probed with the
         joiner's own `auth_method`/`auth_token` (`auth_required` when it
-        refuses them, with `detail`). A host that cannot be reached, or a
-        server of the fleet that refuses this certificate, is `unreachable`
-        (502). The operator compares `root_fingerprint` with the one the
+        refuses them, with `detail`). A host that cannot be reached is
+        `unreachable` (502). A host that is reached but refuses the bundle's
+        certificate (typically a bundle revoked since it was issued), or whose
+        certificate the bundle refuses, is `bundle_refused` (422): ask the
+        fleet's master for a new bundle. The operator compares `root_fingerprint` with the one the
         master gave by another channel BEFORE joining (#299).
       operationId: checkFleetJoin
       requestBody:
@@ -2435,7 +2441,7 @@ paths:
         "400": { description: bundle_required }
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present or trust_installed" }
-        "422": { description: "bundle_invalid, key_mismatch, agent_mismatch or auth_invalid" }
+        "422": { description: "bundle_invalid, key_mismatch, agent_mismatch, auth_invalid or bundle_refused" }
         "502": { description: unreachable }
   /fleet/leave:
     post:

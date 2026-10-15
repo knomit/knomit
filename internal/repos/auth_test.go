@@ -176,6 +176,18 @@ func TestResolveAuth_CertIsTransportLevel(t *testing.T) {
 	require.Nil(t, auth)
 }
 
+// cert is never a caller's input, whatever the URL: ResolveOrigin refuses it
+// by name before classifying, so no layer behind the edge stores a cert
+// origin knomit did not decide (the edge's validateURLAuth refuses it first;
+// this pins the repos layer on its own).
+func TestResolveOrigin_CertIsNotAnInput(t *testing.T) {
+	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
+	for _, u := range []string{"https://github.com/o/r.git", "https://h:8443/git/kb", "ssh://git@h/kb"} {
+		_, err := m.ResolveOrigin(context.Background(), OriginSpec{URL: u, AuthMethod: "cert"})
+		require.ErrorIs(t, err, ErrCertNotAnInput, u)
+	}
+}
+
 // The go-git URL is keyed on the stored METHOD, never on the URL: cert hands
 // go-git the internal fleet form of the same https URL and no go-git auth;
 // every other method the URL unchanged. A URL that already carries the

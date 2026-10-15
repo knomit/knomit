@@ -404,6 +404,12 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoine
 	if errors.Is(err, ErrPeerCredential) {
 		return refuse(nil, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", err.Error()))
 	}
+	// On the clone path ErrOriginUnreachable comes only from ResolveOrigin's
+	// classification: the hub reached but refusing (a revoked bundle) is
+	// bundle_refused, as join:check says.
+	if errors.Is(err, ErrOriginUnreachable) && !errors.Is(err, pki.ErrOriginUnreachable) {
+		return refuse(nil, joinReachErr(originHost(b.FleetURL), err))
+	}
 	if err != nil {
 		return refuse(nil, fleetErr(http.StatusBadGateway, "clone_failed", err.Error()))
 	}
@@ -498,8 +504,10 @@ type FleetJoinCheck struct {
 // anything (the material is written to a private temporary directory that is
 // removed before returning). An instance of that fleet is hosting "master"
 // (a credential for it is auth_invalid); anything else is a forge, probed
-// with the joiner's credential. A host that cannot be reached, or a peer that
-// refuses, is unreachable (502). It writes nothing.
+// with the joiner's credential (cert as input is auth_invalid). A host that
+// cannot be reached is unreachable (502); a host reached that refuses the
+// bundle, or whose certificate this bundle refuses, is bundle_refused (422,
+// see joinReachErr). It writes nothing.
 func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (FleetJoinCheck, error) {
 	defer m.lockFleetOp()()
 	db := m.ControlDB()
@@ -509,6 +517,9 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 	b, err := m.joinPreflight(db, spec.Bundle)
 	if err != nil {
 		return FleetJoinCheck{}, err
+	}
+	if spec.AuthMethod == "cert" {
+		return FleetJoinCheck{}, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", ErrCertNotAnInput.Error())
 	}
 	agent := pki.AgentIDOfEmail(b.Leaf.EmailAddresses[0]) // joinPreflight checked it is this instance's
 	rootID, _ := pki.RootID(b.Root)
@@ -532,7 +543,7 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 	}
 	peer, err := pki.ClassifyOrigin(cctx, tmp, m.deps.KeyPath, b.FleetURL)
 	if err != nil {
-		return FleetJoinCheck{}, fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+out.Host+": "+err.Error())
+		return FleetJoinCheck{}, joinReachErr(out.Host, err)
 	}
 	if peer {
 		if spec.AuthMethod != "" && spec.AuthMethod != "none" || spec.AuthToken != "" {
@@ -542,7 +553,10 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 		return out, nil
 	}
 	out.Hosting = HostingForge
-	res, err := m.ProbeOriginRefs(ctx, OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken, decided: true})
+	// Not marked decided: ResolveOrigin judges the joiner's own auth like any
+	// probe's (trust_installed guarantees this instance holds no fleet root,
+	// so it dials nothing here).
+	res, err := m.ProbeOriginRefs(ctx, OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken})
 	if err != nil {
 		return FleetJoinCheck{}, err
 	}
@@ -553,6 +567,19 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 		return FleetJoinCheck{}, fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+out.Host+": "+res.Detail)
 	}
 	return out, nil
+}
+
+// joinReachErr names a failed classification of the bundle's fleet URL: a
+// host that could not be reached (pki.ErrOriginUnreachable) is unreachable
+// (502); anything else means the host WAS reached and the fleet's TLS
+// exchange with the bundle's certificate failed (our verifier refused the
+// host, or the host refused the certificate: typically a bundle revoked
+// since it was issued), which is bundle_refused (422).
+func joinReachErr(host string, err error) *FleetError {
+	if errors.Is(err, pki.ErrOriginUnreachable) {
+		return fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+host+": "+err.Error())
+	}
+	return fleetErr(http.StatusUnprocessableEntity, "bundle_refused", "the fleet at "+host+" refused this bundle ("+err.Error()+"): ask the fleet's master for a new bundle")
 }
 
 // originHost is the host an origin URL names: host[:port] of a URL, the
