@@ -188,8 +188,8 @@ func (n *NativeService) GetIdentity() (FleetIdentity, error) {
 	return out, nil
 }
 
-// PublicKeyLine returns the line to hand the fleet operator for `knomit
-// identity enroll --pubkey`. Gated to the Settings window, like everything
+// PublicKeyLine returns the line to hand the fleet's master for its enroll
+// (POST /api/v1/fleet/enroll, public_key). Gated to the Settings window, like everything
 // that feeds enrolment.
 func (n *NativeService) PublicKeyLine(ctx context.Context) (string, error) {
 	if !callerIsSettings(ctx) {

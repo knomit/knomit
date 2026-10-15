@@ -253,7 +253,7 @@ func RootID(root *x509.Certificate) (string, error) {
 
 // watermarks is the on-disk form of crl.number: the highest CRL Number ever
 // accepted, PER ROOT. A root's CRL numbering is its own; a different root
-// starts over at 1. Keying by root means `install --replace-root` can adopt a
+// starts over at 1. Keying by root means an install of another root can adopt a
 // new fleet's CRL #1 without forgetting the old fleet's watermark, so moving
 // A -> B -> A with an OLD fleet-A bundle is still refused as a rollback.
 type watermarks map[string]string // RootID -> decimal CRL Number

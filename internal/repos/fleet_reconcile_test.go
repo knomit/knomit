@@ -214,7 +214,7 @@ func TestFleetRecord_BootReconcile(t *testing.T) {
 }
 
 // F10-3: the reconcile keeps state as the record has it, whatever it is.
-// Only registering and unregistering change state.
+// Only a join (active) and a leave (left) change state.
 func TestFleetRecord_RefreshKeepsStateAndNotes(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")

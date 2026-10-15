@@ -185,7 +185,7 @@ func renderCapabilities(c map[string]string) string {
 // AdvertisedDiff names the advertised fields (key, host, branch, addresses,
 // git, capabilities) in which m and o differ, in record order; nil when none.
 // Agent, state and notes are NOT advertised: the instance never rewrites them
-// on its own (state changes only by registering and unregistering).
+// on its own (state changes only by a join, active, and a leave, left).
 func (m Member) AdvertisedDiff(o Member) []string {
 	var d []string
 	if !(m.Key == nil && o.Key == nil) && !SameKey(m.Key, o.Key) {

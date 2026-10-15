@@ -95,7 +95,7 @@ func (f fleet) enrollWindow(t *testing.T, host string, notBefore, notAfter time.
 	return member{keyPath: keyPath, pub: pub, certPEM: certPEM(der), cert: c}
 }
 
-// install writes what `knomit identity install` writes: instance.crt,
+// install writes what InstallBundle writes: instance.crt,
 // root.crt, crl.pem.
 func (f fleet) install(t *testing.T, m member) string {
 	t.Helper()
@@ -494,7 +494,7 @@ func (f fleet) Revoke(t *testing.T, m member, dirs ...string) {
 	}
 }
 
-// `knomit identity install --replace-root` against a RUNNING server. The CRL
+// An install of another fleet's root against a RUNNING server. The CRL
 // watermark belongs to a root: install resets crl.number on disk, and the
 // reloader must take the new root's watermark from there rather than keep
 // the old fleet's in memory — or it rejects the new fleet's CRL #1 as a
@@ -517,7 +517,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 		t.Fatalf("control: fleet A peer before the move: %v", err)
 	}
 
-	// Exactly what installBundle --replace-root writes, in its order. It no
+	// Exactly what InstallBundle writes for another root, in its order. It no
 	// longer removes crl.number: fleet A's watermark must SURVIVE the move.
 	fb := newFleet(t)
 	certB, _, err := IssueInstance(fb.dir, fb.root, srvM.pub, "server@agents.knomit.io", time.Hour)
@@ -540,7 +540,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 
 	peerB := fb.enroll(t, "peer-b")
 	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
-		t.Fatalf("fleet B peer refused after --replace-root, no restart: %v\nserver log:\n%s", err, rec)
+		t.Fatalf("fleet B peer refused after the root replace, no restart: %v\nserver log:\n%s", err, rec)
 	}
 	// Fleet A's certificate, presented by a client that TRUSTS the server's
 	// new root, so only the SERVER can be the one refusing it.

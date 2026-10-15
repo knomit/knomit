@@ -133,9 +133,9 @@ func TestFleetReserved_RestoreRefused(t *testing.T) {
 }
 
 // The fleet repository is never archived or deleted through the generic
-// doors, in any fleet state (the unregistering escape hatch is gone too).
-// SABOTAGE: restore the state switch in guardFleetRemoval -> the standalone
-// and unregistering rows archive it -> red.
+// doors, in any fleet state (leave and decommission remove it).
+// SABOTAGE: restore a state switch in guardFleetRemoval -> the standalone
+// row archives it -> red.
 func TestFleetReserved_ArchiveAndDeleteRefusedInEveryState(t *testing.T) {
 	dir := t.TempDir()
 	m := newFleetManager(t, dir)
@@ -387,7 +387,7 @@ func seedFleetRemoteWithRoot(t *testing.T, bare, ontYAML string, rootPEM []byte)
 }
 
 // installFleetRoot copies root's key and certificate into m's <home>/fleet,
-// as `knomit identity init-root` leaves them.
+// as a fleet create (or PUT /api/v1/fleet/root) leaves them.
 func installFleetRoot(t *testing.T, m *Manager, root *pkitest.Fleet) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(m.fleetRootDir(), 0o700))

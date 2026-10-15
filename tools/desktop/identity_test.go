@@ -185,7 +185,7 @@ func TestFleetIdentity_SettingsWindowCarriesTheCheckedName(t *testing.T) {
 
 // The binding is a front-end for pki.InstallBundle and nothing else: the
 // files it leaves are byte- and mode-identical to the ones pki (and so
-// `knomit identity install`, which calls the same function) leaves for the
+// a join, which calls the same function) leaves for the
 // same bundle.
 func TestFleetIdentity_InstallWritesWhatPKIWrites(t *testing.T) {
 	home, keyPath := fleetHome(t)

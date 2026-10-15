@@ -739,8 +739,7 @@ func (m *Manager) DeleteRepo(name, reason string) error {
 }
 
 // deleteRepo is DeleteRepo without the fleet guard: the fleet code uses it
-// (the unregister path, once the departure has been pushed, sets the fleet
-// state itself).
+// (leave, decommission and a refused join set the fleet state themselves).
 func (m *Manager) deleteRepo(name, reason string) error {
 	info, err := m.archive(name, ArchiveReason{Source: ArchiveBySystem, Reason: reason})
 	if err != nil {

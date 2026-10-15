@@ -378,7 +378,7 @@ func (r *reloader) parse(rawCert []byte, errC error, rawRoot []byte, errR error,
 // snapshot current.
 //
 // The watermark is per root because a root's CRL numbering is its own: after
-// `install --replace-root` the new fleet's CRL #1 is not a rollback, while an
+// an install of another root the new fleet's CRL #1 is not a rollback, while an
 // older CRL of a root seen before still is — including one re-installed after
 // a detour through another fleet.
 //

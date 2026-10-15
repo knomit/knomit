@@ -7,9 +7,10 @@ package pki
 // late (and at once when the connection is first tracked). "Would be
 // accepted" is VerifyInstanceChain against the current snapshot, the same
 // check VerifyConnection runs, so the invariant cuts on revocation, on the
-// peer's certificate expiring mid-connection, and on `install --replace-root`
-// moving this instance to another fleet. The first two are tested here; the
-// third follows from the same check and needs no path of its own.
+// peer's certificate expiring mid-connection, on an install of another root
+// moving this instance to another fleet, and on Uninstall. The first two and
+// the last are tested here; the third follows from the same check and needs
+// no path of its own.
 //
 // Every test here talks HTTP/1.1 by hand over a raw *tls.Conn. http.Transport
 // silently retries an idempotent request on a FRESH connection when a reused

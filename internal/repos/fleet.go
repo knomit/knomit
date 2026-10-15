@@ -249,8 +249,8 @@ func (m *Manager) originOf(ri *RepoInstance) (*Origin, error) {
 // outcome. The sync loop calls fleetPushed with its own pushes, which is the
 // retry. This push is one-shot: it neither consults nor changes the loop's
 // circuit breakers. The retry DOES ride them: while the loop's push breaker is
-// open the loop does not push, so a pending register or unregister completes
-// only at the breaker's next probe — up to 30 minutes later (breakerMaxOpen).
+// open the loop does not push, so a pending publish (a forge create whose
+// main is not pushed yet, state registering) completes only at the breaker's next probe — up to 30 minutes later (breakerMaxOpen).
 func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) error {
 	perr := m.pushAgentBranch(ctx, ri)
 	if perr == nil {

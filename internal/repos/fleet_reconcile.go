@@ -126,15 +126,14 @@ func (m *Manager) writeRecord(ctx context.Context, ri *RepoInstance, rec fact.Me
 // fields it changed (nil: the record was current, nothing written).
 //
 // It never touches another member's record, and it is never called from a
-// knowledge base's write path: only at boot (fleetBootReconcile) and on a
-// re-registration with the same fleet (RegisterFleet).
+// knowledge base's write path: only at boot (fleetBootReconcile).
 func (m *Manager) refreshOwnRecord(ctx context.Context, ri *RepoInstance) ([]string, error) {
 	cur, found, err := m.ownRecordAt(ri, ri.AgentBranch())
 	if err != nil {
 		return nil, err
 	}
 	if !found {
-		return nil, fmt.Errorf("fleet: this instance's member record is missing on %s; re-register to write it", ri.AgentBranch())
+		return nil, fmt.Errorf("fleet: this instance's member record is missing on %s; leave (POST /api/v1/fleet/leave) and join again to write it", ri.AgentBranch())
 	}
 	want := m.advertised()
 	changed := cur.Member.AdvertisedDiff(want)
@@ -152,9 +151,9 @@ func (m *Manager) refreshOwnRecord(ctx context.Context, ri *RepoInstance) ([]str
 // fleetBootReconcile runs once per boot, after Start opened the repositories:
 // when this instance is registered, bring its own member record up to date
 // with the current config and binary (one commit, or none), and let the
-// ordinary sync loop push it. Standalone, registering, unregistering and
-// read-only instances write nothing. A failure is a WARN and is retried at
-// the next boot or re-registration; it never affects startup.
+// ordinary sync loop push it. Standalone, registering and read-only
+// instances write nothing. A failure is a WARN and is retried at the next
+// boot; it never affects startup.
 func (m *Manager) fleetBootReconcile(ctx context.Context) {
 	row, err := m.fleetDB()
 	if err != nil {

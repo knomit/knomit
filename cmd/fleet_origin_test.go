@@ -265,7 +265,7 @@ func keySigner(t *testing.T, path string) ssh.Signer {
 }
 
 // newFleetFetcherHome enrolls a fresh key in f and installs its files, as
-// `knomit identity install` would, returning the dir, key and principal.
+// a join's InstallBundle would, returning the dir, key and principal.
 func newFleetFetcherHome(t *testing.T, f *pkitest.Fleet, host string) (dir, key string, m pkitest.Member, principal string) {
 	t.Helper()
 	home := t.TempDir()

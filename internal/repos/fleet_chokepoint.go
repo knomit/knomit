@@ -24,7 +24,7 @@ import (
 //     restore, a swapped store and boot. Only a mount opened by the fleet
 //     code (CreateSpec.fleetDoor) or, at boot, THIS instance's recorded
 //     fleet repository (control.db instance_fleet_repo, written by
-//     RegisterFleet) passes (RepoInstance.fleetDoor). Any other registered
+//     CreateFleet and JoinFleet) passes (RepoInstance.fleetDoor). Any other registered
 //     repo whose ontology is or became the fleet's (an upstream switch that
 //     arrived by sync) is refused and listed unavailable with
 //     CauseFleetConflict; it is not the fleet repository, so it archives and

@@ -110,7 +110,7 @@ type RepoInstance struct {
 	// production constructor has to uphold it itself.
 	subscribed bool
 	// fleetDoor admits an ontology with id `fleet` at Identify: the mount was
-	// opened by knomit's fleet code (RegisterFleet), or it is a registered
+	// opened by knomit's fleet code (fleet create or join), or it is a registered
 	// repo mounted at boot. Every other mount of a fleet-id store is refused
 	// there with ErrFleetOntologyReserved (fleet_chokepoint.go). Fixed for the
 	// instance's whole life, so a later walk (an origin change) re-admits it.

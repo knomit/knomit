@@ -312,7 +312,7 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 // network_timeout.
 //
 // pushMu (per branch) still serializes pushes from this instance — the sync
-// loop, the fleet register/unregister push and the create-time push — so one
+// loop, the fleet operations' one push and the create-time push — so one
 // push's snapshot is always taken after the previous push finished. It is NOT
 // a guarantee about what the origin applies: a push that hits network_timeout
 // releases pushMu while the server may still apply it. Against a knomit host
