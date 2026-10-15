@@ -460,15 +460,15 @@ func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, _ originProvider)
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		// The fleet repository (R3.3): a member keeps its origin; the
-		// master's detach makes its copy the hub.
-		if err := m.GuardFleetDetach(ri); err != nil {
-			writeFleetError(w, r, err)
-			return
-		}
-		_, err := m.Send(r.Context(), ri, repos.DetachOrigin())
+		// master's detach makes its copy the hub. Its refusals are
+		// FleetErrors.
+		err := m.DetachRepoOrigin(r.Context(), ri)
+		var fe *repos.FleetError
 		switch {
 		case err == nil:
 			w.WriteHeader(http.StatusNoContent)
+		case errors.As(err, &fe):
+			writeFleetError(w, r, err)
 		case errors.Is(err, repos.ErrSubscriptionOrigin):
 			hal.WriteProblem(w, http.StatusConflict, "Subscription requires its origin",
 				"this repo follows its origin read-only and has no content of its own; archive it instead of detaching the origin",

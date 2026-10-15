@@ -102,7 +102,7 @@ func TestFleetREST_MasterAndHosting(t *testing.T) {
 // refused (the consensus branch is fixed at create), and the operator's merge
 // of a pushed branch is refused (only the master merges). The origin is still
 // there afterwards.
-// SABOTAGE: drop the GuardFleetDetach call in handleHALDeleteOrigin -> 204
+// SABOTAGE: handleHALDeleteOrigin sends DetachOrigin without DetachRepoOrigin -> 204
 // and the origin is gone -> red; drop the IsFleet check in
 // handleHALSetOriginUpstream -> 200 -> red; drop the FleetMergeRefusal call
 // in handlePushedMerge -> the member merges -> red.

@@ -172,7 +172,9 @@ type Manager struct {
 	createWg      sync.WaitGroup
 
 	// fleetOpMu serializes the operations that change this instance's fleet
-	// membership: CreateFleet, RegisterFleet, UnregisterFleet, and the boot
+	// membership and its root: CreateFleet, JoinFleet, LeaveFleet, the
+	// master's enroll, revoke and decommission, the /fleet/root routes, the
+	// fleet repository's origin detach (DetachRepoOrigin), and the boot
 	// rollback of an unfinished create. Each checks the state and then
 	// changes it, so two at once would both pass the check. It is also what
 	// makes a create marker found under it a dead create's

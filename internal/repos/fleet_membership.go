@@ -715,14 +715,28 @@ func (m *Manager) StandDown(ctx context.Context) error {
 	return nil
 }
 
-// GuardFleetDetach is DELETE /repos/{fleet}/origin's check (R3.3): a member's
+// DetachRepoOrigin is DELETE /repos/{repo}/origin: the detach, and on the
+// fleet repository first the R3.3 check (guardFleetDetach). For the fleet
+// repository the check and the detach run under fleetOpMu as one step, so a
+// stand-down (DELETE /fleet/root, which passes while the copy has an origin)
+// cannot remove the key between the master check and the detach and leave a
+// hub with no master.
+func (m *Manager) DetachRepoOrigin(ctx context.Context, ri *RepoInstance) error {
+	if ri != nil && ri.IsFleet() {
+		defer m.lockFleetOp()()
+		if err := m.guardFleetDetach(ri); err != nil {
+			return err
+		}
+	}
+	_, err := m.Send(ctx, ri, DetachOrigin())
+	return err
+}
+
+// guardFleetDetach is the fleet repository's detach check (R3.3): a member's
 // copy keeps its origin (without one it has no main and nothing to push to);
 // the master's detach makes its copy the hub, which needs the mTLS listener
-// and an address to advertise. Any other repository: nil.
-func (m *Manager) GuardFleetDetach(ri *RepoInstance) error {
-	if ri == nil || !ri.IsFleet() {
-		return nil
-	}
+// and an address to advertise.
+func (m *Manager) guardFleetDetach(ri *RepoInstance) error {
 	master := false
 	if err := ri.WithRead(func(svc *store.Service) { master = ri.isFleetMaster(svc) }); err != nil {
 		return err

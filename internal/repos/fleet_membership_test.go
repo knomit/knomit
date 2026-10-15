@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -286,7 +287,7 @@ func TestFleetMembership_TheHubCannotStandDown(t *testing.T) {
 
 // DELETE /repos/{fleet}/origin's guard (R3.3): a member keeps its origin;
 // the master may detach once [tls].addr and external_addresses are set.
-// SABOTAGE: GuardFleetDetach returns nil for a member -> red.
+// SABOTAGE: guardFleetDetach returns nil for a member -> red.
 func TestFleetMembership_DetachGuard(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
@@ -296,19 +297,51 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{URL: f.url, Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
 
-	err = alpha.GuardFleetDetach(alpha.fleetRepo())
+	err = alpha.DetachRepoOrigin(ctx, alpha.fleetRepo())
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
 	require.Equal(t, "member_keeps_origin", code)
+	origin, err := alpha.hasOrigin(alpha.fleetRepo())
+	require.NoError(t, err)
+	require.True(t, origin, "the refused detach left the member's origin")
 
-	_, code = fleetCode(t, f.master.GuardFleetDetach(f.mri))
+	_, code = fleetCode(t, f.master.DetachRepoOrigin(ctx, f.mri))
 	require.Equal(t, "listener_required", code)
 	f.master.deps.Cfg.TLS.Addr = "127.0.0.1:0"
-	_, code = fleetCode(t, f.master.GuardFleetDetach(f.mri))
+	_, code = fleetCode(t, f.master.DetachRepoOrigin(ctx, f.mri))
 	require.Equal(t, "addresses_required", code)
 	f.master.deps.Cfg.ExternalAddresses = []string{"https://master.example"}
-	require.NoError(t, f.master.GuardFleetDetach(f.mri), "the master hosts the fleet here")
-	require.NoError(t, alpha.GuardFleetDetach(createRepo(t, alpha, "kb")), "any other repository: nothing to check")
+	require.NoError(t, f.master.DetachRepoOrigin(ctx, f.mri), "the master hosts the fleet here")
+	origin, err = f.master.hasOrigin(f.mri)
+	require.NoError(t, err)
+	require.False(t, origin, "the master's copy is the hub now")
+}
+
+// Review N5: the fleet repository's detach (check and detach) takes the
+// fleet lock, so a stand-down cannot run between the master check and the
+// detach.
+// SABOTAGE: DetachRepoOrigin without lockFleetOp -> it returns at once -> red.
+func TestFleetMembership_DetachTakesTheFleetLock(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
+	require.NoError(t, err)
+	ri := m.fleetRepo()
+	waiting := make(chan struct{}, 1)
+	setFleetHooks(t, fleetCreateHooks{contended: func() { waiting <- struct{}{} }})
+	m.fleetOpMu.Lock()
+	done := make(chan struct{})
+	go func() { _ = m.DetachRepoOrigin(ctx, ri); close(done) }()
+	select {
+	case <-waiting:
+	case <-done:
+		m.fleetOpMu.Unlock()
+		t.Fatal("the fleet repository's detach ran without the fleet lock")
+	case <-time.After(30 * time.Second):
+		t.Fatal("neither waited nor returned")
+	}
+	m.fleetOpMu.Unlock()
+	<-done
 }
 
 // The operator's merge of a pushed branch on the fleet repository (R3.3,

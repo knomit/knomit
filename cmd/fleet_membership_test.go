@@ -385,7 +385,7 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 // detach, a member's upstream PATCH and the old hub's manual merge of a dead
 // pushed branch are refused.
 // SABOTAGE: drop the hub check in StandDown -> alpha stands down while it is
-// the hub -> red; drop the master check of GuardFleetDetach -> charlie's
+// the hub -> red; drop the master check of guardFleetDetach -> charlie's
 // detach is 204 -> red.
 func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	ctx := context.Background()
