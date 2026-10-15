@@ -1,6 +1,7 @@
 package pki
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func peerURL(addr string) string { return "https://" + addr + "/git/kb" }
@@ -112,6 +114,45 @@ func TestClassifyOrigin_AnUnreachableHostIsRefusedNamed(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close()
 	peer, err := ClassifyOrigin(ctx10(t), x.aDir, x.a.keyPath, peerURL(addr))
+	if peer || !errors.Is(err, ErrOriginUnreachable) {
+		t.Fatalf("peer=%v err=%v, want ErrOriginUnreachable", peer, err)
+	}
+}
+
+// A host that accepts the TCP connection but never answers the handshake (a
+// peer under load, a black-holing middlebox) is unreachable too: the deadline
+// ends the handshake before our verifier ran, and that is ErrOriginUnreachable,
+// never "not a peer" (which would store it as stock https).
+func TestClassifyOrigin_AStalledHandshakeIsRefusedNamed(t *testing.T) {
+	x := newTwoInstances(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accepted atomic.Int32
+	held := make(chan net.Conn, 8)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			held <- c // hold it open, write nothing
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		for len(held) > 0 {
+			(<-held).Close()
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	peer, err := ClassifyOrigin(ctx, x.aDir, x.a.keyPath, peerURL(ln.Addr().String()))
+	if accepted.Load() != 1 {
+		t.Fatalf("the stalling host accepted %d connections, want 1 (the TCP dial must succeed for this row)", accepted.Load())
+	}
 	if peer || !errors.Is(err, ErrOriginUnreachable) {
 		t.Fatalf("peer=%v err=%v, want ErrOriginUnreachable", peer, err)
 	}
