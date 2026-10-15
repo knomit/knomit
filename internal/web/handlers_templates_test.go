@@ -82,8 +82,8 @@ func TestTemplates_ListingRoutes(t *testing.T) {
 		require.True(t, strings.HasPrefix(ti.Fact, "kb/templates/"+ti.Name+"/"), ti.Fact)
 		names = append(names, ti.Name)
 	}
-	// The pinned playbooks may still carry a fleet template (it is listed,
-	// and refused at create); the ordinary templates are all there.
+	// A subset, not the whole list: the listing is whatever the pinned
+	// playbooks carry; these templates are always among it.
 	require.Subset(t, names, []string{"coding", "general", "mission"})
 
 	code, one := getTemplates(t, r, "/repos/playbooks/templates")
@@ -172,7 +172,7 @@ func TestPostRepos_FleetOntologyReserved(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p), rec.Body.String())
 		require.Equal(t, "Fleet ontology reserved", p.Title)
-		require.Contains(t, p.Detail, "knomit fleet")
+		require.Contains(t, p.Detail, "/api/v1/fleet")
 		require.Nil(t, m.Get("f1"))
 	}
 }

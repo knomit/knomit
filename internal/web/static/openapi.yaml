@@ -2177,7 +2177,10 @@ paths:
         `already_registered` (409, another fleet: unregister first),
         `not_a_fleet` (422, the repository's ontology is not the fleet ontology;
         the mount is removed), `clone_failed` (502, nothing is mounted or
-        persisted; re-issue the request), `url_required` (400).
+        persisted; re-issue the request), `url_required` (400),
+        `create_unfinished` (409, an earlier `POST /fleet/create` did not
+        finish and rolling it back failed; it is retried at the next start
+        and by the next create or registration).
       operationId: registerFleet
       requestBody:
         required: true
@@ -2214,6 +2217,84 @@ paths:
         "200": { description: Unregistered, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
         "202": { description: Unregistering (push pending), content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
         "409": { description: not_registered or unregistration_pending }
+  /fleet/create:
+    post:
+      tags: [fleet]
+      summary: Found a fleet with a fresh root; this instance is its master and first member
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        it mints the fleet ROOT KEY and installs this instance's own
+        certificate, so any other transport is 403.
+
+        An earlier create that did not finish (the process died part way)
+        is rolled back first, as at every start. If that rollback fails, the
+        answer is `create_unfinished` (409, with the cause), and it is retried
+        at the next start and by the next create or registration.
+
+        Pre-flights, before anything is written: this instance is in no
+        fleet (`fleet_present`, 409: state not standalone, a fleet repository
+        mounted or recorded; the message names the way out); no fleet trust
+        material is installed in `[tls].dir` (`trust_installed`, 409: it is
+        another fleet's, and a create would replace it); the fleet root
+        directory `<home>/fleet` is absent or empty (`root_present`, 409: a
+        fleet always gets a fresh root, and the one there belongs to another
+        fleet). Without `origin` this instance hosts the fleet, so
+        `[tls].addr` (`listener_required`, 422) and `external_addresses`
+        (`addresses_required`, 422) must be set. With `origin` the URL must
+        be a forge, not `knomit+https` (`knomit_origin`, 422: a
+        knomit-hosted fleet is hosted by its master), and the repo create's
+        own checks apply (reachable, a branch to cut from, not yet a
+        knowledge base).
+
+        Then: the root is minted (`root.key` a plain owner-only file,
+        `root.crt`, an empty `crl.pem`) with this instance's certificate; the
+        fleet repository is created from the built-in fleet ontology and
+        recorded as this instance's fleet repository (it mounts again after a
+        restart); on its agent branch, as separate commits,
+        `artifacts/fleet/root.crt` and `crl.pem` (ROOT FIRST), this
+        instance's `certs/<agent id>.pem` and one `issued/<serial>.pem`, and
+        its member record (state `active`); the bundle is installed as this
+        instance's TLS identity; the root moves to `<home>/fleet`. A failure
+        in any of these, or a process that dies during them, removes all of
+        it again: on a forge the agent branch the create pushed (deleted only
+        while it is still the commit this instance pushed), the repository
+        and its record, the installed material, the root, the fleet state.
+
+        Then `main` is published. Without `origin`, `main` follows the agent
+        branch here. With `origin` the agent branch is pushed and then `main`
+        on the origin is set to its tip, never by force, and local `main`
+        follows. 201 only when local `main` holds this instance's active
+        record (state `registered`, `record_state` `active`). Otherwise 202:
+        on a forge state `registering` with `last_error` set, and the sync
+        loop's next push of the agent branch publishes `main` again (the
+        state becomes `registered` only once that succeeds); without an
+        origin state `registered` with `record_state` `pending` until the
+        local reconcile moves `main`.
+      operationId: createFleet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, description: "The fleet repository's local name (default fleet)" }
+                origin:
+                  type: object
+                  required: [url]
+                  description: Host the fleet repository on a forge (mode initialize onto this URL). Absent = this instance hosts it.
+                  properties:
+                    url: { type: string }
+                    branch: { type: string }
+                    auth_method: { type: string }
+                    auth_token: { type: string }
+      responses:
+        "201": { description: Created; local main holds the active record, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "202": { description: Created; main does not hold the record yet (a publish is pending), content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "400": { description: Invalid name or request }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "fleet_present, trust_installed, root_present, create_unfinished, or a repo create conflict (name, origin in use)" }
+        "422": { description: "listener_required, addresses_required, knomit_origin, or a refused origin" }
   /fleet/members:
     get:
       tags: [fleet]

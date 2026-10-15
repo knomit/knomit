@@ -164,6 +164,11 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	r.Put("/fleet", handlePutFleet(b, s.Manager))
 	r.Delete("/fleet", handleDeleteFleet(b, s.Manager))
 	r.Get("/fleet/members", handleFleetMembers(b, s.Manager))
+	// Fleet create mints the fleet ROOT KEY and installs this instance's own
+	// certificate, so it is served to the local authenticated listener only
+	// (RequireLocalVia: the unix socket or named pipe) — never to a peer over
+	// mTLS, and never to a browser page on loopback TCP.
+	r.With(RequireLocalVia).Post("/fleet/create", handleCreateFleet(b, s.Manager))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Get("/archived/{id}", handleHALArchivedItem(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -92,6 +93,58 @@ func handleDeleteFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			status = http.StatusAccepted
 		}
 		hal.WriteHAL(w, status, fleetView(b, st))
+	}
+}
+
+type createFleetRequest struct {
+	Name   string `json:"name,omitempty"`
+	Origin *struct {
+		URL        string `json:"url"`
+		Branch     string `json:"branch,omitempty"`
+		AuthMethod string `json:"auth_method,omitempty"`
+		AuthToken  string `json:"auth_token,omitempty"`
+	} `json:"origin,omitempty"`
+}
+
+// createdFleetStatus is POST /fleet/create's success status: 201 only when
+// the fleet's main holds this instance's active record (state registered AND
+// record_state active, read at local main), 202 otherwise: a forge publish
+// that failed, or a main that has not followed the agent branch yet.
+func createdFleetStatus(st repos.FleetStatus) int {
+	if st.State == repos.FleetRegistered && st.RecordState == fact.MemberActive {
+		return http.StatusCreated
+	}
+	return http.StatusAccepted
+}
+
+// handleCreateFleet: POST /api/v1/fleet/create, found a fleet with a fresh
+// root, this instance its master and first member (Manager.CreateFleet,
+// which runs detached from the request: a client that hangs up does not cut
+// it short). The status is createdFleetStatus's. Local listener only
+// (router).
+func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createFleetRequest
+		if !decodeJSON(w, r, &req, 0) {
+			return
+		}
+		spec := repos.FleetCreateSpec{Name: req.Name}
+		if req.Origin != nil {
+			spec.Origin = &repos.OriginSpec{URL: req.Origin.URL, Branch: req.Origin.Branch, AuthMethod: req.Origin.AuthMethod, AuthToken: req.Origin.AuthToken}
+		}
+		st, err := m.CreateFleet(r.Context(), spec)
+		if err != nil {
+			var fe *repos.FleetError
+			if errors.As(err, &fe) {
+				writeFleetError(w, r, err)
+				return
+			}
+			// The repo create's own refusals (name, origin, reachability).
+			status, title := createErrStatus(err)
+			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
+			return
+		}
+		hal.WriteHAL(w, createdFleetStatus(st), fleetView(b, st))
 	}
 }
 

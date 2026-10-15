@@ -214,6 +214,12 @@ type RemoteIndex interface {
 	// RecordPushError persists a push failure on the named remote without
 	// pushing (a refused PublishUpstream, which records nothing itself).
 	RecordPushError(name, msg string) error
+	// RetractPushedBranch deletes branch on the origin with a lease on the
+	// hash this instance last pushed there, then removes the origin remote
+	// from the git config so that no later push recreates it. It is for a
+	// repository about to be deleted (a rolled-back fleet create). A tip
+	// someone else pushed is left alone, as an error.
+	RetractPushedBranch(ctx context.Context, branch string, auth transport.AuthMethod) error
 	// RecordSyncError persists a sync failure (last_status="error",
 	// last_error=msg) on the named remote without performing a fetch. Used to
 	// surface an auth-resolution failure that never reaches Sync().
