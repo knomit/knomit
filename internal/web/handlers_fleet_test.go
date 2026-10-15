@@ -196,8 +196,21 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 
 	rec = send(http.MethodPatch, "/repos/kb", `{"description":"hello"}`)
 	require.Equal(t, http.StatusOK, rec.Code, "control: %s", rec.Body.String())
+	// Control without running a review (the stub LLM cannot drive one): a
+	// synthesis already running on kb answers 409 from the hub, which the
+	// handler reaches only past the write gate.
+	release := make(chan struct{})
+	defer close(release)
+	_, err = m.Get("kb").TaskHub().Start("synth", func(ctx context.Context, _ func(repos.TaskEvent)) {
+		select {
+		case <-ctx.Done():
+		case <-release:
+		}
+	})
+	require.NoError(t, err)
 	rec = send(http.MethodPost, "/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
-	require.Equal(t, http.StatusCreated, rec.Code, "control: %s", rec.Body.String())
+	require.Equal(t, http.StatusConflict, rec.Code, "control: past the gate: %s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Job already running")
 
 	// The operator's merge of a pushed member branch is NOT an authored write
 	// and stays open on the fleet repository: an unknown branch is a 404, not
