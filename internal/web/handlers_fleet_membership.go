@@ -33,7 +33,8 @@ func handleEnrollFleet(m *repos.Manager) http.HandlerFunc {
 
 // handleJoinFleet: POST /api/v1/fleet/join {url, auth_method, auth_token,
 // bundle}, join the fleet at url with the bundle its master's enroll
-// returned. 200, state registered; a refusal leaves nothing behind.
+// returned. 200, state registered, with the installed root's
+// root_fingerprint; a refusal leaves nothing behind.
 func handleJoinFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -55,7 +56,9 @@ func handleJoinFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			writeFleetError(w, r, err)
 			return
 		}
-		hal.WriteHAL(w, http.StatusOK, fleetView(b, st))
+		view := fleetView(b, st.FleetStatus)
+		view["root_fingerprint"] = st.RootFingerprint
+		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }
 

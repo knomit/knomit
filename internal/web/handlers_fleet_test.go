@@ -130,6 +130,11 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 
 	join := joinOverSocket(t, s, key, url, root)
 	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
+	var joined map[string]any
+	require.NoError(t, json.Unmarshal(join.Body.Bytes(), &joined))
+	rootID, err := pki.RootID(root.Root.Cert)
+	require.NoError(t, err)
+	require.Equal(t, rootID, joined["root_fingerprint"], "the join names the root it installed (review N7)")
 	out = getFleetJSON(t, s)
 	require.Equal(t, repos.FleetRegistered, out["state"])
 	require.Equal(t, false, out["master"])

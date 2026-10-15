@@ -2320,8 +2320,9 @@ paths:
         409: on a knomit host, a leaf not on `main` yet) or any other refusal
         (`clone_failed`, 502) undoes all of it: no repository, no recorded
         uid, no installed material, no agent branch left on the origin,
-        state standalone. 200 with state `registered`; the record counts
-        once the master admits it into `main`.
+        state standalone. 200 with state `registered` and the installed
+        root's `root_fingerprint`; the record counts once the master admits
+        it into `main`.
       operationId: joinFleet
       requestBody:
         required: true
@@ -2336,7 +2337,17 @@ paths:
                 auth_token: { type: string }
                 bundle: { type: string, description: "PEM, as POST /fleet/enroll returned it" }
       responses:
-        "200": { description: Joined, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "200":
+          description: Joined
+          content:
+            application/hal+json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/FleetStatus" }
+                  - type: object
+                    required: [root_fingerprint]
+                    properties:
+                      root_fingerprint: { type: string, description: "the fingerprint of the root the bundle installed" }
         "400": { description: url_and_bundle_required }
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present, trust_installed, join_refused or create_unfinished" }

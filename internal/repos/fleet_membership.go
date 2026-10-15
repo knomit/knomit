@@ -75,6 +75,14 @@ type FleetLeft struct {
 	PushError string `json:"push_error,omitempty"`
 }
 
+// FleetJoined is what POST /fleet/join answers: the state after the join,
+// and the fingerprint of the root the bundle installed (§1.5 Join step 2:
+// supplying the bundle is the operator's consent to that root).
+type FleetJoined struct {
+	FleetStatus
+	RootFingerprint string `json:"root_fingerprint"`
+}
+
 // FleetRevocation is what POST /fleet/revoke answers.
 type FleetRevocation struct {
 	AgentID      string `json:"agent_id"`
@@ -297,48 +305,49 @@ func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) 
 
 // JoinFleet joins the fleet at spec.URL with the bundle the master's enroll
 // returned (see the file comment). It answers registered: the record is on
-// the fleet's origin, and counts once the master admits it into main.
-func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatus, error) {
+// the fleet's origin, and counts once the master admits it into main. The
+// answer carries the fingerprint of the root the bundle installed.
+func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoined, error) {
 	defer m.lockFleetOp()()
 	if err := m.recoverFleetCreate(ctx); err != nil {
-		return FleetStatus{}, err
+		return FleetJoined{}, err
 	}
 	db := m.ControlDB()
 	if db == nil {
-		return FleetStatus{}, errors.New("fleet join: control.db is not open")
+		return FleetJoined{}, errors.New("fleet join: control.db is not open")
 	}
 	if err := m.refuseFleetPresent(db); err != nil {
-		return FleetStatus{}, err
+		return FleetJoined{}, err
 	}
 	if err := m.refuseInstalledTrust(); err != nil {
-		return FleetStatus{}, err
+		return FleetJoined{}, err
 	}
 	b, err := pki.SplitBundle(spec.Bundle)
 	if err != nil {
-		return FleetStatus{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", err.Error())
+		return FleetJoined{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", err.Error())
 	}
 	if _, err := pki.PreviewBundle(m.deps.KeyPath, spec.Bundle); err != nil {
 		if errors.Is(err, pki.ErrKeyMismatch) {
-			return FleetStatus{}, fleetErr(http.StatusUnprocessableEntity, "key_mismatch", err.Error())
+			return FleetJoined{}, fleetErr(http.StatusUnprocessableEntity, "key_mismatch", err.Error())
 		}
-		return FleetStatus{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", err.Error())
+		return FleetJoined{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", err.Error())
 	}
 	var leafID string
 	if len(b.Leaf.EmailAddresses) == 1 {
 		leafID = pki.AgentIDOfEmail(b.Leaf.EmailAddresses[0])
 	}
 	if leafID != m.AgentID() {
-		return FleetStatus{}, fleetErr(http.StatusUnprocessableEntity, "agent_mismatch", fmt.Sprintf("the bundle's certificate is for agent %q, not this instance's %q", leafID, m.AgentID()))
+		return FleetJoined{}, fleetErr(http.StatusUnprocessableEntity, "agent_mismatch", fmt.Sprintf("the bundle's certificate is for agent %q, not this instance's %q", leafID, m.AgentID()))
 	}
 	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle, pki.InstallOptions{}); err != nil {
-		return FleetStatus{}, fmt.Errorf("fleet join: install the bundle: %w", err)
+		return FleetJoined{}, fmt.Errorf("fleet join: install the bundle: %w", err)
 	}
-	refuse := func(ri *RepoInstance, ferr *FleetError) (FleetStatus, error) {
+	refuse := func(ri *RepoInstance, ferr *FleetError) (FleetJoined, error) {
 		if uerr := m.undoJoin(context.WithoutCancel(ctx), ri); uerr != nil {
 			ferr.Msg += "; undoing the join failed (" + uerr.Error() + ")"
 		}
 		_ = recordFleetAttempt(db, ferr, time.Now())
-		return FleetStatus{}, ferr
+		return FleetJoined{}, ferr
 	}
 	ri, err := m.Create(ctx, CreateSpec{Name: m.freeFleetName(spec.URL), Mode: "clone",
 		Origin: &OriginSpec{URL: spec.URL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken}, fleetDoor: true}, func(Event) {})
@@ -361,13 +370,16 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 		return refuse(ri, fleetErr(http.StatusConflict, "join_refused", "the fleet did not take this instance's record: "+err.Error()+". Nothing is kept; join again (a leaf the master issued just now reaches the fleet's main on its next round)"))
 	}
 	if err := recordFleetAttempt(db, nil, time.Now()); err != nil {
-		return FleetStatus{}, err
+		return FleetJoined{}, err
 	}
 	if err := setFleetState(db, FleetRegistered, time.Now()); err != nil {
-		return FleetStatus{}, err
+		return FleetJoined{}, err
 	}
 	log.Info().Str("fleet", ri.Name()).Msg("fleet: joined; the record counts once the master admits it into main")
-	return m.FleetStatus(ctx)
+	out := FleetJoined{}
+	out.RootFingerprint, _ = pki.RootID(b.Root)
+	out.FleetStatus, err = m.FleetStatus(ctx)
+	return out, err
 }
 
 // undoJoin takes a refused join back: the agent branch the mount may have

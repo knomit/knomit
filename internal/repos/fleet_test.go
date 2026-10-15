@@ -76,7 +76,8 @@ func pushCount(t *testing.T, bare, ref string) int {
 func joinTestFleet(t *testing.T, m *Manager, url string, root *pkitest.Fleet) (FleetStatus, error) {
 	t.Helper()
 	mem := root.Enroll(t, m.AgentID()+"@"+pki.AgentEmailDomain, m.deps.KeyPath)
-	return m.JoinFleet(context.Background(), FleetJoinSpec{URL: url, Bundle: root.Bundle(t, mem)})
+	j, err := m.JoinFleet(context.Background(), FleetJoinSpec{URL: url, Bundle: root.Bundle(t, mem)})
+	return j.FleetStatus, err
 }
 
 // newFleetManager is a started manager that can sign (its member record is a
