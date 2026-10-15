@@ -132,3 +132,82 @@ func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 	}
 	require.Equal(t, len(cases), fleetCalls, "every push read the fleet")
 }
+
+// S2 on a knomit host, the user's ruling pinned: rogue (active, certified)
+// pushes two commits to its own folder and their clean merge. The merge's
+// signature is (a) present but does not verify → ADMITTED, like an unsigned
+// clean merge, because it carries nothing beyond its parents; (b) a VERIFYING
+// signature by boss, not the pusher → not-pusher (signerIsPusher still
+// compares a signature that verifies). CheckRange agrees on (a) and admits
+// (b): it has no pusher.
+//
+// SABOTAGE: admit a clean merge only when its signature verifies or is
+// absent (`serr == nil || unsigned` in judgeSigner) → (a) is refused
+// signature → red.
+func TestReceivePack_CleanMergeSignatureStates(t *testing.T) {
+	p := newTestFleetPKI(t)
+	r, boss := namedSigner(t, "rogue"), namedSigner(t, "boss")
+	rl, _ := p.leaf("rogue", r)
+	bl, _ := p.leaf("boss", boss)
+	extra := p.artifacts(p.crl(), map[string]string{"rogue": rl, "boss": bl})
+	extra["kb/members/rogue/1.md"] = memberFile("rogue", fact.MemberActive, r.PublicKey())
+	h := newFleetPushHost(t, extra)
+	fp, _ := pusherOf(t, r)
+
+	cases := []struct {
+		name   string
+		mergeK ssh.Signer
+		broken bool
+		want   string // receive-pack verdict; "" = admitted
+		gate   string // CheckRange verdict
+	}{
+		{"a bad signature", r, true, "", ""},
+		{"a verifying signature by another member", boss, false, RuleNotPusher, ""},
+	}
+	ran := 0
+	for i, tc := range cases {
+		peer, dir := newDiskPeer(t, h.srv.URL)
+		head := peer.head()
+		files := peer.files(head)
+		a := peer.commitAs("rogue", []*object.Commit{head}, r, with(files, "kb/members/rogue/2.md", "a"))
+		b := peer.commitAs("rogue", []*object.Commit{head}, r, with(files, "kb/members/rogue/3.md", "b"))
+		m := peer.commitAs("rogue", []*object.Commit{a, b}, tc.mergeK, with(files, "kb/members/rogue/2.md", "a", "kb/members/rogue/3.md", "b"))
+		if tc.broken {
+			m = brokenSig(t, peer.repo, m)
+		}
+		v3, err := checkM3(m)
+		require.NoError(t, err)
+		require.True(t, v3.OK, "%s: fixture: the merge is M3-clean", tc.name)
+		peer.setBranch("work", m)
+		branch := "agent/sig-" + string(rune('a'+i))
+		h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (Fleet, error) {
+			return h.svc.FleetAt("main")
+		}})
+
+		err = peer.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+branch)
+		pushRule := ""
+		if err != nil {
+			mm := pushRuleRE.FindStringSubmatch(err.Error())
+			require.NotNil(t, mm, "%s: unexpected push error: %v", tc.name, err)
+			pushRule = mm[1]
+		}
+		require.Equal(t, tc.want, pushRule, tc.name)
+		if tc.want == "" {
+			require.Equal(t, m.Hash, h.ref(branch), "%s: the admitted branch exists on the host", tc.name)
+		} else {
+			require.Equal(t, plumbing.ZeroHash, h.ref(branch), "%s: a refused branch is not created", tc.name)
+		}
+
+		v, err := CheckRange(RangeInput{KBDir: dir, Main: "refs/remotes/origin/main", Candidate: m.Hash.String(),
+			FleetDir: dir, FleetRev: "refs/remotes/origin/main"})
+		require.NoError(t, err)
+		require.Equal(t, 3, v.Checked, tc.name)
+		gateRule := ""
+		if len(v.Refused) > 0 {
+			gateRule = onlyRefusal(t, v).Rule
+		}
+		require.Equal(t, tc.gate, gateRule, tc.name)
+		ran++
+	}
+	require.Equal(t, 2, ran)
+}

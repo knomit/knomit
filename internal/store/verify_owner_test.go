@@ -3,6 +3,7 @@ package store
 import (
 	"testing"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -83,14 +84,15 @@ func TestRecordOwner_OnlyTheOwnFolderAndNoDelete(t *testing.T) {
 	require.Equal(t, 7, ran)
 }
 
-// Artifact paths are not the owner rule's: a member commit that adds a file
-// under artifacts/ is judged by the artifact rules, so a leaf the root never
-// signed is refused artifact-pki (the artifact rule ran), not not-owner. The
-// master's own artifact commits (enroll, revoke) pass the owner rule the same
-// way: they change no non-artifact path.
+// Declared artifact paths are not the owner rule's: a member commit that adds
+// a file at a declared path is judged by the artifact rules, so a leaf the
+// root never signed is refused artifact-pki (the artifact rule ran), not
+// not-owner. Undeclared artifacts/ paths are the owner rule's
+// (TestRecordOwner_OnlyDeclaredArtifactPathsAreExempt, which also runs the
+// master's enroll and revoke).
 //
-// SABOTAGE: drop the underArtifacts exclusion from recordOwner → not-owner →
-// red.
+// SABOTAGE: drop the declaredArtifact exemption from recordOwner → not-owner
+// → red.
 func TestRecordOwner_ArtifactPathsAreTheArtifactRules(t *testing.T) {
 	f, main, base, _, x := ownerFixture(t)
 	f.ref(f.fleet, "cand", f.commit(f.fleet, with(base, "artifacts/fleet/certs/evil.pem", "x"), "agent-x", x, main))
@@ -181,4 +183,234 @@ func TestM3_ActiveMemberMergeOfMain(t *testing.T) {
 	r := onlyRefusal(t, f.checkSelf(""))
 	require.Equal(t, dirty.Hash.String(), r.Commit)
 	require.Equal(t, RuleNotOwner, r.Rule)
+}
+
+// brokenSig stores a copy of the signed commit c whose message is changed
+// after signing: the SSHSIG is still there and still parses, but it no longer
+// verifies (ErrBadSignature). Tree and parents are c's.
+func brokenSig(t *testing.T, repo *gogit.Repository, c *object.Commit) *object.Commit {
+	t.Helper()
+	require.NotEmpty(t, c.PGPSignature, "fixture: c is signed")
+	cp := *c
+	cp.Message += "\ntampered after signing\n"
+	o := repo.Storer.NewEncodedObject()
+	require.NoError(t, cp.Encode(o))
+	h, err := repo.Storer.SetEncodedObject(o)
+	require.NoError(t, err)
+	got, err := object.GetCommit(repo.Storer, h)
+	require.NoError(t, err)
+	_, serr := verifyCommitSignature(got)
+	require.ErrorIs(t, serr, ErrBadSignature, "fixture: the signature is present and does not verify")
+	return got
+}
+
+// B1, the judge's half: a record in a member's own folder must be a record FOR
+// that member. agent-x adds members/agent-x/evil.md whose body says
+// agent: boss (the review's attack: once on main it made boss "ambiguous"
+// and locked boss out), or rewrites its own record to name boss: both
+// not-owner. Controls: its own record edited, and a note in its folder that
+// is no record, are admitted.
+//
+// SABOTAGE: drop the record-agent check in recordOwner → the attack rows are
+// admitted → red.
+func TestRecordOwner_ARecordInTheOwnFolderIsForTheOwner(t *testing.T) {
+	const own = "kb/members/agent-x/1.md"
+	other := namedSigner(t, "other-key")
+	rows := []struct {
+		name   string
+		files  func(base map[string]string) map[string]string
+		want   string // "" = admitted
+		reason string
+	}{
+		{"adds a record for boss in its own folder", func(b map[string]string) map[string]string {
+			return with(b, "kb/members/agent-x/evil.md", memberFile("boss", fact.MemberActive, other.PublicKey()))
+		}, RuleNotOwner, `kb/members/agent-x/evil.md, a record for agent "boss"`},
+		{"rewrites its own record to name boss", func(b map[string]string) map[string]string {
+			return with(b, own, memberFile("boss", fact.MemberActive, other.PublicKey()))
+		}, RuleNotOwner, `kb/members/agent-x/1.md, a record for agent "boss"`},
+		{"control: edits its own record", func(b map[string]string) map[string]string { return with(b, own, b[own]+"\nv2\n") }, "", ""},
+		{"control: a note that is no record", func(b map[string]string) map[string]string {
+			return with(b, "kb/members/agent-x/notes.md", "n")
+		}, "", ""},
+	}
+	ran := 0
+	for _, row := range rows {
+		f, main, base, _, x := ownerFixture(t)
+		f.ref(f.fleet, "cand", f.commit(f.fleet, row.files(base), "agent-x", x, main))
+		v := f.checkSelf("")
+		require.Equal(t, 1, v.Checked, row.name)
+		if row.want == "" {
+			require.Empty(t, v.Refused, row.name)
+		} else {
+			r := onlyRefusal(t, v)
+			require.Equal(t, row.want, r.Rule, row.name)
+			require.Contains(t, r.Reason, row.reason, row.name)
+		}
+		ran++
+	}
+	require.Equal(t, 4, ran)
+}
+
+// B1, the loader's half: records already on main in the WRONG folder
+// (members/agent-x/evil.md saying agent: boss, members/agent-x/pre.md saying
+// agent: joiner) are not loaded, so they lock nobody out. Boss's ordinary
+// edit of its own record is admitted (it was "ambiguous: 2 member records"),
+// and the joiner's first registration is rule A's as usual (the stray record
+// made mayRegister false). The loader returns one record per own folder.
+//
+// SABOTAGE: drop the folder check in loadMembersOfTree → boss is ambiguous
+// and the joiner is refused → red.
+func TestFleetLoader_IgnoresARecordInAnotherAgentsFolder(t *testing.T) {
+	p := newTestFleetPKI(t)
+	boss, x, j := namedSigner(t, "boss"), namedSigner(t, "x"), namedSigner(t, "joiner")
+	bl, _ := p.leaf("boss", boss)
+	xl, _ := p.leaf("agent-x", x)
+	jl, _ := p.leaf("joiner", j)
+	arts := p.artifacts(p.crl(), map[string]string{"boss": bl, "agent-x": xl, "joiner": jl})
+	arts["kb/members/agent-x/1.md"] = memberFile("agent-x", fact.MemberActive, x.PublicKey())
+	// Already on main (main itself is not judged): the stray records.
+	arts["kb/members/agent-x/evil.md"] = memberFile("boss", fact.MemberActive, x.PublicKey())
+	arts["kb/members/agent-x/pre.md"] = memberFile("joiner", fact.MemberActive, j.PublicKey())
+	f, main, base := selfRegFixture(t, arts)
+
+	ms, err := LoadFleet(f.fleetDir, "main", "")
+	require.NoError(t, err)
+	byPath := map[string]string{}
+	for _, m := range ms {
+		byPath[m.Path] = m.Agent
+	}
+	require.Equal(t, map[string]string{"kb/members/boss/1.md": "boss", "kb/members/agent-x/1.md": "agent-x"}, byPath,
+		"only the records in their own folder are loaded")
+
+	f.ref(f.fleet, "cand", f.commit(f.fleet, with(base, "kb/members/boss/1.md", base["kb/members/boss/1.md"]+"\nv2\n"), "boss", boss, main))
+	v := f.checkSelf("")
+	require.Equal(t, 1, v.Checked)
+	require.Empty(t, v.Refused, "boss is not locked out by a record in agent-x's folder")
+
+	f.selfReg(main, base, "joiner", j)
+	v = f.checkSelf("")
+	require.Equal(t, 1, v.Checked)
+	require.Empty(t, v.Refused, "a joiner is not pre-empted by a record for it in another folder")
+}
+
+// S4: only a DECLARED artifact path (one an artifacts: pattern matches) is
+// the artifact rules' instead of the owner rule's. A member adding,
+// modifying or deleting an undeclared path under artifacts/ is not-owner.
+// The master's enroll (a new leaf and its issuance record) and revoke (a
+// newer CRL and a revocation statement) touch declared paths only and pass.
+//
+// SABOTAGE: exempt every artifacts/ path from recordOwner again → the three
+// undeclared rows are admitted → red.
+func TestRecordOwner_OnlyDeclaredArtifactPathsAreExempt(t *testing.T) {
+	const stray = "artifacts/x/y.bin"
+	rows := []struct {
+		name  string
+		files func(base map[string]string) map[string]string
+		path  string
+	}{
+		{"adds an undeclared artifact", func(b map[string]string) map[string]string { return with(b, "artifacts/fleet/notes.txt", "n") }, "artifacts/fleet/notes.txt"},
+		{"modifies an undeclared artifact", func(b map[string]string) map[string]string { return with(b, stray, "v2") }, stray},
+		{"deletes an undeclared artifact", func(b map[string]string) map[string]string { return without(b, stray) }, stray},
+	}
+	ran := 0
+	for _, row := range rows {
+		f, _, base, _, x := ownerFixture(t)
+		base = with(base, stray, "v1")
+		main := f.fleetMain(base)
+		f.ref(f.fleet, "cand", f.commit(f.fleet, row.files(base), "agent-x", x, main))
+		v := f.checkSelf("")
+		require.Equal(t, 1, v.Checked, row.name)
+		r := onlyRefusal(t, v)
+		require.Equal(t, RuleNotOwner, r.Rule, row.name)
+		require.Contains(t, r.Reason, row.path, row.name)
+		ran++
+	}
+	require.Equal(t, 3, ran)
+
+	// The master (boss) enrolls newbie, then revokes agent-x.
+	p := newTestFleetPKI(t)
+	boss, x, nb := namedSigner(t, "boss"), namedSigner(t, "x"), namedSigner(t, "newbie")
+	bl, _ := p.leaf("boss", boss)
+	xl, xs := p.leaf("agent-x", x)
+	arts := p.artifacts(p.crl(), map[string]string{"boss": bl, "agent-x": xl})
+	arts["kb/members/agent-x/1.md"] = memberFile("agent-x", fact.MemberActive, x.PublicKey())
+	f, main, base := selfRegFixture(t, arts)
+	l := fleetLayout(t)
+	nl, _ := p.leaf("newbie", nb)
+	enrolled := with(base, l.LeafPath("newbie"), nl, issuedDir+"0003-newbie.pem", nl)
+	enroll := f.commit(f.fleet, enrolled, "boss", boss, main)
+	revoke := f.commit(f.fleet, with(enrolled, l.CRL, p.crl(xs), revocationsDir+"0001.txt", p.revocation(xs, "test")), "boss", boss, enroll)
+	f.ref(f.fleet, "cand", revoke)
+	v := f.checkSelf("")
+	require.Equal(t, 2, v.Checked, "enroll and revoke")
+	require.Empty(t, v.Refused, "the master's enroll and revoke commits keep the owner rule")
+}
+
+// S2, the user's ruling, pinned so it is not lost: a two-parent merge that
+// passes M3 is ADMITTED even when its signature is present but does not
+// verify, exactly like an unsigned clean merge. It carries no content beyond
+// its parents, and stripping the signature would give the same verdict. The
+// merge reaches the clean-merge branch (checkM3 is OK; the signature is
+// ErrBadSignature, not unsigned). Control: the same broken signature on a
+// merge that changes a file beyond its parents is refused signature.
+//
+// SABOTAGE: admit a clean merge only when its signature verifies or is
+// absent (`serr == nil || unsigned`) → the clean row is refused signature →
+// red.
+func TestM3_CleanMergeWithABadSignatureIsAdmitted(t *testing.T) {
+	f, main, base, boss, x := ownerFixture(t)
+	const own = "kb/members/agent-x/1.md"
+	side := f.commit(f.fleet, with(base, own, base[own]+"\nv2\n"), "agent-x", x, main)
+	bossV2 := with(base, "kb/members/boss/1.md", base["kb/members/boss/1.md"]+"\nv2\n")
+	main2 := f.commit(f.fleet, bossV2, "boss", boss, main)
+	f.ref(f.fleet, "main", main2)
+	merged := with(bossV2, own, base[own]+"\nv2\n")
+
+	clean := brokenSig(t, f.fleet, f.commit(f.fleet, merged, "agent-x", x, side, main2))
+	m3, err := checkM3(clean)
+	require.NoError(t, err)
+	require.True(t, m3.OK, "fixture: the merge is M3-clean")
+	f.ref(f.fleet, "cand", clean)
+	v := f.checkSelf("")
+	require.Equal(t, 2, v.Checked, "the side commit and the merge")
+	require.Empty(t, v.Refused, "a clean merge whose signature does not verify is admitted")
+
+	dirty := brokenSig(t, f.fleet, f.commit(f.fleet, with(merged, own, base[own]+"\nv3\n"), "agent-x", x, side, main2))
+	f.ref(f.fleet, "cand", dirty)
+	r := onlyRefusal(t, f.checkSelf(""))
+	require.Equal(t, dirty.Hash.String(), r.Commit)
+	require.Equal(t, RuleSignature, r.Rule, "a merge beyond its parents needs a signature that verifies")
+}
+
+// S1 at the gate: a merge whose tree adds a gitlink (a submodule entry)
+// beyond its parents is not M3-clean. Signed, it is judged by the rules and
+// the owner rule refuses the gitlink's path; unsigned, it is refused merge.
+//
+// SABOTAGE: flatten M3's trees with tree.Files() again (it skips gitlinks) →
+// both merges are admitted → red.
+func TestM3_AGitlinkBeyondTheParentsIsJudged(t *testing.T) {
+	f, main, base, boss, x := ownerFixture(t)
+	const own = "kb/members/agent-x/1.md"
+	side := f.commit(f.fleet, with(base, own, base[own]+"\nv2\n"), "agent-x", x, main)
+	bossV2 := with(base, "kb/members/boss/1.md", base["kb/members/boss/1.md"]+"\nv2\n")
+	main2 := f.commit(f.fleet, bossV2, "boss", boss, main)
+	f.ref(f.fleet, "main", main2)
+	// "a-gitlink" sorts before kb/, so it is the first path the owner
+	// rule's diff meets (against main's side the merge also changes boss's
+	// record, which the owner rule would name otherwise).
+	merged := with(bossV2, own, base[own]+"\nv2\n", "a-gitlink", gitlinkEntry+main.Hash.String())
+
+	signed := f.commit(f.fleet, merged, "agent-x", x, side, main2)
+	f.ref(f.fleet, "cand", signed)
+	r := onlyRefusal(t, f.checkSelf(""))
+	require.Equal(t, signed.Hash.String(), r.Commit)
+	require.Equal(t, RuleNotOwner, r.Rule, r.Reason)
+	require.Contains(t, r.Reason, "changes a-gitlink")
+
+	unsigned := f.commit(f.fleet, merged, "", nil, side, main2)
+	f.ref(f.fleet, "cand", unsigned)
+	r = onlyRefusal(t, f.checkSelf(""))
+	require.Equal(t, unsigned.Hash.String(), r.Commit)
+	require.Equal(t, RuleMerge, r.Rule)
+	require.Contains(t, r.Reason, "a-gitlink")
 }

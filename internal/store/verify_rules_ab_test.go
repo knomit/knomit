@@ -638,7 +638,6 @@ func TestRuleA_RecordMustMatchTheLeaf(t *testing.T) {
 		reason string
 	}{
 		{"record holds another key", []string{"kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, k2.PublicKey())}, "not the signing key"},
-		{"record names another agent", []string{"kb/members/joiner/1.md", memberFile("boss", fact.MemberActive, k1.PublicKey())}, "names agent \"boss\""},
 		{"record is not active", []string{"kb/members/joiner/1.md", memberFile("joiner", fact.MemberLeft, k1.PublicKey())}, "may only write \"active\""},
 		{"two records", []string{"kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, k1.PublicKey()),
 			"kb/members/joiner/2.md", memberFile("joiner", fact.MemberActive, k1.PublicKey())}, "holds 2 files"},
@@ -654,7 +653,26 @@ func TestRuleA_RecordMustMatchTheLeaf(t *testing.T) {
 		require.Contains(t, r.Reason, tc.reason, tc.name)
 		ran++
 	}
-	require.Equal(t, 5, ran)
+	require.Equal(t, 4, ran)
+
+	// A record for another agent in the joiner's folder. Written by the
+	// commit, the owner rule refuses it (B1), so rule A keeps the record
+	// rules' refusal unchanged. Already on main (the loader skips it) with a
+	// commit that changes nothing, the owner rule passes and selfRecord's
+	// agent check refuses it.
+	stray := memberFile("boss", fact.MemberActive, k1.PublicKey())
+	f, main, base := selfRegFixture(t, arts)
+	f.ref(f.fleet, "cand", f.commit(f.fleet, with(base, "kb/members/joiner/1.md", stray), "joiner", k1, main))
+	r := onlyRefusal(t, f.checkSelf(""))
+	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, `no member record for agent "joiner"`, r.Reason, "the owner rule refused the shape")
+
+	g, gmain, gbase := selfRegFixture(t, with(arts, "kb/members/joiner/1.md", stray))
+	g.ref(g.fleet, "cand", g.commit(g.fleet, gbase, "joiner", k1, gmain))
+	r = onlyRefusal(t, g.checkSelf(""))
+	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Contains(t, r.Reason, "self-registration not admitted")
+	require.Contains(t, r.Reason, `names agent "boss"`)
 }
 
 // No PKI files at all: every old-rule verdict is what it was. The table

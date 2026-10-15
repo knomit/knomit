@@ -271,6 +271,13 @@ func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 	unsigned := serr != nil && (errors.Is(serr, ErrUnsigned) || errors.Is(serr, ErrNotSSHSIG))
 	if c.NumParents() >= 2 {
 		v, err := checkM3(c)
+		// DECISION (user ruling, PR #523 S2): a clean merge is admitted
+		// whatever its signature state: unsigned, a signature that verifies,
+		// or one that is present and does NOT verify. Its signature is not
+		// verified here because the merge carries no content beyond its
+		// parents, and stripping the signature would give the same verdict.
+		// Pinned by TestM3_CleanMergeWithABadSignatureIsAdmitted and
+		// TestReceivePack_CleanMergeSignatureStates.
 		if err == nil && v.OK {
 			return Refusal{}, true
 		}
@@ -512,13 +519,32 @@ var errLeafOtherID = errors.New("the certificate is not issued to this agent id"
 // recordOwner is the record-owner rule, the fleet repository's only. It is
 // baked, not declared: the fleet ontology is product-owned, so there is no
 // attribute to switch it. A member writes its own record and nothing else:
-// every path c changes against EVERY parent (the empty tree for a root
-// commit) that is not under artifacts/ must be under the judged repository's
-// members/<id>/ (ending in "/", compared exactly), and none of those may be a
-// delete — a member leaves by writing state left, never by removing its
-// record. Paths under artifacts/ are the artifact rules' (artifactRules),
-// which every admitted commit keeps too; so the master's enroll and revoke
-// commits, which change artifacts only, pass. Outside the fleet repository
+//   - every path c changes against ANY parent (the union of the per-parent
+//     diffs; the empty tree for a root commit) must be under the judged
+//     repository's members/<id>/ (ending in "/", compared exactly), unless it
+//     is a DECLARED artifact path (one an artifacts: pattern of the judged
+//     repository's ontology at main matches). Declared paths are the artifact
+//     rules' (artifactRules), which every admitted commit keeps too; so the
+//     master's enroll and revoke commits, which change declared artifacts
+//     only, pass. An undeclared path under artifacts/ has no artifact rule,
+//     so it is the owner rule's like any other path: a member may not add,
+//     modify or delete it;
+//   - none of the paths under members/<id>/ may be a delete: a member leaves
+//     by writing state left, never by removing its record;
+//   - a member record (.md) c adds or modifies under members/<id>/ that
+//     parses must be FOR id (its agent: equals id). Otherwise any member
+//     could plant a record for another agent in its own folder and make that
+//     agent ambiguous, or pre-empt a joiner's rule A. The loader also skips
+//     such a record (loadMembersOfTree), so one already on main locks no one
+//     out; this refusal keeps new ones off main. A file that does not parse
+//     as a record is no record: the loader skips it too.
+//
+// The union, not the intersection (paths that differ from EVERY parent), is
+// deliberate: the intersection would admit a merge that takes the OLD side of
+// another member's record, which reverts that record once merged into main
+// (the reasoning of privatePathClosure). The cost: a member's merge that
+// settles a conflict with main is refused not-owner, because against main's
+// side it changes other members' paths. Outside the fleet repository
 // (membersDir "") the rule does not exist.
 //
 // A two-parent merge M3 admits never reaches this: against its main-side
@@ -547,14 +573,57 @@ func (j judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
 		}
 		for _, ch := range changes {
 			for _, name := range []string{ch.From.Name, ch.To.Name} {
-				if name != "" && !underArtifacts(name) && !strings.HasPrefix(name, dir) {
-					return refuse(fmt.Sprintf("agent %q changes %s: a member writes only under %s", id, name, dir))
+				if name != "" && !strings.HasPrefix(name, dir) && !j.declaredArtifact(name) {
+					return refuse(fmt.Sprintf("agent %q changes %s: a member writes only under %s (and declared artifact paths)", id, name, dir))
 				}
 			}
-			if ch.To.Name == "" && !underArtifacts(ch.From.Name) {
+			if ch.To.Name == "" && strings.HasPrefix(ch.From.Name, dir) {
 				return refuse(fmt.Sprintf("agent %q deletes %s: a member record is never deleted", id, ch.From.Name))
+			}
+			if ch.To.Name != "" && strings.HasPrefix(ch.To.Name, dir) && strings.HasSuffix(ch.To.Name, ".md") {
+				agent, err := recordAgent(ch)
+				if err != nil {
+					return refuse(fmt.Sprintf("%s cannot be read: %v", ch.To.Name, err))
+				}
+				if agent != "" && agent != id {
+					return refuse(fmt.Sprintf("agent %q writes %s, a record for agent %q: a member writes only its own record", id, ch.To.Name, agent))
+				}
 			}
 		}
 	}
 	return Refusal{}, true
+}
+
+// declaredArtifact reports whether repoPath is a declared artifact path: under
+// artifacts/ and matched by a pattern of the judged repository's ontology. A
+// path whose rules are ambiguous counts as declared: artifactRules refuses it
+// (RuleArtifactRules) with the reason.
+func (j judge) declaredArtifact(repoPath string) bool {
+	if !underArtifacts(repoPath) {
+		return false
+	}
+	attrs, err := j.ont.ArtifactAttrs(repoPath)
+	return err != nil || attrs.Matched
+}
+
+// recordAgent is the agent: of the member record a change writes, or "" when
+// the file does not parse as a member record (the loader skips such a file).
+func recordAgent(ch *object.Change) (string, error) {
+	f, err := ch.To.Tree.TreeEntryFile(&ch.To.TreeEntry)
+	if err != nil {
+		return "", err
+	}
+	content, err := f.Contents()
+	if err != nil {
+		return "", err
+	}
+	ff, err := fact.ParseFact(ch.To.Name, content)
+	if err != nil {
+		return "", nil
+	}
+	m, err := fact.ParseMember(ff.Body)
+	if err != nil {
+		return "", nil
+	}
+	return m.Agent, nil
 }

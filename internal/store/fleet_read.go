@@ -102,6 +102,15 @@ func loadMembers(fleetID string, c *object.Commit, root string) ([]FleetMember, 
 }
 
 // loadMembersOfTree is loadMembers over a tree.
+//
+// A record counts only in its OWN folder: a record at members/<x>/... whose
+// agent: is not <x> (or a file directly under members/, in no folder) is
+// skipped and logged once per blob like a malformed one. Otherwise a record
+// one member planted in its own folder for ANOTHER agent would make that
+// agent ambiguous (two records) and lock it out, or pre-empt a joiner's
+// rule A; the record-owner rule (recordOwner) refuses writing such a record,
+// and this keeps one that is already on main harmless to every reader and
+// to the judge.
 func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetMember, error) {
 	prefix := path.Join(root, fact.MembersTopic) + "/"
 	var out []FleetMember
@@ -122,6 +131,13 @@ func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetM
 			if _, seen := malformedLogged.LoadOrStore(fleetID+"\x00"+f.Name+"\x00"+f.Hash.String(), true); !seen {
 				log.Error().Err(perr).Str("fleet", fleetID).Str("path", f.Name).Str("blob", f.Hash.String()).
 					Msg("fleet: malformed member record skipped")
+			}
+			return nil
+		}
+		if folder, _, ok := strings.Cut(strings.TrimPrefix(f.Name, prefix), "/"); !ok || folder != m.Agent {
+			if _, seen := malformedLogged.LoadOrStore(fleetID+"\x00"+f.Name+"\x00"+f.Hash.String(), true); !seen {
+				log.Error().Str("fleet", fleetID).Str("path", f.Name).Str("blob", f.Hash.String()).Str("agent", m.Agent).
+					Msg("fleet: member record outside its agent's folder skipped")
 			}
 			return nil
 		}

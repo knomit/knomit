@@ -176,6 +176,26 @@ func TestM3(t *testing.T) {
 			t.Fatalf("inject: %+v", v)
 		}
 	})
+	// S1: gitlinks are tree entries like any other. tree.Files() skips them,
+	// so M3 once passed a merge that adds one. Controls: a gitlink both
+	// parents carry, and one only the side moves, are merged like files.
+	t.Run("(g) a gitlink beyond the parents is refused; carried ones are merged", func(t *testing.T) {
+		v := mustM3(t, r.commit(with(clean, "zz-gitlink", gitlinkEntry+B.Hash.String()), M, S))
+		if v.OK || !strings.Contains(v.Reason, "zz-gitlink") {
+			t.Fatalf("injected gitlink: %+v", v)
+		}
+		gl := with(base, "sub", gitlinkEntry+B.Hash.String())
+		B2 := r.commit(gl, B)
+		M2 := r.commit(with(gl, "kb/u.md", "u2"), B2)
+		S2 := r.commit(with(gl, "sub", gitlinkEntry+M.Hash.String()), B2)
+		if v := mustM3(t, r.commit(with(gl, "kb/u.md", "u2", "sub", gitlinkEntry+M.Hash.String()), M2, S2)); !v.OK {
+			t.Fatalf("a gitlink only the side moved, merged: %s", v.Reason)
+		}
+		v = mustM3(t, r.commit(with(gl, "kb/u.md", "u2"), M2, S2))
+		if v.OK || !strings.Contains(v.Reason, "sub") {
+			t.Fatalf("the side's gitlink move dropped: %+v", v)
+		}
+	})
 	t.Run("both sides changed one path needs a signature", func(t *testing.T) {
 		S2 := r.commit(with(base, "kb/u.md", "u3"), B)
 		v := mustM3(t, r.commit(with(mainFiles, "kb/u.md", "u2"), M, S2))

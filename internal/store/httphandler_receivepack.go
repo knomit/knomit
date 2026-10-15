@@ -411,6 +411,13 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 // verify) and has no signer to compare. A merge that passed M3 with a
 // signature that DOES verify still needs it to be the pusher's.
 //
+// On such a clean merge this check protects nothing: a pusher can strip or
+// corrupt the signature and the same merge is admitted (the S2 ruling in
+// judgeSigner). That is harmless, because a clean merge carries no content
+// beyond its parents, and its parents are either new in this push (judged
+// on their own) or commits the host already holds; the check matters for
+// every other signed commit.
+//
 // Only NEW commits reach this (newCommits stops at commits the host holds):
 // a member merging the host's main into its branch pushes other members'
 // commits, but the host holds those, so only the member's own merge commit is
