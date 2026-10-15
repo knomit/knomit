@@ -245,3 +245,29 @@ func recordFleetAttempt(db *sql.DB, attemptErr error, now time.Time) error {
 	_, err := db.Exec(`UPDATE instance_identity SET fleet_last_attempt = ?, fleet_last_error = ? WHERE id = 1`, now.Unix(), msg)
 	return err
 }
+
+// recordFleetRepo records uid as this instance's fleet repository (control.db
+// instance_fleet_repo, migration 000016), replacing any earlier one. The
+// fleet code calls it when it mounts the fleet repository; boot admits a
+// fleet-id ontology only for the recorded uid (fleet_chokepoint.go). Purging
+// the repository clears it (the foreign key cascades).
+func recordFleetRepo(db *sql.DB, uid string) error {
+	if _, err := db.Exec(`INSERT INTO instance_fleet_repo (id, repo_uid) VALUES (1, ?)
+		ON CONFLICT(id) DO UPDATE SET repo_uid = excluded.repo_uid`, uid); err != nil {
+		return fmt.Errorf("fleet repository: record: %w", err)
+	}
+	return nil
+}
+
+// recordedFleetRepo is the uid recordFleetRepo stored; "" when none is.
+func recordedFleetRepo(db *sql.DB) (string, error) {
+	var uid string
+	err := db.QueryRow(`SELECT repo_uid FROM instance_fleet_repo WHERE id = 1`).Scan(&uid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("fleet repository: read: %w", err)
+	}
+	return uid, nil
+}

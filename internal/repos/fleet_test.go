@@ -194,34 +194,6 @@ func TestFleet_UnregisterIsDurable(t *testing.T) {
 	require.Contains(t, remoteRecord(t, bare, agent), "state: left")
 }
 
-// R3b: while unregistering, archiving the fleet repository by hand is the
-// escape hatch: it ends the retries and returns to standalone.
-func TestFleet_ArchiveByHandEndsUnregistering(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
-	m := newFleetManager(t, dir)
-	_, err := m.RegisterFleet(ctx, url, "", "")
-	require.NoError(t, err)
-	name := m.fleetRepo().Name()
-
-	_, err = m.Archive(name)
-	status, code := fleetCode(t, err)
-	require.Equal(t, http.StatusConflict, status, "a bare archive while registered is refused")
-	require.Equal(t, "use_unregister", code)
-
-	require.NoError(t, os.Rename(bare, bare+".away"))
-	st, err := m.UnregisterFleet(ctx)
-	require.NoError(t, err)
-	require.Equal(t, FleetUnregistering, st.State)
-	_, err = m.Archive(name)
-	require.NoError(t, err)
-	st, err = m.FleetStatus(ctx)
-	require.NoError(t, err)
-	require.Equal(t, FleetStandalone, st.State)
-}
-
 // R4: every other refusal, with its code; a failed clone leaves nothing
 // mounted, stays standalone and reports last_error.
 func TestFleet_Refusals(t *testing.T) {

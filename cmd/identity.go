@@ -52,12 +52,9 @@ func identityCmd() *cobra.Command {
 // when instances start nagging for a fresh one.
 const crlValidityDefault = 30 * 24 * time.Hour
 
-// fleetDirName is the default fleet root directory under the knomit home:
-// the root key (root.key, a plain owner-only file, like an SSH key), the root
-// certificate, the CRL and the two ledgers.
-const fleetDirName = "fleet"
-
-// resolveFleetRootDir is --dir, or <home>/fleet when it is not given.
+// resolveFleetRootDir is --dir, or <home>/fleet (pki.FleetRootDirName) when
+// it is not given: the root key (root.key, a plain owner-only file, like an
+// SSH key), the root certificate, the CRL and the two ledgers.
 func resolveFleetRootDir(dir string) (string, error) {
 	if dir != "" {
 		return dir, nil
@@ -66,7 +63,7 @@ func resolveFleetRootDir(dir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("--dir not given and the knomit home is unresolved: %w", err)
 	}
-	return filepath.Join(cfg.Home, fleetDirName), nil
+	return filepath.Join(cfg.Home, pki.FleetRootDirName), nil
 }
 
 func identityInitRootCmd() *cobra.Command {

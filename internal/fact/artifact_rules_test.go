@@ -9,9 +9,9 @@ func ontWithArtifacts(section string) string {
 	return "id: t\nname: T\nartifacts:\n" + section + "topics:\n  notes:\n    description: n\n"
 }
 
-// The fleet preset declares the PKI and the ledger rules (R7) and
+// The fleet ontology declares the PKI and the ledger rules (R7) and
 // verify_signatures: enforce, and it is a valid NEW ontology.
-func TestFleetPreset_DeclaresArtifactRulesAndEnforce(t *testing.T) {
+func TestFleetOntology_DeclaresArtifactRulesAndEnforce(t *testing.T) {
 	o := FleetOntology()
 	if o.Attributes[AttrVerifySignatures] != "enforce" {
 		t.Fatalf("verify_signatures = %v, want enforce", o.Attributes[AttrVerifySignatures])
@@ -149,8 +149,8 @@ func TestArtifactAttrs_Combination(t *testing.T) {
 	}
 }
 
-// The boot refresh may never add, change or drop an artifact rule: a stored
-// rule the preset lacks is divergence, and so is a preset that adds one.
+// A stored artifact rule the preset lacks is divergence: the boot refresh
+// writes the preset over the stored file and would erase it.
 func TestArtifactRules_AreRefreshDivergence(t *testing.T) {
 	with, err := ParseOntology([]byte(ontWithArtifacts("  a/x: { change: write-once }\n")))
 	if err != nil {
@@ -162,11 +162,5 @@ func TestArtifactRules_AreRefreshDivergence(t *testing.T) {
 	}
 	if d := with.SubsetDivergence(without); d != DivergenceAttributes {
 		t.Fatalf("stored rule, preset without it: divergence %q, want %q", d, DivergenceAttributes)
-	}
-	if d := without.SubsetDivergence(with); d != "" {
-		t.Fatalf("stored without, preset with: SubsetDivergence %q (the refresh guard is ArtifactRulesEqual)", d)
-	}
-	if ArtifactRulesEqual(without, with) || !ArtifactRulesEqual(with, with) || !ArtifactRulesEqual(without, without) {
-		t.Fatal("ArtifactRulesEqual")
 	}
 }

@@ -11,8 +11,8 @@ import { SettingsPage, type Section } from './SettingsPage';
 // action shown while the state forbids it is disabled WITH its reason.
 //
 // Registering pushes this instance's member record on its agent branch of the
-// fleet repository; a human accepts it by merging that branch into the fleet's
-// main (record state "pending" until then). Unregistering pushes a "left"
+// fleet repository; it counts once the fleet's master merges it into the
+// fleet's main (record state "pending" until then). Unregistering pushes a "left"
 // record FIRST and unmounts the fleet repository only once that push lands.
 
 // Pushes are retried on the sync loop, so the state moves without a click.
@@ -71,7 +71,7 @@ export function recordSync(st: FleetStatus): { text: string; warn: boolean } | n
     return { text: 'differs from knomit.toml / this binary: restart or re-register to update it', warn: true };
   }
   if (st.record_pending_update) {
-    return { text: "pending update: waiting for someone to merge this instance's branch into the fleet's main", warn: false };
+    return { text: "pending update: waiting for the fleet's master to merge this instance's branch into the fleet's main", warn: false };
   }
   return { text: 'current', warn: false };
 }
@@ -84,7 +84,7 @@ export function registerBlocked(st: FleetStatus): string {
     case 'registering':
       return 'A registration is still being pushed; it is retried on every sync.';
     case 'unregistering':
-      return 'An unregistration is still being pushed; it must finish (or the fleet repository be archived) before registering again.';
+      return 'An unregistration is still being pushed; it is retried on every sync and must finish before registering again.';
     case 'registered':
       return `Registered with ${st.fleet_repo ?? 'a fleet'}: unregister first to join another.`;
   }
@@ -202,7 +202,7 @@ export function FleetPage() {
               <span style={kvKey}>Record on main</span>
               <span data-testid="fleet-record-state" style={{ color: '#ddd' }}>
                 {st.record_state ?? 'pending'}
-                {st.record_state === 'pending' && <span style={dim}> — waiting for someone to merge this instance's branch</span>}
+                {st.record_state === 'pending' && <span style={dim}> — waiting for the fleet's master to merge this instance's branch</span>}
               </span>
             </>
           )}
@@ -268,8 +268,8 @@ export function FleetPage() {
       body: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={dim}>
-            Joining pushes this instance's member record on its own branch of the fleet repository; someone with access
-            to that repository accepts it by merging the branch into its main.
+            Joining pushes this instance's member record on its own branch of the fleet repository; it counts once the
+            fleet's master merges it into the fleet's main.
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
             <input aria-label="Fleet repository URL" placeholder="https://… or git@…" value={url} onChange={e => setUrl(e.target.value)} style={input} />
@@ -303,9 +303,6 @@ export function FleetPage() {
             Unregister
           </button>
           {unregWhy && <div data-testid="fleet-unregister-why" style={dim}>{unregWhy}</div>}
-          {st.state === 'unregistering' && (
-            <div style={dim}>To stop retrying, archive the fleet repository by hand.</div>
-          )}
           {actErrNode}
         </div>
       ),

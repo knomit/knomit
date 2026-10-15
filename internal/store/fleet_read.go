@@ -21,8 +21,8 @@ import (
 	"knomit/internal/pki"
 )
 
-// ErrNotFleet: the repository's ontology is not the fleet preset.
-var ErrNotFleet = errors.New("not a fleet repository (its ontology is not the fleet preset)")
+// ErrNotFleet: the repository's ontology is not the fleet ontology.
+var ErrNotFleet = errors.New("not a fleet repository (its ontology is not the fleet ontology)")
 
 // FleetMember is one member record as read from a fleet repository's tree.
 type FleetMember struct {
@@ -132,7 +132,7 @@ func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetM
 }
 
 // LoadFleet opens the fleet repository at dir, checks that its ontology (at
-// rev) is the fleet preset, and returns the member records at rev. root is the
+// rev) is the fleet ontology, and returns the member records at rev. root is the
 // repository's fact root ("" = "kb").
 func LoadFleet(dir, rev, root string) ([]FleetMember, error) {
 	f, err := LoadFleetAt(dir, rev, root)
@@ -155,7 +155,7 @@ func LoadFleetAt(dir, rev, root string) (Fleet, error) {
 
 // FleetMembersAt returns the member records at branch in THIS store (a
 // mounted fleet repository), after checking that its ontology there is the
-// fleet preset. root is the store's fact root.
+// fleet ontology. root is the store's fact root.
 func (s *Service) FleetMembersAt(branch string) ([]FleetMember, error) {
 	f, err := s.FleetAt(branch)
 	return f.Members, err
@@ -191,7 +191,7 @@ type Fleet struct {
 	PKI     *FleetPKI // nil: the revision declares no pki: root, or holds no root file yet
 }
 
-// loadFleetAt checks that c's ontology is the fleet preset and reads its
+// loadFleetAt checks that c's ontology is the fleet ontology and reads its
 // member records (under <root>/members/) and the certificate artifacts its
 // ontology's artifacts section declares (pki: root | crl | leaf).
 func loadFleetAt(fleetID string, c *object.Commit, root string) (Fleet, error) {
@@ -227,7 +227,7 @@ const defaultPKIFileCap = 64 << 10
 
 // crlReadBound is how much of a CRL with no max_size a reader reads. It is a
 // memory guard, not a policy cap: the CRL grows with every revocation and
-// never shrinks (revoked_set: superset), so the fleet preset declares no
+// never shrinks (revoked_set: superset), so the fleet ontology declares no
 // max_size on it, and this bound sits far above any real fleet's CRL (an
 // entry is about 40 bytes: over a million revocations).
 const crlReadBound = 64 << 20

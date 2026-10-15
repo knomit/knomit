@@ -90,3 +90,43 @@ func TestWriteHandlers_AgentBranchPassesGate(t *testing.T) {
 		})
 	}
 }
+
+// The fleet repository is read-only for every MCP write, on its own agent
+// branch too: the five write tools answer the fleet message, and the
+// experiment tool answers everything but list with it. The same tools write
+// to an ordinary repo's agent branch (TestWriteHandlers_AgentBranchStaysWritable).
+// SABOTAGE: drop the IsFleet arm of RepoInstance.WritableBranch -> learn is
+// accepted -> red; drop the experiment tool's fleet gate -> open forks -> red.
+func TestWriteHandlers_RejectTheFleetRepository(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.FleetOntology())
+	require.True(t, ri.IsFleet(), "fixture: a fleet repository")
+	ctx := repos.WithBinding(context.Background(), repos.NewBindingOfRepo(ri, ri.AgentBranch()))
+
+	handlers := map[string]func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error){
+		"learn":       LearnHandler(),
+		"update":      UpdateHandler(),
+		"retract":     RetractHandler(),
+		"hypothesize": HypothesizeHandler(),
+		"review":      ReviewHandler(),
+	}
+	for name, h := range handlers {
+		t.Run(name, func(t *testing.T) {
+			var req mcpgo.CallToolRequest
+			req.Params.Arguments = map[string]any{}
+			result, err := h(ctx, req)
+			require.NoError(t, err)
+			require.True(t, result.IsError, "%s must reject writes to the fleet repository", name)
+			require.Contains(t, resultText(t, result), "changes only through `knomit fleet`", name)
+		})
+	}
+	for _, action := range []string{"open", "commit", "rollback", "sync"} {
+		t.Run("experiment "+action, func(t *testing.T) {
+			var req mcpgo.CallToolRequest
+			req.Params.Arguments = map[string]any{"action": action, "name": "exp-a"}
+			result, err := ExperimentHandler(nil)(ctx, req)
+			require.NoError(t, err)
+			require.True(t, result.IsError)
+			require.Contains(t, resultText(t, result), "changes only through `knomit fleet`", action)
+		})
+	}
+}

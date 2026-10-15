@@ -166,11 +166,14 @@ paths:
         `.knomit/**`, a symlink, submodule or executable, over 256 files or
         4 MiB, no or an invalid `.knomit/ontology.yaml`, a built-in preset's
         id on an ontology that is not that preset, two template facts for
-        one name); 409 "Fleet template needs initialize" for a fleet
-        template outside mode=initialize, and 409 "Fleet already present"
-        for one on an instance that already has a fleet or a fleet
-        registration in flight; 503 "Fleet state unavailable" when that
-        state cannot be read.
+        one name).
+
+        The ontology id `fleet` is reserved for the fleet repository, which
+        only the fleet routes create or join: 422 "Fleet ontology reserved",
+        before the 202, for `ontology_preset: fleet`, an `ontology_yaml` with
+        id `fleet` or a template whose ontology has it, in every mode; a
+        clone or subscribe of a fleet repository is refused the same way
+        when the create reads the remote's ontology.
       operationId: createRepo
       requestBody:
         required: true
@@ -2139,12 +2142,15 @@ paths:
       description: |
         The membership state machine: `standalone` (no fleet) -> `registering`
         (own member record committed, push pending) -> `registered` (the
-        record is `pending` on the fleet's main until a human merges it, then
+        record is `pending` on the fleet's main until the fleet's master merges it, then
         `active`, `left` or `revoked` as that main says) -> `unregistering`
         (a `left` record committed, push pending) -> `standalone`.
         `last_error` is the latest push or fetch failure, cleared on success;
         a pending push is retried on the sync loop. The fleet repository is the
-        one mounted repository whose ontology is the fleet preset.
+        one mounted repository whose ontology id is `fleet` (an ontology
+        built into knomit). It is read-only for MCP and the fact routes, may
+        be a lens's read mount but not its write repo, and is never archived,
+        deleted, restored or connected through the repo routes.
       operationId: getFleet
       responses:
         "200":
@@ -2157,9 +2163,9 @@ paths:
       summary: Register with a fleet (or refresh this instance's record)
       description: |
         Mounts the fleet repository (clone, with an agent branch), refuses
-        unless its ontology is the fleet preset, writes this instance's member
-        record on the agent branch and pushes it. A human accepts by merging
-        the agent branch into the fleet's main. The same URL again compares
+        unless its ontology is the fleet ontology, writes this instance's member
+        record on the agent branch and pushes it. The record counts once the
+        fleet's master merges it into main. The same URL again compares
         the record with the current config and binary and writes ONE new
         version only if an advertised field (key, host, branch, addresses,
         git, capabilities) changed. 202 while the push is pending (retried on
@@ -2169,7 +2175,7 @@ paths:
         Refusals carry a machine-readable `code`:
         `registration_pending` (409), `unregistration_pending` (409),
         `already_registered` (409, another fleet: unregister first),
-        `not_a_fleet` (422, the repository's ontology is not the fleet preset;
+        `not_a_fleet` (422, the repository's ontology is not the fleet ontology;
         the mount is removed), `clone_failed` (502, nothing is mounted or
         persisted; re-issue the request), `url_required` (400).
       operationId: registerFleet
@@ -2199,9 +2205,9 @@ paths:
         enters `unregistering` and pushes. Only a successful push unmounts the
         fleet repository and returns to `standalone` (200); otherwise the state
         stays `unregistering` with `last_error` set and the push is retried on
-        the sync loop (202) until it succeeds or the fleet repository is
-        archived by hand. A bare archive of the fleet repository while
-        registered is refused with `use_unregister` (409). Refusals:
+        the sync loop (202) until it succeeds. The fleet repository is never
+        archived or deleted through the repo routes: those refuse it with
+        `fleet_repository` (409) in every state. Refusals:
         `not_registered` (409), `unregistration_pending` (409).
       operationId: unregisterFleet
       responses:
@@ -2482,9 +2488,10 @@ paths:
       description: |
         Moves an archived repo back to active. Optionally renames it via
         `new_name`. Returns 409 if the name or origin is already in use by an
-        active repo, and 422 if the repo's ontology is a symlink (knomit does
-        not follow symlinks, and refuses such a repo); the repo then stays
-        archived, so it can still be purged.
+        active repo, 422 if the repo's ontology is a symlink (knomit does
+        not follow symlinks, and refuses such a repo), and 422 "Fleet
+        ontology reserved" for a fleet repository (never restored); the repo
+        then stays archived, so it can still be purged.
       operationId: restoreArchivedRepo
       requestBody:
         required: false
@@ -3591,7 +3598,8 @@ components:
             `active` when the repo has a live store. Otherwise the reason it has
             none: `missing` (the database file is gone), `unopenable` (the file
             is there but the store or git failed to open, or the ontology on
-            its read branch is a symlink — `detail` names the path), or
+            its read branch is a symlink — `detail` names the path — or it is a
+            second fleet repository, which boot leaves unmounted), or
             `conflict` (another active repo already holds this knowledge base).
 
             A repo in a non-active state is REGISTERED — it stays in this list,

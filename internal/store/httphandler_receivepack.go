@@ -379,7 +379,7 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 	}
 	// Rule A (self-registration) exists only where member records live: this
 	// repository must itself be the fleet repository (its ontology at the
-	// upstream is the fleet preset).
+	// upstream is the fleet ontology).
 	selfRoot := ""
 	if fact.IsFleetOntology(ont) {
 		if selfRoot = rp.rh.factRoot; selfRoot == "" {

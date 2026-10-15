@@ -348,6 +348,12 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 			hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
 			return
 		}
+		// Both files are committed on the agent branch: the same refusal as
+		// the fact routes when it accepts no authored write (the fleet
+		// repository, a subscription).
+		if refuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
+			return
+		}
 
 		// Validate BOTH lengths before writing EITHER. The two writes are two
 		// separate git commits and there is no transaction spanning them, so a

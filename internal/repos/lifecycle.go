@@ -143,6 +143,10 @@ type CreateSpec struct {
 	// mode refuses it.
 	Template *TemplateRef
 	Origin   *OriginSpec
+	// fleetDoor marks a create made by knomit's fleet code: the one door
+	// through which an ontology with id `fleet` may be created or mounted
+	// (fleet_chokepoint.go). Unexported, so no request can set it.
+	fleetDoor bool
 }
 
 // validateOntologySources is the request-shape rule for the three ontology
@@ -292,6 +296,9 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	if err := validateOntologySources(spec); err != nil {
 		return err
 	}
+	if err := refuseReservedOntology(spec); err != nil {
+		return err
+	}
 	if spec.joinsRemoteOntology() {
 		if err := rejectOntologySpecForClone(spec); err != nil {
 			return err
@@ -302,11 +309,7 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	// create re-reads it (authoritative): the source can move in between, and
 	// the commit the create records is the one IT read.
 	if spec.Template != nil && (spec.Mode == "template" || spec.Mode == "initialize") {
-		rt, err := m.ResolveTemplate(ctx, *spec.Template)
-		if err != nil {
-			return err
-		}
-		if err := m.checkTemplateMode(rt, spec.Mode); err != nil {
+		if _, err := m.ResolveTemplate(ctx, *spec.Template); err != nil {
 			return err
 		}
 	}
@@ -524,6 +527,9 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	if err := validateOntologySources(spec); err != nil {
 		return nil, err
 	}
+	if err := refuseReservedOntology(spec); err != nil {
+		return nil, err
+	}
 	reg, _, err := m.controlHandles()
 	if err != nil {
 		return nil, err
@@ -596,6 +602,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	// the "repo is populating" 503, and the reservation above keeps any other
 	// create off this name and origin.
 	ri := m.newInstance(spec.Name, uid, spec.Mode == "subscribe")
+	ri.fleetDoor = spec.fleetDoor
 	m.Set(spec.Name, ri)
 
 	_, merr := m.Send(ctx, ri, Mount(MountSpec{Mode: MountCreate, Create: spec, Emit: emit}))
@@ -731,10 +738,10 @@ func (m *Manager) DeleteRepo(name, reason string) error {
 	return m.deleteRepo(name, reason)
 }
 
-// deleteRepo is DeleteRepo without the fleet guard: the unregister path uses
-// it once the departure has been pushed.
+// deleteRepo is DeleteRepo without the fleet guard: the fleet code uses it
+// (the unregister path, once the departure has been pushed, sets the fleet
+// state itself).
 func (m *Manager) deleteRepo(name, reason string) error {
-	wasFleet := m.IsFleetRepo(name)
 	info, err := m.archive(name, ArchiveReason{Source: ArchiveBySystem, Reason: reason})
 	if err != nil {
 		return err
@@ -743,7 +750,6 @@ func (m *Manager) deleteRepo(name, reason string) error {
 		return fmt.Errorf("delete %q: archived, but the purge that follows failed (the row remains in the archive): %w", name, perr)
 	}
 	log.Info().Str("repo", name).Str("uid", info.ID).Msg("deleted repo")
-	m.fleetRemoved(wasFleet)
 	return nil
 }
 
@@ -926,9 +932,6 @@ func (m *Manager) initTemplate(ctx context.Context, spec CreateSpec, dbPath stri
 	emit(Event{Step: "template", Phase: PhaseValidate, Message: "reading template " + spec.Template.Repo + "/" + spec.Template.Name, Pct: 20})
 	rt, err := m.ResolveTemplate(ctx, *spec.Template)
 	if err != nil {
-		return err
-	}
-	if err := m.checkTemplateMode(rt, spec.Mode); err != nil {
 		return err
 	}
 	emit(Event{Step: "init-git", Phase: PhaseTransfer, Indeterminate: true, Message: "initialising git store", Pct: 50})
@@ -1192,9 +1195,6 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	if spec.Template != nil {
 		rt, err := m.ResolveTemplate(ctx, *spec.Template)
 		if err != nil {
-			return "", err
-		}
-		if err := m.checkTemplateMode(rt, spec.Mode); err != nil {
 			return "", err
 		}
 		tmpl = rt
@@ -1561,31 +1561,17 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 // base no longer block adding the same one again (both uniqueness rules count
 // ACTIVE rows only).
 //
-// The fleet guard cannot see an unavailable fleet repository: the fleet is
-// recognised by a MOUNTED repo's ontology (fleetRepo), and an unavailable one
-// has none loaded. Archiving it is therefore not refused, and the fleet state
-// is left as it was — accepted, because a fleet repository that will not open
-// serves no fleet either.
-//
-// KNOWN DEAD END (not made worse here): a fleet row in state "unregistering"
-// whose fleet repository is unavailable. Archiving that repository does not
-// call fleetRemoved (wasFleet is false: it cannot be recognised), so the row
-// stays "unregistering" and RegisterFleet keeps refusing with "an
-// unregistration is still being pushed; it must finish (or the fleet
-// repository be archived)" — whose advertised remedy, archiving, no longer
-// clears it. It was already a dead end before unavailable repos could be
-// archived; clearing it needs a way to identify the fleet repository without
-// mounting it.
+// The fleet repository is never archived here (guardFleetRemoval). The guard
+// cannot see an UNAVAILABLE fleet repository: the fleet is recognised by a
+// MOUNTED repo's ontology (fleetRepo), and an unavailable one has none
+// loaded. Archiving it is therefore not refused, and the fleet state is left
+// as it was — accepted, because a fleet repository that will not open serves
+// no fleet either.
 func (m *Manager) ArchiveWith(name string, why ArchiveReason) (ArchiveInfo, error) {
 	if err := m.guardFleetRemoval(name); err != nil {
 		return ArchiveInfo{}, err
 	}
-	wasFleet := m.IsFleetRepo(name)
-	info, err := m.archive(name, why)
-	if err == nil {
-		m.fleetRemoved(wasFleet)
-	}
-	return info, err
+	return m.archive(name, why)
 }
 
 // archive is ArchiveWith without the fleet guard (see deleteRepo).
@@ -1874,7 +1860,7 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	// holds this knowledge base — makes the mount fail, and the restore is
 	// undone: the file is untouched, so this is two UPDATEs. The sync loop
 	// starts during the walk, for an origin-backed repo and a local one alike.
-	ri, merr := m.mountExisting(target, uid, origin)
+	ri, merr := m.mountExisting(target, uid, origin, false)
 	if merr != nil {
 		_ = reg.SetState(uid, StateArchived, rec.ArchivedAt)
 		if target != rec.Name {

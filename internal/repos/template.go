@@ -60,22 +60,6 @@ var (
 	// ErrTemplatePresetID: its ontology uses an embedded preset's id but is
 	// not that preset (the boot refresh would treat it as the preset).
 	ErrTemplatePresetID = errors.New("template ontology uses a built-in preset's id but is not that preset")
-	// ErrTemplateFleetLocal: a fleet-id template may not become a LOCAL repo
-	// (it would become this instance's fleet, and `knomit fleet register`
-	// would then answer already_registered); use mode "initialize" on the
-	// fleet's git URL. Every fleet-template refusal matches it, including
-	// ErrTemplateFleetPresent.
-	ErrTemplateFleetLocal = errors.New("a fleet template creates the fleet repository only with mode \"initialize\" on the fleet's git URL, and only when this instance has no fleet")
-	// ErrTemplateFleetPresent: the request IS an initialize, but this
-	// instance already has a fleet repository, or a fleet registration or
-	// unregistration is in flight. It wraps ErrTemplateFleetLocal (so
-	// errors.Is(err, ErrTemplateFleetLocal) still holds) and exists so the
-	// answer does not tell an initialize to use initialize.
-	ErrTemplateFleetPresent = fmt.Errorf("%w: this instance already has a fleet", ErrTemplateFleetLocal)
-	// ErrTemplateFleetStateUnavailable: the fleet state could not be READ,
-	// so whether a registration is in flight is unknown. The create is
-	// refused (fail closed); it is not a verdict on the template.
-	ErrTemplateFleetStateUnavailable = errors.New("fleet state unavailable: cannot tell whether a fleet registration is in flight")
 )
 
 // templatePresetByID is fact.EmbeddedPresetByID, as a variable only so a test
@@ -129,9 +113,9 @@ func (m *Manager) templateSource(ctx context.Context, ref TemplateRef, fn func(s
 
 // ResolveTemplate reads template ref at its source's consensus tip and checks
 // it: name, folder, plain files only, layout, limits, an ontology that parses
-// as NEW, not a preset id unless it IS that preset, and at most one describing
-// fact. It writes nothing. The fleet rule depends on the mode and is checked
-// by the caller (checkTemplateMode).
+// as NEW, never the reserved fleet id (ErrFleetOntologyReserved, in every
+// mode), not a preset id unless it IS that preset, and at most one describing
+// fact. It writes nothing.
 func (m *Manager) ResolveTemplate(ctx context.Context, ref TemplateRef) (*ResolvedTemplate, error) {
 	if !fact.ValidTemplateName(ref.Name) {
 		return nil, fmt.Errorf("%w: %q", ErrTemplateName, ref.Name)
@@ -170,6 +154,9 @@ func (m *Manager) ResolveTemplate(ctx context.Context, ref TemplateRef) (*Resolv
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s/%s: %v", ErrTemplateOntology, ref.Repo, ref.Name, err)
 	}
+	if fact.IsFleetOntology(o) {
+		return nil, fmt.Errorf("%w: template %s/%s", ErrFleetOntologyReserved, ref.Repo, ref.Name)
+	}
 	// "Is that preset" is exactly what the boot refresh asks (stages.go
 	// refreshDivergence): a template this accepts with a preset's id is one
 	// the refresh upgrades in place, never one it would rewrite into a
@@ -181,34 +168,6 @@ func (m *Manager) ResolveTemplate(ctx context.Context, ref TemplateRef) (*Resolv
 	}
 	rt.Ontology = o
 	return rt, nil
-}
-
-// checkTemplateMode applies the rules that depend on the create mode: a
-// fleet-id template only with "initialize" (ErrTemplateFleetLocal), and only
-// while this instance has no fleet repository and no fleet registration in
-// flight (ErrTemplateFleetPresent). A fleet state that cannot be read
-// refuses too (ErrTemplateFleetStateUnavailable): fail closed.
-func (m *Manager) checkTemplateMode(rt *ResolvedTemplate, mode string) error {
-	if !fact.IsFleetOntology(rt.Ontology) {
-		return nil
-	}
-	if mode != "initialize" {
-		return ErrTemplateFleetLocal
-	}
-	if ri := m.fleetRepo(); ri != nil {
-		return fmt.Errorf("%w: its fleet repository is %q", ErrTemplateFleetPresent, ri.Name())
-	}
-	// Any read failure refuses, a missing identity row included: app.New and
-	// Manager.Start both write that row before a create can run, so a row
-	// that is not there was lost, and "nothing in flight" cannot be known.
-	row, err := m.fleetDB()
-	switch {
-	case err != nil:
-		return fmt.Errorf("%w: %v", ErrTemplateFleetStateUnavailable, err)
-	case row.State == FleetRegistering || row.State == FleetUnregistering:
-		return fmt.Errorf("%w: a fleet registration is %s", ErrTemplateFleetPresent, row.State)
-	}
-	return nil
 }
 
 // listingSkipLevel is the level the all-repos listing logs a skipped repo at.

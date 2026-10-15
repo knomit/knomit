@@ -550,6 +550,8 @@ func lensCreateErrStatus(err error) (int, string) {
 		return http.StatusUnprocessableEntity, "Lens pins an unknown branch"
 	case errors.Is(err, repos.ErrLensWriteSubscribed):
 		return http.StatusUnprocessableEntity, "Lens write repo is a subscription"
+	case errors.Is(err, repos.ErrLensWriteFleet):
+		return http.StatusUnprocessableEntity, "Lens write repo is the fleet repository"
 	case errors.Is(err, repos.ErrLensWriteEmpty):
 		return http.StatusBadRequest, "Lens write repo required"
 	case errors.Is(err, repos.ErrLensDescriptionTooLong):

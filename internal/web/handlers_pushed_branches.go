@@ -161,7 +161,10 @@ func handlePushedMerge() http.HandlerFunc {
 				"repo "+ri.Name()+" is a subscription: it has no agent branch to merge into", r.URL.Path)
 			return
 		}
-		if refuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
+		// The fleet repository is read-only for authored writes, but the
+		// operator's merge of a pushed member branch is how the fleet's
+		// master accepts it by hand, so it is not refused here.
+		if !ri.IsFleet() && refuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
 			return
 		}
 

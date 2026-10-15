@@ -1084,6 +1084,7 @@ func isCommitRefusal(err error) bool {
 	return isLifecycleRefusal(err) ||
 		errors.Is(err, repos.ErrOriginOntologyConflict) ||
 		errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal) ||
+		errors.Is(err, repos.ErrFleetOntologyReserved) ||
 		errors.Is(err, repos.ErrOriginUnreachable) ||
 		errors.Is(err, repos.ErrLocalOriginDenied) ||
 		errors.Is(err, repos.ErrRegistryUnavailable)
@@ -1098,6 +1099,10 @@ func writeCommitProblem(w http.ResponseWriter, r *http.Request, b hal.URLBuilder
 		hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
 		hal.WriteProblem(w, http.StatusConflict, "Knowledge base already local", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrFleetOntologyReserved):
+		// The fleet repository is never connected, and a fleet-id store never
+		// arrives by connect (guardSwap).
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Fleet ontology reserved", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrOriginUnreachable):
 		hal.WriteProblem(w, http.StatusBadGateway, "Origin not attached", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrLocalOriginDenied):

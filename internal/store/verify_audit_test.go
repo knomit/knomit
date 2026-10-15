@@ -117,7 +117,7 @@ func TestAudit_AgentIDsAreExactLikeTheGate(t *testing.T) {
 
 // A symlinked fleet ontology is the named error (fact.ErrSymlinkNotFollowed),
 // as at LoadFleet and FleetMembersAt, never "not a fleet": the symlink's link
-// TEXT is the real fleet preset, so a reader that parsed it would audit
+// TEXT is the real fleet ontology, so a reader that parsed it would audit
 // cleanly, and one that folded the error into ErrNotFleet would lie about the
 // data. Sabotage: fold the read error back into ErrNotFleet → red.
 func TestAudit_SymlinkedFleetOntologyIsNamedNotNotAFleet(t *testing.T) {

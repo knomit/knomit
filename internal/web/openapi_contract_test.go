@@ -172,7 +172,7 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 	}
 	require.Contains(t, paths, "/fleet/members")
 	text := fmt.Sprint(fleet)
-	for _, code := range []string{"registration_pending", "unregistration_pending", "already_registered", "not_a_fleet", "clone_failed", "not_registered", "use_unregister"} {
+	for _, code := range []string{"registration_pending", "unregistration_pending", "already_registered", "not_a_fleet", "clone_failed", "not_registered", "fleet_repository"} {
 		require.Contains(t, text, code, "refusal code %s must be declared", code)
 	}
 	schema := doc["components"].(map[string]any)["schemas"].(map[string]any)["FleetStatus"].(map[string]any)

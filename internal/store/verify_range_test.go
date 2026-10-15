@@ -278,7 +278,7 @@ func TestCheckRange_OffTouchesNothing(t *testing.T) {
 }
 
 // G9: verification on with no fleet, an unreadable fleet, or a fleet whose
-// ontology is not the fleet preset: the gate could not run (an error, exit 2
+// ontology is not the fleet ontology: the gate could not run (an error, exit 2
 // in the command), never an empty member set.
 func TestCheckRange_FleetMissingIsCouldNotRun(t *testing.T) {
 	f := newRangeFixture(t)

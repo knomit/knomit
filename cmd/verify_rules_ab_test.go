@@ -96,7 +96,7 @@ func TestVerifyCI_RulesABOverPlainCheckouts(t *testing.T) {
 	fleet := filepath.Join(tmp, "fleet")
 	require.NoError(t, os.MkdirAll(fleet, 0o755))
 	git(fleet, nil, "init", "-q", "-b", "main")
-	// The fleet preset as it ships: enforce, and the artifacts section that
+	// The fleet ontology as it ships: enforce, and the artifacts section that
 	// declares where the certificates are (R7).
 	preset, err := fact.FleetOntology().Serialize()
 	require.NoError(t, err)

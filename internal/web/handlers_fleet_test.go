@@ -3,11 +3,13 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,6 +20,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
+	"knomit/internal/web/hal"
 )
 
 func gitRun(t *testing.T, dir string, args ...string) {
@@ -29,7 +32,7 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, "git %v: %s", args, out)
 }
 
-// seedFleetBare is a bare fleet repository whose main holds the fleet preset.
+// seedFleetBare is a bare fleet repository whose main holds the fleet ontology.
 func seedFleetBare(t *testing.T, dir string) string {
 	t.Helper()
 	bare := filepath.Join(dir, "fleet.git")
@@ -111,4 +114,125 @@ func TestFleetMemberRow(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &m))
 	require.Equal(t, []any{}, m["addresses"], "an F09 record without addresses is []")
 	require.Equal(t, map[string]any{}, m["capabilities"])
+}
+
+// The fleet repository is read-only for the fact REST routes: a create on its
+// own agent branch is refused 403 with the one fleet message, and so is an
+// experiment open; an ordinary repo's create is not (control).
+// SABOTAGE: drop the IsFleet arm of RepoInstance.WritableBranch -> the create
+// is accepted -> red.
+func TestFleetREST_FactWritesRefused(t *testing.T) {
+	dir := t.TempDir()
+	url := seedFleetBare(t, dir)
+	home := filepath.Join(dir, "home")
+	require.NoError(t, os.MkdirAll(home, 0o755))
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), Machine: repos.Options{Synchronous: true},
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+	_, err := m.RegisterFleet(context.Background(), url, "", "")
+	require.NoError(t, err)
+	_, err = m.Create(context.Background(), repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
+	require.NoError(t, err)
+	st, err := m.FleetStatus(context.Background())
+	require.NoError(t, err)
+	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := fromLoopback(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+	const fact = `{"title":"T","body":"b","domain":["x"]}`
+	rec := post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+
+	rec = post("/repos/"+st.FleetRepo+"/experiments", `{"name":"exp-a"}`)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Fleet repository is read-only")
+
+	rec = post("/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
+	require.Equal(t, http.StatusCreated, rec.Code, "control: %s", rec.Body.String())
+
+	// Every other REST route that commits to a repo refuses the fleet
+	// repository the same way (PR #520 F2): a synthesis run (its reviewer
+	// writes dedup, synthesis and discovery facts on the agent branch) and
+	// the repo PATCH (README.md / LICENSE on the agent branch).
+	// SABOTAGE: drop the refuseUnwritableBranch call from
+	// handleStartSynthesis -> 201 -> red; from handleHALRepoPatch -> 200 and a
+	// README commit -> red.
+	rs := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb", LLMAdapter: &stubLLMAdapter{}}).NewAPIRouter()
+	send := func(method, path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := fromLoopback(httptest.NewRequest(method, path, strings.NewReader(body)))
+		req.Header.Set("Content-Type", "application/json")
+		rs.ServeHTTP(rec, req)
+		return rec
+	}
+	fleetRI := m.Get(st.FleetRepo)
+	head := func() string {
+		t.Helper()
+		var tip string
+		require.NoError(t, fleetRI.WithRead(func(svc *store.Service) {
+			h, err := svc.Branches().HeadCommit(context.Background(), "agent/rest-fleet")
+			require.NoError(t, err)
+			tip = h
+		}))
+		return tip
+	}
+	before := head()
+	rec = send(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+	rec = send(http.MethodPatch, "/repos/"+st.FleetRepo, `{"description":"hello","license":"MIT"}`)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+	require.Equal(t, before, head(), "nothing was committed on the fleet repository")
+
+	rec = send(http.MethodPatch, "/repos/kb", `{"description":"hello"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "control: %s", rec.Body.String())
+	// Control without running a review (the stub LLM cannot drive one): a
+	// synthesis already running on kb answers 409 from the hub, which the
+	// handler reaches only past the write gate.
+	release := make(chan struct{})
+	defer close(release)
+	_, err = m.Get("kb").TaskHub().Start("synth", func(ctx context.Context, _ func(repos.TaskEvent)) {
+		select {
+		case <-ctx.Done():
+		case <-release:
+		}
+	})
+	require.NoError(t, err)
+	rec = send(http.MethodPost, "/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
+	require.Equal(t, http.StatusConflict, rec.Code, "control: past the gate: %s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Job already running")
+
+	// The operator's merge of a pushed member branch is NOT an authored write
+	// and stays open on the fleet repository: an unknown branch is a 404, not
+	// the read-only 403.
+	// SABOTAGE: drop the IsFleet exemption in handlePushedMerge -> 403 -> red.
+	rec = post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/peer")+"/merge", `{"expected_tip":"0123456789012345678901234567890123456789"}`)
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+}
+
+// A restore or a connect refused for the reserved fleet id is a 422 the
+// client can read, never the 500 of an unmapped error: Identify refuses a
+// restored fleet repository, guardSwap a connect.
+// SABOTAGE: drop either ErrFleetOntologyReserved arm -> 500 -> red.
+func TestFleetReserved_RestoreAndConnectStatuses(t *testing.T) {
+	err := fmt.Errorf("register repo: %w", repos.ErrFleetOntologyReserved)
+	status, title := archiveErrStatus(err)
+	require.Equal(t, http.StatusUnprocessableEntity, status)
+	require.Equal(t, "Fleet ontology reserved", title)
+
+	require.True(t, isCommitRefusal(err), "a connect refused before anything changed")
+	rec := httptest.NewRecorder()
+	writeCommitProblem(rec, httptest.NewRequest(http.MethodPost, "/repos/kb/origin-sessions/x/commit", nil), hal.URLBuilder{}, "kb", err)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Fleet ontology reserved")
 }

@@ -16,7 +16,7 @@ import (
 )
 
 // newFleetPushHost is a knomit host serving a FLEET repository under
-// verify_signatures = enforce: the fleet preset ontology, one active member
+// verify_signatures = enforce: the fleet ontology, one active member
 // "boss", and extra (artifacts, more records) on main. Its push policy reads
 // the fleet from the host's own main, as repos.Manager.FleetAtMain does when
 // the mounted fleet repository is the one being pushed to.
