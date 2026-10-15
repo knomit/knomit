@@ -69,6 +69,13 @@ func TestNoHardcodedBranchLiterals(t *testing.T) {
 							defs = append(defs, fset.Position(bl.Pos()).String())
 						}
 					}
+					// The join check's hosting value names the fleet's
+					// master (a role), not a branch.
+					if id.Name == "HostingMaster" && i < len(vs.Values) {
+						if bl, ok := vs.Values[i].(*ast.BasicLit); ok {
+							allowed[bl] = true
+						}
+					}
 				}
 				return true
 			})

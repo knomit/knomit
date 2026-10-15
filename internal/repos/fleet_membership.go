@@ -470,6 +470,12 @@ func (m *Manager) joinPreflight(db *sql.DB, raw []byte) (pki.Bundle, error) {
 	return b, nil
 }
 
+// The two FleetJoinCheck.Hosting values.
+const (
+	HostingMaster = "master" // a role, not a branch (consensus_branch_literals_test allows this name)
+	HostingForge  = "forge"
+)
+
 // FleetJoinCheck is what POST /fleet/join:check answers: where the bundle's
 // fleet lives and the root the operator confirms BEFORE the join installs it.
 type FleetJoinCheck struct {
@@ -532,10 +538,10 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 		if spec.AuthMethod != "" && spec.AuthMethod != "none" || spec.AuthToken != "" {
 			return FleetJoinCheck{}, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", ErrPeerCredential.Error())
 		}
-		out.Hosting = "master"
+		out.Hosting = HostingMaster
 		return out, nil
 	}
-	out.Hosting = "forge"
+	out.Hosting = HostingForge
 	res, err := m.ProbeOriginRefs(ctx, OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken, decided: true})
 	if err != nil {
 		return FleetJoinCheck{}, err
