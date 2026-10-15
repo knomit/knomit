@@ -775,7 +775,10 @@ paths:
             conflicting_paths, paths_without_base, base_commit, host_commit and
             peer_commit. "Branch moved" carries expected_tip and actual_tip.
             Also "Unrelated histories", "Cannot sign", "Repository has no agent
-            branch".
+            branch". On the fleet repository (code set): `not_master` (only
+            the fleet's master merges) and `judge_refused` (the master
+            re-judges the branch, tip minus main, against main now, as its
+            merger does, and refuses what the judge refuses).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1920,11 +1923,15 @@ paths:
       responses:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Problem" }
+        "422": { description: "The fleet's master hosting it here needs [tls].addr (listener_required) and external_addresses (addresses_required)" }
         "409":
           description: >
             Subscription requires its origin — a repo that follows its origin
             read-only has no content of its own; archive it instead. Or "Repo
             is indexing", carrying `_links.cancel-index` {href, method: POST}.
+            On the fleet repository, a member's copy keeps its origin
+            (`member_keeps_origin`): only the master hosts the fleet, and on
+            the master the detach makes its copy the hub.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1956,6 +1963,7 @@ paths:
               schema: { $ref: "#/components/schemas/UpstreamSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: "fleet_upstream_fixed: the fleet repository's consensus branch is fixed at create" }
         "500": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin-sessions:
@@ -2140,17 +2148,23 @@ paths:
       tags: [fleet]
       summary: This instance's fleet membership (F09)
       description: |
-        The membership state machine: `standalone` (no fleet) -> `registering`
-        (own member record committed, push pending) -> `registered` (the
-        record is `pending` on the fleet's main until the fleet's master merges it, then
-        `active`, `left` or `revoked` as that main says) -> `unregistering`
-        (a `left` record committed, push pending) -> `standalone`.
-        `last_error` is the latest push or fetch failure, cleared on success;
-        a pending push is retried on the sync loop. The fleet repository is the
-        one mounted repository whose ontology id is `fleet` (an ontology
-        built into knomit). It is read-only for MCP and the fact routes, may
-        be a lens's read mount but not its write repo, and is never archived,
-        deleted, restored or connected through the repo routes.
+        The membership state: `standalone` (no fleet), `registering` (a forge
+        create whose publish of `main` is still pending, retried on the sync
+        loop) or `registered` (in a fleet; the own record is `pending` on the
+        fleet's main until the fleet's master merges it, then `active`,
+        `left` or `revoked` as that main says). `last_error` is the latest
+        push or fetch failure, cleared on success. `master` says this
+        instance is the fleet's master (its `<home>/fleet/root.key` is here
+        and its `root.crt` is the root on the fleet's main), `hosting` where
+        its copy of the fleet repository syncs (`none`: no origin, this
+        instance is the hub; otherwise the origin URL), `root_dir` where the
+        root key lives on a master. The fleet repository is the one mounted
+        repository whose ontology id is `fleet` (an ontology built into
+        knomit). It is read-only for MCP and the fact routes, may be a
+        lens's read mount but not its write repo, and is never archived,
+        deleted, restored or connected through the repo routes: it changes
+        through the fleet routes below, every one served on the local
+        listener only.
       operationId: getFleet
       responses:
         "200":
@@ -2158,65 +2172,6 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/FleetStatus" }
-    put:
-      tags: [fleet]
-      summary: Register with a fleet (or refresh this instance's record)
-      description: |
-        Mounts the fleet repository (clone, with an agent branch), refuses
-        unless its ontology is the fleet ontology, writes this instance's member
-        record on the agent branch and pushes it. The record counts once the
-        fleet's master merges it into main. The same URL again compares
-        the record with the current config and binary and writes ONE new
-        version only if an advertised field (key, host, branch, addresses,
-        git, capabilities) changed. 202 while the push is pending (retried on
-        the sync loop). With no `external_addresses` in knomit.toml the
-        registration still succeeds and the response carries `notice`.
-
-        Refusals carry a machine-readable `code`:
-        `registration_pending` (409), `unregistration_pending` (409),
-        `already_registered` (409, another fleet: unregister first),
-        `not_a_fleet` (422, the repository's ontology is not the fleet ontology;
-        the mount is removed), `clone_failed` (502, nothing is mounted or
-        persisted; re-issue the request), `url_required` (400),
-        `create_unfinished` (409, an earlier `POST /fleet/create` did not
-        finish and rolling it back failed; it is retried at the next start
-        and by the next create or registration).
-      operationId: registerFleet
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [url]
-              properties:
-                url: { type: string }
-                auth_method: { type: string }
-                auth_token: { type: string }
-      responses:
-        "200": { description: Registered, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
-        "202": { description: Registering (push pending), content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
-        "400": { description: url_required }
-        "409": { description: registration_pending, unregistration_pending or already_registered }
-        "422": { description: not_a_fleet }
-        "502": { description: clone_failed }
-    delete:
-      tags: [fleet]
-      summary: Unregister from the fleet
-      description: |
-        Commits this instance's record with `state: left` on its agent branch,
-        enters `unregistering` and pushes. Only a successful push unmounts the
-        fleet repository and returns to `standalone` (200); otherwise the state
-        stays `unregistering` with `last_error` set and the push is retried on
-        the sync loop (202) until it succeeds. The fleet repository is never
-        archived or deleted through the repo routes: those refuse it with
-        `fleet_repository` (409) in every state. Refusals:
-        `not_registered` (409), `unregistration_pending` (409).
-      operationId: unregisterFleet
-      responses:
-        "200": { description: Unregistered, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
-        "202": { description: Unregistering (push pending), content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
-        "409": { description: not_registered or unregistration_pending }
   /fleet/create:
     post:
       tags: [fleet]
@@ -2228,8 +2183,10 @@ paths:
 
         An earlier create that did not finish (the process died part way)
         is rolled back first, as at every start. If that rollback fails, the
-        answer is `create_unfinished` (409, with the cause), and it is retried
-        at the next start and by the next create or registration.
+        answer is `create_unfinished` (409, with the cause, and the way out
+        when the forge's agent branch moved to a tip this instance did not
+        push: delete that branch on the forge by hand), and it is retried at
+        the next start and by the next create or join.
 
         Pre-flights, before anything is written: this instance is in no
         fleet (`fleet_present`, 409: state not standalone, a fleet repository
@@ -2295,6 +2252,263 @@ paths:
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present, trust_installed, root_present, create_unfinished, or a repo create conflict (name, origin in use)" }
         "422": { description: "listener_required, addresses_required, knomit_origin, or a refused origin" }
+  /fleet/enroll:
+    post:
+      tags: [fleet]
+      summary: The master issues a joiner's certificate and returns its bundle
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing.
+
+        The master only (`not_master`, 409). Issues a leaf for `agent_id` and
+        `public_key` (the `ssh-ed25519` line `knomit identity show` prints on
+        the joiner), commits `artifacts/fleet/certs/<agent_id>.pem` and one
+        `issued/<serial>.pem` on the master's agent branch and publishes
+        `main` (`published`; a failure is `publish_error`, and the sync loop
+        publishes it again: the joiner is admitted only once `main` holds the
+        leaf). The bundle is the leaf, the root and the current CRL, nothing
+        else; the operator carries it to the joiner. Refusals:
+        `invalid_agent_id`, `invalid_key` (422), `own_id`, `not_registered`,
+        `not_master` (409).
+      operationId: enrollFleetMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id, public_key]
+              properties:
+                agent_id: { type: string }
+                public_key: { type: string, description: "ssh-ed25519 public key line" }
+      responses:
+        "201":
+          description: Enrolled
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  agent_id: { type: string }
+                  serial: { type: string }
+                  bundle: { type: string, description: "PEM: leaf, root, CRL" }
+                  root_fingerprint: { type: string }
+                  published: { type: boolean }
+                  publish_error: { type: string }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "not_registered, not_master or own_id" }
+        "422": { description: "invalid_agent_id or invalid_key" }
+  /fleet/join:
+    post:
+      tags: [fleet]
+      summary: Join a fleet with the bundle its master's enroll returned
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing.
+
+        Pre-flights, before anything is written: this instance is in no
+        fleet (`fleet_present`, 409), no trust material is installed
+        (`trust_installed`, 409), the bundle is a bundle (`bundle_invalid`,
+        422) for THIS instance's key (`key_mismatch`, 422) and agent id
+        (`agent_mismatch`, 422). Then the bundle is installed (supplying it
+        is the operator's consent to its root), the fleet repository is
+        cloned through the fleet door, its ontology must be the fleet's
+        (`not_a_fleet`, 422) and its main's `artifacts/fleet/root.crt` the
+        bundle's root (`root_differs`, 422), it is recorded (it mounts again
+        after a restart), and this instance's record (state `active`) is
+        written and pushed ONCE. A push the fleet refuses (`join_refused`,
+        409: on a knomit host, a leaf not on `main` yet) or any other refusal
+        (`clone_failed`, 502) undoes all of it: no repository, no recorded
+        uid, no installed material, no agent branch left on the origin,
+        state standalone. 200 with state `registered`; the record counts
+        once the master admits it into `main`.
+      operationId: joinFleet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, bundle]
+              properties:
+                url: { type: string }
+                auth_method: { type: string }
+                auth_token: { type: string }
+                bundle: { type: string, description: "PEM, as POST /fleet/enroll returned it" }
+      responses:
+        "200": { description: Joined, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "400": { description: url_and_bundle_required }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "fleet_present, trust_installed, join_refused or create_unfinished" }
+        "422": { description: "bundle_invalid, key_mismatch, agent_mismatch, not_a_fleet or root_differs" }
+        "502": { description: clone_failed }
+  /fleet/leave:
+    post:
+      tags: [fleet]
+      summary: Leave the fleet (a member)
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing.
+
+        Writes this instance's record with `state: left` and pushes it ONCE
+        (`pushed`, or `push_error`), then removes the fleet here whatever the
+        push did, so it works offline: the fleet repository is dropped from
+        every lens that reads it and deleted, the trust material is
+        uninstalled, the state is `standalone`. The master's revoke is the
+        authoritative half. The master is refused (`master`, 409):
+        decommission, or hand the root on and stand down first. Refusals:
+        `not_registered` (409).
+      operationId: leaveFleet
+      responses:
+        "200":
+          description: Left
+          content:
+            application/hal+json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/FleetStatus" }
+                  - type: object
+                    properties:
+                      pushed: { type: boolean }
+                      push_error: { type: string }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "not_registered or master" }
+  /fleet/revoke:
+    post:
+      tags: [fleet]
+      summary: The master revokes a member's certificate
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing.
+
+        The master only. A new CRL from the CURRENT `crl.pem` on the fleet's
+        main plus the member's leaf serial, and its root-signed revocation
+        statement (`revocations/<serial>.txt`), committed on the master's
+        agent branch and published (`published` / `publish_error`); the CRL
+        is installed here at once (`install_error`) and copied to
+        `<home>/fleet`. Members install the newer CRL from `main`. Refusals:
+        `not_enrolled` (404), `already_revoked`, `own_id`, `not_master`,
+        `not_registered` (409), `revoke_failed` (422).
+      operationId: revokeFleetMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id]
+              properties:
+                agent_id: { type: string }
+                reason: { type: string }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  agent_id: { type: string }
+                  serial: { type: string }
+                  crl_number: { type: string }
+                  published: { type: boolean }
+                  publish_error: { type: string }
+                  install_error: { type: string }
+        "403": { description: Not the local authenticated listener }
+        "404": { description: not_enrolled }
+        "409": { description: "already_revoked, own_id, not_master or not_registered" }
+        "422": { description: revoke_failed }
+  /fleet/decommission:
+    post:
+      tags: [fleet]
+      summary: The master ends the fleet
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing.
+
+        The master only. The fleet repository here is dropped from every
+        lens and deleted (a forge keeps its copy, inert), the trust material
+        is uninstalled and `<home>/fleet` (the root key included) is
+        deleted; state `standalone`. Members' syncs then fail, and each
+        leaves. Refusals: `not_master`, `not_registered` (409).
+      operationId: decommissionFleet
+      responses:
+        "200": { description: Decommissioned, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "not_master or not_registered" }
+  /fleet/root:
+    get:
+      tags: [fleet]
+      summary: The master's root files, for a master switch
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing.
+
+        The files of `<home>/fleet` as one document: `root.key` (the root
+        PRIVATE key), `root.crt`, `crl.pem`, `issued.jsonl`, `revoked.jsonl`
+        (those present). Install them on the new master with `PUT`, then
+        stand down here with `DELETE`. One master at a time is the user's
+        job: nothing checks the other side. Refusals: `no_root` (404).
+      operationId: getFleetRoot
+      responses:
+        "200":
+          description: The root files
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FleetRoot" }
+        "403": { description: Not the local authenticated listener }
+        "404": { description: no_root }
+    put:
+      tags: [fleet]
+      summary: Install another master's root files here
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing.
+
+        Refused while a root key is here, or `<home>/fleet` holds anything
+        (`root_present`, 409: stand down or decommission first). `root.key`
+        and `root.crt` are required (`root_incomplete`, 422), only the five
+        root file names are taken (`unknown_file`, 422), and the key must be
+        the certificate's (`root_invalid`, 422). The files land in a private
+        directory and are moved into place. This instance is the master once
+        that root is the one on the fleet's main.
+      operationId: putFleetRoot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files: { type: object, additionalProperties: { type: string } }
+      responses:
+        "201":
+          description: Installed
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FleetRoot" }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: root_present }
+        "422": { description: "root_incomplete, unknown_file or root_invalid" }
+    delete:
+      tags: [fleet]
+      summary: Stand down as master
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing.
+
+        Deletes `<home>/fleet` and keeps the membership: the user's way to
+        remove the key from the old master after a switch. Refused while
+        this instance's copy of the fleet repository has no origin (`hub`,
+        409): it hosts the fleet, so point it at the new master first
+        (`PUT /repos/{fleet}/origin`). Refusals: `no_root` (404).
+      operationId: standDownFleetRoot
+      responses:
+        "204": { description: Stood down }
+        "403": { description: Not the local authenticated listener }
+        "404": { description: no_root }
+        "409": { description: hub }
   /fleet/members:
     get:
       tags: [fleet]
@@ -3611,7 +3825,7 @@ components:
       type: object
       required: [state, agent_id]
       properties:
-        state: { type: string, enum: [standalone, registering, registered, unregistering] }
+        state: { type: string, enum: [standalone, registering, registered] }
         fleet_repo: { type: string }
         fleet_url: { type: string }
         agent_id: { type: string, description: "This instance's persisted, opaque agent id" }
@@ -3632,9 +3846,19 @@ components:
             git: { type: string }
             capabilities: { type: object, additionalProperties: { type: string } }
             host: { type: string }
-        record_current: { type: boolean, description: "The own record matches what the current config and binary advertise (absent when there is no record). Updated at boot and on re-registration." }
+        record_current: { type: boolean, description: "The own record matches what the current config and binary advertise (absent when there is no record). Updated at boot." }
         record_pending_update: { type: boolean, description: "The fleet's main holds an older version of the own record: waiting for a merge" }
         notice: { type: string, description: "Set while external_addresses is empty" }
+        master: { type: boolean, description: "This instance is the fleet's master: its <home>/fleet/root.key is here and its root.crt is the root on the fleet's main" }
+        hosting: { type: string, description: "Where this copy of the fleet repository syncs: none (no origin: this instance is the hub) or the origin URL; absent with no fleet repository" }
+        root_dir: { type: string, description: "<home>/fleet, where a master's root key lives" }
+    FleetRoot:
+      type: object
+      required: [dir, files]
+      properties:
+        dir: { type: string }
+        root_fingerprint: { type: string }
+        files: { type: object, additionalProperties: { type: string }, description: "File name -> contents: root.key, root.crt, crl.pem, issued.jsonl, revoked.jsonl" }
     # HAL primitives
     Link:
       type: object

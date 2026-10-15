@@ -1,21 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { FleetPage, capabilitiesText, registerBlocked, unregisterBlocked } from './ManageFleet';
+import { FleetPage, capabilitiesText } from './ManageFleet';
 import { api, type FleetStatus } from './api';
 
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
   api: {
     getFleet: vi.fn(),
-    registerFleet: vi.fn(),
-    unregisterFleet: vi.fn(),
     listFleetMembers: vi.fn(),
   },
 }));
 
 const standalone: FleetStatus = { state: 'standalone', agent_id: 'mindev-local-8ef0cd32', since: '2026-09-27T10:00:00Z' };
-const unregistering: FleetStatus = {
-  state: 'unregistering',
+const registering: FleetStatus = {
+  state: 'registering',
   agent_id: 'mindev-local-8ef0cd32',
   fleet_repo: 'fleet',
   fleet_url: 'https://github.com/knomit/fleet.git',
@@ -31,52 +29,15 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 
-describe('the state machine decides what is allowed, and says why', () => {
-  it('standalone: register allowed, unregister blocked', () => {
-    expect(registerBlocked(standalone)).toBe('');
-    expect(unregisterBlocked(standalone)).toMatch(/standalone/);
-  });
-  it('registering, registered and unregistering each block register with a reason', () => {
-    for (const state of ['registering', 'registered', 'unregistering'] as const) {
-      expect(registerBlocked({ ...standalone, state })).not.toBe('');
-    }
-  });
-  it('unregistering blocks a second unregister', () => {
-    expect(unregisterBlocked(unregistering)).toMatch(/already being pushed/);
-    expect(unregisterBlocked({ ...unregistering, state: 'registered' })).toBe('');
-  });
-});
-
 describe('FleetPage', () => {
   it('shows the state, the record state and last_error verbatim, with the retry status', async () => {
-    vi.mocked(api.getFleet).mockResolvedValue(unregistering);
+    vi.mocked(api.getFleet).mockResolvedValue(registering);
     render(<FleetPage />);
-    await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('unregistering'));
+    await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('registering'));
     expect(screen.getByTestId('fleet-record-state').textContent).toContain('active');
     const errBox = screen.getByTestId('fleet-last-error');
     expect(errBox.textContent).toContain('dial tcp 140.82.121.4:443: connect: network is unreachable');
     expect(errBox.textContent).toContain('Retrying on the next sync');
-  });
-
-  it('disables the forbidden actions with their reasons', async () => {
-    vi.mocked(api.getFleet).mockResolvedValue(unregistering);
-    render(<FleetPage />);
-    await waitFor(() => expect(screen.getByTestId('fleet-register')).toBeDisabled());
-    expect(screen.getByTestId('fleet-unregister')).toBeDisabled();
-    expect(screen.getByTestId('fleet-register-why').textContent).toMatch(/unregistration is still being pushed/);
-    expect(screen.getByTestId('fleet-unregister-why').textContent).toMatch(/already being pushed/);
-  });
-
-  it('registers with the typed URL and keeps the form filled when it fails', async () => {
-    vi.mocked(api.registerFleet).mockRejectedValue(new Error('clone failed: repository not found'));
-    render(<FleetPage />);
-    await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('standalone'));
-    const input = screen.getByLabelText('Fleet repository URL') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: 'https://github.com/knomit/fleet.git' } });
-    fireEvent.click(screen.getByTestId('fleet-register'));
-    await waitFor(() => expect(screen.getByTestId('fleet-error').textContent).toContain('repository not found'));
-    expect(api.registerFleet).toHaveBeenCalledWith('https://github.com/knomit/fleet.git', '');
-    expect(input.value).toBe('https://github.com/knomit/fleet.git');
   });
 });
 
@@ -123,7 +84,7 @@ describe('F10: addresses, capabilities and the own record', () => {
     render(<FleetPage />);
     await waitFor(() => expect(screen.getByTestId('fleet-notice').textContent).toContain('external_addresses'));
     expect(screen.getByTestId('fleet-external-addresses').textContent).toBe('none');
-    expect(screen.getByTestId('fleet-record-sync').textContent).toMatch(/restart or re-register/);
+    expect(screen.getByTestId('fleet-record-sync').textContent).toMatch(/restart to update it/);
   });
 
   it('lists every member with its addresses, capabilities, host and state as written', async () => {
@@ -144,50 +105,37 @@ describe('F10: addresses, capabilities and the own record', () => {
   });
 });
 
-// The page is the index + blocks layout: This instance, Members, then the one
-// action the state allows. Join and Leave render by state; both stay while a
-// push is still pending, each with its reason.
+// The page is the index + blocks layout: This instance, then Members. No
+// action block: every fleet operation is a local-listener route a browser
+// page cannot reach (POST /api/v1/fleet/join, /leave, ...).
 describe('the Fleet page layout', () => {
   const sectionIds = () => Array.from(screen.getByTestId('fleet-page').querySelectorAll('section')).map(s => s.id);
   const registered: FleetStatus = { state: 'registered', agent_id: 'a1', fleet_repo: 'fleet', record_state: 'active' };
 
-  it('a registered instance shows only Leave', async () => {
+  it('a registered instance and a standalone one show the same two blocks', async () => {
     vi.mocked(api.getFleet).mockResolvedValue(registered);
-    render(<FleetPage />);
+    const { unmount } = render(<FleetPage />);
     await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('registered'));
-    expect(sectionIds()).toEqual(['this-instance', 'members', 'leave']);
-    expect(screen.queryByTestId('fleet-register')).toBeNull();
-    expect(screen.getByTestId('fleet-unregister')).toBeEnabled();
-  });
-
-  it('a standalone instance shows only Join', async () => {
+    expect(sectionIds()).toEqual(['this-instance', 'members']);
+    unmount();
+    vi.mocked(api.getFleet).mockResolvedValue(standalone);
     render(<FleetPage />);
     await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('standalone'));
-    expect(sectionIds()).toEqual(['this-instance', 'members', 'join']);
-    expect(screen.queryByTestId('fleet-unregister')).toBeNull();
+    expect(sectionIds()).toEqual(['this-instance', 'members']);
   });
 
   it('indexes the blocks under a "Fleet" heading', async () => {
     vi.mocked(api.getFleet).mockResolvedValue(registered);
     render(<FleetPage />);
-    await waitFor(() => expect(sectionIds()).toEqual(['this-instance', 'members', 'leave']));
+    await waitFor(() => expect(sectionIds()).toEqual(['this-instance', 'members']));
     expect(screen.getByTestId('settings-index-heading')).toHaveTextContent('Fleet');
     expect(screen.getByTestId('toc-this-instance')).toHaveTextContent('This instance');
     expect(screen.getByTestId('toc-members')).toHaveTextContent('Members');
-    expect(screen.getByTestId('toc-leave')).toHaveTextContent('Leave fleet');
-  });
-
-  it('keeps both actions while a push is pending, each with its reason', async () => {
-    vi.mocked(api.getFleet).mockResolvedValue({ ...registered, state: 'registering' });
-    render(<FleetPage />);
-    await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('registering'));
-    expect(sectionIds()).toEqual(['this-instance', 'members', 'join', 'leave']);
-    expect(screen.getByTestId('fleet-register-why').textContent).toMatch(/registration is still being pushed/);
   });
 });
 
-// Operators pass this instance's agent id to `knomit identity enroll`, so the
-// id the page shows can be copied as-is: exactly the server's opaque string.
+// Operators pass this instance's agent id to the master's enroll, so the id
+// the page shows can be copied as-is: exactly the server's opaque string.
 describe('agent id copy control', () => {
   it('sits next to the agent id and copies exactly that id to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);

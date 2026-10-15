@@ -2055,10 +2055,10 @@ async function denyOAuthPending(id: string): Promise<void> {
 }
 
 // ─── Fleet (F09) ────────────────────────────────────────────────────────────
-// This instance's fleet membership state machine: standalone -> registering
-// -> registered -> unregistering -> standalone. record_state is this agent's
+// This instance's fleet membership state: standalone, registering (a forge
+// create whose publish of main is pending) or registered. record_state is this agent's
 // record as the fleet's MAIN says ("pending" until the fleet's master merges it).
-export type FleetState = 'standalone' | 'registering' | 'registered' | 'unregistering';
+export type FleetState = 'standalone' | 'registering' | 'registered';
 
 export interface FleetStatus {
   state: FleetState;
@@ -2079,6 +2079,12 @@ export interface FleetStatus {
   record_current?: boolean;
   record_pending_update?: boolean;
   notice?: string;
+  // master: this instance is the fleet's master; hosting: where its copy of
+  // the fleet repository syncs ('none' = it is the hub, else the origin
+  // URL); root_dir: <home>/fleet, where a master's root key lives.
+  master?: boolean;
+  hosting?: string;
+  root_dir?: string;
 }
 
 // FleetRecordFields are a member record's advertised fields, as written.
@@ -2101,7 +2107,7 @@ export interface FleetMember {
 }
 
 // FleetRefusal carries the server's machine-readable refusal code
-// (registration_pending, already_registered, not_a_fleet, clone_failed, ...).
+// (not_registered, ...).
 export class FleetRefusal extends Error {
   code: string;
   constructor(message: string, code: string) {
@@ -2129,22 +2135,6 @@ async function getFleet(): Promise<FleetStatus> {
   return (await r.json()) as FleetStatus;
 }
 
-async function registerFleet(url: string, authToken?: string): Promise<FleetStatus> {
-  const r = await fetch(apiUrl('/api/v1/fleet'), {
-    method: 'PUT',
-    headers: oauthHeaders(true),
-    body: JSON.stringify({ url, auth_token: authToken || undefined }),
-  });
-  if (!r.ok) throw await fleetFailure(r);
-  return (await r.json()) as FleetStatus;
-}
-
-async function unregisterFleet(): Promise<FleetStatus> {
-  const r = await fetch(apiUrl('/api/v1/fleet'), { method: 'DELETE', headers: oauthHeaders(true) });
-  if (!r.ok) throw await fleetFailure(r);
-  return (await r.json()) as FleetStatus;
-}
-
 async function listFleetMembers(): Promise<FleetMember[]> {
   const r = await fetch(apiUrl('/api/v1/fleet/members'), { headers: oauthHeaders(false) });
   if (!r.ok) throw await fleetFailure(r);
@@ -2155,8 +2145,6 @@ async function listFleetMembers(): Promise<FleetMember[]> {
 export const api = {
   listOAuthPending,
   getFleet,
-  registerFleet,
-  unregisterFleet,
   listFleetMembers,
   approveOAuthPending,
   denyOAuthPending,
