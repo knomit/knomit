@@ -495,25 +495,33 @@ func editOwnRecord(t *testing.T, ri *RepoInstance, id, line string) {
 }
 
 // The fetch judge judges EVERY commit of tip ∖ main, not the tip alone (PR
-// #524 S3). Alpha's branch carries X (an edit of another member's folder)
-// and then Y (an edit of alpha's own record, admissible on its own: the
-// control shows a branch of such edits admitted). The tip Y is refused,
-// naming X, and no local branch is left.
+// #524 S3). Alpha, a joiner (its record is not on main), pushes X (an edit
+// of another member's folder) and then Y (an edit of its own record). Y is
+// admissible on its own: the control judges a branch of the record and such
+// an edit, without promoting it, so main never gains alpha's record and
+// alpha stays a joiner (rule A's shape check binds a joiner; an existing
+// member's edit of another folder is the record-owner rule's, #523). The tip
+// Y is refused, naming X, and no local branch is left.
 // SABOTAGE: in store.JudgePeerBranch judge the tip commit only -> Y alone is
 // admitted and agent/alpha becomes a local branch, red.
 func TestFleetMaster_ARefusedCommitUnderAnAdmissibleTipIsRefused(t *testing.T) {
+	ctx := context.Background()
 	alpha := testsigner.Named("alpha")
 	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
 	_, ari := f.join(t, "alpha", alpha)
-	// Control: the record, then an edit of it, admitted.
 	editOwnRecord(t, ari, "alpha", "first edit")
 	round(t, ari)
-	round(t, f.mri)
-	require.Equal(t, f.rev(t, "agent/alpha"), localTip(t, f.mri, "agent/alpha"), "fixture: own-record edits are admitted")
-	require.Empty(t, f.mri.peers.Refusals())
+	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
+		_, err := svc.Remote().SyncWithPeers(ctx, f.mri.AgentBranch(), nil)
+		require.NoError(t, err)
+		reason, err := svc.JudgePeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), plumbing.NewHash(f.rev(t, "agent/alpha")), nil)
+		require.NoError(t, err)
+		require.Empty(t, reason, "control: the record and an own-record edit are admissible")
+	}))
+	require.Empty(t, localTip(t, f.mri, "agent/alpha"), "fixture: the control promoted nothing")
 
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
-		_, err := svc.Facts().WriteFact(context.Background(), ari.AgentBranch(), "kb/members/beta/0000beta.md",
+		_, err := svc.Facts().WriteFact(ctx, ari.AgentBranch(), "kb/members/beta/0000beta.md",
 			"---\nkind: pragmatic\ntype: policy\n---\n# beta\n\nnot alpha's to write\n", "X: beta's folder", "created")
 		require.NoError(t, err)
 	}))
@@ -524,6 +532,7 @@ func TestFleetMaster_ARefusedCommitUnderAnAdmissibleTipIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	x := strings.TrimSpace(string(out))
 	require.NoError(t, exec.Command("git", "-C", f.bare, "cat-file", "-e", x+":kb/members/beta/0000beta.md").Run(), "fixture: X is the tip's parent")
+	require.False(t, f.onForgeMain(t, memberRecordPath("kb", "alpha")), "fixture: alpha is a joiner")
 
 	round(t, f.mri)
 	r := f.mri.peers.Refusals()["agent/alpha"]
