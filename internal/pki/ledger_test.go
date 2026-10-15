@@ -47,7 +47,7 @@ func pinSerial(t *testing.T, n int64) {
 // the comparison must not depend on it.
 func TestIssueLeaf_EquivalentToIssueInstance(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-fleet-root-test", custodyPass, time.Hour)
+	root, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func crlFields(c *x509.RevocationList) []any {
 // statement for the serial that VerifyRevocation accepts.
 func TestRevokeSerial_EquivalentToRevoke(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-fleet-root-test", custodyPass, time.Hour)
+	root, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,11 +186,11 @@ func TestRevokeSerial_EquivalentToRevoke(t *testing.T) {
 // SABOTAGE: drop the copy of current's entries → the superset assertion is
 // red; drop the IsRevoked check → the already-revoked row is red.
 func TestRevokeSerial_CRLIsASupersetOfTheCurrentCRL(t *testing.T) {
-	root, err := NewRoot(t.TempDir(), "knomit-fleet-root-test", custodyPass, time.Hour)
+	root, err := NewRoot(t.TempDir(), "knomit-fleet-root-test", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _ := NewRoot(t.TempDir(), "knomit-fleet-root-other", custodyPass, time.Hour)
+	other, _ := NewRoot(t.TempDir(), "knomit-fleet-root-other", time.Hour)
 	old := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	cur, err := SignCRL(root, []Revoked{{Serial: big.NewInt(0x11), At: old}, {Serial: big.NewInt(0x22), At: old}}, big.NewInt(5), time.Now(), time.Now().Add(time.Hour))
 	if err != nil {
@@ -231,7 +231,7 @@ func TestRevokeSerial_CRLIsASupersetOfTheCurrentCRL(t *testing.T) {
 // local log already holds revocations: that CRL would drop them.
 func TestRevoke_MissingCRLWithALoggedRevocationIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-fleet-root-test", custodyPass, time.Hour)
+	root, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestRevoke_MissingCRLWithALoggedRevocationIsRefused(t *testing.T) {
 // CRL succeeds → red.
 func TestRevoke_CRLLaggingTheLocalLogIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-fleet-root-test", custodyPass, time.Hour)
+	root, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func signedCRL(t *testing.T, root Root, n int64, serials ...int64) []byte {
 }
 
 func TestInstallCRL_OnlyAboveTheWatermark(t *testing.T) {
-	root, err := NewRoot(t.TempDir(), "knomit-fleet-root-test", custodyPass, time.Hour)
+	root, err := NewRoot(t.TempDir(), "knomit-fleet-root-test", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,8 +361,8 @@ func TestInstallCRL_OnlyAboveTheWatermark(t *testing.T) {
 }
 
 func TestInstallCRL_RefusesAnotherRootAndAForgedCRL(t *testing.T) {
-	a, _ := NewRoot(t.TempDir(), "same-cn", custodyPass, time.Hour)
-	b, _ := NewRoot(t.TempDir(), "same-cn", custodyPass, time.Hour)
+	a, _ := NewRoot(t.TempDir(), "same-cn", time.Hour)
+	b, _ := NewRoot(t.TempDir(), "same-cn", time.Hour)
 	dir := instanceWithRoot(t, a)
 	crlPath := filepath.Join(dir, CRLFile)
 

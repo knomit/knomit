@@ -22,6 +22,11 @@
 // lives in it.
 package privdir
 
+import (
+	"errors"
+	"path/filepath"
+)
+
 // Ensure creates path if it is missing and makes it private to the current
 // user.
 //
@@ -35,3 +40,29 @@ package privdir
 // quo, and the warning is the part that was missing. The per-OS
 // implementation says exactly what is changed and what is left alone.
 func Ensure(path string) error { return ensure(path) }
+
+// ErrNotPrivate is Verify's refusal: the directory is not private to the
+// current user.
+var ErrNotPrivate = errors.New("directory is not private to this user")
+
+// Verify reports whether path is, right now, a directory private to the
+// current user, and changes nothing. It returns nil, or an error wrapping
+// ErrNotPrivate that names the path, why, and where there is one the fix.
+//
+// Ensure is best-effort by design: it warns and carries on over a directory
+// it cannot make private. Verify is for the caller that must not carry on,
+// the one that is about to write or read a secret whose ONLY protection is
+// the directory (on Windows a file's mode bits mean nothing). Call Ensure
+// first, so that what Ensure can fix is fixed, then Verify.
+//
+// Refused on every OS: a symlink (or junction) in place of the directory,
+// since whoever controls its parent can repoint it; something that is not a
+// directory; an owner who is not this user. Unix: any group or other bit.
+// Windows: an owner other than this user, SYSTEM or Administrators, a NULL
+// DACL, or an allow ACE for any account Ensure's warning also counts as
+// foreign (SYSTEM, Administrators, CREATOR OWNER and OWNER RIGHTS are not).
+//
+// path is cleaned first: Lstat of `link/` (or `link\` on Windows) resolves
+// the link, so a trailing separator, which shell tab-completion appends,
+// would otherwise get a symlinked directory past the symlink refusal.
+func Verify(path string) error { return verify(filepath.Clean(path)) }

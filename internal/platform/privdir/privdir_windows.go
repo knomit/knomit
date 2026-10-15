@@ -4,6 +4,7 @@ package privdir
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"unsafe"
@@ -163,6 +164,43 @@ func protect(path string) error {
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
 		nil, nil, dacl, nil); err != nil {
 		return fmt.Errorf("set DACL: %w", err)
+	}
+	return nil
+}
+
+// currentSID is ownSID, a variable so a test can play another account: a
+// directory owned by a second account cannot be built without one.
+var currentSID = ownSID
+
+// verify is Verify on Windows: Lstat (a symlink or a junction is refused,
+// never followed), then the owner and DACL as Inspect reads them, judged by
+// the same rules Ensure's warnings use (protect's owner check, and
+// foreignGrants). Whether the DACL is protected is not itself the test: a
+// DACL is private when nobody else is granted, inherited or not.
+func verify(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+		return fmt.Errorf("%w: %s is a reparse point (symlink, junction or similar); use the directory it points to, not a link to it", ErrNotPrivate, path)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%w: %s is not a directory", ErrNotPrivate, path)
+	}
+	sid, err := currentSID()
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrNotPrivate, path, err)
+	}
+	in, err := Inspect(path)
+	if err != nil {
+		return fmt.Errorf("%w: %s: read owner and DACL: %v", ErrNotPrivate, path, err)
+	}
+	if in.Owner != sid && in.Owner != sidSystem && in.Owner != sidAdministrators {
+		return fmt.Errorf("%w: %s is owned by %s, not by this user (%s), and its owner can always grant itself access", ErrNotPrivate, path, in.Owner, sid)
+	}
+	if foreign := foreignGrants(in, sid); len(foreign) > 0 {
+		return fmt.Errorf("%w: %s's DACL grants %s; remove those grants (icacls), or use a directory under your profile", ErrNotPrivate, path, strings.Join(foreign, ", "))
 	}
 	return nil
 }

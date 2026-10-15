@@ -7,15 +7,18 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
-)
 
-var testPass = []byte("correct horse battery staple")
+	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/platform/privdir"
+)
 
 // posixModes gates file-MODE assertions. Windows has no POSIX permission
 // bits — os.Stat reports 0666/0444 whatever WriteFile was asked for — so a
@@ -26,7 +29,7 @@ var posixModes = runtime.GOOS != "windows"
 func newTestRoot(t *testing.T) (string, Root) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "fleet")
-	r, err := NewRoot(dir, "knomit-fleet-root-test", testPass, 24*time.Hour)
+	r, err := NewRoot(dir, "knomit-fleet-root-test", 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +49,10 @@ func parsePEMCert(t *testing.T, b []byte) *x509.Certificate {
 	return c
 }
 
-func TestNewRoot_IsSelfSignedCAAndReloadsOnlyWithThePassphrase(t *testing.T) {
+// The root key is a plain file, like an SSH key: an unencrypted OpenSSH
+// private key, 0600, in a directory private to the user, and LoadRoot opens
+// it asking for nothing.
+func TestNewRoot_IsSelfSignedCAInAPlainOwnerOnlyKeyFile(t *testing.T) {
 	dir, r := newTestRoot(t)
 	if !r.Cert.IsCA || !r.Cert.BasicConstraintsValid {
 		t.Fatal("root is not a CA")
@@ -57,10 +63,7 @@ func TestNewRoot_IsSelfSignedCAAndReloadsOnlyWithThePassphrase(t *testing.T) {
 	if err := r.Cert.CheckSignatureFrom(r.Cert); err != nil {
 		t.Fatalf("root not self-signed: %v", err)
 	}
-	if _, err := LoadRoot(dir, []byte("wrong")); err == nil {
-		t.Fatal("LoadRoot accepted a wrong passphrase")
-	}
-	back, err := LoadRoot(dir, testPass)
+	back, err := LoadRoot(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,34 +73,286 @@ func TestNewRoot_IsSelfSignedCAAndReloadsOnlyWithThePassphrase(t *testing.T) {
 	if !back.Signer.Public().(ed25519.PublicKey).Equal(r.Cert.PublicKey) {
 		t.Fatal("reloaded root key does not match its certificate")
 	}
-	// The key on disk is encrypted: an unencrypted parse must not succeed.
-	raw, _ := os.ReadFile(filepath.Join(dir, RootKeyFile))
+	// Unencrypted OpenSSH: the same parser that reads an instance's
+	// id_ed25519 (no passphrase) reads it, and it is the root's key.
+	keyPath := filepath.Join(dir, RootKeyFile)
+	raw, _ := os.ReadFile(keyPath)
 	if !strings.Contains(string(raw), "OPENSSH PRIVATE KEY") {
 		t.Fatalf("root.key is not OpenSSH format: %.40q", raw)
 	}
-	if _, _, err := LoadSigner(filepath.Join(dir, RootKeyFile)); err == nil {
-		t.Fatal("root.key parsed WITHOUT a passphrase; it must be encrypted")
+	_, pub, err := LoadSigner(keyPath)
+	if err != nil {
+		t.Fatalf("root.key does not parse as a plain OpenSSH key: %v", err)
 	}
-	if fi, _ := os.Stat(filepath.Join(dir, RootKeyFile)); posixModes && fi.Mode().Perm() != 0o600 {
-		t.Fatalf("root.key mode %v, want 0600", fi.Mode().Perm())
+	if !pub.Equal(r.Cert.PublicKey) {
+		t.Fatal("root.key holds a key other than the root's")
+	}
+	if posixModes {
+		if fi, _ := os.Stat(keyPath); fi.Mode().Perm() != 0o600 {
+			t.Fatalf("root.key mode %v, want 0600", fi.Mode().Perm())
+		}
+		if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
+			t.Fatalf("fleet root dir mode %v, want 0700", fi.Mode().Perm())
+		}
 	}
 	if c, err := LoadRootCert(filepath.Join(dir, RootCertFile)); err != nil || !c.Equal(r.Cert) {
 		t.Fatalf("LoadRootCert: %v", err)
 	}
 }
 
-func TestNewRoot_RefusesToOverwriteAndRefusesEmptyPassphrase(t *testing.T) {
+// A fleet root directory that already exists wider than private (made by
+// hand, or by an older build) is tightened before the key is written into
+// it: a plain key in a 0755 directory would be readable by its neighbours'
+// listing and, under a wide umask, by them.
+func TestNewRoot_TightensAnExistingWideDirectory(t *testing.T) {
+	if !posixModes {
+		t.Skip("mode bits; the Windows DACL is asserted in root_windows_test.go")
+	}
+	dir := filepath.Join(t.TempDir(), "fleet")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil { // past the umask
+		t.Fatal(err)
+	}
+	if _, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("fleet root dir mode %v after NewRoot, want 0700", fi.Mode().Perm())
+	}
+}
+
+func TestNewRoot_RefusesToReplaceARoot(t *testing.T) {
 	dir, _ := newTestRoot(t)
 	before, _ := os.ReadFile(filepath.Join(dir, RootKeyFile))
-	if _, err := NewRoot(dir, "again", testPass, time.Hour); err == nil {
-		t.Fatal("NewRoot overwrote an existing root")
+	if _, err := NewRoot(dir, "again", time.Hour); err == nil || !strings.Contains(err.Error(), "refusing to replace the fleet root") {
+		t.Fatalf("NewRoot over an existing root: %v, want a refusal", err)
 	}
 	after, _ := os.ReadFile(filepath.Join(dir, RootKeyFile))
 	if string(before) != string(after) {
 		t.Fatal("root.key changed on a refused NewRoot")
 	}
-	if _, err := NewRoot(filepath.Join(t.TempDir(), "m"), "x", nil, time.Hour); err == nil {
-		t.Fatal("NewRoot accepted an empty passphrase")
+	// A root.crt alone (the key was copied away) is a root too: a new key
+	// beside it would never pair with it.
+	if err := os.Remove(filepath.Join(dir, RootKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRoot(dir, "again", time.Hour); err == nil || !strings.Contains(err.Error(), "refusing to replace the fleet root") {
+		t.Fatalf("NewRoot over an existing root.crt: %v, want a refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, RootKeyFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused NewRoot wrote root.key: %v", err)
+	}
+}
+
+// No root.key is "not the master", the sentinel callers branch on; a key
+// that is not the certificate's is refused; and a passphrase-encrypted key
+// (an older build's) is refused, never prompted for.
+func TestLoadRoot_Refusals(t *testing.T) {
+	dir, _ := newTestRoot(t)
+	keyPath := filepath.Join(dir, RootKeyFile)
+	good, _ := os.ReadFile(keyPath)
+
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRoot(dir); !errors.Is(err, ErrNoRootKey) {
+		t.Fatalf("LoadRoot without root.key: %v, want ErrNoRootKey", err)
+	}
+
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	blk, _ := ssh.MarshalPrivateKey(other, "")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(blk), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRoot(dir); err == nil || !strings.Contains(err.Error(), "not a pair") {
+		t.Fatalf("LoadRoot with another key: %v, want \"not a pair\"", err)
+	}
+
+	k, err := ssh.ParseRawPrivateKey(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, _ := ssh.MarshalPrivateKeyWithPassphrase(k, "", []byte("old build"))
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(enc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadRoot(dir)
+	if err == nil || errors.Is(err, ErrNoRootKey) {
+		t.Fatalf("LoadRoot with an encrypted root.key: %v, want a refusal that is not ErrNoRootKey", err)
+	}
+	if fix := "ssh-keygen -p -N '' -f " + keyPath; !strings.Contains(err.Error(), fix) {
+		t.Fatalf("encrypted root.key refusal %q does not name the fix %q", err, fix)
+	}
+}
+
+// symlinkOrSkip makes link -> target, skipping where the OS will not (an
+// unprivileged Windows account without developer mode).
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if !posixModes {
+			t.Skipf("cannot create a symlink here: %v", err)
+		}
+		t.Fatal(err)
+	}
+}
+
+// A fleet root directory that is a symlink is refused before the key is
+// written: privdir.Ensure only warns about it, and the link can be
+// repointed by whoever controls its parent. Nothing lands in the target.
+func TestNewRoot_RefusesASymlinkedFleetDir(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "fleet")
+	symlinkOrSkip(t, target, dir)
+	_, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour)
+	if !errors.Is(err, privdir.ErrNotPrivate) || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("NewRoot into a symlinked dir: %v, want privdir.ErrNotPrivate naming the symlink", err)
+	}
+	for _, f := range []string{RootKeyFile, RootCertFile} {
+		if _, err := os.Lstat(filepath.Join(target, f)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a refused NewRoot wrote %s through the link: %v", f, err)
+		}
+	}
+}
+
+// A trailing separator, as shell tab-completion leaves on `--dir ~/link/`,
+// must not get a symlinked fleet dir past the refusal: lstat("link/")
+// resolves the link, so privdir.Verify has to clean the path first.
+func TestRoot_RefusesASymlinkedFleetDirWithATrailingSeparator(t *testing.T) {
+	sep := string(filepath.Separator)
+	t.Run("NewRoot", func(t *testing.T) {
+		base := t.TempDir()
+		target := filepath.Join(base, "target")
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(base, "fleet")
+		symlinkOrSkip(t, target, link)
+		_, err := NewRoot(link+sep, "knomit-fleet-root-test", time.Hour)
+		if !errors.Is(err, privdir.ErrNotPrivate) || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("NewRoot(%q): %v, want privdir.ErrNotPrivate naming the symlink", link+sep, err)
+		}
+		for _, f := range []string{RootKeyFile, RootCertFile} {
+			if _, err := os.Lstat(filepath.Join(target, f)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a refused NewRoot wrote %s through the link: %v", f, err)
+			}
+		}
+	})
+	t.Run("LoadRoot", func(t *testing.T) {
+		base := t.TempDir()
+		target := filepath.Join(base, "target")
+		if _, err := NewRoot(target, "knomit-fleet-root-test", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadRoot(target + sep); err != nil {
+			t.Fatalf("fixture: LoadRoot of the real dir with a trailing separator: %v", err)
+		}
+		link := filepath.Join(base, "fleet")
+		symlinkOrSkip(t, target, link)
+		_, err := LoadRoot(link + sep)
+		if !errors.Is(err, privdir.ErrNotPrivate) || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("LoadRoot(%q): %v, want privdir.ErrNotPrivate naming the symlink", link+sep, err)
+		}
+	})
+}
+
+// A root.key that is a DANGLING symlink passes the os.Stat pre-check (Stat
+// follows the link and finds nothing), so O_EXCL is what refuses it. Without
+// O_EXCL the plain key would be written to wherever the link points.
+func TestNewRoot_RefusesADanglingRootKeySymlink(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "fleet")
+	if err := privdir.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(base, "elsewhere.key")
+	symlinkOrSkip(t, target, filepath.Join(dir, RootKeyFile))
+	if _, err := os.Stat(filepath.Join(dir, RootKeyFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fixture: the link is not dangling: %v", err)
+	}
+	if _, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour); err == nil {
+		t.Fatal("NewRoot over a dangling root.key symlink: accepted")
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("NewRoot wrote the key through the dangling link to %s: %v", target, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, RootCertFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused NewRoot left root.crt: %v", err)
+	}
+}
+
+// LoadRoot refuses a fleet root directory that is not private, and says
+// how to fix it: a "copy the directory" move (cp -r, an unzip) lands it at
+// 0755, and the signer must not run from there.
+func TestLoadRoot_RefusesAFleetDirThatIsNotPrivate(t *testing.T) {
+	if !posixModes {
+		t.Skip("mode bits; the Windows DACL is asserted in root_windows_test.go")
+	}
+	dir, _ := newTestRoot(t)
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadRoot(dir)
+	if !errors.Is(err, privdir.ErrNotPrivate) || !strings.Contains(err.Error(), "chmod 700 "+dir) {
+		t.Fatalf("LoadRoot from a 0755 fleet dir: %v, want privdir.ErrNotPrivate naming chmod 700", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRoot(dir); err != nil {
+		t.Fatalf("LoadRoot after chmod 700: %v", err)
+	}
+
+	link := filepath.Join(t.TempDir(), "fleet-link")
+	symlinkOrSkip(t, dir, link)
+	if _, err := LoadRoot(link); !errors.Is(err, privdir.ErrNotPrivate) {
+		t.Fatalf("LoadRoot through a symlinked fleet dir: %v, want privdir.ErrNotPrivate", err)
+	}
+}
+
+// LoadRoot refuses a root.key that other users can read, the way ssh
+// refuses an UNPROTECTED PRIVATE KEY FILE, naming the chmod; and a root.key
+// that is a symlink, whatever it points to.
+func TestLoadRoot_RefusesAnExposedRootKey(t *testing.T) {
+	dir, _ := newTestRoot(t)
+	keyPath := filepath.Join(dir, RootKeyFile)
+	if posixModes {
+		for _, mode := range []os.FileMode{0o644, 0o640, 0o604, 0o660} {
+			if err := os.Chmod(keyPath, mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadRoot(dir)
+			if !errors.Is(err, ErrUnprotectedRootKey) || !strings.Contains(err.Error(), "chmod 600 "+keyPath) {
+				t.Fatalf("LoadRoot with root.key %v: %v, want ErrUnprotectedRootKey naming chmod 600", mode, err)
+			}
+		}
+		if err := os.Chmod(keyPath, 0o400); err != nil { // stricter than 0600 is fine
+			t.Fatal(err)
+		}
+		if _, err := LoadRoot(dir); err != nil {
+			t.Fatalf("LoadRoot with root.key 0400: %v", err)
+		}
+		if err := os.Chmod(keyPath, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The same key, moved out and linked back: a valid pair, refused only
+	// because root.key is a link.
+	moved := filepath.Join(t.TempDir(), "real.key")
+	if err := os.Rename(keyPath, moved); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, moved, keyPath)
+	_, err := LoadRoot(dir)
+	if !errors.Is(err, ErrUnprotectedRootKey) || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("LoadRoot with a symlinked root.key: %v, want ErrUnprotectedRootKey naming the symlink", err)
 	}
 }
 

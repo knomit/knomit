@@ -26,15 +26,16 @@ import (
 )
 
 // Consent path 2 on the operator's side (F19 phase 3b, Task 3). `knomit
-// oauth approve|deny <id> --sign <issuer>` runs on the machine that holds
-// the fleet root key — never on the instance — and prints a signed
+// oauth approve|deny <id> --sign <issuer>` runs on the machine whose fleet
+// root directory holds the plain root.key (not necessarily the instance
+// whose request it approves), reads that file, and prints a signed
 // statement; `knomit oauth approve --signed <file|->` delivers it from any
 // machine (so does curl: it is one POST of that JSON to <issuer>/oauth/approve).
 
 type signOpts struct {
-	verb, issuer, dir, instance, passFile, subject string
-	scopes                                         []string
-	scopesGiven, yes                               bool
+	verb, issuer, dir, instance, subject string
+	scopes                               []string
+	scopesGiven, yes                     bool
 }
 
 var fingerprintArgRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -59,13 +60,6 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	host, err := issuedStanding(o.dir, o.instance)
 	if err != nil {
 		return err
-	}
-	// A passphrase FILE answers no question, so it signs unattended and needs
-	// --yes. Without one, the confirmation comes after the printout: the
-	// typed passphrase (--passphrase-file -, key in root.key) or a y/N answer
-	// (key in the OS keychain, where no passphrase guards it).
-	if !o.yes && o.passFile != "" && o.passFile != "-" {
-		return errors.New("refusing to sign unattended: with --passphrase-file <file> add --yes, or use --passphrase-file - so that typing the passphrase after reading the request is the confirmation")
 	}
 	issuer := strings.TrimSuffix(o.issuer, "/")
 	d, err := fetchDescription(ctx, issuer, id)
@@ -95,20 +89,15 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	}
 	printDescription(errOut, d, stmt, host)
 
-	// The passphrase is asked only when the key is in root.key: a keychain-held
-	// key opens without one, and a prompt for it would guard nothing.
-	askPass := func() ([]byte, error) {
-		if o.passFile == "-" {
-			fmt.Fprintln(errOut, "Type the fleet root passphrase to sign this, or interrupt to abort:")
-		}
-		return readPassphrase(cmd, o.passFile)
-	}
-	root, src, err := pki.OpenRoot(o.dir, rootKeychain, askPass)
+	// The key is the plain <dir>/root.key: it opens asking for nothing. The
+	// confirmation below is consent to THIS approval, read after the
+	// printout, not a guard on the key; --yes gives it up front.
+	root, err := pki.LoadRoot(o.dir)
 	if err != nil {
 		return err
 	}
-	if src == pki.RootFromKeychain && !o.yes {
-		fmt.Fprint(errOut, "The fleet root key is in the OS keychain (no passphrase is asked). Sign this statement? [y/N] ")
+	if !o.yes {
+		fmt.Fprint(errOut, "Sign this statement with the fleet root key? [y/N] ")
 		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
 			return err
