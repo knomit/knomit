@@ -396,11 +396,15 @@ func TestFleetMaster_RoundPublishesAMainCreateFailedToPublish(t *testing.T) {
 // (a joiner may touch only members/<own id>/); with the record-owner rule
 // (#523) the rule is not-owner. The rule name is not asserted.
 // SABOTAGE: pass selfRoot "" to newJudge in judgeIncoming -> rule A does not
-// run, alpha's commit is admitted, red.
+// run and even alpha's own record is refused (the control), red.
 func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
 	alpha := testsigner.Named("alpha")
 	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
 	_, ari := f.join(t, "alpha", alpha)
+	// Control: alpha's record alone, under alpha's own folder, is admitted.
+	round(t, f.mri)
+	admitted := f.rev(t, "agent/alpha")
+	require.Equal(t, admitted, localTip(t, f.mri, "agent/alpha"), "fixture: the record alone is admitted")
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
 		_, err := svc.Facts().WriteFact(context.Background(), ari.AgentBranch(), "kb/members/beta/0000beta.md",
 			"---\nkind: pragmatic\ntype: policy\n---\n# beta\n\nnot alpha's to write\n", "beta's folder", "created")
@@ -414,5 +418,5 @@ func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
 	r := f.mri.peers.Refusals()["agent/alpha"]
 	require.Equal(t, f.rev(t, "agent/alpha"), r.Tip)
 	require.Contains(t, r.Reason, "refused by verify_signatures=enforce")
-	require.Empty(t, localTip(t, f.mri, "agent/alpha"), "never a local branch, never merged")
+	require.Equal(t, admitted, localTip(t, f.mri, "agent/alpha"), "the local branch stays at the admitted tip")
 }
