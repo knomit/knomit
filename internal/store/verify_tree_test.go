@@ -384,3 +384,100 @@ func TestReceivePack_MalformedTreeRefused(t *testing.T) {
 	}
 	require.Equal(t, 4, ran)
 }
+
+// A judged commit's PARENT is often not judged itself: main's tip below a
+// CheckRange range, or the host-held upstream tip under a push. When that
+// parent's tree is malformed, the rules that diff parent → c (recordOwner,
+// artifactRules, the closure's DiffTree) read a truncated parent: a delete
+// of a path behind the bogus entry is invisible and a rewrite reads as an
+// insert. So commitTreeShape checks every parent's tree too, and a
+// well-formed commit on a malformed parent is refused malformed-tree, the
+// reason naming the parent.
+//
+// malformedTip commits on base the tree of base plus, under kb/, a Dir entry
+// "zz-bogus" naming a blob and then kb/zzz-victim.md, which sorts after it.
+func malformedTip(t *testing.T, st storer.EncodedObjectStorer, base *object.Commit, agent string, s ssh.Signer) *object.Commit {
+	t.Helper()
+	r := repoOn(t, st)
+	tree := graftTree(t, st, base.TreeHash, "kb",
+		object.TreeEntry{Name: "zz-bogus", Mode: filemode.Dir, Hash: r.blob("payload")},
+		object.TreeEntry{Name: "zzz-victim.md", Mode: filemode.Regular, Hash: r.blob("victim v1")})
+	return shapeCommit(t, st, tree, agent, s, base)
+}
+
+// requireWellFormed asserts c's OWN tree passes checkTreeShape, so a refusal
+// can only come from a parent's.
+func requireWellFormed(t *testing.T, c *object.Commit) {
+	t.Helper()
+	tree, err := c.Tree()
+	require.NoError(t, err)
+	require.NoError(t, checkTreeShape(tree, nil), "the judged commit's own tree is well formed")
+}
+
+// CheckRange: main's tip P, below the range, holds the malformed tree. boss's
+// well-formed signed single-parent commit on P drops the bogus entry and
+// rewrites kb/zzz-victim.md. It is the one commit judged, and it is refused
+// malformed-tree, the reason naming the parent P and the entry.
+//
+// SABOTAGE: loop commitTreeShape over c.ParentHashes[:0] → the commit is
+// admitted → red.
+func TestCheckRange_MalformedParentTreeRefused(t *testing.T) {
+	f := newRangeFixture(t)
+	boss := namedSigner(t, "boss")
+	f.setFleet(map[string]string{"boss/1.md": memberFile("boss", fact.MemberActive, boss.PublicKey())})
+	base := map[string]string{fact.OntologyFile: kbOntology("enforce"), "kb/notes/a.md": "a"}
+	root := f.commit(f.kb, base, "", nil)
+	st := f.kb.Storer
+	p := malformedTip(t, st, root, "boss", boss)
+	f.ref(f.kb, "main", p)
+	c := shapeCommit(t, st, repoOn(t, st).tree(with(base, "kb/zzz-victim.md", "victim v2")), "boss", boss, p)
+	requireWellFormed(t, c)
+	require.Equal(t, []plumbing.Hash{p.Hash}, c.ParentHashes)
+	f.ref(f.kb, "cand", c)
+
+	v, err := f.check("enforce")
+	require.NoError(t, err)
+	require.Equal(t, 1, v.Checked)
+	got := onlyRefusal(t, v)
+	require.Equal(t, RuleMalformedTree, got.Rule)
+	require.Equal(t, c.Hash.String(), got.Commit)
+	require.Contains(t, got.Reason, "parent "+p.Hash.String()+": kb/zz-bogus (mode")
+}
+
+// receive-pack: the host's main (the upstream tip) holds the malformed tree,
+// all its objects host-held; the peer pushes one well-formed commit on it
+// that rewrites kb/zzz-victim.md. Under verify_signatures off, where the
+// closure is the only check, the push is refused malformed-tree naming the
+// parent, the branch is not created and main does not move.
+//
+// SABOTAGE: loop commitTreeShape over c.ParentHashes[:0] → the push is
+// admitted → red.
+func TestReceivePack_MalformedUpstreamTipRefused(t *testing.T) {
+	h := newPushHost(t, VerifyOff, 1)
+	pe := newPeer(t, h.srv.URL)
+	p := malformedTip(t, pe.repo.Storer, pe.head(), "", nil)
+	// Plant P as the host's main, every object of it host-held.
+	it, err := pe.repo.Storer.IterEncodedObjects(plumbing.AnyObject)
+	require.NoError(t, err)
+	copied := 0
+	require.NoError(t, it.ForEach(func(o plumbing.EncodedObject) error {
+		if h.svc.rh.gits.HasEncodedObject(o.Hash()) == nil {
+			return nil
+		}
+		copied++
+		_, err := h.svc.rh.gits.SetEncodedObject(o)
+		return err
+	}))
+	require.Positive(t, copied)
+	require.NoError(t, h.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), p.Hash)))
+
+	c := pe.commitAs("peer-abcd1234", []*object.Commit{p}, nil,
+		with(pe.files(pe.head()), "kb/zzz-victim.md", "victim v2"))
+	requireWellFormed(t, c)
+	const branch = "agent/bogus-up"
+	out := pushNew(t, h, pe, c, branch)
+	require.Contains(t, out, "knomit: commit "+c.Hash.String()+" refused: "+RuleMalformedTree)
+	require.Contains(t, out, "parent "+p.Hash.String()+": kb/zz-bogus (mode")
+	require.Equal(t, plumbing.ZeroHash, h.ref(branch), "a refused branch is not created")
+	require.Equal(t, p.Hash, h.ref("main"), "main does not move")
+}
