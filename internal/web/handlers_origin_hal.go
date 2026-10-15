@@ -420,6 +420,11 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 				"branch name contains characters not allowed in a git ref", r.URL.Path)
 			return
 		}
+		if ri.IsFleet() {
+			hal.WriteProblemWithExtra(w, http.StatusConflict, "Fleet repository", repos.ErrFleetUpstreamFixed.Error(),
+				r.URL.Path, map[string]any{"code": "fleet_upstream_fixed"})
+			return
+		}
 
 		if err := op.SetOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
 			if errors.Is(err, errOriginNoStore) {
@@ -454,6 +459,12 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, _ originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		// The fleet repository (R3.3): a member keeps its origin; the
+		// master's detach makes its copy the hub.
+		if err := m.GuardFleetDetach(ri); err != nil {
+			writeFleetError(w, r, err)
+			return
+		}
 		_, err := m.Send(r.Context(), ri, repos.DetachOrigin())
 		switch {
 		case err == nil:

@@ -81,11 +81,16 @@ func (f *forgeFleet) manager(t *testing.T, id string, signer ssh.Signer) *Manage
 	t.Helper()
 	home := filepath.Join(f.dir, id)
 	require.NoError(t, os.MkdirAll(home, 0o755))
+	// The key file is only what a join's bundle is checked against; the
+	// record names the signer's key, the one the leaves on main certify.
+	key, _ := pkitest.NewKey(t)
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: f.dir},
+		Cfg: config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: f.dir,
+			TLS: config.TLSConfig{Dir: filepath.Join(home, "pki")}},
 		AgentBranch: "agent/" + id,
 		AgentID:     id,
 		Signer:      signer,
+		KeyPath:     key,
 		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
@@ -93,12 +98,12 @@ func (f *forgeFleet) manager(t *testing.T, id string, signer ssh.Signer) *Manage
 	return m
 }
 
-// join starts a member and registers it: its record is written on its agent
-// branch and pushed to the forge.
+// join starts a member and joins it (POST /fleet/join): its record is
+// written on its agent branch and pushed to the forge.
 func (f *forgeFleet) join(t *testing.T, id string, signer ssh.Signer) (*Manager, *RepoInstance) {
 	t.Helper()
 	m := f.manager(t, id, signer)
-	_, err := m.RegisterFleet(context.Background(), f.url, "", "")
+	_, err := joinTestFleet(t, m, f.url, f.root)
 	require.NoError(t, err)
 	require.NotEmpty(t, f.rev(t, "agent/"+id), "fixture: %s's branch is on the forge", id)
 	return m, m.fleetRepo()

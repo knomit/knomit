@@ -385,17 +385,23 @@ func TestCreateFleet_ConcurrentCreatesOneWins(t *testing.T) {
 
 // N7. Every operation that changes this instance's fleet membership takes
 // the fleet lock: while it is held, each one waits.
-// Sabotage: drop lockFleetOp from UnregisterFleet -> its row returns at once
+// Sabotage: drop lockFleetOp from LeaveFleet -> its row returns at once
 // -> red.
 func TestFleetOps_TakeTheFleetLock(t *testing.T) {
 	ctx := context.Background()
 	for name, op := range map[string]func(m *Manager) error{
 		"create": func(m *Manager) error { _, err := m.CreateFleet(ctx, FleetCreateSpec{}); return err },
-		"register": func(m *Manager) error {
-			_, err := m.RegisterFleet(ctx, "https://forge.invalid/fleet.git", "", "")
+		"join": func(m *Manager) error {
+			_, err := m.JoinFleet(ctx, FleetJoinSpec{URL: "https://forge.invalid/fleet.git"})
 			return err
 		},
-		"unregister": func(m *Manager) error { _, err := m.UnregisterFleet(ctx); return err },
+		"leave":        func(m *Manager) error { _, err := m.LeaveFleet(ctx); return err },
+		"enroll":       func(m *Manager) error { _, err := m.EnrollFleetMember(ctx, "x", ""); return err },
+		"revoke":       func(m *Manager) error { _, err := m.RevokeFleetMember(ctx, "x", ""); return err },
+		"decommission": func(m *Manager) error { _, err := m.DecommissionFleet(ctx); return err },
+		"root get":     func(m *Manager) error { _, err := m.FleetRootFiles(); return err },
+		"root put":     func(m *Manager) error { _, err := m.InstallFleetRoot(nil); return err },
+		"stand down":   func(m *Manager) error { return m.StandDown(ctx) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := newFleetHost(t, t.TempDir(), nil)

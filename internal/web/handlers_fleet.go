@@ -47,55 +47,6 @@ func handleGetFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-type registerFleetRequest struct {
-	URL        string `json:"url"`
-	AuthMethod string `json:"auth_method,omitempty"`
-	AuthToken  string `json:"auth_token,omitempty"`
-}
-
-// handlePutFleet: PUT /api/v1/fleet {url}, register (or refresh the record
-// with the same fleet). 202 while the registration push is pending.
-func handlePutFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req registerFleetRequest
-		if !decodeJSON(w, r, &req, 0) {
-			return
-		}
-		if req.URL == "" {
-			hal.WriteProblemWithExtra(w, http.StatusBadRequest, "URL required", "the body must carry a non-empty url", r.URL.Path, map[string]any{"code": "url_required"})
-			return
-		}
-		st, err := m.RegisterFleet(r.Context(), req.URL, req.AuthMethod, req.AuthToken)
-		if err != nil {
-			writeFleetError(w, r, err)
-			return
-		}
-		status := http.StatusOK
-		if st.State != repos.FleetRegistered {
-			status = http.StatusAccepted
-		}
-		hal.WriteHAL(w, status, fleetView(b, st))
-	}
-}
-
-// handleDeleteFleet: DELETE /api/v1/fleet, unregister. 200 when the
-// departure was pushed and the fleet unmounted; 202 while the push is being
-// retried (state unregistering, last_error set).
-func handleDeleteFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		st, err := m.UnregisterFleet(r.Context())
-		if err != nil {
-			writeFleetError(w, r, err)
-			return
-		}
-		status := http.StatusOK
-		if st.State != repos.FleetStandalone {
-			status = http.StatusAccepted
-		}
-		hal.WriteHAL(w, status, fleetView(b, st))
-	}
-}
-
 type createFleetRequest struct {
 	Name   string `json:"name,omitempty"`
 	Origin *struct {

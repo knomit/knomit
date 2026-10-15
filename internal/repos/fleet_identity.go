@@ -173,10 +173,9 @@ func resolveIdentity(db *sql.DB, fresh Identity, now time.Time) (Identity, error
 
 // Fleet membership states (instance_identity.fleet_state).
 const (
-	FleetStandalone    = "standalone"
-	FleetRegistering   = "registering"
-	FleetRegistered    = "registered"
-	FleetUnregistering = "unregistering"
+	FleetStandalone  = "standalone"
+	FleetRegistering = "registering"
+	FleetRegistered  = "registered"
 )
 
 // FleetRow is this instance's persisted identity and fleet state.

@@ -101,8 +101,23 @@ func (f *Fleet) Enroll(t testing.TB, email string, keyPath ...string) Member {
 	return Member{KeyPath: path, Pub: pub, CertPEM: certPEM, Cert: c}
 }
 
+// Bundle is m's enrollment bundle: its leaf, the root and the current CRL,
+// what POST /api/v1/fleet/enroll returns and POST /api/v1/fleet/join takes.
+func (f *Fleet) Bundle(t testing.TB, m Member) []byte {
+	t.Helper()
+	rootPEM, err := os.ReadFile(filepath.Join(f.Dir, pki.RootCertFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	crlPEM, err := os.ReadFile(filepath.Join(f.Dir, pki.CRLFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(append(append([]byte{}, m.CertPEM...), rootPEM...), crlPEM...)
+}
+
 // Install writes instance.crt, root.crt and crl.pem for m into dir (created
-// 0700), what `knomit identity install` leaves behind.
+// 0700), what an enrolled instance holds after POST /api/v1/fleet/join.
 func (f *Fleet) Install(t testing.TB, m Member, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {

@@ -18,6 +18,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/version"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -27,15 +28,19 @@ import (
 // dir (after closing the previous one) is a restart.
 func bootFleet(t *testing.T, dir string, mut func(*config.Config)) (*Manager, func()) {
 	t.Helper()
-	cfg := config.Config{Home: filepath.Join(dir, "home"), OntologyRoot: "kb", LocalOriginRoot: dir}
+	cfg := config.Config{Home: filepath.Join(dir, "home"), OntologyRoot: "kb", LocalOriginRoot: dir,
+		TLS: config.TLSConfig{Dir: filepath.Join(dir, "home", "pki")}}
 	if mut != nil {
 		mut(&cfg)
 	}
 	require.NoError(t, os.MkdirAll(cfg.Home, 0o755))
+	key, err := testsigner.WriteNamedKey(cfg.Home, "fleet-test")
+	require.NoError(t, err)
 	m := New(context.Background(), Deps{
 		Cfg:         cfg,
 		AgentBranch: "agent/test-fleet",
 		Signer:      testsigner.Named("fleet-test"),
+		KeyPath:     key,
 		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start(), "the fleet reconcile never fails Start")
@@ -106,11 +111,11 @@ func captureLog(t *testing.T) *syncBuf {
 	return buf
 }
 
-// registerAt registers m with the fleet at url and pushes, returning the
-// fleet repository's agent branch.
-func registerAt(t *testing.T, m *Manager, url string) string {
+// registerAt joins m to the fleet at url (a bundle of root) and pushes,
+// returning the fleet repository's agent branch.
+func registerAt(t *testing.T, m *Manager, url string, root *pkitest.Fleet) string {
 	t.Helper()
-	st, err := m.RegisterFleet(context.Background(), url, "", "")
+	st, err := joinTestFleet(t, m, url, root)
 	require.NoError(t, err)
 	require.Equal(t, FleetRegistered, st.State)
 	return m.fleetRepo().AgentBranch()
@@ -122,13 +127,13 @@ func registerAt(t *testing.T, m *Manager, url string) string {
 func TestFleetRecord_RegisterCopiesAddressesVerbatim(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, bare)
 	m, _ := bootFleet(t, dir, func(c *config.Config) {
 		c.ExternalAddresses = []string{"https://h1v302.tail5113a7.ts.net", "http://10.0.0.5:8080"}
 		c.Host, c.Port = "box.lan", "19278"
 		c.Auth.LoopbackHosts = []string{"h1v302.tail5113a7.ts.net", "code.example"}
 	})
-	agent := registerAt(t, m, url)
+	agent := registerAt(t, m, url, root)
 	rec := remoteRecord(t, bare, agent)
 	require.Contains(t, rec, "\naddresses: https://h1v302.tail5113a7.ts.net http://10.0.0.5:8080\n")
 	require.NotContains(t, rec, "19278", "the listen port is not an address")
@@ -141,12 +146,12 @@ func TestFleetRecord_RegisterCopiesAddressesVerbatim(t *testing.T) {
 
 	dir2 := t.TempDir()
 	bare2 := filepath.Join(dir2, "fleet.git")
-	url2 := seedFleetRemote(t, bare2)
+	url2, root2 := seedJoinableFleet(t, bare2)
 	m2, _ := bootFleet(t, dir2, func(c *config.Config) {
 		c.Host, c.Port = "box.lan", "19278"
 		c.Auth.LoopbackHosts = []string{"h1v302.tail5113a7.ts.net"}
 	})
-	agent2 := registerAt(t, m2, url2)
+	agent2 := registerAt(t, m2, url2, root2)
 	rec2 := remoteRecord(t, bare2, agent2)
 	require.NotContains(t, rec2, "addresses:", "nothing configured, nothing advertised")
 	st2, err := m2.FleetStatus(context.Background())
@@ -164,9 +169,9 @@ func TestFleetRecord_RegisterCopiesAddressesVerbatim(t *testing.T) {
 func TestFleetRecord_BootReconcile(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, bare)
 	m, closeM := bootFleet(t, dir, withAddresses("https://old.example"))
-	agent := registerAt(t, m, url)
+	agent := registerAt(t, m, url, root)
 	mergeOnRemote(t, bare, agent)
 	syncFleet(t, m)
 	m.FleetRetry(context.Background())
@@ -213,9 +218,9 @@ func TestFleetRecord_BootReconcile(t *testing.T) {
 func TestFleetRecord_RefreshKeepsStateAndNotes(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, bare)
 	m, _ := bootFleet(t, dir, withAddresses("https://old.example"))
-	registerAt(t, m, url)
+	registerAt(t, m, url, root)
 	ri := m.fleetRepo()
 	cur, found, err := m.ownRecordAt(ri, ri.AgentBranch())
 	require.NoError(t, err)
@@ -245,9 +250,9 @@ func TestFleetRecord_VersionChangeRefreshesCapabilities(t *testing.T) {
 
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, bare)
 	m, closeM := bootFleet(t, dir, withAddresses("https://x.example"))
-	agent := registerAt(t, m, url)
+	agent := registerAt(t, m, url, root)
 	require.Contains(t, remoteRecord(t, bare, agent), "version=0.5.0.aaaaaaa")
 	head0 := remoteHead(t, bare, agent)
 	closeM()
@@ -273,9 +278,9 @@ func TestFleetRecord_OSArchFromRuntime(t *testing.T) {
 	hostPlatform = func() (string, string) { return "plan9", "mips64le" }
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, bare)
 	m, _ := bootFleet(t, dir, func(c *config.Config) { c.Git.Serve = true })
-	agent := registerAt(t, m, url)
+	agent := registerAt(t, m, url, root)
 	rec := remoteRecord(t, bare, agent)
 	require.Contains(t, rec, "\ncapabilities: arch=mips64le os=plan9 read_only=false version="+version.String()+"\n")
 	require.Contains(t, rec, "\ngit: /git\n", "git.serve mounts /git")
@@ -292,7 +297,7 @@ func TestFleetRecord_GitOnlyWhenServed(t *testing.T) {
 	require.Equal(t, "true", m.advertised().Capabilities["read_only"])
 }
 
-// F10-7: standalone and unregistering boots write nothing, even with a
+// F10-7: standalone and registering boots write nothing, even with a
 // changed config.
 func TestFleetRecord_BootWritesNothingUnlessRegistered(t *testing.T) {
 	// Standalone: nothing mounted, nothing to write, Start is fine.
@@ -300,36 +305,28 @@ func TestFleetRecord_BootWritesNothingUnlessRegistered(t *testing.T) {
 	bootFleet(t, t.TempDir(), withAddresses("https://x.example"))
 	require.NotContains(t, logs.String(), "fleet record")
 
-	// Unregistering: the departure's push failed; the restart with a new
-	// address must not write an update on top of the "left" record.
+	// Registering (a forge create whose publish of main has not landed):
+	// the restart with a new address writes no update.
 	dir := t.TempDir()
-	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, filepath.Join(dir, "fleet.git"))
 	m, closeM := bootFleet(t, dir, withAddresses("https://old.example"))
-	agent := registerAt(t, m, url)
-	head0 := remoteHead(t, bare, agent)
-	require.NoError(t, os.Rename(bare, bare+".away"))
-	st, err := m.UnregisterFleet(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, FleetUnregistering, st.State)
+	registerAt(t, m, url, root)
+	require.NoError(t, setFleetState(m.ControlDB(), FleetRegistering, fixedNow()))
 	closeM()
-
 	m, _ = bootFleet(t, dir, withAddresses("https://new.example"))
-	require.NoError(t, os.Rename(bare+".away", bare))
-	m.FleetRetry(context.Background())
-	require.Equal(t, 1, commitsBetween(t, bare, head0, agent), "the departure only, no boot update")
-	rec := remoteRecord(t, bare, agent)
-	require.Contains(t, rec, "state: left")
-	require.Contains(t, rec, "addresses: https://old.example")
+	rec, found, err := m.ownRecordAt(m.fleetRepo(), m.fleetRepo().AgentBranch())
+	require.NoError(t, err)
+	require.True(t, found, "reached: the record is read after the restart")
+	require.Equal(t, []string{"https://old.example"}, rec.Addresses, "no boot update while registering")
 }
 
 // F10-8: a read-only instance never reconciles (it never pushes).
 func TestFleetRecord_ReadOnlyBootWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, bare)
 	m, closeM := bootFleet(t, dir, withAddresses("https://old.example"))
-	agent := registerAt(t, m, url)
+	agent := registerAt(t, m, url, root)
 	ri := m.fleetRepo()
 	before, _, err := m.ownRecordAt(ri, agent)
 	require.NoError(t, err)
@@ -348,9 +345,9 @@ func TestFleetRecord_ReadOnlyBootWritesNothing(t *testing.T) {
 func TestFleetRecord_UnopenableFleetRepoWarns(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, bare)
 	m, closeM := bootFleet(t, dir, withAddresses("https://old.example"))
-	registerAt(t, m, url)
+	registerAt(t, m, url, root)
 	uid := m.fleetRepo().UID()
 	dbPath := m.RepoPath(uid)
 	closeM()
@@ -366,36 +363,14 @@ func TestFleetRecord_UnopenableFleetRepoWarns(t *testing.T) {
 	require.Equal(t, FleetRegistered, st.State, "the state machine is untouched")
 }
 
-// F10-10: re-registering with the same fleet runs the same comparison: no
-// commit when current, ONE when a field changed.
-func TestFleetRecord_ReRegisterCompares(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
-	m, _ := bootFleet(t, dir, withAddresses("https://old.example"))
-	agent := registerAt(t, m, url)
-	head0 := remoteHead(t, bare, agent)
-
-	registerAt(t, m, url)
-	require.Equal(t, head0, remoteHead(t, bare, agent), "unchanged: no commit at all")
-
-	m.deps.Cfg.ExternalAddresses = []string{"https://new.example"}
-	st, err := m.RegisterFleet(ctx, url, "", "")
-	require.NoError(t, err)
-	require.Equal(t, FleetRegistered, st.State)
-	require.Equal(t, 1, commitsBetween(t, bare, head0, agent), "changed: one commit")
-	require.Contains(t, remoteRecord(t, bare, agent), "addresses: https://new.example")
-}
-
 // F10-11: the record stays ONE policy fact at one path; earlier addresses
 // are earlier versions of it, never a list kept inside the fact.
 func TestFleetRecord_HistoryIsVersions(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "fleet.git")
-	url := seedFleetRemote(t, bare)
+	url, root := seedJoinableFleet(t, bare)
 	m, closeM := bootFleet(t, dir, withAddresses("https://a.example"))
-	agent := registerAt(t, m, url)
+	agent := registerAt(t, m, url, root)
 	closeM()
 	m, _ = bootFleet(t, dir, withAddresses("https://b.example"))
 	m.FleetRetry(context.Background())

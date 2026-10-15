@@ -15,8 +15,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/pki"
+	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -33,21 +36,72 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, "git %v: %s", args, out)
 }
 
-// seedFleetBare is a bare fleet repository whose main holds the fleet ontology.
-func seedFleetBare(t *testing.T, dir string) string {
+// seedFleetBare is a bare fleet repository whose main holds the fleet
+// ontology and a fresh root's root.crt and CRL (what a forge create leaves),
+// and that root.
+func seedFleetBare(t *testing.T, dir string) (string, *pkitest.Fleet) {
 	t.Helper()
+	root := pkitest.New(t)
 	bare := filepath.Join(dir, "fleet.git")
 	gitRun(t, dir, "init", "--bare", "--initial-branch=main", bare)
 	work := t.TempDir()
 	gitRun(t, dir, "clone", bare, work)
 	ont, err := fact.FleetOntology().Serialize()
 	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(repos.OntologyPath)), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(work, repos.OntologyPath), ont, 0o644))
+	files := map[string][]byte{repos.OntologyPath: ont}
+	for _, name := range []string{pki.RootCertFile, pki.CRLFile} {
+		b, err := os.ReadFile(filepath.Join(root.Dir, name))
+		require.NoError(t, err)
+		files["artifacts/fleet/"+name] = b
+	}
+	for p, b := range files {
+		require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(p)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(work, p), b, 0o644))
+	}
 	gitRun(t, work, "add", "-A")
 	gitRun(t, work, "commit", "-m", "fleet")
 	gitRun(t, work, "push", "origin", "main")
-	return fileuri.New(bare)
+	return fileuri.New(bare), root
+}
+
+// restFleetManager is a started manager named rest-fleet whose key file
+// holds its signing key, with its trust material in <home>/pki.
+func restFleetManager(t *testing.T, dir string) (*repos.Manager, string) {
+	t.Helper()
+	home := filepath.Join(dir, "home")
+	require.NoError(t, os.MkdirAll(home, 0o755))
+	key, err := testsigner.WriteNamedKey(home, "rest-fleet")
+	require.NoError(t, err)
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir,
+			TLS: config.TLSConfig{Dir: filepath.Join(home, "pki")}},
+		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), KeyPath: key, Machine: repos.Options{Synchronous: true},
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+	return m, key
+}
+
+// localWriteGrants: the socket principal holds read and write, as an
+// operator's grant gives it, so a local-only route also passes the write
+// gate.
+func localWriteGrants() auth.StaticGrants {
+	local := auth.Principal{Kind: auth.KindBridge, ID: "uid:501", Via: auth.LocalVia}
+	return auth.StaticGrants{local.String(): {auth.Read: {}, auth.Write: {}}}
+}
+
+// joinOverSocket is POST /fleet/join over the local listener with a bundle
+// root issues for the manager's key and agent id.
+func joinOverSocket(t *testing.T, s *Server, key, url string, root *pkitest.Fleet) *httptest.ResponseRecorder {
+	t.Helper()
+	bundle := root.Bundle(t, root.Enroll(t, "rest-fleet@"+pki.AgentEmailDomain, key))
+	body, err := json.Marshal(map[string]string{"url": url, "bundle": string(bundle)})
+	require.NoError(t, err)
+	req := localPeer(httptest.NewRequest(http.MethodPost, "/fleet/join", strings.NewReader(string(body))))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, req)
+	return rec
 }
 
 func getFleetJSON(t *testing.T, s *Server) map[string]any {
@@ -65,25 +119,22 @@ func getFleetJSON(t *testing.T, s *Server) map[string]any {
 // fields and whether they are current.
 func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	dir := t.TempDir()
-	url := seedFleetBare(t, dir)
-	home := filepath.Join(dir, "home")
-	require.NoError(t, os.MkdirAll(home, 0o755))
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), Machine: repos.Options{Synchronous: true},
-	})
-	require.NoError(t, m.Start())
-	t.Cleanup(func() { _ = m.Close() })
-	s := &Server{Manager: m}
+	url, root := seedFleetBare(t, dir)
+	m, key := restFleetManager(t, dir)
+	s := &Server{Manager: m, Grants: localWriteGrants()}
 
 	out := getFleetJSON(t, s)
 	require.Equal(t, []any{}, out["external_addresses"], "unset is an empty array, never null")
 	require.Contains(t, out["notice"], "external_addresses")
 	require.NotContains(t, out, "record")
 
-	_, err := m.RegisterFleet(context.Background(), url, "", "")
-	require.NoError(t, err)
+	join := joinOverSocket(t, s, key, url, root)
+	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
 	out = getFleetJSON(t, s)
+	require.Equal(t, repos.FleetRegistered, out["state"])
+	require.Equal(t, false, out["master"])
+	require.Equal(t, url, out["hosting"])
+	require.Equal(t, filepath.Join(dir, "home", "fleet"), out["root_dir"])
 	rec, ok := out["record"].(map[string]any)
 	require.True(t, ok, "registered: the own record is shown: %v", out)
 	require.Equal(t, []any{}, rec["addresses"])
@@ -149,18 +200,11 @@ func TestFleetMemberRows_LastRefusal(t *testing.T) {
 // is accepted -> red.
 func TestFleetREST_FactWritesRefused(t *testing.T) {
 	dir := t.TempDir()
-	url := seedFleetBare(t, dir)
-	home := filepath.Join(dir, "home")
-	require.NoError(t, os.MkdirAll(home, 0o755))
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), Machine: repos.Options{Synchronous: true},
-	})
-	require.NoError(t, m.Start())
-	t.Cleanup(func() { _ = m.Close() })
-	_, err := m.RegisterFleet(context.Background(), url, "", "")
-	require.NoError(t, err)
-	_, err = m.Create(context.Background(), repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
+	url, root := seedFleetBare(t, dir)
+	m, key := restFleetManager(t, dir)
+	join := joinOverSocket(t, &Server{Manager: m, Grants: localWriteGrants()}, key, url, root)
+	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
+	_, err := m.Create(context.Background(), repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
 	require.NoError(t, err)
 	st, err := m.FleetStatus(context.Background())
 	require.NoError(t, err)
@@ -176,7 +220,7 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	const fact = `{"title":"T","body":"b","domain":["x"]}`
 	rec := post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
 
 	rec = post("/repos/"+st.FleetRepo+"/experiments", `{"name":"exp-a"}`)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
@@ -214,10 +258,10 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	before := head()
 	rec = send(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
 	rec = send(http.MethodPatch, "/repos/"+st.FleetRepo, `{"description":"hello","license":"MIT"}`)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
 	require.Equal(t, before, head(), "nothing was committed on the fleet repository")
 
 	rec = send(http.MethodPatch, "/repos/kb", `{"description":"hello"}`)

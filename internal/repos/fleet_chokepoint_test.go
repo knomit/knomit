@@ -29,7 +29,7 @@ func fleetOntologyYAML(t *testing.T) string {
 
 // mountFleetByDoor mounts the fleet remote at url as name through the fleet
 // code's door and records it as this instance's fleet repository (what
-// RegisterFleet does, without the record and push), and fails the test
+// JoinFleet does, without the bundle, record and push), and fails the test
 // unless it is the fleet repository.
 func mountFleetByDoor(t *testing.T, m *Manager, name, url string) *RepoInstance {
 	t.Helper()
@@ -37,6 +37,18 @@ func mountFleetByDoor(t *testing.T, m *Manager, name, url string) *RepoInstance 
 	require.NoError(t, err)
 	require.True(t, ri.IsFleet(), "fixture: %s is a fleet repository", name)
 	require.NoError(t, recordFleetRepo(m.ControlDB(), ri.UID()))
+	return ri
+}
+
+// mountFleetMember is a member's half of a join on a fleet remote that holds
+// no root (so no bundle can be checked against it): mountFleetByDoor, the
+// own record written and pushed, state registered.
+func mountFleetMember(t *testing.T, m *Manager, name, url string) *RepoInstance {
+	t.Helper()
+	ri := mountFleetByDoor(t, m, name, url)
+	require.NoError(t, m.writeOwnRecord(context.Background(), ri, fact.MemberActive))
+	require.NoError(t, m.pushAgentBranch(context.Background(), ri))
+	require.NoError(t, setFleetState(m.ControlDB(), FleetRegistered, fixedNow()))
 	return ri
 }
 
@@ -82,7 +94,7 @@ func TestFleetReserved_CreateDoorsRefuse(t *testing.T) {
 
 // The doors that take the ontology FROM the remote (clone, subscribe) are
 // refused at Identify, and the failed create is rolled back. The fleet code's
-// door (CreateSpec.fleetDoor, RegisterFleet) mounts the same remote.
+// door (CreateSpec.fleetDoor, JoinFleet) mounts the same remote.
 // SABOTAGE: make admitFleetOntology return nil -> the clone row mounts a
 // fleet repository -> red.
 func TestFleetReserved_CloneAndSubscribeRefusedAtIdentify(t *testing.T) {
@@ -128,7 +140,7 @@ func TestFleetReserved_ArchiveAndDeleteRefusedInEveryState(t *testing.T) {
 	dir := t.TempDir()
 	m := newFleetManager(t, dir)
 	mountFleetByDoor(t, m, "fleet", seedFleetRemote(t, filepath.Join(dir, "fleet.git")))
-	for _, state := range []string{FleetStandalone, FleetRegistering, FleetRegistered, FleetUnregistering} {
+	for _, state := range []string{FleetStandalone, FleetRegistering, FleetRegistered} {
 		require.NoError(t, setFleetState(m.ControlDB(), state, fixedNow()))
 		_, err := m.Archive("fleet")
 		status, code := fleetCode(t, err)
@@ -262,8 +274,7 @@ func TestFleetReserved_BootAdmitsOnlyTheRecordedFleet(t *testing.T) {
 			m := newFleetManager(t, dir)
 			fleetName := ""
 			if withFleet {
-				_, err := m.RegisterFleet(ctx, seedFleetRemote(t, filepath.Join(dir, "fleet.git")), "", "")
-				require.NoError(t, err)
+				mountFleetMember(t, m, "fleet", seedFleetRemote(t, filepath.Join(dir, "fleet.git")))
 				fleetName = m.fleetRepo().Name()
 			}
 			kb, err := m.Create(ctx, CreateSpec{Name: "kb", Mode: "clone", Origin: &OriginSpec{URL: fileuri.New(bare)}}, nil)

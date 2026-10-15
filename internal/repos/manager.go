@@ -237,7 +237,7 @@ var ErrReplicaInLens = errors.New("lens mounts two replicas of the same repo")
 var ErrLensWriteSubscribed = errors.New("lens write repo is a subscription (read-only)")
 
 // ErrLensWriteFleet is returned when a lens names the fleet repository as its
-// write repo. The fleet repository changes only through `knomit fleet`
+// write repo. The fleet repository changes only through the fleet API
 // (ErrFleetReadOnly); a lens may hold it as a read mount only.
 var ErrLensWriteFleet = errors.New("lens write repo is the fleet repository (read-only); a lens may only read it")
 

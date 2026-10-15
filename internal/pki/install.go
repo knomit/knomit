@@ -239,6 +239,32 @@ func InstallBundle(dir, keyPath string, raw []byte, opts InstallOptions) (Identi
 	return id, nil
 }
 
+// Uninstall removes the fleet trust material from dir: instance.crt, crl.pem
+// and root.crt, under the same cross-process lock as InstallBundle, so it
+// cannot interleave with an install. A file already absent is not an error.
+// crl.number (the per-root CRL watermark) is kept: it is filed per root, so
+// it changes nothing for another fleet, and it still refuses an older CRL if
+// this root is ever installed again. The instance key is never touched.
+//
+// The knomit+https client resolves dir at each session, so its next session
+// finds no certificate (ErrNotEnrolled). A running mTLS listener keeps the
+// set it last adopted until it restarts: the reloader adopts only a
+// complete set.
+func Uninstall(dir string) error {
+	unlock, err := lockInstall(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	var errs []error
+	for _, f := range []string{InstanceCertFile, CRLFile, RootCertFile} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // InstallCRL installs a CRL on its own (fleet design D13), for a member that
 // finds a newer one in the fleet repo: no leaf, no root change. Under the
 // same cross-process lock as InstallBundle it checks that rootCert is the

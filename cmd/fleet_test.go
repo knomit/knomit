@@ -12,28 +12,28 @@ import (
 	"knomit/internal/auth"
 )
 
-// TestFleetCLI_ThinClientOverTheLocalListener: `knomit fleet` only calls
-// /api/v1/fleet on the local listener and prints what the server says,
-// including last_error; a refusal's detail comes back as the error.
+// TestFleetCLI_ThinClientOverTheLocalListener: `knomit fleet status` only
+// GETs /api/v1/fleet on the local listener and prints what the server says,
+// including last_error, the role and where the fleet is hosted; a refusal's
+// detail comes back as the error.
 func TestFleetCLI_ThinClientOverTheLocalListener(t *testing.T) {
 	sock := oauthLocalListenerPath(t)
 	ln, cleanup, err := auth.ListenLocal(sock)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
-	var gotMethod string
-	var gotBody map[string]string
+	var methods []string
+	refuse := false
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/fleet", func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotBody = nil
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		if r.Method == http.MethodDelete {
+		methods = append(methods, r.Method)
+		if refuse {
 			w.Header().Set("Content-Type", "application/problem+json")
-			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"detail":"this instance is standalone","code":"not_registered"}`))
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"detail":"control.db is not open"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"state":"unregistering","agent_id":"box","fleet_repo":"fleet","record_state":"active","last_error":"dial tcp: refused"}`))
+		_, _ = w.Write([]byte(`{"state":"registered","agent_id":"box","fleet_repo":"fleet","record_state":"active","last_error":"dial tcp: refused",
+			"master":true,"hosting":"none","root_dir":"/h/fleet"}`))
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
@@ -42,18 +42,16 @@ func TestFleetCLI_ThinClientOverTheLocalListener(t *testing.T) {
 	ctx := context.Background()
 
 	var out bytes.Buffer
-	require.NoError(t, fleetCall(ctx, hc, &out, http.MethodGet, nil))
-	require.Equal(t, http.MethodGet, gotMethod)
-	require.Contains(t, out.String(), "unregistering")
+	require.NoError(t, fleetCall(ctx, hc, &out))
+	require.Contains(t, out.String(), "registered")
 	require.Contains(t, out.String(), "dial tcp: refused", "last_error is shown verbatim")
+	require.Contains(t, out.String(), "hosting: none")
+	require.Contains(t, out.String(), "role:   master (fleet root directory: /h/fleet)")
 
-	out.Reset()
-	require.NoError(t, fleetCall(ctx, hc, &out, http.MethodPut, map[string]string{"url": "https://h/fleet.git"}))
-	require.Equal(t, http.MethodPut, gotMethod)
-	require.Equal(t, "https://h/fleet.git", gotBody["url"])
-
-	err = fleetCall(ctx, hc, &out, http.MethodDelete, nil)
-	require.ErrorContains(t, err, "this instance is standalone")
+	refuse = true
+	err = fleetCall(ctx, hc, &out)
+	require.ErrorContains(t, err, "control.db is not open")
+	require.Equal(t, []string{http.MethodGet, http.MethodGet}, methods, "status only ever GETs")
 }
 
 // F10: status prints the configured addresses, the record's advertised
@@ -69,7 +67,7 @@ func TestFleetCLI_PrintsAddressesAndRecord(t *testing.T) {
 	require.Contains(t, out.String(), "addresses (knomit.toml): https://new.example")
 	require.Contains(t, out.String(), "addresses (record):      https://old.example")
 	require.Contains(t, out.String(), "capabilities: arch=amd64 os=linux")
-	require.Contains(t, out.String(), "restart or re-register")
+	require.Contains(t, out.String(), "restart to update it")
 
 	st = fleetStatusJSON{}
 	require.NoError(t, json.Unmarshal([]byte(`{"state":"registered","agent_id":"box","fleet_repo":"fleet","record_state":"active",

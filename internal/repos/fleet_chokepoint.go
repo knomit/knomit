@@ -41,7 +41,7 @@ var ErrFleetOntologyReserved = errors.New("the ontology id \"fleet\" is reserved
 
 // ErrFleetReadOnly is the one answer to an authored write (MCP, the fact
 // REST routes, an experiment) on the fleet repository.
-var ErrFleetReadOnly = errors.New("the fleet repository changes only through `knomit fleet`")
+var ErrFleetReadOnly = errors.New("the fleet repository changes only through the fleet API (/api/v1/fleet/..., the Fleet page)")
 
 // CauseFleetConflict: a registered repository holds an ontology with id
 // `fleet` but is not this instance's recorded fleet repository (an upstream

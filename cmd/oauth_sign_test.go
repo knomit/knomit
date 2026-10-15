@@ -81,9 +81,17 @@ func newFakeIssuer(t *testing.T, clientName, redirect string) *fakeIssuer {
 // fingerprint.
 func signSetup(t *testing.T) (dir, fp string) {
 	t.Helper()
-	dir = fleetRoot(t)
-	_, pub, pubPath := instanceHome(t, "headless")
-	enroll(t, dir, pubPath)
+	// What a fleet create and an enroll leave in <home>/fleet: the root and
+	// the issuance log line of the instance's leaf.
+	dir = filepath.Join(t.TempDir(), "fleet")
+	root, err := pki.NewRoot(dir, "knomit-fleet-root-test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pub, _ := instanceHome(t, "headless")
+	if _, _, err := pki.IssueInstance(dir, root, pub, "headless@"+pki.AgentEmailDomain, time.Hour); err != nil {
+		t.Fatal(err)
+	}
 	return dir, pki.Fingerprint(pub)
 }
 

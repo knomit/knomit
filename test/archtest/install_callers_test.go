@@ -21,29 +21,38 @@ import (
 // local listener (the unix socket, or the named pipe on Windows) may reach
 // one, and only behind RequireLocalVia. The callers are:
 //
-//   - the CLI (`knomit identity install`, run by the operator in a terminal);
-//   - the desktop's Settings window binding (gated to that window);
+//   - the desktop's Settings window binding (gated to that window; it goes
+//     with the Fleet UI, which joins through POST /fleet/join instead);
 //   - internal/repos/fleet_create.go, the fleet create. It installs this
 //     instance's OWN leaf, which it has just issued from the fresh root it
-//     minted, so the material never comes from a request. Its one route,
-//     POST /api/v1/fleet/create, is behind RequireLocalVia: neither a remote
-//     peer nor a browser on loopback TCP can reach it.
+//     minted, so the material never comes from a request;
+//   - internal/repos/fleet_membership.go, the fleet join. It installs the
+//     bundle the operator brought from the master's enroll, after checking
+//     it is for THIS instance's key and agent id, and only on an instance
+//     with no trust material installed; a refused join uninstalls it.
+//
+// Both routes, POST /api/v1/fleet/create and /join, are behind
+// RequireLocalVia: neither a remote peer nor a browser on loopback TCP can
+// reach them.
 //
 // A route-list snapshot would catch a NEW route only; this catches any
 // production code, route or not, that starts calling install.
 var installCallers = []string{
-	"cmd/identity.go",
 	"internal/repos/fleet_create.go",
+	"internal/repos/fleet_membership.go",
 	"tools/desktop/identity.go",
 }
 
 // installCRLCallers are the ONLY production files that may call
 // pki.InstallCRL, the CRL-only install (fleet design D13). It writes trust
 // material like InstallBundle and must never be reachable over a network
-// route. It has
-// no production caller yet: the fleet reconcile's member tick will be the
-// first, and adding it here is a reviewed decision, not a silent new path.
-var installCRLCallers []string
+// route. The one caller is the master's revoke (POST /api/v1/fleet/revoke,
+// behind RequireLocalVia), which installs the CRL it just signed under its
+// own installed root; the members' tick will be the next, a reviewed
+// decision, not a silent new path.
+var installCRLCallers = []string{
+	"internal/repos/fleet_membership.go",
+}
 
 // TestInstallBundleHasOnlyTheListedCallers parses every non-test Go file of
 // every package in the module — the desktop's included, which needs its
