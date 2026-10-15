@@ -406,8 +406,17 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 
 // signerIsPusher refuses a signed commit whose SSHSIG key is not the pusher's
 // certificate key. Called only for a commit judgeCommit accepted, so a commit
-// without a verifiable signature here is an unsigned merge that passed M3
-// (it adds nothing beyond its parents) and has no signer to compare.
+// without a verifiable signature here is a two-parent merge that passed M3
+// (it adds nothing beyond its parents; unsigned, or a signature that does not
+// verify) and has no signer to compare. A merge that passed M3 with a
+// signature that DOES verify still needs it to be the pusher's.
+//
+// On such a clean merge this check protects nothing: a pusher can strip or
+// corrupt the signature and the same merge is admitted (the S2 ruling in
+// judgeSigner). That is harmless, because a clean merge carries no content
+// beyond its parents, and its parents are either new in this push (judged
+// on their own) or commits the host already holds; the check matters for
+// every other signed commit.
 //
 // Only NEW commits reach this (newCommits stops at commits the host holds):
 // a member merging the host's main into its branch pushes other members'
@@ -462,7 +471,17 @@ func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, co
 	if err != nil {
 		return fmt.Sprintf("knomit: %s could not be read: %v", upstream, err)
 	}
+	shapeOK := map[plumbing.Hash]bool{}
 	for _, c := range commits {
+		// The closure's DiffTree ends silently at a directory entry that is
+		// not a tree (as does every go-git walker; checkTreeShape), so a
+		// bogus entry would hide the private paths after it. reachableNew
+		// does not catch one that names an object the host already holds.
+		// Refused here, in every verify_signatures mode, with the judge's
+		// rule name.
+		if err := commitTreeShape(c, shapeOK); err != nil {
+			return fmt.Sprintf("knomit: commit %s refused: %s: %v", c.Hash, RuleMalformedTree, err)
+		}
 		p, err := privateChangeFromBase(c, up)
 		if err != nil {
 			return fmt.Sprintf("knomit: commit %s could not be compared with %s: %v", c.Hash, upstream, err)
@@ -484,6 +503,11 @@ func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, co
 // agent branch's private paths. Requiring EVERY base instead wedged a member
 // branch for good on a benign criss-cross (its merge stays new on every later
 // push).
+//
+// c's tree must be well formed (privatePathClosure checks it first): DiffTree
+// ends silently at a directory entry that is not a tree. A base tree is one
+// the host holds; one truncated there only makes c's paths look added, which
+// refuses rather than hides.
 func privateChangeFromBase(c, up *object.Commit) (string, error) {
 	tree, err := c.Tree()
 	if err != nil {

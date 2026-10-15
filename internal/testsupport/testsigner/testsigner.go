@@ -49,8 +49,11 @@ func Install() {
 // keep matching their member records; production never derives an id from a
 // branch (D18) and passes the persisted instance_identity.agent_id instead.
 // A test that must prove the persisted id wins sets one that differs from
-// this.
-func FixtureAgentID(branch string) string { return strings.TrimPrefix(branch, "agent/") }
+// this. Any '/' left (a fixture branch such as "machine/test") becomes '-',
+// because an agent id may not hold '/' (pki.ValidAgentID).
+func FixtureAgentID(branch string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(branch, "agent/"), "/", "-")
+}
 
 // Named returns a deterministic signer derived from name, distinct from the
 // fallback: give it to Deps.Signer / SetSigner in a test that must prove a

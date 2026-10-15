@@ -150,7 +150,9 @@ func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 
 // fleetMemberRow is one member as GET /api/v1/fleet/members shows it: every
 // field as the record has it (someone else's odd values are shown, never
-// used), addresses always an array and capabilities always an object.
+// used) except state, which is "revoked" when the CRL at the same main lists
+// the member's leaf (repos.Manager.FleetMembers derives it); addresses always
+// an array and capabilities always an object.
 func fleetMemberRow(mem store.FleetMember) map[string]any {
 	f := repos.MemberFieldsOf(mem.Member)
 	return map[string]any{

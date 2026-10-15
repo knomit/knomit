@@ -169,7 +169,7 @@ func TestIssueLeaf_RefusesAnAgentIDThatDoesNotReadBack(t *testing.T) {
 			t.Errorf("IssueLeaf(%q) issued", email)
 		}
 	}
-	for _, id := range []string{"a+b", "a@b", "", "a b", "Laptop", "laptop-AB12CD34", "Pauls-MacBook-Pro.local-ab12cd34"} {
+	for _, id := range []string{"a+b", "a@b", "", "a b", "Laptop", "laptop-AB12CD34", "Pauls-MacBook-Pro.local-ab12cd34", "alice/x", "/alice", "alice/"} {
 		if _, err := AgentEmail(id); !errors.Is(err, ErrAgentIDInvalid) {
 			t.Errorf("AgentEmail(%q): err=%v, want ErrAgentIDInvalid", id, err)
 		}
@@ -181,6 +181,11 @@ func TestIssueLeaf_RefusesAnAgentIDThatDoesNotReadBack(t *testing.T) {
 		if id != "" && AgentIDOfEmail(id+"@"+AgentEmailDomain) == id {
 			t.Errorf("AgentIDOfEmail reads %q back as itself, but ValidAgentID refuses it", id)
 		}
+	}
+	// A '/' would make the id a path: members/alice/x/ would be a subfolder
+	// of alice's, and certs/alice/x.pem would sit outside certs/*.pem.
+	if err := ValidAgentID("alice/x"); err == nil || !strings.Contains(err.Error(), "'/'") {
+		t.Errorf("ValidAgentID(alice/x): %v, want a '/' refusal", err)
 	}
 	// Upper case is refused, never folded: the error names it.
 	if err := ValidAgentID("Laptop"); err == nil || !strings.Contains(err.Error(), "upper-case") {

@@ -50,8 +50,10 @@ var ErrAgentIDInvalid = errors.New("pki: invalid agent id")
 // ids are lower case everywhere, and every comparison of one is exact, so an
 // upper-case id could never equal the lower-case member folder, file name or
 // record that names it), '+' (everything after it would be read as an
-// operation, so a+b would be judged as a), '@', or white space or a control
-// character. Every id it accepts reads back as itself. It is checked where an
+// operation, so a+b would be judged as a), '@', '/' (the id names one folder,
+// members/<id>/, and one leaf file, certs/<id>.pem: alice/x would own a
+// subfolder of alice's and a leaf outside certs/*.pem), or white space or a
+// control character. Every id it accepts reads back as itself. It is checked where an
 // id is MINTED (repos.ResolveIdentity), where a stored id is read back at boot,
 // and where a certificate is issued for one; it never extracts anything from
 // an id. IssueLeaf additionally needs the whole address to be printable ASCII
@@ -62,6 +64,9 @@ func ValidAgentID(id string) error {
 	}
 	if strings.ContainsAny(id, "+@") {
 		return fmt.Errorf("%w: %q holds '+' or '@'", ErrAgentIDInvalid, id)
+	}
+	if strings.Contains(id, "/") {
+		return fmt.Errorf("%w: %q holds '/' (an id names one folder, members/<id>/, and one file, certs/<id>.pem)", ErrAgentIDInvalid, id)
 	}
 	for _, c := range id {
 		switch {

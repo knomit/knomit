@@ -102,7 +102,23 @@ func loadMembers(fleetID string, c *object.Commit, root string) ([]FleetMember, 
 }
 
 // loadMembersOfTree is loadMembers over a tree.
+//
+// A record counts only in its OWN folder: a record at members/<x>/... whose
+// agent: is not <x> (or a file directly under members/, in no folder) is
+// skipped and logged once per blob like a malformed one. Otherwise a record
+// one member planted in its own folder for ANOTHER agent would make that
+// agent ambiguous (two records) and lock it out, or pre-empt a joiner's
+// rule A; the record-owner rule (recordOwner) refuses writing such a record,
+// and this keeps one that is already on main harmless to every reader and
+// to the judge.
 func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetMember, error) {
+	// tree.Files() ends SILENTLY at a directory entry that is not a tree, so
+	// one bogus entry would hide every record after it (and a member could
+	// plant one in its own folder to make the members sorting after it
+	// vanish). A malformed tree fails the load instead.
+	if err := checkTreeShape(tree, nil); err != nil {
+		return nil, fmt.Errorf("fleet %s: malformed tree: %w", fleetID, err)
+	}
 	prefix := path.Join(root, fact.MembersTopic) + "/"
 	var out []FleetMember
 	err := tree.Files().ForEach(func(f *object.File) error {
@@ -122,6 +138,13 @@ func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetM
 			if _, seen := malformedLogged.LoadOrStore(fleetID+"\x00"+f.Name+"\x00"+f.Hash.String(), true); !seen {
 				log.Error().Err(perr).Str("fleet", fleetID).Str("path", f.Name).Str("blob", f.Hash.String()).
 					Msg("fleet: malformed member record skipped")
+			}
+			return nil
+		}
+		if folder, _, ok := strings.Cut(strings.TrimPrefix(f.Name, prefix), "/"); !ok || folder != m.Agent {
+			if _, seen := malformedLogged.LoadOrStore(fleetID+"\x00"+f.Name+"\x00"+f.Hash.String(), true); !seen {
+				log.Error().Str("fleet", fleetID).Str("path", f.Name).Str("blob", f.Hash.String()).Str("agent", m.Agent).
+					Msg("fleet: member record outside its agent's folder skipped")
 			}
 			return nil
 		}
@@ -291,6 +314,44 @@ func (p *FleetPKI) Cert(id string) (*x509.Certificate, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return c, nil
+}
+
+// verifyLeaf verifies leaf against this revision's root and CRL, at a moment
+// inside the leaf's own validity (never the current time: the judge is
+// historical, and TLS refuses an expired certificate on every connection).
+// An unusable root or CRL is its load error; a listed serial is
+// pki.ErrRevoked, and only from a CRL the root signed, about a leaf the root
+// signed.
+func (p *FleetPKI) verifyLeaf(leaf *x509.Certificate) (pki.Identity, error) {
+	if p.Root == nil {
+		return pki.Identity{}, p.RootErr
+	}
+	if p.CRL == nil {
+		return pki.Identity{}, p.CRLErr
+	}
+	at := leaf.NotBefore
+	if p.Root.NotBefore.After(at) {
+		at = p.Root.NotBefore
+	}
+	return pki.VerifyInstanceChain(leaf, nil, p.Root, p.CRL, at, pki.UsageClient)
+}
+
+// Revoked reports whether agent id is revoked at this revision: the leaf at
+// its leaf path chains to the root and its serial is on the CRL the root
+// signed. It is how a reader derives a member's "revoked" state (M6): the
+// state is never written to a record, it is the CRL's. A missing, unreadable
+// or foreign leaf, or an unusable root or CRL, is not "revoked" (nothing the
+// root signed says so); the judge refuses those on its own terms (rule B).
+func (p *FleetPKI) Revoked(id string) bool {
+	if p == nil {
+		return false
+	}
+	leaf, err := p.Cert(id)
+	if leaf == nil || err != nil {
+		return false
+	}
+	_, err = p.verifyLeaf(leaf)
+	return errors.Is(err, pki.ErrRevoked)
 }
 
 // parseCertPEM parses one CERTIFICATE PEM block.
