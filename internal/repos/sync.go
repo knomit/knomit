@@ -433,8 +433,11 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 		}
 
 		// The fleet master's round (peers): decided once per round, so a root
-		// key copied in or removed acts on the next round.
+		// key copied in or removed acts on the next round. publishes also
+		// covers the root holder whose main does not hold the root yet (a
+		// forge create whose publish of main failed).
 		master := peers.isMaster(svc)
+		publishes := master || peers.publishesMain(svc)
 
 		// Sync first. A failed fetch does not skip the push: pushing this
 		// instance's own branch without a fresh fetch is still a correct
@@ -496,9 +499,10 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 			if err == nil {
 				pushResult, err = svc.Remote().Push(ctx, agentBranch, auth)
 			}
-			if err == nil && master {
+			if err == nil && publishes {
 				// The master publishes main: its agent branch, without force.
-				// A refusal is this round's push error like any other.
+				// A refusal is this round's push error like any other, so the
+				// fleet state machine (onPush) sees it.
 				var mainResult store.PushResult
 				if mainResult, err = peers.publish(ctx, svc, agentBranch, auth); err == nil && mainResult.Pushed {
 					pushResult.Pushed = true

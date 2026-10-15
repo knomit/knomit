@@ -318,6 +318,7 @@ func (m *Manager) UnregisterFleet(ctx context.Context) (FleetStatus, error) {
 // only at the breaker's next probe — up to 30 minutes later (breakerMaxOpen).
 func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) {
 	var perr error
+	publishes := false
 	werr := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			perr = errors.New("fleet repository is not open")
@@ -334,9 +335,15 @@ func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) {
 			return
 		}
 		_, perr = svc.Remote().Push(ctx, ri.AgentBranch(), auth)
+		publishes = perr == nil && ri.publishesFleetMain(svc)
 	})
 	if werr != nil && perr == nil {
 		perr = werr
+	}
+	if perr == nil && publishes {
+		// As the sync loop's round does: a push of the fleet repository by
+		// its root holder includes publishing main.
+		perr = m.publishFleetMainNow(ctx, ri)
 	}
 	m.fleetPushed(ri.Name(), perr)
 }
@@ -347,9 +354,11 @@ func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) {
 // (-> unmount, standalone). Pushes of any other repository are ignored.
 //
 // Registering on the instance that holds the fleet root (a forge create
-// whose publish of main failed) completes only when main is published: this
-// arm publishes it (publishFleetMainNow) and stays registering, with
-// last_error, while that fails. A member has nothing to publish, and its
+// whose publish of main failed) completes only when main is published. The
+// publish is part of every push of the fleet repository by its root holder
+// (RepoInstance.publishesFleetMain: the sync loop's round and pushFleet), so
+// pushErr already carries a failed publish and the state stays registering,
+// with last_error, while it fails. A member has nothing to publish, and its
 // pushed agent branch completes its registration.
 func (m *Manager) fleetPushed(repo string, pushErr error) {
 	if !m.IsFleetRepo(repo) {
@@ -372,13 +381,6 @@ func (m *Manager) fleetPushed(repo string, pushErr error) {
 	}
 	switch row.State {
 	case FleetRegistering:
-		if ri := m.Get(repo); ri != nil && m.holdsFleetRootOf(ri) {
-			if err := m.publishFleetMainNow(m.ctx, ri); err != nil {
-				_ = recordFleetAttempt(db, err, now)
-				log.Warn().Err(err).Str("fleet", repo).Msg("fleet: publishing main failed; still registering")
-				return
-			}
-		}
 		if err := setFleetState(db, FleetRegistered, now); err != nil {
 			log.Warn().Err(err).Msg("fleet: entering registered failed")
 		}
@@ -391,14 +393,6 @@ func (m *Manager) fleetPushed(repo string, pushErr error) {
 			log.Warn().Err(err).Msg("fleet: entering standalone failed")
 		}
 	}
-}
-
-// holdsFleetRootOf reports whether this instance holds the root of the fleet
-// ri is, as its agent branch records it (holdsFleetRootAt).
-func (m *Manager) holdsFleetRootOf(ri *RepoInstance) bool {
-	held := false
-	_ = ri.WithRead(func(svc *store.Service) { held = m.holdsFleetRootAt(svc, ri.AgentBranch()) })
-	return held
 }
 
 // FleetRetry pushes the fleet repository once, as a sync tick would. Used by

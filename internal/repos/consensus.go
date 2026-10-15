@@ -199,12 +199,27 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 	defer release()
 
 	upstream := svc.UpstreamBranch()
+	// admit, on the fleet repository, re-judges a branch's tip against the
+	// current main before it is merged (fleetPeers.mayMerge): a branch
+	// admitted before main moved (a revocation) may now be refused, and is
+	// then demoted instead of merged. nil everywhere else.
+	var admit func(branch string, tip plumbing.Hash) bool
 	if m.ri.IsFleet() {
 		// The fleet repository: merging is the master's duty, on every
 		// hosting (R-merge). The origin is transport only, and `consensus`
 		// is not read: the fleet ontology does not declare it.
 		if !m.ri.isFleetMaster(svc) {
 			return
+		}
+		mainTip, err := svc.Branches().HeadCommit(ctx, upstream)
+		if err != nil {
+			m.warnOnce("main:"+err.Error(), fmt.Sprintf("consensus: read %s: %v; nothing merged, the next kick retries", upstream, err))
+			return
+		}
+		hist := &lazyMain{svc: svc}
+		main := plumbing.NewHash(mainTip)
+		admit = func(branch string, tip plumbing.Hash) bool {
+			return m.ri.peers.mayMerge(ctx, svc, branch, m.agentBranch, tip, main, hist)
 		}
 	} else if !m.mayMerge(ctx, svc, upstream) {
 		return
@@ -223,7 +238,7 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 		if !m.ri.isPushedBranch(b.Name, upstream) {
 			continue
 		}
-		if m.mergeOne(ctx, svc, b.Name) {
+		if m.mergeOne(ctx, svc, b.Name, admit) {
 			merged = true
 		}
 	}
@@ -284,10 +299,11 @@ func (m *consensusMerger) autoAt(ctx context.Context, svc *store.Service, upstre
 }
 
 // mergeOne merges one pushed branch at its current tip; true when it wrote a
-// merge commit.
-func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, branch string) bool {
+// merge commit. admit, when not nil, must accept that tip first; the merge
+// is then of exactly that tip (a branch that moved since is ErrBranchMoved).
+func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, branch string, admit func(string, plumbing.Hash) bool) bool {
 	tipStr, err := svc.Branches().HeadCommit(ctx, branch)
-	if err != nil {
+	if err != nil || tipStr == "" {
 		return false // gone since the list; nothing to merge
 	}
 	tip := plumbing.NewHash(tipStr)
@@ -295,6 +311,9 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 	refusedTip, wasRefused := m.refused[branch]
 	m.mu.Unlock()
 	if wasRefused && refusedTip == tip {
+		return false
+	}
+	if admit != nil && !admit(branch, tip) {
 		return false
 	}
 	if h := currentConsensusHooks().beforeMerge; h != nil {

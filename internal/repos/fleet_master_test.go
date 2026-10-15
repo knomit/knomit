@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -231,14 +232,21 @@ func TestFleetMaster_RefusedTipIsNotRejudgedUntilItMoves(t *testing.T) {
 	require.Equal(t, first, f.mri.peers.Refusals()["agent/beta"], "not judged again")
 }
 
-// The master pushes main WITHOUT force: a main written on the forge after the
-// master's fetch makes the push a non-fast-forward, reported as the round's
-// ordinary push error, and the forge keeps the other main. The next round
-// fetches it, merges it into the master's branch and publishes a main that
-// contains it.
+// STATED ASSUMPTION this test pins (user ruling 2026-10-15, PR #524 S1):
+// the forge's main is trusted; branch protection is the forge admin's job.
+// The master adopts the forge's main as it is, unjudged (rewinds included),
+// merges it into its agent branch and publishes the result: below, an
+// unsigned "write past the branch protection" ends up on main after the next
+// round, by design.
+//
+// And the master pushes main WITHOUT force: a main written on the forge
+// after the master's fetch makes the push a non-fast-forward, reported as the
+// round's ordinary push error, and the forge keeps the other main. The next
+// round fetches it, merges it into the master's branch and publishes a main
+// that contains it.
 // SABOTAGE: push main with "+" (force) in remoteIndex.push -> the forge's
 // commit is overwritten and no error is recorded, red.
-func TestFleetMaster_MainPushIsNotForcedAndConverges(t *testing.T) {
+func TestFleetMaster_TrustsTheForgesMainAndNeverForcesItsPush(t *testing.T) {
 	f := newForgeFleet(t, nil)
 	round(t, f.mri) // publish the master's branch once
 	require.Equal(t, localTip(t, f.mri, "agent/master"), f.rev(t, "main"))
@@ -324,7 +332,7 @@ func TestFleetMaster_MergerGateIsTheMasterPredicate(t *testing.T) {
 				require.NoError(t, err)
 				require.Nil(t, r, "fixture: no origin")
 				require.Equal(t, !tc.stray, ri.isFleetMaster(svc), "fixture: master or not")
-				reason, err := svc.AdmitPeerBranch(context.Background(), "agent/alpha", ri.AgentBranch(), tip)
+				reason, err := svc.AdmitPeerBranch(context.Background(), "agent/alpha", ri.AgentBranch(), tip, nil)
 				require.NoError(t, err)
 				require.Empty(t, reason)
 			}))
@@ -418,7 +426,9 @@ func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
 	r := f.mri.peers.Refusals()["agent/alpha"]
 	require.Equal(t, f.rev(t, "agent/alpha"), r.Tip)
 	require.Contains(t, r.Reason, "refused by verify_signatures=enforce")
-	require.Equal(t, admitted, localTip(t, f.mri, "agent/alpha"), "the local branch stays at the admitted tip")
+	require.Empty(t, localTip(t, f.mri, "agent/alpha"),
+		"the branch's latest verdict is a refusal: its local branch, admitted earlier, is demoted (N3)")
+	require.NotEqual(t, admitted, r.Tip)
 }
 
 // R-visibility applies to a member's FIRST clone too (PR #524 S2): beta's
@@ -450,4 +460,238 @@ func TestFleetMember_CloneHoldsNoOtherAgentsBranch(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, tips, "a member's clone tracks no other agent's branch")
 	}))
+}
+
+// forgeMainCommit writes (content non-nil) or deletes (nil) path on the
+// forge's main, as the forge's admin would: the master adopts it (S1).
+func (f *forgeFleet) forgeMainCommit(t *testing.T, path string, content []byte, msg string) {
+	t.Helper()
+	work := t.TempDir()
+	runGit(t, "", "clone", "-q", "-b", "main", f.bare, work)
+	if content == nil {
+		runGit(t, work, "rm", "-q", path)
+	} else {
+		require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(path)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(work, path), content, 0o644))
+		runGit(t, work, "add", "-A")
+	}
+	runGit(t, work, "commit", "-q", "-m", msg)
+	runGit(t, work, "push", "-q", "origin", "main")
+}
+
+// editOwnRecord commits a change to the member's own record on its agent
+// branch (signed by the member), and returns nothing: the record stays a
+// valid record of the member, only its body grows.
+func editOwnRecord(t *testing.T, ri *RepoInstance, id, line string) {
+	t.Helper()
+	path := memberRecordPath("kb", id)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		got, err := svc.Facts().ReadFact(context.Background(), ri.AgentBranch(), path, nil)
+		raw := got.Content
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(context.Background(), ri.AgentBranch(), path, raw+"\n"+line+"\n", "record: "+line, "updated")
+		require.NoError(t, err)
+	}))
+}
+
+// The fetch judge judges EVERY commit of tip ∖ main, not the tip alone (PR
+// #524 S3). Alpha's branch carries X (an edit of another member's folder)
+// and then Y (an edit of alpha's own record, admissible on its own: the
+// control shows a branch of such edits admitted). The tip Y is refused,
+// naming X, and no local branch is left.
+// SABOTAGE: in store.JudgePeerBranch judge the tip commit only -> Y alone is
+// admitted and agent/alpha becomes a local branch, red.
+func TestFleetMaster_ARefusedCommitUnderAnAdmissibleTipIsRefused(t *testing.T) {
+	alpha := testsigner.Named("alpha")
+	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
+	_, ari := f.join(t, "alpha", alpha)
+	// Control: the record, then an edit of it, admitted.
+	editOwnRecord(t, ari, "alpha", "first edit")
+	round(t, ari)
+	round(t, f.mri)
+	require.Equal(t, f.rev(t, "agent/alpha"), localTip(t, f.mri, "agent/alpha"), "fixture: own-record edits are admitted")
+	require.Empty(t, f.mri.peers.Refusals())
+
+	require.NoError(t, ari.WithRead(func(svc *store.Service) {
+		_, err := svc.Facts().WriteFact(context.Background(), ari.AgentBranch(), "kb/members/beta/0000beta.md",
+			"---\nkind: pragmatic\ntype: policy\n---\n# beta\n\nnot alpha's to write\n", "X: beta's folder", "created")
+		require.NoError(t, err)
+	}))
+	editOwnRecord(t, ari, "alpha", "Y: second edit")
+	round(t, ari)
+	tip := f.rev(t, "agent/alpha")
+	out, err := exec.Command("git", "-C", f.bare, "rev-parse", "agent/alpha~1").Output()
+	require.NoError(t, err)
+	x := strings.TrimSpace(string(out))
+	require.NoError(t, exec.Command("git", "-C", f.bare, "cat-file", "-e", x+":kb/members/beta/0000beta.md").Run(), "fixture: X is the tip's parent")
+
+	round(t, f.mri)
+	r := f.mri.peers.Refusals()["agent/alpha"]
+	require.Equal(t, tip, r.Tip, "the refusal is of the tip Y")
+	require.Contains(t, r.Reason, "commit "+x, "the refusal names X, the commit under the tip")
+	require.Empty(t, localTip(t, f.mri, "agent/alpha"), "no local branch is left")
+}
+
+// The memo is keyed on (tip, main), and main moving is the enrolment flow
+// (PR #524 S4): beta pushes its join branch before its leaf is on main and
+// is refused. The issuance then lands on main; beta's tip, unchanged, is
+// judged again, admitted and promoted, and the refusal is cleared.
+// SABOTAGE: drop main from the memo key (peerKey{tip: ...} only, in
+// fleetPeers.admit) -> beta stays refused until it pushes again, red.
+func TestFleetMaster_ARefusedTipIsAdmittedWhenItsLeafLandsOnMain(t *testing.T) {
+	beta := testsigner.Named("beta")
+	f := newForgeFleet(t, nil)
+	f.join(t, "beta", beta)
+	betaTip := f.rev(t, "agent/beta")
+	round(t, f.mri)
+	require.Contains(t, f.mri.peers.Refusals()["agent/beta"].Reason, "refused by verify_signatures=enforce", "fixture: no leaf, refused")
+	require.Empty(t, localTip(t, f.mri, "agent/beta"))
+
+	pub := beta.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey().(ed25519.PublicKey)
+	leaf, _, err := pki.IssueInstance(f.root.Dir, f.root.Root, pub, "beta@agents.knomit.io", time.Hour)
+	require.NoError(t, err)
+	f.forgeMainCommit(t, "artifacts/fleet/certs/beta.pem", leaf, "issue beta's leaf")
+
+	round(t, f.mri)
+	require.Equal(t, betaTip, f.rev(t, "agent/beta"), "fixture: beta did not push again")
+	require.Equal(t, betaTip, localTip(t, f.mri, "agent/beta"), "the same tip is admitted once main holds the leaf")
+	require.NotContains(t, f.mri.peers.Refusals(), "agent/beta", "the refusal is cleared")
+}
+
+// A member branch deleted on the forge is forgotten by the master (PR #524
+// N1): the master's fetch prunes within the peer refspec, so the tracking
+// ref goes, and the branch's refusal with it.
+// SABOTAGE: drop `opts.Prune = true` in store.fetchOrigin -> the tracking ref
+// and the refusal stay, red.
+func TestFleetMaster_ABranchDeletedOnTheForgeIsForgotten(t *testing.T) {
+	beta := testsigner.Named("beta")
+	f := newForgeFleet(t, nil)
+	f.join(t, "beta", beta)
+	round(t, f.mri)
+	require.Contains(t, f.mri.peers.Refusals(), "agent/beta", "fixture: refused")
+
+	runGit(t, f.bare, "branch", "-q", "-D", "agent/beta")
+	round(t, f.mri)
+	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
+		tips, err := svc.Remote().PeerTips(f.mri.AgentBranch())
+		require.NoError(t, err)
+		require.NotContains(t, tips, "agent/beta", "the tracking ref is pruned")
+		main, err := svc.Branches().HeadCommit(context.Background(), "main")
+		require.NoError(t, err)
+		require.Equal(t, f.rev(t, "main"), main, "the prune kept main")
+	}))
+	require.NotContains(t, f.mri.peers.Refusals(), "agent/beta", "the refusal is forgotten")
+	require.Equal(t, localTip(t, f.mri, "agent/master"), f.rev(t, "agent/master"), "the own branch is untouched")
+}
+
+// A branch admitted before main moved, and refused against the new main,
+// is demoted and never merged (PR #524 N3), on both hostings: the merger
+// re-judges each local agent/* branch against the current main. Alpha's
+// branch is admitted while main holds its leaf; the forge's admin then
+// removes the leaf from main (as a revocation would refuse it). The merger,
+// held off until then (no root key), re-judges, refuses and demotes it.
+// SABOTAGE: drop the demote call in fleetPeers.mayMerge -> the local branch
+// stays, red. Drop the admit gate in consensusMerger.runOnce (admit = nil)
+// -> alpha is merged, red.
+func TestFleetMaster_ARejudgedRefusalDemotesTheAdmittedBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hub  bool
+	}{
+		{name: "forge"},
+		{name: "knomit-hosted hub", hub: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			alpha := testsigner.Named("alpha")
+			f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
+			f.join(t, "alpha", alpha)
+			tip := plumbing.NewHash(f.rev(t, "agent/alpha"))
+			// Not the master while the branch is admitted: its merger is inert.
+			require.NoError(t, os.Remove(filepath.Join(f.master.fleetRootDir(), pki.RootKeyFile)))
+			require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
+				_, err := svc.Remote().SyncWithPeers(ctx, f.mri.AgentBranch(), nil)
+				require.NoError(t, err)
+				reason, err := svc.AdmitPeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), tip, nil)
+				require.NoError(t, err)
+				require.Empty(t, reason, "fixture: admitted while main holds the leaf")
+			}))
+			require.Equal(t, tip.String(), localTip(t, f.mri, "agent/alpha"))
+
+			f.forgeMainCommit(t, "artifacts/fleet/certs/alpha.pem", nil, "alpha's leaf leaves main")
+			require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
+				_, err := svc.Remote().Sync(ctx, f.mri.AgentBranch(), nil)
+				require.NoError(t, err)
+			}))
+			ri := f.mri
+			if tc.hub {
+				_, err := f.master.Send(ctx, f.mri, DetachOrigin())
+				require.NoError(t, err)
+				ri = f.master.Get("fleet")
+			}
+			installFleetRoot(t, f.master, f.root)
+			require.NoError(t, ri.WithRead(func(svc *store.Service) {
+				require.True(t, ri.isFleetMaster(svc), "fixture: the master again")
+				main, err := svc.Branches().HeadCommit(ctx, "main")
+				require.NoError(t, err)
+				require.Equal(t, f.rev(t, "main"), main, "fixture: main moved here")
+			}))
+
+			settleMerger(t, ri)
+			st := ri.consensus.snapshot()
+			require.Zero(t, st.Merges, "the refused branch is not merged")
+			require.Empty(t, localTip(t, ri, "agent/alpha"), "the admitted branch is demoted")
+			r := ri.peers.Refusals()["agent/alpha"]
+			require.Equal(t, tip.String(), r.Tip)
+			require.Contains(t, r.Reason, "refused by verify_signatures=enforce")
+		})
+	}
+}
+
+// One publish path (#518 + PR #524): a forge create whose publish of main
+// failed leaves the root holder registering, with main lacking the root, so
+// it is not the master yet. The sync loop's round still publishes main
+// (publishesFleetMain: the root on the agent branch), the fleet state
+// machine reads that round's outcome and enters registered, and fleetPushed
+// publishes nothing of its own: the create's publish seam is not called
+// again by the round.
+// SABOTAGE: gate the round's publish on `master` alone in runReconcileLoop
+// -> main stays the README while the state reads registered, red. Put a
+// publishFleetMainNow back in fleetPushed's registering arm -> the seam is
+// called by the round, red.
+func TestFleetMaster_TheLoopRoundPublishesMainForTheCreatorOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	bare := forgeFleetRemote(t, dir)
+	readme := gitRev(t, bare, "refs/heads/main")
+	m := newFleetHost(t, dir, nil)
+	calls := 0
+	refuse := true
+	setFleetHooks(t, fleetCreateHooks{beforePublish: func() error {
+		calls++
+		if refuse {
+			return errors.New("main is protected")
+		}
+		return nil
+	}})
+	st, err := m.CreateFleet(ctx, FleetCreateSpec{Origin: &OriginSpec{URL: fileuri.New(bare)}})
+	require.NoError(t, err)
+	require.Equal(t, FleetRegistering, st.State, "fixture: main was not published")
+	require.Equal(t, readme, gitRev(t, bare, "refs/heads/main"))
+	ri := m.fleetRepo()
+	require.NotNil(t, ri)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		require.False(t, ri.isFleetMaster(svc), "fixture: main does not hold the root, so not the master yet")
+		require.True(t, ri.publishesFleetMain(svc), "fixture: the root holder publishes")
+	}))
+	refuse = false
+	before := calls
+
+	roundOnPush(t, ri, m.fleetPushed)
+	require.Equal(t, before, calls, "the round's own publish is the only one: fleetPushed publishes nothing")
+	require.Equal(t, gitRev(t, bare, "refs/heads/"+ri.AgentBranch()), gitRev(t, bare, "refs/heads/main"), "the round published main")
+	st, err = m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Equal(t, FleetRegistered, st.State)
+	require.Empty(t, st.LastError)
 }

@@ -2324,11 +2324,13 @@ paths:
                         last_refusal:
                           type: object
                           description: |
-                            On the fleet's master with a forge origin only: the last tip of
-                            this member's branch (the record's `branch`) that the master
-                            fetched and refused, left behind and not judged again until the
-                            branch or main moves. Absent when the last tip was admitted.
-                            Held in memory.
+                            On the fleet's master only: the last tip of this member's branch
+                            (the record's `branch`) that the master refused, left behind and
+                            not judged again until the branch or main moves. Refused when
+                            fetched from a forge origin, or when re-judged against a main
+                            that moved (both hostings; a local branch admitted earlier is
+                            then removed). Absent when the last tip was admitted. Held in
+                            memory.
                           properties:
                             branch: { type: string }
                             tip: { type: string }
