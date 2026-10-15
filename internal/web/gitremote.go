@@ -127,6 +127,7 @@ func pushPolicy(r *http.Request, rm *repos.Manager, ri *repos.RepoInstance) stor
 		OwnBranch: ri.AgentBranch(),
 		Fleet:     rm.FleetAtMain,
 	}
+	fleetRefusal := rm.FleetPushRefusal(ri)
 	switch {
 	case p.Kind != auth.KindInstance || p.Via != auth.ViaCert || p.ID == "":
 		pol.Refusal = fmt.Sprintf("knomit: pushing requires an enrolled instance certificate; principal %s is not one", p)
@@ -137,6 +138,11 @@ func pushPolicy(r *http.Request, rm *repos.Manager, ri *repos.RepoInstance) stor
 		pol.Refusal = fmt.Sprintf("knomit: principal %s does not hold push:own", p)
 	case ri.Subscribed():
 		pol.Refusal = fmt.Sprintf("knomit: repo %q is a subscription; it accepts no pushes", ri.Name())
+	case fleetRefusal != "":
+		// A fleet copy with an origin: members push to the origin, and a
+		// master with an origin holds fetched, possibly refused, member tips
+		// that a pushed merge would launder past the judge.
+		pol.Refusal = fleetRefusal
 	default:
 		pol.Pusher = p.ID
 	}

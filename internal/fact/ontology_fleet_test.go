@@ -5,15 +5,17 @@ import (
 	"testing"
 )
 
-// The fleet ontology DECLARES consensus: auto in its own text (explicit,
-// never inferred from the id, 3015a4d6), and it stays a valid NEW ontology.
-// The value read is asserted, not "no error": the reader treats an unknown
-// value as off.
-// SABOTAGE: drop the key -> Mode off -> red.
-func TestFleetOntology_DeclaresConsensusAuto(t *testing.T) {
+// The fleet ontology declares NO consensus (round 3, R3.4): merging into main
+// is the fleet master's duty, never a setting. Absent, `consensus` reads off
+// and so does the `conflicts` default it would switch on (a conflicting
+// member branch is refused and left behind, not settled). It stays a valid
+// NEW ontology with verify_signatures: enforce.
+// SABOTAGE: re-add `consensus: auto` -> the attribute is present and the
+// conflicts default reads merge -> red.
+func TestFleetOntology_DeclaresNoConsensus(t *testing.T) {
 	o := FleetOntology()
-	if o.Attributes[AttrConsensus] != ConsensusAuto {
-		t.Fatalf("consensus = %v, want %s", o.Attributes[AttrConsensus], ConsensusAuto)
+	if v, ok := o.Attributes[AttrConsensus]; ok {
+		t.Fatalf("consensus = %v, want the attribute absent", v)
 	}
 	raw, err := o.Serialize()
 	if err != nil {
@@ -26,8 +28,15 @@ func TestFleetOntology_DeclaresConsensusAuto(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cs.Valid || cs.Mode != ConsensusAuto {
-		t.Fatalf("ReadConsensus = %+v, want auto and valid", cs)
+	if !cs.Valid || cs.Mode != ConsensusOff {
+		t.Fatalf("ReadConsensus = %+v, want off and valid", cs)
+	}
+	cf, err := ReadConflicts(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.Facts != ConflictsOff || cf.State != ConflictsOff {
+		t.Fatalf("ReadConflicts = %+v, want facts and state off", cf)
 	}
 	vs, err := ReadVerifySettings(raw)
 	if err != nil || vs.Mode != "enforce" {

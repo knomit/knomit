@@ -18,6 +18,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
@@ -362,7 +363,56 @@ func BranchACreateReads(remoteHasAgentBranch bool, agentBranch, consensusBranch 
 	return consensusBranch
 }
 
-func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string, progress func(string)) (upstream string, remoteWasEmpty bool, err error) {
+// InitOption changes how InitFromRemote bootstraps.
+type InitOption func(*initOptions)
+
+type initOptions struct{ ownBranchesOnly bool }
+
+// OwnBranchesOnly makes the bootstrap fetch bring every branch of the remote
+// EXCEPT other instances' agent/* branches: the fleet door's clone
+// (R-visibility: a non-master never gets another agent's branch, and that
+// includes its first clone, PR #524 S2). Without it the bootstrap fetch is
+// the wildcard +refs/heads/*:refs/remotes/origin/*, which copies every agent
+// branch's objects into the store for good, even though the steady-state
+// refspecs never fetch them again.
+func OwnBranchesOnly() InitOption { return func(o *initOptions) { o.ownBranchesOnly = true } }
+
+// ownBranchesRefspecs lists the remote's branches (one advertisement, no
+// objects) and returns one exact refspec per branch that is not an agent/*
+// branch, plus own when the remote has it. A remote with no ref answers
+// transport.ErrEmptyRemoteRepository; one whose only branches are other
+// agents' answers ErrNoConsensusBranch (an empty list would fall back to the
+// wildcard).
+func ownBranchesRefspecs(ctx context.Context, originURL string, auth transport.AuthMethod, own string, timeout time.Duration) ([]gogitconfig.RefSpec, error) {
+	rem := gogit.NewRemote(memory.NewStorage(), &gogitconfig.RemoteConfig{Name: "origin", URLs: []string{originURL}})
+	lctx, cancel := netCtxWith(ctx, timeout)
+	defer cancel()
+	refs, err := rem.ListContext(lctx, &gogit.ListOptions{Auth: auth})
+	if err != nil {
+		return nil, err
+	}
+	var out []gogitconfig.RefSpec
+	for _, ref := range refs {
+		if !ref.Name().IsBranch() {
+			continue
+		}
+		b := ref.Name().Short()
+		if strings.HasPrefix(b, "agent/") && b != own {
+			continue
+		}
+		out = append(out, gogitconfig.RefSpec("+refs/heads/"+b+":refs/remotes/origin/"+b))
+	}
+	if len(refs) == 0 {
+		return nil, transport.ErrEmptyRemoteRepository
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: the remote holds only other agents' branches", ErrNoConsensusBranch)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
+func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string, progress func(string), opts ...InitOption) (upstream string, remoteWasEmpty bool, err error) {
 	// Record the RESOLVED consensus branch (consensus_branch.go): it outlives
 	// the origin row if the origin is later removed.
 	defer func() {
@@ -379,24 +429,38 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 		return "", false, err
 	}
 
-	_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{
-		Name: "origin",
-		URLs: []string{originURL},
-		Fetch: []gogitconfig.RefSpec{
-			"+refs/heads/*:refs/remotes/origin/*",
-		},
+	var o initOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	bootstrap := []gogitconfig.RefSpec{"+refs/heads/*:refs/remotes/origin/*"}
+	if o.ownBranchesOnly {
+		if agentBranch == "" {
+			agentBranch = defaultAgentBranch()
+		}
+		bootstrap, err = ownBranchesRefspecs(ctx, originURL, auth, agentBranch, s.rh.netTimeout)
+		if err != nil && !errors.Is(err, transport.ErrEmptyRemoteRepository) {
+			return "", false, fmt.Errorf("InitFromRemote: list the remote: %w", err)
+		}
+	}
+	_, cerr := repo.CreateRemote(&gogitconfig.RemoteConfig{
+		Name:  "origin",
+		URLs:  []string{originURL},
+		Fetch: bootstrap,
 	})
-	if err != nil {
-		return "", false, fmt.Errorf("InitFromRemote: create remote: %w", err)
+	if cerr != nil {
+		return "", false, fmt.Errorf("InitFromRemote: create remote: %w", cerr)
 	}
 
-	fetchCtx, fetchCancel := s.rh.netCtx(ctx)
-	err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{
-		RemoteName: "origin",
-		Auth:       auth,
-		Progress:   progressSink(progress),
-	})
-	fetchCancel()
+	if err == nil {
+		fetchCtx, fetchCancel := s.rh.netCtx(ctx)
+		err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{
+			RemoteName: "origin",
+			Auth:       auth,
+			Progress:   progressSink(progress),
+		})
+		fetchCancel()
+	}
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		up, seedErr := s.initFromEmptyRemote(ctx, repo, originURL, auth, upstreamMain, agentBranch, initFiles)
 		return up, true, seedErr
@@ -422,8 +486,9 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 	s.rh.repo = repo
 
 	// Configure remote with two-refspec fetch (main + agent/<host>).
-	// The initial CreateRemote above used a wildcard refspec to discover all
-	// remote branches at bootstrap; now we lock it down for steady state.
+	// The initial CreateRemote above used a wildcard refspec (or, under
+	// OwnBranchesOnly, every branch but other agents') to discover the remote's
+	// branches at bootstrap; now we lock it down for steady state.
 	if err := s.rh.configureRemote(originURL, upstreamMain, agentBranch); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: configure remote: %w", err)
 	}

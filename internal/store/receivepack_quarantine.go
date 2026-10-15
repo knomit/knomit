@@ -72,24 +72,48 @@ func (q *quarantine) held(h plumbing.Hash) bool {
 	return ok
 }
 
-// newCommits returns the commits reachable from tip that arrived in this push,
-// tip first. The walk STOPS at any commit the host already holds rather than
-// walking every host ref's history for a stop set (F11 review N9): the result
-// is reachable(tip) ∖ reachable(host refs) in time proportional to the push,
-// not to the repository. The two definitions differ only for commits the host
-// holds that no ref reaches, and those are already present, so not judging
-// them again is right either way.
+// newCommits returns the commits reachable from tip that the judge must see,
+// tip first. The walk descends every commit that arrived in this push, and
+// STOPS at a commit the host already holds rather than walking every host
+// ref's history for a stop set (F11 review N9): the result is reachable(tip)
+// ∖ reachable(host refs) in time proportional to the push, not to the
+// repository.
+//
+// admitted, when not nil, narrows "holds" to "holds AND admitted": a held
+// commit ends the walk only when admitted says so, and any other held commit
+// is descended and returned as if it were new. That is the fleet
+// repository's rule (PR #524 B1): its copy can hold commits nobody judged — a
+// master with an origin fetches refused member tips, and a member's clone
+// made before PR #524 copied every agent/* branch — and once such a copy
+// becomes the hub, a clean merge of an unjudged commit and main would be the
+// only new commit, admitting the unjudged one through it. nil keeps the old
+// rule (every other repository): a held commit there was either pushed and
+// judged, or written or fetched by this host.
+//
+// A commit neither sent nor held ends the walk too; reachableNew reports it.
 //
 // visited counts the commit objects decoded; it equals len(commits) exactly
 // when the walk never descended into the host's history, which a test pins.
-func (q *quarantine) newCommits(tip plumbing.Hash) (commits []*object.Commit, visited int, err error) {
+func (q *quarantine) newCommits(tip plumbing.Hash, admitted func(plumbing.Hash) (bool, error)) (commits []*object.Commit, visited int, err error) {
 	seen := map[plumbing.Hash]bool{}
 	stack := []plumbing.Hash{tip}
 	for len(stack) > 0 {
 		h := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if seen[h] || !q.held(h) {
+		if seen[h] {
 			continue
+		}
+		if !q.held(h) {
+			if admitted == nil || q.host.HasEncodedObject(h) != nil {
+				continue
+			}
+			ok, err := admitted(h)
+			if err != nil {
+				return nil, visited, fmt.Errorf("commit %s: %w", h, err)
+			}
+			if ok {
+				continue
+			}
 		}
 		seen[h] = true
 		c, err := object.GetCommit(q, h)

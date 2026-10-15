@@ -2321,6 +2321,21 @@ paths:
                         addresses: { type: array, items: { type: string }, description: "As the record has it; never validated or used" }
                         git: { type: string, description: "Path suffix a peer appends to an address (/git), absent when not served" }
                         capabilities: { type: object, additionalProperties: { type: string }, description: "os, arch, version, read_only, as the record has them" }
+                        last_refusal:
+                          type: object
+                          description: |
+                            On the fleet's master only: the last tip of this member's branch
+                            (the record's `branch`) that the master refused, left behind and
+                            not judged again until the branch or main moves. Refused when
+                            fetched from a forge origin, or when re-judged against a main
+                            that moved (both hostings; a local branch admitted earlier is
+                            then removed). Absent when the last tip was admitted. Held in
+                            memory.
+                          properties:
+                            branch: { type: string }
+                            tip: { type: string }
+                            reason: { type: string }
+                            at: { type: string, format: date-time }
         "409": { description: not_registered }
   /sessions:
     get:

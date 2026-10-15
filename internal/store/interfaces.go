@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	"knomit/internal/embeddings/params"
@@ -198,12 +199,21 @@ type RemoteIndex interface {
 	GetRemote(name string) (*Remote, error)
 	DeleteRemote(name string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
+	// SyncWithPeers is Sync that also fetches every agent/* branch into
+	// refs/remotes/origin/agent/* (the fleet master on a forge).
+	SyncWithPeers(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
 	// PublishUpstream pushes the tip of the local branch from to the origin's
 	// consensus branch WITHOUT force: the fleet master's write of the fleet
 	// repository's main. A main on the origin that is not an ancestor of the
 	// tip is refused by the origin, as an ordinary push error.
 	PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error)
+	// PeerTips lists the fetched agent/* branches (refs/remotes/origin/agent/*)
+	// other than own, by branch name.
+	PeerTips(own string) (map[string]plumbing.Hash, error)
+	// RecordPushError persists a push failure on the named remote without
+	// pushing (a refused PublishUpstream, which records nothing itself).
+	RecordPushError(name, msg string) error
 	// RetractPushedBranch deletes branch on the origin with a lease on the
 	// hash this instance last pushed there, then removes the origin remote
 	// from the git config so that no later push recreates it. It is for a

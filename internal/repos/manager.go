@@ -813,6 +813,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 			fact.TriggerIdentity{Agent: m.AgentID(), Host: m.deps.AgentHost}, cfg.Log.SlowTriggerMS,
 			cfg.Triggers.ScriptRatePerMinute, m.deps.ScriptTools, cfg.Home, m.ServerAddress)
 		ri.consensus = newConsensusMerger(ri, name, agentBranch)
+		ri.peers = newFleetPeers(ri.isFleetMaster, ri.publishesFleetMain)
 	}
 	// No sweeper for a subscription (no experiment can be forked from one)
 	// or when experiments.expiry_days is 0 (never expire: the loop must not

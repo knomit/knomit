@@ -184,6 +184,13 @@ func (ri *remoteIndex) RecordSyncError(name, msg string) error {
 	return ri.updateRemoteStatus(name, "error", &msg)
 }
 
+// RecordPushError persists a push failure (last_push_status="error",
+// last_push_error=msg) on the named remote: the fleet master's refused
+// PublishUpstream, which records nothing itself.
+func (ri *remoteIndex) RecordPushError(name, msg string) error {
+	return ri.updateRemotePushStatus(name, "error", &msg)
+}
+
 // updateRemotePushStatus updates the push status fields for a remote, creating
 // the status row if absent. See updateRemoteStatus.
 func (ri *remoteIndex) updateRemotePushStatus(name, status string, pushErr *string) error {

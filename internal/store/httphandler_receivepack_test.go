@@ -648,7 +648,7 @@ func TestReceivePack_NewCommitWalkIsProportionalToThePush(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
-	commits, visited, err := q.newCommits(c2.Hash)
+	commits, visited, err := q.newCommits(c2.Hash, nil)
 	require.NoError(t, err)
 	require.Len(t, commits, 2)
 	require.Equal(t, c2.Hash, commits[0].Hash)

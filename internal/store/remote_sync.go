@@ -35,9 +35,32 @@ var errNoOriginRemote = errors.New("no origin git remote configured")
 //
 // upstreamMain is the consensus branch, never empty here: every caller has
 // resolved it (InitFromRemote, InitSubscription) or refused an empty one (Sync).
-func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string, timeout time.Duration) error {
+//
+// extra refspecs are fetched beside the configured ones, in both attempts,
+// without being written to the git config: the fleet master's peerRefspec,
+// decided per round (SyncWithPeers). A wildcard refspec never fails to match,
+// so it cannot cause the fallback.
+//
+// With extra, the strict attempt also PRUNES (PR #524 N1): a tracking ref
+// under a refspec's destination whose branch the origin no longer has is
+// removed, so a member branch deleted on the forge is forgotten by the
+// master. The prune stays within the extra wildcard: the strict attempt
+// succeeds only when every exact configured refspec matched (go-git's
+// calculateRefs runs before the prune and fails with NoMatchingRefSpecError
+// otherwise), so those refs exist on the origin and are never pruned. The
+// fallback attempt (the own branch absent on the origin) does not prune.
+func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string, timeout time.Duration, extra ...gogitconfig.RefSpec) error {
+	opts := &gogit.FetchOptions{RemoteName: "origin", Auth: auth}
+	if len(extra) > 0 {
+		rem, err := repo.Remote("origin")
+		if err != nil {
+			return err
+		}
+		opts.RefSpecs = append(append([]gogitconfig.RefSpec(nil), rem.Config().Fetch...), extra...)
+		opts.Prune = true
+	}
 	strictCtx, strictCancel := netCtxWith(ctx, timeout)
-	err := repo.FetchContext(strictCtx, &gogit.FetchOptions{RemoteName: "origin", Auth: auth})
+	err := repo.FetchContext(strictCtx, opts)
 	strictCancel()
 	if err == nil || errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return nil
@@ -54,7 +77,7 @@ func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 	fallbackErr := repo.FetchContext(fallbackCtx, &gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
-		RefSpecs:   []gogitconfig.RefSpec{upstreamRefspec},
+		RefSpecs:   append([]gogitconfig.RefSpec{upstreamRefspec}, extra...),
 	})
 	fallbackCancel()
 	if fallbackErr == nil || errors.Is(fallbackErr, gogit.NoErrAlreadyUpToDate) {
@@ -116,7 +139,27 @@ func abandonedByCaller(ctx context.Context, retErr error) bool {
 // fast-forwards onto the new main and scrubbed files drop correctly.
 //
 // Safe to call repeatedly; each step is a no-op when there's nothing to do.
-func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
+func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {
+	return ri.sync(ctx, agentBranch, auth)
+}
+
+// peerRefspec is the fleet master's third fetch refspec: every member's agent
+// branch, into remote-tracking refs (refs/remotes/origin/agent/*) that
+// nothing reads as a branch. Only AdmitPeerBranch moves a local branch to one
+// of their tips, after judging it.
+const peerRefspec = gogitconfig.RefSpec("+refs/heads/agent/*:refs/remotes/origin/agent/*")
+
+// SyncWithPeers is Sync for the fleet's master when its copy of the fleet
+// repository has an origin (a forge): the same round, with every agent/*
+// branch fetched as well (peerRefspec). The refspec rides THIS fetch only and
+// is never written to the git config, so a member's remote never has it, and
+// an instance that gains or loses the fleet root key changes what it fetches
+// on its next round, without a restart.
+func (ri *remoteIndex) SyncWithPeers(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {
+	return ri.sync(ctx, agentBranch, auth, peerRefspec)
+}
+
+func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transport.AuthMethod, extra ...gogitconfig.RefSpec) (res SyncResult, retErr error) {
 	remote, err := ri.GetRemote("origin")
 	if err != nil || remote == nil {
 		log.Debug().Msg("Sync: no origin remote configured, skipping")
@@ -169,7 +212,7 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		if _, err := ri.rh.repo.Remote("origin"); err != nil {
 			return errNoOriginRemote
 		}
-		return fetchOrigin(ctx, ri.rh.repo, auth, upstreamMain, ri.rh.netTimeout)
+		return fetchOrigin(ctx, ri.rh.repo, auth, upstreamMain, ri.rh.netTimeout, extra...)
 	}()
 	if fetchErr == errNoOriginRemote {
 		log.Debug().Msg("Sync: no origin git remote configured, skipping")
@@ -209,6 +252,7 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 		return SyncResult{}, nil
 	}
 
+	// Stated assumption (user ruling 2026-10-15, PR #524 S1): the origin's main is trusted as fetched, rewinds included, on the fleet master too; branch protection on it is the forge admin's job.
 	mainRes, err := func() (MainReconcileResult, error) {
 		defer ri.rh.lockBranch(upstreamMain)()
 		return ri.rh.reconcileMain(ctx, upstreamMain)

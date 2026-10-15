@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -697,23 +698,33 @@ func (m *Manager) publishFleetMainNow(ctx context.Context, ri *RepoInstance) err
 				perr = err
 				return
 			}
-			if _, err := svc.Remote().PublishUpstream(ctx, ri.AgentBranch(), auth); err != nil {
-				perr = fmt.Errorf("publish main: %w", err)
-				return
-			}
+			_, perr = publishFleetMainOn(ctx, svc, ri.AgentBranch(), auth)
+			return
 		}
 		if _, err := svc.AdvanceLocalUpstream(ctx, ri.AgentBranch(), svc.UpstreamBranch()); err != nil {
-			if remote == nil {
-				perr = err
-				return
-			}
-			// main is on the forge; the sync loop's next fetch brings it here.
-			log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: local main did not follow the published main yet")
+			perr = err
 		}
 	}); werr != nil && perr == nil {
 		perr = werr
 	}
 	return perr
+}
+
+// publishFleetMainOn is THE publish of the fleet repository's main on a
+// forge, shared by every caller (create's step 7 and FleetRetry's push,
+// through publishFleetMainNow, and the sync loop's round, fleetPeers.publish):
+// PublishUpstream (main = from's tip, never forced), then local main
+// fast-forwarded to from. A local main that cannot follow yet is only
+// warned: main is on the forge, and the next fetch brings it here.
+func publishFleetMainOn(ctx context.Context, svc *store.Service, from string, auth transport.AuthMethod) (store.PushResult, error) {
+	res, err := svc.Remote().PublishUpstream(ctx, from, auth)
+	if err != nil {
+		return res, fmt.Errorf("publish main: %w", err)
+	}
+	if _, err := svc.AdvanceLocalUpstream(ctx, from, svc.UpstreamBranch()); err != nil {
+		log.Warn().Err(err).Str("from", from).Msg("fleet: local main did not follow the published main yet")
+	}
+	return res, nil
 }
 
 // issuancePattern is the repo path pattern of the ontology's pki: issuance

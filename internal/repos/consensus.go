@@ -9,6 +9,14 @@
 // (kb/invariants/store/local-reconcile/never-reset-never-exit), so the host's
 // own facts would never reach it again.
 //
+// The fleet repository is the one exception to that gate (R-merge, round 3):
+// it does not declare `consensus`, and its merger runs exactly where this
+// instance is the fleet's master (isFleetMaster), with or without an origin.
+// Without one (a knomit-hosted fleet) the pushed branches come from
+// receive-pack and main follows through the local reconcile; with one (a
+// forge) they come from the master's fetch-time judge (fleet_master.go),
+// which also publishes main. On a member the merger is inert.
+//
 // Shape, like the trigger dispatcher: ri.onCommit (under the writer's branch
 // lock) only schedules — one non-blocking send on a 1-slot channel — and the
 // merge runs on this goroutine, so a push's POST never waits for it. It is
@@ -191,18 +199,29 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 	defer release()
 
 	upstream := svc.UpstreamBranch()
-	if !m.autoAt(ctx, svc, upstream) {
-		return
-	}
-	origin, err := svc.Remote().GetRemote("origin")
-	if err != nil {
-		m.warnOnce("origin-read:"+err.Error(), fmt.Sprintf(
-			"consensus: auto: could not read this repo's origin (%v); nothing merged, the next kick retries", err))
-		return
-	}
-	if origin != nil {
-		m.warnOnce("origin:"+origin.URL, fmt.Sprintf(
-			"consensus: auto ignored: this repo has an origin (%s); the origin owns %s", origin.URL, upstream))
+	// admit, on the fleet repository, re-judges a branch's tip against the
+	// current main before it is merged (fleetPeers.mayMerge): a branch
+	// admitted before main moved (a revocation) may now be refused, and is
+	// then demoted instead of merged. nil everywhere else.
+	var admit func(branch string, tip plumbing.Hash) bool
+	if m.ri.IsFleet() {
+		// The fleet repository: merging is the master's duty, on every
+		// hosting (R-merge). The origin is transport only, and `consensus`
+		// is not read: the fleet ontology does not declare it.
+		if !m.ri.isFleetMaster(svc) {
+			return
+		}
+		mainTip, err := svc.Branches().HeadCommit(ctx, upstream)
+		if err != nil {
+			m.warnOnce("main:"+err.Error(), fmt.Sprintf("consensus: read %s: %v; nothing merged, the next kick retries", upstream, err))
+			return
+		}
+		hist := &lazyMain{svc: svc}
+		main := plumbing.NewHash(mainTip)
+		admit = func(branch string, tip plumbing.Hash) bool {
+			return m.ri.peers.mayMerge(ctx, svc, branch, m.agentBranch, tip, main, hist)
+		}
+	} else if !m.mayMerge(ctx, svc, upstream) {
 		return
 	}
 
@@ -219,7 +238,7 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 		if !m.ri.isPushedBranch(b.Name, upstream) {
 			continue
 		}
-		if m.mergeOne(ctx, svc, b.Name) {
+		if m.mergeOne(ctx, svc, b.Name, admit) {
 			merged = true
 		}
 	}
@@ -228,6 +247,27 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 		// next round; wake it rather than wait an interval.
 		m.ri.wakeSync()
 	}
+}
+
+// mayMerge is the gate for every repo but the fleet repository: `consensus:
+// auto` at the consensus branch's tip, and no origin (the origin owns the
+// consensus branch).
+func (m *consensusMerger) mayMerge(ctx context.Context, svc *store.Service, upstream string) bool {
+	if !m.autoAt(ctx, svc, upstream) {
+		return false
+	}
+	origin, err := svc.Remote().GetRemote("origin")
+	if err != nil {
+		m.warnOnce("origin-read:"+err.Error(), fmt.Sprintf(
+			"consensus: auto: could not read this repo's origin (%v); nothing merged, the next kick retries", err))
+		return false
+	}
+	if origin != nil {
+		m.warnOnce("origin:"+origin.URL, fmt.Sprintf(
+			"consensus: auto ignored: this repo has an origin (%s); the origin owns %s", origin.URL, upstream))
+		return false
+	}
+	return true
 }
 
 // autoAt reports whether the ontology at upstream's tip says consensus: auto.
@@ -259,10 +299,11 @@ func (m *consensusMerger) autoAt(ctx context.Context, svc *store.Service, upstre
 }
 
 // mergeOne merges one pushed branch at its current tip; true when it wrote a
-// merge commit.
-func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, branch string) bool {
+// merge commit. admit, when not nil, must accept that tip first; the merge
+// is then of exactly that tip (a branch that moved since is ErrBranchMoved).
+func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, branch string, admit func(string, plumbing.Hash) bool) bool {
 	tipStr, err := svc.Branches().HeadCommit(ctx, branch)
-	if err != nil {
+	if err != nil || tipStr == "" {
 		return false // gone since the list; nothing to merge
 	}
 	tip := plumbing.NewHash(tipStr)
@@ -270,6 +311,9 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 	refusedTip, wasRefused := m.refused[branch]
 	m.mu.Unlock()
 	if wasRefused && refusedTip == tip {
+		return false
+	}
+	if admit != nil && !admit(branch, tip) {
 		return false
 	}
 	if h := currentConsensusHooks().beforeMerge; h != nil {

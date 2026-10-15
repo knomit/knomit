@@ -1092,7 +1092,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// lost its refs in between must not be silently turned into a fresh local
 	// knowledge base with a minted identity nobody else shares.
 	upstream, remoteWasEmpty, err := svc.InitFromRemote(ctx, spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
-		transferProgress(emit, "clone"))
+		transferProgress(emit, "clone"), fleetCloneOptions(spec)...)
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
 	}
@@ -1254,7 +1254,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// branch, through the same fact machinery every later write uses.
 	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "reading " + spec.Origin.URL, Pct: 40})
 	upstream, remoteWasEmpty, err := svc.InitFromRemote(ctx, spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
-		transferProgress(emit, "clone"))
+		transferProgress(emit, "clone"), fleetCloneOptions(spec)...)
 	if err != nil {
 		return "", fmt.Errorf("initialize: %w", err)
 	}
@@ -2229,5 +2229,16 @@ func (m *Manager) RenameLens(oldName, newName string) error {
 	}
 
 	log.Info().Str("uid", l.UID).Str("from", oldName).Str("to", newName).Msg("renamed lens")
+	return nil
+}
+
+// fleetCloneOptions is the fleet door's clone rule (R-visibility, PR #524
+// S2): a create through the fleet door fetches the remote's branches but
+// never another instance's agent/* branch, from its first fetch on. Only the
+// master ever fetches those, judged, on its rounds (fleet_master.go).
+func fleetCloneOptions(spec CreateSpec) []store.InitOption {
+	if spec.fleetDoor {
+		return []store.InitOption{store.OwnBranchesOnly()}
+	}
 	return nil
 }

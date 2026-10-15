@@ -74,8 +74,9 @@ func (m *Manager) isFleetMaster(svc *store.Service) bool {
 
 // holdsFleetRootAt is isFleetMaster's test against any branch of the fleet
 // repository: the root key file is in <home>/fleet AND root.crt beside it is
-// the root that artifacts/fleet/root.crt holds at branch. fleetPushed asks it
-// of the agent branch, before main has ever been published.
+// the root that artifacts/fleet/root.crt holds at branch.
+// RepoInstance.publishesFleetMain asks it of the agent branch, before main
+// has ever been published.
 func (m *Manager) holdsFleetRootAt(svc *store.Service, branch string) bool {
 	if m == nil || m.deps.Cfg.Home == "" || svc == nil || branch == "" {
 		return false

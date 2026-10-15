@@ -802,7 +802,7 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 		name = "reconcile"
 		run = func(ctx context.Context) {
 			runReconcileLoop(ctx, svc, r.hub, r.remoteEdgeSink(), r.Name(), r.agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly,
-				env.onPush, r.triggerKick, r.syncWake, r.breakers, mode(), once)
+				env.onPush, r.triggerKick, r.syncWake, r.breakers, mode(), r.peers, once)
 		}
 	}
 	if once {

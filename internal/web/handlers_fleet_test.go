@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -114,6 +115,31 @@ func TestFleetMemberRow(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &m))
 	require.Equal(t, []any{}, m["addresses"], "an F09 record without addresses is []")
 	require.Equal(t, map[string]any{}, m["capabilities"])
+}
+
+// GET /fleet/members carries the master's last refusal of a member's branch
+// on THAT member's row (matched by the record's branch) and nowhere else; a
+// record with no branch never matches.
+// SABOTAGE: drop the last_refusal assignment in fleetMemberRows -> red.
+func TestFleetMemberRows_LastRefusal(t *testing.T) {
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	refused := map[string]repos.PeerRefusal{
+		"agent/b": {Branch: "agent/b", Tip: "abc", Reason: "knomit: commit abc refused", At: at},
+		"":        {Branch: "", Tip: "zzz", Reason: "never shown"},
+	}
+	rows := fleetMemberRows([]store.FleetMember{
+		{Member: fact.Member{Agent: "a", State: fact.MemberActive, Branch: "agent/a"}},
+		{Member: fact.Member{Agent: "b", State: fact.MemberActive, Branch: "agent/b"}},
+		{Member: fact.Member{Agent: "c", State: fact.MemberActive}},
+	}, refused)
+	raw, err := json.Marshal(rows)
+	require.NoError(t, err)
+	var got []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Len(t, got, 3)
+	require.NotContains(t, got[0], "last_refusal")
+	require.Equal(t, map[string]any{"branch": "agent/b", "tip": "abc", "reason": "knomit: commit abc refused", "at": "2026-10-15T12:00:00Z"}, got[1]["last_refusal"])
+	require.NotContains(t, got[2], "last_refusal")
 }
 
 // The fleet repository is read-only for the fact REST routes: a create on its

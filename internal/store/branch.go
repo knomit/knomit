@@ -286,7 +286,12 @@ func (rh *repoHandler) DropBranch(ctx context.Context, name string) error {
 	// the deletion. Released when the function returns.
 	unlock := rh.lockBranch(name)
 	defer unlock()
+	return rh.dropBranchLocked(ctx, name, id)
+}
 
+// dropBranchLocked is DropBranch's body, for a caller that already holds
+// name's write lock (demotePeer decides under it whether to drop).
+func (rh *repoHandler) dropBranchLocked(ctx context.Context, name string, id int64) error {
 	// 1. Delete the git ref first. If this fails, we leave the SQLite
 	// state untouched so the operation is retryable — better than a
 	// half-removed state where the ref is gone but rows remain.
