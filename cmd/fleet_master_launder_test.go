@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +12,10 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
-	gogitconfig "github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
@@ -140,11 +145,9 @@ func TestFleetMaster_ForgeCopyRefusesPushesSoARefusedTipCannotBeLaundered(t *tes
 	}
 
 	// M: an unsigned clean merge of X and main, pushed to the master's /git
-	// by an enrolled instance.
-	aDir, aKey, _, _ := newFleetFetcherHome(t, f, "mallory")
-	if err := pki.InstallGitTransport(aDir, aKey); err != nil {
-		t.Fatal(err)
-	}
+	// by an enrolled instance. The pack carries M ALONE: the master already
+	// holds X (it fetched it), so receive-pack's walk would never reach X.
+	_, _, mallory, _ := newFleetFetcherHome(t, f, "mallory")
 	missionGit(t, seed, "fetch", "-q", "origin")
 	missionGit(t, seed, "checkout", "-q", "-b", "launder", "origin/main")
 	missionGit(t, seed, "merge", "-q", "--no-ff", "--no-edit", "agent/x")
@@ -152,18 +155,34 @@ func TestFleetMaster_ForgeCopyRefusesPushesSoARefusedTipCannotBeLaundered(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "master",
-		URLs: []string{pki.GitScheme + "://" + tlsAddr + "/git/" + ri.Name()}}); err != nil {
+	m, err := repo.ResolveRevision("launder")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if m, err := repo.ResolveRevision("launder"); err == nil {
-		x, _ := repo.ResolveRevision("agent/x")
-		t.Logf("X = %s, M = %s", x, m)
+	x, _ := repo.ResolveRevision("agent/x")
+	t.Logf("X = %s, M = %s", x, m)
+	var pack bytes.Buffer
+	if _, err := packfile.NewEncoder(&pack, repo.Storer, false).Encode([]plumbing.Hash{*m}, 0); err != nil {
+		t.Fatal(err)
 	}
-	pushErr := repo.PushContext(ctx, &gogit.PushOptions{RemoteName: "master",
-		RefSpecs: []gogitconfig.RefSpec{"refs/heads/launder:refs/heads/agent/launder"}})
-	if pushErr == nil || !strings.Contains(pushErr.Error(), "has an origin") {
-		t.Errorf("the push to the master's copy: %v, want the fleet copy's refusal", pushErr)
+	req := packp.NewReferenceUpdateRequest()
+	req.Capabilities.Set(capability.ReportStatus)
+	req.Commands = []*packp.Command{{Name: "refs/heads/agent/launder", Old: plumbing.ZeroHash, New: *m}}
+	req.Packfile = io.NopCloser(&pack)
+	var body bytes.Buffer
+	if err := req.Encode(&body); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := f.Client(t, mallory).Post("https://"+tlsAddr+"/git/"+ri.Name()+"/git-receive-pack",
+		"application/x-git-receive-pack-request", &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	t.Logf("receive-pack: %d %q", resp.StatusCode, reply)
+	if !strings.Contains(string(reply), "has an origin") {
+		t.Errorf("the push to the master's copy was not refused as a fleet copy with an origin: %q", reply)
 	}
 
 	round()

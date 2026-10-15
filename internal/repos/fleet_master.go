@@ -179,7 +179,9 @@ func (m *Manager) FleetPushRefusal(ri *RepoInstance) string {
 	case err != nil:
 		return fmt.Sprintf("knomit: the origin of the fleet repository %q could not be read (%v); it accepts no push", ri.Name(), err)
 	case o != nil:
-		return fmt.Sprintf("knomit: this copy of the fleet repository %q has an origin (%s); push your agent branch there, not to this instance", ri.Name(), o.URL)
+		// The URL is not echoed: the pusher is a peer, and an operator's
+		// origin URL may carry credentials.
+		return fmt.Sprintf("knomit: this copy of the fleet repository %q has an origin; push your agent branch to the fleet's origin, not to this instance", ri.Name())
 	}
 	return ""
 }
