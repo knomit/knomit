@@ -3,6 +3,7 @@
 package privdir
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,8 +263,115 @@ func assertForeignGrantWarned(t *testing.T, out, sid string) {
 	}
 }
 
-// Not built here, because a test cannot create them: a root OWNED by another
-// account (needs a second account, or SeRestorePrivilege), and a process
+// assertNotPrivate: err is ErrNotPrivate and its message carries each want.
+func assertNotPrivate(t *testing.T, err error, want ...string) {
+	t.Helper()
+	if !errors.Is(err, ErrNotPrivate) {
+		t.Fatalf("Verify: %v, want ErrNotPrivate", err)
+	}
+	for _, w := range want {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("Verify error %q does not say %q", err, w)
+		}
+	}
+}
+
+// Under a BROAD parent (so a directory Ensure never protected would fail),
+// what Ensure makes passes Verify.
+func TestVerify_AcceptsEnsureUnderABroadParent(t *testing.T) {
+	home := filepath.Join(broadParent(t), "home")
+	if err := Ensure(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(home); err != nil {
+		t.Fatalf("Verify after Ensure: %v", err)
+	}
+}
+
+// A directory that merely inherited the broad parent's DACL grants
+// BUILTIN\Users: refused. This is the shape Ensure cannot fix when it only
+// warns (a service SID, a share).
+func TestVerify_RefusesAnInheritedBroadDACL(t *testing.T) {
+	home := filepath.Join(broadParent(t), "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !hasSID(inspect(t, home), usersSID) {
+		t.Fatalf("fixture: %s does not inherit a Users grant", home)
+	}
+	assertNotPrivate(t, Verify(home), home, usersSID)
+}
+
+// The pre-created-by-someone-else shape: a protected DACL that Ensure leaves
+// alone (and only warns about) is refused by Verify, naming the grant.
+func TestVerify_RefusesAProtectedDACLGrantingAnotherAccount(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	setDACL(t, home, "D:P(A;OICI;FA;;;"+me(t)+")(A;OICI;FA;;;SY)(A;OICI;0x1200a9;;;BU)")
+	if err := Ensure(home); err != nil {
+		t.Fatal(err)
+	}
+	assertNotPrivate(t, Verify(home), home, usersSID)
+}
+
+// The convention notForeign already holds for Ensure's warning: SYSTEM,
+// Administrators, CREATOR OWNER and OWNER RIGHTS do not make a DACL shared.
+func TestVerify_AcceptsAdministratorsAndOwnerPlaceholders(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	setDACL(t, home, "D:P(A;OICI;FA;;;"+me(t)+")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICIIO;GA;;;CO)(A;;0x1200a9;;;OW)")
+	if err := Verify(home); err != nil {
+		t.Fatalf("Verify of a DACL private to the user: %v", err)
+	}
+}
+
+// An owner other than this user, SYSTEM or Administrators can always grant
+// itself access back. Built by making Verify see another current SID, since
+// a test cannot give a directory to a second account.
+func TestVerify_RefusesADirOwnedBySomeoneElse(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := Ensure(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(home); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	owner := inspect(t, home).Owner
+	currentSID = func() (string, error) { return "S-1-5-21-1-2-3-4242", nil }
+	t.Cleanup(func() { currentSID = ownSID })
+	// Elevated (as CI runs), new objects are owned by BUILTIN\Administrators,
+	// which the owner rule accepts; the refusal then comes from the real
+	// user's ACE, now someone else's. Unelevated, it is the owner rule.
+	want := "owned by " + owner
+	if owner == sidAdministrators {
+		want = "grants " + me(t)
+	}
+	assertNotPrivate(t, Verify(home), home, want)
+}
+
+// A directory symlink is refused whatever its target grants. Creating one
+// needs SeCreateSymbolicLinkPrivilege (or developer mode); skipped without.
+func TestVerify_RefusesASymlinkedDir(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := Ensure(target); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(dir, "home")
+	if err := os.Symlink(target, home); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	assertNotPrivate(t, Verify(home), home, "symlink")
+}
+
+// Not built here, because a test cannot create them: Ensure's warning over a
+// root REALLY owned by another account (needs a second account, or
+// SeRestorePrivilege; Verify's refusal of one is simulated through
+// currentSID by TestVerify_RefusesADirOwnedBySomeoneElse), and a process
 // running as a service SID. ensure's owner check and isServiceSID are the
 // code paths; the SIDs they compare against are the constants in
 // privdir_windows.go.

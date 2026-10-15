@@ -29,7 +29,7 @@ type testFleetPKI struct {
 
 func newTestFleetPKI(t *testing.T) *testFleetPKI {
 	t.Helper()
-	root, err := pki.NewRoot(t.TempDir(), "fleet-test", []byte("pw"), 10*365*24*time.Hour)
+	root, err := pki.NewRoot(t.TempDir(), "fleet-test", 10*365*24*time.Hour)
 	require.NoError(t, err)
 	return &testFleetPKI{t: t, root: root}
 }

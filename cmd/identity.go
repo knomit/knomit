@@ -25,17 +25,24 @@ import (
 
 // identityCmd is `knomit identity`: the offline enrollment flow of F19
 // phase 2. The fleet root side (init-root, enroll, revoke) runs on the
-// operator's machine against a --dir that never lives on a fleet machine;
-// the instance side (install, show) runs on each instance against its own
+// machine whose fleet root directory (--dir, default <home>/fleet) holds the
+// plain root.key; the instance side (install, show) runs on each instance against its own
 // home. The fleet root SIGNS existing instance keys and never generates them;
 // there is no CSR — enroll takes the instance's public key line.
 func identityCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "identity",
 		Short: "Instance certificates: mint the fleet root, enroll, install, revoke, show",
+		// cobra answers an unknown subcommand of a group that has no Run
+		// with the group's help and exit 0, before Args is consulted. A RunE
+		// makes the group runnable, so `identity <typo>` is refused by
+		// NoArgs (non-zero exit, with the usage hint) and bare `identity`
+		// still prints the help.
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	c.AddCommand(identityInitRootCmd(), identityEnrollCmd(), identityInstallCmd(), identityRevokeCmd(), identityShowCmd(),
-		identityExportRootCmd(), identityImportRootCmd(), identityRootFingerprintCmd())
+		identityRootFingerprintCmd())
 	return c
 }
 
@@ -45,41 +52,9 @@ func identityCmd() *cobra.Command {
 // when instances start nagging for a fresh one.
 const crlValidityDefault = 30 * 24 * time.Hour
 
-// readPassphrase reads the fleet root passphrase from path ("-" = the first line
-// of stdin). There is no interactive prompt: reading a passphrase without
-// echo needs golang.org/x/term, which this phase does not add as a
-// dependency; a file (or a pipe) also keeps it out of shell history.
-func readPassphrase(cmd *cobra.Command, path string) ([]byte, error) {
-	if path == "" {
-		return nil, errors.New("--passphrase-file is required (use - to read one line from stdin)")
-	}
-	var raw []byte
-	var err error
-	if path == "-" {
-		line, rerr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-		if rerr != nil && !errors.Is(rerr, io.EOF) {
-			return nil, rerr
-		}
-		raw = []byte(line)
-	} else if raw, err = os.ReadFile(path); err != nil {
-		return nil, fmt.Errorf("read passphrase: %w", err)
-	}
-	p := bytes.TrimRight(raw, "\r\n")
-	if len(p) == 0 {
-		return nil, errors.New("the passphrase is empty")
-	}
-	return p, nil
-}
-
-// rootKeychain is where the fleet root commands keep the fleet root key (D9).
-// A variable so cmd tests can inject a fake; TestMain also points
-// go-keyring at its in-memory mock, so no test reaches the real keychain.
-var rootKeychain = pki.OSKeychain()
-
 // resolveFleetRootDir is --dir, or <home>/fleet (pki.FleetRootDirName) when
-// it is not given: the root certificate, the CRL and the two ledgers (the key
-// itself is in the keychain, or root.key there when the keychain is
-// unavailable).
+// it is not given: the root key (root.key, a plain owner-only file, like an
+// SSH key), the root certificate, the CRL and the two ledgers.
 func resolveFleetRootDir(dir string) (string, error) {
 	if dir != "" {
 		return dir, nil
@@ -91,49 +66,12 @@ func resolveFleetRootDir(dir string) (string, error) {
 	return filepath.Join(cfg.Home, pki.FleetRootDirName), nil
 }
 
-// lazyPassphrase reads --passphrase-file only when custody needs it (the
-// file fallback), and at most once.
-func lazyPassphrase(cmd *cobra.Command, passFile string) pki.Passphrase {
-	var p []byte
-	var err error
-	read := false
-	return func() ([]byte, error) {
-		if !read {
-			read = true
-			if passFile == "" {
-				err = errors.New("the root key is not in the OS keychain here: --passphrase-file is required (use - to read one line from stdin)")
-			} else {
-				p, err = readPassphrase(cmd, passFile)
-			}
-		}
-		return p, err
-	}
-}
-
-// openFleetRoot opens the fleet root for enroll and revoke and says where
-// its key came from.
-func openFleetRoot(cmd *cobra.Command, dir, passFile string) (pki.Root, error) {
-	root, src, err := pki.OpenRoot(dir, rootKeychain, lazyPassphrase(cmd, passFile))
-	if err != nil {
-		return pki.Root{}, err
-	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "# fleet root key from the %s\n", custodyLabel(src, dir))
-	return root, nil
-}
-
-func custodyLabel(src pki.RootSource, dir string) string {
-	if src == pki.RootFromKeychain {
-		return "OS keychain"
-	}
-	return "passphrase-encrypted file " + filepath.Join(dir, pki.RootKeyFile)
-}
-
 func identityInitRootCmd() *cobra.Command {
-	var dir, cn, passFile string
+	var dir, cn string
 	var validity, crlValidity time.Duration
 	c := &cobra.Command{
 		Use:   "init-root",
-		Short: "Create the fleet root; its key goes into the OS keychain (or a passphrase-encrypted file without one)",
+		Short: "Create the fleet root; its key is a plain owner-only file in the fleet root directory, like an SSH key",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if cn == "" {
 				return errors.New("--cn is required")
@@ -142,7 +80,7 @@ func identityInitRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			root, src, err := pki.CreateRoot(dir, cn, validity, rootKeychain, lazyPassphrase(cmd, passFile))
+			root, err := pki.NewRoot(dir, cn, validity)
 			if err != nil {
 				return err
 			}
@@ -152,8 +90,8 @@ func identityInitRootCmd() *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "# fleet root created in %s; its key is in the %s\n", dir, custodyLabel(src, dir))
-			fmt.Fprintln(out, "# back the key up with `knomit identity export-root --keep --out <file>`; losing it ends the fleet")
+			fmt.Fprintf(out, "# fleet root created in %s; its key is %s\n", dir, filepath.Join(dir, pki.RootKeyFile))
+			fmt.Fprintln(out, "# that file IS the fleet: whoever can read it can sign for the fleet; keep it private and back the directory up (losing it ends the fleet)")
 			// The value each instance confirms with `identity install --root`.
 			if id, err := pki.RootID(root.Cert); err == nil {
 				fmt.Fprintf(out, "# fleet root fingerprint: %s (give it to each instance for `knomit identity install --root`)\n", id)
@@ -162,9 +100,8 @@ func identityInitRootCmd() *cobra.Command {
 			return err
 		},
 	}
-	c.Flags().StringVar(&dir, "dir", "", "fleet root directory to create (root.crt, crl.pem, the ledgers; default <home>/fleet)")
+	c.Flags().StringVar(&dir, "dir", "", "fleet root directory to create (root.key, root.crt, crl.pem, the ledgers; default <home>/fleet)")
 	c.Flags().StringVar(&cn, "cn", "", "root common name, e.g. knomit-fleet-root-<you>")
-	c.Flags().StringVar(&passFile, "passphrase-file", "", "file holding the root passphrase (- = stdin); used only when the OS keychain is unavailable")
 	c.Flags().DurationVar(&validity, "validity", 10*365*24*time.Hour, "root certificate validity")
 	c.Flags().DurationVar(&crlValidity, "crl-validity", crlValidityDefault, "NextUpdate of the initial CRL")
 	return c
@@ -216,7 +153,7 @@ func enrollEmail(agentID string, operator bool, email string) (string, error) {
 }
 
 func identityEnrollCmd() *cobra.Command {
-	var dir, pubArg, agentID, email, passFile, outPath string
+	var dir, pubArg, agentID, email, outPath string
 	var operator bool
 	var validity time.Duration
 	c := &cobra.Command{
@@ -245,7 +182,7 @@ it holds only the grants rows of its principal.`,
 			if err != nil {
 				return err
 			}
-			root, err := openFleetRoot(cmd, dir, passFile)
+			root, err := pki.LoadRoot(dir)
 			if err != nil {
 				return err
 			}
@@ -285,7 +222,6 @@ it holds only the grants rows of its principal.`,
 	c.Flags().StringVar(&agentID, "agent-id", "", "issue an INSTANCE certificate for this agent id (email SAN <id>@"+pki.AgentEmailDomain+")")
 	c.Flags().BoolVar(&operator, "operator", false, "issue an OPERATOR certificate instead (no agent id)")
 	c.Flags().StringVar(&email, "email", "", "with --operator: the operator's email address for the certificate (optional)")
-	c.Flags().StringVar(&passFile, "passphrase-file", "", "file holding the root passphrase (- = stdin)")
 	c.Flags().StringVar(&outPath, "out", "", "write the bundle here instead of stdout")
 	c.Flags().DurationVar(&validity, "validity", 90*24*time.Hour, "certificate validity")
 	return c
@@ -315,8 +251,7 @@ root certificate, not its key. Ways to get it:
   - the operator: ` + "`knomit identity init-root`" + ` prints it on its
     "# fleet root fingerprint:" line;
   - the operator, later: ` + "`knomit identity root-fingerprint`" + ` prints it
-    from the fleet root directory's root.crt (no key or passphrase needed,
-    wherever the key is kept);
+    from the fleet root directory's root.crt (the root key is not needed);
   - on the instance: ` + "`knomit identity install`" + ` without --root prints
     it as "bundle fleet root:" (compare it with the operator's value), and
     ` + "`knomit identity show`" + ` prints the installed root as "root:".`,
@@ -502,7 +437,7 @@ func confirmRoot(out io.Writer, p pki.BundlePreview, installed pki.RootInfo, opt
 }
 
 func identityRevokeCmd() *cobra.Command {
-	var dir, serialHex, fp, reason, passFile string
+	var dir, serialHex, fp, reason string
 	var crlValidity time.Duration
 	c := &cobra.Command{
 		Use:   "revoke",
@@ -519,7 +454,7 @@ func identityRevokeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			root, err := openFleetRoot(cmd, dir, passFile)
+			root, err := pki.LoadRoot(dir)
 			if err != nil {
 				return err
 			}
@@ -551,7 +486,6 @@ func identityRevokeCmd() *cobra.Command {
 	c.Flags().StringVar(&serialHex, "serial", "", "serial to revoke (hex, as enroll printed it)")
 	c.Flags().StringVar(&fp, "fingerprint", "", "revoke EVERY certificate issued for this 64-hex fingerprint")
 	c.Flags().StringVar(&reason, "reason", "", "free text recorded in revoked.jsonl")
-	c.Flags().StringVar(&passFile, "passphrase-file", "", "file holding the root passphrase (- = stdin)")
 	c.Flags().DurationVar(&crlValidity, "crl-validity", crlValidityDefault, "NextUpdate of the reissued CRL")
 	return c
 }
@@ -640,170 +574,15 @@ func showIdentity(out io.Writer, cfg config.Config) error {
 	return nil
 }
 
-// stdinIsTerminal is whether the command runs on a terminal. A variable so
-// tests can stand in for one; export-root refuses to run without it.
-var stdinIsTerminal = func(cmd *cobra.Command) bool { return isTerminal(cmd.InOrStdin()) }
-
-func identityExportRootCmd() *cobra.Command {
-	var dir, outPath, passFile string
-	var keep bool
-	c := &cobra.Command{
-		Use:   "export-root",
-		Short: "Move the fleet root key into a passphrase-encrypted file (backup or fleet root takeover)",
-		Long: `Write the fleet root key, passphrase-encrypted (the same OpenSSH format as
-root.key), followed by the root certificate, to a NEW file given by --out.
-
-By default this MOVES the key: once the file has been written and read back,
-the OS keychain item and any root.key in the fleet root directory are removed, so
-two fleet roots never coexist by accident. --keep leaves the local copy in place
-(a backup). The command runs only on a terminal; there is no API or UI for it.
-Load the file on the new fleet root machine with ` + "`knomit identity import-root <file>`" + `.`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if outPath == "" {
-				return errors.New("--out is required: the root key is only ever written to a file")
-			}
-			if !stdinIsTerminal(cmd) {
-				return errors.New("export-root runs only on a terminal: it moves the fleet root key and is never scripted")
-			}
-			dir, err := resolveFleetRootDir(dir)
-			if err != nil {
-				return err
-			}
-			pass, err := readExportPassphrase(cmd, passFile)
-			if err != nil {
-				return err
-			}
-			res, err := pki.ExportRoot(dir, outPath, rootKeychain, pass, keep)
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "exported the fleet root key (from the %s) to %s\n", custodyLabel(res.From, dir), outPath)
-			switch {
-			case keep:
-				fmt.Fprintln(out, "kept the local copy (--keep)")
-			case res.KeychainErr != nil:
-				// The key was read from the file because the keychain could
-				// not be read; deleting its item failed too, so it may still
-				// be there. Never claim this machine cannot sign.
-				if res.RemovedFile {
-					fmt.Fprintf(out, "removed %s\n", filepath.Join(dir, pki.RootKeyFile))
-				}
-				fmt.Fprintf(out, "WARNING: the OS keychain could not delete its item %s/%s (%v): it may STILL hold the fleet root key, so this machine may still sign for the fleet; remove that item by hand\n",
-					pki.KeychainService, rootAccount(dir), res.KeychainErr)
-			case res.RemovedKeychain || res.RemovedFile:
-				fmt.Fprintln(out, "removed the local copy: this machine can no longer sign for the fleet until the file is imported again")
-			}
-			return nil
-		},
-	}
-	c.Flags().StringVar(&dir, "dir", "", "fleet root directory (default <home>/fleet)")
-	c.Flags().StringVar(&outPath, "out", "", "file to write (must not exist)")
-	c.Flags().StringVar(&passFile, "passphrase-file", "", "file holding the passphrase that encrypts the export, and opens root.key if the key is held there (- = type it on the terminal); it is always confirmed by typing it again")
-	c.Flags().BoolVar(&keep, "keep", false, "keep the local copy (a backup) instead of moving the key")
-	return c
-}
-
-func identityImportRootCmd() *cobra.Command {
-	var dir, passFile string
-	c := &cobra.Command{
-		Use:   "import-root <file>",
-		Short: "Load a fleet root key written by export-root into the OS keychain (or root.key without one)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			dir, err := resolveFleetRootDir(dir)
-			if err != nil {
-				return err
-			}
-			pass, err := readPassphrase(cmd, passFile)
-			if err != nil {
-				return err
-			}
-			root, src, err := pki.ImportRoot(dir, args[0], rootKeychain, pass)
-			if err != nil {
-				return err
-			}
-			id, _ := pki.RootID(root.Cert)
-			fmt.Fprintf(cmd.OutOrStdout(), "imported fleet root %s (%q) into the %s; fleet root directory %s\n",
-				id, root.Cert.Subject.CommonName, custodyLabel(src, dir), dir)
-			return nil
-		},
-	}
-	c.Flags().StringVar(&dir, "dir", "", "fleet root directory (default <home>/fleet)")
-	c.Flags().StringVar(&passFile, "passphrase-file", "", "file holding the export's passphrase (- = stdin)")
-	return c
-}
-
-// readExportPassphrase reads the passphrase that will encrypt an export and
-// makes the operator type it (again) on the terminal: after a move the
-// export is the only copy of the root key, and a passphrase nobody can
-// repeat makes it unrecoverable. With --passphrase-file - both entries are
-// typed; with a file, its content must be typed once to confirm. A
-// mismatch aborts before anything is written or removed.
-func readExportPassphrase(cmd *cobra.Command, path string) ([]byte, error) {
-	if path == "" {
-		return nil, errors.New("--passphrase-file is required (use - to type it)")
-	}
-	in := bufio.NewReader(cmd.InOrStdin())
-	errOut := cmd.ErrOrStderr()
-	readLine := func(prompt string) ([]byte, error) {
-		fmt.Fprint(errOut, prompt)
-		line, err := in.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, err
-		}
-		return []byte(strings.TrimRight(line, "\r\n")), nil
-	}
-	var first []byte
-	if path == "-" {
-		p, err := readLine("Passphrase for the export file: ")
-		if err != nil {
-			return nil, err
-		}
-		first = p
-	} else {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read passphrase: %w", err)
-		}
-		first = bytes.TrimRight(raw, "\r\n")
-	}
-	if len(first) == 0 {
-		return nil, errors.New("the passphrase is empty")
-	}
-	again, err := readLine("Type the export passphrase again to confirm: ")
-	if err != nil {
-		return nil, err
-	}
-	if !bytes.Equal(first, again) {
-		return nil, errors.New("the passphrase was not confirmed (the second entry differs); nothing was written or removed")
-	}
-	return first, nil
-}
-
-// rootAccount is the keychain account of the root in dir, for messages.
-func rootAccount(dir string) string {
-	c, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile))
-	if err != nil {
-		return pki.KeychainAccount("<root id>")
-	}
-	id, err := pki.RootID(c)
-	if err != nil {
-		return pki.KeychainAccount("<root id>")
-	}
-	return pki.KeychainAccount(id)
-}
-
 func identityRootFingerprintCmd() *cobra.Command {
 	var dir string
 	c := &cobra.Command{
 		Use:   "root-fingerprint",
 		Short: "Print the fleet root fingerprint (the value `install --root` takes) from the fleet root directory's root.crt",
 		Long: `Print the fleet root fingerprint: 64 hex characters, the SHA-256 of the
-root public key's SSH wire encoding, read from <dir>/root.crt. It needs
-neither the root key nor its passphrase, so it works wherever the key is kept
-(OS keychain or root.key). Give the value to each instance for
+root public key's SSH wire encoding, read from <dir>/root.crt. It does not
+need the root key, so it works on any machine that has the root certificate.
+Give the value to each instance for
 ` + "`knomit identity install --root`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

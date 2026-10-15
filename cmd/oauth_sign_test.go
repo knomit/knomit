@@ -79,12 +79,12 @@ func newFakeIssuer(t *testing.T, clientName, redirect string) *fakeIssuer {
 
 // signSetup: a fleet root, an instance enrolled by it, and the instance's
 // fingerprint.
-func signSetup(t *testing.T) (dir, passFile, fp string) {
+func signSetup(t *testing.T) (dir, fp string) {
 	t.Helper()
-	dir, passFile = fleetRoot(t)
+	dir = fleetRoot(t)
 	_, pub, pubPath := instanceHome(t, "headless")
-	enroll(t, dir, passFile, pubPath)
-	return dir, passFile, pki.Fingerprint(pub)
+	enroll(t, dir, pubPath)
+	return dir, pki.Fingerprint(pub)
 }
 
 func rootPub(t *testing.T, dir string) ed25519.PublicKey {
@@ -97,10 +97,10 @@ func rootPub(t *testing.T, dir string) ed25519.PublicKey {
 }
 
 func TestOAuthSign_PrintsThenSignsWhatItPrinted(t *testing.T) {
-	dir, passFile, fp := signSetup(t)
+	dir, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
 	stdout, stderr, err := runSplit(t, "", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
-		"--instance", fp, "--as", "laptop", "--passphrase-file", passFile, "--yes")
+		"--instance", fp, "--as", "laptop", "--yes")
 	if err != nil {
 		t.Fatalf("sign: %v\n%s", err, stderr)
 	}
@@ -138,11 +138,11 @@ func TestOAuthSign_PrintsThenSignsWhatItPrinted(t *testing.T) {
 // pending`, so a hostile client_name cannot hide or reorder what the
 // operator reads.
 func TestOAuthSign_PrintoutIsEscaped(t *testing.T) {
-	dir, passFile, fp := signSetup(t)
+	dir, fp := signSetup(t)
 	hostile := "Claude Code\x1b[8m hidden\u202Eedoc"
 	fi := newFakeIssuer(t, hostile, "https://evil.example/cb")
 	_, stderr, err := runSplit(t, "", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
-		"--instance", fp, "--as", "laptop", "--passphrase-file", passFile, "--yes")
+		"--instance", fp, "--as", "laptop", "--yes")
 	if err != nil {
 		t.Fatalf("sign: %v\n%s", err, stderr)
 	}
@@ -160,17 +160,17 @@ func TestOAuthSign_PrintoutIsEscaped(t *testing.T) {
 // W2: the instance fingerprint comes from the operator, and must be one this
 // fleet root issued and has not revoked — never from the public description.
 func TestOAuthSign_InstanceMustBeIssuedAndNotRevoked(t *testing.T) {
-	dir, passFile, fp := signSetup(t)
+	dir, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
 	sign := func(instance string) (string, error) {
 		_, stderr, err := runSplit(t, "", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
-			"--instance", instance, "--as", "laptop", "--passphrase-file", passFile, "--yes")
+			"--instance", instance, "--as", "laptop", "--yes")
 		return stderr, err
 	}
 	if _, err := sign(strings.Repeat("a", 64)); err == nil || !strings.Contains(err.Error(), "never issued") {
 		t.Fatalf("unknown instance: %v", err)
 	}
-	if out, err := run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp, "--passphrase-file", passFile); err != nil {
+	if out, err := run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp); err != nil {
 		t.Fatalf("revoke: %v\n%s", err, out)
 	}
 	if _, err := sign(fp); err == nil || !strings.Contains(err.Error(), "revoked") {
@@ -181,41 +181,73 @@ func TestOAuthSign_InstanceMustBeIssuedAndNotRevoked(t *testing.T) {
 // The served digest must be the digest of the served fields; a description
 // that disagrees with itself is refused rather than signed.
 func TestOAuthSign_RefusesAnInconsistentDescription(t *testing.T) {
-	dir, passFile, fp := signSetup(t)
+	dir, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
 	fi.desc.RedirectURI = "https://evil.example/cb" // digest still covers the localhost one
 	_, _, err := runSplit(t, "", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
-		"--instance", fp, "--as", "laptop", "--passphrase-file", passFile, "--yes")
+		"--instance", fp, "--as", "laptop", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "digest") {
 		t.Fatalf("inconsistent description: %v", err)
 	}
 }
 
-// Reading the passphrase on stdin AFTER the printout is the confirmation;
-// a passphrase from a file signs unattended, so it needs --yes.
-func TestOAuthSign_UnattendedNeedsYes(t *testing.T) {
-	// File custody: the typed passphrase opens root.key and confirms.
-	useKeychain(t, &cliKeychain{items: map[string]string{}, setErr: errors.New("no Secret Service")})
-	dir, passFile, fp := signSetup(t)
+// The root key opens asking for nothing; what --sign asks, after printing
+// the request, is consent to THIS approval: y signs, anything else (or no
+// answer) signs nothing, and --yes signs without the question. No passphrase
+// is ever asked, and --passphrase-file is gone.
+// Sabotage: skip the question when !o.yes (red: "n" signs), or drop the
+// --yes check (red: --yes asks and, with no answer, signs nothing).
+func TestOAuthSign_AsksYesNoNeverAPassphrase(t *testing.T) {
+	dir, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
-	_, _, err := runSplit(t, "", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
-		"--instance", fp, "--as", "laptop", "--passphrase-file", passFile)
-	if err == nil || !strings.Contains(err.Error(), "--yes") {
-		t.Fatalf("file passphrase without --yes: %v", err)
+	args := []string{"oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir, "--instance", fp, "--as", "laptop"}
+
+	for _, answer := range []string{"n\n", ""} {
+		stdout, stderr, err := runSplit(t, answer, args...)
+		if err == nil || !strings.Contains(err.Error(), "not confirmed") || strings.Contains(stdout, `"signature"`) {
+			t.Fatalf("answer %q: %v\nstdout %s", answer, err, stdout)
+		}
+		if !strings.Contains(stderr, "[y/N]") || strings.Contains(strings.ToLower(stderr), "passphrase") {
+			t.Fatalf("answer %q: asked no y/N, or asked a passphrase:\n%s", answer, stderr)
+		}
+		// The question comes AFTER the request is shown.
+		if a, q := strings.Index(stderr, "About to sign"), strings.Index(stderr, "[y/N]"); a < 0 || a > q {
+			t.Fatalf("asked before showing the request:\n%s", stderr)
+		}
 	}
-	pass, _ := os.ReadFile(passFile)
-	stdout, stderr, err := runSplit(t, string(pass), "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
-		"--instance", fp, "--as", "laptop", "--passphrase-file", "-")
-	if err != nil || !strings.Contains(stdout, `"signature"`) || !strings.Contains(stderr, "passphrase") {
-		t.Fatalf("stdin passphrase: %v\nstdout %s\nstderr %s", err, stdout, stderr)
+	stdout, _, err := runSplit(t, "y\n", args...)
+	if err != nil || !strings.Contains(stdout, `"signature"`) {
+		t.Fatalf("answer y: %v\nstdout %s", err, stdout)
+	}
+	stdout, stderr, err := runSplit(t, "", append(args, "--yes")...)
+	if err != nil || !strings.Contains(stdout, `"signature"`) || strings.Contains(stderr, "[y/N]") {
+		t.Fatalf("--yes: %v\nstdout %s\nstderr %s", err, stdout, stderr)
+	}
+	if _, _, err := runSplit(t, "", append(args, "--yes", "--passphrase-file", "-")...); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+		t.Fatalf("--passphrase-file: %v, want an unknown flag", err)
+	}
+}
+
+// On a machine whose fleet root directory has no root.key (not the master),
+// --sign refuses with pki.ErrNoRootKey and signs nothing.
+func TestOAuthSign_WithoutTheRootKeyIsNotTheMaster(t *testing.T) {
+	dir, fp := signSetup(t)
+	if err := os.Remove(filepath.Join(dir, pki.RootKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
+	stdout, _, err := runSplit(t, "y\n", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
+		"--instance", fp, "--as", "laptop")
+	if !errors.Is(err, pki.ErrNoRootKey) || strings.Contains(stdout, `"signature"`) {
+		t.Fatalf("--sign without root.key: %v, want ErrNoRootKey\nstdout %s", err, stdout)
 	}
 }
 
 func TestOAuthSign_Deny(t *testing.T) {
-	dir, passFile, fp := signSetup(t)
+	dir, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
 	stdout, stderr, err := runSplit(t, "", "oauth", "deny", signID, "--sign", fi.srv.URL, "--dir", dir,
-		"--instance", fp, "--passphrase-file", passFile, "--yes")
+		"--instance", fp, "--yes")
 	if err != nil {
 		t.Fatalf("deny --sign: %v\n%s", err, stderr)
 	}
@@ -228,10 +260,10 @@ func TestOAuthSign_Deny(t *testing.T) {
 // --signed delivers the JSON as it is, to the issuer it names (or --issuer),
 // from any machine.
 func TestOAuthSigned_Delivers(t *testing.T) {
-	dir, passFile, fp := signSetup(t)
+	dir, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
 	blob, _, err := runSplit(t, "", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
-		"--instance", fp, "--as", "laptop", "--passphrase-file", passFile, "--yes")
+		"--instance", fp, "--as", "laptop", "--yes")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,14 +307,14 @@ func assertInert(t *testing.T, what, s string) {
 }
 
 func TestOAuthSign_IssuerErrorBodyIsEscaped(t *testing.T) {
-	dir, passFile, fp := signSetup(t)
+	dir, fp := signSetup(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(hostileBody))
 	}))
 	defer srv.Close()
 	stdout, stderr, err := runSplit(t, "", "oauth", "approve", signID, "--sign", srv.URL, "--dir", dir,
-		"--instance", fp, "--as", "laptop", "--passphrase-file", passFile, "--yes")
+		"--instance", fp, "--as", "laptop", "--yes")
 	if err == nil {
 		t.Fatal("want an error for a 404 description")
 	}

@@ -75,7 +75,7 @@ func TestVerifyCI_RulesABOverPlainCheckouts(t *testing.T) {
 			fact.RenderMember(fact.Member{Agent: id, State: fact.MemberActive, Key: a.signer.PublicKey(), Host: "h"})
 	}
 
-	root, err := pki.NewRoot(filepath.Join(tmp, "root"), "fleet-test", []byte("pw"), 10*365*24*time.Hour)
+	root, err := pki.NewRoot(filepath.Join(tmp, "root"), "fleet-test", 10*365*24*time.Hour)
 	require.NoError(t, err)
 	leaf := func(id string, a agent) (string, *big.Int) {
 		email, err := pki.AgentEmail(id)

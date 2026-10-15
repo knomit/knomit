@@ -22,9 +22,6 @@ import (
 	"knomit/internal/pki"
 )
 
-// Passphrase is the root passphrase every test fleet uses.
-var Passphrase = []byte("pkitest passphrase")
-
 // Fleet is a root with a published CRL, in its own fleet root dir.
 type Fleet struct {
 	Dir  string
@@ -46,7 +43,7 @@ func (m Member) Fingerprint() string { return pki.Fingerprint(m.Pub) }
 func New(t testing.TB) *Fleet {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "fleet")
-	root, err := pki.NewRoot(dir, "knomit-fleet-root-test", Passphrase, 24*time.Hour)
+	root, err := pki.NewRoot(dir, "knomit-fleet-root-test", 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
