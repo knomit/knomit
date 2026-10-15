@@ -2057,7 +2057,7 @@ async function denyOAuthPending(id: string): Promise<void> {
 // ─── Fleet (F09) ────────────────────────────────────────────────────────────
 // This instance's fleet membership state machine: standalone -> registering
 // -> registered -> unregistering -> standalone. record_state is this agent's
-// record as the fleet's MAIN says ("pending" until a human merges it).
+// record as the fleet's MAIN says ("pending" until the fleet's master merges it).
 export type FleetState = 'standalone' | 'registering' | 'registered' | 'unregistering';
 
 export interface FleetStatus {

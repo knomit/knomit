@@ -2142,7 +2142,7 @@ paths:
       description: |
         The membership state machine: `standalone` (no fleet) -> `registering`
         (own member record committed, push pending) -> `registered` (the
-        record is `pending` on the fleet's main until a human merges it, then
+        record is `pending` on the fleet's main until the fleet's master merges it, then
         `active`, `left` or `revoked` as that main says) -> `unregistering`
         (a `left` record committed, push pending) -> `standalone`.
         `last_error` is the latest push or fetch failure, cleared on success;
@@ -2164,8 +2164,8 @@ paths:
       description: |
         Mounts the fleet repository (clone, with an agent branch), refuses
         unless its ontology is the fleet ontology, writes this instance's member
-        record on the agent branch and pushes it. A human accepts by merging
-        the agent branch into the fleet's main. The same URL again compares
+        record on the agent branch and pushes it. The record counts once the
+        fleet's master merges it into main. The same URL again compares
         the record with the current config and binary and writes ONE new
         version only if an advertised field (key, host, branch, addresses,
         git, capabilities) changed. 202 while the push is pending (retried on

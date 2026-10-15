@@ -117,8 +117,8 @@ func (m *Manager) fleetDB() (*FleetRow, error) {
 }
 
 // FleetStatus reports the state machine, the fleet repository, this agent's id
-// and its record's state at the fleet's main ("pending" until a human merges
-// the registration).
+// and its record's state at the fleet's main ("pending" until the fleet's
+// master merges the registration into main).
 func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	row, err := m.fleetDB()
 	if err != nil {
@@ -223,8 +223,8 @@ func (m *Manager) originOf(ri *RepoInstance) (*Origin, error) {
 
 // RegisterFleet joins the fleet at url: mount it (clone, with an agent
 // branch), refuse unless its ontology is the fleet ontology, write this
-// instance's member record on the agent branch, push. A human accepts by
-// merging the agent branch into the fleet's main. The same URL again refreshes
+// instance's member record on the agent branch, push. The record counts once
+// the fleet's master merges it into main. The same URL again refreshes
 // the record (for example after a key rotation).
 func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken string) (FleetStatus, error) {
 	row, err := m.fleetDB()

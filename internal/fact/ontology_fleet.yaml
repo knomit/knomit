@@ -11,9 +11,10 @@ description: >-
 # once the fleet has a root certificate, the fleet's certificates.
 attributes:
   verify_signatures: enforce
-  # The master merges every member branch it accepted into main by itself;
-  # nobody merges by hand. It accepts only signed commits that pass the
-  # checks above, so this setting needs verify_signatures: enforce beside it.
+  # The master merges every member branch it accepted into its own agent
+  # branch by itself, and main follows that branch; nobody merges by hand.
+  # It accepts only signed commits that pass the checks above, so this
+  # setting needs verify_signatures: enforce beside it.
   consensus: auto
 # The fleet's certificate artifacts, under artifacts/ (R7). The commit judge
 # enforces these rules on every commit; the fleet reader finds the

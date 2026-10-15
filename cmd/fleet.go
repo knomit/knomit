@@ -23,8 +23,8 @@ func fleetCmd() *cobra.Command {
 		Short: "Show, join or leave this instance's fleet (F09)",
 		Long: `An instance is standalone until it registers with a fleet: a knomit
 repository whose ontology is the fleet ontology. Registering mounts it, writes this
-instance's member record on its agent branch and pushes it; a human accepts by
-merging that branch into the fleet's main. Unregistering pushes a "left" record
+instance's member record on its agent branch and pushes it; the record counts once
+the fleet's master merges it into main. Unregistering pushes a "left" record
 first, and only then unmounts the fleet repository (retrying until the push
 succeeds).`,
 	}
