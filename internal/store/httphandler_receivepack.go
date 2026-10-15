@@ -426,6 +426,14 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 // a member merging the host's main into its branch pushes other members'
 // commits, but the host holds those, so only the member's own merge commit is
 // judged.
+//
+// INVARIANT this relies on: every commit the walk skips is reachable from
+// main or from a ref that was itself admitted. Objects that are held but were
+// never judged break it: a clean merge of an unjudged commit and main would be
+// the only new commit, so the unjudged commit would be admitted through it. The
+// fleet master with an origin fetches every member branch, refused tips
+// included, so its copy accepts no push at all (repos.Manager.FleetPushRefusal,
+// applied at the web edge in pushPolicy).
 func signerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
 	s, err := verifyCommitSignature(c)
 	if err != nil {

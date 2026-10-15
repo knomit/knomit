@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -157,6 +158,30 @@ func (p *fleetPeers) publish(ctx context.Context, svc *store.Service, own string
 		}
 	}
 	return res, err
+}
+
+// FleetPushRefusal is why ri accepts no push over /git, or "": a copy of the
+// fleet repository that has an origin accepts none, master or member. Members
+// push to the origin (the forge), never to another instance, and only the hub
+// — the master's copy with NO origin — receives pushes (R-visibility: nobody
+// pushes to a non-master). It is also what keeps the fetch-time judge sound:
+// a master with an origin FETCHES every member branch, refused tips included,
+// so it holds objects nobody admitted, and receive-pack judges only the
+// commits a host does not hold. A clean merge of a refused tip and main
+// pushed here would bring only the merge to the judge and launder the tip
+// into main. An unreadable origin row refuses (fail closed).
+func (m *Manager) FleetPushRefusal(ri *RepoInstance) string {
+	if ri == nil || !ri.IsFleet() {
+		return ""
+	}
+	o, err := m.originOf(ri)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("knomit: the origin of the fleet repository %q could not be read (%v); it accepts no push", ri.Name(), err)
+	case o != nil:
+		return fmt.Sprintf("knomit: this copy of the fleet repository %q has an origin (%s); push your agent branch there, not to this instance", ri.Name(), o.URL)
+	}
+	return ""
 }
 
 // FleetRefusals is the fleet master's last refusal of each member branch it
