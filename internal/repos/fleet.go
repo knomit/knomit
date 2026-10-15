@@ -184,9 +184,18 @@ func (m *Manager) FleetAtMain(ctx context.Context) (store.Fleet, error) {
 }
 
 // fleetMembersAtMain reads the member records at the fleet repository's
-// consensus branch (fleetAtMain).
+// consensus branch (fleetAtMain), as readers show them: a member whose leaf
+// the CRL at that SAME revision lists is "revoked", whatever its record says
+// (M6: revoked is derived, never written). Only readers get this view
+// (FleetStatus, GET /fleet/members); the judge reads the records as written
+// (FleetAtMain) and refuses a revoked leaf by rule B.
 func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, error) {
 	f, err := m.fleetAtMain(ri)
+	for i := range f.Members {
+		if f.PKI.Revoked(f.Members[i].Agent) {
+			f.Members[i].State = fact.MemberRevoked
+		}
+	}
 	return f.Members, err
 }
 
