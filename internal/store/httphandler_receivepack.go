@@ -406,8 +406,10 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 
 // signerIsPusher refuses a signed commit whose SSHSIG key is not the pusher's
 // certificate key. Called only for a commit judgeCommit accepted, so a commit
-// without a verifiable signature here is an unsigned merge that passed M3
-// (it adds nothing beyond its parents) and has no signer to compare.
+// without a verifiable signature here is a two-parent merge that passed M3
+// (it adds nothing beyond its parents; unsigned, or a signature that does not
+// verify) and has no signer to compare. A merge that passed M3 with a
+// signature that DOES verify still needs it to be the pusher's.
 //
 // Only NEW commits reach this (newCommits stops at commits the host holds):
 // a member merging the host's main into its branch pushes other members'
