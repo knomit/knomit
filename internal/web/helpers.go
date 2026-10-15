@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"knomit/internal/pki"
+	"knomit/internal/repos"
 )
 
 // detailWithoutTitlePrefix renders err as a problem+json `detail`, dropping a
@@ -58,19 +59,19 @@ func isGitURL(s string) bool {
 
 // validateURLAuth checks that the auth method is compatible with the URL scheme.
 //
-// knomit+https (another enrolled instance) authenticates ONLY with the
-// instance certificate: auth method cert, or "" which resolves to it. The
-// wizard's urlAuthMismatch (web/src/originAuth.ts) makes the same two
-// refusals in the same words, and both tests run one table. The repos layer
-// (resolveAuthWithOrigin) forces cert again for every clone and sync; this
-// edge check is the one that tells the user what to change.
+// Another knomit instance of this fleet is named by its plain https URL;
+// knomit decides that it is one (repos.Manager.ResolveOrigin) and stores auth
+// method cert for it. So cert is never an input here, and a URL under the
+// fleet transport's internal scheme is refused (pki.GitURL, which reads the
+// scheme case-insensitively, as go-git does). The wizard's urlAuthMismatch
+// (web/src/originAuth.ts) makes the same refusals in the same words, and both
+// tests run one table.
 func validateURLAuth(u, authMethod string) error {
-	isKnomit := pki.IsFleetURL(u)
-	if isKnomit && authMethod != "cert" && authMethod != "" {
-		return fmt.Errorf("knomit+https origins authenticate with the instance certificate — use auth method cert")
+	if _, err := pki.GitURL(u, false); err != nil {
+		return pki.ErrUnsupportedOriginScheme
 	}
-	if !isKnomit && authMethod == "cert" {
-		return fmt.Errorf("cert auth is only valid with knomit+https:// URLs")
+	if authMethod == "cert" {
+		return repos.ErrCertNotAnInput
 	}
 	isSSH := strings.HasPrefix(u, "git@") || strings.HasPrefix(u, "ssh://")
 	isHTTP := strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")

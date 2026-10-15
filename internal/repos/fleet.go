@@ -24,6 +24,9 @@ type FleetError struct {
 	Status int
 	Code   string
 	Msg    string
+	// Choices, when set, are the values the caller may pick from to retry
+	// (address_required: this instance's external_addresses).
+	Choices []string
 }
 
 func (e *FleetError) Error() string { return e.Code + ": " + e.Msg }

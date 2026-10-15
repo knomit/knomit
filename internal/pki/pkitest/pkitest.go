@@ -116,6 +116,17 @@ func (f *Fleet) Bundle(t testing.TB, m Member) []byte {
 	return append(append(append([]byte{}, m.CertPEM...), rootPEM...), crlPEM...)
 }
 
+// WithURL is raw as the bundle document an enroll returns, naming url as the
+// fleet repository URL (pki.FleetBundle).
+func WithURL(t testing.TB, raw []byte, url string) []byte {
+	t.Helper()
+	doc, err := pki.FleetBundle(raw, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
 // Install writes instance.crt, root.crt and crl.pem for m into dir (created
 // 0700), what an enrolled instance holds after POST /api/v1/fleet/join.
 func (f *Fleet) Install(t testing.TB, m Member, dir string) {

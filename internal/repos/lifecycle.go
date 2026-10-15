@@ -114,11 +114,17 @@ func (m *Manager) lensNameConflict(name string) error {
 }
 
 // OriginSpec describes a git remote to attach at create/restore time.
+//
+// AuthMethod "cert" is never an input: Manager.ResolveOrigin sets it when the
+// URL classifies as an instance of this fleet, and marks the spec decided so
+// later steps of the same operation neither re-classify nor refuse it.
 type OriginSpec struct {
 	URL        string
 	Branch     string
 	AuthMethod string
 	AuthToken  string
+
+	decided bool // ResolveOrigin ran: AuthMethod is the decided one
 }
 
 // CreateSpec is the single input for all repo-creation modes.
@@ -359,6 +365,15 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	// branch on the remote other than its own, so it can no longer be the thing
 	// that pushes a protected default branch into existence.
 	if spec.hasRemote() {
+		// The transport first (a refusal is certain: a credential for a fleet
+		// peer, a host that cannot be reached, a peer whose certificate is
+		// refused, the internal scheme, cert as input), so the probes below
+		// use the decided one. spec is this call's copy.
+		o, err := m.ResolveOrigin(ctx, *spec.Origin)
+		if err != nil {
+			return err
+		}
+		spec.Origin = &o
 		// A ref-less remote is refused for BOTH remote modes. knomit never
 		// creates a branch on a remote other than its own agent branch, so
 		// there is nothing to cut that branch from and nothing to clone —
@@ -544,6 +559,14 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		if spec.Origin == nil || spec.Origin.URL == "" {
 			return nil, fmt.Errorf("%w: %s mode requires origin.url", ErrInvalidName, spec.Mode)
 		}
+		// The transport is decided here, authoritatively and before anything
+		// is written: every create mode, join and fleet create pass through,
+		// and the decided method (cert for a fleet peer) is what is stored.
+		o, err := m.ResolveOrigin(ctx, *spec.Origin)
+		if err != nil {
+			return nil, err
+		}
+		spec.Origin = &o
 		origin = spec.Origin.URL
 	}
 
@@ -1052,7 +1075,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 		return "", err
 	}
 	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "cloning from " + spec.Origin.URL, Pct: 40})
-	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}
@@ -1090,7 +1113,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// InitFromRemote found at the moment it actually fetched, and a remote that
 	// lost its refs in between must not be silently turned into a fresh local
 	// knowledge base with a minted identity nobody else shares.
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(ctx, spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(ctx, gitURL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
 		transferProgress(emit, "clone"), fleetCloneOptions(spec)...)
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
@@ -1221,7 +1244,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 		}
 	}
 
-	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}
@@ -1252,7 +1275,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// ontology is written below instead — as an ordinary commit on the agent
 	// branch, through the same fact machinery every later write uses.
 	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "reading " + spec.Origin.URL, Pct: 40})
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(ctx, spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(ctx, gitURL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
 		transferProgress(emit, "clone"), fleetCloneOptions(spec)...)
 	if err != nil {
 		return "", fmt.Errorf("initialize: %w", err)
@@ -1387,7 +1410,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 		return "", err
 	}
 	emit(Event{Step: "subscribe", Phase: PhaseTransfer, Indeterminate: true, Message: "subscribing to " + spec.Origin.URL, Pct: 40})
-	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}
@@ -1404,7 +1427,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
 	svc.SetAcceptList(m.acceptListFor(uid))
 
-	upstream, err := svc.InitSubscription(ctx, spec.Origin.URL, auth, spec.Origin.Branch,
+	upstream, err := svc.InitSubscription(ctx, gitURL, auth, spec.Origin.Branch,
 		transferProgress(emit, "subscribe"))
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return "", fmt.Errorf("subscribe: %w", ErrRemoteNoBranches)

@@ -147,7 +147,7 @@ func (lf *launderFixture) installRoot(t *testing.T) {
 func (lf *launderFixture) register(t *testing.T) {
 	t.Helper()
 	bundle := lf.f.Bundle(t, lf.f.Enroll(t, "bravo@"+pki.AgentEmailDomain, lf.key))
-	st, err := lf.mgr.JoinFleet(lf.ctx, repos.FleetJoinSpec{URL: lf.url, Bundle: bundle})
+	st, err := lf.mgr.JoinFleet(lf.ctx, repos.FleetJoinSpec{Bundle: pkitest.WithURL(t, bundle, lf.url)})
 	if err != nil {
 		t.Fatalf("join the fleet: %v", err)
 	}

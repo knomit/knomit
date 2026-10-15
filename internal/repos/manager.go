@@ -183,15 +183,20 @@ type Manager struct {
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote
-// URL, using the manager's own key path as the SSH key fallback. It is the
-// clone boundary for the immediate-clone paths (repo create and origin-session
-// test), so it also enforces the local-origin policy here: an origin that the
+// URL, using the manager's own key path as the SSH key fallback, and returns
+// the URL go-git is to be handed (pki.GitURL: the internal fleet form for an
+// origin whose method is cert, else url unchanged). It is the clone boundary
+// for the immediate-clone paths (repo create and origin-session test), so it
+// also enforces the local-origin policy here: an origin that the
 // LocalOriginRoot gate rejects fails before any clone is attempted. Deferred
 // clones (sync of a stored remote) are gated at write time via
 // ValidateLocalOrigin instead.
-func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transport.AuthMethod, error) {
+//
+// cfg.AuthMethod must already be decided (ResolveOrigin): this never
+// classifies.
+func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (string, transport.AuthMethod, error) {
 	if err := m.ValidateLocalOrigin(url); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	// Per-request auth configs (authConfigFromSpec) carry only the credential,
 	// so inherit the operator's known_hosts location — otherwise a spec-driven
@@ -744,6 +749,25 @@ func (m *Manager) Close() error {
 func (m *Manager) Send(ctx context.Context, ri *RepoInstance, e MachineEvent) (Reply, error) {
 	if ri == nil || ri.machine == nil {
 		return Reply{}, ErrNotOpen
+	}
+	// An origin entering through an attach or a swap is classified here, on
+	// the caller's goroutine and before the event is queued (ResolveOrigin):
+	// the machine then stores the decided method.
+	switch e.kind {
+	case evAttachOrigin:
+		o, err := m.ResolveOrigin(ctx, e.origin)
+		if err != nil {
+			return Reply{}, err
+		}
+		e.origin = o
+	case evSwapStore:
+		if e.swap.Origin.URL != "" {
+			o, err := m.ResolveOrigin(ctx, e.swap.Origin)
+			if err != nil {
+				return Reply{}, err
+			}
+			e.swap.Origin = o
+		}
 	}
 	return ri.machine.Send(ctx, e)
 }

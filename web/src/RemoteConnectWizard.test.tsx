@@ -39,6 +39,21 @@ describe('RemoteConnectWizard', () => {
     expect(api.getOrigin).toHaveBeenCalledWith('knomit');
   });
 
+  // A fleet peer is a plain https URL; the server decides it is one and
+  // stores 'cert'. The wizard never offers a certificate option, and a stored
+  // 'cert' prefills Auto-detect so a re-submit is decided again.
+  it('offers no certificate option and prefills a stored cert origin as Auto-detect', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
+      name: 'origin', url: 'https://bravo.tail:8443/git/kb', branch: 'main', auth_method: 'cert',
+    });
+    render(<RemoteConnectWizard repo="knomit" onCancel={() => {}} onDone={() => {}} />);
+    const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+    await waitFor(() => expect(url.value).toBe('https://bravo.tail:8443/git/kb'));
+    const select = screen.getByLabelText('Auth method') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(Array.from(select.options).map(o => o.value)).toEqual(['', 'none', 'ssh', 'token', 'basic']);
+  });
+
   it('advances Connect→Review on a successful test and hides the strategy picker for shared history', async () => {
     (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
     (createSession as unknown as Fn).mockResolvedValueOnce({ session_id: 'sess-1' });

@@ -239,6 +239,7 @@ func (m *Manager) ProbeInitializedOn(ctx context.Context, o OriginSpec, inspect 
 type remoteProbe struct {
 	m       *Manager
 	o       OriginSpec
+	gitURL  string // the URL go-git is handed (pki.GitURL)
 	auth    transport.AuthMethod
 	authErr error
 	adv     *packp.AdvRefs
@@ -261,11 +262,18 @@ func (m *Manager) beginRemoteProbe(ctx context.Context, o OriginSpec) (*remotePr
 	}
 	p := &remoteProbe{m: m, o: o}
 	p.netCtx, p.cancel = probeCtx(ctx, m.deps.Cfg.Git.NetworkTimeout)
-	p.auth, p.authErr = m.ResolveAuth(authConfigFromSpec(&o), o.URL)
+	// Decided once per operation (a no-op for a spec the caller resolved);
+	// a refusal is a result here, like an unassemblable credential.
+	o, p.authErr = m.ResolveOrigin(p.netCtx, o)
 	if p.authErr != nil {
 		return p, nil
 	}
-	p.adv, p.advErr = advertise(p.netCtx, o.URL, p.auth)
+	p.o = o
+	p.gitURL, p.auth, p.authErr = m.ResolveAuth(authConfigFromSpec(&o), o.URL)
+	if p.authErr != nil {
+		return p, nil
+	}
+	p.adv, p.advErr = advertise(p.netCtx, p.gitURL, p.auth)
 	if p.advErr != nil && errors.Is(p.advErr, transport.ErrEmptyRemoteRepository) {
 		// A remote with no refs is not a failure to look: it is a remote with
 		// no refs, which every caller here already has an answer for.
@@ -299,7 +307,7 @@ func (p *remoteProbe) initializedOn(parent context.Context, inspect string) (Ini
 	if p.advErr != nil {
 		return InitializedResult{Branch: inspect, Detail: p.advErr.Error()}, nil
 	}
-	res, err := p.m.probeInitializedBranch(parent, p.netCtx, p.o, p.auth, inspect, advertisesShallow(p.adv))
+	res, err := p.m.probeInitializedBranch(parent, p.netCtx, p.o, p.gitURL, p.auth, inspect, advertisesShallow(p.adv))
 	if err != nil {
 		return res, err
 	}
@@ -349,9 +357,9 @@ func (p *remoteProbe) initialized(parent context.Context) (InitializedResult, er
 // come back as an HTTP 500 against knomit's own endpoint, and as "Server does
 // not support shallow clients" from real git. Without shallow the clone is a
 // full single-branch one, still bounded by budgetedStorage.
-func (m *Manager) probeInitializedBranch(parent, netCtx context.Context, o OriginSpec, auth transport.AuthMethod, inspect string, shallowOK bool) (InitializedResult, error) {
+func (m *Manager) probeInitializedBranch(parent, netCtx context.Context, o OriginSpec, gitURL string, auth transport.AuthMethod, inspect string, shallowOK bool) (InitializedResult, error) {
 	opts := &gogit.CloneOptions{
-		URL:          o.URL,
+		URL:          gitURL,
 		Auth:         auth,
 		SingleBranch: true,
 		Tags:         gogit.NoTags,

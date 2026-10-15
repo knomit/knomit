@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"knomit/internal/pki"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -538,14 +539,14 @@ func createBody(t *testing.T, mode, ontologyPreset, originURL string) string {
 }
 
 // POST /repos with an origin runs the same URL/auth check as PUT /origin and
-// the origin sessions, in the same words, before any job starts. Without it
-// the create path was the one edge that let knomit+https + token (or cert on
-// an https URL) through to fail later, or silently fetch anonymously.
+// the origin sessions, in the same words, before any job starts: cert is not
+// an input, and the fleet transport's internal scheme is refused.
 func TestPostRepos_OriginURLAuthMismatchIs400WithTheSharedWording(t *testing.T) {
+	internal := internalForms(t, "https://h:8443/git/kb")
 	for _, tc := range []struct{ url, method, want string }{
-		{"knomit+https://h:8443/git/kb", "token", "knomit+https origins authenticate with the instance certificate — use auth method cert"},
-		{"KNOMIT+HTTPS://h:8443/git/kb", "basic", "knomit+https origins authenticate with the instance certificate — use auth method cert"},
-		{"https://github.com/o/r.git", "cert", "cert auth is only valid with knomit+https:// URLs"},
+		{internal[0], "", pki.ErrUnsupportedOriginScheme.Error()},
+		{internal[1], "basic", pki.ErrUnsupportedOriginScheme.Error()},
+		{"https://github.com/o/r.git", "cert", repos.ErrCertNotAnInput.Error()},
 	} {
 		m := newRealManager(t)
 		s := &Server{Manager: m}

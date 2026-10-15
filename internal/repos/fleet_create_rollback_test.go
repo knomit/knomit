@@ -393,11 +393,11 @@ func TestFleetOps_TakeTheFleetLock(t *testing.T) {
 	for name, op := range map[string]func(m *Manager) error{
 		"create": func(m *Manager) error { _, err := m.CreateFleet(ctx, FleetCreateSpec{}); return err },
 		"join": func(m *Manager) error {
-			_, err := m.JoinFleet(ctx, FleetJoinSpec{URL: "https://forge.invalid/fleet.git"})
+			_, err := m.JoinFleet(ctx, FleetJoinSpec{})
 			return err
 		},
 		"leave":        func(m *Manager) error { _, err := m.LeaveFleet(ctx); return err },
-		"enroll":       func(m *Manager) error { _, err := m.EnrollFleetMember(ctx, "x", ""); return err },
+		"enroll":       func(m *Manager) error { _, err := m.EnrollFleetMember(ctx, "x", "", ""); return err },
 		"revoke":       func(m *Manager) error { _, err := m.RevokeFleetMember(ctx, "x", ""); return err },
 		"decommission": func(m *Manager) error { _, err := m.DecommissionFleet(ctx); return err },
 		"root get":     func(m *Manager) error { _, err := m.FleetRootFiles(); return err },
@@ -459,7 +459,7 @@ func TestCreateFleet_FailedRollbackIsRetriedUntilTheForgeBranchIsGone(t *testing
 	require.Equal(t, http.StatusConflict, status)
 	require.Equal(t, "create_unfinished", code)
 	require.ErrorContains(t, err, "delete that branch on the forge by hand", "the message names the way out")
-	_, err = m.JoinFleet(ctx, FleetJoinSpec{URL: fileuri.New(bare)})
+	_, err = m.JoinFleet(ctx, FleetJoinSpec{})
 	_, code = fleetCode(t, err)
 	require.Equal(t, "create_unfinished", code, "a join is refused too")
 	mk, err := readFleetCreateMarker(m.ControlDB())

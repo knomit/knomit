@@ -88,7 +88,7 @@ type Options struct {
 	NoOAuth bool
 }
 
-// installGitTransport registers the knomit+https transport and logs the
+// installGitTransport registers the fleet transport and logs the
 // instance's fleet state for it in one line. The registration stands whatever
 // the state; an unenrolled instance is picked up on its next fetch once
 // a fleet join or create has installed a certificate, with no restart.
@@ -96,11 +96,11 @@ func installGitTransport(dir, keyPath string) {
 	err := pki.InstallGitTransport(dir, keyPath)
 	switch {
 	case err == nil:
-		log.Info().Str("dir", dir).Msg("knomit+https origins: enrolled, fetching over mutual TLS")
+		log.Info().Str("dir", dir).Msg("fleet origins: enrolled, fetching over mutual TLS")
 	case errors.Is(err, pki.ErrNotEnrolled):
-		log.Info().Str("dir", dir).Msg("knomit+https origins: not enrolled; fetches from them fail until this instance joins a fleet (POST /api/v1/fleet/join)")
+		log.Info().Str("dir", dir).Msg("fleet origins: not enrolled; fetches from them fail until this instance joins a fleet (POST /api/v1/fleet/join)")
 	default:
-		log.Warn().Err(err).Str("dir", dir).Msg("knomit+https origins: fleet files unusable; fetches from them fail until fixed")
+		log.Warn().Err(err).Str("dir", dir).Msg("fleet origins: fleet files unusable; fetches from them fail until fixed")
 	}
 }
 
@@ -141,7 +141,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 	a.agentBranch, a.agentID, a.agentHost = ident.Branch, ident.AgentID, ident.Host
 
-	// The knomit+https go-git transport, registered before anything can
+	// The fleet go-git transport, registered before anything can
 	// clone or sync (repos.New and Manager.Start are below): go-git's
 	// protocol registry is an unsynchronised map. Always registered, enrolled
 	// or not, so a fleet origin never falls through to another transport.

@@ -222,14 +222,14 @@ func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
 			if err := pki.InstallGitTransport(pDir, pKey); err != nil {
 				t.Fatalf("install transport: %v", err)
 			}
-			pMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+			pMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: pDir}},
 				KeyPath: pKey, AgentBranch: "agent/alpha-" + pki.Short(pMember.Fingerprint()), Machine: repos.Options{Synchronous: true}})
 			if err := pMgr.Start(); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { pMgr.Close() })
 			peer, err := pMgr.Create(ctx, repos.CreateSpec{Name: "mission", Mode: "clone",
-				Origin: &repos.OriginSpec{URL: pki.GitScheme + "://" + tlsAddr + "/git/mission", AuthMethod: "cert"}}, nil)
+				Origin: &repos.OriginSpec{URL: "https://" + tlsAddr + "/git/mission"}}, nil)
 			if err != nil {
 				t.Fatalf("peer clone from the host: %v", err)
 			}

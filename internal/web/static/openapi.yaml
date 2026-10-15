@@ -2197,11 +2197,11 @@ paths:
         fleet always gets a fresh root, and the one there belongs to another
         fleet). Without `origin` this instance hosts the fleet, so
         `[tls].addr` (`listener_required`, 422) and `external_addresses`
-        (`addresses_required`, 422) must be set. With `origin` the URL must
-        be a forge, not `knomit+https` (`knomit_origin`, 422: a
-        knomit-hosted fleet is hosted by its master), and the repo create's
-        own checks apply (reachable, a branch to cut from, not yet a
-        knowledge base).
+        (`addresses_required`, 422) must be set. With `origin` the repo
+        create's own checks apply (reachable, a branch to cut from, not yet a
+        knowledge base). Another knomit instance cannot be the origin: this
+        instance holds no fleet trust yet (`trust_installed`), so such a URL
+        is not a fleet peer and fails its TLS handshake.
 
         Then: the root is minted (`root.key` a plain owner-only file,
         `root.crt`, an empty `crl.pem`) with this instance's certificate; the
@@ -2251,7 +2251,7 @@ paths:
         "400": { description: Invalid name or request }
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present, trust_installed, root_present, create_unfinished, or a repo create conflict (name, origin in use)" }
-        "422": { description: "listener_required, addresses_required, knomit_origin, or a refused origin" }
+        "422": { description: "listener_required, addresses_required, or a refused origin" }
   /fleet/enroll:
     post:
       tags: [fleet]
@@ -2266,10 +2266,26 @@ paths:
         `issued/<serial>.pem` on the master's agent branch and publishes
         `main` (`published`; a failure is `publish_error`, and the sync loop
         publishes it again: the joiner is admitted only once `main` holds the
-        leaf). The bundle is the leaf, the root and the current CRL, nothing
-        else; the operator carries it to the joiner. Refusals:
-        `invalid_agent_id`, `invalid_key` (422), `own_id`, `not_registered`,
-        `not_master` (409).
+        leaf). The bundle is the leaf, the root, the current CRL and the
+        fleet repository URL members use (`fleet_url`, also in the
+        response), nothing else; the operator carries it to the joiner, whose
+        join needs nothing more.
+
+        The fleet URL: when the fleet repository here syncs with an origin (a
+        forge, or the hub when this master is not it), that origin's URL, and
+        `address` is refused (`address_not_applicable`, 422). When this
+        instance is the hub, `https://<address>/git/<repo>` at one of this
+        instance's `external_addresses`: with exactly one configured,
+        `address` may be omitted; with several, it is required
+        (`address_required`, 422, whose `choices` lists them); one that is not
+        configured is `address_unknown` (422, with `choices`), and one that is
+        not https is `address_not_https` (422). Every refusal comes before
+        the leaf is issued.
+
+        Refusals: `invalid_agent_id`, `invalid_key`, the address codes above
+        (422); `own_id`, `not_registered`, `not_master`, `enrolled` (the id
+        has an unrevoked leaf on `main`: revoke it first), `rekey_unsupported`
+        (the id has a leaf for another key) (409).
       operationId: enrollFleetMember
       requestBody:
         required: true
@@ -2281,6 +2297,7 @@ paths:
               properties:
                 agent_id: { type: string }
                 public_key: { type: string, description: "ssh-ed25519 public key line" }
+                address: { type: string, description: "On the hub: which of external_addresses the bundle's fleet URL uses; needed only when several are configured" }
       responses:
         "201":
           description: Enrolled
@@ -2291,13 +2308,22 @@ paths:
                 properties:
                   agent_id: { type: string }
                   serial: { type: string }
-                  bundle: { type: string, description: "PEM: leaf, root, CRL" }
+                  bundle: { type: string, description: "The bundle document: a `# knomit fleet bundle v1` header with url, agent, root (fingerprint) and serial lines, then the leaf, root and CRL PEM blocks" }
+                  fleet_url: { type: string, description: "The fleet repository URL the bundle carries" }
                   root_fingerprint: { type: string }
                   published: { type: boolean }
                   publish_error: { type: string }
         "403": { description: Not the local authenticated listener }
-        "409": { description: "not_registered, not_master or own_id" }
-        "422": { description: "invalid_agent_id or invalid_key" }
+        "409": { description: "not_registered, not_master, own_id, enrolled or rekey_unsupported" }
+        "422":
+          description: "invalid_agent_id, invalid_key, address_required, address_unknown, address_not_https or address_not_applicable; address_required and address_unknown carry choices"
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string }
+                  choices: { type: array, items: { type: string }, description: "this instance's external_addresses" }
   /fleet/join:
     post:
       tags: [fleet]
@@ -2310,9 +2336,14 @@ paths:
         fleet (`fleet_present`, 409), no trust material is installed
         (`trust_installed`, 409), the bundle is a bundle (`bundle_invalid`,
         422) for THIS instance's key (`key_mismatch`, 422) and agent id
-        (`agent_mismatch`, 422). Then the bundle is installed (supplying it
-        is the operator's consent to its root), the fleet repository is
-        cloned through the fleet door, its ontology must be the fleet's
+        (`agent_mismatch`, 422) that names the fleet repository URL
+        (`bundle_invalid` otherwise), and `auth_method` fits that URL
+        (`auth_invalid`, 422: `cert` is never an input). Then the bundle is
+        installed (supplying it is the operator's consent to its root), the
+        fleet repository is cloned from the bundle's URL through the fleet
+        door (an https URL whose server chains to the installed root is
+        reached over the fleet transport; a forge with the joiner's own
+        `auth_method` and `auth_token`), its ontology must be the fleet's
         (`not_a_fleet`, 422) and its main's `artifacts/fleet/root.crt` the
         bundle's root (`root_differs`, 422), it is recorded (it mounts again
         after a restart), and this instance's record (state `active`) is
@@ -2330,12 +2361,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [url, bundle]
+              required: [bundle]
               properties:
-                url: { type: string }
-                auth_method: { type: string }
+                bundle: { type: string, description: "PEM, as POST /fleet/enroll returned it; it names the fleet repository URL" }
+                auth_method: { type: string, description: "The joiner's own credential for a forge-hosted fleet only" }
                 auth_token: { type: string }
-                bundle: { type: string, description: "PEM, as POST /fleet/enroll returned it" }
       responses:
         "200":
           description: Joined
@@ -2348,11 +2378,65 @@ paths:
                     required: [root_fingerprint]
                     properties:
                       root_fingerprint: { type: string, description: "the fingerprint of the root the bundle installed" }
-        "400": { description: url_and_bundle_required }
+        "400": { description: bundle_required }
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present, trust_installed, join_refused or create_unfinished" }
-        "422": { description: "bundle_invalid, key_mismatch, agent_mismatch, not_a_fleet or root_differs" }
+        "422": { description: "bundle_invalid, key_mismatch, agent_mismatch, auth_invalid, not_a_fleet or root_differs" }
         "502": { description: clone_failed }
+  /fleet/join:check:
+    post:
+      tags: [fleet]
+      summary: Check a join before anything is installed
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing. Writes nothing.
+
+        The join's Check step. Runs the join's pre-flights (`fleet_present`,
+        `trust_installed` 409; `bundle_invalid`, `key_mismatch`,
+        `agent_mismatch`, `auth_invalid` 422), then reaches the URL the
+        bundle names presenting the BUNDLE's certificate and judging the
+        server against the BUNDLE's root, without installing either (they
+        are held in a private temporary directory removed before the answer).
+        A server of that fleet is `hosting: master` (a credential for it is
+        `auth_invalid`); anything else is `hosting: forge`, probed with the
+        joiner's own `auth_method`/`auth_token` (`auth_required` when it
+        refuses them, with `detail`). A host that cannot be reached, or a
+        server of the fleet that refuses this certificate, is `unreachable`
+        (502). The operator compares `root_fingerprint` with the one the
+        master gave by another channel BEFORE joining (#299).
+      operationId: checkFleetJoin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bundle]
+              properties:
+                bundle: { type: string, description: "The bundle document POST /fleet/enroll returned" }
+                auth_method: { type: string, description: "The joiner's own credential for a forge-hosted fleet only" }
+                auth_token: { type: string }
+      responses:
+        "200":
+          description: Checked
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                required: [url, hosting, host, root_fingerprint, agent_id, auth_required]
+                properties:
+                  url: { type: string, description: "The fleet repository URL the bundle names" }
+                  hosting: { type: string, enum: [master, forge] }
+                  host: { type: string }
+                  root_fingerprint: { type: string, description: "The bundle's root, to confirm before joining" }
+                  agent_id: { type: string }
+                  auth_required: { type: boolean }
+                  detail: { type: string }
+        "400": { description: bundle_required }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "fleet_present or trust_installed" }
+        "422": { description: "bundle_invalid, key_mismatch, agent_mismatch or auth_invalid" }
+        "502": { description: unreachable }
   /fleet/leave:
     post:
       tags: [fleet]
@@ -4792,7 +4876,11 @@ components:
     # Repo lifecycle — create / archive / restore / purge
     CreateRepoOrigin:
       type: object
-      description: Remote origin to join or initialize (used when mode=clone or mode=initialize).
+      description: >-
+        Remote origin to join or initialize (used when mode=clone or
+        mode=initialize). An https URL to another knomit instance's TLS port
+        is used over the fleet transport automatically: give it with no
+        auth_method (a credential for it is refused).
       properties:
         url:         { type: string, description: Remote URL }
         branch:      { type: string, description: Remote branch to track }
@@ -5340,7 +5428,15 @@ components:
         last_push_at:     { type: string, nullable: true }
         last_push_status: { type: string, nullable: true }
         last_push_error:  { type: string, nullable: true }
-        auth_method:      { type: string, enum: [token, basic, ssh] }
+        auth_method:
+          type: string
+          enum: [token, basic, ssh, cert]
+          description: >-
+            cert is set by knomit for an origin that is another knomit
+            instance of this fleet (an https URL whose server's certificate
+            chains to this instance's fleet root, decided once when the
+            origin is set); it is served over the fleet's mutual-TLS
+            transport. Not accepted as input.
         fetch_breaker:    { $ref: "#/components/schemas/SyncBreaker" }
         push_breaker:     { $ref: "#/components/schemas/SyncBreaker" }
         _links:           { $ref: "#/components/schemas/LinkMap" }
@@ -5366,6 +5462,10 @@ components:
     OriginConfigRequest:
       type: object
       required: [url]
+      description: >-
+        An https URL to another knomit instance's TLS port is used over the
+        fleet transport automatically: give it with no auth_method (a
+        credential for it is refused).
       properties:
         url:         { type: string }
         branch:      { type: string, description: "Upstream consensus branch. Defaults to the stored branch, then the repo's recorded consensus branch; never a fixed name." }

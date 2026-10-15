@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/pki"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -112,7 +113,7 @@ func originsOf(m *repos.Manager) (*repos.Origins, error) {
 func restoreRemoteConfig(svc *store.Service, ri *repos.RepoInstance, prev *store.Remote, op string) {
 	var rerr error
 	if prev != nil && prev.URL != "" {
-		rerr = svc.ConfigureRemote(prev.URL, prev.Branch, ri.AgentBranch())
+		rerr = repos.ConfigureGitRemote(svc, prev.URL, prev.AuthMethod, prev.Branch, ri.AgentBranch())
 	} else {
 		rerr = svc.Remote().DeleteRemote("origin")
 	}
@@ -166,7 +167,7 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manag
 			err = fmt.Errorf("SetOriginUpstream: no origin configured")
 			return
 		}
-		if cerr := svc.ConfigureRemote(existing.URL, branch, ri.AgentBranch()); cerr != nil {
+		if cerr := repos.ConfigureGitRemote(svc, existing.URL, existing.AuthMethod, branch, ri.AgentBranch()); cerr != nil {
 			err = cerr
 			return
 		}
@@ -312,7 +313,9 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			return
 		}
 		authMethod := req.AuthMethod
-		if authMethod == "" && existing != nil {
+		// A stored cert is knomit's decision, not an input: the attach
+		// decides again (repos.Manager.ResolveOrigin), so it is not carried.
+		if authMethod == "" && existing != nil && existing.AuthMethod != "cert" {
 			authMethod = existing.AuthMethod
 		}
 		authToken := assembleAuthToken(authMethod, req.Token, req.User, req.Password)
@@ -338,6 +341,9 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 		case errors.Is(err, repos.ErrLocalOriginDenied):
 			hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
 				detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
+			return
+		case errors.Is(err, repos.ErrPeerCredential), errors.Is(err, repos.ErrCertNotAnInput), errors.Is(err, pki.ErrUnsupportedOriginScheme):
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", err.Error(), r.URL.Path)
 			return
 		case errors.Is(err, repos.ErrOriginOntologyConflict):
 			hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)

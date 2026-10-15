@@ -984,7 +984,7 @@ func TestValidate_ExternalAddresses(t *testing.T) {
 		}
 	}
 	c := Defaults()
-	c.ExternalAddresses = []string{"https://h1v302.tail5113a7.ts.net", "http://10.0.0.5:19278", "knomit+https://box.example:8443"}
+	c.ExternalAddresses = []string{"https://h1v302.tail5113a7.ts.net", "http://10.0.0.5:19278", "git://box.example:9418"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid addresses refused: %v", err)
 	}

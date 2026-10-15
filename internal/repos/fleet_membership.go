@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,10 +33,12 @@ import (
 //
 //   - ENROLL (master): issue a leaf for (agent id, ssh-ed25519 key), commit it
 //     and its issuance record on the master's agent branch, publish main, and
-//     hand back the bundle: leaf + root + CRL, nothing else.
+//     hand back the bundle document (pki.FleetBundle): the fleet repository
+//     URL members use (fleetURLForBundle), then leaf + root + CRL.
 //   - JOIN (member): check the bundle is for THIS instance's key and id,
-//     install it, clone the fleet repository through the fleet door, check its
-//     root is the bundle's, record it, write the own record and push it ONCE.
+//     install it, clone the fleet repository at the bundle's URL through the
+//     fleet door, check its root is the bundle's, record it, write the own
+//     record and push it ONCE.
 //     Any refusal, the push's included, undoes all of it: no repository, no
 //     installed material, no record, state standalone.
 //   - LEAVE (member): write `left`, push once, then remove the fleet here
@@ -51,9 +55,11 @@ import (
 
 // FleetEnrollment is what POST /fleet/enroll answers.
 type FleetEnrollment struct {
-	AgentID         string `json:"agent_id"`
-	Serial          string `json:"serial"`
-	Bundle          string `json:"bundle"` // leaf, root and CRL, PEM
+	AgentID string `json:"agent_id"`
+	Serial  string `json:"serial"`
+	Bundle  string `json:"bundle"` // the bundle document: header (fleet URL, agent, root, serial), then leaf, root and CRL PEM
+	// FleetURL is the fleet repository URL the bundle carries.
+	FleetURL        string `json:"fleet_url"`
 	RootFingerprint string `json:"root_fingerprint"`
 	// Published says main holds the leaf now (a joiner is admitted only
 	// then); PublishError is why not. The sync loop publishes it again.
@@ -61,10 +67,12 @@ type FleetEnrollment struct {
 	PublishError string `json:"publish_error,omitempty"`
 }
 
-// FleetJoinSpec is what POST /fleet/join takes.
+// FleetJoinSpec is what POST /fleet/join takes: the bundle (which names the
+// fleet repository URL) and, for a forge-hosted fleet only, the joiner's own
+// forge credential.
 type FleetJoinSpec struct {
-	URL, AuthMethod, AuthToken string
-	Bundle                     []byte
+	AuthMethod, AuthToken string
+	Bundle                []byte
 }
 
 // FleetLeft is what POST /fleet/leave answers: the state after the leave,
@@ -203,8 +211,10 @@ func parseKeyLine(line string) (ed25519.PublicKey, error) {
 
 // EnrollFleetMember issues a leaf for agentID's key (master only), commits it
 // and its issuance record on the master's agent branch, publishes main and
-// returns the bundle the joiner installs with POST /fleet/join.
-func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine string) (FleetEnrollment, error) {
+// returns the bundle the joiner joins with (POST /fleet/join). address picks
+// which of this instance's external_addresses the bundle's fleet URL is built
+// from (fleetURLForBundle); every refusal comes before the leaf is issued.
+func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine, address string) (FleetEnrollment, error) {
 	defer m.lockFleetOp()()
 	if err := pki.ValidAgentID(agentID); err != nil {
 		return FleetEnrollment{}, fleetErr(http.StatusUnprocessableEntity, "invalid_agent_id", err.Error())
@@ -219,6 +229,10 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine string
 	}
 	if agentID == m.AgentID() {
 		return FleetEnrollment{}, fleetErr(http.StatusConflict, "own_id", "this is the master's own agent id: its leaf is issued at create")
+	}
+	fleetURL, err := m.fleetURLForBundle(ri, address)
+	if err != nil {
+		return FleetEnrollment{}, err
 	}
 	root, err := pki.LoadRoot(m.fleetRootDir())
 	if err != nil {
@@ -271,13 +285,65 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine string
 	bundle.Write(certPEM)
 	bundle.Write(certPEMOf(root.Cert))
 	bundle.Write(crlPEMOf(f.PKI.CRL))
-	out := FleetEnrollment{AgentID: agentID, Serial: rec.Serial, Bundle: bundle.String(), RootFingerprint: rootID, Published: true}
+	doc, err := pki.FleetBundle(bundle.Bytes(), fleetURL)
+	if err != nil {
+		return FleetEnrollment{}, err
+	}
+	out := FleetEnrollment{AgentID: agentID, Serial: rec.Serial, Bundle: string(doc),
+		FleetURL: fleetURL, RootFingerprint: rootID, Published: true}
 	if perr := m.publishMasterWrite(ctx, ri); perr != nil {
 		log.Warn().Err(perr).Str("agent", agentID).Msg("fleet enroll: main does not hold the leaf yet; the sync loop publishes it")
 		out.Published, out.PublishError = false, perr.Error()
 	}
 	log.Info().Str("agent", agentID).Str("serial", rec.Serial).Msg("fleet: member enrolled")
 	return out, nil
+}
+
+// fleetURLForBundle is the fleet repository URL an enroll's bundle carries:
+// the one members use.
+//   - The fleet repository here syncs with an origin (a forge, or the hub
+//     when this master is not it): that origin's URL. address is refused
+//     (address_not_applicable): there is nothing to choose.
+//   - This instance is the hub: https://<external address>/git/<repo>, at the
+//     external address the caller chose. With exactly one configured, it
+//     needs no choice; with several and none given, address_required lists
+//     them (Choices); one that is not configured is address_unknown; one
+//     that is not https:// is address_not_https (members reach the hub's
+//     mTLS listener).
+func (m *Manager) fleetURLForBundle(ri *RepoInstance, address string) (string, error) {
+	o, err := m.originOf(ri)
+	if err != nil {
+		return "", err
+	}
+	if o != nil {
+		if address != "" {
+			return "", fleetErr(http.StatusUnprocessableEntity, "address_not_applicable", "this fleet's repository syncs with "+o.URL+", the URL members use: enroll without an address")
+		}
+		return o.URL, nil
+	}
+	addrs := m.deps.Cfg.ExternalAddresses
+	switch {
+	case address != "":
+		known := false
+		for _, a := range addrs {
+			known = known || a == address
+		}
+		if !known {
+			return "", &FleetError{Status: http.StatusUnprocessableEntity, Code: "address_unknown",
+				Msg: "address " + address + " is not one of this instance's external_addresses (knomit.toml)", Choices: append([]string{}, addrs...)}
+		}
+	case len(addrs) == 1:
+		address = addrs[0]
+	case len(addrs) == 0:
+		return "", fleetErr(http.StatusUnprocessableEntity, "addresses_required", "a fleet hosted here needs external_addresses in knomit.toml: they are how members reach this instance")
+	default:
+		return "", &FleetError{Status: http.StatusUnprocessableEntity, Code: "address_required",
+			Msg: "this instance has several external_addresses: choose the one the member reaches it at (address)", Choices: append([]string{}, addrs...)}
+	}
+	if !strings.HasPrefix(strings.ToLower(address), "https://") {
+		return "", fleetErr(http.StatusUnprocessableEntity, "address_not_https", "address "+address+" is not https://: members reach the hub's mTLS listener ([tls].addr) over https")
+	}
+	return strings.TrimSuffix(address, "/") + "/git/" + ri.Name(), nil
 }
 
 // refuseEnrolledID refuses an enroll of agentID while main holds a leaf for
@@ -303,8 +369,8 @@ func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) 
 	return nil
 }
 
-// JoinFleet joins the fleet at spec.URL with the bundle the master's enroll
-// returned (see the file comment). It answers registered: the record is on
+// JoinFleet joins the fleet at the bundle's URL with the bundle the master's
+// enroll returned (see the file comment). It answers registered: the record is on
 // the fleet's origin, and counts once the master admits it into main. The
 // answer carries the fingerprint of the root the bundle installed.
 func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoined, error) {
@@ -316,28 +382,9 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoine
 	if db == nil {
 		return FleetJoined{}, errors.New("fleet join: control.db is not open")
 	}
-	if err := m.refuseFleetPresent(db); err != nil {
-		return FleetJoined{}, err
-	}
-	if err := m.refuseInstalledTrust(); err != nil {
-		return FleetJoined{}, err
-	}
-	b, err := pki.SplitBundle(spec.Bundle)
+	b, err := m.joinPreflight(db, spec.Bundle)
 	if err != nil {
-		return FleetJoined{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", err.Error())
-	}
-	if _, err := pki.PreviewBundle(m.deps.KeyPath, spec.Bundle); err != nil {
-		if errors.Is(err, pki.ErrKeyMismatch) {
-			return FleetJoined{}, fleetErr(http.StatusUnprocessableEntity, "key_mismatch", err.Error())
-		}
-		return FleetJoined{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", err.Error())
-	}
-	var leafID string
-	if len(b.Leaf.EmailAddresses) == 1 {
-		leafID = pki.AgentIDOfEmail(b.Leaf.EmailAddresses[0])
-	}
-	if leafID != m.AgentID() {
-		return FleetJoined{}, fleetErr(http.StatusUnprocessableEntity, "agent_mismatch", fmt.Sprintf("the bundle's certificate is for agent %q, not this instance's %q", leafID, m.AgentID()))
+		return FleetJoined{}, err
 	}
 	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle, pki.InstallOptions{}); err != nil {
 		return FleetJoined{}, fmt.Errorf("fleet join: install the bundle: %w", err)
@@ -349,8 +396,14 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoine
 		_ = recordFleetAttempt(db, ferr, time.Now())
 		return FleetJoined{}, ferr
 	}
-	ri, err := m.Create(ctx, CreateSpec{Name: m.freeFleetName(spec.URL), Mode: "clone",
-		Origin: &OriginSpec{URL: spec.URL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken}, fleetDoor: true}, func(Event) {})
+	// The clone decides the transport (ResolveOrigin) against the trust just
+	// installed: the hub's listener chains to the bundle's root -> cert; a
+	// forge is not a peer and takes the joiner's own credential.
+	ri, err := m.Create(ctx, CreateSpec{Name: m.freeFleetName(b.FleetURL), Mode: "clone",
+		Origin: &OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken}, fleetDoor: true}, func(Event) {})
+	if errors.Is(err, ErrPeerCredential) {
+		return refuse(nil, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", err.Error()))
+	}
 	if err != nil {
 		return refuse(nil, fleetErr(http.StatusBadGateway, "clone_failed", err.Error()))
 	}
@@ -380,6 +433,135 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoine
 	out.RootFingerprint, _ = pki.RootID(b.Root)
 	out.FleetStatus, err = m.FleetStatus(ctx)
 	return out, err
+}
+
+// joinPreflight is every refusal a join (and its check) makes before
+// anything is installed: this instance is in no fleet (fleet_present) and
+// holds no trust material (trust_installed); the bundle is a bundle document
+// naming the fleet URL (bundle_invalid), for this instance's key
+// (key_mismatch) and agent id (agent_mismatch).
+func (m *Manager) joinPreflight(db *sql.DB, raw []byte) (pki.Bundle, error) {
+	if err := m.refuseFleetPresent(db); err != nil {
+		return pki.Bundle{}, err
+	}
+	if err := m.refuseInstalledTrust(); err != nil {
+		return pki.Bundle{}, err
+	}
+	b, err := pki.SplitBundle(raw)
+	if err != nil {
+		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", err.Error())
+	}
+	if b.FleetURL == "" {
+		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", "the bundle names no fleet repository URL: enroll this instance again on the master")
+	}
+	if _, err := pki.PreviewBundle(m.deps.KeyPath, raw); err != nil {
+		if errors.Is(err, pki.ErrKeyMismatch) {
+			return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "key_mismatch", err.Error())
+		}
+		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", err.Error())
+	}
+	var leafID string
+	if len(b.Leaf.EmailAddresses) == 1 {
+		leafID = pki.AgentIDOfEmail(b.Leaf.EmailAddresses[0])
+	}
+	if leafID != m.AgentID() {
+		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "agent_mismatch", fmt.Sprintf("the bundle's certificate is for agent %q, not this instance's %q", leafID, m.AgentID()))
+	}
+	return b, nil
+}
+
+// FleetJoinCheck is what POST /fleet/join:check answers: where the bundle's
+// fleet lives and the root the operator confirms BEFORE the join installs it.
+type FleetJoinCheck struct {
+	URL string `json:"url"`
+	// Hosting is "master" (the URL is an instance of the bundle's fleet,
+	// reached over the fleet transport with the bundle's certificate) or
+	// "forge" (anything else: the joiner's own credential is used).
+	Hosting         string `json:"hosting"`
+	Host            string `json:"host"`
+	RootFingerprint string `json:"root_fingerprint"`
+	AgentID         string `json:"agent_id"`
+	// AuthRequired: a forge refused the credential given (or none).
+	AuthRequired bool   `json:"auth_required"`
+	Detail       string `json:"detail,omitempty"`
+}
+
+// CheckFleetJoin is the join's check (POST /fleet/join:check): the join's
+// pre-flights, then the bundle's URL is reached presenting the BUNDLE's
+// certificate and judged against the BUNDLE's root, without installing
+// anything (the material is written to a private temporary directory that is
+// removed before returning). An instance of that fleet is hosting "master"
+// (a credential for it is auth_invalid); anything else is a forge, probed
+// with the joiner's credential. A host that cannot be reached, or a peer that
+// refuses, is unreachable (502). It writes nothing.
+func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (FleetJoinCheck, error) {
+	defer m.lockFleetOp()()
+	db := m.ControlDB()
+	if db == nil {
+		return FleetJoinCheck{}, errors.New("fleet join check: control.db is not open")
+	}
+	b, err := m.joinPreflight(db, spec.Bundle)
+	if err != nil {
+		return FleetJoinCheck{}, err
+	}
+	agent := pki.AgentIDOfEmail(b.Leaf.EmailAddresses[0]) // joinPreflight checked it is this instance's
+	rootID, _ := pki.RootID(b.Root)
+	out := FleetJoinCheck{URL: b.FleetURL, Host: originHost(b.FleetURL), RootFingerprint: rootID, AgentID: agent}
+
+	tmp, err := os.MkdirTemp("", "knomit-join-check-")
+	if err != nil {
+		return FleetJoinCheck{}, err
+	}
+	defer os.RemoveAll(tmp)
+	for name, body := range map[string][]byte{pki.InstanceCertFile: certPEMOf(b.Leaf), pki.RootCertFile: b.RootPEM, pki.CRLFile: b.CRLPEM} {
+		if err := os.WriteFile(filepath.Join(tmp, name), body, 0o600); err != nil {
+			return FleetJoinCheck{}, err
+		}
+	}
+	cctx := ctx
+	if d := m.deps.Cfg.Git.NetworkTimeout; d > 0 {
+		var cancel context.CancelFunc
+		cctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
+	peer, err := pki.ClassifyOrigin(cctx, tmp, m.deps.KeyPath, b.FleetURL)
+	if err != nil {
+		return FleetJoinCheck{}, fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+out.Host+": "+err.Error())
+	}
+	if peer {
+		if spec.AuthMethod != "" && spec.AuthMethod != "none" || spec.AuthToken != "" {
+			return FleetJoinCheck{}, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", ErrPeerCredential.Error())
+		}
+		out.Hosting = "master"
+		return out, nil
+	}
+	out.Hosting = "forge"
+	res, err := m.ProbeOriginRefs(ctx, OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken, decided: true})
+	if err != nil {
+		return FleetJoinCheck{}, err
+	}
+	switch {
+	case res.AuthRequired:
+		out.AuthRequired, out.Detail = true, res.Detail
+	case !res.Reachable:
+		return FleetJoinCheck{}, fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+out.Host+": "+res.Detail)
+	}
+	return out, nil
+}
+
+// originHost is the host an origin URL names: host[:port] of a URL, the
+// host of an scp-style git@host:path, "" for a local path.
+func originHost(u string) string {
+	if strings.Contains(u, "://") {
+		if p, err := url.Parse(u); err == nil {
+			return p.Host
+		}
+		return ""
+	}
+	if at, colon := strings.Index(u, "@"), strings.Index(u, ":"); at >= 0 && colon > at {
+		return u[at+1 : colon]
+	}
+	return ""
 }
 
 // undoJoin takes a refused join back: the agent branch the mount may have
