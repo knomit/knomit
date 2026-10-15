@@ -80,7 +80,7 @@ func PKCS8(priv ed25519.PrivateKey) ([]byte, error) {
 
 // AuthorizedKeyLine is the instance's public key as one authorized_keys line
 // with the "knomit@<hostname>" comment, a hint for the person reading it: the
-// certificate `knomit identity enroll` issues names the agent id the operator
+// certificate the master's enroll (POST /api/v1/fleet/enroll) issues names the agent id the operator
 // passes (--agent-id), never this comment (D18). ONE builder, so the .pub the server
 // writes when it creates the key (internal/app ensureKeyPair) and
 // PublicKeyLine cannot differ.
@@ -92,8 +92,8 @@ func AuthorizedKeyLine(pub ssh.PublicKey) string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))) + " knomit@" + hostname
 }
 
-// PublicKeyLine returns the line to hand the fleet operator for `knomit
-// identity enroll --pubkey`: the one the server wrote to <keyPath>.pub,
+// PublicKeyLine returns the line to hand the fleet's master for its enroll
+// (POST /api/v1/fleet/enroll, public_key): the one the server wrote to <keyPath>.pub,
 // without its newline. It is derived from the PRIVATE key at keyPath, not
 // read from .pub, which can be stale or — for a [remote].ssh_key — absent.
 // It lives here and not in internal/app because the desktop's Settings

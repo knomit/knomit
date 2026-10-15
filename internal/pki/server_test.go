@@ -95,7 +95,7 @@ func (f fleet) enrollWindow(t *testing.T, host string, notBefore, notAfter time.
 	return member{keyPath: keyPath, pub: pub, certPEM: certPEM(der), cert: c}
 }
 
-// install writes what `knomit identity install` writes: instance.crt,
+// install writes what InstallBundle writes: instance.crt,
 // root.crt, crl.pem.
 func (f fleet) install(t *testing.T, m member) string {
 	t.Helper()
@@ -276,7 +276,7 @@ func TestServerConfig_RevocationTakesEffectWithoutRestartIncludingResumption(t *
 	if len(resumed) != 2 || resumed[0] || !resumed[1] {
 		t.Fatalf("DidResume per request = %v, want [false true]", resumed)
 	}
-	if _, err := Revoke(f.dir, f.root, Revoked{Serial: peer.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+	if _, err := revokeDir(f.dir, f.root, Revoked{Serial: peer.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	f.publishCRL(t, dir)
@@ -300,7 +300,7 @@ func TestServerConfig_RevocationTakesEffectWithoutRestartIncludingResumption(t *
 func TestServerConfig_LowerCRLNumberNotAdoptedPreviousStillEnforced(t *testing.T) {
 	f, _, dir, rec, addr := serverSide(t)
 	peer := f.enroll(t, "peer")
-	if _, err := Revoke(f.dir, f.root, Revoked{Serial: peer.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+	if _, err := revokeDir(f.dir, f.root, Revoked{Serial: peer.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	f.publishCRL(t, dir) // Number 2, lists peer
@@ -329,7 +329,7 @@ func TestServerConfig_RestartRemembersTheCRLNumber(t *testing.T) {
 	f := newFleet(t)
 	srvM := f.enroll(t, "server")
 	dir := f.install(t, srvM)
-	if _, err := Revoke(f.dir, f.root, Revoked{Serial: big.NewInt(77), At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+	if _, err := revokeDir(f.dir, f.root, Revoked{Serial: big.NewInt(77), At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	f.publishCRL(t, dir)
@@ -486,7 +486,7 @@ func TestServerConfig_TornInstallKeepsThePreviousSetAndLogsOnce(t *testing.T) {
 // Revoke revokes m on the fleet root and publishes the CRL into each dir.
 func (f fleet) Revoke(t *testing.T, m member, dirs ...string) {
 	t.Helper()
-	if _, err := Revoke(f.dir, f.root, Revoked{Serial: m.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+	if _, err := revokeDir(f.dir, f.root, Revoked{Serial: m.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	for _, d := range dirs {
@@ -494,7 +494,7 @@ func (f fleet) Revoke(t *testing.T, m member, dirs ...string) {
 	}
 }
 
-// `knomit identity install --replace-root` against a RUNNING server. The CRL
+// An install of another fleet's root against a RUNNING server. The CRL
 // watermark belongs to a root: install resets crl.number on disk, and the
 // reloader must take the new root's watermark from there rather than keep
 // the old fleet's in memory — or it rejects the new fleet's CRL #1 as a
@@ -505,7 +505,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 	srvM := fa.enroll(t, "server")
 	dir := fa.install(t, srvM)
 	for _, s := range []int64{101, 102} { // fleet A's watermark reaches 3
-		if _, err := Revoke(fa.dir, fa.root, Revoked{Serial: big.NewInt(s), At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+		if _, err := revokeDir(fa.dir, fa.root, Revoked{Serial: big.NewInt(s), At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -517,7 +517,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 		t.Fatalf("control: fleet A peer before the move: %v", err)
 	}
 
-	// Exactly what installBundle --replace-root writes, in its order. It no
+	// Exactly what InstallBundle writes for another root, in its order. It no
 	// longer removes crl.number: fleet A's watermark must SURVIVE the move.
 	fb := newFleet(t)
 	certB, _, err := IssueInstance(fb.dir, fb.root, srvM.pub, "server@agents.knomit.io", time.Hour)
@@ -540,7 +540,7 @@ func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
 
 	peerB := fb.enroll(t, "peer-b")
 	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
-		t.Fatalf("fleet B peer refused after --replace-root, no restart: %v\nserver log:\n%s", err, rec)
+		t.Fatalf("fleet B peer refused after the root replace, no restart: %v\nserver log:\n%s", err, rec)
 	}
 	// Fleet A's certificate, presented by a client that TRUSTS the server's
 	// new root, so only the SERVER can be the one refusing it.

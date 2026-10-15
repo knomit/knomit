@@ -161,21 +161,43 @@ func TestOpenAPI_ChangesDeclared(t *testing.T) {
 }
 
 // TestOpenAPI_FleetDeclared (F09): the fleet endpoints are declared with every
-// state and every refusal code a client branches on.
+// state and every refusal code a client branches on; GET /fleet is the only
+// method left on /fleet (PUT and DELETE became POST /fleet/join and /leave).
 func TestOpenAPI_FleetDeclared(t *testing.T) {
 	doc := servedOpenAPI(t)
 	paths := doc["paths"].(map[string]any)
 	fleet, ok := paths["/fleet"].(map[string]any)
 	require.True(t, ok, "/fleet must be declared")
-	for _, m := range []string{"get", "put", "delete"} {
-		require.Contains(t, fleet, m)
-	}
+	require.Contains(t, fleet, "get")
+	require.NotContains(t, fleet, "put", "PUT /fleet is gone: POST /fleet/join")
+	require.NotContains(t, fleet, "delete", "DELETE /fleet is gone: POST /fleet/leave")
 	require.Contains(t, paths, "/fleet/members")
-	text := fmt.Sprint(fleet)
-	for _, code := range []string{"registration_pending", "unregistration_pending", "already_registered", "not_a_fleet", "clone_failed", "not_registered", "fleet_repository"} {
-		require.Contains(t, text, code, "refusal code %s must be declared", code)
+	codes := map[string][]string{
+		"/fleet/create":       {"fleet_present", "trust_installed", "root_present", "create_unfinished"},
+		"/fleet/enroll":       {"not_master", "own_id", "invalid_key", "invalid_agent_id"},
+		"/fleet/join":         {"fleet_present", "trust_installed", "key_mismatch", "agent_mismatch", "not_a_fleet", "root_differs", "join_refused", "clone_failed"},
+		"/fleet/leave":        {"not_registered", "is_master"},
+		"/fleet/revoke":       {"not_enrolled", "already_revoked", "own_id", "not_master"},
+		"/fleet/decommission": {"not_master"},
+		"/fleet/root":         {"no_root", "root_present", "root_incomplete", "unknown_file", "root_invalid", "hub"},
+	}
+	for path, want := range codes {
+		op, ok := paths[path].(map[string]any)
+		require.True(t, ok, "%s must be declared", path)
+		text := fmt.Sprint(op)
+		require.Contains(t, text, "LOCAL LISTENER ONLY", "%s is local only", path)
+		for _, code := range want {
+			require.Contains(t, text, code, "%s: refusal code %s must be declared", path, code)
+		}
+	}
+	root := paths["/fleet/root"].(map[string]any)
+	for _, m := range []string{"get", "put", "delete"} {
+		require.Contains(t, root, m)
 	}
 	schema := doc["components"].(map[string]any)["schemas"].(map[string]any)["FleetStatus"].(map[string]any)
-	state := schema["properties"].(map[string]any)["state"].(map[string]any)
-	require.ElementsMatch(t, []any{"standalone", "registering", "registered", "unregistering"}, state["enum"])
+	props := schema["properties"].(map[string]any)
+	require.ElementsMatch(t, []any{"standalone", "registering", "registered"}, props["state"].(map[string]any)["enum"])
+	for _, f := range []string{"master", "hosting", "root_dir"} {
+		require.Contains(t, props, f)
+	}
 }

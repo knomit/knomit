@@ -471,7 +471,7 @@ func TestGitTransport_NotEnrolledFailsNamedWithoutConnecting(t *testing.T) {
 	}
 }
 
-// Installed at boot unenrolled; `knomit identity install` later; the next
+// Installed at boot unenrolled; a join's InstallBundle later; the next
 // clone works with no second install and no restart.
 func TestGitTransport_EnrolledAfterBootWorksWithoutRestart(t *testing.T) {
 	resetInstall(t)
@@ -488,7 +488,7 @@ func TestGitTransport_EnrolledAfterBootWorksWithoutRestart(t *testing.T) {
 	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(addr)}); !errors.Is(err, ErrNotEnrolled) {
 		t.Fatalf("before enrolment: err=%v, want ErrNotEnrolled", err)
 	}
-	copyDir(t, f.install(t, a), aDir) // what `knomit identity install` leaves in aDir
+	copyDir(t, f.install(t, a), aDir) // what InstallBundle leaves in aDir
 	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(addr)}); err != nil {
 		t.Fatalf("after enrolment: %v", err)
 	}

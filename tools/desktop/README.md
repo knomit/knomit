@@ -295,11 +295,11 @@ The app can join a knomit fleet as an enrolled instance (knomit#256), without
 the `knomit` CLI. In **Settings → Fleet identity**:
 
 1. **Copy public key** and send the line to whoever holds the fleet root. They
-   run `knomit identity enroll --agent-id <agent id> --pubkey '<line>' …` (the
+   call the master's `POST /api/v1/fleet/enroll` with `agent_id` and `public_key` (the
    agent id is the `agent:` of this instance's member record) and send back a
    bundle.
 2. **Paste from clipboard** or **Choose file…**, then **Install**. The same
-   checks as `knomit identity install` apply: the key matches, the chain
+   checks as `POST /api/v1/fleet/join` apply: the key matches, the chain
    verifies, the CRL is not older than the one held. A bundle from a
    *different* fleet root is refused until you confirm the move, and the
    confirmation names both roots' fingerprints.

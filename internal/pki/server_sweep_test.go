@@ -7,9 +7,10 @@ package pki
 // late (and at once when the connection is first tracked). "Would be
 // accepted" is VerifyInstanceChain against the current snapshot, the same
 // check VerifyConnection runs, so the invariant cuts on revocation, on the
-// peer's certificate expiring mid-connection, and on `install --replace-root`
-// moving this instance to another fleet. The first two are tested here; the
-// third follows from the same check and needs no path of its own.
+// peer's certificate expiring mid-connection, on an install of another root
+// moving this instance to another fleet, and on Uninstall. The first two and
+// the last are tested here; the third follows from the same check and needs
+// no path of its own.
 //
 // Every test here talks HTTP/1.1 by hand over a raw *tls.Conn. http.Transport
 // silently retries an idempotent request on a FRESH connection when a reused
@@ -44,6 +45,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -144,7 +148,7 @@ func (rc *rawConn) cutWithin(d time.Duration) bool {
 
 func (f fleet) revoke(t *testing.T, m member, instDir string) {
 	t.Helper()
-	if _, err := Revoke(f.dir, f.root, Revoked{Serial: m.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+	if _, err := revokeDir(f.dir, f.root, Revoked{Serial: m.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	f.publishCRL(t, instDir)
@@ -368,5 +372,69 @@ func TestServer_RunStopsWhenItsContextIsCancelled(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after its context was cancelled")
+	}
+}
+
+// PR #525 review B2: leave and decommission run Uninstall while the listener
+// is up, and the instance is out of the fleet at once, without a restart. A
+// peer that was served before is refused after: its established connection is
+// cut by the next tick, and a fresh handshake fails. An install never removes
+// all three files, so "all three absent" is unambiguous; a partial set while
+// uninstalled (an install half done) adopts nothing, and the completed
+// install (a rejoin) is adopted without a restart.
+// SABOTAGE: refresh treats the all-absent set like any other unusable set
+// (keeps the last good snapshot) -> the old peer is still served -> red.
+func TestServer_UninstallTakesTheListenerOutOfTheFleetWithoutARestart(t *testing.T) {
+	f := newFleet(t)
+	srvM := f.enroll(t, "server")
+	dir := f.install(t, srvM)
+	peer := f.enroll(t, "peer")
+	ss := startSweepServer(t, dir, srvM.keyPath, time.Hour)
+
+	rc := f.dialRaw(t, peer, ss.addr)
+	if err := rc.get(); err != nil {
+		t.Fatalf("before the uninstall: %v\n%s", err, ss.rec)
+	}
+	if _, err := get(f.clientFor(t, peer, nil), ss.addr); err != nil {
+		t.Fatalf("a fresh connection before the uninstall: %v\n%s", err, ss.rec)
+	}
+	rootPEM, _ := os.ReadFile(filepath.Join(dir, RootCertFile))
+	crlPEM, _ := os.ReadFile(filepath.Join(dir, CRLFile))
+
+	if err := Uninstall(dir); err != nil {
+		t.Fatal(err)
+	}
+	ss.s.tick()
+	if !rc.cutWithin(2 * time.Second) {
+		t.Fatalf("one tick after the uninstall, the peer's connection is still open\n%s", ss.rec)
+	}
+	if !ss.rec.has("tls_uninstalled") {
+		t.Fatalf("want the uninstall logged:\n%s", ss.rec)
+	}
+	// The close names the uninstall, not a generic "no certificate".
+	closedForUninstall := false
+	for _, l := range strings.Split(ss.rec.String(), "\n") {
+		if strings.Contains(l, "tls_conn_closed") && strings.Contains(l, "no fleet trust material is installed") {
+			closedForUninstall = true
+		}
+	}
+	if !closedForUninstall {
+		t.Fatalf("want the close logged with the uninstall as its reason:\n%s", ss.rec)
+	}
+	if body, err := get(f.clientFor(t, peer, nil), ss.addr); err == nil {
+		t.Fatalf("a fresh connection after the uninstall was served (%q)\n%s", body, ss.rec)
+	}
+
+	// Half an install while uninstalled: still nobody gets in.
+	if err := writeFileAtomic(filepath.Join(dir, InstanceCertFile), srvM.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := get(f.clientFor(t, peer, nil), ss.addr); err == nil {
+		t.Fatalf("served (%q) with only instance.crt installed\n%s", body, ss.rec)
+	}
+	// The install completes (a rejoin): adopted, no restart.
+	installSet(t, dir, rootPEM, crlPEM, srvM.certPEM)
+	if _, err := get(f.clientFor(t, peer, nil), ss.addr); err != nil {
+		t.Fatalf("after the reinstall: %v\n%s", err, ss.rec)
 	}
 }

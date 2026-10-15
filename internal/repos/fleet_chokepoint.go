@@ -24,7 +24,7 @@ import (
 //     restore, a swapped store and boot. Only a mount opened by the fleet
 //     code (CreateSpec.fleetDoor) or, at boot, THIS instance's recorded
 //     fleet repository (control.db instance_fleet_repo, written by
-//     RegisterFleet) passes (RepoInstance.fleetDoor). Any other registered
+//     CreateFleet and JoinFleet) passes (RepoInstance.fleetDoor). Any other registered
 //     repo whose ontology is or became the fleet's (an upstream switch that
 //     arrived by sync) is refused and listed unavailable with
 //     CauseFleetConflict; it is not the fleet repository, so it archives and
@@ -41,7 +41,7 @@ var ErrFleetOntologyReserved = errors.New("the ontology id \"fleet\" is reserved
 
 // ErrFleetReadOnly is the one answer to an authored write (MCP, the fact
 // REST routes, an experiment) on the fleet repository.
-var ErrFleetReadOnly = errors.New("the fleet repository changes only through `knomit fleet`")
+var ErrFleetReadOnly = errors.New("the fleet repository changes only through the fleet API (/api/v1/fleet/..., the Fleet page)")
 
 // CauseFleetConflict: a registered repository holds an ontology with id
 // `fleet` but is not this instance's recorded fleet repository (an upstream

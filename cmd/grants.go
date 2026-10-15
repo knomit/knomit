@@ -150,7 +150,7 @@ func grantsRevoke(ctx context.Context, out io.Writer, g *auth.SQLGrants, princip
 	// Parsed, not globbed: the refusal keys on the Kind and Via the string
 	// PARSES to, which is exactly what auth.CertGrants keys on.
 	if perm == auth.Read && p.Kind == auth.KindInstance && p.Via == auth.ViaCert {
-		return errors.New("read is implicit for enrolled instances (the certificate chain is admission); to remove an instance, revoke its certificate with `knomit identity revoke`")
+		return errors.New("read is implicit for enrolled instances (the certificate chain is admission); to remove an instance, the fleet's master revokes its certificate (POST /api/v1/fleet/revoke)")
 	}
 	if err := g.Revoke(ctx, p, perm); err != nil {
 		return err

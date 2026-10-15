@@ -22,7 +22,8 @@ import (
 // starts closed.
 //
 // What does NOT consult or change them: the one-shot network calls — the
-// create-time push and the fleet register/unregister push. None of them loops.
+// create-time push and the fleet operations' one push (join, leave, the
+// master's publish). None of them loops.
 // The local (no-origin) loop has no breaker: it does no network I/O.
 
 const (

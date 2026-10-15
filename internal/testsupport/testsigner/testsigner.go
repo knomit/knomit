@@ -137,3 +137,20 @@ func WriteFallbackKey(dir string) (string, error) {
 	}
 	return path, nil
 }
+
+// WriteNamedKey writes Named(name)'s private key (OpenSSH format, 0600) under
+// dir and returns its path: the instance key file of a fixture whose commits
+// Named(name) signs, so a certificate issued for that file's key names the
+// signing key (a fleet join checks its bundle against the key file).
+func WriteNamedKey(dir, name string) (string, error) {
+	seed := sha256.Sum256([]byte("knomit named test signer: " + name))
+	block, err := ssh.MarshalPrivateKey(ed25519.NewKeyFromSeed(seed[:]), name)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, name+"_ed25519")
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}

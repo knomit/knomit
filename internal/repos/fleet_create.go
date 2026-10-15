@@ -59,7 +59,7 @@ import (
 // to undo from the marker and from what exists, not from what the failed
 // call remembers. So the same rollback also runs for a create that died part
 // way (a crash or a kill): a marker found at boot, or by the next create or
-// registration, is undone first. A rollback that fails part way keeps the
+// join, is undone first. A rollback that fails part way keeps the
 // marker and is retried there.
 //
 // A failed step 7 is not rolled back: the state stays registering with
@@ -136,7 +136,7 @@ func (m *Manager) lockFleetOp() func() {
 // fleetRootStagingDir is where a create mints the root before it moves it to
 // <home>/fleet (step 5). Nothing but a create writes it, so the rollback
 // removes it whole. Until the move, an operator command that writes
-// <home>/fleet (knomit identity init-root) never sees this create's root,
+// <home>/fleet (PUT /api/v1/fleet/root) never sees this create's root,
 // and nothing this create undoes is in <home>/fleet.
 func (m *Manager) fleetRootStagingDir() string {
 	return m.fleetRootDir() + ".creating"
@@ -185,7 +185,7 @@ func (m *Manager) CreateFleet(ctx context.Context, spec FleetCreateSpec) (FleetS
 		// The rollback is not cut short by the create's own deadline.
 		if rerr := m.undoFleetCreate(context.WithoutCancel(ctx)); rerr != nil {
 			_ = recordFleetAttempt(m.ControlDB(), fmt.Errorf("fleet create rollback incomplete: %w", rerr), time.Now())
-			err = fmt.Errorf("%w; the rollback is incomplete (%v): it is retried at the next start and by the next fleet create or registration", err, rerr)
+			err = fmt.Errorf("%w; the rollback is incomplete (%v): it is retried at the next start and by the next fleet create or join", err, rerr)
 		}
 		return FleetStatus{}, err
 	}
@@ -210,30 +210,8 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 	if db == nil {
 		return CreateSpec{}, errors.New("fleet create: control.db is not open")
 	}
-	row, err := readFleetRow(db)
-	if err != nil {
+	if err := m.refuseFleetPresent(db); err != nil {
 		return CreateSpec{}, err
-	}
-	switch row.State {
-	case FleetStandalone:
-	case FleetUnregistering:
-		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", "this instance is leaving its fleet (state unregistering): the departure is retried on every sync, and a fleet can be created once it is done")
-	default:
-		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", "this instance is in a fleet (state "+row.State+"): leave it first (DELETE /api/v1/fleet)")
-	}
-	if ri := m.fleetRepo(); ri != nil {
-		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", fmt.Sprintf("this instance has a fleet repository, %q, whose registration did not finish (state standalone): finish it with PUT /api/v1/fleet and its URL, then leave with DELETE /api/v1/fleet", ri.Name()))
-	}
-	if uid, err := recordedFleetRepo(db); err != nil {
-		return CreateSpec{}, err
-	} else if uid != "" {
-		name := uid
-		for _, u := range m.Unavailable() {
-			if u.Record.UID == uid {
-				name = u.Record.Name
-			}
-		}
-		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", "this instance has a recorded fleet repository (uid "+uid+") that is not mounted: archive it (DELETE /api/v1/repos/"+name+") if it is still listed, then purge it (DELETE /api/v1/archived/"+uid+")")
 	}
 	if err := m.refuseInstalledTrust(); err != nil {
 		return CreateSpec{}, err
@@ -257,13 +235,9 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 	}
 	cs := CreateSpec{Name: name, Mode: "custom", OntologyYAML: string(y), fleetDoor: true}
 	if spec.Origin == nil {
-		// Without an origin this instance is the hub: members push to it
-		// over the mTLS listener at the addresses its record advertises.
-		if m.deps.Cfg.TLS.Addr == "" {
-			return CreateSpec{}, fleetErr(http.StatusUnprocessableEntity, "listener_required", "a fleet hosted here needs the mTLS listener: set [tls].addr in knomit.toml (members push to it)")
-		}
-		if len(m.deps.Cfg.ExternalAddresses) == 0 {
-			return CreateSpec{}, fleetErr(http.StatusUnprocessableEntity, "addresses_required", "a fleet hosted here needs external_addresses in knomit.toml: they are how members reach this instance")
+		// Without an origin this instance is the hub.
+		if err := m.refuseNoHubListener(); err != nil {
+			return CreateSpec{}, err
 		}
 	} else {
 		if pki.IsFleetURL(spec.Origin.URL) {
@@ -280,20 +254,50 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 	return cs, nil
 }
 
+// refuseFleetPresent refuses while this instance is in a fleet, in any form:
+// a fleet state other than standalone, a mounted fleet repository, or a
+// recorded one that is not mounted. Create and join both start here.
+func (m *Manager) refuseFleetPresent(db *sql.DB) error {
+	row, err := readFleetRow(db)
+	if err != nil {
+		return err
+	}
+	if row.State != FleetStandalone {
+		return fleetErr(http.StatusConflict, "fleet_present", "this instance is in a fleet (state "+row.State+"): leave it first (POST /api/v1/fleet/leave)")
+	}
+	if ri := m.fleetRepo(); ri != nil {
+		return fleetErr(http.StatusConflict, "fleet_present", fmt.Sprintf("this instance has a fleet repository, %q, whose join did not finish (state standalone): remove it with POST /api/v1/fleet/leave", ri.Name()))
+	}
+	uid, err := recordedFleetRepo(db)
+	if err != nil {
+		return err
+	}
+	if uid != "" {
+		name := uid
+		for _, u := range m.Unavailable() {
+			if u.Record.UID == uid {
+				name = u.Record.Name
+			}
+		}
+		return fleetErr(http.StatusConflict, "fleet_present", "this instance has a recorded fleet repository (uid "+uid+") that is not mounted: archive it (DELETE /api/v1/repos/"+name+") if it is still listed, then purge it (DELETE /api/v1/archived/"+uid+")")
+	}
+	return nil
+}
+
 // refuseInstalledTrust refuses while any fleet trust material is installed in
 // [tls].dir: this instance holds another fleet's certificate, and installing
 // the new fleet's leaf would replace it silently.
 func (m *Manager) refuseInstalledTrust() error {
 	dir := m.deps.Cfg.TLS.Dir
 	if dir == "" {
-		return errors.New("fleet create: [tls].dir is not set")
+		return errors.New("fleet: [tls].dir is not set")
 	}
 	for _, f := range []string{pki.RootCertFile, pki.CRLFile, pki.InstanceCertFile} {
 		p := filepath.Join(dir, f)
 		if _, err := os.Lstat(p); err == nil {
-			return fleetErr(http.StatusConflict, "trust_installed", "fleet trust material is installed ("+p+"): this instance holds another fleet's certificate, which a create would replace. If that fleet is no longer used, move "+pki.RootCertFile+", "+pki.CRLFile+" and "+pki.InstanceCertFile+" out of "+dir+" and create again")
+			return fleetErr(http.StatusConflict, "trust_installed", "fleet trust material is installed ("+p+"): this instance holds another fleet's certificate, which this would replace. If that fleet is no longer used, move "+pki.RootCertFile+", "+pki.CRLFile+" and "+pki.InstanceCertFile+" out of "+dir+" and try again")
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("fleet create: %w", err)
+			return fmt.Errorf("fleet: %w", err)
 		}
 	}
 	return nil
@@ -392,7 +396,7 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 	if !ok || layout.CRL == "" || !layout.HasLeaves() {
 		return nil, errors.New("fleet create: the fleet ontology declares no pki root, crl and leaf")
 	}
-	issuedPattern, err := issuancePattern(ont)
+	issuedPattern, err := artifactPattern(ont, fact.PKIIssuance)
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +458,7 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 
 // recoverFleetCreate rolls back a create that did not finish (a marker with
 // no create running: the caller holds fleetOpMu). It is called at boot and
-// before every create and registration. A rollback that fails part way is a
+// before every create and join. A rollback that fails part way is a
 // create_unfinished refusal, and is retried at the next of those.
 func (m *Manager) recoverFleetCreate(ctx context.Context) error {
 	db := m.ControlDB()
@@ -469,7 +473,7 @@ func (m *Manager) recoverFleetCreate(ctx context.Context) error {
 		Msg("fleet create: an earlier create did not finish; rolling it back")
 	if err := m.undoFleetCreate(ctx); err != nil {
 		_ = recordFleetAttempt(db, fmt.Errorf("fleet create rollback incomplete: %w", err), time.Now())
-		return fleetErr(http.StatusConflict, "create_unfinished", "an earlier fleet create did not finish, and undoing it failed: "+err.Error()+". It is retried at the next start and by the next fleet create or registration")
+		return fleetErr(http.StatusConflict, "create_unfinished", "an earlier fleet create did not finish, and undoing it failed: "+err.Error()+". It is retried at the next start and by the next fleet create or join. If the forge's "+m.deps.AgentBranch+" moved to a tip this instance did not push, delete that branch on the forge by hand, then retry")
 	}
 	log.Info().Str("fleet", mk.RepoName).Msg("fleet create: the unfinished create is rolled back")
 	return nil
@@ -544,9 +548,9 @@ func (m *Manager) unavailableFleetCreateRepo(mk *fleetCreateMarker) (string, boo
 }
 
 // retractFleetBranch deletes the agent branch the create pushed to the
-// fleet repository's forge, with a lease on the hash this instance pushed
-// (store RetractPushedBranch). A fleet hosted here has no origin: nothing to
-// do.
+// fleet repository's forge, with a lease on the last tip this instance saw
+// there, pushed or fetched (store RetractPushedBranch: the remote-tracking
+// ref). A fleet hosted here has no origin: nothing to do.
 func (m *Manager) retractFleetBranch(ctx context.Context, ri *RepoInstance) error {
 	var rerr error
 	if err := ri.WithRead(func(svc *store.Service) {
@@ -596,13 +600,7 @@ func (m *Manager) uninstallFreshTrust(mk *fleetCreateMarker) error {
 	if !mk.TLSDirExisted {
 		return os.RemoveAll(dir)
 	}
-	var errs []error
-	for _, f := range []string{pki.InstanceCertFile, pki.CRLFile, pki.RootCertFile} {
-		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return pki.Uninstall(dir)
 }
 
 // removeCreatedRoot removes <home>/fleet when it holds THIS create's root
@@ -631,29 +629,7 @@ func (m *Manager) removeCreatedRoot(mk *fleetCreateMarker) error {
 func (m *Manager) publishFleetMain(ctx context.Context, ri *RepoInstance) {
 	db := m.ControlDB()
 	err := func() error {
-		var perr error
-		if werr := ri.WithRead(func(svc *store.Service) {
-			if svc == nil {
-				perr = errors.New("fleet repository is not open")
-				return
-			}
-			remote, err := svc.Remote().GetRemote("origin")
-			if err != nil || remote == nil {
-				perr = fmt.Errorf("fleet repository has no origin: %v", err)
-				return
-			}
-			auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
-			if err != nil {
-				perr = err
-				return
-			}
-			if _, err := svc.Remote().Push(ctx, ri.AgentBranch(), auth); err != nil {
-				perr = err
-			}
-		}); werr != nil && perr == nil {
-			perr = werr
-		}
-		if perr != nil {
+		if perr := m.pushAgentBranch(ctx, ri); perr != nil {
 			return perr
 		}
 		return m.publishFleetMainNow(ctx, ri)
@@ -725,21 +701,6 @@ func publishFleetMainOn(ctx context.Context, svc *store.Service, from string, au
 		log.Warn().Err(err).Str("from", from).Msg("fleet: local main did not follow the published main yet")
 	}
 	return res, nil
-}
-
-// issuancePattern is the repo path pattern of the ontology's pki: issuance
-// rule (one '*' where the file name goes).
-func issuancePattern(ont *fact.Ontology) (string, error) {
-	var found []string
-	for pat, block := range ont.Artifacts {
-		if v, _ := block[fact.ArtifactKeyPKI].(string); v == fact.PKIIssuance {
-			found = append(found, pat)
-		}
-	}
-	if len(found) != 1 || strings.Count(found[0], "*") != 1 {
-		return "", fmt.Errorf("fleet create: the fleet ontology must declare exactly one pki: issuance pattern with one '*', found %v", found)
-	}
-	return fact.ArtifactsRoot + "/" + found[0], nil
 }
 
 // writeFleetArtifacts commits files as ONE commit on ri's agent branch,

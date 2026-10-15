@@ -99,8 +99,7 @@ func TestFleet_TrunkWithoutOriginReadsTheRecordedBranch(t *testing.T) {
 	bare := filepath.Join(dir, "fleet.git")
 	url := seedFleetRemoteOn(t, bare, "trunk")
 	m := newFleetManager(t, dir)
-	_, err := m.RegisterFleet(ctx, url, "", "")
-	require.NoError(t, err)
+	mountFleetMember(t, m, "fleet", url)
 	agent := m.fleetRepo().AgentBranch()
 
 	// The human accepts: merge the agent branch into trunk on the remote.

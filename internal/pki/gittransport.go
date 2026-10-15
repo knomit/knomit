@@ -39,7 +39,7 @@ func IsFleetURL(u string) bool {
 
 // ErrNotEnrolled: this instance has no fleet certificate, so it cannot fetch
 // from a knomit+https origin.
-var ErrNotEnrolled = errors.New("this instance has no fleet certificate; knomit+https origins need `knomit identity install`")
+var ErrNotEnrolled = errors.New("this instance has no fleet certificate; knomit+https origins need this instance in a fleet (POST /api/v1/fleet/join)")
 
 // fleetSource resolves the mTLS client LAZILY from the files under dir, so
 // an instance enrolled after boot fetches on its next session without a

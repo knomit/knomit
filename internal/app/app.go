@@ -91,14 +91,14 @@ type Options struct {
 // installGitTransport registers the knomit+https transport and logs the
 // instance's fleet state for it in one line. The registration stands whatever
 // the state; an unenrolled instance is picked up on its next fetch once
-// `knomit identity install` has run, with no restart.
+// a fleet join or create has installed a certificate, with no restart.
 func installGitTransport(dir, keyPath string) {
 	err := pki.InstallGitTransport(dir, keyPath)
 	switch {
 	case err == nil:
 		log.Info().Str("dir", dir).Msg("knomit+https origins: enrolled, fetching over mutual TLS")
 	case errors.Is(err, pki.ErrNotEnrolled):
-		log.Info().Str("dir", dir).Msg("knomit+https origins: not enrolled; fetches from them fail until `knomit identity install`")
+		log.Info().Str("dir", dir).Msg("knomit+https origins: not enrolled; fetches from them fail until this instance joins a fleet (POST /api/v1/fleet/join)")
 	default:
 		log.Warn().Err(err).Str("dir", dir).Msg("knomit+https origins: fleet files unusable; fetches from them fail until fixed")
 	}

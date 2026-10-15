@@ -13,7 +13,7 @@ import (
 )
 
 // Install orchestration for the instance side of enrollment: what
-// `knomit identity install` and `identity show` do, and what the desktop's
+// a fleet join and `identity show` do, and what the desktop's
 // Settings window does over its Wails bindings (knomit#256). It lives here,
 // not in cmd or app, because both front-ends need it and it needs no server:
 // ONE implementation of the checks, so the two cannot drift.
@@ -153,7 +153,7 @@ type InstallOptions struct {
 	ExpectInstalledRoot string
 }
 
-// InstallBundle is `identity install`: it installs raw into dir for the key
+// InstallBundle installs raw (an enrollment bundle) into dir for the key
 // at keyPath. Every check runs BEFORE anything is written — the directory
 // itself included — so a VERIFICATION failure leaves dir exactly as it was.
 // An I/O failure between the three renames can leave a mixed set; the
@@ -237,6 +237,33 @@ func InstallBundle(dir, keyPath string, raw []byte, opts InstallOptions) (Identi
 		return Identity{}, err
 	}
 	return id, nil
+}
+
+// Uninstall removes the fleet trust material from dir: instance.crt, crl.pem
+// and root.crt, under the same cross-process lock as InstallBundle, so it
+// cannot interleave with an install. A file already absent is not an error.
+// crl.number (the per-root CRL watermark) is kept: it is filed per root, so
+// it changes nothing for another fleet, and it still refuses an older CRL if
+// this root is ever installed again. The instance key is never touched.
+//
+// The knomit+https client resolves dir at each session, so its next session
+// finds no certificate (ErrNotEnrolled). A running mTLS listener adopts the
+// uninstalled state (all three files absent) on its next handshake or tick:
+// it refuses every handshake and cuts every established connection, without
+// a restart.
+func Uninstall(dir string) error {
+	unlock, err := lockInstall(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	var errs []error
+	for _, f := range []string{InstanceCertFile, CRLFile, RootCertFile} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // InstallCRL installs a CRL on its own (fleet design D13), for a member that

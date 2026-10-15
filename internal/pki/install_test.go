@@ -18,7 +18,7 @@ import (
 	"knomit/internal/pki/pkitest"
 )
 
-// bundleFor is what `knomit identity enroll` hands the instance: the
+// bundleFor is what the master's enroll (POST /api/v1/fleet/enroll) hands the instance: the
 // instance certificate, the root certificate and the fleet's current CRL.
 func bundleFor(t *testing.T, f *pkitest.Fleet, m pkitest.Member) []byte {
 	t.Helper()

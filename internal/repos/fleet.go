@@ -34,7 +34,7 @@ func fleetErr(status int, code, msg string) *FleetError {
 
 // FleetStatus is what GET /api/v1/fleet reports.
 type FleetStatus struct {
-	State        string     `json:"state"` // standalone | registering | registered | unregistering
+	State        string     `json:"state"` // standalone | registering | registered
 	FleetRepo    string     `json:"fleet_repo,omitempty"`
 	FleetURL     string     `json:"fleet_url,omitempty"`
 	AgentID      string     `json:"agent_id"`
@@ -55,6 +55,16 @@ type FleetStatus struct {
 	RecordCurrent       *bool         `json:"record_current,omitempty"`
 	RecordPendingUpdate bool          `json:"record_pending_update"`
 	Notice              string        `json:"notice,omitempty"`
+
+	// Master says this instance is the fleet's master (isFleetMaster: the
+	// root key file is here and its root is the one on the fleet's main).
+	// Hosting is where the fleet repository's copy here syncs: "none" (no
+	// origin: this instance is the hub) or the origin's URL; empty when no
+	// fleet repository is mounted. RootDir is <home>/fleet, where the root
+	// key lives on the master (and where a master switch copies it to).
+	Master  bool   `json:"master"`
+	Hosting string `json:"hosting,omitempty"`
+	RootDir string `json:"root_dir"`
 }
 
 // MemberFields are a member record's advertised, informational fields as the
@@ -128,6 +138,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
 		ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...),
+		RootDir:           m.fleetRootDir(),
 	}
 	if len(st.ExternalAddresses) == 0 {
 		st.Notice = NoAddressesNotice
@@ -144,9 +155,13 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		st.RecordCurrent = &current
 	}
 	st.FleetRepo = ri.Name()
-	if o, oerr := m.originOf(ri); oerr == nil && o != nil {
-		st.FleetURL = o.URL
+	if o, oerr := m.originOf(ri); oerr == nil {
+		st.Hosting = "none"
+		if o != nil {
+			st.FleetURL, st.Hosting = o.URL, o.URL
+		}
 	}
+	_ = ri.WithRead(func(svc *store.Service) { st.Master = ri.isFleetMaster(svc) })
 	st.RecordState = "pending"
 	members, lerr := m.fleetMembersAtMain(ri)
 	if lerr == nil {
@@ -230,105 +245,33 @@ func (m *Manager) originOf(ri *RepoInstance) (*Origin, error) {
 	return o.Get(ri.UID())
 }
 
-// RegisterFleet joins the fleet at url: mount it (clone, with an agent
-// branch), refuse unless its ontology is the fleet ontology, write this
-// instance's member record on the agent branch, push. The record counts once
-// the fleet's master merges it into main. The same URL again refreshes
-// the record (for example after a key rotation).
-func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken string) (FleetStatus, error) {
-	defer m.lockFleetOp()()
-	if err := m.recoverFleetCreate(ctx); err != nil {
-		return FleetStatus{}, err
-	}
-	row, err := m.fleetDB()
-	if err != nil {
-		return FleetStatus{}, err
-	}
-	switch row.State {
-	case FleetRegistering:
-		return FleetStatus{}, fleetErr(http.StatusConflict, "registration_pending", "a registration is still being pushed; wait for it or check last_error")
-	case FleetUnregistering:
-		return FleetStatus{}, fleetErr(http.StatusConflict, "unregistration_pending", "an unregistration is still being pushed; it is retried on every sync and must finish before registering again")
-	}
-	db := m.ControlDB()
-	ri := m.fleetRepo()
-	if ri != nil {
-		o, oerr := m.originOf(ri)
-		if oerr != nil || o == nil || !sameFleetURL(o.URL, url) {
-			return FleetStatus{}, fleetErr(http.StatusConflict, "already_registered", "this instance is registered with another fleet; unregister first")
-		}
-	} else {
-		name := m.freeFleetName(url)
-		created, cerr := m.Create(ctx, CreateSpec{Name: name, Mode: "clone", Origin: &OriginSpec{URL: url, AuthMethod: authMethod, AuthToken: authToken}, fleetDoor: true}, func(Event) {})
-		if cerr != nil {
-			_ = recordFleetAttempt(db, cerr, time.Now())
-			return FleetStatus{}, fleetErr(http.StatusBadGateway, "clone_failed", cerr.Error())
-		}
-		if !fact.IsFleetOntology(created.Ontology()) {
-			msg := "the repository's ontology is not the fleet ontology"
-			if derr := m.deleteRepo(created.Name(), "fleet registration: the repository's ontology is not the fleet ontology"); derr != nil {
-				log.Warn().Err(derr).Str("repo", created.Name()).Msg("fleet: removing a non-fleet mount failed")
-				msg += fmt.Sprintf("; removing the mount %q failed (%v): archive it by hand", created.Name(), derr)
-				_ = recordFleetAttempt(db, errors.New(msg), time.Now())
-			}
-			return FleetStatus{}, fleetErr(http.StatusUnprocessableEntity, "not_a_fleet", msg)
-		}
-		// Boot admits a fleet-id ontology only for the recorded repository.
-		if rerr := recordFleetRepo(db, created.UID()); rerr != nil {
-			if derr := m.deleteRepo(created.Name(), "fleet registration: recording the fleet repository failed"); derr != nil {
-				log.Warn().Err(derr).Str("repo", created.Name()).Msg("fleet: removing an unrecorded fleet mount failed")
-			}
-			return FleetStatus{}, fleetErr(http.StatusInternalServerError, "record_failed", rerr.Error())
-		}
-		ri = created
-	}
-	if err := m.registerOwnRecord(ctx, ri); err != nil {
-		return FleetStatus{}, err
-	}
-	if err := setFleetState(db, FleetRegistering, time.Now()); err != nil {
-		return FleetStatus{}, err
-	}
-	m.pushFleet(ctx, ri)
-	return m.FleetStatus(ctx)
-}
-
-// UnregisterFleet leaves the fleet: commit this instance's record with state
-// left on the agent branch, enter unregistering, push. Only a SUCCESSFUL push
-// unmounts the fleet repository and returns to standalone; a failed push is
-// retried on the sync loop until it succeeds. A departure is never silent.
-func (m *Manager) UnregisterFleet(ctx context.Context) (FleetStatus, error) {
-	defer m.lockFleetOp()()
-	row, err := m.fleetDB()
-	if err != nil {
-		return FleetStatus{}, err
-	}
-	ri := m.fleetRepo()
-	switch {
-	case row.State == FleetUnregistering:
-		return FleetStatus{}, fleetErr(http.StatusConflict, "unregistration_pending", "an unregistration is already being pushed")
-	case ri == nil || row.State == FleetStandalone:
-		return FleetStatus{}, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone")
-	}
-	if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
-		return FleetStatus{}, err
-	}
-	if err := setFleetState(m.ControlDB(), FleetUnregistering, time.Now()); err != nil {
-		return FleetStatus{}, err
-	}
-	m.pushFleet(ctx, ri)
-	return m.FleetStatus(ctx)
-}
-
 // pushFleet pushes the fleet repository's agent branch now and applies the
 // outcome. The sync loop calls fleetPushed with its own pushes, which is the
 // retry. This push is one-shot: it neither consults nor changes the loop's
 // circuit breakers. The retry DOES ride them: while the loop's push breaker is
-// open the loop does not push, so a pending register or unregister completes
-// only at the breaker's next probe — up to 30 minutes later (breakerMaxOpen).
-func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) {
+// open the loop does not push, so a pending publish (a forge create whose
+// main is not pushed yet, state registering) completes only at the breaker's next probe — up to 30 minutes later (breakerMaxOpen).
+func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) error {
+	perr := m.pushAgentBranch(ctx, ri)
+	if perr == nil {
+		publishes := false
+		if werr := ri.WithRead(func(svc *store.Service) { publishes = ri.publishesFleetMain(svc) }); werr != nil {
+			perr = werr
+		} else if publishes {
+			// As the sync loop's round does: a push of the fleet repository
+			// by its root holder includes publishing main.
+			perr = m.publishFleetMainNow(ctx, ri)
+		}
+	}
+	m.fleetPushed(ri.Name(), perr)
+	return perr
+}
+
+// pushAgentBranch pushes the fleet repository's agent branch to its origin
+// once (the one push of a join or a leave, and the first half of pushFleet).
+func (m *Manager) pushAgentBranch(ctx context.Context, ri *RepoInstance) error {
 	var perr error
-	publishes := false
-	werr := ri.WithRead(func(svc *store.Service) {
+	if werr := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			perr = errors.New("fleet repository is not open")
 			return
@@ -344,23 +287,17 @@ func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) {
 			return
 		}
 		_, perr = svc.Remote().Push(ctx, ri.AgentBranch(), auth)
-		publishes = perr == nil && ri.publishesFleetMain(svc)
-	})
-	if werr != nil && perr == nil {
+	}); werr != nil && perr == nil {
 		perr = werr
 	}
-	if perr == nil && publishes {
-		// As the sync loop's round does: a push of the fleet repository by
-		// its root holder includes publishing main.
-		perr = m.publishFleetMainNow(ctx, ri)
-	}
-	m.fleetPushed(ri.Name(), perr)
+	return perr
 }
 
 // fleetPushed applies one push outcome of the fleet repository to the state
 // machine: a failure records last_error and changes nothing else; a success
-// clears it and completes registering (-> registered) or unregistering
-// (-> unmount, standalone). Pushes of any other repository are ignored.
+// clears it and completes registering (-> registered). Pushes of any other
+// repository are ignored. Leaving is not a state: POST /fleet/leave pushes
+// once and removes the fleet whatever the push did (LeaveFleet).
 //
 // Registering on the instance that holds the fleet root (a forge create
 // whose publish of main failed) completes only when main is published. The
@@ -388,18 +325,9 @@ func (m *Manager) fleetPushed(repo string, pushErr error) {
 	if err != nil {
 		return
 	}
-	switch row.State {
-	case FleetRegistering:
+	if row.State == FleetRegistering {
 		if err := setFleetState(db, FleetRegistered, now); err != nil {
 			log.Warn().Err(err).Msg("fleet: entering registered failed")
-		}
-	case FleetUnregistering:
-		if err := m.deleteRepo(repo, "fleet unregistered: the departure was pushed"); err != nil {
-			_ = recordFleetAttempt(db, fmt.Errorf("unmount after the departure was pushed: %w", err), now)
-			return
-		}
-		if err := setFleetState(db, FleetStandalone, now); err != nil {
-			log.Warn().Err(err).Msg("fleet: entering standalone failed")
 		}
 	}
 }
@@ -409,7 +337,7 @@ func (m *Manager) fleetPushed(repo string, pushErr error) {
 // that want an immediate retry.
 func (m *Manager) FleetRetry(ctx context.Context) {
 	if ri := m.fleetRepo(); ri != nil {
-		m.pushFleet(ctx, ri)
+		_ = m.pushFleet(ctx, ri)
 	}
 }
 
@@ -421,7 +349,7 @@ func (m *Manager) guardFleetRemoval(name string) error {
 	if !m.IsFleetRepo(name) {
 		return nil
 	}
-	return fleetErr(http.StatusConflict, "fleet_repository", "this is the fleet repository: it is never archived or deleted directly; leave the fleet with `knomit fleet unregister` (DELETE /api/v1/fleet)")
+	return fleetErr(http.StatusConflict, "fleet_repository", "this is the fleet repository: it is never archived or deleted directly; leave with `POST /api/v1/fleet/leave` (Fleet page); the master decommissions with `POST /api/v1/fleet/decommission`")
 }
 
 // writeOwnRecord writes this instance's member record on the fleet
@@ -433,36 +361,6 @@ func (m *Manager) writeOwnRecord(ctx context.Context, ri *RepoInstance, state st
 	rec := m.advertised()
 	rec.State = state
 	return m.writeRecord(ctx, ri, rec, "fleet: "+rec.Agent+" is "+state, "")
-}
-
-// registerOwnRecord is the record half of a registration. A first
-// registration writes the record. Registering again with the same fleet
-// compares first, like the boot reconcile: an active record whose advertised
-// fields are current is left alone (no commit); otherwise ONE new version is
-// written with state active and the record's notes kept.
-func (m *Manager) registerOwnRecord(ctx context.Context, ri *RepoInstance) error {
-	cur, found, err := m.ownRecordAt(ri, ri.AgentBranch())
-	if err != nil || !found {
-		// No record on the agent branch (a fresh mount, or unreadable):
-		// write it whole, as a first registration does.
-		return m.writeOwnRecord(ctx, ri, fact.MemberActive)
-	}
-	want := m.advertised()
-	changed := cur.Member.AdvertisedDiff(want)
-	if cur.State == fact.MemberActive && len(changed) == 0 {
-		log.Info().Str("fleet", ri.Name()).Msg("fleet record current")
-		return nil
-	}
-	want.State, want.Notes = fact.MemberActive, cur.Notes
-	if cur.State != fact.MemberActive {
-		changed = append([]string{"state"}, changed...)
-	}
-	msg := "fleet: " + want.Agent + " record updated: " + strings.Join(changed, ", ")
-	if err := m.writeRecord(ctx, ri, want, msg, cur.Blob); err != nil {
-		return err
-	}
-	log.Info().Str("fleet", ri.Name()).Msg("fleet record updated: " + strings.Join(changed, ", "))
-	return nil
 }
 
 // freeFleetName picks a local name for the fleet repository mount: the URL's
@@ -477,11 +375,6 @@ func (m *Manager) freeFleetName(url string) string {
 		name = fmt.Sprintf("%s-%d", base, i)
 	}
 	return name
-}
-
-func sameFleetURL(a, b string) bool {
-	norm := func(s string) string { return strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(s), "/"), ".git") }
-	return norm(a) == norm(b)
 }
 
 // memberRecordPath is the stable path of an agent's member record: one fact

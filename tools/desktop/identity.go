@@ -20,7 +20,7 @@ import (
 
 // The Settings window's "Fleet identity" section (knomit#256): enrolment of
 // a desktop that has no `knomit` CLI. The install checks are pki's
-// (pki.InstallBundle), the same function `knomit identity install` calls;
+// (pki.InstallBundle), the same function the fleet join calls;
 // this file only resolves the paths, gates the caller and shapes the answer.
 //
 // WHY BINDINGS, NOT HTTP: every route on the app handler is also served on
@@ -188,8 +188,8 @@ func (n *NativeService) GetIdentity() (FleetIdentity, error) {
 	return out, nil
 }
 
-// PublicKeyLine returns the line to hand the fleet operator for `knomit
-// identity enroll --pubkey`. Gated to the Settings window, like everything
+// PublicKeyLine returns the line to hand the fleet's master for its enroll
+// (POST /api/v1/fleet/enroll, public_key). Gated to the Settings window, like everything
 // that feeds enrolment.
 func (n *NativeService) PublicKeyLine(ctx context.Context) (string, error) {
 	if !callerIsSettings(ctx) {

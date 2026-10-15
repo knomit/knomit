@@ -162,8 +162,9 @@ func handlePushedMerge() http.HandlerFunc {
 			return
 		}
 		// The fleet repository is read-only for authored writes, but the
-		// operator's merge of a pushed member branch is how the fleet's
-		// master accepts it by hand, so it is not refused here.
+		// master's merge of a pushed member branch by hand is allowed:
+		// FleetMergeRefusal below refuses a member's, and re-judges the
+		// branch on the master.
 		if !ri.IsFleet() && refuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
 			return
 		}
@@ -184,6 +185,9 @@ func handlePushedMerge() http.HandlerFunc {
 			if !pushed {
 				return
 			}
+			if err = ri.FleetMergeRefusal(r.Context(), svc, branch, plumbing.NewHash(req.ExpectedTip)); err != nil {
+				return
+			}
 			res, err = svc.MergePushed(r.Context(), branch, ri.AgentBranch(), plumbing.NewHash(req.ExpectedTip), side)
 		}); aerr != nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
@@ -196,6 +200,11 @@ func handlePushedMerge() http.HandlerFunc {
 		if !pushed {
 			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Not a pushed branch",
 				branch+" is not a branch a peer pushed to this host; only those can be merged here", r.URL.Path)
+			return
+		}
+		var fe *repos.FleetError
+		if errors.As(err, &fe) {
+			writeFleetError(w, r, err)
 			return
 		}
 		if err != nil {

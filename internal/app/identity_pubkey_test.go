@@ -9,8 +9,8 @@ import (
 	"knomit/internal/pki"
 )
 
-// PublicKeyLine is the line an operator passes to `knomit identity enroll
-// --pubkey`, for a desktop user who has no CLI to print it. It must be the
+// PublicKeyLine is the line an operator passes to the master's enroll
+// (POST /api/v1/fleet/enroll, public_key), for a desktop user who has no CLI to print it. It must be the
 // line ensureKeyPair writes to <key>.pub — the knomit@<host> comment
 // included, since enroll takes the SAN host from it — and it is built from
 // the PRIVATE key, because .pub can be stale or, with [remote].ssh_key,

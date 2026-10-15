@@ -32,7 +32,7 @@ import (
 //
 // (nil, nil, nil) means the listener is off: no addr, or an addr with no
 // certificate yet (logged at WARN, not fatal, so configuring [tls] before
-// `knomit identity install` is harmless). A certificate that IS installed
+// a fleet join is harmless). A certificate that IS installed
 // but cannot be loaded — CRL missing or malformed, a CRL older than
 // crl.number, a certificate for another key — is an error: fail closed.
 //
@@ -58,7 +58,7 @@ func OpenTLSServer(ctx context.Context, tcfg config.TLSConfig, keyPath string, l
 	}
 	if !pki.HasInstanceCert(tcfg.Dir) {
 		log.Warn().Str("dir", tcfg.Dir).Str("addr", tcfg.Addr).
-			Msg("tls listener configured but no instance certificate installed; run `knomit identity install`; serving plaintext only")
+			Msg("tls listener configured but no instance certificate installed; join a fleet (POST /api/v1/fleet/join) or create one; serving plaintext only")
 		return nil, nil, nil
 	}
 	ps, err := pki.NewServer(tcfg.Dir, keyPath, logTLSReason, tlsRecheckInterval)

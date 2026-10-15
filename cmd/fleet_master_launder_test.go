@@ -59,6 +59,9 @@ type launderFixture struct {
 	ri      *repos.RepoInstance
 	tlsAddr string
 	evil    string
+	key     string
+	tlsCfg  config.TLSConfig
+	srv     *web.Server
 }
 
 func newLaunderFixture(t *testing.T, master bool) *launderFixture {
@@ -114,10 +117,9 @@ func newLaunderFixture(t *testing.T, master bool) *launderFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { lf.mgr.Close() })
-	srv := &web.Server{Manager: lf.mgr, GitHandler: web.GitRemoteHandler(lf.mgr), APIOnly: true,
+	lf.srv = &web.Server{Manager: lf.mgr, GitHandler: web.GitRemoteHandler(lf.mgr), APIOnly: true,
 		Auth: cfg.Auth, Grants: auth.NewSQLGrants(lf.mgr.ControlDB())}
-	f.Install(t, f.Enroll(t, "bravo@"+pki.AgentEmailDomain, key), cfg.TLS.Dir)
-	_, lf.tlsAddr = serveFleetNode(t, srv.Handler(), key, cfg.TLS)
+	lf.key, lf.tlsCfg = key, cfg.TLS
 	return lf
 }
 
@@ -139,16 +141,20 @@ func (lf *launderFixture) installRoot(t *testing.T) {
 	}
 }
 
-// register mounts the fleet repository at B (RegisterFleet's clone).
+// register joins B to the fleet (POST /fleet/join's JoinFleet: the bundle
+// installed, the fleet door's clone, the record pushed), then serves B's
+// /git over mTLS with the certificate the join installed.
 func (lf *launderFixture) register(t *testing.T) {
 	t.Helper()
-	st, err := lf.mgr.RegisterFleet(lf.ctx, lf.url, "", "")
+	bundle := lf.f.Bundle(t, lf.f.Enroll(t, "bravo@"+pki.AgentEmailDomain, lf.key))
+	st, err := lf.mgr.JoinFleet(lf.ctx, repos.FleetJoinSpec{URL: lf.url, Bundle: bundle})
 	if err != nil {
-		t.Fatalf("mount the fleet: %v", err)
+		t.Fatalf("join the fleet: %v", err)
 	}
 	if lf.ri = lf.mgr.Get(st.FleetRepo); lf.ri == nil {
 		t.Fatalf("no fleet repo %q", st.FleetRepo)
 	}
+	_, lf.tlsAddr = serveFleetNode(t, lf.srv.Handler(), lf.key, lf.tlsCfg)
 }
 
 // round runs one origin round: Sync re-enters on a re-attach of the same

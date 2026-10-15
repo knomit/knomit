@@ -139,45 +139,17 @@ func RevokeSerial(root Root, current *x509.RevocationList, r Revoked, thisUpdate
 	return Revocation{Statement: st, CRLPEM: crl, Number: number, Line: append(line, '\n')}, nil
 }
 
-// Revoke is RevokeSerial against the fleet root directory: it reissues
-// <dir>/crl.pem from the CURRENT <dir>/crl.pem plus r, with a Number one
-// higher (1 if there is none), and appends r to the local log
-// <dir>/revoked.jsonl. The current crl.pem must list every serial the local
-// log holds: a missing crl.pem while the log holds revocations, or a present
-// one that lags it (an older CRL restored from a backup), is refused, as the
-// CRL built from it would silently drop them. Nothing is written then.
-func Revoke(dir string, root Root, r Revoked, next time.Time) (*big.Int, error) {
-	prior, err := LoadRevoked(dir)
-	if err != nil {
-		return nil, err
-	}
-	var current *x509.RevocationList
-	switch cur, err := LoadCRL(filepath.Join(dir, CRLFile)); {
-	case err == nil:
-		current = cur
-		for _, p := range prior {
-			if p.Serial == nil || !IsRevoked(current, p.Serial) {
-				return nil, fmt.Errorf("pki: %s (Number %v) does not list serial %s, which %s records as revoked; refusing to sign a CRL that drops it (restore the newest CRL)", CRLFile, current.Number, p.Serial.Text(16), RevokedLogFile)
-			}
-		}
-	case !errors.Is(err, ErrCRLMissing):
-		return nil, fmt.Errorf("pki: current CRL unreadable, refusing to guess what it lists: %w", err)
-	default:
-		if len(prior) > 0 {
-			return nil, fmt.Errorf("pki: %s is missing but %s lists %d revocations; refusing to sign a CRL that drops them", CRLFile, RevokedLogFile, len(prior))
-		}
-	}
-	rv, err := RevokeSerial(root, current, r, time.Now(), next)
-	if err != nil {
-		return nil, err
-	}
+// RecordRevocation keeps the fleet root directory's own copies of a
+// revocation RevokeSerial built: it appends rv's line to <dir>/revoked.jsonl
+// (the master's local audit log) and replaces <dir>/crl.pem with rv's CRL,
+// atomically, so a crash never leaves a torn crl.pem (the file GET
+// /fleet/root hands the next master). The fleet repository's main is the
+// authority; these are copies.
+func RecordRevocation(dir string, rv Revocation) error {
 	if err := appendLine(filepath.Join(dir, RevokedLogFile), rv.Line); err != nil {
-		return nil, fmt.Errorf("pki: revocation log: %w", err)
+		return fmt.Errorf("pki: revocation log: %w", err)
 	}
-	if err := writeFileAtomic(filepath.Join(dir, CRLFile), rv.CRLPEM, 0o644); err != nil {
-		return nil, err
-	}
-	return rv.Number, nil
+	return writeFileAtomic(filepath.Join(dir, CRLFile), rv.CRLPEM, 0o644)
 }
 
 // LoadRevoked reads the fleet root's revocation log. An absent log is empty.
@@ -281,7 +253,7 @@ func RootID(root *x509.Certificate) (string, error) {
 
 // watermarks is the on-disk form of crl.number: the highest CRL Number ever
 // accepted, PER ROOT. A root's CRL numbering is its own; a different root
-// starts over at 1. Keying by root means `install --replace-root` can adopt a
+// starts over at 1. Keying by root means an install of another root can adopt a
 // new fleet's CRL #1 without forgetting the old fleet's watermark, so moving
 // A -> B -> A with an OLD fleet-A bundle is still refused as a rollback.
 type watermarks map[string]string // RootID -> decimal CRL Number

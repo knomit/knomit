@@ -13,11 +13,11 @@ import (
 
 // TestFleetRecordWriters_OnlyFleetCallers (F10): the functions that write
 // this instance's member record are called only from the fleet files (boot
-// reconcile, register/unregister and create), never from a repository's open, sync or
+// reconcile, create, join and leave), never from a repository's open, sync or
 // write path.
 func TestFleetRecordWriters_OnlyFleetCallers(t *testing.T) {
-	writers := map[string]bool{"writeRecord": true, "writeOwnRecord": true, "refreshOwnRecord": true, "registerOwnRecord": true, "fleetBootReconcile": true, "startFleetBootReconcile": true}
-	allowed := map[string]bool{"fleet.go": true, "fleet_create.go": true, "fleet_reconcile.go": true, "manager.go": true}
+	writers := map[string]bool{"writeRecord": true, "writeOwnRecord": true, "refreshOwnRecord": true, "fleetBootReconcile": true, "startFleetBootReconcile": true}
+	allowed := map[string]bool{"fleet.go": true, "fleet_create.go": true, "fleet_membership.go": true, "fleet_reconcile.go": true, "manager.go": true}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestFleetRecordWriters_OnlyFleetCallers(t *testing.T) {
 	sort.Strings(sites)
 	// The exact call sites: a new one (a second automatic writer) must be a
 	// deliberate edit here. manager.go's one call is Start's.
-	want := "fleet.go:registerOwnRecord fleet.go:writeOwnRecord fleet.go:writeOwnRecord fleet.go:writeRecord fleet.go:writeRecord fleet_create.go:writeOwnRecord " +
+	want := "fleet.go:writeRecord fleet_create.go:writeOwnRecord fleet_membership.go:writeOwnRecord fleet_membership.go:writeOwnRecord " +
 		"fleet_reconcile.go:fleetBootReconcile fleet_reconcile.go:refreshOwnRecord fleet_reconcile.go:writeRecord manager.go:startFleetBootReconcile"
 	if got := strings.Join(sites, " "); got != want {
 		t.Fatalf("member record write call sites changed:\n got %s\nwant %s", got, want)

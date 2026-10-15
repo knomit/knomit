@@ -1,19 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type FleetMember, type FleetStatus } from './api';
-import { btn } from './manageStyles';
 import { CopyIcon } from './icons';
 import { SettingsPage, type Section } from './SettingsPage';
 
-// The Fleet server page: this instance's fleet membership (F09): the state machine
-// standalone -> registering -> registered -> unregistering -> standalone, as
-// GET /api/v1/fleet reports it. Every error the server records (last_error) is
-// shown verbatim with when it happened and whether a retry is pending; an
-// action shown while the state forbids it is disabled WITH its reason.
+// The Fleet server page: this instance's fleet membership (F09) as
+// GET /api/v1/fleet reports it: standalone, registering (a forge create whose
+// publish of main is pending) or registered. Every error the server records
+// (last_error) is shown verbatim with when it happened.
 //
-// Registering pushes this instance's member record on its agent branch of the
-// fleet repository; it counts once the fleet's master merges it into the
-// fleet's main (record state "pending" until then). Unregistering pushes a "left"
-// record FIRST and unmounts the fleet repository only once that push lands.
+// Every fleet operation (create, enroll, join, leave, revoke, decommission,
+// the root's move) is a route served on the local listener only, which a
+// browser page cannot reach; the page shows the state and the members.
 
 // Pushes are retried on the sync loop, so the state moves without a click.
 const POLL_MS = 5_000;
@@ -21,12 +18,11 @@ const POLL_MS = 5_000;
 const mono: React.CSSProperties = { fontFamily: 'ui-monospace, monospace', fontSize: 12, wordBreak: 'break-all' };
 const dim: React.CSSProperties = { color: '#888', fontSize: 12 };
 const errText: React.CSSProperties = { color: '#f87171', fontSize: 12, marginTop: 6 };
-const input: React.CSSProperties = { background: '#000', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '4px 6px', minWidth: 280 };
 
 const copyBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', flexShrink: 0 };
 
-// AgentIdCopy copies this instance's agent id (e.g. for `knomit identity
-// enroll`) exactly as the server reports it: the id is opaque, so nothing is
+// AgentIdCopy copies this instance's agent id (what the master's enroll
+// takes) exactly as the server reports it: the id is opaque, so nothing is
 // trimmed or reformatted. Same affordance as the connect panel's copy buttons.
 function AgentIdCopy({ id }: { id: string }) {
   const [copied, setCopied] = useState(false);
@@ -68,7 +64,7 @@ export function capabilitiesText(c?: Record<string, string>): string {
 export function recordSync(st: FleetStatus): { text: string; warn: boolean } | null {
   if (!st.record) return null;
   if (st.record_current === false) {
-    return { text: 'differs from knomit.toml / this binary: restart or re-register to update it', warn: true };
+    return { text: 'differs from knomit.toml / this binary: restart to update it', warn: true };
   }
   if (st.record_pending_update) {
     return { text: "pending update: waiting for the fleet's master to merge this instance's branch into the fleet's main", warn: false };
@@ -76,54 +72,13 @@ export function recordSync(st: FleetStatus): { text: string; warn: boolean } | n
   return { text: 'current', warn: false };
 }
 
-// registerBlocked / unregisterBlocked are the reasons the state machine
-// forbids an action ('' = allowed). The server refuses the same requests with
-// the same codes; the UI only says so before the click.
-export function registerBlocked(st: FleetStatus): string {
-  switch (st.state) {
-    case 'registering':
-      return 'A registration is still being pushed; it is retried on every sync.';
-    case 'unregistering':
-      return 'An unregistration is still being pushed; it is retried on every sync and must finish before registering again.';
-    case 'registered':
-      return `Registered with ${st.fleet_repo ?? 'a fleet'}: unregister first to join another.`;
-  }
-  return '';
-}
-
-export function unregisterBlocked(st: FleetStatus): string {
-  switch (st.state) {
-    case 'standalone':
-      return 'This instance is standalone: there is no fleet to leave.';
-    case 'unregistering':
-      return 'The departure is already being pushed; it is retried on every sync.';
-  }
-  return '';
-}
-
-// Which action blocks the page shows. A standalone instance can only join and
-// a registered one can only leave, so each shows just the one that applies.
-// While a registration or an unregistration is still being pushed both stay,
-// each disabled with its reason where the state forbids it: that is when the
-// reader most needs to see why the button they expect does not work.
-function fleetActions(state: FleetStatus['state']): ('join' | 'leave')[] {
-  if (state === 'standalone') return ['join'];
-  if (state === 'registered') return ['leave'];
-  return ['join', 'leave'];
-}
-
 // FleetPage is the Fleet server page: the membership as ruled blocks with an
-// index beside them (This instance, Members, then Join or Leave by state).
+// index beside them (This instance, Members).
 export function FleetPage() {
   const [st, setSt] = useState<FleetStatus | null>(null);
   const [members, setMembers] = useState<FleetMember[]>([]);
-  // loadErr is a failed poll; actErr is the refusal of the last click. The
-  // poll must never clear actErr: the user has to read why the click failed.
+  // loadErr is a failed poll.
   const [loadErr, setLoadErr] = useState('');
-  const [actErr, setActErr] = useState('');
-  const [url, setUrl] = useState('');
-  const [token, setToken] = useState('');
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
     api.getFleet()
@@ -145,21 +100,6 @@ export function FleetPage() {
     return () => clearInterval(t);
   }, [load]);
 
-  // The form keeps its values on a failure, so a failed clone is re-issued
-  // with one click.
-  const act = async (f: () => Promise<FleetStatus>) => {
-    setBusy(true);
-    setActErr('');
-    try {
-      setSt(await f());
-    } catch (e) {
-      setActErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-      load();
-    }
-  };
-
   const sections: Section[] = [];
   if (!st) {
     sections.push({
@@ -169,12 +109,8 @@ export function FleetPage() {
     return <SettingsPage kind="fleet" sections={sections} testid="fleet-page" />;
   }
 
-  const regWhy = registerBlocked(st);
-  const unregWhy = unregisterBlocked(st);
-  const pending = st.state === 'registering' || st.state === 'unregistering';
+  const pending = st.state === 'registering';
   const sync = recordSync(st);
-  const actions = fleetActions(st.state);
-  const actErrNode = actErr && <div role="alert" data-testid="fleet-error" style={errText}>{actErr}</div>;
 
   sections.push({
     id: 'this-instance',
@@ -260,54 +196,6 @@ export function FleetPage() {
       </div>
     ),
   });
-
-  if (actions.includes('join')) {
-    sections.push({
-      id: 'join',
-      title: 'Join a fleet',
-      body: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={dim}>
-            Joining pushes this instance's member record on its own branch of the fleet repository; it counts once the
-            fleet's master merges it into the fleet's main.
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-            <input aria-label="Fleet repository URL" placeholder="https://… or git@…" value={url} onChange={e => setUrl(e.target.value)} style={input} />
-            <input aria-label="Access token" placeholder="access token (optional)" type="password" value={token} onChange={e => setToken(e.target.value)} style={input} />
-            <button type="button" data-testid="fleet-register" style={btn(busy || !!regWhy || url.trim() === '', 'primary')}
-              disabled={busy || !!regWhy || url.trim() === ''} title={regWhy}
-              onClick={() => act(() => api.registerFleet(url.trim(), token))}>
-              Register
-            </button>
-          </div>
-          {regWhy && <div data-testid="fleet-register-why" style={dim}>{regWhy}</div>}
-          {!actions.includes('leave') && actErrNode}
-        </div>
-      ),
-    });
-  }
-
-  if (actions.includes('leave')) {
-    sections.push({
-      id: 'leave',
-      title: 'Leave fleet',
-      danger: true,
-      body: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
-          <div style={dim}>
-            Pushes a "left" record first, and unmounts the fleet repository only once that push lands.
-          </div>
-          <button type="button" data-testid="fleet-unregister" style={btn(busy || !!unregWhy, 'danger')}
-            disabled={busy || !!unregWhy} title={unregWhy}
-            onClick={() => act(() => api.unregisterFleet())}>
-            Unregister
-          </button>
-          {unregWhy && <div data-testid="fleet-unregister-why" style={dim}>{unregWhy}</div>}
-          {actErrNode}
-        </div>
-      ),
-    });
-  }
 
   return <SettingsPage kind="fleet" sections={sections} testid="fleet-page" />;
 }

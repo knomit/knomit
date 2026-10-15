@@ -172,7 +172,9 @@ type Manager struct {
 	createWg      sync.WaitGroup
 
 	// fleetOpMu serializes the operations that change this instance's fleet
-	// membership: CreateFleet, RegisterFleet, UnregisterFleet, and the boot
+	// membership and its root: CreateFleet, JoinFleet, LeaveFleet, the
+	// master's enroll, revoke and decommission, the /fleet/root routes, the
+	// fleet repository's origin detach (DetachRepoOrigin), and the boot
 	// rollback of an unfinished create. Each checks the state and then
 	// changes it, so two at once would both pass the check. It is also what
 	// makes a create marker found under it a dead create's
@@ -237,7 +239,7 @@ var ErrReplicaInLens = errors.New("lens mounts two replicas of the same repo")
 var ErrLensWriteSubscribed = errors.New("lens write repo is a subscription (read-only)")
 
 // ErrLensWriteFleet is returned when a lens names the fleet repository as its
-// write repo. The fleet repository changes only through `knomit fleet`
+// write repo. The fleet repository changes only through the fleet API
 // (ErrFleetReadOnly); a lens may hold it as a read mount only.
 var ErrLensWriteFleet = errors.New("lens write repo is the fleet repository (read-only); a lens may only read it")
 

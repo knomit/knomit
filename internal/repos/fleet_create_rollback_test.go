@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -385,17 +386,23 @@ func TestCreateFleet_ConcurrentCreatesOneWins(t *testing.T) {
 
 // N7. Every operation that changes this instance's fleet membership takes
 // the fleet lock: while it is held, each one waits.
-// Sabotage: drop lockFleetOp from UnregisterFleet -> its row returns at once
+// Sabotage: drop lockFleetOp from LeaveFleet -> its row returns at once
 // -> red.
 func TestFleetOps_TakeTheFleetLock(t *testing.T) {
 	ctx := context.Background()
 	for name, op := range map[string]func(m *Manager) error{
 		"create": func(m *Manager) error { _, err := m.CreateFleet(ctx, FleetCreateSpec{}); return err },
-		"register": func(m *Manager) error {
-			_, err := m.RegisterFleet(ctx, "https://forge.invalid/fleet.git", "", "")
+		"join": func(m *Manager) error {
+			_, err := m.JoinFleet(ctx, FleetJoinSpec{URL: "https://forge.invalid/fleet.git"})
 			return err
 		},
-		"unregister": func(m *Manager) error { _, err := m.UnregisterFleet(ctx); return err },
+		"leave":        func(m *Manager) error { _, err := m.LeaveFleet(ctx); return err },
+		"enroll":       func(m *Manager) error { _, err := m.EnrollFleetMember(ctx, "x", ""); return err },
+		"revoke":       func(m *Manager) error { _, err := m.RevokeFleetMember(ctx, "x", ""); return err },
+		"decommission": func(m *Manager) error { _, err := m.DecommissionFleet(ctx); return err },
+		"root get":     func(m *Manager) error { _, err := m.FleetRootFiles(); return err },
+		"root put":     func(m *Manager) error { _, err := m.InstallFleetRoot(nil); return err },
+		"stand down":   func(m *Manager) error { return m.StandDown(ctx) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := newFleetHost(t, t.TempDir(), nil)
@@ -416,4 +423,57 @@ func TestFleetOps_TakeTheFleetLock(t *testing.T) {
 			<-done
 		})
 	}
+}
+
+// #518 R2: a rollback that FAILS. A forge create dies after its push; then a
+// tip this instance never saw replaces its agent branch on the forge, so the
+// lease of the rollback's retract refuses the delete. The next create and the
+// next join answer create_unfinished (409) naming the way out, the marker is
+// kept and last_error set; once the branch is deleted on the forge by hand,
+// the retry rolls back and the create succeeds.
+// SABOTAGE: recoverFleetCreate ignores undoFleetCreate's error -> the second
+// create is not create_unfinished -> red.
+func TestCreateFleet_FailedRollbackIsRetriedUntilTheForgeBranchIsGone(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	bare := forgeFleetRemote(t, dir)
+	m := newFleetHost(t, dir, nil)
+	reached := false
+	setFleetHooks(t, fleetCreateHooks{step: failAt("committed", errFleetCreateDied, &reached)})
+	_, err := m.CreateFleet(ctx, FleetCreateSpec{Origin: &OriginSpec{URL: fileuri.New(bare)}})
+	require.ErrorIs(t, err, errFleetCreateDied)
+	pushed := gitRev(t, bare, "refs/heads/agent/test-fleet")
+	require.NotEmpty(t, pushed, "fixture: the dead create pushed its agent branch")
+
+	work := t.TempDir()
+	runGit(t, "", "clone", "-q", bare, work)
+	runGit(t, work, "checkout", "-q", "-b", "foreign", "origin/agent/test-fleet")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foreign.txt"), []byte("x"), 0o644))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "-m", "foreign")
+	runGit(t, work, "push", "-q", "-f", "origin", "foreign:agent/test-fleet")
+	require.NotEqual(t, pushed, gitRev(t, bare, "refs/heads/agent/test-fleet"), "fixture: a tip this instance never saw")
+
+	_, err = m.CreateFleet(ctx, FleetCreateSpec{Origin: &OriginSpec{URL: fileuri.New(bare)}})
+	status, code := fleetCode(t, err)
+	require.Equal(t, http.StatusConflict, status)
+	require.Equal(t, "create_unfinished", code)
+	require.ErrorContains(t, err, "delete that branch on the forge by hand", "the message names the way out")
+	_, err = m.JoinFleet(ctx, FleetJoinSpec{URL: fileuri.New(bare)})
+	_, code = fleetCode(t, err)
+	require.Equal(t, "create_unfinished", code, "a join is refused too")
+	mk, err := readFleetCreateMarker(m.ControlDB())
+	require.NoError(t, err)
+	require.NotNil(t, mk, "the marker is kept")
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Contains(t, st.LastError, "rollback incomplete")
+
+	runGit(t, bare, "update-ref", "-d", "refs/heads/agent/test-fleet")
+	st, err = m.CreateFleet(ctx, FleetCreateSpec{Origin: &OriginSpec{URL: fileuri.New(bare)}})
+	require.NoError(t, err, "the retry rolls back, then creates")
+	require.Equal(t, FleetRegistered, st.State)
+	mk, err = readFleetCreateMarker(m.ControlDB())
+	require.NoError(t, err)
+	require.Nil(t, mk)
 }

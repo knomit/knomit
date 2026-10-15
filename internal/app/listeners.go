@@ -261,7 +261,7 @@ func OpenListeners(ctx context.Context, o ListenerOptions) (*Listeners, error) {
 	l.Address = serverAddress(cfg, ul, tcpAddr)
 
 	// 4. the mTLS listener: its OWN http.Server over the same handler, off
-	// until [tls].addr is set and `knomit identity install` has placed a
+	// until [tls].addr is set and a fleet join or create has placed a
 	// certificate.
 	tcfg := cfg.TLS
 	l.TLSState.Configured = tcfg.Addr

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 )
@@ -109,11 +108,11 @@ func crlFields(c *x509.RevocationList) []any {
 	return []any{c.Number.String(), c.ThisUpdate.UTC().Format(time.RFC3339), c.NextUpdate.UTC().Format(time.RFC3339), entries, c.Issuer.String()}
 }
 
-// Two revocations in a row: the pure RevokeSerial, given the CURRENT CRL,
-// yields the same local log line and a CRL with the same Number, times and
-// entries as the file variant Revoke — and a root-signed revocation
-// statement for the serial that VerifyRevocation accepts.
-func TestRevokeSerial_EquivalentToRevoke(t *testing.T) {
+// Two revocations in a row: RevokeSerial, given the CURRENT CRL, yields a CRL
+// one Number higher with every entry, and a root-signed revocation statement
+// that VerifyRevocation accepts; RecordRevocation keeps the root directory's
+// copies, the log line appended and crl.pem replaced by exactly that CRL.
+func TestRevokeSerial_AndRecordRevocation(t *testing.T) {
 	dir := t.TempDir()
 	root, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour)
 	if err != nil {
@@ -130,32 +129,25 @@ func TestRevokeSerial_EquivalentToRevoke(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := Revoked{Serial: big.NewInt(serial), At: time.Now().UTC(), Reason: "test"}
-		num, err := Revoke(dir, root, r, next)
+		rv, err := RevokeSerial(root, current, r, time.Now(), next)
 		if err != nil {
+			t.Fatal(err)
+		}
+		if rv.Number.Int64() != int64(i+2) {
+			t.Fatalf("revocation %d: Number %v, want %d", i, rv.Number, i+2)
+		}
+		if err := RecordRevocation(dir, rv); err != nil {
 			t.Fatal(err)
 		}
 		full, _ := os.ReadFile(filepath.Join(dir, RevokedLogFile))
-		fileLine := full[len(ledger):]
+		if !bytes.Equal(full, append(ledger, rv.Line...)) {
+			t.Fatalf("revocation %d: the log is %q, want the previous lines then %q", i, full, rv.Line)
+		}
 		ledger = full
-		fileCRL, err := LoadCRL(filepath.Join(dir, CRLFile))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		rv, err := RevokeSerial(root, current, r, fileCRL.ThisUpdate, next)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if rv.Number.Cmp(num) != 0 || num.Int64() != int64(i+2) {
-			t.Fatalf("revocation %d: numbers pure %v file %v, want %d", i, rv.Number, num, i+2)
-		}
-		if !bytes.Equal(rv.Line, fileLine) {
-			t.Fatalf("revocation %d: log line pure %q file %q", i, rv.Line, fileLine)
+		if onDisk, _ := os.ReadFile(filepath.Join(dir, CRLFile)); !bytes.Equal(onDisk, rv.CRLPEM) {
+			t.Fatalf("revocation %d: crl.pem is not the new CRL", i)
 		}
 		pure := mustParseCRLPEM(t, rv.CRLPEM)
-		if got, want := crlFields(pure), crlFields(fileCRL); !reflect.DeepEqual(got, want) {
-			t.Fatalf("revocation %d: CRL fields\n pure %v\n file %v", i, got, want)
-		}
 		if len(pure.RevokedCertificateEntries) != i+1 {
 			t.Fatalf("revocation %d: %d entries", i, len(pure.RevokedCertificateEntries))
 		}
@@ -224,72 +216,6 @@ func TestRevokeSerial_CRLIsASupersetOfTheCurrentCRL(t *testing.T) {
 	foreign := mustParseCRLPEM(t, signedCRL(t, other, 9))
 	if _, err := RevokeSerial(root, foreign, Revoked{Serial: big.NewInt(0x44), At: time.Now()}, time.Now(), next); !errors.Is(err, ErrCRLInvalid) {
 		t.Fatalf("another root's current CRL: %v, want ErrCRLInvalid", err)
-	}
-}
-
-// The file variant refuses to sign a CRL #1 when crl.pem is gone but the
-// local log already holds revocations: that CRL would drop them.
-func TestRevoke_MissingCRLWithALoggedRevocationIsRefused(t *testing.T) {
-	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Revoke(dir, root, Revoked{Serial: big.NewInt(1), At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(dir, CRLFile)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Revoke(dir, root, Revoked{Serial: big.NewInt(2), At: time.Now()}, time.Now().Add(time.Hour)); err == nil {
-		t.Fatal("a CRL #1 that drops a logged revocation was signed")
-	}
-}
-
-// A present crl.pem that lags the local log (an older CRL restored from a
-// backup) is refused too (review L3): the new CRL is built from the current
-// one, so it would silently drop the logged revocation the old CRL lacks.
-// Nothing is written: the log and crl.pem are as they were. With the CRL
-// that lists every logged serial back in place, the revocation goes through.
-//
-// SABOTAGE: drop the lag check in Revoke → the revocation against the old
-// CRL succeeds → red.
-func TestRevoke_CRLLaggingTheLocalLogIsRefused(t *testing.T) {
-	dir := t.TempDir()
-	root, err := NewRoot(dir, "knomit-fleet-root-test", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	next := time.Now().Add(time.Hour)
-	if _, err := Revoke(dir, root, Revoked{Serial: big.NewInt(1), At: time.Now()}, next); err != nil {
-		t.Fatal(err)
-	}
-	crlPath, logPath := filepath.Join(dir, CRLFile), filepath.Join(dir, RevokedLogFile)
-	old, _ := os.ReadFile(crlPath)
-	if _, err := Revoke(dir, root, Revoked{Serial: big.NewInt(2), At: time.Now()}, next); err != nil {
-		t.Fatal(err)
-	}
-	current, _ := os.ReadFile(crlPath)
-	if err := os.WriteFile(crlPath, old, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	logBefore, _ := os.ReadFile(logPath)
-	_, err = Revoke(dir, root, Revoked{Serial: big.NewInt(3), At: time.Now()}, next)
-	if err == nil || !strings.Contains(err.Error(), "does not list serial 2") {
-		t.Fatalf("revoke against a CRL lagging the log: %v", err)
-	}
-	if got, _ := os.ReadFile(crlPath); !bytes.Equal(got, old) {
-		t.Fatal("the refused revoke rewrote crl.pem")
-	}
-	if got, _ := os.ReadFile(logPath); !bytes.Equal(got, logBefore) {
-		t.Fatal("the refused revoke appended to the log")
-	}
-	// Control: with the CRL that lists every logged serial, it goes through.
-	if err := os.WriteFile(crlPath, current, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := Revoke(dir, root, Revoked{Serial: big.NewInt(3), At: time.Now()}, next); err != nil || n.Cmp(big.NewInt(3)) != 0 {
-		t.Fatalf("control: revoke against the current CRL: #%v %v", n, err)
 	}
 }
 

@@ -312,7 +312,7 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 // network_timeout.
 //
 // pushMu (per branch) still serializes pushes from this instance — the sync
-// loop, the fleet register/unregister push and the create-time push — so one
+// loop, the fleet operations' one push and the create-time push — so one
 // push's snapshot is always taken after the previous push finished. It is NOT
 // a guarantee about what the origin applies: a push that hits network_timeout
 // releases pushMu while the server may still apply it. Against a knomit host
@@ -480,8 +480,9 @@ func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth tr
 // RetractPushedBranch takes back what this instance pushed of branch, for a
 // repository that is about to be deleted (a fleet create that is being rolled
 // back). It deletes refs/heads/<branch> on the origin WITH A LEASE on the
-// hash this instance last pushed there, which is the tracking ref
-// refs/remotes/origin/<branch> that every successful Push sets. Then it
+// last tip this instance saw there, pushed OR fetched: the tracking ref
+// refs/remotes/origin/<branch>, which every successful Push sets and every
+// fetch of the branch's refspec updates. Then it
 // removes the origin from this repository's git config, so that no later push
 // recreates the branch (the reconcile loop's Push skips a repository without
 // an origin remote). Both steps run under the branch's push lock, which every
@@ -489,8 +490,10 @@ func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth tr
 //
 // The lease is the origin's compare-and-swap. The delete command carries the
 // old value from the push session's own advertisement, and RequireRemoteRefs
-// refuses the push unless that value is the hash this instance pushed. A tip
-// that someone else pushed is therefore never deleted. Such a push is refused
+// refuses the push unless that value is the tracking ref's hash. A tip
+// someone else pushed AFTER this instance last saw the branch is therefore
+// never deleted; one it fetched before the retract is (the loop force-pushes
+// its own agent branch anyway). Such a push is refused
 // with an error that names both hashes, and the origin remote is kept so that
 // the caller can retry.
 //

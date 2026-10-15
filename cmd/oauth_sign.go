@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"knomit/internal/config"
 	"knomit/internal/oauth"
 	"knomit/internal/pki"
 )
@@ -39,6 +40,20 @@ type signOpts struct {
 }
 
 var fingerprintArgRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// resolveFleetRootDir is --dir, or <home>/fleet (pki.FleetRootDirName) when
+// it is not given: the root key (root.key, a plain owner-only file, like an
+// SSH key), the root certificate, the CRL and the two local logs.
+func resolveFleetRootDir(dir string) (string, error) {
+	if dir != "" {
+		return dir, nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return "", fmt.Errorf("--dir not given and the knomit home is unresolved: %w", err)
+	}
+	return filepath.Join(cfg.Home, pki.FleetRootDirName), nil
+}
 
 // oauthSign fetches the waiting request's description, prints it for the
 // operator to read (errOut), checks the instance against the fleet root's own

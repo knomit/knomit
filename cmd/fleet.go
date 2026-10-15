@@ -20,13 +20,11 @@ import (
 func fleetCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "fleet",
-		Short: "Show, join or leave this instance's fleet (F09)",
-		Long: `An instance is standalone until it registers with a fleet: a knomit
-repository whose ontology is the fleet ontology. Registering mounts it, writes this
-instance's member record on its agent branch and pushes it; the record counts once
-the fleet's master merges it into main. Unregistering pushes a "left" record
-first, and only then unmounts the fleet repository (retrying until the push
-succeeds).`,
+		Short: "Show this instance's fleet (F09)",
+		Long: `An instance is standalone until it creates or joins a fleet. Every fleet
+operation is a REST route on the local listener (/api/v1/fleet/create, enroll,
+join, leave, revoke, decommission, root), used by the Fleet page; this command
+only shows the state (GET /api/v1/fleet).`,
 	}
 	status := &cobra.Command{
 		Use:   "status",
@@ -34,35 +32,11 @@ succeeds).`,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withFleetAPI(func(hc *http.Client) error {
-				return fleetCall(cmd.Context(), hc, cmd.OutOrStdout(), http.MethodGet, nil)
+				return fleetCall(cmd.Context(), hc, cmd.OutOrStdout())
 			})
 		},
 	}
-	var token, method string
-	register := &cobra.Command{
-		Use:   "register <fleet-repo-url>",
-		Short: "Join a fleet (or refresh this instance's record in it)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			body := map[string]string{"url": args[0], "auth_method": method, "auth_token": token}
-			return withFleetAPI(func(hc *http.Client) error {
-				return fleetCall(cmd.Context(), hc, cmd.OutOrStdout(), http.MethodPut, body)
-			})
-		},
-	}
-	register.Flags().StringVar(&token, "token", "", "access token for the fleet repository's origin")
-	register.Flags().StringVar(&method, "auth-method", "", "auth method for the origin (default: inferred)")
-	unregister := &cobra.Command{
-		Use:   "unregister",
-		Short: "Leave the fleet: push a left record, then unmount the fleet repository",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withFleetAPI(func(hc *http.Client) error {
-				return fleetCall(cmd.Context(), hc, cmd.OutOrStdout(), http.MethodDelete, nil)
-			})
-		},
-	}
-	c.AddCommand(status, register, unregister)
+	c.AddCommand(status)
 	return c
 }
 
@@ -86,6 +60,9 @@ type fleetStatusJSON struct {
 	Since       string `json:"since"`
 	LastAttempt string `json:"last_attempt"`
 	LastError   string `json:"last_error"`
+	Master      bool   `json:"master"`
+	Hosting     string `json:"hosting"`
+	RootDir     string `json:"root_dir"`
 	// F10
 	ExternalAddresses []string `json:"external_addresses"`
 	Record            *struct {
@@ -97,9 +74,9 @@ type fleetStatusJSON struct {
 	Notice              string `json:"notice"`
 }
 
-func fleetCall(ctx context.Context, hc *http.Client, out io.Writer, method string, body any) error {
+func fleetCall(ctx context.Context, hc *http.Client, out io.Writer) error {
 	var st fleetStatusJSON
-	if err := localCall(ctx, hc, method, "/fleet", body, &st); err != nil {
+	if err := localCall(ctx, hc, http.MethodGet, "/fleet", nil, &st); err != nil {
 		return err
 	}
 	printFleetStatus(out, st)
@@ -110,8 +87,9 @@ func printFleetStatus(out io.Writer, st fleetStatusJSON) {
 	fmt.Fprintf(out, "state:  %s (since %s)\n", st.State, st.Since)
 	fmt.Fprintf(out, "agent:  %s\n", st.AgentID)
 	if st.FleetRepo != "" {
-		fmt.Fprintf(out, "fleet:  %s (%s)\n", st.FleetRepo, st.FleetURL)
+		fmt.Fprintf(out, "fleet:  %s (hosting: %s)\n", st.FleetRepo, st.Hosting)
 		fmt.Fprintf(out, "record: %s\n", st.RecordState)
+		fmt.Fprintf(out, "fleet master: %t (fleet root directory: %s)\n", st.Master, st.RootDir)
 	}
 	if len(st.ExternalAddresses) > 0 {
 		fmt.Fprintf(out, "addresses (knomit.toml): %s\n", strings.Join(st.ExternalAddresses, " "))
@@ -127,9 +105,9 @@ func printFleetStatus(out io.Writer, st fleetStatusJSON) {
 	}
 	switch {
 	case st.RecordCurrent != nil && !*st.RecordCurrent:
-		fmt.Fprintln(out, "record differs from knomit.toml / this binary: restart or re-register to update it")
+		fmt.Fprintln(out, "record differs from knomit.toml / this binary: restart to update it")
 	case st.RecordPendingUpdate:
-		fmt.Fprintln(out, "record: pending update (merge this instance's branch into the fleet's main)")
+		fmt.Fprintln(out, "record: pending update (waiting for the fleet's master to merge it into main)")
 	}
 	if st.Notice != "" {
 		fmt.Fprintf(out, "notice: %s\n", st.Notice)

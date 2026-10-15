@@ -1,6 +1,6 @@
 // Package pkitest builds throwaway fleets for tests in OTHER packages
-// (internal/web, cmd): a root, enrolled members, and the files `knomit
-// identity install` would write. Everything is generated in-process in
+// (internal/web, cmd): a root, enrolled members, and the files a fleet
+// join would write. Everything is generated in-process in
 // t.TempDir(); no key material is ever committed.
 package pkitest
 
@@ -101,8 +101,23 @@ func (f *Fleet) Enroll(t testing.TB, email string, keyPath ...string) Member {
 	return Member{KeyPath: path, Pub: pub, CertPEM: certPEM, Cert: c}
 }
 
+// Bundle is m's enrollment bundle: its leaf, the root and the current CRL,
+// what POST /api/v1/fleet/enroll returns and POST /api/v1/fleet/join takes.
+func (f *Fleet) Bundle(t testing.TB, m Member) []byte {
+	t.Helper()
+	rootPEM, err := os.ReadFile(filepath.Join(f.Dir, pki.RootCertFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	crlPEM, err := os.ReadFile(filepath.Join(f.Dir, pki.CRLFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(append(append([]byte{}, m.CertPEM...), rootPEM...), crlPEM...)
+}
+
 // Install writes instance.crt, root.crt and crl.pem for m into dir (created
-// 0700), what `knomit identity install` leaves behind.
+// 0700), what an enrolled instance holds after POST /api/v1/fleet/join.
 func (f *Fleet) Install(t testing.TB, m Member, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -126,13 +141,18 @@ func (f *Fleet) Install(t testing.TB, m Member, dir string) {
 // Revoke revokes m on the fleet root and copies the new CRL into each dir.
 func (f *Fleet) Revoke(t testing.TB, m Member, dirs ...string) {
 	t.Helper()
-	if _, err := pki.Revoke(f.Dir, f.Root, pki.Revoked{Serial: m.Cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(filepath.Join(f.Dir, pki.CRLFile))
+	current, err := pki.LoadCRL(filepath.Join(f.Dir, pki.CRLFile))
 	if err != nil {
 		t.Fatal(err)
 	}
+	rv, err := pki.RevokeSerial(f.Root, current, pki.Revoked{Serial: m.Cert.SerialNumber, At: time.Now()}, time.Now(), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pki.RecordRevocation(f.Dir, rv); err != nil {
+		t.Fatal(err)
+	}
+	b := rv.CRLPEM
 	for _, d := range dirs {
 		tmp := filepath.Join(d, "."+pki.CRLFile+".tmp")
 		if err := os.WriteFile(tmp, b, 0o600); err != nil {

@@ -159,16 +159,26 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	r.Get("/repo-events", handleRepoEvents(s.Manager))
 	r.Get("/logs/events", handleLogEvents(s.Logs, s.ReadOnly))
 	// F09 fleet membership: a TOP-LEVEL resource (the instance's state, not a
-	// repo's). PUT/DELETE pass the ordinary write gate.
+	// repo's). The two reads are open to any principal the edge admits.
 	r.Get("/fleet", handleGetFleet(b, s.Manager))
-	r.Put("/fleet", handlePutFleet(b, s.Manager))
-	r.Delete("/fleet", handleDeleteFleet(b, s.Manager))
 	r.Get("/fleet/members", handleFleetMembers(b, s.Manager))
-	// Fleet create mints the fleet ROOT KEY and installs this instance's own
-	// certificate, so it is served to the local authenticated listener only
-	// (RequireLocalVia: the unix socket or named pipe) — never to a peer over
-	// mTLS, and never to a browser page on loopback TCP.
-	r.With(RequireLocalVia).Post("/fleet/create", handleCreateFleet(b, s.Manager))
+	// Every fleet operation uses the fleet ROOT KEY or installs or removes
+	// this instance's trust material, so each is served to the local
+	// authenticated listener only (RequireLocalVia: the unix socket or named
+	// pipe) — never to a peer over mTLS, and never to a browser page on
+	// loopback TCP (issue #521 opens them remotely later, under one rule).
+	r.Group(func(r chi.Router) {
+		r.Use(RequireLocalVia)
+		r.Post("/fleet/create", handleCreateFleet(b, s.Manager))
+		r.Post("/fleet/enroll", handleEnrollFleet(s.Manager))
+		r.Post("/fleet/join", handleJoinFleet(b, s.Manager))
+		r.Post("/fleet/leave", handleLeaveFleet(b, s.Manager))
+		r.Post("/fleet/revoke", handleRevokeFleet(s.Manager))
+		r.Post("/fleet/decommission", handleDecommissionFleet(b, s.Manager))
+		r.Get("/fleet/root", handleGetFleetRoot(s.Manager))
+		r.Put("/fleet/root", handlePutFleetRoot(s.Manager))
+		r.Delete("/fleet/root", handleDeleteFleetRoot(s.Manager))
+	})
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Get("/archived/{id}", handleHALArchivedItem(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))

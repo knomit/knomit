@@ -210,19 +210,25 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, email string, validity time.Dur
 	return Issuance{CertPEM: certPEM(der), Record: rec, Line: append(line, '\n')}, nil
 }
 
-// IssueInstance is IssueLeaf as of time.Now() that also appends the ledger
-// line to <dir>/issued.jsonl: the fleet-root-directory form `identity enroll`
-// uses. A certificate whose line could not be logged is not returned, since
-// revocation finds serials in that log.
+// IssueInstance is IssueLeaf as of time.Now() that also records the issuance
+// in the fleet root directory dir (RecordIssuance): the form fleet create
+// uses for the master's own leaf. A certificate whose line could not be
+// logged is not returned.
 func IssueInstance(dir string, root Root, pub ed25519.PublicKey, email string, validity time.Duration) ([]byte, Issued, error) {
 	is, err := IssueLeaf(root, pub, email, validity, time.Now())
 	if err != nil {
 		return nil, Issued{}, err
 	}
-	if err := appendLine(filepath.Join(dir, IssuedLogFile), is.Line); err != nil {
-		return nil, Issued{}, fmt.Errorf("pki: issuance log (certificate discarded, since it could never be revoked by serial): %w", err)
+	if err := RecordIssuance(dir, is); err != nil {
+		return nil, Issued{}, fmt.Errorf("pki: issuance log (certificate discarded): %w", err)
 	}
 	return is.CertPEM, is.Record, nil
+}
+
+// RecordIssuance appends is's line to <dir>/issued.jsonl, the fleet root's
+// local audit log of every leaf it issued.
+func RecordIssuance(dir string, is Issuance) error {
+	return appendLine(filepath.Join(dir, IssuedLogFile), is.Line)
 }
 
 // appendLine appends one ledger line (already newline-terminated), 0600.
