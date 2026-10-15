@@ -392,7 +392,8 @@ func installFleetRoot(t *testing.T, m *Manager, root *pkitest.Fleet) {
 // refreshFixture mounts, through the fleet door, a fleet repository whose
 // main holds staleFleetYAML and root A's certificate. home is what
 // <home>/fleet holds when it mounts: "master" root A, "stray" another root
-// (a stray root.key from another fleet), "member" nothing.
+// (a stray root.key from another fleet), "cert-only" root A's certificate
+// without its key, "member" nothing.
 func refreshFixture(t *testing.T, home string) (m *Manager, ri *RepoInstance, stale string, rootA *pkitest.Fleet) {
 	t.Helper()
 	dir := t.TempDir()
@@ -407,6 +408,9 @@ func refreshFixture(t *testing.T, home string) (m *Manager, ri *RepoInstance, st
 		installFleetRoot(t, m, rootA)
 	case "stray":
 		installFleetRoot(t, m, pkitest.New(t))
+	case "cert-only":
+		installFleetRoot(t, m, rootA)
+		require.NoError(t, os.Remove(filepath.Join(m.fleetRootDir(), pki.RootKeyFile)))
 	}
 	return m, mountFleetByDoor(t, m, "fleet", url), stale, rootA
 }
@@ -456,6 +460,18 @@ func TestFleetOntologyRefresh_StrayRootKeyIsNotTheMaster(t *testing.T) {
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		require.False(t, m.isFleetMaster(svc), "not this fleet's master")
 	}))
+}
+
+// This fleet's root certificate without the key beside it (a member that
+// keeps a copy of root.crt) does not make the master either: both halves are
+// required.
+// SABOTAGE: drop the root.key check from isFleetMaster -> the member
+// rewrites the file -> red.
+func TestFleetOntologyRefresh_RootCertWithoutKeyIsNotTheMaster(t *testing.T) {
+	m, ri, stale, _ := refreshFixture(t, "cert-only")
+	_, err := pki.LoadRootCert(filepath.Join(m.fleetRootDir(), pki.RootCertFile))
+	require.NoError(t, err, "reached: this fleet's root certificate is in <home>/fleet")
+	require.Equal(t, stale, agentOntology(t, ri), "the stored file is left byte for byte")
 }
 
 // A refused restore on the MASTER writes nothing into the archived store
