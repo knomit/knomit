@@ -13,7 +13,7 @@ import (
 )
 
 // Install orchestration for the instance side of enrollment: what
-// `knomit identity install` and `identity show` do, and what the desktop's
+// a fleet join and `identity show` do, and what the desktop's
 // Settings window does over its Wails bindings (knomit#256). It lives here,
 // not in cmd or app, because both front-ends need it and it needs no server:
 // ONE implementation of the checks, so the two cannot drift.
@@ -153,7 +153,7 @@ type InstallOptions struct {
 	ExpectInstalledRoot string
 }
 
-// InstallBundle is `identity install`: it installs raw into dir for the key
+// InstallBundle installs raw (an enrollment bundle) into dir for the key
 // at keyPath. Every check runs BEFORE anything is written — the directory
 // itself included — so a VERIFICATION failure leaves dir exactly as it was.
 // An I/O failure between the three renames can leave a mixed set; the

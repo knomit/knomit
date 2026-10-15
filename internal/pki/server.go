@@ -41,7 +41,7 @@ type snapshot struct {
 
 // reloader re-reads instance.crt, root.crt and crl.pem on every handshake
 // (and, for a Server, on every tick of Run) and adopts a changed set, so
-// `knomit identity install` and a new CRL take effect without a restart. It compares file BYTES rather than mtimes: the
+// a fleet join and a new CRL take effect without a restart. It compares file BYTES rather than mtimes: the
 // files are a few KB, and a byte comparison cannot be fooled by mtime
 // granularity or an inode reused by an atomic rename.
 type reloader struct {
@@ -375,7 +375,7 @@ func (r *reloader) adopt(s *snapshot) error {
 		return err
 	}
 	if stale {
-		r.logf("CRL is stale (NextUpdate passed); still enforcing it; publish a fresh one with `knomit identity revoke` or a reissue",
+		r.logf("CRL is stale (NextUpdate passed); still enforcing it; the fleet's master publishes a fresh one (POST /api/v1/fleet/revoke) or a reissue",
 			"event", "tls_crl_stale", "next_update", s.crl.NextUpdate, "crl_number", s.crl.Number.String())
 	}
 	if last == nil || s.crl.Number.Cmp(last) > 0 {

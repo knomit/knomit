@@ -20,7 +20,7 @@ import (
 
 // The Settings window's "Fleet identity" section (knomit#256): enrolment of
 // a desktop that has no `knomit` CLI. The install checks are pki's
-// (pki.InstallBundle), the same function `knomit identity install` calls;
+// (pki.InstallBundle), the same function the fleet join calls;
 // this file only resolves the paths, gates the caller and shapes the answer.
 //
 // WHY BINDINGS, NOT HTTP: every route on the app handler is also served on

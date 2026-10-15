@@ -47,7 +47,7 @@ var (
 	ErrStatementMismatch  = errors.New("oauth: the statement was signed over a different request than the one waiting under that id")
 	ErrReplayed           = errors.New("oauth: this statement was already applied")
 	ErrReplayTableFull    = errors.New("oauth: too many recent signed statements; try again shortly")
-	ErrNoFleetRoot        = errors.New("oauth: signed approval is unavailable: this instance holds no fleet root (not enrolled with `knomit identity install`)")
+	ErrNoFleetRoot        = errors.New("oauth: signed approval is unavailable: this instance holds no fleet root (not in a fleet: POST /api/v1/fleet/join)")
 )
 
 // maxStatementLifetime bounds how far ahead a statement may expire: a signed

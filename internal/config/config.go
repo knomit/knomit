@@ -368,7 +368,7 @@ type Config struct {
 //
 // Addr empty (the default) means no TLS listener. A set Addr with no
 // certificate installed in Dir logs a WARN and serves plaintext only, so
-// configuring the listener before `knomit identity install` is harmless.
+// configuring the listener before a fleet join is harmless.
 //
 // Dir holds instance.crt, root.crt, crl.pem and crl.number. The instance KEY
 // is not here: it stays at [remote].ssh_key / <Home>/id_ed25519, the one copy.

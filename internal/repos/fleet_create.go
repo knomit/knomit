@@ -136,7 +136,7 @@ func (m *Manager) lockFleetOp() func() {
 // fleetRootStagingDir is where a create mints the root before it moves it to
 // <home>/fleet (step 5). Nothing but a create writes it, so the rollback
 // removes it whole. Until the move, an operator command that writes
-// <home>/fleet (knomit identity init-root) never sees this create's root,
+// <home>/fleet (PUT /api/v1/fleet/root) never sees this create's root,
 // and nothing this create undoes is in <home>/fleet.
 func (m *Manager) fleetRootStagingDir() string {
 	return m.fleetRootDir() + ".creating"

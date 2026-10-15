@@ -338,14 +338,16 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 	return m.FleetStatus(ctx)
 }
 
-// undoJoin takes a refused join back: the agent branch it may have pushed
-// (with the lease, as the create's rollback does), the repository, the
-// installed material. Every step runs; the errors are joined.
+// undoJoin takes a refused join back: the agent branch the mount may have
+// pushed to a forge (with the lease, as the create's rollback does), the
+// repository, the installed material. Every step runs; the errors of the
+// last two are joined. The retract is best effort: a knomit host refuses
+// every delete, and what the mount pushed there is main's tip, no record.
 func (m *Manager) undoJoin(ctx context.Context, ri *RepoInstance) error {
 	var errs []error
 	if ri != nil {
 		if err := m.retractFleetBranch(ctx, ri); err != nil {
-			errs = append(errs, fmt.Errorf("delete the agent branch on the origin: %w", err))
+			log.Info().Err(err).Str("fleet", ri.Name()).Msg("fleet join refused: the agent branch on the origin is left (it holds no record)")
 		}
 		if err := m.deleteRepo(ri.Name(), "fleet join refused"); err != nil {
 			errs = append(errs, err)

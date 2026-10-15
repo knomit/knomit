@@ -1,6 +1,6 @@
 // Package pkitest builds throwaway fleets for tests in OTHER packages
-// (internal/web, cmd): a root, enrolled members, and the files `knomit
-// identity install` would write. Everything is generated in-process in
+// (internal/web, cmd): a root, enrolled members, and the files a fleet
+// join would write. Everything is generated in-process in
 // t.TempDir(); no key material is ever committed.
 package pkitest
 

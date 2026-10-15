@@ -65,7 +65,7 @@ export interface InstallResult {
  */
 export const CLASS_TEXT: Record<string, string> = {
   malformed:
-    'That is not an enrollment bundle. It must hold this instance’s certificate, the fleet root certificate and a revocation list, as the operator’s knomit identity enroll writes it.',
+    'That is not an enrollment bundle. It must hold this instance’s certificate, the fleet root certificate and a revocation list, as the fleet master’s enroll returns it.',
   key_mismatch:
     'This bundle was issued for a different key. Send the operator this instance’s public key (Copy public key) and ask for a new bundle.',
   chain:

@@ -104,7 +104,7 @@ func TestGrants_AddListRevokeAndTheRefusals(t *testing.T) {
 
 	// revoke read on an instance: refused, by PARSING, with the explanation.
 	_, err = run(t, "", "grants", "revoke", inst, "read")
-	if err == nil || !strings.Contains(err.Error(), "knomit identity revoke") {
+	if err == nil || !strings.Contains(err.Error(), "POST /api/v1/fleet/revoke") {
 		t.Fatalf("revoke read on an instance: %v", err)
 	}
 	// Positive control: read on a non-instance principal is revocable.
