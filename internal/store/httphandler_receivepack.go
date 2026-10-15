@@ -239,7 +239,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(fmt.Sprintf("knomit: %s would point at %s, which is not a commit this push sent or this host holds", cmd.Name, cmd.New))
 		return
 	}
-	commits, _, err := q.newCommits(cmd.New)
+	commits, _, err := q.newCommits(cmd.New, rp.rh.heldAdmitted(r.Context(), rp.upstream()))
 	if err != nil {
 		refuse(fmt.Sprintf("knomit: the pushed history could not be read: %v", err))
 		return
@@ -422,18 +422,23 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 // without a verifiable signature here is an unsigned merge that passed M3
 // (it adds nothing beyond its parents) and has no signer to compare.
 //
-// Only NEW commits reach this (newCommits stops at commits the host holds):
-// a member merging the host's main into its branch pushes other members'
-// commits, but the host holds those, so only the member's own merge commit is
-// judged.
+// Only the commits newCommits returns reach this: those the push sent, and on
+// the fleet repository also every held commit that is NOT reachable from main
+// or from a local agent/* branch (heldAdmitted). A member merging the host's
+// main into its branch pushes other members' commits, but those are on main
+// or on admitted branches, so only the member's own merge commit is judged.
 //
 // INVARIANT this relies on: every commit the walk skips is reachable from
-// main or from a ref that was itself admitted. Objects that are held but were
-// never judged break it: a clean merge of an unjudged commit and main would be
-// the only new commit, so the unjudged commit would be admitted through it. The
-// fleet master with an origin fetches every member branch, refused tips
-// included, so its copy accepts no push at all (repos.Manager.FleetPushRefusal,
-// applied at the web edge in pushPolicy).
+// main or from a ref that was itself admitted. On the fleet repository the
+// walk enforces it (PR #524 B1): its copy can hold commits nobody judged (a
+// master with an origin fetches refused member tips; a member clone made
+// before PR #524 copied every agent/* branch), and a clean merge of such a
+// commit and main would otherwise be the only commit judged, admitting the
+// unjudged one through it. A fleet copy with an origin also accepts no push at
+// all (repos.Manager.FleetPushRefusal, at the web edge in pushPolicy): defence
+// in depth, and "nobody pushes to a non-master". Every other repository keeps
+// "held = judged or written here", which holds because it never fetches
+// another agent's branch after its clone.
 func signerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
 	s, err := verifyCommitSignature(c)
 	if err != nil {
@@ -606,6 +611,75 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 		}
 	}
 	return res, seeded, "", nil
+}
+
+// heldAdmitted is newCommits' admitted predicate for a push to this
+// repository: nil (every held commit ends the walk) unless this repository is
+// the fleet repository, where a held commit ends it only when it is reachable
+// from the consensus branch or from a local refs/heads/agent/* branch. Those
+// refs are admitted by construction: receive-pack's register and the fleet
+// master's promotePeer create them only after the judge, and this host's own
+// agent branch is written only by this host. Remote-tracking refs are not
+// admitted: a fetch stores whatever the origin had.
+//
+// The fleet is recognised by the ontology at the upstream's tip; when that
+// cannot be read the strict rule applies (judging more is the safe side, and
+// verify refuses the push anyway).
+//
+// Cost: a frontier commit that IS a head tip answers at once; any other one
+// builds, once per push and only then, the set of commits reachable from the
+// heads. The fleet repository is small; every other repository keeps the walk
+// proportional to the push.
+func (rh *repoHandler) heldAdmitted(ctx context.Context, upstream string) func(plumbing.Hash) (bool, error) {
+	if _, ont, err := rh.verifyModeAt(ctx, upstream); err == nil && !fact.IsFleetOntology(ont) {
+		return nil
+	}
+	var heads []plumbing.Hash
+	var reach map[plumbing.Hash]bool
+	loaded := false
+	load := func() error {
+		loaded = true
+		if up, err := rh.gits.Reference(plumbing.NewBranchReferenceName(upstream)); err == nil {
+			heads = append(heads, up.Hash())
+		} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return err
+		}
+		iter, err := rh.gits.IterReferences()
+		if err != nil {
+			return err
+		}
+		defer iter.Close()
+		return iter.ForEach(func(ref *plumbing.Reference) error {
+			if ref.Type() == plumbing.HashReference && strings.HasPrefix(ref.Name().String(), "refs/heads/agent/") {
+				heads = append(heads, ref.Hash())
+			}
+			return nil
+		})
+	}
+	return func(h plumbing.Hash) (bool, error) {
+		if !loaded {
+			if err := load(); err != nil {
+				return false, err
+			}
+		}
+		for _, head := range heads {
+			if head == h {
+				return true, nil
+			}
+		}
+		if reach == nil {
+			reach = map[plumbing.Hash]bool{}
+			for _, head := range heads {
+				if reach[head] {
+					continue
+				}
+				if err := walkHistory(rh.gits, head, reach, func(c *object.Commit) { reach[c.Hash] = true }); err != nil {
+					return false, err
+				}
+			}
+		}
+		return reach[h], nil
+	}
 }
 
 // pushRegisterHook, when set (tests only), runs inside register after the
