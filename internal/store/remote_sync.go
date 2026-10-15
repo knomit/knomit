@@ -433,6 +433,88 @@ func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth tr
 	return PushResult{Pushed: true}, nil
 }
 
+// RetractPushedBranch takes back what this instance pushed of branch, for a
+// repository that is about to be deleted (a fleet create that is being rolled
+// back). It deletes refs/heads/<branch> on the origin WITH A LEASE on the
+// hash this instance last pushed there, which is the tracking ref
+// refs/remotes/origin/<branch> that every successful Push sets. Then it
+// removes the origin from this repository's git config, so that no later push
+// recreates the branch (the reconcile loop's Push skips a repository without
+// an origin remote). Both steps run under the branch's push lock, which every
+// Push takes, so no push can land between them.
+//
+// The lease is the origin's compare-and-swap. The delete command carries the
+// old value from the push session's own advertisement, and RequireRemoteRefs
+// refuses the push unless that value is the hash this instance pushed. A tip
+// that someone else pushed is therefore never deleted. Such a push is refused
+// with an error that names both hashes, and the origin remote is kept so that
+// the caller can retry.
+//
+// A branch that is already absent on the origin is not an error. When the
+// origin has the branch but this instance has no tracking ref for it, this
+// instance never pushed it: nothing is deleted, and the call fails.
+func (ri *remoteIndex) RetractPushedBranch(ctx context.Context, branch string, auth transport.AuthMethod) error {
+	if branch == "" {
+		return ErrNoAgentBranch
+	}
+	defer ri.rh.lockPush(branch)()
+	remote, err := ri.rh.repo.Remote("origin")
+	if errors.Is(err, gogit.ErrRemoteNotFound) {
+		return nil // nothing can push here any more, and a re-run after a removal lands here
+	}
+	if err != nil {
+		return fmt.Errorf("RetractPushedBranch: %w", err)
+	}
+	name := plumbing.NewBranchReferenceName(branch)
+	tracking := plumbing.NewRemoteReferenceName("origin", branch)
+	var pushed plumbing.Hash
+	if ref, err := ri.rh.gits.Reference(tracking); err == nil {
+		pushed = ref.Hash()
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("RetractPushedBranch: %s: %w", tracking, err)
+	}
+
+	netCtx, cancel := ri.rh.netCtx(ctx)
+	defer cancel()
+	refs, err := remote.ListContext(netCtx, &gogit.ListOptions{Auth: auth})
+	if err != nil && !errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return fmt.Errorf("RetractPushedBranch: list the origin: %w", err)
+	}
+	var at plumbing.Hash
+	for _, r := range refs {
+		if r.Name() == name {
+			at = r.Hash()
+		}
+	}
+	switch {
+	case at.IsZero():
+		// Absent on the origin: nothing to delete.
+	case pushed.IsZero():
+		return fmt.Errorf("RetractPushedBranch: the origin's %s is at %s, and this instance never pushed it: left alone", branch, at)
+	case at != pushed:
+		return fmt.Errorf("RetractPushedBranch: the origin's %s is at %s, not %s (the commit this instance pushed): left alone", branch, at, pushed)
+	default:
+		var srv bytes.Buffer
+		if err := ri.rh.repo.PushContext(netCtx, &gogit.PushOptions{
+			RemoteName:        "origin",
+			RefSpecs:          []gogitconfig.RefSpec{gogitconfig.RefSpec(":" + name.String())},
+			RequireRemoteRefs: []gogitconfig.RefSpec{gogitconfig.RefSpec(pushed.String() + ":" + name.String())},
+			Auth:              auth,
+			Progress:          &srv,
+		}); err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+			return fmt.Errorf("RetractPushedBranch: delete %s on the origin: %w%s", branch, err, remoteSays(srv.String()))
+		}
+		log.Info().Str("branch", branch).Str("commit", pushed.String()).Msg("RetractPushedBranch: deleted on the origin")
+	}
+	if err := ri.rh.gits.RemoveReference(tracking); err != nil && !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("RetractPushedBranch: %s: %w", tracking, err)
+	}
+	if err := ri.rh.repo.DeleteRemote("origin"); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
+		return fmt.Errorf("RetractPushedBranch: remove the origin remote: %w", err)
+	}
+	return nil
+}
+
 // storeHooks are test seams for the store. Every field is nil in production.
 type storeHooks struct {
 	// afterSnapshot runs in Push after the snapshot is taken and the write

@@ -204,6 +204,12 @@ type RemoteIndex interface {
 	// repository's main. A main on the origin that is not an ancestor of the
 	// tip is refused by the origin, as an ordinary push error.
 	PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error)
+	// RetractPushedBranch deletes branch on the origin with a lease on the
+	// hash this instance last pushed there, then removes the origin remote
+	// from the git config so that no later push recreates it. It is for a
+	// repository about to be deleted (a rolled-back fleet create). A tip
+	// someone else pushed is left alone, as an error.
+	RetractPushedBranch(ctx context.Context, branch string, auth transport.AuthMethod) error
 	// RecordSyncError persists a sync failure (last_status="error",
 	// last_error=msg) on the named remote without performing a fetch. Used to
 	// surface an auth-resolution failure that never reaches Sync().
