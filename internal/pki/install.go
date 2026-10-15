@@ -247,9 +247,10 @@ func InstallBundle(dir, keyPath string, raw []byte, opts InstallOptions) (Identi
 // this root is ever installed again. The instance key is never touched.
 //
 // The knomit+https client resolves dir at each session, so its next session
-// finds no certificate (ErrNotEnrolled). A running mTLS listener keeps the
-// set it last adopted until it restarts: the reloader adopts only a
-// complete set.
+// finds no certificate (ErrNotEnrolled). A running mTLS listener adopts the
+// uninstalled state (all three files absent) on its next handshake or tick:
+// it refuses every handshake and cuts every established connection, without
+// a restart.
 func Uninstall(dir string) error {
 	unlock, err := lockInstall(dir)
 	if err != nil {

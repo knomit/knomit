@@ -32,16 +32,23 @@ type Logf func(reason string, kv ...any)
 // snapshot is one consistent set of the three files. It is replaced as a
 // WHOLE: a reload in which any part fails keeps the previous snapshot in
 // force, so the listener never runs with, say, a new root and the old CRL.
+//
+// The one exception is the UNINSTALLED snapshot: all three files absent at
+// once, which only Uninstall produces (an install renames over them, never
+// removes them; leave and decommission uninstall). It has no root, and
+// uninstalled is the refusal of every handshake and every established
+// connection, so a running listener leaves the fleet without a restart.
 type snapshot struct {
 	rawCert, rawRoot, rawCRL []byte
 	cert                     tls.Certificate
 	root                     *x509.Certificate
 	crl                      *x509.RevocationList
+	uninstalled              error
 }
 
 // reloader re-reads instance.crt, root.crt and crl.pem on every handshake
 // (and, for a Server, on every tick of Run) and adopts a changed set, so
-// a fleet join and a new CRL take effect without a restart. It compares file BYTES rather than mtimes: the
+// a fleet join, a new CRL and a leave take effect without a restart. It compares file BYTES rather than mtimes: the
 // files are a few KB, and a byte comparison cannot be fooled by mtime
 // granularity or an inode reused by an atomic rename.
 type reloader struct {
@@ -92,8 +99,9 @@ const DefaultRecheckInterval = 10 * time.Second
 // the same peer would be accepted, checked at most one interval late. The
 // check is snapshot.check, the one VerifyConnection runs, against the CURRENT
 // snapshot. So it cuts a revoked peer, a peer whose certificate expired
-// mid-connection, and every peer of the old fleet after `install
-// --replace-root` — all three are what a fresh handshake would refuse.
+// mid-connection, every peer of the old fleet after a root replace, and
+// every peer at all once the files are uninstalled (leave, decommission) —
+// all four are what a fresh handshake would refuse.
 //
 // Three things run the check on established connections:
 //   - the moment a connection is first tracked (ConnRegistry.ConnState),
@@ -125,7 +133,12 @@ func NewServer(dir, keyPath string, logf Logf, interval time.Duration) (*Server,
 	}, r.logf)
 	s.cfg = r.configFor(snap)
 	s.cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
-		return r.configFor(s.refresh()), nil
+		snap := s.refresh()
+		if snap.uninstalled != nil {
+			r.logf(snap.uninstalled.Error(), "event", "tls_refused")
+			return nil, snap.uninstalled
+		}
+		return r.configFor(snap), nil
 	}
 	return s, nil
 }
@@ -236,6 +249,9 @@ func (r *reloader) verify(s *snapshot, cs tls.ConnectionState, usage Usage) erro
 // handshake runs (via verify) and what ConnRegistry re-runs on established
 // connections, so the two can never disagree about a peer.
 func (s *snapshot) check(cs tls.ConnectionState, usage Usage) error {
+	if s.uninstalled != nil {
+		return s.uninstalled
+	}
 	if len(cs.PeerCertificates) == 0 {
 		return fmt.Errorf("%w: peer presented no certificate", ErrUntrustedRoot)
 	}
@@ -252,6 +268,8 @@ func (r *reloader) current() *snapshot {
 
 // refresh returns the snapshot to use for this handshake, adopting a changed
 // file set if it passes every check and keeping the current one otherwise.
+// All three files absent is not a failed set but the uninstalled snapshot
+// (see snapshot), adopted at once.
 func (r *reloader) refresh() *snapshot {
 	cur := r.current()
 
@@ -261,6 +279,17 @@ func (r *reloader) refresh() *snapshot {
 	if errC == nil && errR == nil && errL == nil &&
 		bytes.Equal(rawCert, cur.rawCert) && bytes.Equal(rawRoot, cur.rawRoot) && bytes.Equal(rawCRL, cur.rawCRL) {
 		return cur
+	}
+	if errors.Is(errC, os.ErrNotExist) && errors.Is(errR, os.ErrNotExist) && errors.Is(errL, os.ErrNotExist) {
+		if cur.uninstalled != nil {
+			return cur
+		}
+		next := &snapshot{uninstalled: fmt.Errorf("%w: no fleet trust material is installed in %s (uninstalled: the fleet was left or decommissioned)", ErrUntrustedRoot, r.dir)}
+		r.mu.Lock()
+		r.cur, r.rejected = next, nil
+		r.mu.Unlock()
+		r.logf("tls files uninstalled; every peer is refused", "event", "tls_uninstalled", "dir", r.dir)
+		return next
 	}
 	// The memo key includes a read ERROR in place of the bytes, so a file
 	// that has gone missing is also logged once, not on every handshake.

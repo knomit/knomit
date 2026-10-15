@@ -335,8 +335,38 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 		t.Fatalf("bravo after the revoke: %q", s)
 	}
 
+	// A member still enrolled reaches the hub's running mTLS listener until
+	// the decommission, and not after it: no restart (review B2).
+	charlie := newFleetNode(t, dir, "charlie")
+	enr, err := alpha.mgr.EnrollFleetMember(ctx, "charlie", charlie.keyLine())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pki.InstallBundle(charlie.cfg.TLS.Dir, charlie.key, []byte(enr.Bundle), pki.InstallOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	peer, err := pki.HTTPClient(charlie.cfg.TLS.Dir, charlie.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hubGet := func() error {
+		peer.CloseIdleConnections()
+		resp, err := peer.Get("https://" + alpha.tlsAddr + "/api/v1/fleet")
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		return nil
+	}
+	if err := hubGet(); err != nil {
+		t.Fatalf("an enrolled member is refused by the hub before the decommission: %v", err)
+	}
+
 	if _, err := alpha.mgr.DecommissionFleet(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if err := hubGet(); err == nil {
+		t.Fatal("the decommissioned hub's running listener still admits a member")
 	}
 	if alpha.mgr.Get("fleet") != nil {
 		t.Fatal("the fleet repository survived the decommission")
