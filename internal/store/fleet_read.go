@@ -293,6 +293,44 @@ func (p *FleetPKI) Cert(id string) (*x509.Certificate, error) {
 	return c, nil
 }
 
+// verifyLeaf verifies leaf against this revision's root and CRL, at a moment
+// inside the leaf's own validity (never the current time: the judge is
+// historical, and TLS refuses an expired certificate on every connection).
+// An unusable root or CRL is its load error; a listed serial is
+// pki.ErrRevoked, and only from a CRL the root signed, about a leaf the root
+// signed.
+func (p *FleetPKI) verifyLeaf(leaf *x509.Certificate) (pki.Identity, error) {
+	if p.Root == nil {
+		return pki.Identity{}, p.RootErr
+	}
+	if p.CRL == nil {
+		return pki.Identity{}, p.CRLErr
+	}
+	at := leaf.NotBefore
+	if p.Root.NotBefore.After(at) {
+		at = p.Root.NotBefore
+	}
+	return pki.VerifyInstanceChain(leaf, nil, p.Root, p.CRL, at, pki.UsageClient)
+}
+
+// Revoked reports whether agent id is revoked at this revision: the leaf at
+// its leaf path chains to the root and its serial is on the CRL the root
+// signed. It is how a reader derives a member's "revoked" state (M6): the
+// state is never written to a record, it is the CRL's. A missing, unreadable
+// or foreign leaf, or an unusable root or CRL, is not "revoked" (nothing the
+// root signed says so); the judge refuses those on its own terms (rule B).
+func (p *FleetPKI) Revoked(id string) bool {
+	if p == nil {
+		return false
+	}
+	leaf, err := p.Cert(id)
+	if leaf == nil || err != nil {
+		return false
+	}
+	_, err = p.verifyLeaf(leaf)
+	return errors.Is(err, pki.ErrRevoked)
+}
+
 // parseCertPEM parses one CERTIFICATE PEM block.
 func parseCertPEM(raw []byte) (*x509.Certificate, error) {
 	blk, _ := pem.Decode(raw)

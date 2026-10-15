@@ -282,19 +282,21 @@ func TestRuleA_CertNotChainingRefused(t *testing.T) {
 	require.Contains(t, r.Reason, "does not chain to the fleet root")
 }
 
-// The shape of rule A: every changed path under members/<author id>/. A
-// commit that also touches anything else, one that writes ANOTHER id's
-// folder, and one whose only change is elsewhere, are judged by the old
-// rules only — with a valid leaf present, so a broken shape check admits.
+// The shape of rule A is the record-owner rule: every changed path outside
+// artifacts/ under members/<author id>/. A commit that also touches anything
+// else, one that writes ANOTHER id's folder, and one that touches a dot path,
+// are judged by the old rules only — with a valid leaf present, so a broken
+// shape check admits. (Artifact paths are the artifact rules':
+// TestRecordOwner_ArtifactPathsAreTheArtifactRules.)
 //
-// SABOTAGE: make onlyUnder return true → all three admitted → red.
+// SABOTAGE: make recordOwner return ok → all three admitted → red.
 func TestRuleA_ShapeOnlyOwnMembersFolder(t *testing.T) {
 	p := newTestFleetPKI(t)
 	j := namedSigner(t, "joiner")
 	leaf, _ := p.leaf("joiner", j)
 	arts := p.artifacts(p.crl(), map[string]string{"joiner": leaf})
 	cases := map[string][]string{
-		"also outside":      {"kb/members/joiner/1.md", "x", "artifacts/fleet/certs/evil.pem", "x"},
+		"also outside":      {"kb/members/joiner/1.md", "x", "kb/notes/evil.md", "x"},
 		"other id's folder": {"kb/members/boss/2.md", "x"},
 		"dot path":          {"kb/members/joiner/1.md", "x", ".gitignore", "x"},
 	}
@@ -337,10 +339,11 @@ func TestRuleA_MergeDiffAgainstEveryParent(t *testing.T) {
 	require.Empty(t, v.Refused, "positive control: both stay inside the folder")
 
 	g, gmain, gbase := selfRegFixture(t, arts)
-	gside := g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", rec1, "artifacts/fleet/x.txt", "x"), "joiner", j, gmain)
+	gside := g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", rec1, "kb/notes/x.md", "x"), "joiner", j, gmain)
 	// Against gside (the FIRST parent) the merge only rewrites 1.md (inside);
-	// against main (the second) it also brings x.txt (outside).
-	gm := g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", rec2, "artifacts/fleet/x.txt", "x"), "joiner", j, gside, gmain)
+	// against main (the second) it also brings x.md (outside). It is not M3
+	// clean (it rewrites 1.md beyond both parents), so the rules judge it.
+	gm := g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", rec2, "kb/notes/x.md", "x"), "joiner", j, gside, gmain)
 	g.ref(g.fleet, "cand", gm)
 	v = g.checkSelf("")
 	require.Equal(t, 2, v.Checked)

@@ -51,41 +51,52 @@ var pushRuleRE = regexp.MustCompile(`refused by verify_signatures=enforce: ([a-z
 //	joiner   no record, a valid leaf on main (rule A: the bootstrap)
 //	gone     an active record whose leaf is revoked (rule B)
 //	stranger no record and no leaf (today's no-record)
+//	rogue    an active, certified member writing ANOTHER member's folder
+//	         (the record-owner rule; receive-pack table only)
 
 // Rules A and B on a knomit host, and the same verdicts from CheckRange over
 // a plain checkout of the same commits. A joiner whose leaf artifact is on
 // the fleet's main pushes its FIRST record under enforce and is admitted (the
 // branch is created on the host); a member whose leaf is revoked is refused;
-// a stranger is no-record.
+// a stranger is no-record; an active member writing boss's folder is
+// not-owner (the record-owner rule rides the same shared judge).
 //
 // SABOTAGE: give verify newJudge(fleet, "") (rule A off on the host) → the
 // joiner's push is refused no-record → red.
 func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 	p := newTestFleetPKI(t)
-	j, g, z := namedSigner(t, "joiner"), namedSigner(t, "gone"), namedSigner(t, "stranger")
+	j, g, z, r := namedSigner(t, "joiner"), namedSigner(t, "gone"), namedSigner(t, "stranger"), namedSigner(t, "rogue")
 	jl, _ := p.leaf("joiner", j)
 	gl, gs := p.leaf("gone", g)
-	extra := p.artifacts(p.crl(gs), map[string]string{"joiner": jl, "gone": gl})
+	rl, _ := p.leaf("rogue", r)
+	extra := p.artifacts(p.crl(gs), map[string]string{"joiner": jl, "gone": gl, "rogue": rl})
 	extra["kb/members/gone/1.md"] = memberFile("gone", fact.MemberActive, g.PublicKey())
+	extra["kb/members/rogue/1.md"] = memberFile("rogue", fact.MemberActive, r.PublicKey())
 	h := newFleetPushHost(t, extra)
 	fleetCalls := 0
 	h.setPolicy(PushPolicy{OwnBranch: hostBranch})
 
 	cases := []struct {
 		id   string
+		path string // the file the commit writes ("" = its own record)
 		want string
 	}{
-		{"joiner", ""},
-		{"gone", RuleRevoked},
-		{"stranger", RuleNoRecord},
+		{"joiner", "", ""},
+		{"gone", "", RuleRevoked},
+		{"stranger", "", RuleNoRecord},
+		{"rogue", "kb/members/boss/2.md", RuleNotOwner},
 	}
-	signers := map[string]ssh.Signer{"joiner": j, "gone": g, "stranger": z}
+	signers := map[string]ssh.Signer{"joiner": j, "gone": g, "stranger": z, "rogue": r}
 	for i, tc := range cases {
 		signer := signers[tc.id]
 		peer, dir := newDiskPeer(t, h.srv.URL)
 		head := peer.head()
+		path := tc.path
+		if path == "" {
+			path = "kb/members/" + tc.id + "/1.md"
+		}
 		c := peer.commitAs(tc.id, []*object.Commit{head}, signer,
-			with(peer.files(head), "kb/members/"+tc.id+"/1.md", memberFile(tc.id, fact.MemberActive, signer.PublicKey())))
+			with(peer.files(head), path, memberFile(tc.id, fact.MemberActive, signer.PublicKey())))
 		peer.setBranch("work", c)
 		fp, _ := pusherOf(t, signer)
 		branch := "agent/case-" + string(rune('a'+i))

@@ -226,7 +226,12 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 }
 
 // judgeCommit applies the gate's rules to one commit:
-//   - an unsigned merge passes only if it adds nothing beyond its parents (M3);
+//   - a two-parent merge that adds nothing beyond its parents (M3) passes,
+//     signed or not, BEFORE any record rule (H4): a member's routine "merge
+//     main into my branch" is never refused as no-record or not-owner, even
+//     though against main's side it brings in other members' changes. A merge
+//     that fails M3 is judged like any commit when signed, and refused
+//     (RuleMerge) when unsigned;
 //   - otherwise the SSHSIG must verify;
 //   - the author address's agent id must have exactly ONE member record;
 //   - the signing key (the full key) must be that record's CURRENT key, and no
@@ -235,11 +240,15 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 //   - rule B (only when the fleet revision holds root.crt): the leaf artifact
 //     for the id must name that key, chain to the root and not be on the CRL
 //     (certified: RuleNoCert, RuleKeyMismatch, RuleRevoked);
+//   - the record-owner rule (fleet repository only, recordOwner): every path
+//     the commit changes outside artifacts/, against every parent, is under
+//     members/<author id>/, and none of them is a delete;
 //   - rule A: a commit refused above for having no record, a record for
 //     another key, or an inactive record is ADMITTED when it is a
 //     self-registration backed by a valid leaf artifact (selfRegistration) —
 //     only when the id has no active record and the signing key is not the
-//     current key of another id's record (R4, mayRegister);
+//     current key of another id's record (R4, mayRegister), and only when it
+//     keeps the record-owner rule;
 //   - the artifact rules (R7): every commit the rules above admit, signed or
 //     an M3 merge, must also keep every artifact rule of the judged
 //     repository's ontology at main (artifactRules).
@@ -259,17 +268,20 @@ func (j judge) judgeCommit(c *object.Commit) (Refusal, bool) {
 func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 	h := c.Hash.String()
 	s, serr := verifyCommitSignature(c)
-	if serr != nil {
-		if (errors.Is(serr, ErrUnsigned) || errors.Is(serr, ErrNotSSHSIG)) && c.NumParents() >= 2 {
-			v, err := checkM3(c)
+	unsigned := serr != nil && (errors.Is(serr, ErrUnsigned) || errors.Is(serr, ErrNotSSHSIG))
+	if c.NumParents() >= 2 {
+		v, err := checkM3(c)
+		if err == nil && v.OK {
+			return Refusal{}, true
+		}
+		if unsigned {
 			if err != nil {
 				return Refusal{Commit: h, Rule: RuleMerge, Reason: err.Error()}, false
 			}
-			if !v.OK {
-				return Refusal{Commit: h, Rule: RuleMerge, Reason: v.Reason}, false
-			}
-			return Refusal{}, true
+			return Refusal{Commit: h, Rule: RuleMerge, Reason: v.Reason}, false
 		}
+	}
+	if serr != nil {
 		return Refusal{Commit: h, Rule: RuleSignature, Reason: serr.Error()}, false
 	}
 	fp := s.Fingerprint
@@ -280,7 +292,10 @@ func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 	r, ok := j.judgeRecord(h, id, s)
 	switch {
 	case ok:
-		return j.certified(h, id, s)
+		if r, ok := j.certified(h, id, s); !ok {
+			return r, false
+		}
+		return j.recordOwner(c, id)
 	case (r.Rule == RuleNoRecord || r.Rule == RuleKeyMismatch || r.Rule == RuleInactive) && j.mayRegister(id, s):
 		return j.selfRegistration(c, id, s, r)
 	}
@@ -349,9 +364,11 @@ func (j judge) certified(h, id string, s CommitSigner) (Refusal, bool) {
 
 // selfRegistration is rule A. The commit was refused by the record rules
 // with refusal; it is ADMITTED instead when:
-//   - every path it changes, against EVERY parent, is under the judged fleet
-//     repository's members/<id>/ (the author writing its own record and
-//     nothing else), and
+//   - it keeps the record-owner rule (recordOwner: every path it changes
+//     outside artifacts/, against EVERY parent, is under the judged fleet
+//     repository's members/<id>/ and none is a delete — the author writing
+//     its own record and nothing else; artifact paths are the artifact
+//     rules'), and
 //   - the leaf artifact certs/<id>.pem at the fleet revision exists, its key
 //     equals the SIGNING key (full key), it chains to root.crt and its serial
 //     is not on crl.pem, and
@@ -372,7 +389,10 @@ func (j judge) certified(h, id string, s CommitSigner) (Refusal, bool) {
 // RuleKeyMismatch; a revoked leaf is RuleRevoked.
 func (j judge) selfRegistration(c *object.Commit, id string, s CommitSigner, refusal Refusal) (Refusal, bool) {
 	dir := j.membersDir + id + "/"
-	if j.pki == nil || j.membersDir == "" || !onlyUnder(c, dir) {
+	if j.pki == nil || j.membersDir == "" {
+		return refusal, false
+	}
+	if _, ok := j.recordOwner(c, id); !ok {
 		return refusal, false
 	}
 	leaf, err := j.leafFor(id, s)
@@ -472,17 +492,7 @@ func (j judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
 	if err != nil || !fact.SameKey(certKey, s.Key) {
 		return leaf, errLeafOtherKey
 	}
-	if j.pki.Root == nil {
-		return leaf, j.pki.RootErr
-	}
-	if j.pki.CRL == nil {
-		return leaf, j.pki.CRLErr
-	}
-	at := leaf.NotBefore
-	if j.pki.Root.NotBefore.After(at) {
-		at = j.pki.Root.NotBefore
-	}
-	ident, err := pki.VerifyInstanceChain(leaf, nil, j.pki.Root, j.pki.CRL, at, pki.UsageClient)
+	ident, err := j.pki.verifyLeaf(leaf)
 	if err != nil {
 		return leaf, err
 	}
@@ -499,37 +509,52 @@ func (j judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
 // agent id (or is an operator certificate).
 var errLeafOtherID = errors.New("the certificate is not issued to this agent id")
 
-// onlyUnder reports whether c changes at least one path and every path it
-// changes against EVERY parent (the empty tree for a root commit) is under
-// dir (ending in "/", compared exactly). A merge that brings in anything else from
-// one side is not under dir against the other side. An unreadable tree is
-// "no": the commit falls back to the record rules.
-func onlyUnder(c *object.Commit, dir string) bool {
+// recordOwner is the record-owner rule, the fleet repository's only. It is
+// baked, not declared: the fleet ontology is product-owned, so there is no
+// attribute to switch it. A member writes its own record and nothing else:
+// every path c changes against EVERY parent (the empty tree for a root
+// commit) that is not under artifacts/ must be under the judged repository's
+// members/<id>/ (ending in "/", compared exactly), and none of those may be a
+// delete — a member leaves by writing state left, never by removing its
+// record. Paths under artifacts/ are the artifact rules' (artifactRules),
+// which every admitted commit keeps too; so the master's enroll and revoke
+// commits, which change artifacts only, pass. Outside the fleet repository
+// (membersDir "") the rule does not exist.
+//
+// A two-parent merge M3 admits never reaches this: against its main-side
+// parent it brings in other members' changes, yet adds nothing. A tree that
+// cannot be read is a refusal.
+func (j judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
+	if j.membersDir == "" {
+		return Refusal{}, true
+	}
+	dir := j.membersDir + id + "/"
+	refuse := func(reason string) (Refusal, bool) {
+		return Refusal{Commit: c.Hash.String(), Rule: RuleNotOwner, Reason: reason}, false
+	}
 	tree, err := c.Tree()
 	if err != nil {
-		return false
+		return refuse(fmt.Sprintf("the commit's tree cannot be read: %v", err))
 	}
 	parents, err := parentTrees(c)
 	if err != nil {
-		return false
+		return refuse(fmt.Sprintf("a parent's tree cannot be read: %v", err))
 	}
-	changed := false
 	for _, pt := range parents {
 		changes, err := object.DiffTree(pt, tree)
 		if err != nil {
-			return false
+			return refuse(fmt.Sprintf("diff: %v", err))
 		}
 		for _, ch := range changes {
 			for _, name := range []string{ch.From.Name, ch.To.Name} {
-				if name == "" {
-					continue
+				if name != "" && !underArtifacts(name) && !strings.HasPrefix(name, dir) {
+					return refuse(fmt.Sprintf("agent %q changes %s: a member writes only under %s", id, name, dir))
 				}
-				if !strings.HasPrefix(name, dir) {
-					return false
-				}
-				changed = true
+			}
+			if ch.To.Name == "" && !underArtifacts(ch.From.Name) {
+				return refuse(fmt.Sprintf("agent %q deletes %s: a member record is never deleted", id, ch.From.Name))
 			}
 		}
 	}
-	return changed
+	return Refusal{}, true
 }

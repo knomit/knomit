@@ -37,6 +37,10 @@ const (
 	RuleDuplicateKey = "duplicate-key" // the signing key is the current key of more than one record
 	RuleInactive     = "inactive"      // the record's state is not active
 	RuleMerge        = "merge"         // an unsigned merge that fails M3
+	// RuleNotOwner: the fleet repository only — a member commit that changes
+	// a path outside artifacts/ that is not under members/<its own id>/, or
+	// deletes a file there (the record-owner rule, recordOwner).
+	RuleNotOwner = "not-owner"
 	// RuleRevoked: the leaf artifact for the author's id at the fleet revision
 	// is for the signing key, chains to the fleet root, and its serial is on
 	// the fleet CRL (rule B; or a self-registration on a revoked leaf).
