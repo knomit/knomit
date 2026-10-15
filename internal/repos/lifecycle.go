@@ -626,7 +626,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			}
 		}
 		if pushedTo != "" {
-			merr = agentBranchAlreadyPushed(merr, spec.Origin.URL, m.deps.AgentBranch, pushedTo, spec.fleetDoor)
+			merr = agentBranchAlreadyPushed(merr, spec.Origin.URL, m.deps.AgentBranch, pushedTo, fleetUndoText(spec))
 		}
 		return nil, merr
 	}
@@ -1356,7 +1356,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// never sees this one — the mode switch returns it directly — so it carries
 	// its own explanation.
 	if cerr := ctx.Err(); cerr != nil {
-		return "", agentBranchAlreadyPushed(cerr, spec.Origin.URL, m.deps.AgentBranch, upstream, spec.fleetDoor)
+		return "", agentBranchAlreadyPushed(cerr, spec.Origin.URL, m.deps.AgentBranch, upstream, fleetUndoText(spec))
 	}
 	return upstream, nil
 }
@@ -1441,21 +1441,35 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 // improvement over the seed-era version of this message, which had to explain
 // an unrecoverable half-seeded remote and offer two ways out of it.
 //
-// A fleet create (fleet true) is not re-run to adopt the branch: its
-// rollback takes the branch back from the forge (retractFleetBranch), and a
-// second create is refused until it has, so the text says that instead.
+// A create through the fleet door is not re-run to adopt the branch:
+// fleetUndo (fleetUndoText) says what takes it back instead.
 //
 // It wraps with %w: ErrRepoAlreadyRegistered and context.Canceled both reach
 // this, and both are matched with errors.Is by callers (createErrStatus in
 // internal/web, among others).
-func agentBranchAlreadyPushed(err error, url, agentBranch, upstream string, fleet bool) error {
-	if fleet {
-		return fmt.Errorf("%w (%s was already pushed to %s; %s was not touched, and the fleet create's rollback "+
-			"deletes that branch on the forge)", err, agentBranch, url, upstream)
+func agentBranchAlreadyPushed(err error, url, agentBranch, upstream, fleetUndo string) error {
+	if fleetUndo != "" {
+		return fmt.Errorf("%w (%s was already pushed to %s; %s was not touched, and %s)", err, agentBranch, url, upstream, fleetUndo)
 	}
 	return fmt.Errorf("%w (%s was already pushed to %s, so the ontology is safe there; %s was not touched, "+
 		"and creating this repository again will adopt that branch rather than start over)",
 		err, agentBranch, url, upstream)
+}
+
+// fleetUndoText is what takes a pushed agent branch back after a failed
+// create through the fleet door, "" for any other create. A fleet create's
+// rollback deletes it on the forge (retractFleetBranch; a second create is
+// refused until it has). A join's clone is undone by undoJoin, whose retract
+// is best effort: a knomit host refuses every delete, and what the mount
+// pushed there is main's tip, no record.
+func fleetUndoText(spec CreateSpec) string {
+	switch {
+	case !spec.fleetDoor:
+		return ""
+	case spec.Mode == "clone":
+		return "the refused join takes that branch back from the origin where the origin allows a delete (a knomit host keeps it; it holds no member record)"
+	}
+	return "the fleet create's rollback deletes that branch on the forge"
 }
 
 // initializeProbeErr maps a ProbeOrigin result to the error initInitialize

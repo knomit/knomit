@@ -405,16 +405,27 @@ func TestFleetMembership_ManualMergeIsMasterOnlyAndReJudged(t *testing.T) {
 
 // #518 R4: the generic create's "creating this repository again will adopt
 // that branch" is not shown for a fleet, whose create is not re-run to adopt
-// it (its rollback deletes the branch on the forge).
-// SABOTAGE: ignore the fleet argument -> the fleet text offers to adopt -> red.
+// it (its rollback deletes the branch on the forge). Review N2: a join's
+// clone (also through the fleet door) names the join's undo, never the
+// create's rollback.
+// SABOTAGE: ignore the fleet argument -> the fleet text offers to adopt ->
+// red; fleetUndoText ignores the mode -> the join names the create -> red.
 func TestAgentBranchAlreadyPushed_FleetIsNotOfferedToAdopt(t *testing.T) {
 	base := context.Canceled
-	repo := agentBranchAlreadyPushed(base, "https://forge/x.git", "agent/a", "main", false)
-	flt := agentBranchAlreadyPushed(base, "https://forge/x.git", "agent/a", "main", true)
-	require.ErrorIs(t, flt, context.Canceled)
-	require.Contains(t, repo.Error(), "adopt that branch")
-	require.NotContains(t, flt.Error(), "adopt")
-	require.Contains(t, flt.Error(), "rollback deletes that branch on the forge")
+	at := func(spec CreateSpec) string {
+		err := agentBranchAlreadyPushed(base, "https://forge/x.git", "agent/a", "main", fleetUndoText(spec))
+		require.ErrorIs(t, err, context.Canceled)
+		return err.Error()
+	}
+	repo := at(CreateSpec{Mode: "initialize"})
+	create := at(CreateSpec{Mode: "custom", fleetDoor: true})
+	join := at(CreateSpec{Mode: "clone", fleetDoor: true})
+	require.Contains(t, repo, "adopt that branch")
+	require.NotContains(t, create, "adopt")
+	require.Contains(t, create, "the fleet create's rollback deletes that branch on the forge")
+	require.NotContains(t, join, "adopt")
+	require.NotContains(t, join, "create")
+	require.Contains(t, join, "the refused join takes that branch back")
 }
 
 // B1 (PR #525 review): an enroll over an id that already has a leaf on main.
