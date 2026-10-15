@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -139,12 +140,23 @@ func (p *fleetPeers) admit(ctx context.Context, svc *store.Service, own string, 
 	p.mu.Unlock()
 }
 
-// publish is step 3: main = the agent branch, pushed without force.
+// publish is step 3: main = the agent branch, pushed without force
+// (store PublishUpstream, the same call create makes once), and local main
+// fast-forwarded to it. It runs on EVERY master round whose own push did not
+// fail, whether or not that push sent anything, so a main that create (or an
+// earlier round) failed to publish is published by the next round. A refusal
+// is recorded on the push status row, since PublishUpstream records nothing.
 func (p *fleetPeers) publish(ctx context.Context, svc *store.Service, own string, auth transport.AuthMethod) (store.PushResult, error) {
 	if _, err := svc.AdvanceLocalUpstream(ctx, own, svc.UpstreamBranch()); err != nil {
 		return store.PushResult{}, err
 	}
-	return svc.Remote().PushUpstream(ctx, auth)
+	res, err := svc.Remote().PublishUpstream(ctx, own, auth)
+	if err != nil && !errors.Is(ctx.Err(), context.Canceled) {
+		if rerr := svc.Remote().RecordPushError("origin", err.Error()); rerr != nil {
+			return res, errors.Join(err, rerr)
+		}
+	}
+	return res, err
 }
 
 // FleetRefusals is the fleet master's last refusal of each member branch it

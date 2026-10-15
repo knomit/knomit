@@ -203,12 +203,17 @@ type RemoteIndex interface {
 	// refs/remotes/origin/agent/* (the fleet master on a forge).
 	SyncWithPeers(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
-	// PushUpstream pushes the local consensus branch without force (the
-	// fleet master publishing main).
-	PushUpstream(ctx context.Context, auth transport.AuthMethod) (PushResult, error)
+	// PublishUpstream pushes the tip of the local branch from to the origin's
+	// consensus branch WITHOUT force: the fleet master's write of the fleet
+	// repository's main. A main on the origin that is not an ancestor of the
+	// tip is refused by the origin, as an ordinary push error.
+	PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error)
 	// PeerTips lists the fetched agent/* branches (refs/remotes/origin/agent/*)
 	// other than own, by branch name.
 	PeerTips(own string) (map[string]plumbing.Hash, error)
+	// RecordPushError persists a push failure on the named remote without
+	// pushing (a refused PublishUpstream, which records nothing itself).
+	RecordPushError(name, msg string) error
 	// RecordSyncError persists a sync failure (last_status="error",
 	// last_error=msg) on the named remote without performing a fetch. Used to
 	// surface an auth-resolution failure that never reaches Sync().

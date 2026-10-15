@@ -104,13 +104,17 @@ func (f *forgeFleet) join(t *testing.T, id string, signer ssh.Signer) (*Manager,
 }
 
 // round runs ONE origin round of ri's sync loop, as the background loop does.
-func round(t *testing.T, ri *RepoInstance) {
+func round(t *testing.T, ri *RepoInstance) { t.Helper(); roundOnPush(t, ri, nil) }
+
+// roundOnPush is round with the loop's onPush hook (the fleet state
+// machine's: Manager.fleetPushed in production).
+func roundOnPush(t *testing.T, ri *RepoInstance, onPush func(string, error)) {
 	t.Helper()
 	svc, release, err := ri.Acquire()
 	require.NoError(t, err)
 	defer release()
 	runReconcileLoop(context.Background(), svc, ri.hub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
-		makeRemoteAuthFn(config.RemoteAuthConfig{}, ""), ri.env.cfg.LocalOriginRoot, false, nil, nil, nil, nil, nil, ri.peers, true)
+		makeRemoteAuthFn(config.RemoteAuthConfig{}, ""), ri.env.cfg.LocalOriginRoot, false, onPush, nil, nil, nil, nil, ri.peers, true)
 }
 
 // settleMerger waits for a merger run that STARTED after this call (the
@@ -259,7 +263,9 @@ func TestFleetMaster_MainPushIsNotForcedAndConverges(t *testing.T) {
 			"---\ntype: observation\n---\n# x\n\nx\n", "x", "created")
 		require.NoError(t, err)
 	}))
-	round(t, f.mri)
+	var pushErr error
+	roundOnPush(t, f.mri, func(_ string, err error) { pushErr = err })
+	require.ErrorContains(t, pushErr, "non-fast-forward", "the fleet state machine sees the refused main as the round's push error")
 	require.NotEmpty(t, other)
 	require.Equal(t, other, f.rev(t, "main"), "the forge's main is not overwritten")
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
@@ -352,4 +358,61 @@ func TestFleetMaster_FetchJudgeRunsThePrivatePathClosure(t *testing.T) {
 	require.Contains(t, r.Reason, `cannot be pushed`)
 	require.Contains(t, r.Reason, ".knomit/triggers.yaml")
 	require.Empty(t, localTip(t, f.mri, "agent/alpha"))
+}
+
+// PR 3's gap: create publishes main once; if that publish fails, the agent
+// branch is on the forge but main is not. The master's next round publishes
+// it even though its own push has nothing to send, and the fleet state
+// machine (onPush) sees success only once main is published.
+// SABOTAGE: publish only when the own push sent something
+// (`err == nil && master && pushResult.Pushed`) -> forge main stays behind, red.
+func TestFleetMaster_RoundPublishesAMainCreateFailedToPublish(t *testing.T) {
+	f := newForgeFleet(t, nil)
+	mainBefore := f.rev(t, "main")
+	// As create leaves it after a failed publish: a commit on the agent
+	// branch, pushed, and main behind it.
+	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
+		_, err := svc.Facts().WriteFact(context.Background(), f.mri.AgentBranch(), "kb/notes/created.md",
+			"---\ntype: observation\n---\n# c\n\nc\n", "c", "created")
+		require.NoError(t, err)
+		_, err = svc.Remote().Push(context.Background(), f.mri.AgentBranch(), nil)
+		require.NoError(t, err)
+	}))
+	tip := localTip(t, f.mri, "agent/master")
+	require.Equal(t, tip, f.rev(t, "agent/master"), "fixture: the agent branch is on the forge")
+	require.Equal(t, mainBefore, f.rev(t, "main"), "fixture: main was not published")
+
+	calls := 0
+	var last error
+	roundOnPush(t, f.mri, func(_ string, err error) { calls++; last = err })
+	require.Equal(t, 1, calls)
+	require.NoError(t, last)
+	require.Equal(t, tip, f.rev(t, "main"), "the round published main")
+}
+
+// A fetched member tip that edits ANOTHER member's folder is refused, as a
+// pushed one is: the fetch judge runs the fleet repository's record rules
+// (selfRoot is the fleet's fact root). Today that is rule A's shape check
+// (a joiner may touch only members/<own id>/); with the record-owner rule
+// (#523) the rule is not-owner. The rule name is not asserted.
+// SABOTAGE: pass selfRoot "" to newJudge in judgeIncoming -> rule A does not
+// run, alpha's commit is admitted, red.
+func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
+	alpha := testsigner.Named("alpha")
+	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
+	_, ari := f.join(t, "alpha", alpha)
+	require.NoError(t, ari.WithRead(func(svc *store.Service) {
+		_, err := svc.Facts().WriteFact(context.Background(), ari.AgentBranch(), "kb/members/beta/0000beta.md",
+			"---\nkind: pragmatic\ntype: policy\n---\n# beta\n\nnot alpha's to write\n", "beta's folder", "created")
+		require.NoError(t, err)
+	}))
+	round(t, ari) // pushes alpha's branch with the extra commit
+	require.NoError(t, exec.Command("git", "-C", f.bare, "cat-file", "-e", "agent/alpha:kb/members/beta/0000beta.md").Run(),
+		"fixture: the edit is on the forge")
+
+	round(t, f.mri)
+	r := f.mri.peers.Refusals()["agent/alpha"]
+	require.Equal(t, f.rev(t, "agent/alpha"), r.Tip)
+	require.Contains(t, r.Reason, "refused by verify_signatures=enforce")
+	require.Empty(t, localTip(t, f.mri, "agent/alpha"), "never a local branch, never merged")
 }
