@@ -615,11 +615,8 @@ func (m *Manager) InstallFleetRoot(files map[string]string) (FleetRoot, error) {
 	present := func() error {
 		return fleetErr(http.StatusConflict, "root_present", "a fleet root is already here ("+dir+"): stand down or decommission first")
 	}
-	if ok, err := m.rootKeyHere(); err != nil {
-		return FleetRoot{}, err
-	} else if ok {
-		return FleetRoot{}, present()
-	}
+	// Anything in <home>/fleet, the root key first of all, refuses: the
+	// files land by a rename, which never replaces a directory with content.
 	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
 		return FleetRoot{}, present()
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {

@@ -191,7 +191,7 @@ func runGitOut(dir string, args ...string) (string, error) {
 // a second PUT is refused, and the old master (its copy has an origin) stands
 // down and is a member again. PUT refuses unknown files, a missing key and a
 // key that is not the certificate's.
-// SABOTAGE: drop the root.key check in InstallFleetRoot -> the second PUT
+// SABOTAGE: drop the non-empty <home>/fleet check in InstallFleetRoot -> the second PUT
 // is accepted -> red.
 func TestFleetMembership_ForgeRootMovesAndTheOldMasterStandsDown(t *testing.T) {
 	ctx := context.Background()
