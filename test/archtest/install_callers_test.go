@@ -23,8 +23,15 @@ import (
 //
 // A route-list snapshot would catch a NEW route only; this catches any
 // production code, route or not, that starts calling install.
+//
+// internal/repos/fleet_create.go is the third, a reviewed decision: the fleet
+// create installs this instance's OWN leaf, which it has just issued from the
+// fresh root it minted, so the material never comes from a request. Its one
+// route, POST /api/v1/fleet/create, is behind RequireLocalVia: a remote peer
+// and a browser on loopback TCP cannot reach it.
 var installCallers = []string{
 	"cmd/identity.go",
+	"internal/repos/fleet_create.go",
 	"tools/desktop/identity.go",
 }
 

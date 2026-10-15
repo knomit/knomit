@@ -252,7 +252,8 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 // reconcile loop does run first per tick).
 //
 // Push does NOT push main — main is consensus, written by the remote-side
-// merge-to-main mechanism, never directly by an agent.
+// merge-to-main mechanism, never directly by an agent. The one exception is
+// the fleet master's write of the fleet repository's main, PublishUpstream.
 //
 // Returns Pushed=false (no error) when there is nothing to push (the snapshot
 // already equals the last-known origin/agent ref).
@@ -371,6 +372,64 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 	}
 
 	log.Info().Str("branch", branch).Str("commit", snap.String()).Msg("Push: force-pushed")
+	return PushResult{Pushed: true}, nil
+}
+
+// PublishUpstream pushes the tip of the local branch from to the origin's
+// consensus branch (the origin's Branch, "main"), by hash and WITHOUT force
+// (<tip>:refs/heads/<main>, no '+'). It is the one push that writes a
+// consensus branch, and only the fleet master calls it, for the fleet
+// repository (Push above never writes main). Without force the origin refuses
+// an update that is not a fast-forward, so a main the caller has not seen is
+// never overwritten: that refusal is an ordinary push error.
+//
+// It holds the push lock of the consensus branch, reads from's tip under
+// from's write lock, and records nothing in the remotes table: the caller
+// reports the outcome. Pushed is false when the origin's main already is the
+// tip.
+func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error) {
+	remote, err := ri.GetRemote("origin")
+	if err != nil || remote == nil {
+		return PushResult{}, fmt.Errorf("PublishUpstream: no origin: %v", err)
+	}
+	upstream := remote.Branch
+	if upstream == "" {
+		return PushResult{}, fmt.Errorf("PublishUpstream: the origin has no branch: %w", ErrNoConsensusBranch)
+	}
+	if from == "" || from == upstream {
+		return PushResult{}, fmt.Errorf("PublishUpstream: %q is not a branch to publish to %q", from, upstream)
+	}
+	defer ri.rh.lockPush(upstream)()
+	tip, err := func() (plumbing.Hash, error) {
+		defer ri.rh.lockBranch(from)()
+		ref, err := ri.rh.gits.Reference(plumbing.NewBranchReferenceName(from))
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		return ref.Hash(), nil
+	}()
+	if err != nil {
+		return PushResult{}, fmt.Errorf("PublishUpstream: local ref %s: %w", from, err)
+	}
+	if _, err := ri.rh.repo.CommitObject(tip); err != nil {
+		return PushResult{}, fmt.Errorf("PublishUpstream: tip %s is unreadable: %w", tip, err)
+	}
+	refspec := fmt.Sprintf("%s:refs/heads/%s", tip, upstream)
+	pushCtx, cancel := ri.rh.netCtx(ctx)
+	defer cancel()
+	var srv bytes.Buffer
+	if err := ri.rh.repo.PushContext(pushCtx, &gogit.PushOptions{
+		RemoteName: "origin",
+		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
+		Auth:       auth,
+		Progress:   &srv,
+	}); err != nil {
+		if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+			return PushResult{Pushed: false}, nil
+		}
+		return PushResult{}, fmt.Errorf("PublishUpstream: %w%s", err, remoteSays(srv.String()))
+	}
+	log.Info().Str("upstream", upstream).Str("from", from).Str("commit", tip.String()).Msg("PublishUpstream: pushed")
 	return PushResult{Pushed: true}, nil
 }
 

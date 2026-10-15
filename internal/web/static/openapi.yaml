@@ -2214,6 +2214,71 @@ paths:
         "200": { description: Unregistered, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
         "202": { description: Unregistering (push pending), content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
         "409": { description: not_registered or unregistration_pending }
+  /fleet/create:
+    post:
+      tags: [fleet]
+      summary: Found a fleet with a fresh root; this instance is its master and first member
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        it mints the fleet ROOT KEY and installs this instance's own
+        certificate, so any other transport is 403.
+
+        Pre-flights, before anything is written: this instance is in no
+        fleet (`fleet_present`, 409: state not standalone, a fleet repository
+        mounted or recorded); no fleet trust material is installed in
+        `[tls].dir` (`trust_installed`, 409: leave the fleet first); the fleet
+        root directory `<home>/fleet` is absent or empty (`root_present`, 409:
+        a fleet always gets a fresh root; decommission the previous one).
+        Without `origin` this instance hosts the fleet, so `[tls].addr`
+        (`listener_required`, 422) and `external_addresses`
+        (`addresses_required`, 422) must be set. With `origin` the URL must
+        be a forge, not `knomit+https` (`knomit_origin`, 422: a
+        knomit-hosted fleet is hosted by its master), and the repo create's
+        own checks apply (reachable, a branch to cut from, not yet a
+        knowledge base).
+
+        Then: the root is minted into `<home>/fleet` (`root.key` a plain
+        owner-only file, `root.crt`, an empty `crl.pem`); the fleet
+        repository is created from the built-in fleet ontology and recorded
+        as this instance's fleet repository (it mounts again after a
+        restart); on its agent branch, as separate commits,
+        `artifacts/fleet/root.crt` and `crl.pem` (ROOT FIRST), this
+        instance's `certs/<agent id>.pem` and one `issued/<serial>.pem`, and
+        its member record (state `active`); the bundle is installed as this
+        instance's TLS identity. A failure in any of these removes all of
+        it again: the repository, `<home>/fleet`, the installed material,
+        the fleet state.
+
+        Without `origin`, `main` follows the agent branch at once: 201,
+        state `registered`. With `origin` the agent branch is pushed and
+        then `main` is set to its tip, never by force: 201 once `main` on
+        the origin holds the record; 202 (state `registering`, `last_error`
+        set) when a push failed, and the sync loop retries the agent branch.
+      operationId: createFleet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, description: "The fleet repository's local name (default fleet)" }
+                origin:
+                  type: object
+                  required: [url]
+                  description: Host the fleet repository on a forge (mode initialize onto this URL). Absent = this instance hosts it.
+                  properties:
+                    url: { type: string }
+                    branch: { type: string }
+                    auth_method: { type: string }
+                    auth_token: { type: string }
+      responses:
+        "201": { description: Created; main holds the record, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "202": { description: Created; a push to the origin is pending, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "400": { description: Invalid name or request }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "fleet_present, trust_installed, root_present, or a repo create conflict (name, origin in use)" }
+        "422": { description: "listener_required, addresses_required, knomit_origin, or a refused origin" }
   /fleet/members:
     get:
       tags: [fleet]

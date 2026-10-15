@@ -170,6 +170,11 @@ type Manager struct {
 	createsCtx    context.Context
 	createsCancel context.CancelFunc
 	createWg      sync.WaitGroup
+
+	// fleetOpMu serializes the operations that make this instance a fleet
+	// member (CreateFleet, RegisterFleet): each checks "no fleet here" and
+	// then mounts one, so two of them at once would both pass the check.
+	fleetOpMu sync.Mutex
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote

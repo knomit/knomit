@@ -95,6 +95,50 @@ func handleDeleteFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
+type createFleetRequest struct {
+	Name   string `json:"name,omitempty"`
+	Origin *struct {
+		URL        string `json:"url"`
+		Branch     string `json:"branch,omitempty"`
+		AuthMethod string `json:"auth_method,omitempty"`
+		AuthToken  string `json:"auth_token,omitempty"`
+	} `json:"origin,omitempty"`
+}
+
+// handleCreateFleet: POST /api/v1/fleet/create, found a fleet with a fresh
+// root, this instance its master and first member (Manager.CreateFleet).
+// 201 when the fleet's main holds the record (state registered); 202 while
+// a forge push is pending. Local listener only (router).
+func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createFleetRequest
+		if !decodeJSON(w, r, &req, 0) {
+			return
+		}
+		spec := repos.FleetCreateSpec{Name: req.Name}
+		if req.Origin != nil {
+			spec.Origin = &repos.OriginSpec{URL: req.Origin.URL, Branch: req.Origin.Branch, AuthMethod: req.Origin.AuthMethod, AuthToken: req.Origin.AuthToken}
+		}
+		st, err := m.CreateFleet(r.Context(), spec)
+		if err != nil {
+			var fe *repos.FleetError
+			if errors.As(err, &fe) {
+				writeFleetError(w, r, err)
+				return
+			}
+			// The repo create's own refusals (name, origin, reachability).
+			status, title := createErrStatus(err)
+			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
+			return
+		}
+		status := http.StatusCreated
+		if st.State != repos.FleetRegistered {
+			status = http.StatusAccepted
+		}
+		hal.WriteHAL(w, status, fleetView(b, st))
+	}
+}
+
 // fleetMemberRow is one member as GET /api/v1/fleet/members shows it: every
 // field as the record has it (someone else's odd values are shown, never
 // used), addresses always an array and capabilities always an object.

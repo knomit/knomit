@@ -227,6 +227,8 @@ func (m *Manager) originOf(ri *RepoInstance) (*Origin, error) {
 // the fleet's master merges it into main. The same URL again refreshes
 // the record (for example after a key rotation).
 func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken string) (FleetStatus, error) {
+	m.fleetOpMu.Lock()
+	defer m.fleetOpMu.Unlock()
 	row, err := m.fleetDB()
 	if err != nil {
 		return FleetStatus{}, err

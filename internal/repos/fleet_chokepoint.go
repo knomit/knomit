@@ -37,7 +37,7 @@ import (
 // doors (guardFleetRemoval).
 
 // ErrFleetOntologyReserved refuses a fleet-id ontology at a generic door.
-var ErrFleetOntologyReserved = errors.New("the ontology id \"fleet\" is reserved for the fleet repository, which only `knomit fleet` creates or joins")
+var ErrFleetOntologyReserved = errors.New("the ontology id \"fleet\" is reserved for the fleet repository, which only the fleet API (/api/v1/fleet/...) creates or joins")
 
 // ErrFleetReadOnly is the one answer to an authored write (MCP, the fact
 // REST routes, an experiment) on the fleet repository.

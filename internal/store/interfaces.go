@@ -199,6 +199,11 @@ type RemoteIndex interface {
 	DeleteRemote(name string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
+	// PublishUpstream pushes the tip of the local branch from to the origin's
+	// consensus branch WITHOUT force: the fleet master's write of the fleet
+	// repository's main. A main on the origin that is not an ancestor of the
+	// tip is refused by the origin, as an ordinary push error.
+	PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error)
 	// RecordSyncError persists a sync failure (last_status="error",
 	// last_error=msg) on the named remote without performing a fetch. Used to
 	// surface an auth-resolution failure that never reaches Sync().
