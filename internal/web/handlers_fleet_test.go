@@ -159,6 +159,46 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	rec = post("/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
 	require.Equal(t, http.StatusCreated, rec.Code, "control: %s", rec.Body.String())
 
+	// Every other REST route that commits to a repo refuses the fleet
+	// repository the same way (PR #520 F2): a synthesis run (its reviewer
+	// writes dedup, synthesis and discovery facts on the agent branch) and
+	// the repo PATCH (README.md / LICENSE on the agent branch).
+	// SABOTAGE: drop the refuseUnwritableBranch call from
+	// handleStartSynthesis -> 201 -> red; from handleHALRepoPatch -> 200 and a
+	// README commit -> red.
+	rs := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb", LLMAdapter: &stubLLMAdapter{}}).NewAPIRouter()
+	send := func(method, path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := fromLoopback(httptest.NewRequest(method, path, strings.NewReader(body)))
+		req.Header.Set("Content-Type", "application/json")
+		rs.ServeHTTP(rec, req)
+		return rec
+	}
+	fleetRI := m.Get(st.FleetRepo)
+	head := func() string {
+		t.Helper()
+		var tip string
+		require.NoError(t, fleetRI.WithRead(func(svc *store.Service) {
+			h, err := svc.Branches().HeadCommit(context.Background(), "agent/rest-fleet")
+			require.NoError(t, err)
+			tip = h
+		}))
+		return tip
+	}
+	before := head()
+	rec = send(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+	rec = send(http.MethodPatch, "/repos/"+st.FleetRepo, `{"description":"hello","license":"MIT"}`)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "changes only through `knomit fleet`")
+	require.Equal(t, before, head(), "nothing was committed on the fleet repository")
+
+	rec = send(http.MethodPatch, "/repos/kb", `{"description":"hello"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "control: %s", rec.Body.String())
+	rec = send(http.MethodPost, "/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
+	require.Equal(t, http.StatusCreated, rec.Code, "control: %s", rec.Body.String())
+
 	// The operator's merge of a pushed member branch is NOT an authored write
 	// and stays open on the fleet repository: an unknown branch is a 404, not
 	// the read-only 403.

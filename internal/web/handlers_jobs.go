@@ -55,6 +55,12 @@ func handleStartSynthesis(llmAdapter llm.LLMAdapter) http.HandlerFunc {
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		// The reviewer writes on the repo's agent branch whatever branch the
+		// URL names, so that is the branch that must accept authored writes
+		// (the fleet repository and a subscription accept none).
+		if refuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
+			return
+		}
 
 		hub := ri.TaskHub()
 		if hub == nil {
