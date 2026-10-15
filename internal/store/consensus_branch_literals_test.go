@@ -16,8 +16,9 @@ import (
 // internal/ and the dev tools that read a knowledge base (tools/okf,
 // tools/calibrate), no non-test file may carry a string literal naming a
 // branch by convention ("main", "master", or a ref/remote path ending in one).
-// The single exception is the definition of DefaultConsensusBranch, the one
-// named default a brand-new repo gets.
+// Two exceptions: the definition of DefaultConsensusBranch, the one named
+// default a brand-new repo gets, and the value of any constant named
+// HostingMaster (the join check's hosting value, a fleet role, not a branch).
 //
 // It parses the files (go/ast), so comments and prose do not count, only
 // values the program can act on. Restoring any of the removed defaults
