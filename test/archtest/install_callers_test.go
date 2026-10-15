@@ -42,11 +42,11 @@ var installCallers = []string{
 // first, and adding it here is a reviewed decision, not a silent new path.
 var installCRLCallers []string
 
-// TestInstallBundleHasOnlyTheTwoFrontEnds parses every non-test Go file of
+// TestInstallBundleHasOnlyTheListedCallers parses every non-test Go file of
 // every package in the module — the desktop's included, which needs its
 // build tag to be listed — and fails on a call to pki.InstallBundle (through
 // whatever name the file imports internal/pki as) outside installCallers.
-func TestInstallBundleHasOnlyTheTwoFrontEnds(t *testing.T) {
+func TestInstallBundleHasOnlyTheListedCallers(t *testing.T) {
 	root := moduleRoot(t)
 	var files []string
 	// Every tag set and GOOS the module builds for: go list reports only the
