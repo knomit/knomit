@@ -16,7 +16,8 @@ import (
 //
 // M3 is how an UNSIGNED merge (GitHub's auto-merge workflow) is accepted
 // without a knomit signature: it may only combine what its parents already
-// carry. For every path with base blob b and parent blobs a and c, the result
+// carry. For every path (every non-tree entry: files, symlinks and gitlinks,
+// compared on hash and mode) with base blob b and parent blobs a and c, the result
 // must be c when a==b, a when c==b, a when a==c, and anything else ("both
 // sides changed") needs a signature. Absence is a value, so a deletion follows
 // the same table. The rule that preceded it ("every path equals SOME parent")
@@ -55,23 +56,36 @@ func checkM3(merge *object.Commit) (m3Verdict, error) {
 	if len(bases) != 1 {
 		return m3Verdict{Reason: fmt.Sprintf("%d merge bases (criss-cross or disjoint): a signature is required", len(bases))}, nil
 	}
+	// flat is every non-tree entry of c's tree: files, symlinks AND gitlinks
+	// (submodule entries), each with its mode. tree.Files() would not do: it
+	// skips submodule entries, so a "clean" merge could add a gitlink its
+	// parents do not carry and still pass. The TreeWalker itself ends
+	// silently at a directory entry that is not a tree, so the tree's shape
+	// is checked first (checkTreeShape): such an entry is an error, never
+	// the end of the walk.
 	flat := func(c *object.Commit) (map[string]pathEntry, error) {
 		tree, err := c.Tree()
 		if err != nil {
 			return nil, err
 		}
+		if err := checkTreeShape(tree, nil); err != nil {
+			return nil, err
+		}
 		out := map[string]pathEntry{}
-		files := tree.Files()
-		defer files.Close()
+		w := object.NewTreeWalker(tree, true, nil)
+		defer w.Close()
 		for {
-			f, err := files.Next()
+			name, e, err := w.Next()
 			if err == io.EOF {
 				return out, nil
 			}
 			if err != nil {
 				return nil, err
 			}
-			out[f.Name] = pathEntry{Hash: f.Hash, Mode: f.Mode}
+			if e.Mode == filemode.Dir {
+				continue
+			}
+			out[name] = pathEntry{Hash: e.Hash, Mode: e.Mode}
 		}
 	}
 	b, err := flat(bases[0])

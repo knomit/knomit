@@ -120,7 +120,9 @@ func TestArtifactRules_TrustFilesAreProtected(t *testing.T) {
 		{"size cap", []string{issuedDir + "big.pem", strings.Repeat("x", 16<<10+1)}, RuleArtifactSize, "larger than its max_size of 16384"},
 		{"control: a new issuance record", []string{issuedDir + "0003-boss.pem", a.base[a.l.LeafPath("boss")]}, "", ""},
 		{"control: a newer CRL", []string{a.l.CRL, newer}, "", ""},
-		{"control: an undeclared file has no cap", []string{"artifacts/fleet/notes.txt", strings.Repeat("x", 1<<20)}, "", ""},
+		// On the fleet repository an undeclared path has no artifact rule,
+		// so it is the record-owner rule's (S4): boss may not write it.
+		{"an undeclared file is the owner rule's", []string{"artifacts/fleet/notes.txt", strings.Repeat("x", 1<<20)}, RuleNotOwner, "artifacts/fleet/notes.txt"},
 	}
 	ran := 0
 	for _, r := range rows {
@@ -368,11 +370,16 @@ func TestArtifactRules_ReplacementCRLIsASuperset(t *testing.T) {
 }
 
 // Review F6: a non-file entry AT a declared path, or anything UNDER one, is
-// refused artifact-not-a-file — a directory squatting a leaf's name
-// (certs/<id>.pem/x) or an issuance record's, a symlink, a submodule.
-// Undeclared paths stay free.
+// refused — a directory squatting a leaf's name (certs/<id>.pem/x) or an
+// issuance record's, a symlink, a submodule. A symlink or submodule AT a
+// declared path is the artifact rules' (artifact-not-a-file). A path UNDER a
+// declared file matches no pattern, so on the fleet repository it is the
+// record-owner rule's first (S4: not-owner); the squat check for a path a
+// family pattern declares is pinned by TestArtifactRules_FamilyPatternIsNotASquat.
 //
-// SABOTAGE: skip squat() in change → the directory rows are admitted → red.
+// SABOTAGE: skip squat() in change → the symlink and submodule rows stay
+// refused (mode check), the squat rows of FamilyPatternIsNotASquat are
+// admitted → red there.
 func TestArtifactRules_DirectorySquatRefused(t *testing.T) {
 	a := newArtFleet(t)
 	gitlink := gitlinkEntry + a.main.Hash.String()
@@ -380,13 +387,13 @@ func TestArtifactRules_DirectorySquatRefused(t *testing.T) {
 		name, rule, reason string
 		kv                 []string
 	}{
-		{"directory at a leaf's path", RuleArtifactNotAFile, "certs/newbie.pem, which is a declared artifact file", []string{a.l.LeafPath("newbie") + "/x", "junk"}},
-		{"deep directory at a leaf's path", RuleArtifactNotAFile, "certs/newbie.pem, which is a declared artifact file", []string{a.l.LeafPath("newbie") + "/a/b", "junk"}},
-		{"directory at an issuance path", RuleArtifactNotAFile, "issued/x.pem, which is a declared artifact file", []string{issuedDir + "x.pem/y", "junk"}},
-		{"directory at a revocation path", RuleArtifactNotAFile, "revocations/x.txt, which is a declared artifact file", []string{revocationsDir + "x.txt/y", "junk"}},
+		{"directory at a leaf's path", RuleNotOwner, "changes artifacts/fleet/certs/newbie.pem/x", []string{a.l.LeafPath("newbie") + "/x", "junk"}},
+		{"deep directory at a leaf's path", RuleNotOwner, "changes artifacts/fleet/certs/newbie.pem/a/b", []string{a.l.LeafPath("newbie") + "/a/b", "junk"}},
+		{"directory at an issuance path", RuleNotOwner, "changes artifacts/fleet/issued/x.pem/y", []string{issuedDir + "x.pem/y", "junk"}},
+		{"directory at a revocation path", RuleNotOwner, "changes artifacts/fleet/revocations/x.txt/y", []string{revocationsDir + "x.txt/y", "junk"}},
 		{"symlink at a leaf's path", RuleArtifactNotAFile, "must be a regular file", []string{a.l.LeafPath("newbie"), symlinkEntry + "../root.crt"}},
 		{"submodule at an issuance path", RuleArtifactNotAFile, "must be a regular file", []string{issuedDir + "x.pem", gitlink}},
-		{"control: an undeclared subdirectory", "", "", []string{"artifacts/fleet/notes/x.md", "ok"}},
+		{"control: a declared path", "", "", []string{issuedDir + "0003-boss.pem", a.base[a.l.LeafPath("boss")]}},
 	} {
 		v := a.cand("boss", a.boss, r.kv...)
 		if r.rule == "" {
