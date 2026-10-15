@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,6 +43,19 @@ type fleetNode struct {
 	receives atomic.Int32
 }
 
+// fleetFreePort is a TCP port free on 127.0.0.1 a moment ago (every OS:
+// serve_supervised_test.go's freePort is not built on Windows).
+func fleetFreePort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	return port
+}
+
 func newFleetNode(t *testing.T, dir, id string) *fleetNode {
 	t.Helper()
 	cfg := config.Defaults()
@@ -50,7 +64,7 @@ func newFleetNode(t *testing.T, dir, id string) *fleetNode {
 	// The mTLS listener's port is fixed up front so external_addresses can
 	// name it: an enroll's bundle carries https://<that address>/git/fleet,
 	// the URL a joiner clones.
-	addr := "127.0.0.1:" + freePort(t)
+	addr := "127.0.0.1:" + fleetFreePort(t)
 	cfg.TLS = config.TLSConfig{Addr: addr, Dir: filepath.Join(cfg.Home, "pki")}
 	cfg.ExternalAddresses = []string{"https://" + addr}
 	key, _ := pkitest.NewKey(t)

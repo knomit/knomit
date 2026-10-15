@@ -73,7 +73,7 @@ func TestFleetJoinCheck_KnomitHosted(t *testing.T) {
 
 	// The same certificates naming a host that does not answer.
 	bare := enr.Bundle[strings.Index(enr.Bundle, "-----BEGIN "):]
-	dead, err := pki.FleetBundle([]byte(bare), "https://127.0.0.1:"+freePort(t)+"/git/fleet")
+	dead, err := pki.FleetBundle([]byte(bare), "https://127.0.0.1:"+fleetFreePort(t)+"/git/fleet")
 	if err != nil {
 		t.Fatal(err)
 	}
