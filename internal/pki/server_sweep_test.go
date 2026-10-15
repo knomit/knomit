@@ -424,6 +424,17 @@ func TestServer_UninstallTakesTheListenerOutOfTheFleetWithoutARestart(t *testing
 	if body, err := get(f.clientFor(t, peer, nil), ss.addr); err == nil {
 		t.Fatalf("a fresh connection after the uninstall was served (%q)\n%s", body, ss.rec)
 	}
+	// And that refused handshake is logged by name (#525 follow-up), not
+	// only by http.Server's anonymous "TLS handshake error".
+	refusedNamed := false
+	for _, l := range strings.Split(ss.rec.String(), "\n") {
+		if strings.Contains(l, "tls_refused") && strings.Contains(l, "no fleet trust material is installed") {
+			refusedNamed = true
+		}
+	}
+	if !refusedNamed {
+		t.Fatalf("want the refused fresh handshake logged as tls_refused naming the uninstall:\n%s", ss.rec)
+	}
 
 	// Half an install while uninstalled: still nobody gets in.
 	if err := writeFileAtomic(filepath.Join(dir, InstanceCertFile), srvM.certPEM, 0o600); err != nil {

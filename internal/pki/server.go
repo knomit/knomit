@@ -133,8 +133,19 @@ func NewServer(dir, keyPath string, logf Logf, interval time.Duration) (*Server,
 		return r.current().check(cs, UsageClient)
 	}, r.logf)
 	s.cfg = r.configFor(snap)
-	s.cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
-		return r.configFor(s.refresh()), nil
+	s.cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		snap := s.refresh()
+		if snap.uninstalled != nil {
+			// The handshake fails in its own certificate step (the snapshot
+			// has none), before VerifyConnection could log it; name it here,
+			// as every other refusal is named.
+			remote := ""
+			if hello != nil && hello.Conn != nil {
+				remote = hello.Conn.RemoteAddr().String()
+			}
+			r.logf(snap.uninstalled.Error(), "event", "tls_refused", "remote", remote)
+		}
+		return r.configFor(snap), nil
 	}
 	return s, nil
 }
