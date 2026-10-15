@@ -189,12 +189,15 @@ apply, read at the same --fleet-rev. Every member also needs the leaf for its
 agent id: issued to that id (its email address is <agent id>@agents.knomit.io),
 for its record's key, chaining to the root and not on the CRL (else no-cert,
 key-mismatch or revoked). In the fleet repository itself, every member commit
-may change, outside artifacts/, only its author's own members/<agent id>/
-folder, and may delete nothing there (else not-owner); a commit that keeps
-that rule is admitted without a record when the agent id has no active record, the signing key is not the
-current key of another id's record, and the leaf for the id holds the signing key, chains to the root
-and is not revoked; the folder must then hold exactly one active record for
-that agent and that key: a new member's first record. Expiry is not judged.
+may change only its author's own members/<agent id>/ folder and the artifact
+paths the ontology declares, may delete nothing in that folder, and any
+member record it writes there must be for that agent (else not-owner); a
+record in another agent's folder is ignored. A commit that keeps that rule
+is admitted without a record when the agent id has no active record, the
+signing key is not the current key of another id's record, and the leaf for
+the id holds the signing key, chains to the root and is not revoked; the
+folder must then hold exactly one active record for that agent and that
+key: a new member's first record. Expiry is not judged.
 Without a root the rules are exactly the ones above.
 
 The upstream's ontology may also declare rules for files under artifacts/
