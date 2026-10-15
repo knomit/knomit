@@ -197,7 +197,7 @@ func TestFleetMaster_ForgeAdmitsMergesAndPublishesMain(t *testing.T) {
 	// A member's round fetches main and its own branch only: beta's branch
 	// (pushed after alpha cloned) never reaches it, and the master's branch,
 	// which moved since, stays as alpha's clone saw it. Its merger never
-	// merges. (The bootstrap clone itself copies every branch the forge had.)
+	// merges. (Nor does its clone: TestFleetMember_CloneHoldsNoOtherAgentsBranch.)
 	round(t, ari)
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
 		require.False(t, ari.isFleetMaster(svc))
@@ -419,4 +419,35 @@ func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
 	require.Equal(t, f.rev(t, "agent/alpha"), r.Tip)
 	require.Contains(t, r.Reason, "refused by verify_signatures=enforce")
 	require.Equal(t, admitted, localTip(t, f.mri, "agent/alpha"), "the local branch stays at the admitted tip")
+}
+
+// R-visibility applies to a member's FIRST clone too (PR #524 S2): beta's
+// branch is on the forge, with a commit main does not hold, before alpha
+// joins. Alpha's clone holds main and its own branch, and neither beta's
+// tracking ref nor beta's commit. The objects matter, not only the ref: a
+// held commit nobody judged is what a laundering merge needs (B1).
+// SABOTAGE: drop OwnBranchesOnly from fleetCloneOptions (the wildcard
+// bootstrap fetch) -> alpha holds beta's commit and its tracking ref, red.
+func TestFleetMember_CloneHoldsNoOtherAgentsBranch(t *testing.T) {
+	alpha := testsigner.Named("alpha")
+	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
+	work := t.TempDir()
+	runGit(t, "", "clone", "-q", f.bare, work)
+	runGit(t, work, "checkout", "-q", "-b", "agent/beta")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "beta.md"), []byte("beta\n"), 0o644))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-q", "-m", "beta's own")
+	runGit(t, work, "push", "-q", "origin", "agent/beta")
+	beta := plumbing.NewHash(f.rev(t, "agent/beta"))
+	require.False(t, beta.IsZero())
+	require.NotEqual(t, beta.String(), f.rev(t, "main"))
+
+	_, ari := f.join(t, "alpha", alpha)
+	require.NoError(t, ari.WithRead(func(svc *store.Service) {
+		require.True(t, svc.CommitExists(plumbing.NewHash(f.rev(t, "main"))), "fixture: the clone holds main")
+		require.False(t, svc.CommitExists(beta), "a member's clone holds no commit of another agent's branch")
+		tips, err := svc.Remote().PeerTips(ari.AgentBranch())
+		require.NoError(t, err)
+		require.Empty(t, tips, "a member's clone tracks no other agent's branch")
+	}))
 }
