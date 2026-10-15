@@ -227,6 +227,10 @@ func (m *Manager) originOf(ri *RepoInstance) (*Origin, error) {
 // the fleet's master merges it into main. The same URL again refreshes
 // the record (for example after a key rotation).
 func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken string) (FleetStatus, error) {
+	defer m.lockFleetOp()()
+	if err := m.recoverFleetCreate(ctx); err != nil {
+		return FleetStatus{}, err
+	}
 	row, err := m.fleetDB()
 	if err != nil {
 		return FleetStatus{}, err
@@ -284,6 +288,7 @@ func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken 
 // unmounts the fleet repository and returns to standalone; a failed push is
 // retried on the sync loop until it succeeds. A departure is never silent.
 func (m *Manager) UnregisterFleet(ctx context.Context) (FleetStatus, error) {
+	defer m.lockFleetOp()()
 	row, err := m.fleetDB()
 	if err != nil {
 		return FleetStatus{}, err
@@ -340,6 +345,12 @@ func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) {
 // machine: a failure records last_error and changes nothing else; a success
 // clears it and completes registering (-> registered) or unregistering
 // (-> unmount, standalone). Pushes of any other repository are ignored.
+//
+// Registering on the instance that holds the fleet root (a forge create
+// whose publish of main failed) completes only when main is published: this
+// arm publishes it (publishFleetMainNow) and stays registering, with
+// last_error, while that fails. A member has nothing to publish, and its
+// pushed agent branch completes its registration.
 func (m *Manager) fleetPushed(repo string, pushErr error) {
 	if !m.IsFleetRepo(repo) {
 		return
@@ -361,6 +372,13 @@ func (m *Manager) fleetPushed(repo string, pushErr error) {
 	}
 	switch row.State {
 	case FleetRegistering:
+		if ri := m.Get(repo); ri != nil && m.holdsFleetRootOf(ri) {
+			if err := m.publishFleetMainNow(m.ctx, ri); err != nil {
+				_ = recordFleetAttempt(db, err, now)
+				log.Warn().Err(err).Str("fleet", repo).Msg("fleet: publishing main failed; still registering")
+				return
+			}
+		}
 		if err := setFleetState(db, FleetRegistered, now); err != nil {
 			log.Warn().Err(err).Msg("fleet: entering registered failed")
 		}
@@ -373,6 +391,14 @@ func (m *Manager) fleetPushed(repo string, pushErr error) {
 			log.Warn().Err(err).Msg("fleet: entering standalone failed")
 		}
 	}
+}
+
+// holdsFleetRootOf reports whether this instance holds the root of the fleet
+// ri is, as its agent branch records it (holdsFleetRootAt).
+func (m *Manager) holdsFleetRootOf(ri *RepoInstance) bool {
+	held := false
+	_ = ri.WithRead(func(svc *store.Service) { held = m.holdsFleetRootAt(svc, ri.AgentBranch()) })
+	return held
 }
 
 // FleetRetry pushes the fleet repository once, as a sync tick would. Used by

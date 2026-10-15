@@ -185,12 +185,20 @@ func (m *Manager) fleetBootReconcile(ctx context.Context) {
 	log.Info().Str("fleet", ri.Name()).Msg("fleet record updated: " + strings.Join(changed, ", "))
 }
 
-// startFleetBootReconcile launches fleetBootReconcile off the startup path.
-// Close waits for it before releasing the handles it uses.
+// startFleetBootReconcile launches fleetBootReconcile off the startup path,
+// after the rollback of a fleet create that did not finish (a marker left by
+// a crash, recoverFleetCreate). Close waits for it before releasing the
+// handles it uses.
 func (m *Manager) startFleetBootReconcile() {
 	m.fleetBootWg.Add(1)
 	go func() {
 		defer m.fleetBootWg.Done()
+		func() {
+			defer m.lockFleetOp()()
+			if err := m.recoverFleetCreate(m.ctx); err != nil {
+				log.Warn().Err(err).Msg("fleet create: rolling back the unfinished create at boot failed")
+			}
+		}()
 		m.fleetBootReconcile(m.ctx)
 	}()
 }

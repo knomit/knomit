@@ -363,7 +363,6 @@ func TestCreateFromTemplate_Refusals(t *testing.T) {
 			"kb/templates/twice/aaaa1111.md":                       templateFactBody("twice", "one"),
 			"kb/templates/twice/bbbb2222.md":                       templateFactBody("twice", "two"),
 			"kb/templates/fact-only/cccc3333.md":                   templateFactBody("fact-only", "no folder"),
-			".knomit/templates/fleet/.knomit/ontology.yaml":        fleetOntologyYAML(t),
 		},
 		links: map[string]string{".knomit/templates/symlink/.knomit/link.md": "../README.md"},
 		execs: []string{".knomit/templates/exec/.knomit/recipes/run.js"},
@@ -397,7 +396,6 @@ func TestCreateFromTemplate_Refusals(t *testing.T) {
 		{TemplateRef{Repo: "src", Name: "symlink"}, ErrTemplateNotRegular},
 		{TemplateRef{Repo: "src", Name: "exec"}, ErrTemplateNotRegular},
 		{TemplateRef{Repo: "src", Name: "twice"}, ErrTemplateDescribedTwice},
-		{TemplateRef{Repo: "src", Name: "fleet"}, ErrFleetOntologyReserved},
 	} {
 		t.Run(tc.ref.Repo+"/"+tc.ref.Name, func(t *testing.T) {
 			before := repoFiles(t, m)

@@ -13,33 +13,43 @@ import (
 	"testing"
 )
 
-// installCallers are the ONLY production files that may call pki.InstallBundle:
-// the CLI (`knomit identity install`, run by the operator in a terminal) and
-// the desktop's Settings window binding (gated to that window). Trust
-// material — the fleet root, this instance's certificate, the CRL — must
-// never be installable over HTTP: every route on the app handler is also
-// served on the mTLS listener and by `knomit serve`, so an install route
-// would be callable by remote peers (knomit#256).
+// installCallers are the ONLY production files that may call pki.InstallBundle.
+// Trust material (the fleet root, this instance's certificate, the CRL) is
+// never installable over a NETWORK route: every route on the app handler is
+// also served on the mTLS listener and by `knomit serve`, so an install
+// reachable there would be callable by remote peers (knomit#256). Only the
+// local listener (the unix socket, or the named pipe on Windows) may reach
+// one, and only behind RequireLocalVia. The callers are:
+//
+//   - the CLI (`knomit identity install`, run by the operator in a terminal);
+//   - the desktop's Settings window binding (gated to that window);
+//   - internal/repos/fleet_create.go, the fleet create. It installs this
+//     instance's OWN leaf, which it has just issued from the fresh root it
+//     minted, so the material never comes from a request. Its one route,
+//     POST /api/v1/fleet/create, is behind RequireLocalVia: neither a remote
+//     peer nor a browser on loopback TCP can reach it.
 //
 // A route-list snapshot would catch a NEW route only; this catches any
 // production code, route or not, that starts calling install.
 var installCallers = []string{
 	"cmd/identity.go",
+	"internal/repos/fleet_create.go",
 	"tools/desktop/identity.go",
 }
 
 // installCRLCallers are the ONLY production files that may call
 // pki.InstallCRL, the CRL-only install (fleet design D13). It writes trust
-// material like InstallBundle and must never be reachable over HTTP. It has
+// material like InstallBundle and must never be reachable over a network
+// route. It has
 // no production caller yet: the fleet reconcile's member tick will be the
 // first, and adding it here is a reviewed decision, not a silent new path.
 var installCRLCallers []string
 
-// TestInstallBundleHasOnlyTheTwoFrontEnds parses every non-test Go file of
+// TestInstallBundleHasOnlyTheListedCallers parses every non-test Go file of
 // every package in the module — the desktop's included, which needs its
 // build tag to be listed — and fails on a call to pki.InstallBundle (through
 // whatever name the file imports internal/pki as) outside installCallers.
-func TestInstallBundleHasOnlyTheTwoFrontEnds(t *testing.T) {
+func TestInstallBundleHasOnlyTheListedCallers(t *testing.T) {
 	root := moduleRoot(t)
 	var files []string
 	// Every tag set and GOOS the module builds for: go list reports only the
