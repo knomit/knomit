@@ -156,6 +156,10 @@ func TestFleetMaster_ForgeCopyRefusesPushesSoARefusedTipCannotBeLaundered(t *tes
 		URLs: []string{pki.GitScheme + "://" + tlsAddr + "/git/" + ri.Name()}}); err != nil {
 		t.Fatal(err)
 	}
+	if m, err := repo.ResolveRevision("launder"); err == nil {
+		x, _ := repo.ResolveRevision("agent/x")
+		t.Logf("X = %s, M = %s", x, m)
+	}
 	pushErr := repo.PushContext(ctx, &gogit.PushOptions{RemoteName: "master",
 		RefSpecs: []gogitconfig.RefSpec{"refs/heads/launder:refs/heads/agent/launder"}})
 	if pushErr == nil || !strings.Contains(pushErr.Error(), "has an origin") {
