@@ -183,7 +183,7 @@ func verify(path string) error {
 		return err
 	}
 	if fi.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
-		return fmt.Errorf("%w: %s is a symlink or junction; use the directory it points to, not a link to it", ErrNotPrivate, path)
+		return fmt.Errorf("%w: %s is a reparse point (symlink, junction or similar); use the directory it points to, not a link to it", ErrNotPrivate, path)
 	}
 	if !fi.IsDir() {
 		return fmt.Errorf("%w: %s is not a directory", ErrNotPrivate, path)

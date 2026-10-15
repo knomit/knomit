@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -542,9 +544,9 @@ func TestIdentity_RootKeyIsAPlainFileEnrollAsksNothing(t *testing.T) {
 		t.Fatalf("init-root --passphrase-file: %v; the passphrase flag is gone", err)
 	}
 	// The export/import commands are gone from the command tree. Running
-	// them proves nothing: `identity` is a group without --dir (a flag
-	// error) and answers an unknown subcommand with its help and exit 0
-	// (kb gotcha 6ed9b0b3), so the tree itself is what is asserted. The
+	// them with --dir proves nothing (`identity` has no --dir, a flag
+	// error either way), so the tree itself is asserted here, and
+	// TestIdentity_UnknownSubcommandExitsNonZero covers running one. The
 	// enroll row proves the lookup can find a subcommand that exists.
 	have := map[string]bool{}
 	for _, sub := range identityCmd().Commands() {
@@ -557,6 +559,24 @@ func TestIdentity_RootKeyIsAPlainFileEnrollAsksNothing(t *testing.T) {
 		if have[gone] {
 			t.Fatalf("identity still has a %s subcommand; the root key is a plain file and is copied, not exported", gone)
 		}
+	}
+}
+
+// `identity` is a command group. Without its own Args/RunE, cobra answers
+// an unknown subcommand with the group's help and exit 0 (kb gotcha
+// 6ed9b0b3), so a script calling a removed subcommand would "succeed".
+func TestIdentity_UnknownSubcommandExitsNonZero(t *testing.T) {
+	out, err := run(t, "", "identity")
+	if err != nil || !strings.Contains(out, "enroll") {
+		t.Fatalf("fixture: bare `identity` should print its help and succeed: %v\n%s", err, out)
+	}
+	root := RootCmd()
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"identity", "import-root", "x"})
+	err = Execute(context.Background(), root)
+	if err == nil || !strings.Contains(err.Error(), `unknown command "import-root"`) {
+		t.Fatalf("identity import-root x: %v, want an unknown-command error (a non-zero exit)", err)
 	}
 }
 

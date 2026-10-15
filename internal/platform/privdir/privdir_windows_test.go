@@ -368,8 +368,10 @@ func TestVerify_RefusesASymlinkedDir(t *testing.T) {
 	assertNotPrivate(t, Verify(home), home, "symlink")
 }
 
-// Not built here, because a test cannot create them: a root OWNED by another
-// account (needs a second account, or SeRestorePrivilege), and a process
+// Not built here, because a test cannot create them: Ensure's warning over a
+// root REALLY owned by another account (needs a second account, or
+// SeRestorePrivilege; Verify's refusal of one is simulated through
+// currentSID by TestVerify_RefusesADirOwnedBySomeoneElse), and a process
 // running as a service SID. ensure's owner check and isServiceSID are the
 // code paths; the SIDs they compare against are the constants in
 // privdir_windows.go.

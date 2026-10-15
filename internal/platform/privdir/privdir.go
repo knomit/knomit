@@ -22,7 +22,10 @@
 // lives in it.
 package privdir
 
-import "errors"
+import (
+	"errors"
+	"path/filepath"
+)
 
 // Ensure creates path if it is missing and makes it private to the current
 // user.
@@ -58,4 +61,8 @@ var ErrNotPrivate = errors.New("directory is not private to this user")
 // Windows: an owner other than this user, SYSTEM or Administrators, a NULL
 // DACL, or an allow ACE for any account Ensure's warning also counts as
 // foreign (SYSTEM, Administrators, CREATOR OWNER and OWNER RIGHTS are not).
-func Verify(path string) error { return verify(path) }
+//
+// path is cleaned first: Lstat of `link/` (or `link\` on Windows) resolves
+// the link, so a trailing separator, which shell tab-completion appends,
+// would otherwise get a symlinked directory past the symlink refusal.
+func Verify(path string) error { return verify(filepath.Clean(path)) }

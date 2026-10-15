@@ -221,6 +221,47 @@ func TestNewRoot_RefusesASymlinkedFleetDir(t *testing.T) {
 	}
 }
 
+// A trailing separator, as shell tab-completion leaves on `--dir ~/link/`,
+// must not get a symlinked fleet dir past the refusal: lstat("link/")
+// resolves the link, so privdir.Verify has to clean the path first.
+func TestRoot_RefusesASymlinkedFleetDirWithATrailingSeparator(t *testing.T) {
+	sep := string(filepath.Separator)
+	t.Run("NewRoot", func(t *testing.T) {
+		base := t.TempDir()
+		target := filepath.Join(base, "target")
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(base, "fleet")
+		symlinkOrSkip(t, target, link)
+		_, err := NewRoot(link+sep, "knomit-fleet-root-test", time.Hour)
+		if !errors.Is(err, privdir.ErrNotPrivate) || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("NewRoot(%q): %v, want privdir.ErrNotPrivate naming the symlink", link+sep, err)
+		}
+		for _, f := range []string{RootKeyFile, RootCertFile} {
+			if _, err := os.Lstat(filepath.Join(target, f)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a refused NewRoot wrote %s through the link: %v", f, err)
+			}
+		}
+	})
+	t.Run("LoadRoot", func(t *testing.T) {
+		base := t.TempDir()
+		target := filepath.Join(base, "target")
+		if _, err := NewRoot(target, "knomit-fleet-root-test", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadRoot(target + sep); err != nil {
+			t.Fatalf("fixture: LoadRoot of the real dir with a trailing separator: %v", err)
+		}
+		link := filepath.Join(base, "fleet")
+		symlinkOrSkip(t, target, link)
+		_, err := LoadRoot(link + sep)
+		if !errors.Is(err, privdir.ErrNotPrivate) || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("LoadRoot(%q): %v, want privdir.ErrNotPrivate naming the symlink", link+sep, err)
+		}
+	})
+}
+
 // A root.key that is a DANGLING symlink passes the os.Stat pre-check (Stat
 // follows the link and finds nothing), so O_EXCL is what refuses it. Without
 // O_EXCL the plain key would be written to wherever the link points.

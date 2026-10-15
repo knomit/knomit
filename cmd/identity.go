@@ -33,6 +33,13 @@ func identityCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "identity",
 		Short: "Instance certificates: mint the fleet root, enroll, install, revoke, show",
+		// cobra answers an unknown subcommand of a group that has no Run
+		// with the group's help and exit 0, before Args is consulted. A RunE
+		// makes the group runnable, so `identity <typo>` is refused by
+		// NoArgs (non-zero exit, with the usage hint) and bare `identity`
+		// still prints the help.
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	c.AddCommand(identityInitRootCmd(), identityEnrollCmd(), identityInstallCmd(), identityRevokeCmd(), identityShowCmd(),
 		identityRootFingerprintCmd())
