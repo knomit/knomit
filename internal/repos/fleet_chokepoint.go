@@ -37,7 +37,7 @@ import (
 // doors (guardFleetRemoval).
 
 // ErrFleetOntologyReserved refuses a fleet-id ontology at a generic door.
-var ErrFleetOntologyReserved = errors.New("the ontology id \"fleet\" is reserved for the fleet repository, which only `knomit fleet` creates or joins")
+var ErrFleetOntologyReserved = errors.New("the ontology id \"fleet\" is reserved for the fleet repository, which only the fleet API (/api/v1/fleet/...) creates or joins")
 
 // ErrFleetReadOnly is the one answer to an authored write (MCP, the fact
 // REST routes, an experiment) on the fleet repository.
@@ -66,7 +66,18 @@ func (m *Manager) fleetRootDir() string {
 // opened here. Every error answers no, so an unreadable home or main never
 // makes an instance the master.
 func (m *Manager) isFleetMaster(svc *store.Service) bool {
-	if m == nil || m.deps.Cfg.Home == "" || svc == nil {
+	if svc == nil {
+		return false
+	}
+	return m.holdsFleetRootAt(svc, svc.UpstreamBranch())
+}
+
+// holdsFleetRootAt is isFleetMaster's test against any branch of the fleet
+// repository: the root key file is in <home>/fleet AND root.crt beside it is
+// the root that artifacts/fleet/root.crt holds at branch. fleetPushed asks it
+// of the agent branch, before main has ever been published.
+func (m *Manager) holdsFleetRootAt(svc *store.Service, branch string) bool {
+	if m == nil || m.deps.Cfg.Home == "" || svc == nil || branch == "" {
 		return false
 	}
 	st, err := os.Stat(filepath.Join(m.fleetRootDir(), pki.RootKeyFile))
@@ -77,11 +88,7 @@ func (m *Manager) isFleetMaster(svc *store.Service) bool {
 	if err != nil {
 		return false
 	}
-	main := svc.UpstreamBranch()
-	if main == "" {
-		return false
-	}
-	f, err := svc.FleetAt(main)
+	f, err := svc.FleetAt(branch)
 	if err != nil || f.PKI == nil || f.PKI.Root == nil {
 		return false
 	}
