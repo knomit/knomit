@@ -35,9 +35,10 @@ type Logf func(reason string, kv ...any)
 //
 // The one exception is the UNINSTALLED snapshot: all three files absent at
 // once, which only Uninstall produces (an install renames over them, never
-// removes them; leave and decommission uninstall). It has no root, and
-// uninstalled is the refusal of every handshake and every established
-// connection, so a running listener leaves the fleet without a restart.
+// removes them; leave and decommission uninstall). It has no certificate and
+// no root, so no handshake completes, and uninstalled is what check answers
+// for every established connection (the sweep closes each one, naming it), so
+// a running listener leaves the fleet without a restart.
 type snapshot struct {
 	rawCert, rawRoot, rawCRL []byte
 	cert                     tls.Certificate
@@ -133,12 +134,7 @@ func NewServer(dir, keyPath string, logf Logf, interval time.Duration) (*Server,
 	}, r.logf)
 	s.cfg = r.configFor(snap)
 	s.cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
-		snap := s.refresh()
-		if snap.uninstalled != nil {
-			r.logf(snap.uninstalled.Error(), "event", "tls_refused")
-			return nil, snap.uninstalled
-		}
-		return r.configFor(snap), nil
+		return r.configFor(s.refresh()), nil
 	}
 	return s, nil
 }
