@@ -80,6 +80,45 @@ func TestCreateFleet_DiedAtEachStepIsRolledBackAtBoot(t *testing.T) {
 	}
 }
 
+// A create that died inside its repository create, before the store was
+// whole, leaves a registered repository that does not mount at the next
+// start. The boot rollback deletes it all the same: it is the marker's name,
+// registered since the create began.
+// Sabotage: drop the unavailable branch of undoFleetCreate -> the dead
+// repository stays registered -> red.
+func TestCreateFleet_DiedRepoThatDoesNotMountIsRolledBackAtBoot(t *testing.T) {
+	ctx := context.Background()
+	deps := fleetHostDeps(t, t.TempDir())
+	m := startFleetHost(t, deps)
+	reached := false
+	setFleetHooks(t, fleetCreateHooks{step: failAt("repo", errFleetCreateDied, &reached)})
+	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
+	require.ErrorIs(t, err, errFleetCreateDied)
+	path := m.RepoPath(m.Get("fleet").UID())
+	require.NoError(t, m.Close())
+	require.NoError(t, os.Remove(path), "the store is not whole")
+
+	m = startFleetHost(t, deps)
+	m.fleetBootWg.Wait()
+	requireNoFleetCreated(t, m)
+	require.Empty(t, m.Unavailable(), "nothing is left unavailable")
+}
+
+// N4. The create is not cut short by the request's context: a client that
+// hangs up (here, a context cancelled before the call) still gets a whole
+// fleet, not a rollback.
+// Sabotage: derive the create's context from ctx -> the cancelled context
+// fails the create -> red.
+func TestCreateFleet_RunsDetachedFromTheRequest(t *testing.T) {
+	m := newFleetHost(t, t.TempDir(), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	st, err := m.CreateFleet(ctx, FleetCreateSpec{})
+	require.NoError(t, err)
+	require.Equal(t, FleetRegistered, st.State)
+	require.Equal(t, fact.MemberActive, st.RecordState)
+}
+
 // Without a restart, the next create rolls the dead one back first.
 // Sabotage: drop recoverFleetCreate from CreateFleet -> the pre-flight sees
 // the half-made fleet (fleet_present) -> red.
