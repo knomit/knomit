@@ -15,6 +15,12 @@ const (
 	CRLNumberFile = "crl.number"
 )
 
+// FleetRootDirName is the fleet root directory under the knomit home,
+// <home>/fleet: the default --dir of `knomit identity`, and where knomit
+// looks for the root key and certificate that make an instance its fleet's
+// master.
+const FleetRootDirName = "fleet"
+
 // File names, fleet root side (the operator's --dir, never a fleet machine).
 const (
 	RootKeyFile    = "root.key"

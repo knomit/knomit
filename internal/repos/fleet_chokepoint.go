@@ -51,13 +51,10 @@ var ErrFleetReadOnly = errors.New("the fleet repository changes only through `kn
 // ordinary repo. Reason "unopenable".
 const CauseFleetConflict UnavailableCause = "fleet_conflict"
 
-// fleetRootDirName is the fleet root directory under the knomit home: the
-// master's root key, root certificate, CRL and issuance log.
-const fleetRootDirName = "fleet"
-
-// fleetRootDir is <home>/fleet.
+// fleetRootDir is <home>/fleet (pki.FleetRootDirName): the master's root
+// key, root certificate, CRL and issuance log.
 func (m *Manager) fleetRootDir() string {
-	return filepath.Join(m.deps.Cfg.Home, fleetRootDirName)
+	return filepath.Join(m.deps.Cfg.Home, pki.FleetRootDirName)
 }
 
 // isFleetMaster reports whether this instance is the master of the fleet

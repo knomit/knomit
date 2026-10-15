@@ -76,12 +76,10 @@ func readPassphrase(cmd *cobra.Command, path string) ([]byte, error) {
 // go-keyring at its in-memory mock, so no test reaches the real keychain.
 var rootKeychain = pki.OSKeychain()
 
-// fleetDirName is the default fleet root directory under the knomit home: the
-// root certificate, the CRL and the two ledgers (the key itself is in the
-// keychain, or root.key there when the keychain is unavailable).
-const fleetDirName = "fleet"
-
-// resolveFleetRootDir is --dir, or <home>/fleet when it is not given.
+// resolveFleetRootDir is --dir, or <home>/fleet (pki.FleetRootDirName) when
+// it is not given: the root certificate, the CRL and the two ledgers (the key
+// itself is in the keychain, or root.key there when the keychain is
+// unavailable).
 func resolveFleetRootDir(dir string) (string, error) {
 	if dir != "" {
 		return dir, nil
@@ -90,7 +88,7 @@ func resolveFleetRootDir(dir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("--dir not given and the knomit home is unresolved: %w", err)
 	}
-	return filepath.Join(cfg.Home, fleetDirName), nil
+	return filepath.Join(cfg.Home, pki.FleetRootDirName), nil
 }
 
 // lazyPassphrase reads --passphrase-file only when custody needs it (the
