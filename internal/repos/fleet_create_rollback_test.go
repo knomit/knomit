@@ -342,7 +342,6 @@ func TestCreateFleet_HostedHereMainNotFollowedIsPending(t *testing.T) {
 func TestCreateFleet_ConcurrentCreatesOneWins(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
-	m.fleetBootWg.Wait() // the boot rollback takes the lock too
 	parked := make(chan struct{})
 	release := make(chan struct{})
 	free := sync.OnceFunc(func() { close(release) })
@@ -400,7 +399,6 @@ func TestFleetOps_TakeTheFleetLock(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := newFleetHost(t, t.TempDir(), nil)
-			m.fleetBootWg.Wait() // the boot rollback takes the lock too
 			waiting := make(chan struct{}, 1)
 			setFleetHooks(t, fleetCreateHooks{contended: func() { waiting <- struct{}{} }})
 			m.fleetOpMu.Lock()

@@ -47,6 +47,9 @@ func startFleetHost(t *testing.T, deps Deps) *Manager {
 	m := New(context.Background(), deps)
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { m.Close() })
+	// The boot rollback of an unfinished create takes the fleet lock: a test
+	// that starts its own create (or holds the lock) must not race it.
+	m.fleetBootWg.Wait()
 	return m
 }
 
