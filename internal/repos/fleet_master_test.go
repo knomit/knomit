@@ -403,15 +403,29 @@ func TestFleetMaster_RoundPublishesAMainCreateFailedToPublish(t *testing.T) {
 // (selfRoot is the fleet's fact root). Today that is rule A's shape check
 // (a joiner may touch only members/<own id>/); with the record-owner rule
 // (#523) the rule is not-owner. The rule name is not asserted.
+//
+// Alpha must still be a JOINER when the edit is judged (on this base rule
+// A's shape check binds a joiner only), so the control admits alpha's record
+// while the merger is inert (the root key is out): main never gains the
+// record, whatever the merger's timing.
 // SABOTAGE: pass selfRoot "" to newJudge in judgeIncoming -> rule A does not
 // run and even alpha's own record is refused (the control), red.
 func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
+	ctx := context.Background()
 	alpha := testsigner.Named("alpha")
 	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
 	_, ari := f.join(t, "alpha", alpha)
 	// Control: alpha's record alone, under alpha's own folder, is admitted.
-	round(t, f.mri)
 	admitted := f.rev(t, "agent/alpha")
+	require.NoError(t, os.Remove(filepath.Join(f.master.fleetRootDir(), pki.RootKeyFile)))
+	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
+		_, err := svc.Remote().SyncWithPeers(ctx, f.mri.AgentBranch(), nil)
+		require.NoError(t, err)
+		reason, err := svc.AdmitPeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), plumbing.NewHash(admitted), nil)
+		require.NoError(t, err)
+		require.Empty(t, reason, "fixture: the record alone is admitted")
+	}))
+	installFleetRoot(t, f.master, f.root)
 	require.Equal(t, admitted, localTip(t, f.mri, "agent/alpha"), "fixture: the record alone is admitted")
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
 		_, err := svc.Facts().WriteFact(context.Background(), ari.AgentBranch(), "kb/members/beta/0000beta.md",
@@ -421,6 +435,7 @@ func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
 	round(t, ari) // pushes alpha's branch with the extra commit
 	require.NoError(t, exec.Command("git", "-C", f.bare, "cat-file", "-e", "agent/alpha:kb/members/beta/0000beta.md").Run(),
 		"fixture: the edit is on the forge")
+	require.False(t, f.onForgeMain(t, memberRecordPath("kb", "alpha")), "fixture: alpha is a joiner")
 
 	round(t, f.mri)
 	r := f.mri.peers.Refusals()["agent/alpha"]
