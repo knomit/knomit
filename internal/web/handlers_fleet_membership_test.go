@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -153,4 +154,75 @@ func TestFleetREST_MemberOriginAndMergeGuards(t *testing.T) {
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"code":"not_master"`)
 	require.Contains(t, rec.Body.String(), "only the fleet's master merges")
+}
+
+// Review N6: on the MASTER, the merge route re-judges the pushed branch at
+// the expected tip against main before merging. A branch whose one commit
+// edits another member's folder is refused 409 judge_refused naming
+// not-owner, and the master's branch does not move; one that edits only the
+// master's own folder is merged (control).
+//
+// The master's background merger judges the same branch and demotes (deletes)
+// a refused one, so the route can find it gone (404). That is a lost race,
+// not an answer: the test plants a fresh branch and asks again. What must
+// never happen is a merge.
+// SABOTAGE: handlePushedMerge passes main's tip instead of expected_tip to
+// FleetMergeRefusal -> nothing to judge -> the not-owner branch merges -> red.
+func TestFleetREST_MasterMergeIsReJudged(t *testing.T) {
+	ctx := context.Background()
+	s, _ := fleetCreateServer(t, "127.0.0.1:0")
+	require.Equal(t, http.StatusCreated, postFleetCreate(s, `{}`, true).Code)
+	m := s.Manager
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	ri := m.Get(st.FleetRepo)
+	own := m.AgentID()
+	plant := func(branch, path string) string {
+		var tip string
+		require.NoError(t, ri.WithRead(func(svc *store.Service) {
+			require.NoError(t, svc.Branches().CreateBranch(ctx, branch, svc.UpstreamBranch()))
+			_, err := svc.Facts().WriteFact(ctx, branch, path, "---\nkind: pragmatic\ntype: policy\n---\n# x\n\nx\n", "plant", "")
+			require.NoError(t, err)
+			tip, err = svc.Branches().HeadCommit(ctx, branch)
+			require.NoError(t, err)
+		}))
+		return tip
+	}
+	ownTip := func() string {
+		var tip string
+		require.NoError(t, ri.WithRead(func(svc *store.Service) {
+			var err error
+			tip, err = svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+			require.NoError(t, err)
+		}))
+		return tip
+	}
+	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
+	merge := func(branch, tip string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch(branch)+"/merge", strings.NewReader(`{"expected_tip":"`+tip+`"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+
+	before := ownTip()
+	refused := false
+	for i := 0; i < 20 && !refused; i++ {
+		branch := fmt.Sprintf("agent/x%d", i)
+		rec := merge(branch, plant(branch, "kb/members/somebody/evil.md"))
+		if rec.Code == http.StatusNotFound {
+			continue // the merger demoted it first
+		}
+		require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+		require.Contains(t, rec.Body.String(), `"code":"judge_refused"`)
+		require.Contains(t, rec.Body.String(), "not-owner")
+		refused = true
+	}
+	require.True(t, refused, "the route never reached a planted branch before the merger demoted it")
+	require.Equal(t, before, ownTip(), "nothing was merged into the master's branch")
+
+	rec := merge("agent/y", plant("agent/y", "kb/members/"+own+"/note.md"))
+	require.Less(t, rec.Code, 300, "control: an own-folder edit is merged: %s", rec.Body.String())
+	require.NotEqual(t, before, ownTip(), "control: the master's branch moved")
 }

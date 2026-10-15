@@ -32,7 +32,7 @@ func fleetCreateServer(t *testing.T, addr string) (*Server, string) {
 		Cfg: config.Config{Home: home, OntologyRoot: "kb",
 			TLS:               config.TLSConfig{Dir: filepath.Join(home, "pki"), Addr: addr},
 			ExternalAddresses: []string{"https://fleet-host.example:19279"}},
-		AgentBranch: "agent/rest-fleet", Signer: testsigner.Signer(), KeyPath: keyPath,
+		AgentBranch: "agent/rest-fleet", AgentID: "rest-fleet", Signer: testsigner.Signer(), KeyPath: keyPath,
 		Machine: repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
