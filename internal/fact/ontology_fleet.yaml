@@ -8,14 +8,11 @@ description: >-
   writing its own record on its agent branch; the record counts once the
   fleet's master merges it into main.
 # Every commit that enters main is judged against the member records and,
-# once the fleet has a root certificate, the fleet's certificates.
+# once the fleet has a root certificate, the fleet's certificates. Merging
+# into main is not a setting here: it is the fleet's master's duty, on every
+# hosting.
 attributes:
   verify_signatures: enforce
-  # The master merges every member branch it accepted into its own agent
-  # branch by itself, and main follows that branch; nobody merges by hand.
-  # It accepts only signed commits that pass the checks above, so this
-  # setting needs verify_signatures: enforce beside it.
-  consensus: auto
 # The fleet's certificate artifacts, under artifacts/ (R7). The commit judge
 # enforces these rules on every commit; the fleet reader finds the
 # certificates through the pki declarations. Each issuance (the issued leaf)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	"knomit/internal/embeddings/params"
@@ -198,7 +199,16 @@ type RemoteIndex interface {
 	GetRemote(name string) (*Remote, error)
 	DeleteRemote(name string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
+	// SyncWithPeers is Sync that also fetches every agent/* branch into
+	// refs/remotes/origin/agent/* (the fleet master on a forge).
+	SyncWithPeers(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
+	// PushUpstream pushes the local consensus branch without force (the
+	// fleet master publishing main).
+	PushUpstream(ctx context.Context, auth transport.AuthMethod) (PushResult, error)
+	// PeerTips lists the fetched agent/* branches (refs/remotes/origin/agent/*)
+	// other than own, by branch name.
+	PeerTips(own string) (map[string]plumbing.Hash, error)
 	// RecordSyncError persists a sync failure (last_status="error",
 	// last_error=msg) on the named remote without performing a fetch. Used to
 	// surface an auth-resolution failure that never reaches Sync().

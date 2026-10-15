@@ -106,6 +106,20 @@ func fleetMemberRow(mem store.FleetMember) map[string]any {
 	}
 }
 
+// fleetMemberRows is one row per record; a member whose branch (the record's
+// `branch`) the fleet's master last refused carries it as last_refusal.
+func fleetMemberRows(ms []store.FleetMember, refused map[string]repos.PeerRefusal) []map[string]any {
+	rows := make([]map[string]any, 0, len(ms))
+	for _, mem := range ms {
+		row := fleetMemberRow(mem)
+		if r, ok := refused[mem.Branch]; ok && mem.Branch != "" {
+			row["last_refusal"] = r
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
 // handleFleetMembers: GET /api/v1/fleet/members, the member records at the
 // fleet repository's main.
 func handleFleetMembers(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
@@ -115,10 +129,7 @@ func handleFleetMembers(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			writeFleetError(w, r, err)
 			return
 		}
-		rows := make([]map[string]any, 0, len(ms))
-		for _, mem := range ms {
-			rows = append(rows, fleetMemberRow(mem))
-		}
+		rows := fleetMemberRows(ms, m.FleetRefusals())
 		hal.WriteHAL(w, http.StatusOK, map[string]any{
 			"members": rows,
 			"_links":  hal.LinkMap{"self": {Href: b.APIRoot() + "/fleet/members"}},

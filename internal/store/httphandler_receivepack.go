@@ -16,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -356,8 +357,20 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 // nothing — under off and log an unsigned commit is accepted anyway, so a
 // signer rule there would stop nobody.
 func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*object.Commit, lg zerolog.Logger) string {
-	upstream := rp.upstream()
-	mode, ont, err := rp.rh.verifyModeAt(ctx, upstream)
+	return rp.rh.judgeIncoming(ctx, rp.upstream(), pol.Fleet, func(c *object.Commit) (Refusal, bool) {
+		return signerIsPusher(c, pol.Pusher)
+	}, commits, lg)
+}
+
+// judgeIncoming is the judge where a branch ENTERS this repository, shared by
+// the two entries: receive-pack (a push to a knomit host, verify) and the
+// fleet master's fetch (AdmitPeerBranch, a forge). It reads verify_signatures
+// at upstream's tip, loads the fleet from fleet, and judges every commit with
+// judgeCommit; signer, when not nil, is one more rule for a commit judgeCommit
+// accepted (receive-pack's signer = pusher; a fetch has no pusher). Returns
+// the refusal text, or "".
+func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleetOf func(context.Context) (Fleet, error), signer func(*object.Commit) (Refusal, bool), commits []*object.Commit, lg zerolog.Logger) string {
+	mode, ont, err := rh.verifyModeAt(ctx, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: verify_signatures at %s could not be read: %v", upstream, err)
 	}
@@ -365,10 +378,10 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 		return ""
 	}
 	var fleet Fleet
-	if pol.Fleet == nil {
+	if fleetOf == nil {
 		err = ErrNoFleet
 	} else {
-		fleet, err = pol.Fleet(ctx)
+		fleet, err = fleetOf(ctx)
 	}
 	if err != nil {
 		if mode == VerifyEnforce {
@@ -382,15 +395,15 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 	// upstream is the fleet ontology).
 	selfRoot := ""
 	if fact.IsFleetOntology(ont) {
-		if selfRoot = rp.rh.factRoot; selfRoot == "" {
+		if selfRoot = rh.factRoot; selfRoot == "" {
 			selfRoot = "kb"
 		}
 	}
-	gate := newJudge(fleet, selfRoot, ont, rp.rh.factRoot)
+	gate := newJudge(fleet, selfRoot, ont, rh.factRoot)
 	for _, c := range commits {
 		ref, ok := gate.judgeCommit(c)
-		if ok {
-			ref, ok = signerIsPusher(c, pol.Pusher)
+		if ok && signer != nil {
+			ref, ok = signer(c)
 		}
 		if ok {
 			continue
@@ -450,15 +463,20 @@ func signerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
 // commit may carry no private path at all. A missing upstream never gets
 // here: judgeRequest refuses the push first.
 func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, commits []*object.Commit) string {
+	return rp.rh.privatePathClosure(ctx, q, rp.upstream(), commits)
+}
+
+// privatePathClosure is receivePack.privatePathClosure for any entry: st
+// holds the commits (a push's quarantine; the store itself for a fetch).
+func (rh *repoHandler) privatePathClosure(ctx context.Context, st storer.EncodedObjectStorer, upstream string, commits []*object.Commit) string {
 	if len(commits) == 0 {
 		return ""
 	}
-	upstream := rp.upstream()
-	uh, err := rp.rh.resolveRef(ctx, upstream)
+	uh, err := rh.resolveRef(ctx, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: %s could not be read: %v", upstream, err)
 	}
-	up, err := object.GetCommit(q, uh)
+	up, err := object.GetCommit(st, uh)
 	if err != nil {
 		return fmt.Sprintf("knomit: %s could not be read: %v", upstream, err)
 	}

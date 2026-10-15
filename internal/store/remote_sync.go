@@ -35,9 +35,22 @@ var errNoOriginRemote = errors.New("no origin git remote configured")
 //
 // upstreamMain is the consensus branch, never empty here: every caller has
 // resolved it (InitFromRemote, InitSubscription) or refused an empty one (Sync).
-func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string, timeout time.Duration) error {
+//
+// extra refspecs are fetched beside the configured ones, in both attempts,
+// without being written to the git config: the fleet master's peerRefspec,
+// decided per round (SyncWithPeers). A wildcard refspec never fails to match,
+// so it cannot cause the fallback.
+func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string, timeout time.Duration, extra ...gogitconfig.RefSpec) error {
+	opts := &gogit.FetchOptions{RemoteName: "origin", Auth: auth}
+	if len(extra) > 0 {
+		rem, err := repo.Remote("origin")
+		if err != nil {
+			return err
+		}
+		opts.RefSpecs = append(append([]gogitconfig.RefSpec(nil), rem.Config().Fetch...), extra...)
+	}
 	strictCtx, strictCancel := netCtxWith(ctx, timeout)
-	err := repo.FetchContext(strictCtx, &gogit.FetchOptions{RemoteName: "origin", Auth: auth})
+	err := repo.FetchContext(strictCtx, opts)
 	strictCancel()
 	if err == nil || errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return nil
@@ -54,7 +67,7 @@ func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 	fallbackErr := repo.FetchContext(fallbackCtx, &gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
-		RefSpecs:   []gogitconfig.RefSpec{upstreamRefspec},
+		RefSpecs:   append([]gogitconfig.RefSpec{upstreamRefspec}, extra...),
 	})
 	fallbackCancel()
 	if fallbackErr == nil || errors.Is(fallbackErr, gogit.NoErrAlreadyUpToDate) {
@@ -116,7 +129,27 @@ func abandonedByCaller(ctx context.Context, retErr error) bool {
 // fast-forwards onto the new main and scrubbed files drop correctly.
 //
 // Safe to call repeatedly; each step is a no-op when there's nothing to do.
-func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
+func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {
+	return ri.sync(ctx, agentBranch, auth)
+}
+
+// peerRefspec is the fleet master's third fetch refspec: every member's agent
+// branch, into remote-tracking refs (refs/remotes/origin/agent/*) that
+// nothing reads as a branch. Only AdmitPeerBranch moves a local branch to one
+// of their tips, after judging it.
+const peerRefspec = gogitconfig.RefSpec("+refs/heads/agent/*:refs/remotes/origin/agent/*")
+
+// SyncWithPeers is Sync for the fleet's master when its copy of the fleet
+// repository has an origin (a forge): the same round, with every agent/*
+// branch fetched as well (peerRefspec). The refspec rides THIS fetch only and
+// is never written to the git config, so a member's remote never has it, and
+// an instance that gains or loses the fleet root key changes what it fetches
+// on its next round, without a restart.
+func (ri *remoteIndex) SyncWithPeers(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {
+	return ri.sync(ctx, agentBranch, auth, peerRefspec)
+}
+
+func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transport.AuthMethod, extra ...gogitconfig.RefSpec) (res SyncResult, retErr error) {
 	remote, err := ri.GetRemote("origin")
 	if err != nil || remote == nil {
 		log.Debug().Msg("Sync: no origin remote configured, skipping")
@@ -169,7 +202,7 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		if _, err := ri.rh.repo.Remote("origin"); err != nil {
 			return errNoOriginRemote
 		}
-		return fetchOrigin(ctx, ri.rh.repo, auth, upstreamMain, ri.rh.netTimeout)
+		return fetchOrigin(ctx, ri.rh.repo, auth, upstreamMain, ri.rh.netTimeout, extra...)
 	}()
 	if fetchErr == errNoOriginRemote {
 		log.Debug().Msg("Sync: no origin git remote configured, skipping")
@@ -252,7 +285,8 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 // reconcile loop does run first per tick).
 //
 // Push does NOT push main — main is consensus, written by the remote-side
-// merge-to-main mechanism, never directly by an agent.
+// merge-to-main mechanism, never directly by an agent. The one exception is
+// the fleet repository's master, which publishes main with PushUpstream.
 //
 // Returns Pushed=false (no error) when there is nothing to push (the snapshot
 // already equals the last-known origin/agent ref).
@@ -281,7 +315,34 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 // An empty branch is refused with ErrNoAgentBranch, but that is a BACKSTOP:
 // the reconcile loop gates on repos.pushAllowed and never calls this for a
 // subscription in the first place.
-func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
+func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error) {
+	return ri.push(ctx, branch, auth, true)
+}
+
+// PushUpstream pushes the local consensus branch (the origin's branch) to the
+// origin WITHOUT force: <S>:refs/heads/<upstream>. Only the fleet's master
+// calls it, after advancing its local consensus branch to its agent branch
+// (R-merge: the master merges, and publishes main itself). Without force, a
+// main on the origin that this instance has not seen is never overwritten:
+// the push is refused as a non-fast-forward, which is an ordinary push error
+// (the push status row, the push breaker), and the next round fetches that
+// main, merges it into the agent branch and pushes again. It is the same
+// snapshot push as Push in every other respect.
+func (ri *remoteIndex) PushUpstream(ctx context.Context, auth transport.AuthMethod) (PushResult, error) {
+	remote, err := ri.GetRemote("origin")
+	if err != nil {
+		return PushResult{}, fmt.Errorf("PushUpstream: %w", err)
+	}
+	if remote == nil {
+		return PushResult{}, nil
+	}
+	if remote.Branch == "" {
+		return PushResult{}, fmt.Errorf("PushUpstream: the origin has no branch: %w", ErrNoConsensusBranch)
+	}
+	return ri.push(ctx, remote.Branch, auth, false)
+}
+
+func (ri *remoteIndex) push(ctx context.Context, branch string, auth transport.AuthMethod, force bool) (res PushResult, retErr error) {
 	if branch == "" {
 		return PushResult{}, ErrNoAgentBranch
 	}
@@ -348,7 +409,11 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 
 	// Force-push the snapshot BY HASH: local replayed history is the new truth
 	// on origin, and a commit made after the snapshot is not in this push.
+	// The consensus branch (PushUpstream) goes without the force.
 	refspec := fmt.Sprintf("+%s:refs/heads/%s", snap, branch)
+	if !force {
+		refspec = fmt.Sprintf("%s:refs/heads/%s", snap, branch)
+	}
 	pushCtx, pushCancel := ri.rh.netCtx(ctx)
 	defer pushCancel()
 	// Progress is the SERVER'S SIDE of the conversation, and without it a

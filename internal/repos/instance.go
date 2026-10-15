@@ -164,11 +164,16 @@ type RepoInstance struct {
 	// a lock and its kick slot exists from the first commit; it runs under the
 	// Serve stage's life.
 	triggers *triggerDispatcher
-	// consensus is the F08 consensus merger (`consensus: auto`), nil when this
+	// consensus is the F08 consensus merger (`consensus: auto`; on the fleet
+	// repository, the fleet master's merger), nil when this
 	// repo can have none: a read-only server, or a subscription with no agent
 	// branch. Built once and never reassigned, like triggers; it runs under
 	// the Serve stage's life.
 	consensus *consensusMerger
+	// peers is the fleet master's fetch-time judge state (fleet_master.go),
+	// built beside consensus and nil where it is; it acts only on the fleet
+	// repository, at its master, in the origin round.
+	peers *fleetPeers
 	// sweep is the experiment expiry sweeper, nil when this repo runs none (a
 	// subscription, or experiments.expiry_days = 0). Built once; the Serve
 	// stage runs it unless the machine is Synchronous.

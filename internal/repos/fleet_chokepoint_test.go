@@ -337,19 +337,17 @@ func TestFleetReserved_BootLeavesAnUnrecordedFleetUnmounted(t *testing.T) {
 	require.Empty(t, archived, "nothing is archived")
 }
 
-// staleFleetYAML is the built-in fleet ontology without `consensus: auto`:
-// what a release before it wrote. It still declares the artifacts section,
-// so the fleet reader finds artifacts/fleet/root.crt on main.
+// staleFleetYAML is the built-in fleet ontology WITH `consensus: auto`: what
+// a release before the master merged on every hosting wrote. It still
+// declares the artifacts section, so the fleet reader finds
+// artifacts/fleet/root.crt on main.
 func staleFleetYAML(t *testing.T) string {
 	t.Helper()
-	var kept []string
-	for _, line := range strings.SplitAfter(fleetOntologyYAML(t), "\n") {
-		if strings.TrimSpace(line) != "consensus: auto" {
-			kept = append(kept, line)
-		}
-	}
-	stale := strings.Join(kept, "")
-	require.NotEqual(t, fleetOntologyYAML(t), stale, "fixture: the stale ontology differs")
+	const anchor = "  verify_signatures: enforce\n"
+	builtIn := fleetOntologyYAML(t)
+	require.Equal(t, 1, strings.Count(builtIn, anchor), "fixture: one verify_signatures line")
+	stale := strings.Replace(builtIn, anchor, anchor+"  consensus: auto\n", 1)
+	require.NotEqual(t, builtIn, stale, "fixture: the stale ontology differs")
 	o, err := fact.ParseOntology([]byte(stale))
 	require.NoError(t, err)
 	require.True(t, fact.IsFleetOntology(o), "fixture: still a fleet ontology")

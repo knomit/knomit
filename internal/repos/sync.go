@@ -263,9 +263,16 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // string, because `repo` below is fixed when the loop starts and a rename
 // does not restart it; `repo` labels this loop's logs and hooks only.
 //
+// peers (nil-safe) is the fleet master's share of the round (fleet_master.go):
+// on a round where this instance is the fleet repository's master, the fetch
+// also brings every agent/* branch, each fetched member tip is judged and an
+// admitted one becomes a local branch the consensus merger merges, and after
+// the own push main is advanced to the agent branch and pushed without force.
+// On every other round, and every other repo, it changes nothing.
+//
 // once runs the immediate first round and returns: the Synchronous mode the
 // test harness uses, where no loop may race its assertions.
-func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, events remoteEdgeSink, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, once bool) {
+func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, events remoteEdgeSink, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, peers *fleetPeers, once bool) {
 	defer mode.clear()
 
 	// Initial config read for logging context; a failed one only loses the
@@ -425,12 +432,20 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 			return
 		}
 
+		// The fleet master's round (peers): decided once per round, so a root
+		// key copied in or removed acts on the next round.
+		master := peers.isMaster(svc)
+
 		// Sync first. A failed fetch does not skip the push: pushing this
 		// instance's own branch without a fresh fetch is still a correct
 		// force-push, and the next working fetch merges what it missed.
 		if fetchDue {
 			attempt("fetch")
-			syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)
+			fetch := svc.Remote().Sync
+			if master {
+				fetch = svc.Remote().SyncWithPeers
+			}
+			syncResult, err := fetch(ctx, agentBranch, auth)
 			if tickAbandoned(ctx, err) {
 				// Our own cancellation, not the remote's verdict. Say nothing, count
 				// nothing (the breaker included), and do not go on to push — that
@@ -462,6 +477,9 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 				} else {
 					lg.Debug().Msg("reconcile: sync up to date")
 				}
+				if master {
+					peers.admit(ctx, svc, agentBranch, &lg)
+				}
 			}
 		}
 
@@ -477,6 +495,15 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 			}
 			if err == nil {
 				pushResult, err = svc.Remote().Push(ctx, agentBranch, auth)
+			}
+			if err == nil && master {
+				// The master publishes main: its agent branch, without force.
+				// A refusal is this round's push error like any other.
+				var mainResult store.PushResult
+				if mainResult, err = peers.publish(ctx, svc, agentBranch, auth); err == nil && mainResult.Pushed {
+					pushResult.Pushed = true
+					lg.Info().Str("branch", svc.UpstreamBranch()).Msg("reconcile: fleet master published main")
+				}
 			}
 			if tickAbandoned(ctx, err) {
 				lg.Debug().Err(err).Msg("reconcile: push abandoned; loop is stopping")

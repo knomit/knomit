@@ -20,7 +20,8 @@ import (
 // against for roles that reconcile acts on destructively. Two things act on
 // this answer, and neither is destructive: a human-started, conflict-refusing
 // merge from the web UI, and — with `consensus: auto` on the host's consensus
-// branch — the consensus merger (consensus.go), which makes the same
+// branch, or on the fleet repository at its master — the consensus merger
+// (consensus.go), which makes the same
 // conflict-refusing merge into this instance's own branch without a human.
 // Neither ever writes the pushed branch. A subscription has no agent branch
 // and no pushed branches.
