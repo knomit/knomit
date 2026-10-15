@@ -115,7 +115,7 @@ func TestFleetMembership_ForgeEnrollJoinAdmitLeaveRevokeDecommission(t *testing.
 
 	_, err = f.master.LeaveFleet(ctx)
 	_, code = fleetCode(t, err)
-	require.Equal(t, "master", code, "the master decommissions; it does not leave")
+	require.Equal(t, "is_master", code, "the master decommissions; it does not leave")
 
 	kb := createRepo(t, alpha, "kb")
 	fleetUID := alpha.fleetRepo().UID()

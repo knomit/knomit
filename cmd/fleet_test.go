@@ -46,7 +46,7 @@ func TestFleetCLI_ThinClientOverTheLocalListener(t *testing.T) {
 	require.Contains(t, out.String(), "registered")
 	require.Contains(t, out.String(), "dial tcp: refused", "last_error is shown verbatim")
 	require.Contains(t, out.String(), "hosting: none")
-	require.Contains(t, out.String(), "role:   master (fleet root directory: /h/fleet)")
+	require.Contains(t, out.String(), "fleet master: true (fleet root directory: /h/fleet)")
 
 	refuse = true
 	err = fleetCall(ctx, hc, &out)

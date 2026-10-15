@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -88,11 +90,35 @@ func signSetup(t *testing.T) (dir, fp string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, pub, _ := instanceHome(t, "headless")
-	if _, _, err := pki.IssueInstance(dir, root, pub, "headless@"+pki.AgentEmailDomain, time.Hour); err != nil {
+	_, pub, _ := instanceHome(t, "laptop")
+	if _, _, err := pki.IssueInstance(dir, root, pub, "laptop@"+pki.AgentEmailDomain, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	return dir, pki.Fingerprint(pub)
+}
+
+// revokeIssued revokes the one leaf the fleet root at dir issued, as the
+// master's POST /fleet/revoke does to its local logs: revoked.jsonl and
+// crl.pem in the root directory.
+func revokeIssued(dir string) error {
+	root, err := pki.LoadRoot(dir)
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, pki.IssuedLogFile))
+	if err != nil {
+		return err
+	}
+	var rec pki.Issued
+	if err := json.Unmarshal([]byte(strings.SplitN(string(raw), "\n", 2)[0]), &rec); err != nil {
+		return err
+	}
+	serial, ok := new(big.Int).SetString(rec.Serial, 16)
+	if !ok {
+		return fmt.Errorf("serial %q", rec.Serial)
+	}
+	_, err = pki.Revoke(dir, root, pki.Revoked{Serial: serial, At: time.Now()}, time.Now().Add(time.Hour))
+	return err
 }
 
 func rootPub(t *testing.T, dir string) ed25519.PublicKey {
@@ -178,8 +204,8 @@ func TestOAuthSign_InstanceMustBeIssuedAndNotRevoked(t *testing.T) {
 	if _, err := sign(strings.Repeat("a", 64)); err == nil || !strings.Contains(err.Error(), "never issued") {
 		t.Fatalf("unknown instance: %v", err)
 	}
-	if out, err := run(t, "", "identity", "revoke", "--dir", dir, "--fingerprint", fp); err != nil {
-		t.Fatalf("revoke: %v\n%s", err, out)
+	if err := revokeIssued(dir); err != nil {
+		t.Fatalf("revoke: %v", err)
 	}
 	if _, err := sign(fp); err == nil || !strings.Contains(err.Error(), "revoked") {
 		t.Fatalf("revoked instance: %v", err)

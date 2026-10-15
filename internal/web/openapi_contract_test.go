@@ -176,7 +176,7 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 		"/fleet/create":       {"fleet_present", "trust_installed", "root_present", "create_unfinished"},
 		"/fleet/enroll":       {"not_master", "own_id", "invalid_key", "invalid_agent_id"},
 		"/fleet/join":         {"fleet_present", "trust_installed", "key_mismatch", "agent_mismatch", "not_a_fleet", "root_differs", "join_refused", "clone_failed"},
-		"/fleet/leave":        {"not_registered", "master"},
+		"/fleet/leave":        {"not_registered", "is_master"},
 		"/fleet/revoke":       {"not_enrolled", "already_revoked", "own_id", "not_master"},
 		"/fleet/decommission": {"not_master"},
 		"/fleet/root":         {"no_root", "root_present", "root_incomplete", "unknown_file", "root_invalid", "hub"},

@@ -2355,7 +2355,7 @@ paths:
         push did, so it works offline: the fleet repository is dropped from
         every lens that reads it and deleted, the trust material is
         uninstalled, the state is `standalone`. The master's revoke is the
-        authoritative half. The master is refused (`master`, 409):
+        authoritative half. The master is refused (`is_master`, 409):
         decommission, or hand the root on and stand down first. Refusals:
         `not_registered` (409).
       operationId: leaveFleet
@@ -2372,7 +2372,7 @@ paths:
                       pushed: { type: boolean }
                       push_error: { type: string }
         "403": { description: Not the local authenticated listener }
-        "409": { description: "not_registered or master" }
+        "409": { description: "not_registered or is_master" }
   /fleet/revoke:
     post:
       tags: [fleet]

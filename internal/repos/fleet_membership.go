@@ -381,7 +381,7 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 			return FleetLeft{}, err
 		}
 		if master {
-			return FleetLeft{}, fleetErr(http.StatusConflict, "master", "this instance is the fleet's master: decommission the fleet (POST /api/v1/fleet/decommission), or hand the root to another member (GET and PUT /api/v1/fleet/root) and stand down (DELETE /api/v1/fleet/root) first")
+			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance is the fleet's master: decommission the fleet (POST /api/v1/fleet/decommission), or hand the root to another member (GET and PUT /api/v1/fleet/root) and stand down (DELETE /api/v1/fleet/root) first")
 		}
 		if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
 			out.PushError = "the left record was not written: " + err.Error()

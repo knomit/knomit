@@ -89,11 +89,7 @@ func printFleetStatus(out io.Writer, st fleetStatusJSON) {
 	if st.FleetRepo != "" {
 		fmt.Fprintf(out, "fleet:  %s (hosting: %s)\n", st.FleetRepo, st.Hosting)
 		fmt.Fprintf(out, "record: %s\n", st.RecordState)
-		role := "member"
-		if st.Master {
-			role = "master"
-		}
-		fmt.Fprintf(out, "role:   %s (fleet root directory: %s)\n", role, st.RootDir)
+		fmt.Fprintf(out, "fleet master: %t (fleet root directory: %s)\n", st.Master, st.RootDir)
 	}
 	if len(st.ExternalAddresses) > 0 {
 		fmt.Fprintf(out, "addresses (knomit.toml): %s\n", strings.Join(st.ExternalAddresses, " "))
