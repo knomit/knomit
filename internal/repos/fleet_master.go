@@ -63,12 +63,6 @@ type PeerRefusal struct {
 // refuses a branch admitted before it.
 type peerKey struct{ tip, main plumbing.Hash }
 
-// peerVerdict is the verdict at a key.
-type peerVerdict struct {
-	key     peerKey
-	refused bool
-}
-
 // fleetPeers is the fleet master's judging state for one repo: the fetch
 // judge's (forge) and the merger's re-judge (both hostings). Built with the
 // instance (like the consensus merger) and nil-safe.
@@ -79,13 +73,20 @@ type fleetPeers struct {
 	// hold it yet (a forge create whose publish of main failed).
 	publishes func(*store.Service) bool
 
-	mu       sync.Mutex
-	judged   map[string]peerVerdict
+	mu sync.Mutex
+	// judged is the memo, per branch: the verdict (true = refused) at each
+	// (tip, main) judged. Two judges write it, the fetch judge (the branch's
+	// tip on the origin) and the merger (the local branch's tip, which can be
+	// an older, admitted tip while the fetch refuses a newer one), so it is
+	// keyed by tip and never overwritten by the other's verdict. Entries at
+	// any other main are dropped when one is recorded: they can never match
+	// again.
+	judged   map[string]map[peerKey]bool
 	refusals map[string]PeerRefusal
 }
 
 func newFleetPeers(master, publishes func(*store.Service) bool) *fleetPeers {
-	return &fleetPeers{master: master, publishes: publishes, judged: map[string]peerVerdict{}, refusals: map[string]PeerRefusal{}}
+	return &fleetPeers{master: master, publishes: publishes, judged: map[string]map[peerKey]bool{}, refusals: map[string]PeerRefusal{}}
 }
 
 // isMaster reports whether this round is the fleet master's; false on nil.
@@ -102,22 +103,32 @@ func (p *fleetPeers) publishesMain(svc *store.Service) bool {
 func (p *fleetPeers) verdictAt(branch string, key peerKey) (refused, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	v, ok := p.judged[branch]
-	if !ok || v.key != key {
-		return false, false
-	}
-	return v.refused, true
+	refused, ok = p.judged[branch][key]
+	return refused, ok
 }
 
-// record stores branch's verdict at key: a refusal is kept (last_refusal),
-// an admission clears the branch's refusal.
-func (p *fleetPeers) record(branch string, key peerKey, reason string) {
+// record stores branch's verdict at key. A refusal is kept as the branch's
+// last_refusal. An admission clears it when it is of the same tip, or when
+// latest says this verdict is of the branch's current tip (the fetch judge);
+// the merger's admission of an older local tip leaves a newer tip's refusal.
+func (p *fleetPeers) record(branch string, key peerKey, reason string, latest bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.judged[branch] = peerVerdict{key: key, refused: reason != ""}
-	if reason != "" {
+	m := p.judged[branch]
+	if m == nil {
+		m = map[peerKey]bool{}
+		p.judged[branch] = m
+	}
+	for k := range m {
+		if k.main != key.main {
+			delete(m, k)
+		}
+	}
+	m[key] = reason != ""
+	switch {
+	case reason != "":
 		p.refusals[branch] = PeerRefusal{Branch: branch, Tip: key.tip.String(), Reason: reason, At: time.Now().UTC()}
-	} else {
+	case latest || p.refusals[branch].Tip == key.tip.String():
 		delete(p.refusals, branch)
 	}
 }
@@ -191,7 +202,7 @@ func (p *fleetPeers) mayMerge(ctx context.Context, svc *store.Service, branch, o
 		lg.Warn().Err(err).Str("branch", branch).Msg("fleet master: branch not re-judged; not merged this run")
 		return false
 	}
-	p.record(branch, key, reason)
+	p.record(branch, key, reason, false)
 	if reason == "" {
 		return true
 	}
@@ -260,7 +271,7 @@ func (p *fleetPeers) admit(ctx context.Context, svc *store.Service, own string, 
 			lg.Warn().Err(err).Str("branch", branch).Msg("fleet master: member branch not judged; retried next round")
 			continue
 		}
-		p.record(branch, key, reason)
+		p.record(branch, key, reason, true)
 		if reason != "" {
 			lg.Warn().Str("branch", branch).Str("tip", shortHash(key.tip.String())).Str("reason", reason).
 				Msg("fleet master: member branch refused; left behind")

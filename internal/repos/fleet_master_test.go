@@ -695,3 +695,41 @@ func TestFleetMaster_TheLoopRoundPublishesMainForTheCreatorOnce(t *testing.T) {
 	require.Equal(t, FleetRegistered, st.State)
 	require.Empty(t, st.LastError)
 }
+
+// The two judges share the memo without erasing each other (found by CI on
+// macOS in TestFleetMaster_ARefusedCommitUnderAnAdmissibleTipIsRefused): the
+// fetch judge refuses alpha's new tip Y while the merger, which read the
+// local branch before its demotion, admits the older tip O at the same main.
+// The merger's admission of O must neither clear Y's refusal nor its memo
+// entry; a fetch-judge admission (the branch's current tip) does clear it.
+// SABOTAGE: clear the refusal on every admission in fleetPeers.record
+// (drop the latest/same-tip condition) -> Y's refusal is gone, red. Key the
+// memo by branch alone -> Y's verdict is lost, red.
+func TestFleetPeers_AMergerAdmissionOfAnOlderTipKeepsTheRefusal(t *testing.T) {
+	p := newFleetPeers(nil, nil)
+	main := plumbing.NewHash("1111111111111111111111111111111111111111")
+	old := peerKey{tip: plumbing.NewHash("2222222222222222222222222222222222222222"), main: main}
+	y := peerKey{tip: plumbing.NewHash("3333333333333333333333333333333333333333"), main: main}
+
+	p.record("agent/alpha", y, "commit X refused", true) // the fetch judge
+	p.record("agent/alpha", old, "", false)              // the merger, on the older local tip
+	r, ok := p.Refusals()["agent/alpha"]
+	require.True(t, ok, "Y's refusal survives the merger's admission of the older tip")
+	require.Equal(t, y.tip.String(), r.Tip)
+	refused, seen := p.verdictAt("agent/alpha", y)
+	require.True(t, seen && refused, "Y's memo entry survives")
+	admitted, seen := p.verdictAt("agent/alpha", old)
+	require.True(t, seen && !admitted, "the older tip's verdict is memoised too")
+
+	// The merger re-judging Y itself, admitted at a newer main, clears it.
+	newer := peerKey{tip: y.tip, main: plumbing.NewHash("4444444444444444444444444444444444444444")}
+	p.record("agent/alpha", newer, "", false)
+	require.NotContains(t, p.Refusals(), "agent/alpha", "an admission of the refused tip clears its refusal")
+	_, seen = p.verdictAt("agent/alpha", y)
+	require.False(t, seen, "entries at an older main are dropped")
+
+	// The fetch judge's admission of a newer tip clears an older tip's refusal.
+	p.record("agent/alpha", peerKey{tip: old.tip, main: newer.main}, "refused", false)
+	p.record("agent/alpha", peerKey{tip: plumbing.NewHash("5555555555555555555555555555555555555555"), main: newer.main}, "", true)
+	require.NotContains(t, p.Refusals(), "agent/alpha")
+}
