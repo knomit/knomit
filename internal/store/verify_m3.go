@@ -59,10 +59,16 @@ func checkM3(merge *object.Commit) (m3Verdict, error) {
 	// flat is every non-tree entry of c's tree: files, symlinks AND gitlinks
 	// (submodule entries), each with its mode. tree.Files() would not do: it
 	// skips submodule entries, so a "clean" merge could add a gitlink its
-	// parents do not carry and still pass.
+	// parents do not carry and still pass. The TreeWalker itself ends
+	// silently at a directory entry that is not a tree, so the tree's shape
+	// is checked first (checkTreeShape): such an entry is an error, never
+	// the end of the walk.
 	flat := func(c *object.Commit) (map[string]pathEntry, error) {
 		tree, err := c.Tree()
 		if err != nil {
+			return nil, err
+		}
+		if err := checkTreeShape(tree, nil); err != nil {
 			return nil, err
 		}
 		out := map[string]pathEntry{}

@@ -180,7 +180,10 @@ commit the candidate adds to the upstream: signed; its author's agent id has
 exactly one member record; the signing key is that record's current key and no
 other record's; the agent is active. A two-parent merge that adds nothing
 beyond its parents passes, signed or not, before any of these rules; an
-unsigned merge passes only that way.
+unsigned merge passes only that way. Before all of them, in every knowledge
+base, the commit's tree and its parents' trees must be well formed: every
+directory entry a tree, every file entry a blob, each one present, no name
+twice (else malformed-tree).
 
 When the fleet checkout holds the fleet's certificate artifacts — the root,
 CRL and leaf files its ontology's artifacts section declares (pki: root, crl,

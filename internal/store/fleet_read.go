@@ -112,6 +112,13 @@ func loadMembers(fleetID string, c *object.Commit, root string) ([]FleetMember, 
 // and this keeps one that is already on main harmless to every reader and
 // to the judge.
 func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetMember, error) {
+	// tree.Files() ends SILENTLY at a directory entry that is not a tree, so
+	// one bogus entry would hide every record after it (and a member could
+	// plant one in its own folder to make the members sorting after it
+	// vanish). A malformed tree fails the load instead.
+	if err := checkTreeShape(tree, nil); err != nil {
+		return nil, fmt.Errorf("fleet %s: malformed tree: %w", fleetID, err)
+	}
 	prefix := path.Join(root, fact.MembersTopic) + "/"
 	var out []FleetMember
 	err := tree.Files().ForEach(func(f *object.File) error {

@@ -37,6 +37,12 @@ const (
 	RuleDuplicateKey = "duplicate-key" // the signing key is the current key of more than one record
 	RuleInactive     = "inactive"      // the record's state is not active
 	RuleMerge        = "merge"         // an unsigned merge that fails M3
+	// RuleMalformedTree: the commit's tree, or a parent's, is not well formed
+	// (checkTreeShape): a directory entry that is not a tree object, a file
+	// entry that is not a blob, an object that does not exist, a name go-git
+	// will not read, a duplicate name, or a tree too deep. Judged before every
+	// other rule, in every repository.
+	RuleMalformedTree = "malformed-tree"
 	// RuleNotOwner: the fleet repository only — a member commit that changes
 	// a path outside artifacts/ that is not under members/<its own id>/, or
 	// deletes a file there (the record-owner rule, recordOwner).

@@ -183,6 +183,9 @@ type judge struct {
 	// kbRoot is the judged repository's fact root, where leaf-renewal reads
 	// the member records of the commit's own tree.
 	kbRoot string
+	// shapeOK memoises the trees checkTreeShape found well formed, across
+	// the commits this judge judges (they share most subtrees).
+	shapeOK map[plumbing.Hash]bool
 }
 
 // newJudge builds the judge for one fleet revision. selfRoot is the judged
@@ -193,7 +196,7 @@ func newJudge(f Fleet, selfRoot string, ont *fact.Ontology, kbRoot string) judge
 	if kbRoot == "" {
 		kbRoot = "kb"
 	}
-	j := judge{memberIndex: indexMembers(f.Members), pki: f.PKI, ont: ont, kbRoot: kbRoot}
+	j := judge{memberIndex: indexMembers(f.Members), pki: f.PKI, ont: ont, kbRoot: kbRoot, shapeOK: map[plumbing.Hash]bool{}}
 	if selfRoot != "" {
 		j.membersDir = path.Join(selfRoot, fact.MembersTopic) + "/"
 	}
@@ -226,6 +229,10 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 }
 
 // judgeCommit applies the gate's rules to one commit:
+//   - FIRST, in every repository, the commit's tree and every parent's tree
+//     must be well formed (commitTreeShape, else RuleMalformedTree): every
+//     rule below walks those trees with go-git walkers that end silently at
+//     a directory entry that is not a tree, and would judge only a prefix;
 //   - a two-parent merge that adds nothing beyond its parents (M3) passes,
 //     signed or not, BEFORE any record rule (H4): a member's routine "merge
 //     main into my branch" is never refused as no-record or not-owner, even
@@ -257,6 +264,9 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 // a record or a leaf file is looked up, and compared for equality with the
 // leaf's email SAN id.
 func (j judge) judgeCommit(c *object.Commit) (Refusal, bool) {
+	if err := commitTreeShape(c, j.shapeOK); err != nil {
+		return Refusal{Commit: c.Hash.String(), Rule: RuleMalformedTree, Reason: err.Error()}, false
+	}
 	r, ok := j.judgeSigner(c)
 	if !ok {
 		return r, false
