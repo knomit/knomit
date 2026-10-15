@@ -8,6 +8,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store"
 )
 
 // The fleet is a product feature, not a template: its ontology is built into
@@ -59,15 +60,35 @@ func (m *Manager) fleetRootDir() string {
 	return filepath.Join(m.deps.Cfg.Home, fleetRootDirName)
 }
 
-// isFleetMaster reports whether this instance is the fleet's master: the
-// fleet root key file is in <home>/fleet. Any stat error other than "it is a
-// file" answers no, so an unreadable home never makes an instance the master.
-func (m *Manager) isFleetMaster() bool {
-	if m == nil || m.deps.Cfg.Home == "" {
+// isFleetMaster reports whether this instance is the master of the fleet
+// whose repository svc is: the fleet root key file is in <home>/fleet AND the
+// root certificate beside it is THIS fleet's root, the one
+// artifacts/fleet/root.crt holds on the fleet repository's main. A key file
+// alone is not enough: a member that holds a stray root.key (another fleet's,
+// an undecommissioned one) is not the master. The key is never read or
+// opened here. Every error answers no, so an unreadable home or main never
+// makes an instance the master.
+func (m *Manager) isFleetMaster(svc *store.Service) bool {
+	if m == nil || m.deps.Cfg.Home == "" || svc == nil {
 		return false
 	}
 	st, err := os.Stat(filepath.Join(m.fleetRootDir(), pki.RootKeyFile))
-	return err == nil && st.Mode().IsRegular()
+	if err != nil || !st.Mode().IsRegular() {
+		return false
+	}
+	local, err := pki.LoadRootCert(filepath.Join(m.fleetRootDir(), pki.RootCertFile))
+	if err != nil {
+		return false
+	}
+	main := svc.UpstreamBranch()
+	if main == "" {
+		return false
+	}
+	f, err := svc.FleetAt(main)
+	if err != nil || f.PKI == nil || f.PKI.Root == nil {
+		return false
+	}
+	return local.Equal(f.PKI.Root)
 }
 
 // refuseReservedOntology is the create half for an ontology the request

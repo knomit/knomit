@@ -5,12 +5,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/pki"
+	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
@@ -332,4 +335,166 @@ func TestFleetReserved_BootLeavesAnUnrecordedFleetUnmounted(t *testing.T) {
 	archived, err := m.ListArchived()
 	require.NoError(t, err)
 	require.Empty(t, archived, "nothing is archived")
+}
+
+// staleFleetYAML is the built-in fleet ontology without `consensus: auto`:
+// what a release before it wrote. It still declares the artifacts section,
+// so the fleet reader finds artifacts/fleet/root.crt on main.
+func staleFleetYAML(t *testing.T) string {
+	t.Helper()
+	var kept []string
+	for _, line := range strings.SplitAfter(fleetOntologyYAML(t), "\n") {
+		if strings.TrimSpace(line) != "consensus: auto" {
+			kept = append(kept, line)
+		}
+	}
+	stale := strings.Join(kept, "")
+	require.NotEqual(t, fleetOntologyYAML(t), stale, "fixture: the stale ontology differs")
+	o, err := fact.ParseOntology([]byte(stale))
+	require.NoError(t, err)
+	require.True(t, fact.IsFleetOntology(o), "fixture: still a fleet ontology")
+	_, ok := o.PKILayout()
+	require.True(t, ok, "fixture: still declares the fleet's root")
+	return stale
+}
+
+// seedFleetRemoteWithRoot is a bare fleet remote whose main holds ontYAML
+// and the fleet root certificate rootPEM at artifacts/fleet/root.crt.
+func seedFleetRemoteWithRoot(t *testing.T, bare, ontYAML string, rootPEM []byte) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(bare, 0o755))
+	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	work := t.TempDir()
+	runGit(t, "", "clone", bare, work)
+	for path, body := range map[string][]byte{OntologyPath: []byte(ontYAML), "artifacts/fleet/" + pki.RootCertFile: rootPEM} {
+		require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(path)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(work, path), body, 0o644))
+	}
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-q", "-m", "fleet")
+	runGit(t, work, "push", "-q", "origin", "main")
+	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	return fileuri.New(bare)
+}
+
+// installFleetRoot copies root's key and certificate into m's <home>/fleet,
+// as `knomit identity init-root` leaves them.
+func installFleetRoot(t *testing.T, m *Manager, root *pkitest.Fleet) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(m.fleetRootDir(), 0o700))
+	for _, name := range []string{pki.RootKeyFile, pki.RootCertFile} {
+		raw, err := os.ReadFile(filepath.Join(root.Dir, name))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(m.fleetRootDir(), name), raw, 0o600))
+	}
+}
+
+// refreshFixture mounts, through the fleet door, a fleet repository whose
+// main holds staleFleetYAML and root A's certificate. home is what
+// <home>/fleet holds when it mounts: "master" root A, "stray" another root
+// (a stray root.key from another fleet), "member" nothing.
+func refreshFixture(t *testing.T, home string) (m *Manager, ri *RepoInstance, stale string, rootA *pkitest.Fleet) {
+	t.Helper()
+	dir := t.TempDir()
+	stale = staleFleetYAML(t)
+	rootA = pkitest.New(t)
+	rootPEM, err := os.ReadFile(filepath.Join(rootA.Dir, pki.RootCertFile))
+	require.NoError(t, err)
+	url := seedFleetRemoteWithRoot(t, filepath.Join(dir, "fleet.git"), stale, rootPEM)
+	m = newFleetManager(t, dir)
+	switch home {
+	case "master":
+		installFleetRoot(t, m, rootA)
+	case "stray":
+		installFleetRoot(t, m, pkitest.New(t))
+	}
+	return m, mountFleetByDoor(t, m, "fleet", url), stale, rootA
+}
+
+// agentOntology is the ontology file on ri's agent branch.
+func agentOntology(t *testing.T, ri *RepoInstance) string {
+	t.Helper()
+	got, err := testService(t, ri).Facts().ReadFact(context.Background(), ri.AgentBranch(), OntologyPath, nil)
+	require.NoError(t, err)
+	return got.Content
+}
+
+// The fleet ontology is knomit's own: on the MASTER (this fleet's root key
+// and certificate are in <home>/fleet) a stored fleet ontology that differs
+// from the built-in one is replaced by it wholesale, policy included.
+// SABOTAGE: return before the write in refreshFleetOntology -> the stored
+// file stays stale -> red.
+func TestFleetOntologyRefresh_MasterReplacesItWholesale(t *testing.T) {
+	_, ri, _, _ := refreshFixture(t, "master")
+	require.Equal(t, fleetOntologyYAML(t), agentOntology(t, ri), "the master writes the built-in fleet ontology")
+	require.Same(t, fact.FleetOntology(), ri.Ontology(), "and the built-in one is in force")
+}
+
+// A member (no fleet root key file) never refreshes the fleet ontology: it
+// never writes a dot path on the fleet repository.
+// SABOTAGE: drop the isFleetMaster condition -> the member rewrites the file
+// -> red.
+func TestFleetOntologyRefresh_MemberLeavesItAlone(t *testing.T) {
+	_, ri, stale, _ := refreshFixture(t, "member")
+	require.Equal(t, stale, agentOntology(t, ri), "the stored file is left byte for byte")
+	require.True(t, ri.IsFleet(), "reached: the repo is the fleet repository")
+	require.NotSame(t, fact.FleetOntology(), ri.Ontology(), "the stored ontology is in force")
+}
+
+// A member holding a stray root.key, with the root certificate of ANOTHER
+// fleet beside it (an earlier fleet that was never decommissioned), is not
+// this fleet's master (PR #520 F3): the key file alone does not make it one,
+// its root.crt must equal artifacts/fleet/root.crt on the fleet's main. It
+// leaves the ontology alone.
+// SABOTAGE: drop the root certificate comparison from isFleetMaster (answer
+// true once the key file is there) -> the member rewrites the file -> red.
+func TestFleetOntologyRefresh_StrayRootKeyIsNotTheMaster(t *testing.T) {
+	m, ri, stale, _ := refreshFixture(t, "stray")
+	_, err := os.Stat(filepath.Join(m.fleetRootDir(), pki.RootKeyFile))
+	require.NoError(t, err, "reached: a root key file is in <home>/fleet")
+	require.Equal(t, stale, agentOntology(t, ri), "the stored file is left byte for byte")
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		require.False(t, m.isFleetMaster(svc), "not this fleet's master")
+	}))
+}
+
+// A refused restore on the MASTER writes nothing into the archived store
+// (PR #520 F5). Identify loads the ontology, and so runs the refresh, BEFORE
+// admitFleetOntology refuses the mount; the refresh's fleetDoor condition is
+// the only thing that keeps a master from committing the built-in ontology
+// into the archived repository's agent branch.
+// SABOTAGE: drop `|| !r.fleetDoor` from refreshFleetOntology -> the archived
+// store's ontology is rewritten -> red.
+func TestFleetReserved_RefusedRestoreOnTheMasterWritesNothing(t *testing.T) {
+	m, ri, stale, rootA := refreshFixture(t, "member")
+	uid := ri.UID()
+	o, err := m.originOf(ri)
+	require.NoError(t, err)
+	origin := o.URL
+	info, err := m.archive("fleet", ArchiveReason{Source: ArchiveBySystem, Reason: "test"})
+	require.NoError(t, err)
+	installFleetRoot(t, m, rootA) // this instance is now the fleet's master
+
+	archived := func() (string, bool) {
+		t.Helper()
+		tmp := filepath.Join(t.TempDir(), "copy.db")
+		copyDB(t, m.RepoPath(uid), tmp)
+		svc, err := store.Open(tmp)
+		require.NoError(t, err)
+		defer svc.Close()
+		svc.SetOntologyRoot("kb")
+		svc.SetOrigin(&store.Origin{URL: origin, Branch: "main"})
+		require.NoError(t, svc.OpenRepo())
+		got, err := svc.Facts().ReadFact(context.Background(), "agent/test-fleet", OntologyPath, nil)
+		require.NoError(t, err)
+		return got.Content, m.isFleetMaster(svc)
+	}
+	before, master := archived()
+	require.Equal(t, stale, before, "fixture: the archived store holds the stale ontology")
+	require.True(t, master, "reached: a restore would run on this fleet's master")
+
+	_, err = m.Restore(info.ID, "")
+	require.ErrorIs(t, err, ErrFleetOntologyReserved)
+	after, _ := archived()
+	require.Equal(t, before, after, "the archived store's ontology is byte for byte what it was")
 }

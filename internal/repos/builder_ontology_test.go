@@ -3,8 +3,6 @@ package repos
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -13,7 +11,6 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/pki"
 )
 
 // A repo whose Identify stage has not run (or has exited for a swap)
@@ -591,72 +588,4 @@ func TestRefreshDivergence_NeverAddsOrChangesRootAttributes(t *testing.T) {
 	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(withLog, presetEnforce), "a preset must not CHANGE a root attribute")
 	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(withLog, presetPlain), "a preset must not DROP a root attribute")
 	require.Equal(t, "", refreshDivergence(withLog, presetLog), "an identical root block is preserved, so the refresh may run")
-}
-
-// staleFleetYAML is a fleet ontology an older release could have written: the
-// members topic only, none of the policy the built-in one declares. The
-// presets' subset rule would never replace it (adding verify_signatures is
-// divergence), which is exactly why the fleet's refresh is not that rule.
-const staleFleetYAML = "id: fleet\nname: Fleet\ntopics:\n  members:\n    description: d\n"
-
-// bootFleetRepo reboots a home whose one repo holds staleFleetYAML and is
-// recorded as the instance's fleet repository, with or without the fleet root
-// key file in <home>/fleet, and returns the mounted repo and its agent branch.
-func bootFleetRepo(t *testing.T, master bool) (*RepoInstance, string) {
-	t.Helper()
-	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, staleFleetYAML)
-	recordOnlyRepoAsFleet(t, dir)
-	if master {
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, fleetRootDirName), 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, fleetRootDirName, pki.RootKeyFile), []byte("key"), 0o600))
-	}
-	m := New(context.Background(), Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
-	require.NoError(t, m.Start())
-	t.Cleanup(func() { _ = m.Close() })
-	require.Equal(t, master, m.isFleetMaster(), "fixture: master iff the root key file is there")
-	ri := m.Get(testRepoName)
-	require.NotNil(t, ri, "a registered fleet repository mounts at boot")
-	return ri, agentBranch
-}
-
-// recordOnlyRepoAsFleet records the one active repo of the stopped home dir
-// as its fleet repository, as RegisterFleet does.
-func recordOnlyRepoAsFleet(t *testing.T, dir string) {
-	t.Helper()
-	reg, err := OpenRegistry(filepath.Join(dir, "control.db"))
-	require.NoError(t, err)
-	defer reg.Close()
-	recs, err := reg.List(StateActive)
-	require.NoError(t, err)
-	require.Len(t, recs, 1, "fixture: one repo")
-	require.NoError(t, recordFleetRepo(reg.DB(), recs[0].UID))
-}
-
-// The fleet ontology is knomit's own: on the MASTER (the fleet root key file
-// is in <home>/fleet) a stored fleet ontology that differs from the built-in
-// one is replaced by it wholesale at boot, policy included.
-// SABOTAGE: return before the write in refreshFleetOntology -> the stored
-// file stays stale -> red.
-func TestFleetOntologyRefresh_MasterReplacesItWholesale(t *testing.T) {
-	ri, agentBranch := bootFleetRepo(t, true)
-	builtIn, err := fact.FleetOntology().Serialize()
-	require.NoError(t, err)
-	got, err := testService(t, ri).Facts().ReadFact(context.Background(), agentBranch, OntologyPath, nil)
-	require.NoError(t, err)
-	require.Equal(t, string(builtIn), got.Content, "the master writes the built-in fleet ontology")
-	require.Same(t, fact.FleetOntology(), ri.Ontology(), "and the built-in one is in force")
-	require.Equal(t, "enforce", ri.Ontology().Attributes[fact.AttrVerifySignatures])
-}
-
-// A member (no fleet root key file) never refreshes the fleet ontology: it
-// never writes a dot path on the fleet repository.
-// SABOTAGE: drop the isFleetMaster condition -> the member rewrites the file
-// -> red.
-func TestFleetOntologyRefresh_MemberLeavesItAlone(t *testing.T) {
-	ri, agentBranch := bootFleetRepo(t, false)
-	got, err := testService(t, ri).Facts().ReadFact(context.Background(), agentBranch, OntologyPath, nil)
-	require.NoError(t, err)
-	require.Equal(t, staleFleetYAML, got.Content, "the stored file is left byte for byte")
-	require.True(t, ri.IsFleet(), "reached: the repo is the fleet repository")
-	require.NotContains(t, ri.Ontology().Attributes, fact.AttrVerifySignatures, "the stored ontology is in force")
 }

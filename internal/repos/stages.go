@@ -503,7 +503,7 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 
 // refreshFleetOntology is the fleet repository's ontology refresh: the fleet
 // ontology is knomit's own and changes only with a release, so on the MASTER
-// (the fleet root key is on this machine, isFleetMaster) a stored ontology
+// (this fleet's root key is on this machine, isFleetMaster) a stored ontology
 // that differs from the built-in one is replaced by it wholesale — not the
 // presets' subset rule. Every other instance leaves it alone: a member never
 // writes a dot path on the fleet repository (the master's push gate refuses
@@ -511,7 +511,7 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 // mount that is not admitted (admitFleetOntology) writes nothing either. It
 // returns the ontology in force.
 func (r *RepoInstance) refreshFleetOntology(ctx context.Context, svc *store.Service, read, srcPath string, ont *fact.Ontology) *fact.Ontology {
-	if r.subscribed || !r.fleetDoor || !r.env.m.isFleetMaster() {
+	if r.subscribed || !r.fleetDoor || !r.env.m.isFleetMaster(svc) {
 		return ont
 	}
 	builtIn := fact.FleetOntology()
