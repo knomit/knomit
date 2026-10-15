@@ -133,6 +133,7 @@ func TestGrants_AddListRevokeAndTheRefusals(t *testing.T) {
 		t.Fatalf("list after revoke:\n%s", out)
 	}
 }
+
 // show prints the agent id the instance persisted in control.db — the one
 // app.New resolves and authors commits as — not anything built from the key.
 // The stored id here deliberately shares nothing with the key's fingerprint,
