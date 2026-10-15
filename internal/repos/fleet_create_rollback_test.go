@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -344,6 +345,8 @@ func TestCreateFleet_ConcurrentCreatesOneWins(t *testing.T) {
 	m.fleetBootWg.Wait() // the boot rollback takes the lock too
 	parked := make(chan struct{})
 	release := make(chan struct{})
+	free := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(free) // before Close, which waits for a parked create
 	waiting := make(chan struct{}, 1)
 	first := true
 	setFleetHooks(t, fleetCreateHooks{
@@ -370,7 +373,7 @@ func TestCreateFleet_ConcurrentCreatesOneWins(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("the second create neither waited nor returned")
 	}
-	close(release)
+	free()
 
 	require.NoError(t, <-errA, "the first create wins")
 	_, code := fleetCode(t, <-errB)
