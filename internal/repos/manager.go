@@ -171,9 +171,12 @@ type Manager struct {
 	createsCancel context.CancelFunc
 	createWg      sync.WaitGroup
 
-	// fleetOpMu serializes the operations that make this instance a fleet
-	// member (CreateFleet, RegisterFleet): each checks "no fleet here" and
-	// then mounts one, so two of them at once would both pass the check.
+	// fleetOpMu serializes the operations that change this instance's fleet
+	// membership: CreateFleet, RegisterFleet, UnregisterFleet, and the boot
+	// rollback of an unfinished create. Each checks the state and then
+	// changes it, so two at once would both pass the check. It is also what
+	// makes a create marker found under it a dead create's
+	// (recoverFleetCreate). Take it with lockFleetOp.
 	fleetOpMu sync.Mutex
 }
 
@@ -947,6 +950,13 @@ func (m *Manager) Start() error {
 	if ferr != nil {
 		log.Warn().Err(ferr).Msg("fleet repository record unreadable: no fleet repository is admitted at boot")
 	}
+	// A fleet create that did not finish (fleet_create.go): its repository is
+	// admitted too, even before it was recorded, so that the boot rollback
+	// (startFleetBootReconcile) can open it and delete what it pushed.
+	creating, cerr := readFleetCreateMarker(repoReg.DB())
+	if cerr != nil {
+		log.Warn().Err(cerr).Msg("fleet create marker unreadable: an unfinished create is not rolled back at boot")
+	}
 	// Every active row is mounted concurrently: a mount replies once its walk
 	// reaches Ready, which is milliseconds — the index job runs in the
 	// background — so boot does not wait on any repo's index.
@@ -957,7 +967,7 @@ func (m *Manager) Start() error {
 		boot.Add(1)
 		go func(rec RepoRecord) {
 			defer boot.Done()
-			m.openRegistered(rec, fleetUID != "" && rec.UID == fleetUID)
+			m.openRegistered(rec, (fleetUID != "" && rec.UID == fleetUID) || (creating != nil && rec.Name == creating.RepoName))
 		}(rec)
 	}
 	boot.Wait()

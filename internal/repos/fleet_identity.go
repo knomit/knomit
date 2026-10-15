@@ -212,9 +212,14 @@ func readFleetRow(db *sql.DB) (FleetRow, error) {
 	return r, nil
 }
 
+// sqlExecer is a *sql.DB or a *sql.Tx.
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 // setFleetState moves the state machine. Entering registered stamps
 // registered_at; entering standalone clears it and the last error.
-func setFleetState(db *sql.DB, state string, now time.Time) error {
+func setFleetState(db sqlExecer, state string, now time.Time) error {
 	q := `UPDATE instance_identity SET fleet_state = ?, fleet_state_since = ? WHERE id = 1`
 	args := []any{state, now.Unix()}
 	switch state {
@@ -270,4 +275,80 @@ func recordedFleetRepo(db *sql.DB) (string, error) {
 		return "", fmt.Errorf("fleet repository: read: %w", err)
 	}
 	return uid, nil
+}
+
+// fleetCreateMarker is the row of control.db instance_fleet_create (migration
+// 000017): a fleet create that has begun and not finished. CreateFleet
+// writes it before its first write and deletes it in the transaction that
+// sets the fleet state (finishFleetCreate). A marker found while no create
+// runs is a create that died part way, and undoFleetCreate rolls it back.
+type fleetCreateMarker struct {
+	// RepoName is the fleet repository's local name, free when the create
+	// began.
+	RepoName  string
+	StartedAt time.Time
+	// RootID is pki.RootID of the root this create minted, "" until the root
+	// exists.
+	RootID string
+	// TLSDirExisted says whether [tls].dir existed when the create began.
+	TLSDirExisted bool
+}
+
+// readFleetCreateMarker is the marker, or nil when no create is under way.
+func readFleetCreateMarker(db *sql.DB) (*fleetCreateMarker, error) {
+	var mk fleetCreateMarker
+	var started int64
+	err := db.QueryRow(`SELECT repo_name, started_at, root_id, tls_dir_existed FROM instance_fleet_create WHERE id = 1`).
+		Scan(&mk.RepoName, &started, &mk.RootID, &mk.TLSDirExisted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fleet create marker: read: %w", err)
+	}
+	mk.StartedAt = time.Unix(started, 0).UTC()
+	return &mk, nil
+}
+
+// writeFleetCreateMarker records that a create begins. It fails when a marker
+// is already there, because that one must be rolled back first.
+func writeFleetCreateMarker(db *sql.DB, mk fleetCreateMarker) error {
+	if _, err := db.Exec(`INSERT INTO instance_fleet_create (id, repo_name, started_at, root_id, tls_dir_existed) VALUES (1, ?, ?, '', ?)`,
+		mk.RepoName, mk.StartedAt.Unix(), mk.TLSDirExisted); err != nil {
+		return fmt.Errorf("fleet create marker: write: %w", err)
+	}
+	return nil
+}
+
+// setFleetCreateRoot records the root the create minted.
+func setFleetCreateRoot(db *sql.DB, rootID string) error {
+	res, err := db.Exec(`UPDATE instance_fleet_create SET root_id = ? WHERE id = 1`, rootID)
+	if err != nil {
+		return fmt.Errorf("fleet create marker: record the root: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return errors.New("fleet create marker: no marker to record the root on")
+	}
+	return nil
+}
+
+// finishFleetCreate ends a create in one transaction: it sets the fleet
+// state and deletes the marker. It is a create's point of no return and, with
+// state standalone, the last step of its rollback.
+func finishFleetCreate(db *sql.DB, state string, now time.Time) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("fleet create: finish: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := setFleetState(tx, state, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM instance_fleet_create WHERE id = 1`); err != nil {
+		return fmt.Errorf("fleet create marker: delete: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("fleet create: finish: %w", err)
+	}
+	return nil
 }

@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/pki"
+	"knomit/internal/pki/pkitest"
 	"knomit/internal/repos"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -72,6 +75,22 @@ func TestFleetCreate_LocalListenerOnly(t *testing.T) {
 	_, err := os.Stat(filepath.Join(home, pki.FleetRootDirName))
 	require.ErrorIs(t, err, os.ErrNotExist, "no root was minted")
 
+	// An mTLS peer (another instance of the fleet, the threat knomit#256
+	// names), granted write so that only RequireLocalVia can refuse it.
+	f := pkitest.New(t)
+	peer := f.Enroll(t, "peer@agents.knomit.io")
+	s.Grants.(auth.StaticGrants)[auth.InstancePrincipal(peer.Fingerprint()).String()] = auth.Set{auth.Read: {}, auth.Write: {}}
+	req := httptest.NewRequest(http.MethodPost, "/fleet/create", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "10.0.0.7:5555"
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{peer.Cert}}
+	req = req.WithContext(auth.TLSConnContext(req.Context(), nil))
+	rec = httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "instance:"+peer.Fingerprint()+"@cert", "refused by RequireLocalVia, naming the peer")
+	require.Empty(t, s.Manager.Names(), "a refused create writes nothing")
+
 	rec = postFleetCreate(s, `{"name":"crew"}`, true)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	var out map[string]any
@@ -84,6 +103,25 @@ func TestFleetCreate_LocalListenerOnly(t *testing.T) {
 	rec = postFleetCreate(s, `{"name":"crew-two"}`, true)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"code":"fleet_present"`)
+}
+
+// 201 means main holds this instance's active record: state registered AND
+// record_state active. Anything else is 202.
+// Sabotage: answer 201 on state registered alone -> the pending row is 201
+// -> red.
+func TestCreatedFleetStatus(t *testing.T) {
+	for _, tc := range []struct {
+		state, record string
+		want          int
+	}{
+		{repos.FleetRegistered, "active", http.StatusCreated},
+		{repos.FleetRegistered, "pending", http.StatusAccepted},
+		{repos.FleetRegistering, "pending", http.StatusAccepted},
+		{repos.FleetRegistering, "active", http.StatusAccepted},
+	} {
+		got := createdFleetStatus(repos.FleetStatus{State: tc.state, RecordState: tc.record})
+		require.Equal(t, tc.want, got, "state %s, record %s", tc.state, tc.record)
+	}
 }
 
 // A fleet refusal carries its status and machine code; a repo create

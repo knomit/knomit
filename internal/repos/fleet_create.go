@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math/big"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -31,8 +33,10 @@ import (
 // reach the master; a forge: not a knomit+https URL, reachable and not yet
 // initialized). Then, in order:
 //
-//  1. mint the root: <home>/fleet/root.key (plain, 0600), root.crt and an
-//     empty crl.pem (pki.NewRoot, pki.IssueCRL);
+//  0. write the create marker (control.db instance_fleet_create);
+//  1. mint the root, an empty CRL and this instance's leaf into a staging
+//     directory beside <home>/fleet (fleetRootStagingDir), and record the
+//     root's id on the marker;
 //  2. create the fleet repository from the built-in fleet ontology through
 //     the fleet door, and record it as this instance's fleet repository
 //     (recordFleetRepo, so it mounts again after a restart);
@@ -40,14 +44,26 @@ import (
 //     crl.pem (kb/conventions/fleet/setup/root-first); this instance's leaf
 //     and its one issued/<serial>.pem; its member record, state active;
 //  4. install the bundle (leaf, root, CRL) as this instance's TLS identity;
-//  5. publish main: without an origin main fast-forwards to the agent branch
+//  5. move the staging directory to <home>/fleet;
+//  6. set the fleet state and delete the marker, in one transaction
+//     (finishFleetCreate): the point of no return;
+//  7. publish main: without an origin main fast-forwards to the agent branch
 //     here; with one the agent branch is pushed, then main = that tip
 //     (PublishUpstream, never forced), and local main follows.
 //
-// A failure in 1-4 rolls everything back: the repository (and its record),
-// <home>/fleet, the installed material and the fleet state. Step 5 is past
-// the point of no return: a failed push leaves the state registering and the
-// sync loop retries the agent branch.
+// A failure in 1-5 rolls ALL of it back (undoFleetCreate): on a forge the
+// agent branch this create pushed (deleted with a lease on the hash it
+// pushed), the repository and its record, the installed material, the
+// staging directory and the root, then the marker. The rollback reads what
+// to undo from the marker and from what exists, not from what the failed
+// call remembers. So the same rollback also runs for a create that died part
+// way (a crash or a kill): a marker found at boot, or by the next create or
+// registration, is undone first. A rollback that fails part way keeps the
+// marker and is retried there.
+//
+// A failed step 7 is not rolled back: the state stays registering with
+// last_error set (202), and the sync loop's next push of the agent branch
+// publishes main again (fleetPushed).
 
 const (
 	fleetRootValidity = 10 * 365 * 24 * time.Hour
@@ -64,13 +80,83 @@ type FleetCreateSpec struct {
 	Origin *OriginSpec
 }
 
-// CreateFleet founds a fleet with this instance as its master and first
-// member (see the file comment). 201 at the REST layer when main holds the
-// record (state registered); 202 when a forge push is pending.
-func (m *Manager) CreateFleet(ctx context.Context, spec FleetCreateSpec) (FleetStatus, error) {
-	m.fleetOpMu.Lock()
-	defer m.fleetOpMu.Unlock()
+// fleetCreateHooks are test seams for the fleet create. Every field is nil
+// in production.
+type fleetCreateHooks struct {
+	// step runs after each named step of a create (fleetCreateSteps). An
+	// error fails the create there, and the rollback runs. errFleetCreateDied
+	// makes the create return at once WITHOUT a rollback, as a process
+	// killed at that point would leave things.
+	step func(step string) error
+	// beforePublish runs before main is published (the PublishUpstream of a
+	// forge create, or of fleetPushed; the AdvanceLocalUpstream of a fleet
+	// hosted here). An error is the publish's result.
+	beforePublish func() error
+	// contended runs when a fleet operation finds fleetOpMu held and is
+	// about to wait for it.
+	contended func()
+}
 
+// fleetCreateSteps are the names the step hook sees, in order.
+var fleetCreateSteps = []string{"marked", "root", "repo", "recorded", "committed", "installed", "rooted"}
+
+// errFleetCreateDied is the step hook's "the process died here".
+var errFleetCreateDied = errors.New("fleet create: the process died here (test seam)")
+
+var (
+	fleetHooksMu   sync.Mutex
+	fleetTestHooks fleetCreateHooks
+)
+
+func currentFleetHooks() fleetCreateHooks {
+	fleetHooksMu.Lock()
+	defer fleetHooksMu.Unlock()
+	return fleetTestHooks
+}
+
+func fleetCreateStep(step string) error {
+	if h := currentFleetHooks().step; h != nil {
+		return h(step)
+	}
+	return nil
+}
+
+// lockFleetOp takes fleetOpMu (the contended hook sees a wait).
+func (m *Manager) lockFleetOp() func() {
+	if !m.fleetOpMu.TryLock() {
+		if h := currentFleetHooks().contended; h != nil {
+			h()
+		}
+		m.fleetOpMu.Lock()
+	}
+	return m.fleetOpMu.Unlock
+}
+
+// fleetRootStagingDir is where a create mints the root before it moves it to
+// <home>/fleet (step 5). Nothing but a create writes it, so the rollback
+// removes it whole. Until the move, an operator command that writes
+// <home>/fleet (knomit identity init-root) never sees this create's root,
+// and nothing this create undoes is in <home>/fleet.
+func (m *Manager) fleetRootStagingDir() string {
+	return m.fleetRootDir() + ".creating"
+}
+
+// CreateFleet founds a fleet with this instance as its master and first
+// member (see the file comment). The REST layer answers 201 when main holds
+// the record (state registered, record active) and 202 otherwise. It runs
+// detached from ctx's cancellation, under the Manager's create lifetime, so
+// a client that hangs up does not cut a create short (Close still does).
+func (m *Manager) CreateFleet(ctx context.Context, spec FleetCreateSpec) (FleetStatus, error) {
+	defer m.lockFleetOp()()
+
+	m.createWg.Add(1)
+	defer m.createWg.Done()
+	ctx, cancel := context.WithTimeout(m.createsCtx, m.createTimeout())
+	defer cancel()
+
+	if err := m.recoverFleetCreate(ctx); err != nil {
+		return FleetStatus{}, err
+	}
 	cs, err := m.fleetCreatePreflight(ctx, spec)
 	if err != nil {
 		return FleetStatus{}, err
@@ -83,26 +169,31 @@ func (m *Manager) CreateFleet(ctx context.Context, spec FleetCreateSpec) (FleetS
 	if err != nil {
 		return FleetStatus{}, err
 	}
+	_, statErr := os.Stat(m.deps.Cfg.TLS.Dir)
+	if err := writeFleetCreateMarker(m.ControlDB(), fleetCreateMarker{
+		RepoName: cs.Name, StartedAt: time.Now(), TLSDirExisted: statErr == nil,
+	}); err != nil {
+		return FleetStatus{}, err
+	}
 
-	rb := &fleetRollback{m: m}
-	ri, err := m.foundFleet(ctx, cs, pub, email, rb)
+	ri, err := m.foundFleet(ctx, cs, pub, email)
 	if err != nil {
-		if rerr := rb.run(); rerr != nil {
-			err = fmt.Errorf("%w; the rollback was incomplete: %v", err, rerr)
+		if errors.Is(err, errFleetCreateDied) {
+			return FleetStatus{}, err
+		}
+		// The rollback is not cut short by the create's own deadline.
+		if rerr := m.undoFleetCreate(context.WithoutCancel(ctx)); rerr != nil {
+			_ = recordFleetAttempt(m.ControlDB(), fmt.Errorf("fleet create rollback incomplete: %w", rerr), time.Now())
+			err = fmt.Errorf("%w; the rollback is incomplete (%v): it is retried at the next start and by the next fleet create or registration", err, rerr)
 		}
 		return FleetStatus{}, err
 	}
 
 	if spec.Origin == nil {
-		_ = ri.WithRead(func(svc *store.Service) {
-			if svc == nil {
-				return
-			}
-			if _, err := svc.AdvanceLocalUpstream(ctx, ri.AgentBranch(), svc.UpstreamBranch()); err != nil {
-				// The local reconcile loop retries this.
-				log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet create: main did not follow the agent branch yet")
-			}
-		})
+		if err := m.publishFleetMainNow(ctx, ri); err != nil {
+			// The local reconcile loop retries this; the record is pending.
+			log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet create: main did not follow the agent branch yet")
+		}
 	} else {
 		m.publishFleetMain(ctx, ri)
 	}
@@ -122,16 +213,26 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 	if err != nil {
 		return CreateSpec{}, err
 	}
-	if row.State != FleetStandalone {
-		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", "this instance is already in a fleet (state "+row.State+")")
+	switch row.State {
+	case FleetStandalone:
+	case FleetUnregistering:
+		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", "this instance is leaving its fleet (state unregistering): the departure is retried on every sync, and a fleet can be created once it is done")
+	default:
+		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", "this instance is in a fleet (state "+row.State+"): leave it first (DELETE /api/v1/fleet)")
 	}
 	if ri := m.fleetRepo(); ri != nil {
-		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", fmt.Sprintf("this instance already has a fleet repository, %q", ri.Name()))
+		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", fmt.Sprintf("this instance has a fleet repository, %q, whose registration did not finish (state standalone): finish it with PUT /api/v1/fleet and its URL, then leave with DELETE /api/v1/fleet", ri.Name()))
 	}
 	if uid, err := recordedFleetRepo(db); err != nil {
 		return CreateSpec{}, err
 	} else if uid != "" {
-		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", "this instance has a recorded fleet repository (uid "+uid+") that is not mounted; archive and purge it first")
+		name := uid
+		for _, u := range m.Unavailable() {
+			if u.Record.UID == uid {
+				name = u.Record.Name
+			}
+		}
+		return CreateSpec{}, fleetErr(http.StatusConflict, "fleet_present", "this instance has a recorded fleet repository (uid "+uid+") that is not mounted: archive it (DELETE /api/v1/repos/"+name+") if it is still listed, then purge it (DELETE /api/v1/archived/"+uid+")")
 	}
 	if err := m.refuseInstalledTrust(); err != nil {
 		return CreateSpec{}, err
@@ -179,8 +280,8 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 }
 
 // refuseInstalledTrust refuses while any fleet trust material is installed in
-// [tls].dir: this instance is (or was) enrolled in a fleet and must leave it
-// first. Installing the new fleet's leaf would otherwise move it silently.
+// [tls].dir: this instance holds another fleet's certificate, and installing
+// the new fleet's leaf would replace it silently.
 func (m *Manager) refuseInstalledTrust() error {
 	dir := m.deps.Cfg.TLS.Dir
 	if dir == "" {
@@ -189,7 +290,7 @@ func (m *Manager) refuseInstalledTrust() error {
 	for _, f := range []string{pki.RootCertFile, pki.CRLFile, pki.InstanceCertFile} {
 		p := filepath.Join(dir, f)
 		if _, err := os.Lstat(p); err == nil {
-			return fleetErr(http.StatusConflict, "trust_installed", "fleet trust material is installed ("+p+"): this instance is enrolled in a fleet; leave it first")
+			return fleetErr(http.StatusConflict, "trust_installed", "fleet trust material is installed ("+p+"): this instance holds another fleet's certificate, which a create would replace. If that fleet is no longer used, move "+pki.RootCertFile+", "+pki.CRLFile+" and "+pki.InstanceCertFile+" out of "+dir+" and create again")
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("fleet create: %w", err)
 		}
@@ -198,8 +299,7 @@ func (m *Manager) refuseInstalledTrust() error {
 }
 
 // refuseFleetRootDir refuses unless <home>/fleet is absent or empty: a fleet
-// is founded with a fresh root, and a leftover root key is an
-// undecommissioned fleet. An empty directory is all the rollback may remove.
+// is founded with a fresh root, and a root already there is another fleet's.
 func (m *Manager) refuseFleetRootDir() error {
 	dir := m.fleetRootDir()
 	entries, err := os.ReadDir(dir)
@@ -209,7 +309,7 @@ func (m *Manager) refuseFleetRootDir() error {
 	case err != nil:
 		return fmt.Errorf("fleet create: %w", err)
 	case len(entries) > 0:
-		return fleetErr(http.StatusConflict, "root_present", "the fleet root directory "+dir+" is not empty (it holds "+entries[0].Name()+"): a fleet is created with a fresh root; decommission the previous fleet first")
+		return fleetErr(http.StatusConflict, "root_present", "the fleet root directory "+dir+" is not empty (it holds "+entries[0].Name()+"): a fleet is created with a fresh root. If the fleet that root belongs to is no longer used, move the directory away (it may hold a root key: keep it while that fleet could be needed) and create again")
 	}
 	return nil
 }
@@ -230,54 +330,62 @@ func (m *Manager) ownEd25519Key() (ed25519.PublicKey, error) {
 	return pub, nil
 }
 
-// fleetRollback undoes what foundFleet did, newest first.
-type fleetRollback struct {
-	m     *Manager
-	undos []func() error
-}
-
-func (rb *fleetRollback) add(f func() error) { rb.undos = append(rb.undos, f) }
-
-func (rb *fleetRollback) run() error {
-	var errs []error
-	for i := len(rb.undos) - 1; i >= 0; i-- {
-		if err := rb.undos[i](); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// foundFleet is steps 1-4 of the file comment; every step registers its undo
-// on rb before the next one runs.
-func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.PublicKey, email string, rb *fleetRollback) (*RepoInstance, error) {
-	dir := m.fleetRootDir()
-	rb.add(func() error { return os.RemoveAll(dir) })
-	root, err := pki.NewRoot(dir, "knomit-fleet-root-"+m.AgentID(), fleetRootValidity)
-	if err != nil {
-		return nil, err
-	}
-	crlPEM, err := pki.IssueCRL(dir, root, nil, big.NewInt(1), time.Now().Add(fleetCRLValidity))
-	if err != nil {
-		return nil, err
-	}
-	rootPEM, err := os.ReadFile(filepath.Join(dir, pki.RootCertFile))
-	if err != nil {
+// foundFleet is steps 1-6 of the file comment. Any error before step 6 is
+// undone by undoFleetCreate.
+func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.PublicKey, email string) (*RepoInstance, error) {
+	db := m.ControlDB()
+	if err := fleetCreateStep("marked"); err != nil {
 		return nil, err
 	}
 
+	// 1. The root, its CRL and this instance's leaf, in the staging directory.
+	staging := m.fleetRootStagingDir()
+	if err := os.RemoveAll(staging); err != nil {
+		return nil, fmt.Errorf("fleet create: %w", err)
+	}
+	root, err := pki.NewRoot(staging, "knomit-fleet-root-"+m.AgentID(), fleetRootValidity)
+	if err != nil {
+		return nil, err
+	}
+	rootID, err := pki.RootID(root.Cert)
+	if err != nil {
+		return nil, err
+	}
+	if err := setFleetCreateRoot(db, rootID); err != nil {
+		return nil, err
+	}
+	crlPEM, err := pki.IssueCRL(staging, root, nil, big.NewInt(1), time.Now().Add(fleetCRLValidity))
+	if err != nil {
+		return nil, err
+	}
+	rootPEM, err := os.ReadFile(filepath.Join(staging, pki.RootCertFile))
+	if err != nil {
+		return nil, err
+	}
+	certPEM, rec, err := pki.IssueInstance(staging, root, pub, email, fleetLeafValidity)
+	if err != nil {
+		return nil, err
+	}
+	if err := fleetCreateStep("root"); err != nil {
+		return nil, err
+	}
+
+	// 2. The repository, recorded as this instance's fleet repository.
 	ri, err := m.Create(ctx, cs, func(Event) {})
 	if err != nil {
 		return nil, err
 	}
-	// Deleting the repo also drops its instance_fleet_repo row (cascade).
-	rb.add(func() error {
-		return m.deleteRepo(ri.Name(), "fleet create failed after the repository was created")
-	})
-	if err := recordFleetRepo(m.ControlDB(), ri.UID()); err != nil {
+	if err := fleetCreateStep("repo"); err != nil {
+		return nil, err
+	}
+	if err := recordFleetRepo(db, ri.UID()); err != nil {
+		return nil, err
+	}
+	if err := fleetCreateStep("recorded"); err != nil {
 		return nil, err
 	}
 
+	// 3. Root first, then the leaf, then the record.
 	ont := ri.Ontology()
 	layout, ok := ont.PKILayout()
 	if !ok || layout.CRL == "" || !layout.HasLeaves() {
@@ -293,10 +401,6 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 	}, "fleet: root certificate and CRL (root first)"); err != nil {
 		return nil, err
 	}
-	certPEM, rec, err := pki.IssueInstance(dir, root, pub, email, fleetLeafValidity)
-	if err != nil {
-		return nil, err
-	}
 	if err := m.writeFleetArtifacts(ctx, ri, map[string]string{
 		layout.LeafPath(m.AgentID()):                       string(certPEM),
 		strings.Replace(issuedPattern, "*", rec.Serial, 1): string(certPEM),
@@ -306,50 +410,190 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 	if err := m.writeOwnRecord(ctx, ri, fact.MemberActive); err != nil {
 		return nil, err
 	}
-
-	state := FleetRegistered
-	if cs.Origin != nil {
-		state = FleetRegistering
-	}
-	db := m.ControlDB()
-	rb.add(func() error { return setFleetState(db, FleetStandalone, time.Now()) })
-	if err := setFleetState(db, state, time.Now()); err != nil {
+	if err := fleetCreateStep("committed"); err != nil {
 		return nil, err
 	}
 
-	// Last: an install that fails part way (an I/O error between its
-	// renames) leaves files behind, which the undo removes.
+	// 4. This instance's TLS identity.
 	var bundle bytes.Buffer
 	bundle.Write(certPEM)
 	bundle.Write(rootPEM)
 	bundle.Write(crlPEM)
-	rb.add(func() error { return m.uninstallFreshTrust(root) })
 	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, bundle.Bytes(), pki.InstallOptions{}); err != nil {
 		return nil, fmt.Errorf("fleet create: install this instance's certificate: %w", err)
 	}
-	if afterFleetInstall != nil {
-		if err := afterFleetInstall(); err != nil {
-			return nil, err
-		}
+	if err := fleetCreateStep("installed"); err != nil {
+		return nil, err
+	}
+
+	// 5. The root to its place. An empty <home>/fleet (the pre-flight allows
+	// one) is removed first, and only an empty one: a rename never replaces
+	// a directory that holds something.
+	dir := m.fleetRootDir()
+	if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("fleet create: the fleet root directory %s is no longer empty: %w", dir, err)
+	}
+	if err := os.Rename(staging, dir); err != nil {
+		return nil, fmt.Errorf("fleet create: move the fleet root into %s: %w", dir, err)
+	}
+	if err := fleetCreateStep("rooted"); err != nil {
+		return nil, err
+	}
+
+	// 6. The point of no return.
+	state := FleetRegistered
+	if cs.Origin != nil {
+		state = FleetRegistering
+	}
+	if err := finishFleetCreate(db, state, time.Now()); err != nil {
+		return nil, err
 	}
 	return ri, nil
 }
 
-// afterFleetInstall is a test seam: nil in production. A test sets it to fail
-// a create after its last step, to see the whole rollback.
-var afterFleetInstall func() error
-
-// uninstallFreshTrust removes the trust material a failed create installed:
-// only when the root installed in [tls].dir is this create's root, so
-// nothing installed by anyone else is touched (the pre-flight found none).
-func (m *Manager) uninstallFreshTrust(root pki.Root) error {
-	dir := m.deps.Cfg.TLS.Dir
-	installed, err := pki.InstalledRoot(dir)
-	if err != nil || installed.Fingerprint == "" {
+// recoverFleetCreate rolls back a create that did not finish (a marker with
+// no create running: the caller holds fleetOpMu). It is called at boot and
+// before every create and registration. A rollback that fails part way is a
+// create_unfinished refusal, and is retried at the next of those.
+func (m *Manager) recoverFleetCreate(ctx context.Context) error {
+	db := m.ControlDB()
+	if db == nil {
 		return nil
 	}
-	if id, err := pki.RootID(root.Cert); err != nil || id != installed.Fingerprint {
+	mk, err := readFleetCreateMarker(db)
+	if err != nil || mk == nil {
+		return err
+	}
+	log.Warn().Str("fleet", mk.RepoName).Time("started", mk.StartedAt).
+		Msg("fleet create: an earlier create did not finish; rolling it back")
+	if err := m.undoFleetCreate(ctx); err != nil {
+		_ = recordFleetAttempt(db, fmt.Errorf("fleet create rollback incomplete: %w", err), time.Now())
+		return fleetErr(http.StatusConflict, "create_unfinished", "an earlier fleet create did not finish, and undoing it failed: "+err.Error()+". It is retried at the next start and by the next fleet create or registration")
+	}
+	log.Info().Str("fleet", mk.RepoName).Msg("fleet create: the unfinished create is rolled back")
+	return nil
+}
+
+// undoFleetCreate is the rollback (see the file comment). It undoes what the
+// marker and the disk show, newest first, and deletes the marker last, so
+// every step is safe to run again and a failure stops it with the marker
+// kept. Without a marker it does nothing.
+func (m *Manager) undoFleetCreate(ctx context.Context) error {
+	db := m.ControlDB()
+	mk, err := readFleetCreateMarker(db)
+	if err != nil || mk == nil {
+		return err
+	}
+	// The repository, and first what it pushed to a forge: the repository
+	// holds the record of that push.
+	if ri := m.fleetCreateRepo(db, mk); ri != nil {
+		if err := m.retractFleetBranch(ctx, ri); err != nil {
+			return fmt.Errorf("delete the agent branch on the forge: %w", err)
+		}
+		if err := m.deleteRepo(ri.Name(), "fleet create rolled back"); err != nil {
+			return err
+		}
+	} else if name, ok := m.unavailableFleetCreateRepo(mk); ok {
+		// It never mounted again: what it pushed (if anything) cannot be
+		// read, and is not deleted.
+		if err := m.deleteRepo(name, "fleet create rolled back"); err != nil {
+			return err
+		}
+	}
+	if err := m.uninstallFreshTrust(mk); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(m.fleetRootStagingDir()); err != nil {
+		return err
+	}
+	if err := m.removeCreatedRoot(mk); err != nil {
+		return err
+	}
+	return finishFleetCreate(db, FleetStandalone, time.Now())
+}
+
+// fleetCreateRepo is the mounted repository a create made: the recorded fleet
+// repository, or the repository of the marker's name, provided it holds the
+// fleet ontology (a user repository can never hold it, so a later one that
+// took the name is never touched).
+func (m *Manager) fleetCreateRepo(db *sql.DB, mk *fleetCreateMarker) *RepoInstance {
+	uid, _ := recordedFleetRepo(db)
+	for _, name := range m.Names() {
+		ri := m.Get(name)
+		if ri == nil || !fact.IsFleetOntology(ri.Ontology()) {
+			continue
+		}
+		if (uid != "" && ri.UID() == uid) || ri.Name() == mk.RepoName {
+			return ri
+		}
+	}
+	return nil
+}
+
+// unavailableFleetCreateRepo is a repository of the marker's name, registered
+// since the create began, that did not mount (a create that died inside the
+// repo create, before the store was whole).
+func (m *Manager) unavailableFleetCreateRepo(mk *fleetCreateMarker) (string, bool) {
+	for _, u := range m.Unavailable() {
+		if u.Record.Name == mk.RepoName && u.Record.CreatedAt >= mk.StartedAt.Unix() {
+			return u.Record.Name, true
+		}
+	}
+	return "", false
+}
+
+// retractFleetBranch deletes the agent branch the create pushed to the
+// fleet repository's forge, with a lease on the hash this instance pushed
+// (store RetractPushedBranch). A fleet hosted here has no origin: nothing to
+// do.
+func (m *Manager) retractFleetBranch(ctx context.Context, ri *RepoInstance) error {
+	var rerr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			rerr = errors.New("fleet repository is not open")
+			return
+		}
+		remote, err := svc.Remote().GetRemote("origin")
+		if err != nil {
+			rerr = err
+			return
+		}
+		if remote == nil {
+			return
+		}
+		auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+		if err != nil {
+			rerr = err
+			return
+		}
+		rerr = svc.Remote().RetractPushedBranch(ctx, ri.AgentBranch(), auth)
+	}); err != nil {
+		return err
+	}
+	return rerr
+}
+
+// uninstallFreshTrust removes the trust material the create installed, and
+// only when the root installed in [tls].dir is this create's root (the
+// marker's root id). Material that someone else installed meanwhile (a
+// desktop or CLI install, which then made this create's install fail with
+// RootDiffers) is never touched. When the create made [tls].dir, the
+// directory goes with it, including the CRL watermark (crl.number) the
+// install wrote. Otherwise the watermark keeps an entry for this create's
+// root: it is filed per root, and no other fleet has this root, so it
+// changes nothing. The install lock file beside the directory
+// (pki.LockPath) is left, as any install leaves it.
+func (m *Manager) uninstallFreshTrust(mk *fleetCreateMarker) error {
+	if mk.RootID == "" {
+		return nil // no root yet, so nothing was installed
+	}
+	dir := m.deps.Cfg.TLS.Dir
+	installed, err := pki.InstalledRoot(dir)
+	if err != nil || installed.Fingerprint != mk.RootID {
 		return nil
+	}
+	if !mk.TLSDirExisted {
+		return os.RemoveAll(dir)
 	}
 	var errs []error
 	for _, f := range []string{pki.InstanceCertFile, pki.CRLFile, pki.RootCertFile} {
@@ -360,10 +604,29 @@ func (m *Manager) uninstallFreshTrust(root pki.Root) error {
 	return errors.Join(errs...)
 }
 
-// publishFleetMain is a forge create's step 5: push the agent branch, then
-// main = its tip without force, then local main follows. Registered once
-// main is on the forge; any failure is recorded as the fleet's last error and
-// leaves the state registering.
+// removeCreatedRoot removes <home>/fleet when it holds THIS create's root
+// (moved there in step 5 by a create that then failed or died). Any other
+// root there is left alone.
+func (m *Manager) removeCreatedRoot(mk *fleetCreateMarker) error {
+	if mk.RootID == "" {
+		return nil
+	}
+	dir := m.fleetRootDir()
+	cert, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile))
+	if err != nil {
+		return nil // absent (not moved yet), or not a root this create made
+	}
+	if id, err := pki.RootID(cert); err != nil || id != mk.RootID {
+		return nil
+	}
+	return os.RemoveAll(dir)
+}
+
+// publishFleetMain is a forge create's step 7: push the agent branch, then
+// publish main (publishFleetMainNow). Registered once main is on the forge.
+// A failure is recorded as the fleet's last error and the state is set to
+// registering, whatever a concurrent push of the sync loop did meanwhile:
+// the loop's next successful push publishes main again (fleetPushed).
 func (m *Manager) publishFleetMain(ctx context.Context, ri *RepoInstance) {
 	db := m.ControlDB()
 	err := func() error {
@@ -385,30 +648,72 @@ func (m *Manager) publishFleetMain(ctx context.Context, ri *RepoInstance) {
 			}
 			if _, err := svc.Remote().Push(ctx, ri.AgentBranch(), auth); err != nil {
 				perr = err
-				return
-			}
-			if _, err := svc.Remote().PublishUpstream(ctx, ri.AgentBranch(), auth); err != nil {
-				perr = err
-				return
-			}
-			if _, err := svc.AdvanceLocalUpstream(ctx, ri.AgentBranch(), svc.UpstreamBranch()); err != nil {
-				log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet create: local main did not follow the published main yet")
 			}
 		}); werr != nil && perr == nil {
 			perr = werr
 		}
-		return perr
+		if perr != nil {
+			return perr
+		}
+		return m.publishFleetMainNow(ctx, ri)
 	}()
 	if rerr := recordFleetAttempt(db, err, time.Now()); rerr != nil {
 		log.Warn().Err(rerr).Msg("fleet create: recording the push attempt failed")
 	}
+	state := FleetRegistered
 	if err != nil {
-		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet create: publishing the fleet to its origin failed; the sync loop retries the agent branch")
-		return
+		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet create: publishing the fleet to its origin failed; the sync loop's next push publishes it again")
+		state = FleetRegistering
 	}
-	if err := setFleetState(db, FleetRegistered, time.Now()); err != nil {
-		log.Warn().Err(err).Msg("fleet create: entering registered failed")
+	if err := setFleetState(db, state, time.Now()); err != nil {
+		log.Warn().Err(err).Str("state", state).Msg("fleet create: setting the fleet state failed")
 	}
+}
+
+// publishFleetMainNow publishes the fleet repository's main as the agent
+// branch's tip. With an origin, that is PublishUpstream (never forced) and
+// then local main follows. Without one, local main fast-forwards. The caller
+// holds the fleet root: only the master writes main.
+func (m *Manager) publishFleetMainNow(ctx context.Context, ri *RepoInstance) error {
+	var perr error
+	if werr := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			perr = errors.New("fleet repository is not open")
+			return
+		}
+		if h := currentFleetHooks().beforePublish; h != nil {
+			if perr = h(); perr != nil {
+				return
+			}
+		}
+		remote, err := svc.Remote().GetRemote("origin")
+		if err != nil {
+			perr = err
+			return
+		}
+		if remote != nil {
+			auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+			if err != nil {
+				perr = err
+				return
+			}
+			if _, err := svc.Remote().PublishUpstream(ctx, ri.AgentBranch(), auth); err != nil {
+				perr = fmt.Errorf("publish main: %w", err)
+				return
+			}
+		}
+		if _, err := svc.AdvanceLocalUpstream(ctx, ri.AgentBranch(), svc.UpstreamBranch()); err != nil {
+			if remote == nil {
+				perr = err
+				return
+			}
+			// main is on the forge; the sync loop's next fetch brings it here.
+			log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: local main did not follow the published main yet")
+		}
+	}); werr != nil && perr == nil {
+		perr = werr
+	}
+	return perr
 }
 
 // issuancePattern is the repo path pattern of the ontology's pki: issuance

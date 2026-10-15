@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -105,10 +106,22 @@ type createFleetRequest struct {
 	} `json:"origin,omitempty"`
 }
 
+// createdFleetStatus is POST /fleet/create's success status: 201 only when
+// the fleet's main holds this instance's active record (state registered AND
+// record_state active, read at local main), 202 otherwise: a forge publish
+// that failed, or a main that has not followed the agent branch yet.
+func createdFleetStatus(st repos.FleetStatus) int {
+	if st.State == repos.FleetRegistered && st.RecordState == fact.MemberActive {
+		return http.StatusCreated
+	}
+	return http.StatusAccepted
+}
+
 // handleCreateFleet: POST /api/v1/fleet/create, found a fleet with a fresh
-// root, this instance its master and first member (Manager.CreateFleet).
-// 201 when the fleet's main holds the record (state registered); 202 while
-// a forge push is pending. Local listener only (router).
+// root, this instance its master and first member (Manager.CreateFleet,
+// which runs detached from the request: a client that hangs up does not cut
+// it short). The status is createdFleetStatus's. Local listener only
+// (router).
 func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createFleetRequest
@@ -131,11 +144,7 @@ func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
 			return
 		}
-		status := http.StatusCreated
-		if st.State != repos.FleetRegistered {
-			status = http.StatusAccepted
-		}
-		hal.WriteHAL(w, status, fleetView(b, st))
+		hal.WriteHAL(w, createdFleetStatus(st), fleetView(b, st))
 	}
 }
 

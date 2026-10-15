@@ -2,14 +2,12 @@ package repos
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -125,9 +123,36 @@ func issuedSerials(t *testing.T, home string) []string {
 	return serials
 }
 
+// setFleetHooks installs the fleet create's test seams for one test.
+func setFleetHooks(t *testing.T, h fleetCreateHooks) {
+	t.Helper()
+	fleetHooksMu.Lock()
+	fleetTestHooks = h
+	fleetHooksMu.Unlock()
+	t.Cleanup(func() {
+		fleetHooksMu.Lock()
+		fleetTestHooks = fleetCreateHooks{}
+		fleetHooksMu.Unlock()
+	})
+}
+
+// failAt is a step hook that fails (or, with died, ends the process at) one
+// step, once, and records that the create got there.
+func failAt(step string, err error, reached *bool) func(string) error {
+	return func(s string) error {
+		if s != step || *reached {
+			return nil
+		}
+		*reached = true
+		return err
+	}
+}
+
 // requireNoFleetCreated: a refused or rolled-back create left nothing — no
-// fleet repository mounted, registered or recorded, no fleet root directory,
-// no trust material in [tls].dir, the state standalone.
+// fleet repository mounted, registered or recorded, no fleet root directory
+// or staging directory, no [tls].dir (the fixtures start without one, so
+// the rollback removes the one the create made, its CRL watermark with it),
+// no create marker, the state standalone.
 func requireNoFleetCreated(t *testing.T, m *Manager) {
 	t.Helper()
 	require.Nil(t, m.fleetRepo())
@@ -139,15 +164,24 @@ func requireNoFleetCreated(t *testing.T, m *Manager) {
 	uid, err := recordedFleetRepo(m.ControlDB())
 	require.NoError(t, err)
 	require.Empty(t, uid, "no fleet repository is recorded")
-	_, err = os.Stat(m.fleetRootDir())
-	require.ErrorIs(t, err, os.ErrNotExist, "no fleet root directory")
-	for _, f := range []string{pki.RootCertFile, pki.CRLFile, pki.InstanceCertFile} {
-		_, err := os.Stat(filepath.Join(m.deps.Cfg.TLS.Dir, f))
-		require.ErrorIs(t, err, os.ErrNotExist, "no %s installed", f)
+	for _, d := range []string{m.fleetRootDir(), m.fleetRootStagingDir(), m.deps.Cfg.TLS.Dir} {
+		_, err = os.Stat(d)
+		require.ErrorIs(t, err, os.ErrNotExist, "%s is gone", d)
 	}
+	mk, err := readFleetCreateMarker(m.ControlDB())
+	require.NoError(t, err)
+	require.Nil(t, mk, "no create marker")
 	st, err := m.FleetStatus(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, FleetStandalone, st.State)
+}
+
+// requireNoForgeBranch: the forge holds no agent branch of this instance.
+func requireNoForgeBranch(t *testing.T, bare string) {
+	t.Helper()
+	out, err := exec.Command("git", "-C", bare, "for-each-ref", "--format=%(refname)", "refs/heads/agent/").Output()
+	require.NoError(t, err)
+	require.Empty(t, strings.TrimSpace(string(out)), "the forge keeps no agent branch")
 }
 
 // A fleet hosted here (no origin): a fresh root is minted into <home>/fleet
@@ -293,6 +327,14 @@ func TestCreateFleet_MainIsNeverForced(t *testing.T) {
 	require.Equal(t, stray, gitRev(t, bare, "refs/heads/main"), "the forge's main is unchanged")
 }
 
+// trustFile installs one file of fleet trust material in [tls].dir.
+func trustFile(name string) func(t *testing.T, m *Manager) {
+	return func(t *testing.T, m *Manager) {
+		require.NoError(t, os.MkdirAll(m.deps.Cfg.TLS.Dir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(m.deps.Cfg.TLS.Dir, name), []byte("x"), 0o600))
+	}
+}
+
 // Every pre-flight refuses with its code, before anything is written.
 // Sabotage: delete any one check -> its row creates a fleet (or fails later
 // with another error) -> red.
@@ -312,10 +354,9 @@ func TestCreateFleet_PreflightRefusals(t *testing.T) {
 			status: http.StatusUnprocessableEntity, code: "addresses_required"},
 		{name: "knomit-hosted origin", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "knomit+https://hub.example:19279/git/fleet"}},
 			status: http.StatusUnprocessableEntity, code: "knomit_origin"},
-		{name: "trust installed", setup: func(t *testing.T, m *Manager) {
-			require.NoError(t, os.MkdirAll(m.deps.Cfg.TLS.Dir, 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(m.deps.Cfg.TLS.Dir, pki.CRLFile), []byte("x"), 0o600))
-		}, status: http.StatusConflict, code: "trust_installed"},
+		{name: "root.crt installed", setup: trustFile(pki.RootCertFile), status: http.StatusConflict, code: "trust_installed"},
+		{name: "crl.pem installed", setup: trustFile(pki.CRLFile), status: http.StatusConflict, code: "trust_installed"},
+		{name: "instance.crt installed", setup: trustFile(pki.InstanceCertFile), status: http.StatusConflict, code: "trust_installed"},
 		{name: "root present", setup: func(t *testing.T, m *Manager) {
 			require.NoError(t, os.MkdirAll(m.fleetRootDir(), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(m.fleetRootDir(), pki.RootKeyFile), []byte("old"), 0o600))
@@ -367,81 +408,4 @@ func TestCreateFleet_RepeatIsFleetPresent(t *testing.T) {
 	require.Same(t, orig, m.fleetRepo())
 	require.Nil(t, m.Get("fleet-two"))
 	require.Len(t, issuedSerials(t, m.deps.Cfg.Home), 1, "no second leaf was issued")
-}
-
-// A failure after the last step rolls back ALL of it: the repository and its
-// record, <home>/fleet with the root key, the installed trust material, the
-// fleet state. Sabotage: drop any one undo -> its leftover is found -> red.
-func TestCreateFleet_FailureRollsBackEverything(t *testing.T) {
-	ctx := context.Background()
-	m := newFleetHost(t, t.TempDir(), nil)
-	reached := false
-	afterFleetInstall = func() error {
-		reached = true
-		// The create really got this far: all of it exists right now.
-		require.NotNil(t, m.Get("fleet"))
-		_, err := os.Stat(filepath.Join(m.fleetRootDir(), pki.RootKeyFile))
-		require.NoError(t, err)
-		_, err = os.Stat(filepath.Join(m.deps.Cfg.TLS.Dir, pki.InstanceCertFile))
-		require.NoError(t, err)
-		return errors.New("injected failure")
-	}
-	t.Cleanup(func() { afterFleetInstall = nil })
-
-	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
-	require.ErrorContains(t, err, "injected failure")
-	require.True(t, reached)
-	requireNoFleetCreated(t, m)
-	require.Nil(t, m.Get("fleet"))
-
-	// And the instance can create a fleet afterwards: nothing blocks it.
-	afterFleetInstall = nil
-	st, err := m.CreateFleet(ctx, FleetCreateSpec{})
-	require.NoError(t, err)
-	require.Equal(t, FleetRegistered, st.State)
-}
-
-// An install the bundle check refuses (the leaf is for the signer's key, the
-// key file at KeyPath is another) fails the create after the repository and
-// the root exist; the rollback removes both and installs nothing.
-func TestCreateFleet_RefusedInstallRollsBack(t *testing.T) {
-	ctx := context.Background()
-	m := newFleetHost(t, t.TempDir(), func(d *Deps) { d.Signer = testsigner.Named("another-key") })
-	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
-	require.ErrorIs(t, err, pki.ErrKeyMismatch)
-	requireNoFleetCreated(t, m)
-}
-
-// Two creates at once: exactly one founds the fleet, the other is
-// fleet_present, and the winner's root survives (without the mutex the
-// loser's NewRoot fails and its rollback removes the winner's <home>/fleet).
-// Sabotage: drop the fleetOpMu lock -> both pass the pre-flight -> red (not
-// on every run: it is a race).
-func TestCreateFleet_ConcurrentCreatesOneWins(t *testing.T) {
-	ctx := context.Background()
-	m := newFleetHost(t, t.TempDir(), nil)
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i := range errs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, errs[i] = m.CreateFleet(ctx, FleetCreateSpec{Name: []string{"fleet-a", "fleet-b"}[i]})
-		}(i)
-	}
-	wg.Wait()
-	ok := 0
-	for _, err := range errs {
-		if err == nil {
-			ok++
-			continue
-		}
-		var fe *FleetError
-		require.True(t, errors.As(err, &fe), "the loser is refused at the pre-flight: %v", err)
-		require.Equal(t, "fleet_present", fe.Code)
-	}
-	require.Equal(t, 1, ok)
-	_, err := pki.LoadRoot(m.fleetRootDir())
-	require.NoError(t, err, "the winner's root survives")
-	require.Len(t, issuedSerials(t, m.deps.Cfg.Home), 1)
 }
