@@ -13,7 +13,7 @@ import { useBoot } from './boot';
 import { BootScreen } from './BootScreen';
 import { openEventStream, streamErrorSuffix } from './eventStream';
 import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
-import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
+import { pickRepo, loadLastContext, saveLastContext, browsableRepo } from './repoSelection';
 import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
 import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
@@ -141,7 +141,7 @@ export async function resolveLens(
     // endpoint answers 409 — falling back onto one would swap a broken lens for
     // a broken repo. Gated here rather than trusting callers to pre-filter,
     // since this is the function that decides where the user ends up.
-    const fallback = fallbackRepos.filter(repoAvailable)[0];
+    const fallback = fallbackRepos.filter(browsableRepo)[0];
     if (fallback) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: fallback.name } });
   }
 }
@@ -195,7 +195,7 @@ export async function refreshContextAfterChange(
   // rule pickRepo applies; it lives in both because this path never calls that
   // one. `repoList` is still what the function RETURNS: the caller's list is a
   // list, and the rail has to keep showing what is registered.
-  const readable = repoList.filter(repoAvailable);
+  const readable = repoList.filter(browsableRepo);
   if (readable.length === 0) {
     // Nothing left to browse. Clearing the repo is not cosmetic: state.repo and
     // state.branch key the SSE subscription, and leaving them pointed at the
@@ -985,7 +985,10 @@ export default function App() {
   // else the browse context. With no repositories there is no context to show
   // and the repository draft is the target (its row is the rail's only
   // Repositories row, and its Cancel is withheld).
-  const noRepos = reposLoaded && repos.length === 0;
+  // The fleet repository does not count: it is never a browse context, so an
+  // instance whose only repository is the fleet's is a zero-repository shell
+  // with the Fleet section (PR #528 B3).
+  const noRepos = reposLoaded && !repos.some(r => !r.fleet);
   const displayed = displayedTarget(view, state.context, noRepos);
   const onContext = displayed.kind === 'repo' || displayed.kind === 'lens';
   // facetsFor is the one authority on which tabs the displayed target has; the
@@ -1028,8 +1031,21 @@ export default function App() {
   useEffect(() => {
     // A fleet draft is left alone: a fresh instance may create or join a
     // fleet before it has a repository.
-    if (noRepos && view.draft !== 'repo' && view.draft !== 'fleet') dispatchView({ type: 'OPEN_DRAFT', kind: 'repo', from: stateRef.current.context });
-  }, [noRepos, view.draft, dispatchView]);
+    if (noRepos && view.draft !== 'repo' && view.draft !== 'fleet' && view.pinned?.kind !== 'fleet') dispatchView({ type: 'OPEN_DRAFT', kind: 'repo', from: stateRef.current.context });
+  }, [noRepos, view.draft, view.pinned, dispatchView]);
+  // The fleet repository is never the browse context (B3): whatever pointed
+  // it there (a remembered context, a link, a rename), the context moves to a
+  // browsable repository, or to none, and the fleet target is shown instead.
+  useEffect(() => {
+    const ctx = state.context;
+    if (ctx.kind !== 'repo' || !repos.some(r => r.name === ctx.repo && r.fleet)) return;
+    const next = pickRepo('', repos, null);
+    if (next) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
+    else dispatch({ type: 'SET_REPO', repo: '' });
+    if (!view.locked && view.draft === null) {
+      dispatchView({ type: 'SELECT_PINNED', target: { kind: 'fleet' }, available: FLEET_FACETS });
+    }
+  }, [state.context, repos, view.locked, view.draft, dispatch, dispatchView]);
   // The zero-repo shell IS the end of boot: there is nothing to open, so the
   // boot screen must not come back while the first repository is created.
   useEffect(() => {

@@ -88,6 +88,59 @@ describe('FleetMembers', () => {
     expect(onChanged).toHaveBeenCalled();
   });
 
+  // Review B1: "the joiner can join now" only while the hub's fleet listener
+  // is UP; with it down the card and the page say a join waits for it.
+  // Review S1: Save bundle says what happened, and "Saved" only for a save
+  // that succeeded.
+  // SABOTAGE: drop hubDown from the card -> "can join now" with the listener
+  // down -> red; label the button "Saved" after a download -> red.
+  it('the enroll card claims a join only while the fleet listener runs, and Save says what happened', async () => {
+    const enrolled = { status: 201, body: {
+      agent_id: '5be2d8f4a901', serial: '0a', bundle: BUNDLE, fleet_url: 'https://kb-01.lan:7443/git/fleet',
+      root_fingerprint: 'SHA256:rootfp', published: true,
+    } };
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() }));
+    for (const listening of [false, true]) {
+      stubFleetFetch({ 'GET /api/v1/fleet/members': { body: { members: rows } }, 'POST /api/v1/fleet/enroll': enrolled });
+      const fleet = { ...master, host: { ...master.host, listening, external_addresses: ['https://kb-01.lan:7443'] } };
+      const { unmount } = render(<FleetMembers fleet={fleet} landing={null} onDismissLanding={() => {}} onChanged={() => {}} />);
+      if (listening) expect(screen.queryByTestId('fleet-members-listener-down')).toBeNull();
+      else expect(screen.getByTestId('fleet-members-listener-down')).toHaveTextContent('Members cannot join yet: the fleet listener is not running');
+      fireEvent.click(await screen.findByTestId('fleet-enroll-open'));
+      fireEvent.change(screen.getByTestId('fleet-enroll-agent'), { target: { value: '5be2d8f4a901' } });
+      fireEvent.change(screen.getByTestId('fleet-enroll-key'), { target: { value: 'ssh-ed25519 AAAAjoiner' } });
+      fireEvent.click(screen.getByTestId('fleet-enroll-submit'));
+      const result = await screen.findByTestId('fleet-enroll-result');
+      if (listening) {
+        expect(result).toHaveTextContent('Main holds its certificate: the joiner can join now.');
+      } else {
+        expect(result).not.toHaveTextContent('can join now');
+        expect(result).toHaveTextContent("this instance's fleet listener is not running: the joiner can join once it starts");
+      }
+      fireEvent.click(screen.getByTestId('fleet-save-bundle'));
+      expect(await screen.findByTestId('fleet-save-bundle-outcome')).toHaveTextContent('5be2d8f4a901.fleet-bundle was handed to the browser as a download');
+      expect(screen.getByTestId('fleet-save-bundle')).toHaveTextContent('Save bundle…');
+      unmount();
+    }
+  });
+
+  // Review S5: the joined landing says when this page shows the record, from
+  // the server's interval. Review nit 7: an enrolled row reads "not joined
+  // yet", not "—" and "none", and the joiner's own reads "this instance".
+  it('the joined landing names the next sync, and an enrolled row says it has not joined', async () => {
+    stubFleetFetch({ 'GET /api/v1/fleet/members': { body: { members: [
+      { agent: '5be2d8f4a901', state: 'enrolled' }, { agent: 'a3f9c0d12e7b', state: 'active', host: 'kb-01.acme.example' },
+    ] } } });
+    const me: FleetStatus = { ...master, agent_id: '5be2d8f4a901', master: false, hosting: 'https://kb-01.acme.example:7443/git/fleet', record_state: 'pending', sync_interval_seconds: 300 };
+    render(<FleetMembers fleet={me} landing={{ kind: 'joined', rootFingerprint: 'SHA256:root' }} onDismissLanding={() => {}} onChanged={() => {}} />);
+    expect(screen.getByTestId('fleet-landing')).toHaveTextContent("this page shows it after this instance's next sync (every 5 min)");
+    const row = (await screen.findAllByTestId('fleet-member-row')).find(r => r.getAttribute('data-agent') === '5be2d8f4a901') as HTMLElement;
+    const [instance, state, addresses] = Array.from(row.querySelectorAll('td'));
+    expect(instance).toHaveTextContent(/^5be2d8f4a901this instance$/);
+    expect(state).toHaveTextContent('not joined yet');
+    expect(addresses.textContent).toBe('');
+  });
+
   it('shows a refused enroll verbatim with its code, and offers the revoke for `enrolled`', async () => {
     stubFleetFetch({
       'GET /api/v1/fleet/members': { body: { members: rows } },

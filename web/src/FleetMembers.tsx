@@ -3,7 +3,8 @@ import { api, type FleetEnrollment, type FleetMember, type FleetStatus } from '.
 import { FacetToolbar } from './FacetToolbar';
 import { OutcomeCard } from './OutcomeCard';
 import { Chip, CopyValue, Refusal } from './fleetParts';
-import { STATE_ORDER, memberCounts, shortTip, stateSubline, versionText, saveTextFile } from './fleetText';
+import { STATE_ORDER, intervalText, listenerNotRunning, memberCounts, shortTip, stateSubline, versionText } from './fleetText';
+import { saveTextFile, saveOutcomeLine, type SaveOutcome } from './saveFile';
 import { FLEET_POLL_MS } from './useFleet';
 import { btn, card, cardLabel, confirmBox, confirmInput, fieldHint, fieldInput, fieldLabel } from './manageStyles';
 import { tableWrap, th, policyFooter } from './tableStyles';
@@ -34,6 +35,8 @@ export function FleetMembers({ fleet, landing, onDismissLanding, onChanged }: {
   const local = fleet.local === true;
   const master = fleet.master === true;
   const acts = master && local;
+  // A hub whose fleet listener is not up: nobody can join or push (B1).
+  const hubDown = fleet.hosting === 'none' && fleet.host.listening !== true;
 
   const load = useCallback(() => {
     api.listFleetMembers()
@@ -75,9 +78,15 @@ export function FleetMembers({ fleet, landing, onDismissLanding, onChanged }: {
               headline={landing.kind === 'created' ? 'Fleet created' : 'Joined the fleet'}
               body={landing.kind === 'created'
                 ? 'This instance is the master and its first member. Enroll a member when another instance sends you its agent id and public key.'
-                : `Fleet root ${landing.rootFingerprint}. Your record is on your branch; it counts once the master's next round merges it into main.`}>
+                : `Fleet root ${landing.rootFingerprint}. Your record is on your branch; it counts once the master's next round merges it into main, and this page shows it after this instance's next sync${fleet.sync_interval_seconds ? ` (every ${intervalText(fleet.sync_interval_seconds)})` : ''}.`}>
               <button type="button" style={btn(false)} onClick={onDismissLanding}>Dismiss</button>
             </OutcomeCard>
+          </div>
+        )}
+        {hubDown && (
+          <div style={panel}>
+            <OutcomeCard tone="ask" testid="fleet-members-listener-down" headline="Members cannot join yet: the fleet listener is not running"
+              body={listenerNotRunning(fleet.host.listener_on, fleet.host.listener_reason)} />
           </div>
         )}
         {acts && enrolling && (
@@ -103,14 +112,14 @@ export function FleetMembers({ fleet, landing, onDismissLanding, onChanged }: {
                     <tr data-testid="fleet-member-row" data-agent={m.agent} style={{ color: mine ? '#eee' : '#ccc' }}>
                       <td style={{ ...td, ...monoCell }}>
                         {m.agent}
-                        <span style={subLine}>{m.host || '—'}{mine ? ' · this instance' : ''}</span>
+                        <span style={subLine}>{[m.host, mine ? 'this instance' : ''].filter(Boolean).join(' · ') || (m.state === 'enrolled' ? '' : '—')}</span>
                       </td>
                       <td style={td}>
                         <Chip text={m.state} tone={m.state} testid={`fleet-member-state-${m.agent}`} />
                         {sub && <span style={subLine}>{sub}</span>}
                       </td>
                       <td style={{ ...td, ...monoCell }}>
-                        {(m.addresses ?? []).length ? (m.addresses ?? []).join(' ') : <span style={{ color: '#555' }}>none</span>}
+                        {(m.addresses ?? []).length ? (m.addresses ?? []).join(' ') : m.state === 'enrolled' ? '' : <span style={{ color: '#555' }}>none</span>}
                       </td>
                       <td style={{ ...td, ...monoCell }}>{versionText(m.capabilities) || '—'}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{m.since ? <span title={m.since}>{relativeTime(m.since)}</span> : '—'}</td>
@@ -178,7 +187,8 @@ function EnrollPanel({ fleet, onClose, onEnrolled, onRevoke }: {
   const [err, setErr] = useState<Error | null>(null);
   const [result, setResult] = useState<FleetEnrollment | null>(null);
   const [copied, setCopied] = useState(false);
-  const [saved, setSaved] = useState('');
+  const [saved, setSaved] = useState<SaveOutcome | null>(null);
+  const hubDown = fleet.hosting === 'none' && fleet.host.listening !== true;
   // Only a hub with several external addresses asks: the bundle carries one
   // URL. A refusal that lists the choices (address_required/unknown) asks too.
   const refusalChoices = (err as { choices?: string[] } | null)?.choices ?? [];
@@ -203,9 +213,11 @@ function EnrollPanel({ fleet, onClose, onEnrolled, onRevoke }: {
       <div data-testid="fleet-enroll-result" style={panel}>
         <OutcomeCard tone={result.published ? 'good' : 'bad'}
           headline={result.published ? `Enrolled ${result.agent_id}` : `Enrolled ${result.agent_id}; not on main yet`}
-          body={result.published
-            ? `Serial ${result.serial}. Main holds its certificate: the joiner can join now.`
-            : `Serial ${result.serial}. The certificate is on this instance's branch; the sync loop publishes it again. A join is refused until main holds it.`}
+          body={!result.published
+            ? `Serial ${result.serial}. The certificate is on this instance's branch; the sync loop publishes it again. A join is refused until main holds it.`
+            : hubDown
+              ? `Serial ${result.serial}. Main holds its certificate, but this instance's fleet listener is not running: the joiner can join once it starts (restart knomit).`
+              : `Serial ${result.serial}. Main holds its certificate: the joiner can join now.`}
           detail={result.published ? undefined : result.publish_error} detailLabel="the last attempt reported">
           <div style={{ ...cardLabel, marginTop: 8 }}>Send the joiner</div>
           <div style={btns}>
@@ -215,11 +227,12 @@ function EnrollPanel({ fleet, onClose, onEnrolled, onRevoke }: {
                   .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
                   .catch(() => { /* clipboard unavailable */ });
               }}>{copied ? 'Copied' : 'Copy bundle'}</button>
-            <button type="button" data-testid="fleet-save-bundle" style={btn(!!saved)} disabled={!!saved}
-              onClick={() => { saveTextFile(fileName, result.bundle); setSaved(fileName); }}>
-              {saved ? `Saved ${saved}` : 'Save bundle…'}
+            <button type="button" data-testid="fleet-save-bundle" style={btn(saved?.kind === 'saved')} disabled={saved?.kind === 'saved'}
+              onClick={() => { void saveTextFile(fileName, result.bundle).then(setSaved); }}>
+              {saved?.kind === 'saved' ? 'Saved' : 'Save bundle…'}
             </button>
           </div>
+          {saved && <div data-testid="fleet-save-bundle-outcome" role="status" style={{ ...fieldHint, overflowWrap: 'anywhere' }}>{saveOutcomeLine(saved)}</div>}
           <div style={fieldHint}>
             The bundle holds the fleet's URL (<span data-testid="fleet-enroll-url" style={monoInline}>{result.fleet_url}</span>) and this joiner's certificate. It is for this one instance: a bundle for another agent is refused.
           </div>
@@ -230,7 +243,7 @@ function EnrollPanel({ fleet, onClose, onEnrolled, onRevoke }: {
           <div style={fieldHint}>Give the joiner this fingerprint by a different channel than the bundle; their Join step shows it for checking before anything is installed.</div>
         </OutcomeCard>
         <div style={{ ...btns, marginTop: 12 }}>
-          <button type="button" style={btn(false)} onClick={() => { setResult(null); setAgent(''); setKey(''); setSaved(''); }}>Enroll another</button>
+          <button type="button" style={btn(false)} onClick={() => { setResult(null); setAgent(''); setKey(''); setSaved(null); }}>Enroll another</button>
           <button type="button" style={btn(false)} onClick={onClose}>Done</button>
         </div>
       </div>

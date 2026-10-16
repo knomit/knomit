@@ -130,7 +130,7 @@ export function TargetRail({
   // The fleet repository is the fleet target, drawn in the Fleet section.
   const fleetRepo = fleet?.fleet_repo ?? '';
   const repoItems: RepoItem[] = [
-    ...repos.filter(r => r.name !== fleetRepo).map(r => ({ kind: 'repo' as const, name: r.name, repo: r })),
+    ...repos.filter(r => !r.fleet && r.name !== fleetRepo).map(r => ({ kind: 'repo' as const, name: r.name, repo: r })),
     ...pending.map(j => ({ kind: 'pending' as const, name: j.name, job: j })),
   ].sort(byName).filter(it => match(it.name));
   const shownLenses = [...lenses].sort(byName).filter(l => match(l.name));
@@ -344,7 +344,7 @@ export function TargetRail({
             <span style={sectionTitle}>Fleet</span>
             {!fleetRepo && (
               <PlusButton testId="rail-new-fleet" label="Create or join a fleet"
-                disabled={serverReadOnly || locked || fleet?.local !== true}
+                disabled={locked || fleet?.local !== true}
                 active={draftShown === 'fleet'} onClick={() => { release(); onNewDraft?.('fleet'); }} />
             )}
           </div>

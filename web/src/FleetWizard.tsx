@@ -97,6 +97,19 @@ export function FleetWizard({ fleet, onDone, onCancel }: {
   };
 
   const gate = s.step === 'access' && accessRequired(s) ? `Next unlocks once a check gets in to ${hostOf(accessURL(s))}` : '';
+  // Creating and joining are served to the desktop app only: GET /fleet's
+  // `local` decides, here too (the rail's + is the only way in).
+  if (fleet && fleet.local !== true) {
+    return (
+      <FacetColumns testId="fleet-wizard" left={<IndexHeading>New fleet</IndexHeading>}>
+        <div style={wizardBody}>
+          <OutcomeCard tone="ask" testid="fleet-wizard-desktop-only" headline="Creating or joining a fleet needs the desktop app"
+            body="This page reaches knomit over the network, and creating or joining a fleet is served only to the desktop app on this machine." />
+          <div style={wizardFooter}><button type="button" style={btn(false)} onClick={onCancel}>Cancel</button></div>
+        </div>
+      </FacetColumns>
+    );
+  }
   return (
     <FacetColumns testId="fleet-wizard"
       left={<><IndexHeading>New fleet</IndexHeading>
@@ -194,6 +207,7 @@ function StepHosting({ s, fleet, checking, err, onHosting, onUrl, onConnect }: {
 }) {
   const serve = fleet?.host.would_serve ?? [];
   const listenerOn = !!fleet?.host.listener_on;
+  const listening = fleet?.host.listening === true;
   const hasAddress = (fleet?.host.external_addresses ?? []).length > 0;
   return (
     <div data-testid="fleet-step-hosting">
@@ -206,9 +220,16 @@ function StepHosting({ s, fleet, checking, err, onHosting, onUrl, onConnect }: {
           <>
             <p style={fieldHint}>Members push to this instance over the fleet listener; it judges and merges their branches into main. Nothing leaves this machine.</p>
             <div style={{ marginTop: 12 }}>
-              {listenerOn && serve.length > 0 ? (
+              {listenerOn && serve.length > 0 && listening ? (
                 <OutcomeCard tone="good" testid="fleet-hosting-urls" headline={serve.length > 1 ? 'Members will join at one of' : 'Members will join at'}
                   body={serve.length > 1 ? 'Each bundle you issue names one of them; Enroll asks which. A joiner never types it.' : 'The URL goes into every bundle you issue; a joiner never types it.'}>
+                  <div style={urlList}>{serve.map(u => <div key={u}>{u}</div>)}</div>
+                </OutcomeCard>
+              ) : listenerOn && serve.length > 0 ? (
+                // Configured, not listening: on a fresh instance it cannot be
+                // yet, it needs the certificate the create installs (B1).
+                <OutcomeCard tone="ask" testid="fleet-hosting-urls" headline={serve.length > 1 ? 'Members will join at one of these once the fleet listener runs' : 'Members will join here once the fleet listener runs'}
+                  body={`${serve.length > 1 ? 'Each bundle you issue names one of them; Enroll asks which.' : 'The URL goes into every bundle you issue.'} The fleet listener is not running: it starts when knomit restarts after the create, which installs the certificate it needs. Until then no member can join.`}>
                   <div style={urlList}>{serve.map(u => <div key={u}>{u}</div>)}</div>
                 </OutcomeCard>
               ) : (
@@ -298,7 +319,7 @@ function StepBundle({ s, checking, err, onLoaded, onLoadErr, onCheck }: {
       )}
       {s.check && (
         <div style={{ marginTop: 12 }}>
-          <OutcomeCard tone="good" testid="fleet-bundle-reached" headline={`Reached ${s.check.host}`} url={s.check.url}
+          <OutcomeCard tone="good" testid="fleet-bundle-reached" headline={`Reached ${s.check.host || s.check.url}`} url={s.check.host ? s.check.url : undefined}
             body={s.check.hosting === 'master'
               ? "A fleet hosted by its master. This instance's certificate is its credential; nothing else is needed."
               : 'The fleet lives on a forge. Your own credentials for it come next.'} />
@@ -312,7 +333,8 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
   s: S; checking: boolean; err: Error | null; dispatch: (a: Parameters<typeof fleetWizardReducer>[1]) => void; onCheck: () => void;
 }) {
   const url = accessURL(s);
-  const host = hostOf(url);
+  // A file:// remote has no host: the URL names it.
+  const host = hostOf(url) || url;
   const asked = s.choice === 'create' ? !!s.probe?.auth_required : !!s.check?.auth_required;
   const ssh = /^[^@/]+@[^:]+:|^ssh:\/\//.test(url);
   return (
@@ -328,6 +350,12 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
       ) : (
         <OutcomeCard tone="good" testid="fleet-access-reached" headline={`Reached ${host}`} url={url}
           body={s.choice === 'create' && s.probe?.branches.includes('main') ? 'main · tracked' : undefined} />
+      )}
+      {s.choice === 'create' && s.probe && !s.probe.auth_required && !s.probe.branches.includes('main') && (
+        <div style={{ marginTop: 12 }}>
+          <OutcomeCard tone="ask" testid="fleet-access-no-main" headline="The remote has no main branch yet"
+            body={'Create needs one: push one commit to main (ticking "add a README" is the quickest way), then check again.'} />
+        </div>
       )}
       {err && (
         <div style={{ marginTop: 12 }}>
@@ -374,6 +402,7 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
 function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: Error | null }) {
   const rootDir = fleet?.root_dir ?? '';
   const serve = fleet?.host.would_serve ?? [];
+  const listening = fleet?.host.listening === true;
   const code = (err as { code?: string } | null)?.code ?? '';
   return (
     <div data-testid="fleet-step-review">
@@ -381,7 +410,7 @@ function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: E
       {s.choice === 'create' && s.hosting === 'here' && (
         <ol style={will}>
           <li>A fresh fleet root is created in {rootDir} on this machine; this instance is the master.</li>
-          <li>The fleet repository is created here, with this instance's record and certificate on main.{serve.length ? ` Members will join at ${serve.join(' or ')}.` : ''}</li>
+          <li>The fleet repository is created here, with this instance's record and certificate on main.{serve.length ? (listening ? ` Members will join at ${serve.join(' or ')}.` : ` Members will join at ${serve.join(' or ')} once knomit restarts and its fleet listener starts.`) : ''}</li>
           <li>Every joiner needs a bundle from Fleet → Members → Enroll a member. Each round, this instance judges and merges their branches into main.</li>
         </ol>
       )}
@@ -406,7 +435,7 @@ function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: E
                 checks the host it names as well as the root. */}
             <Kv rows={[
               ['Fleet root', <span key="r" data-testid="fleet-review-root" style={mono}>{s.check.root_fingerprint}</span>],
-              ['Host', <span key="h" data-testid="fleet-review-host" style={mono}>{s.check.host}</span>],
+              ['Host', s.check.host ? <span key="h" data-testid="fleet-review-host" style={mono}>{s.check.host}</span> : null],
             ]} />
             <div style={fieldHint}>Compare it with the fingerprint the fleet's master gave you by another channel. If it differs, do not join: the bundle did not come from your master.</div>
           </div>

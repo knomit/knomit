@@ -39,7 +39,7 @@ async function primeApi({ readOnly = false, oauth = [] as unknown[] | null } = {
   const mod = await import('./api');
   const m = mod.api as unknown as Record<string, ReturnType<typeof vi.fn>>;
   vi.mocked(mod.fetchVersion).mockResolvedValue({ version: '0.0.0', commit: 'abc', full: '0.0.0.abc', readOnly } as Awaited<ReturnType<typeof mod.fetchVersion>>);
-  m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, { name: 'fleet', uid: 'u-fleet' }]);
+  m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, { name: 'fleet', uid: 'u-fleet', fleet: true }]);
   m.listLenses.mockResolvedValue([]);
   m.listArchived.mockResolvedValue([]);
   m.getAgentBranch.mockResolvedValue('machine/test');
@@ -133,6 +133,44 @@ describe('the fleet target', () => {
     await act(async () => { fireEvent.click(gear); });
     await screen.findByTestId('logs-facet');
     expect(screen.queryByTestId('server-tab-fleet')).toBeNull();
+  });
+
+  // Review B3: the fleet repository is never a browse context, so its generic
+  // repo page (Browse, Remote Connect, Archive, Rename) is never drawn. A
+  // remembered context naming it lands on a browsable repository.
+  // SABOTAGE: let pickRepo choose the fleet repository -> the label reads
+  // fleet with the repo's tabs -> red.
+  it('a remembered context naming the fleet repository opens a browsable repository instead', async () => {
+    localStorage.setItem('knomit.context', JSON.stringify({ kind: 'repo', repo: 'fleet' }));
+    const m = await primeApi();
+    await mountApp();
+    await waitFor(() => expect(screen.getByTestId('target-label')).toHaveTextContent('core-kb'));
+    expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+    expect(m.status.mock.calls.some(c => c[0] === 'fleet')).toBe(false);
+  });
+
+  // Review B3 and nits 8 and 10: an instance whose only repository is the
+  // fleet's is the zero-repository shell (the repository draft is the
+  // Repositories row, the rail stays open) with the Fleet row; the fleet's
+  // only page is the fleet target.
+  // SABOTAGE: count the fleet repository in noRepos -> it becomes the
+  // context and its repo Settings show -> red.
+  it('with only the fleet repository, the shell has no repository context and the fleet row opens the fleet target', async () => {
+    const m = await primeApi();
+    m.repos.mockResolvedValue([{ name: 'fleet', uid: 'u-fleet', fleet: true }]);
+    localStorage.setItem('knomit.context', JSON.stringify({ kind: 'repo', repo: 'fleet' }));
+    render(<App />);
+    expect(await screen.findByTestId('no-repos')).toBeInTheDocument();
+    expect(await screen.findByTestId('rail-draft-repo')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-repo-fleet')).toBeNull();
+    const row = await screen.findByTestId('rail-fleet-row');
+    await act(async () => { fireEvent.click(row); });
+    expect(await screen.findByTestId('fleet-members')).toBeInTheDocument();
+    expect(screen.getByTestId('target-rail')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    expect(await screen.findByTestId('fleet-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('repo-settings')).toBeNull();
+    expect(m.status.mock.calls.some(c => c[0] === 'fleet')).toBe(false);
   });
 
   it('leaves the fleet target when GET /fleet says the fleet is gone', async () => {

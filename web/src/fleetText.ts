@@ -6,7 +6,9 @@ import type { FleetEventKind, FleetMember } from './api';
 // verbatim with its code beneath; these are the page's own strings.
 
 /** A chip's tone, the prototype's palette: the fleet's teal for the master,
- *  green for active, blue for enrolled, red for revoked, neutral otherwise. */
+ *  green for active, blue for enrolled and for a record pending (a normal
+ *  state that resolves itself: informational, never amber, which is kept for
+ *  what fails, 3f1b3342), red for revoked, neutral otherwise. */
 export type ChipTone = 'master' | 'member' | 'pending' | 'active' | 'revoked' | 'left' | 'enrolled' | 'green' | 'blue' | 'amber' | 'bad' | 'neutral';
 
 export const CHIP_TONES: Record<ChipTone, { color: string; background: string; border: string }> = {
@@ -14,7 +16,7 @@ export const CHIP_TONES: Record<ChipTone, { color: string; background: string; b
   member: { color: '#999', background: '#1a1a1a', border: '1px solid #2a2a2a' },
   neutral: { color: '#999', background: '#1a1a1a', border: '1px solid #2a2a2a' },
   left: { color: '#999', background: '#1a1a1a', border: '1px solid #2a2a2a' },
-  pending: { color: '#e2c07a', background: '#262013', border: '1px solid #4a3f22' },
+  pending: { color: '#8ab6d6', background: '#131d26', border: '1px solid #244056' },
   amber: { color: '#e2c07a', background: '#262013', border: '1px solid #4a3f22' },
   active: { color: '#7c9', background: '#1a231d', border: '1px solid #2a4a33' },
   green: { color: '#7c9', background: '#1a231d', border: '1px solid #2a4a33' },
@@ -118,19 +120,6 @@ export function joinRefusalNote(code: string): string {
   }
 }
 
-/** saveTextFile hands the reader a file (a bundle, the root key file): a
- *  download of text built in the page. */
-export function saveTextFile(name: string, text: string, type = 'text/plain'): void {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 /** readTextFile reads a file the reader chose (a bundle, a root key file). */
 export function readTextFile(f: File): Promise<string> {
   if (typeof f.text === 'function') return f.text();
@@ -140,4 +129,20 @@ export function readTextFile(f: File): Promise<string> {
     r.onerror = () => reject(new Error(`Could not read ${f.name}.`));
     r.readAsText(f);
   });
+}
+
+/** intervalText is a sync interval as the page says it: "5 min", "90 s". */
+export function intervalText(seconds: number): string {
+  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
+}
+
+/** listenerNotRunning is what the page says when the fleet listener is not
+ *  up (GET /fleet host.listening false): members cannot reach this instance
+ *  until it starts, and it starts only when knomit does with a certificate
+ *  installed (a create, a join or a host-here installs one). */
+export function listenerNotRunning(configured: boolean, reason?: string): string {
+  if (!configured) return 'Members reach this instance over the fleet listener, and it is off. Set the Fleet port in Settings → Network; saving applies it.';
+  if (reason === 'addr_in_use') return 'Members reach this instance over the fleet listener, and its port is held by another program. Free the port or choose another Fleet port in Settings → Network.';
+  return 'Members reach this instance over the fleet listener, and it starts only when knomit starts with this instance\'s certificate installed. Restart knomit (or run `knomit reload` for a server you started yourself) to start it; until then no member can join or push.';
 }

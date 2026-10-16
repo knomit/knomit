@@ -109,6 +109,12 @@ export interface RepoInfo {
    */
   ontology_error?: string;
   /**
+   * true on this instance's fleet repository. It is the fleet target's, never
+   * a browse context, and no generic repo action changes it (the server
+   * refuses them: fleet_repository).
+   */
+  fleet?: boolean;
+  /**
    * Where the repo's lifecycle has got to: populate | open | identify | index
    * | serve | sync | ready. Informational; gate on `state` and `index_state`.
    */
@@ -2074,6 +2080,12 @@ export interface FleetStatus {
   registered_at?: string;
   last_attempt?: string;
   last_error?: string;
+  // last_error_refused: last_error is the fleet refusing this instance's
+  // certificate at the TLS handshake (revoked, or the fleet moved): a retry
+  // does not help. sync_interval_seconds: how often this copy's origin round
+  // runs (absent on the hub), which is when it next sees main.
+  last_error_refused?: boolean;
+  sync_interval_seconds?: number;
   // F10: what this instance offers to host a fleet (listener: its mTLS
   // listener's bind, '' when off, sent to a local caller only; listener_on:
   // whether it has one; the configured external_addresses, [] when unset;
@@ -2082,7 +2094,11 @@ export interface FleetStatus {
   // branch, whether it matches the current config and binary, whether the
   // fleet's main still holds an older version, and the notice shown while no
   // address is configured.
-  host: { listener?: string; listener_on: boolean; external_addresses: string[]; would_serve?: string[] };
+  // listener_on is CONFIGURED ([tls].addr set); listening is the listener
+  // UP now, the only thing that means members can reach it; listener_reason
+  // says why a configured one is not (no_certificate: a restart or `knomit
+  // reload` starts it once a certificate is installed).
+  host: { listener?: string; listener_on: boolean; listening?: boolean; listener_reason?: string; external_addresses: string[]; would_serve?: string[] };
   record?: FleetRecordFields;
   record_current?: boolean;
   record_pending_update?: boolean;
@@ -2259,11 +2275,12 @@ const decommissionFleet = () => fleetCall<FleetStatus>('POST', '/decommission', 
 const exportFleetRoot = () => fleetCall<FleetRoot>('GET', '/root');
 const importFleetRoot = (files: Record<string, string>) => fleetCall<FleetRoot>('PUT', '/root', { files });
 const standDownFleetRoot = () => fleetCall<void>('DELETE', '/root');
-/** Host the fleet here: the master's detach of the fleet repository's origin. */
-async function hostFleetHere(repo: string): Promise<void> {
-  const r = await fetch(apiUrl(`/api/v1/repos/${encodeURIComponent(repo)}/origin`), { method: 'DELETE', headers: oauthHeaders(false) });
-  if (!r.ok) throw await fleetFailure(r);
-}
+/** Host the fleet here (POST /fleet/host): this copy drops its origin and
+ *  becomes the hub. */
+const hostFleetHere = () => fleetCall<FleetStatus>('POST', '/host', {});
+/** Point at the new host (POST /fleet/follow): this copy follows the fleet
+ *  from url, an instance of this fleet. */
+const followFleetHost = (url: string) => fleetCall<FleetStatus>('POST', '/follow', { url });
 
 async function getFleet(): Promise<FleetStatus> {
   const r = await fetch(apiUrl('/api/v1/fleet'), { headers: oauthHeaders(false) });
@@ -2294,6 +2311,7 @@ export const api = {
   importFleetRoot,
   standDownFleetRoot,
   hostFleetHere,
+  followFleetHost,
   approveOAuthPending,
   denyOAuthPending,
   listClientSessions,

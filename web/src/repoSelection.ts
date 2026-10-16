@@ -35,12 +35,21 @@ export const CONTEXT_STORAGE_KEY = 'knomit.context';
 // the user was already browsing that GOES unavailable is dropped by the same
 // rule, which is the honest outcome: there is nothing left to read there.
 export function pickRepo(current: string, repos: RepoInfo[], lastUsed: string | null): string {
-  const readable = repos.filter(repoAvailable);
+  const readable = repos.filter(browsableRepo);
   const exists = (name: string | null): boolean =>
     !!name && readable.some(r => r.name === name);
   if (exists(current)) return current;
   if (exists(lastUsed)) return lastUsed as string;
   return readable[0]?.name ?? '';
+}
+
+// browsableRepo: a repo the browse context may point at. Readable (see
+// pickRepo), and not the FLEET repository: that one's only page is the fleet
+// target (Members, Activity, Settings), never the generic repo page with its
+// Browse, its Remote and its Archive and Rename (PR #528 B3), and no
+// generic repo action changes it (the server refuses them).
+export function browsableRepo(r: RepoInfo): boolean {
+  return repoAvailable(r) && !r.fleet;
 }
 
 // loadLastContext returns the last browse context the user was in, or null.

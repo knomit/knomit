@@ -375,7 +375,9 @@ const CHIP_TONE: Record<NonNullable<TargetLabel['chip']>['tone'], CSSProperties>
   creating: { color: '#8ab6d6', background: '#131d26', border: '1px solid #244056' },
   fleet: { color: FLEET_ACCENT, background: '#121f1d', border: '1px solid #24453f' },
   neutral: { color: '#999', background: '#1a1a1a', border: '1px solid #2a2a2a' },
-  pending: { color: '#e2c07a', background: '#262013', border: '1px solid #4a3f22' },
+  // record pending: a normal state the master's next round resolves, so
+  // informational blue, never amber (amber is for what fails, 3f1b3342).
+  pending: { color: '#8ab6d6', background: '#131d26', border: '1px solid #244056' },
 };
 
 // PanelIcon is the rail toggle's glyph: a window with its left column ruled off.

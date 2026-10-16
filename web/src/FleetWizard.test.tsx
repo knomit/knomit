@@ -65,14 +65,44 @@ describe('FleetWizard: create', () => {
     const onDone = mount();
     expect(railSteps()).toEqual(['Start', 'Hosting', 'Review']);
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
-    expect(screen.getByTestId('fleet-hosting-urls')).toHaveTextContent('https://kb-01.acme.example:7443/git/fleet');
+    // Review B1: a fresh instance's listener is configured but cannot be
+    // listening before the create installs its certificate: the URL is
+    // named, and that nobody can join until the listener runs.
+    const urls = screen.getByTestId('fleet-hosting-urls');
+    expect(urls).toHaveTextContent('https://kb-01.acme.example:7443/git/fleet');
+    expect(urls).toHaveAttribute('data-tone', 'ask');
+    expect(urls).toHaveTextContent('it starts when knomit restarts after the create');
     expect(screen.getByTestId('wizard-step-1-summary')).toHaveTextContent('create');
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('A fresh fleet root is created in /home/k/fleet on this machine');
-    expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('Members will join at https://kb-01.acme.example:7443/git/fleet.');
+    expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('Members will join at https://kb-01.acme.example:7443/git/fleet once knomit restarts and its fleet listener starts.');
     fireEvent.click(screen.getByTestId('fleet-wizard-primary'));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith({ kind: 'created' }));
     expect(calls.find(c => c.route === 'POST /api/v1/fleet/create')?.body).toEqual({});
+  });
+
+  // B1: only a listener that is UP is "Members will join at".
+  // SABOTAGE: read listener_on as listening -> the good card with the
+  // listener down (the test above) -> red; and the reverse here.
+  it('with the fleet listener already running, Hosting and Review say members will join at the URL', () => {
+    stubFleetFetch({});
+    mount({ ...standalone, host: { ...standalone.host, listening: true } });
+    fireEvent.click(screen.getByTestId('fleet-wizard-next'));
+    expect(screen.getByTestId('fleet-hosting-urls')).toHaveAttribute('data-tone', 'good');
+    expect(screen.getByTestId('fleet-hosting-urls')).toHaveTextContent('Members will join at');
+    fireEvent.click(screen.getByTestId('fleet-wizard-next'));
+    expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('Members will join at https://kb-01.acme.example:7443/git/fleet.');
+    expect(screen.getByTestId('fleet-step-review')).not.toHaveTextContent('once knomit restarts');
+  });
+
+  // Review nit 6: the wizard has its own `local` guard.
+  // SABOTAGE: drop it -> Start renders over TCP -> red.
+  it('over TCP (local false) shows no step, only that the desktop app is needed', () => {
+    stubFleetFetch({});
+    mount({ ...standalone, local: false });
+    expect(screen.getByTestId('fleet-wizard-desktop-only')).toHaveAttribute('data-tone', 'ask');
+    expect(screen.queryByTestId('fleet-step-start')).toBeNull();
+    expect(screen.queryByTestId('fleet-wizard-next')).toBeNull();
   });
 
   it('asks for the listener before Review when it is off, and a refusal shows its code with the create note', async () => {
