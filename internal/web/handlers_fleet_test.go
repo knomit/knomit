@@ -189,21 +189,23 @@ func TestFleetREST_LocalIsTheListenerNotTheClient(t *testing.T) {
 // F10: a member row shows every advertised field as the record has it, even
 // someone else's odd values; addresses is always an array.
 func TestFleetMemberRow(t *testing.T) {
-	row := fleetMemberRow(store.FleetMember{Member: fact.Member{
+	since := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	row := fleetMemberRow(repos.FleetMemberRow{FleetMember: store.FleetMember{Member: fact.Member{
 		Agent: "peer", State: fact.MemberActive, Host: "h", Addresses: []string{"not-a-url"}, Git: "/git",
 		Capabilities: map[string]string{"os": "plan9"},
-	}, Path: "kb/members/peer/x.md"})
+	}, Path: "kb/members/peer/x.md"}, Since: &since})
 	raw, err := json.Marshal(row)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"agent":"peer","state":"active","host":"h","branch":"","path":"kb/members/peer/x.md",
-		"addresses":["not-a-url"],"git":"/git","capabilities":{"os":"plan9"}}`, string(raw))
+		"addresses":["not-a-url"],"git":"/git","capabilities":{"os":"plan9"},"since":"2026-10-15T12:00:00Z"}`, string(raw))
 
-	raw, err = json.Marshal(fleetMemberRow(store.FleetMember{Member: fact.Member{Agent: "old", State: fact.MemberActive}}))
+	raw, err = json.Marshal(fleetMemberRow(repos.FleetMemberRow{FleetMember: store.FleetMember{Member: fact.Member{Agent: "old", State: fact.MemberActive}}}))
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
 	require.Equal(t, []any{}, m["addresses"], "an F09 record without addresses is []")
 	require.Equal(t, map[string]any{}, m["capabilities"])
+	require.NotContains(t, m, "since", "no since found: none shown")
 }
 
 // GET /fleet/members carries the master's last refusal of a member's branch
@@ -216,10 +218,10 @@ func TestFleetMemberRows_LastRefusal(t *testing.T) {
 		"agent/b": {Branch: "agent/b", Tip: "abc", Reason: "knomit: commit abc refused", At: at},
 		"":        {Branch: "", Tip: "zzz", Reason: "never shown"},
 	}
-	rows := fleetMemberRows([]store.FleetMember{
-		{Member: fact.Member{Agent: "a", State: fact.MemberActive, Branch: "agent/a"}},
-		{Member: fact.Member{Agent: "b", State: fact.MemberActive, Branch: "agent/b"}},
-		{Member: fact.Member{Agent: "c", State: fact.MemberActive}},
+	rows := fleetMemberRows([]repos.FleetMemberRow{
+		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "a", State: fact.MemberActive, Branch: "agent/a"}}},
+		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "b", State: fact.MemberActive, Branch: "agent/b"}}},
+		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "c", State: fact.MemberActive}}},
 	}, refused)
 	raw, err := json.Marshal(rows)
 	require.NoError(t, err)

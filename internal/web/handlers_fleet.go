@@ -7,7 +7,6 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -109,19 +108,25 @@ func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // fleetMemberRow is one member as GET /api/v1/fleet/members shows it: every
 // field as the record has it (someone else's odd values are shown, never
 // used) except state, which is "revoked" when the CRL at the same main lists
-// the member's leaf (repos.Manager.FleetMembers derives it); addresses always
-// an array and capabilities always an object.
-func fleetMemberRow(mem store.FleetMember) map[string]any {
+// the member's leaf, and "enrolled" for an id with a leaf on main and no
+// record (repos.Manager.FleetMembers derives both); addresses always an array
+// and capabilities always an object; since when the walk found it.
+func fleetMemberRow(mem repos.FleetMemberRow) map[string]any {
 	f := repos.MemberFieldsOf(mem.Member)
-	return map[string]any{
+	row := map[string]any{
 		"agent": mem.Agent, "state": mem.State, "host": mem.Host, "branch": mem.Branch, "path": mem.Path,
 		"addresses": f.Addresses, "git": f.Git, "capabilities": f.Capabilities,
 	}
+	if mem.Since != nil {
+		row["since"] = mem.Since
+	}
+	return row
 }
 
-// fleetMemberRows is one row per record; a member whose branch (the record's
-// `branch`) the fleet's master last refused carries it as last_refusal.
-func fleetMemberRows(ms []store.FleetMember, refused map[string]repos.PeerRefusal) []map[string]any {
+// fleetMemberRows is one row per record or enrolled id; a member whose branch
+// (the record's `branch`) the fleet's master last refused carries it as
+// last_refusal.
+func fleetMemberRows(ms []repos.FleetMemberRow, refused map[string]repos.PeerRefusal) []map[string]any {
 	rows := make([]map[string]any, 0, len(ms))
 	for _, mem := range ms {
 		row := fleetMemberRow(mem)

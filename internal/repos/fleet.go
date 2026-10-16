@@ -224,13 +224,81 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	return st, nil
 }
 
-// FleetMembers returns the member records at the fleet repository's main.
-func (m *Manager) FleetMembers(ctx context.Context) ([]store.FleetMember, error) {
+// MemberEnrolled is the derived state of an agent id that has a leaf on the
+// fleet's main and no member record: the master enrolled it and it has not
+// joined yet (or its join is not merged). Never written to a record.
+const MemberEnrolled = "enrolled"
+
+// maxFleetWalk bounds every walk of the fleet repository's main for the
+// Fleet page (FleetMembers' since, FleetActivity): that many first-parent
+// commits, newest first.
+const maxFleetWalk = 2000
+
+// FleetMemberRow is one row of GET /fleet/members: a member record as
+// readers see it (fleetMembersAtMain), or an enrolled id (a leaf on main, no
+// record: State MemberEnrolled, or revoked when the CRL lists the leaf; Path
+// the leaf's). Since is the committer time of the commit that brought the
+// row's current version (the record, else the leaf) onto main; nil when that
+// is older than the maxFleetWalk commits walked.
+type FleetMemberRow struct {
+	store.FleetMember
+	Since *time.Time
+}
+
+// FleetMembers returns the rows of GET /fleet/members at the fleet
+// repository's main: every member record, then every enrolled id, each with
+// its since.
+func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 	ri := m.fleetRepo()
 	if ri == nil {
 		return nil, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone: no fleet repository is mounted")
 	}
-	return m.fleetMembersAtMain(ri)
+	f, err := m.fleetAtMain(ri)
+	if err != nil {
+		return nil, err
+	}
+	deriveRevoked(f)
+	rows := make([]FleetMemberRow, 0, len(f.Members))
+	recorded := map[string]bool{}
+	for _, mem := range f.Members {
+		rows = append(rows, FleetMemberRow{FleetMember: mem})
+		recorded[mem.Agent] = true
+	}
+	for _, id := range f.PKI.CertIDs() {
+		if recorded[id] {
+			continue
+		}
+		state := MemberEnrolled
+		if f.PKI.Revoked(id) {
+			state = fact.MemberRevoked
+		}
+		rows = append(rows, FleetMemberRow{FleetMember: store.FleetMember{
+			Member: fact.Member{Agent: id, State: state, Addresses: []string{}}, Path: f.PKI.Layout.LeafPath(id)}})
+	}
+	paths := make([]string, len(rows))
+	for i := range rows {
+		paths[i] = rows[i].Path
+	}
+	var since map[string]time.Time
+	var serr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			serr = errors.New("fleet repository is not open")
+			return
+		}
+		since, serr = svc.FleetSince(svc.UpstreamBranch(), paths, maxFleetWalk)
+	}); err != nil {
+		return nil, err
+	}
+	if serr != nil {
+		return nil, serr
+	}
+	for i := range rows {
+		if t, ok := since[rows[i].Path]; ok {
+			rows[i].Since = &t
+		}
+	}
+	return rows, nil
 }
 
 // FleetAtMain returns what the commit judge reads from the fleet repository's
@@ -251,12 +319,18 @@ func (m *Manager) FleetAtMain(ctx context.Context) (store.Fleet, error) {
 // (FleetAtMain) and refuses a revoked leaf by rule B.
 func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, error) {
 	f, err := m.fleetAtMain(ri)
+	deriveRevoked(f)
+	return f.Members, err
+}
+
+// deriveRevoked sets State revoked on every record of f whose leaf the CRL of
+// the same revision lists (M6).
+func deriveRevoked(f store.Fleet) {
 	for i := range f.Members {
 		if f.PKI.Revoked(f.Members[i].Agent) {
 			f.Members[i].State = fact.MemberRevoked
 		}
 	}
-	return f.Members, err
 }
 
 // fleetAtMain reads the fleet at the fleet repository's consensus branch: the

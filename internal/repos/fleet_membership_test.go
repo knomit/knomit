@@ -646,3 +646,42 @@ func TestJoinReachErr_OnlyARefusalIsBundleRefused(t *testing.T) {
 		}
 	}
 }
+
+// GET /fleet/members' rows: after an enroll, the enrolled id (a leaf on main,
+// no record) is a row of its own, state enrolled, at its leaf's path, since
+// the enroll's commit; the master's own record keeps the since of the commit
+// that wrote it. Once the leaf is revoked the enrolled row reads revoked.
+// SABOTAGE: drop the enrolled rows -> one row -> red; give every row the
+// tip's time -> the master's since is after the enroll began -> red.
+func TestFleetMembers_EnrolledRowsAndSince(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
+	require.NoError(t, err)
+	time.Sleep(1100 * time.Millisecond) // commit times have whole seconds
+	before := time.Now().UTC().Truncate(time.Second)
+	_, err = m.EnrollFleetMember(ctx, "bravo", keyLine("bravo"), "")
+	require.NoError(t, err)
+	after := time.Now().UTC()
+
+	rows, err := m.FleetMembers(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "%+v", rows)
+	own, enrolled := rows[0], rows[1]
+	require.Equal(t, m.AgentID(), own.Agent)
+	require.Equal(t, fact.MemberActive, own.State)
+	require.NotNil(t, own.Since)
+	require.True(t, own.Since.Before(before), "the record's since is its own commit's (%v), not the enroll's (after %v)", own.Since, before)
+	require.Equal(t, "bravo", enrolled.Agent)
+	require.Equal(t, MemberEnrolled, enrolled.State)
+	require.Equal(t, "artifacts/fleet/certs/bravo.pem", enrolled.Path)
+	require.NotNil(t, enrolled.Since)
+	require.False(t, enrolled.Since.Before(before) || enrolled.Since.After(after), "the enroll's commit: %v in [%v, %v]", enrolled.Since, before, after)
+
+	_, err = m.RevokeFleetMember(ctx, "bravo", "")
+	require.NoError(t, err)
+	rows, err = m.FleetMembers(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, fact.MemberRevoked, rows[1].State, "an enrolled id whose leaf is on the CRL is revoked")
+}
