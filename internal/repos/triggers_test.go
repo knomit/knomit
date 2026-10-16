@@ -39,7 +39,10 @@ func triggerOntology(rootAttrs string, entries ...string) string {
 	if rootAttrs != "" {
 		b.WriteString(rootAttrs)
 	}
-	b.WriteString("topics:\n  tasks:\n    description: tasks\n")
+	// The context keys the F22 trigger tests write are declared: every fact
+	// write is validated (store validateWrite), and an undeclared key fails
+	// the context gate.
+	b.WriteString("topics:\n  tasks:\n    description: tasks\n    context:\n      task: {type: string}\n      verdict: {type: string}\n")
 	if len(entries) > 0 {
 		b.WriteString("    triggers:\n")
 		for _, e := range entries {

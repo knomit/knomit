@@ -25,10 +25,13 @@ const notPolicy = "---\ntype: observation\n---\n# a note\n\nnot a policy\n"
 // code, as a bug or a hand edit would — is refused by the judge of the
 // master's own commits BEFORE the local reconcile moves main, and the
 // refusal is the fleet's last error (GET /fleet last_error, commit refused).
-// main never holds the fact.
+// main never holds the fact. GET /fleet names the commit, and
+// DropFleetCommit (POST /fleet/drop-commit) is the way out: the branch is
+// rebuilt on main without it, a later good commit kept, and main moves.
 // SABOTAGE: drop the judgeOwnRange call from AdvanceLocalUpstream -> main
 // takes the fact -> red; drop fleetMainAdvanced from the loop (pass nil) ->
-// last_error stays empty -> red.
+// last_error stays empty -> red; keep the dropped commit in
+// DropUnpublishedCommit's replay -> main stays held -> red.
 func TestFleetJudgeOwn_TheHubRefusesItsOwnInvalidRecordBeforeMainMoves(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
@@ -39,8 +42,16 @@ func TestFleetJudgeOwn_TheHubRefusesItsOwnInvalidRecordBeforeMainMoves(t *testin
 	require.Equal(t, localTip(t, ri, ri.AgentBranch()), mainBefore, "fixture: main follows the branch")
 
 	bad := path.Join("kb/members", m.AgentID(), "note.md")
+	good := path.Join("kb/members", m.AgentID(), "good.md")
+	const goodNote = "---\nkind: pragmatic\ntype: policy\n---\n# a good note\n\na policy\n"
+	var badCommit string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, err := svc.Facts().WriteFact(ctx, ri.AgentBranch(), bad, notPolicy, "a bad note", "created")
+		// Past the store's write cores, which refuse it at the source.
+		h, err := svc.TestingCommitFiles(ri.AgentBranch(), map[string]string{bad: notPolicy}, "a bad note")
+		require.NoError(t, err)
+		badCommit = h
+		// A legitimate write after it, which the way out must keep.
+		_, err = svc.Facts().WriteFact(ctx, ri.AgentBranch(), good, goodNote, "a good note", "created")
 		require.NoError(t, err)
 	}))
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
@@ -57,6 +68,32 @@ func TestFleetJudgeOwn_TheHubRefusesItsOwnInvalidRecordBeforeMainMoves(t *testin
 		require.NoError(t, err)
 		require.False(t, ok, "main never holds the invalid fact")
 	}))
+	require.True(t, st.LastErrorMainHeld)
+	require.Equal(t, badCommit, st.LastErrorMainHeldCommit, "GET /fleet names the commit to drop")
+
+	// The way out (POST /fleet/drop-commit): the branch is rebuilt on main
+	// without the refused commit, keeping the good one, and main moves.
+	out, err := m.DropFleetCommit(ctx, st.LastErrorMainHeldCommit)
+	require.NoError(t, err)
+	require.True(t, out.Published, out.PublishError)
+	require.Equal(t, 1, out.Replayed)
+	require.Equal(t, localTip(t, ri, ri.AgentBranch()), localTip(t, ri, "main"), "main moved to the rebuilt branch")
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, ok, err := svc.FileAt("main", bad, 1<<20)
+		require.NoError(t, err)
+		require.False(t, ok, "the dropped commit's fact is gone")
+		_, ok, err = svc.FileAt("main", good, 1<<20)
+		require.NoError(t, err)
+		require.True(t, ok, "the later good commit was kept")
+	}))
+	st, err = m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Empty(t, st.LastError, "main moved: the refusal is cleared")
+	require.False(t, st.LastErrorMainHeld)
+
+	_, err = m.DropFleetCommit(ctx, badCommit)
+	_, code := fleetCode(t, err)
+	require.Equal(t, "not_unpublished", code, "the commit is no longer on the branch")
 }
 
 // A forge-hosted master: the same refusal stops its publish of main
@@ -74,7 +111,8 @@ func TestFleetJudgeOwn_AForgeMasterRefusesItsOwnInvalidWritesBeforePublishing(t 
 	mainBefore := f.rev(t, "main")
 
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
-		_, err := svc.Facts().WriteFact(ctx, f.mri.AgentBranch(), "kb/members/master/note.md", notPolicy, "a bad note", "created")
+		// Past the store's write cores, which refuse it at the source.
+		_, err := svc.TestingCommitFiles(f.mri.AgentBranch(), map[string]string{"kb/members/master/note.md": notPolicy}, "a bad note")
 		require.NoError(t, err)
 	}))
 	roundOnPush(t, f.mri, f.master.fleetPushed)
@@ -100,7 +138,6 @@ func TestFleetJudgeOwn_AForgeMasterRefusesItsOwnInvalidWritesBeforePublishing(t 
 // SABOTAGE: drop the incomingValid call from judgeIncoming -> the invalid
 // note is admitted (it is in the member's own folder) -> red.
 func TestFleetJudgeOwn_TheFetchJudgeRefusesAMemberInvalidFact(t *testing.T) {
-	ctx := context.Background()
 	alpha := testsigner.Named("alpha")
 	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
 
@@ -119,7 +156,8 @@ func TestFleetJudgeOwn_TheFetchJudgeRefusesAMemberInvalidFact(t *testing.T) {
 	require.Equal(t, f.rev(t, "agent/alpha"), localTip(t, f.mri, "agent/alpha"), "the join is admitted: the legacy fact is untouched")
 
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
-		_, err := svc.Facts().WriteFact(ctx, ari.AgentBranch(), "kb/members/alpha/note.md", notPolicy, "a bad note", "created")
+		// Past the store's write cores, which refuse it at the source.
+		_, err := svc.TestingCommitFiles(ari.AgentBranch(), map[string]string{"kb/members/alpha/note.md": notPolicy}, "a bad note")
 		require.NoError(t, err)
 	}))
 	round(t, ari)

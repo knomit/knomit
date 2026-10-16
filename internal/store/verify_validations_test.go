@@ -133,7 +133,9 @@ func TestValidation_ReceivePackJudgesOnlyWhatACommitAddsOrChanges(t *testing.T) 
 	p := newPeer(t, h.srv.URL)
 	base := p.head()
 	mine := p.commit(base, nil, "kb/notes/mine.md", note("mine", "e"))
-	_, err := h.svc.Facts().WriteFact(context.Background(), "main", "kb/notes/later.md", note("later"), "later", "")
+	// Written past every write path (a commit no rule ran on), as legacy
+	// content arrives: the store's own write would refuse it at the source.
+	_, err := h.svc.TestingCommitFiles("main", map[string]string{"kb/notes/later.md": note("later")}, "later")
 	require.NoError(t, err)
 	require.NoError(t, p.repo.Fetch(&gogit.FetchOptions{RemoteName: "origin"}))
 	mainC := p.head()
@@ -163,7 +165,10 @@ func TestValidation_MergeIntoTheAgentBranchJudgesTheResult(t *testing.T) {
 			h.svc.SetSigner(newTestSigner(t))
 			before := h.ref(hostBranch)
 
-			bad := h.branchWith("agent/bad-1", hostBranch, "kb/notes/bad.md", note("bad"))
+			// The branches carry commits no write path of this host made (a
+			// push before this rule, a hand-made commit): the store's own write
+			// would refuse the invalid content at the source.
+			bad := h.rawBranch("agent/bad-1", hostBranch, "kb/notes/bad.md", note("bad"))
 			_, err := merge(h.svc, ctx, "agent/bad-1", hostBranch, bad)
 			var ve *ValidationRefusedError
 			require.True(t, errors.As(err, &ve), "want a validation refusal, got %v", err)
@@ -172,7 +177,7 @@ func TestValidation_MergeIntoTheAgentBranchJudgesTheResult(t *testing.T) {
 			require.Contains(t, ve.Reason, `"names-an-entity"`)
 			require.Equal(t, before, h.ref(hostBranch), "a refused merge moves nothing")
 
-			fixed := h.branchWith("agent/fixed-1", hostBranch, "kb/notes/f.md", note("f"), "kb/notes/f.md", note("f", "e"))
+			fixed := h.rawBranch("agent/fixed-1", hostBranch, "kb/notes/f.md", note("f"), "kb/notes/f.md", note("f", "e"))
 			res, err := merge(h.svc, ctx, "agent/fixed-1", hostBranch, fixed)
 			require.NoError(t, err, "the result holds only the fixed fact")
 			require.Equal(t, ModeMerge, res.Mode)
@@ -258,4 +263,16 @@ func TestValidation_TheHubRefusesAMemberFactThatIsNotPolicy(t *testing.T) {
 	peer.setBranch("work", ok)
 	require.NoError(t, peer.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/agent/rogue"))
 	require.Equal(t, ok.Hash, h.ref("agent/rogue"))
+}
+
+// rawBranch is branchWith through TestingCommitFiles: one commit per kv pair,
+// past the store's write cores (and so past validateWrite).
+func (h *pushHost) rawBranch(branch, from string, kv ...string) plumbing.Hash {
+	h.t.Helper()
+	require.NoError(h.t, h.svc.Branches().CreateBranch(context.Background(), branch, from))
+	for i := 0; i+1 < len(kv); i += 2 {
+		_, err := h.svc.TestingCommitFiles(branch, map[string]string{kv[i]: kv[i+1]}, "write "+kv[i])
+		require.NoError(h.t, err)
+	}
+	return h.ref(branch)
 }

@@ -19,6 +19,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -353,4 +354,96 @@ func (ri *remoteIndex) branchTip(branch string) plumbing.Hash {
 		return plumbing.ZeroHash
 	}
 	return ref.Hash()
+}
+
+// ErrNotUnpublished: DropUnpublishedCommit was asked to drop a commit that is
+// not on the branch, or that the consensus branch already holds.
+var ErrNotUnpublished = errors.New("the commit is not an unpublished commit of this branch")
+
+// DropUnpublishedCommit is the operator's way out of a refusal by the judge
+// of this instance's own commits (judgeOwnRange): the refused commit stays
+// on the agent branch, so every later move of main is refused too, and
+// knomit never rewinds a branch by itself. It rebuilds branch on the
+// consensus branch's tip, replaying in order every commit of branch ∖ main
+// on the first-parent line (re-signed by this instance, its own content
+// winning a conflict) EXCEPT drop. What drop changed is gone from the
+// branch; so are the merge commits of that line (a member's branch the
+// merger had merged): the merger merges those branches again, re-judging
+// them, on its next run. drop must be a commit of branch that main does not
+// hold (ErrNotUnpublished); a member's commit merged in is dropped with the
+// merge that brought it. Returns how many commits were replayed and how many
+// merges were left out.
+func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop plumbing.Hash) (replayed, mergesDropped int, err error) {
+	rh := s.rh
+	upstream := s.UpstreamBranch()
+	if upstream == "" || branch == "" || branch == upstream {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %q is not a branch to rebuild on %q", branch, upstream)
+	}
+	unlock := rh.lockBranch(branch)
+	defer unlock()
+	localRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s: %w", branch, err)
+	}
+	upRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(upstream))
+	if err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s: %w", upstream, err)
+	}
+	onUp := map[plumbing.Hash]bool{}
+	if err := walkHistory(rh.gits, upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	unpublished := map[plumbing.Hash]bool{}
+	if err := walkHistory(rh.gits, localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	if !unpublished[drop] {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s on %s: %w", drop, branch, ErrNotUnpublished)
+	}
+	var line []*object.Commit
+	cur, err := object.GetCommit(rh.gits, localRef.Hash())
+	if err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	for !onUp[cur.Hash] {
+		switch {
+		case cur.NumParents() > 1:
+			mergesDropped++
+		case cur.Hash != drop:
+			line = append(line, cur)
+		}
+		if cur.NumParents() == 0 {
+			break
+		}
+		if cur, err = cur.Parent(0); err != nil {
+			return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+		}
+	}
+	tempRef := plumbing.NewBranchReferenceName(branch + "-dropping")
+	defer func() { _ = rh.gits.RemoveReference(tempRef) }()
+	current := upRef.Hash()
+	for i := len(line) - 1; i >= 0; i-- {
+		if current, err = rh.replayCommit(ctx, line[i], current, StrategyLocalWins); err != nil {
+			return 0, 0, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", line[i].Hash, err)
+		}
+		if err := rh.gits.SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {
+			return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+		}
+	}
+	ctx = context.WithoutCancel(ctx)
+	if err := rh.deriveBeforeAdvance(ctx, current); err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	if err := rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), current)); err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	if err := rh.repopulateBranch(ctx, branch); err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: repopulate: %w", err)
+	}
+	if err := rh.notifyCommit(ctx, branch, current); err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: notify: %w", err)
+	}
+	log.Warn().Str("branch", branch).Str("dropped", drop.String()).Int("replayed", len(line)).Int("merges_dropped", mergesDropped).
+		Msg("DropUnpublishedCommit: the branch was rebuilt on its upstream without the dropped commit")
+	return len(line), mergesDropped, nil
 }

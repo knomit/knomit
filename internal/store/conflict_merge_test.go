@@ -43,7 +43,10 @@ func cmOntology(conflicts string) string {
 			s += "    state: " + state + "\n"
 		}
 	}
-	return s + "topics:\n  notes:\n    description: d\n"
+	// The context keys the context-merge tests write are declared: every
+	// fact write is validated against this ontology (validateWrite), and an
+	// undeclared key fails its context gate.
+	return s + "topics:\n  notes:\n    description: d\n    context:\n      task: {type: string}\n      verdict: {type: string}\n"
 }
 
 // Strategies as the sites build them from a `conflicts` setting.

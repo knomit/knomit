@@ -2095,6 +2095,13 @@ export interface FleetStatus {
   // (read against the commit's own parents) nothing ever admits it: leave
   // and be enrolled again.
   last_error_commit_refused?: boolean;
+  // last_error_main_held (on the master): last_error is the judge of THIS
+  // instance's own commits holding the fleet's main back: commit
+  // last_error_main_held_commit on its fleet branch breaks a rule, main stays
+  // where it is and every later change waits behind it. dropFleetCommit is
+  // the way out.
+  last_error_main_held?: boolean;
+  last_error_main_held_commit?: string;
   // last_error_stood_down: last_error is this copy's host refusing its push
   // because the master there stood down: the push goes to the new host once
   // this copy points at it.
@@ -2330,6 +2337,18 @@ const hostFleetHere = (confirmLoss = false) => fleetCall<FleetStatus>('POST', '/
  *  change says which ran. */
 const followFleetHost = (url: string, cred: { auth_method?: string; auth_token?: string } = {}) =>
   fleetCall<FleetStatus & { change?: FleetFollowChange }>('POST', '/follow', { ...(url ? { url } : {}), ...cred });
+/** POST /fleet/drop-commit: rebuild this instance's fleet branch on main
+ *  without commit (the one GET /fleet last_error_main_held_commit names),
+ *  then publish main. */
+export interface FleetDropResult {
+  dropped: string;
+  replayed: number;
+  merges_dropped: number;
+  published: boolean;
+  publish_error?: string;
+}
+const dropFleetCommit = (commit: string) =>
+  fleetCall<FleetDropResult>('POST', '/drop-commit', { commit });
 /** POST /fleet/index-rebuild: the fleet repository's Rebuild. */
 const rebuildFleetIndex = () =>
   fleetCall<{ id: string; kind: 'index-rebuild'; state: string; repo: string; branch: string }>('POST', '/index-rebuild', {});
@@ -2365,6 +2384,7 @@ export const api = {
   hostFleetHere,
   followFleetHost,
   rebuildFleetIndex,
+  dropFleetCommit,
   approveOAuthPending,
   denyOAuthPending,
   listClientSessions,

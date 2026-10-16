@@ -485,6 +485,76 @@ func (m *Manager) noteOwnJudge(err error) {
 	}
 }
 
+// mainHeldCommit is the commit a recorded own-judge refusal names
+// ("knomit: main was not moved: commit <hash> refused by ..."), or "".
+func mainHeldCommit(lastError string) string {
+	_, rest, ok := strings.Cut(lastError, store.OwnCommitRefusedText+" ")
+	if !ok {
+		return ""
+	}
+	h, _, _ := strings.Cut(rest, " ")
+	if len(h) != 40 || strings.Trim(h, "0123456789abcdef") != "" {
+		return ""
+	}
+	return h
+}
+
+// FleetDropResult is POST /fleet/drop-commit's answer.
+type FleetDropResult struct {
+	Dropped       string `json:"dropped"`
+	Replayed      int    `json:"replayed"`
+	MergesDropped int    `json:"merges_dropped"`
+	// Published: main moved (or already was) at the rebuilt branch.
+	// PublishError: why not, when it did not (another refused commit, a
+	// forge that refused the push); the fleet's last_error says it too.
+	Published    bool   `json:"published"`
+	PublishError string `json:"publish_error,omitempty"`
+}
+
+// DropFleetCommit is POST /fleet/drop-commit: the operator's way out when the
+// judge of this instance's own commits holds the fleet's main back
+// (GET /fleet last_error_main_held). The refused commit stays on the agent
+// branch and every later move of main is refused with it; this rebuilds the
+// fleet repository's agent branch on main without that commit
+// (store.DropUnpublishedCommit: what it changed is gone; the merge commits of
+// unpublished members' branches are left out too, and the merger merges
+// those branches again), then publishes main. Only a commit main does not
+// hold can be dropped (409 not_unpublished).
+func (m *Manager) DropFleetCommit(ctx context.Context, commit string) (FleetDropResult, error) {
+	defer m.lockFleetOp()()
+	ri := m.fleetRepo()
+	if ri == nil {
+		return FleetDropResult{}, fleetErr(http.StatusConflict, "not_registered", "this instance is in no fleet")
+	}
+	if len(commit) != 40 || strings.Trim(commit, "0123456789abcdef") != "" {
+		return FleetDropResult{}, fleetErr(http.StatusUnprocessableEntity, "invalid_commit", "commit must be a full 40-hex commit hash")
+	}
+	out := FleetDropResult{Dropped: commit}
+	var derr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			derr = errors.New("fleet repository is not open")
+			return
+		}
+		out.Replayed, out.MergesDropped, derr = svc.DropUnpublishedCommit(ctx, ri.AgentBranch(), plumbing.NewHash(commit))
+	}); err != nil {
+		return FleetDropResult{}, err
+	}
+	if errors.Is(derr, store.ErrNotUnpublished) {
+		return FleetDropResult{}, fleetErr(http.StatusConflict, "not_unpublished", "commit "+commit+" is not on this instance's fleet branch, or the fleet's main already holds it: there is nothing to drop")
+	}
+	if derr != nil {
+		return FleetDropResult{}, derr
+	}
+	ri.consensusKick()
+	if err := m.publishFleetMainNow(ctx, ri); err != nil {
+		out.PublishError = credentialFreeText(err.Error())
+	} else {
+		out.Published = true
+	}
+	return out, nil
+}
+
 // fleetMainAdvanced is the local reconcile's after hook (the hub's main
 // following its agent branch): on the fleet repository it records the
 // advance's outcome with noteOwnJudge. Every other repository: nothing.

@@ -458,6 +458,36 @@ describe('FleetSettings', () => {
     expect(screen.queryByTestId('fleet-refused-notice')).toBeNull();
   });
 
+  // The judge of the master's OWN commits held main back (#533): the notice
+  // names the commit, says main stays where it is and that retrying does not
+  // help, and its button is the way out (POST /fleet/drop-commit with that
+  // commit). Neither "Retrying" nor the member's leave/revoke advice shows.
+  // SABOTAGE: drop the last_error_main_held arm from FleetSettings -> the
+  // generic "Retrying on the next sync." shows and there is no button -> red;
+  // send another commit than last_error_main_held_commit -> the call body
+  // assertion fails -> red.
+  it("the master's own refused commit: main is held, and Drop is the way out", async () => {
+    const commit = '5a6d21e8c0ffee00112233445566778899aabbcc';
+    const raw = `knomit: main was not moved: commit ${commit} refused by the ontology's validations: validation: kb/members/a3f9c0d12e7b/note.md fails the ontology's validation "members-are-policy" at members: a member record is a pragmatic policy fact`;
+    const fetch = stubFleetFetch({
+      'POST /api/v1/fleet/drop-commit': { body: { dropped: commit, replayed: 2, merges_dropped: 0, published: true } },
+    });
+    const onChanged = mount({ ...hub, last_error: raw, last_error_main_held: true, last_error_main_held_commit: commit });
+    expect(screen.getByTestId('fleet-last-error')).toHaveTextContent(raw);
+    const notice = screen.getByTestId('fleet-main-held-notice');
+    expect(notice).toHaveTextContent("The fleet's main is held where it is: the fleet's rules refuse commit 5a6d21e8 on this instance's own branch");
+    expect(notice).toHaveTextContent('Main does not move while that commit is on the branch');
+    expect(notice).toHaveTextContent('retrying does not help: knomit never removes a commit by itself');
+    expect(notice).toHaveTextContent("Drop it: this instance's branch is rebuilt on main without that commit. What it changed is lost");
+    expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
+    expect(screen.queryByTestId('fleet-commit-refused-notice')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('fleet-main-held-drop'));
+    await waitFor(() => expect(screen.getByTestId('fleet-main-held-done')).toHaveTextContent('✓ Dropped 5a6d21e8. Main moved on.'));
+    expect(fetch.calls.find(c => c.route === 'POST /api/v1/fleet/drop-commit')?.body).toEqual({ commit });
+    expect(onChanged).toHaveBeenCalled();
+  });
+
   // Review S5 and the user's chip ruling: a pending record says when this
   // page will show the master's merge, from the server's interval (never a
   // fixed 300 s), and its chip is informational blue, not amber.

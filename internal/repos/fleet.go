@@ -73,6 +73,16 @@ type FleetStatus struct {
 	// the UI shows for one does not apply; last_error says it in full. Read
 	// from the recorded error only, as LastErrorRefused is.
 	LastErrorCommitRefused bool `json:"last_error_commit_refused,omitempty"`
+	// LastErrorMainHeld: LastError is the judge of THIS instance's own
+	// commits holding the fleet's main back (store.OwnCommitRefusedText):
+	// main stays where it is, every later move is refused too while the
+	// commit is on the agent branch, and the way out is POST
+	// /fleet/drop-commit with LastErrorMainHeldCommit. Read from the recorded
+	// error only.
+	LastErrorMainHeld bool `json:"last_error_main_held,omitempty"`
+	// LastErrorMainHeldCommit is the refused commit's hash, from the same
+	// text ("" when LastErrorMainHeld is false).
+	LastErrorMainHeldCommit string `json:"last_error_main_held_commit,omitempty"`
 	// LastErrorStoodDown: LastError is the fleet's old host refusing this
 	// copy's push because its master stood down (FleetPushRefusalStoodDown):
 	// the push goes to the new host once this copy points at it.
@@ -267,12 +277,14 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		LastErrorRefused: strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
 		LastErrorCommitRefused: (strings.Contains(row.LastError, store.CommitRefusedByJudge) || strings.Contains(row.LastError, store.CommitRefusedByValidation)) &&
 			!strings.Contains(row.LastError, store.OwnCommitRefusedText),
-		LastErrorStoodDown: strings.Contains(row.LastError, FleetPushRefusalStoodDown),
+		LastErrorStoodDown:      strings.Contains(row.LastError, FleetPushRefusalStoodDown),
+		LastErrorMainHeldCommit: mainHeldCommit(row.LastError),
 		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
 			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
 		RootDir:   m.fleetRootDir(),
 		FleetURLs: []string{},
 	}
+	st.LastErrorMainHeld = st.LastErrorMainHeldCommit != ""
 	if f := m.tlsListener.Load(); f != nil {
 		listening, reason := (*f)()
 		st.Host.Listening = listening != ""

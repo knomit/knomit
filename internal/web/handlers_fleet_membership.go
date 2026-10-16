@@ -305,3 +305,26 @@ func handleFleetIndexRebuild(b hal.URLBuilder, m *repos.Manager) http.HandlerFun
 		})
 	}
 }
+
+// handleDropFleetCommit: POST /api/v1/fleet/drop-commit {commit}, the way out
+// when the judge of this instance's own commits holds the fleet's main back
+// (GET /fleet last_error_main_held): the fleet repository's agent branch is
+// rebuilt on main without that commit, then main is published
+// (repos.Manager.DropFleetCommit). 200 with what was dropped and whether main
+// moved; 409 not_registered or not_unpublished; 422 invalid_commit.
+func handleDropFleetCommit(m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Commit string `json:"commit"`
+		}
+		if !decodeJSON(w, r, &req, 0) {
+			return
+		}
+		out, err := m.DropFleetCommit(r.Context(), req.Commit)
+		if err != nil {
+			writeFleetError(w, r, err)
+			return
+		}
+		hal.WriteHAL(w, http.StatusOK, out)
+	}
+}

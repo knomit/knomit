@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, type FleetRoot, type FleetStatus } from './api';
+import { api, type FleetDropResult, type FleetRoot, type FleetStatus } from './api';
 import { SettingsPage, type Section } from './SettingsPage';
 import { OutcomeCard } from './OutcomeCard';
 import { FleetFollowFlow, type FleetFollowMode } from './FleetFollowFlow';
@@ -166,7 +166,9 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         {fleet.last_error && !fleet.last_error_fleet_moved && !fleet.last_error_stood_down && (
           <div data-testid="fleet-last-error" role="alert" style={{ ...errBox, marginTop: 0 }}>
             Last sync failed: <span style={mono}>{fleet.last_error}</span>
-            {fleet.last_error_refused
+            {fleet.last_error_main_held && fleet.last_error_main_held_commit
+              ? <MainHeldNotice commit={fleet.last_error_main_held_commit} local={!!fleet.local} onChanged={onChanged} />
+              : fleet.last_error_refused
               ? <div data-testid="fleet-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet refuses this instance's certificate: it may have been revoked, or the fleet moved to another root. Retrying will not help; ask the fleet's master.</div>
               : fleet.last_error_commit_refused
                 // The host's judge refused a commit of this copy's branch
@@ -401,6 +403,42 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   }
 
   return <SettingsPage kind="fleet" sections={sections} testid="fleet-settings" />;
+}
+
+/** MainHeldNotice: GET /fleet last_error_main_held. The fleet's rules refuse
+ *  a commit on this instance's OWN fleet branch, so its main does not move
+ *  (the judge of the master's own commits); every round refuses the same
+ *  commit, and knomit never removes it by itself. POST /fleet/drop-commit
+ *  is the way out. */
+function MainHeldNotice({ commit, local, onChanged }: { commit: string; local: boolean; onChanged: () => void }) {
+  const { busy, err, run } = useAction();
+  const [done, setDone] = useState<FleetDropResult | null>(null);
+  const short = commit.slice(0, 8);
+  return (
+    <div data-testid="fleet-main-held-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>
+      The fleet's main is held where it is: the fleet's rules refuse commit <span style={mono}>{short}</span> on this
+      instance's own branch (the rule and the reason are above). Main does not move while that commit is on the
+      branch, so nothing written here after it reaches the members, and retrying does not help: knomit never
+      removes a commit by itself. Drop it: this instance's branch is rebuilt on main without that commit. What it
+      changed is lost; every other commit not yet on main is kept, and members' branches merged since main last
+      moved are merged again. Then main moves on.
+      {done
+        ? <div data-testid="fleet-main-held-done" style={{ marginTop: 6 }}>
+            {done.published
+              ? `✓ Dropped ${short}. Main moved on.`
+              : `Dropped ${short}, but main still did not move: ${done.publish_error ?? ''}`}
+          </div>
+        : local
+          ? <div style={{ marginTop: 6 }}>
+              <button type="button" data-testid="fleet-main-held-drop" style={btn(busy, 'danger')} disabled={busy}
+                onClick={() => { void run(async () => { setDone(await api.dropFleetCommit(commit)); }, onChanged); }}>
+                {busy ? 'Dropping…' : `Drop commit ${short}`}
+              </button>
+              <Refusal err={err} note="Nothing was dropped." testid="fleet-main-held-error" />
+            </div>
+          : <div style={{ marginTop: 6 }}>Only the desktop app on this machine can drop it.</div>}
+    </div>
+  );
 }
 
 function DangerRow({ title, action, note }: { title: string; action: ReactNode; note: string }) {
