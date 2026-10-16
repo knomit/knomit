@@ -134,11 +134,37 @@ describe('FleetMembers', () => {
     const me: FleetStatus = { ...master, agent_id: '5be2d8f4a901', master: false, hosting: 'https://kb-01.acme.example:7443/git/fleet', record_state: 'pending', sync_interval_seconds: 300 };
     render(<FleetMembers fleet={me} landing={{ kind: 'joined', rootFingerprint: 'SHA256:root' }} onDismissLanding={() => {}} onChanged={() => {}} />);
     expect(screen.getByTestId('fleet-landing')).toHaveTextContent("this page shows it after this instance's next sync (every 5 min)");
+    // The join's one rule: the record on this instance's branch only is
+    // pending, never "Joined" (user ruling 2026-10-16).
+    expect(screen.getByTestId('fleet-landing')).toHaveTextContent('Join pending');
+    expect(screen.getByTestId('fleet-landing')).toHaveTextContent('the master has not accepted it yet');
+    expect(screen.getByTestId('fleet-landing')).not.toHaveTextContent('Joined the fleet');
+    expect(screen.getByTestId('fleet-landing').getAttribute('data-tone')).toBe('ask');
     const row = (await screen.findAllByTestId('fleet-member-row')).find(r => r.getAttribute('data-agent') === '5be2d8f4a901') as HTMLElement;
     const [instance, state, addresses] = Array.from(row.querySelectorAll('td'));
     expect(instance).toHaveTextContent(/^5be2d8f4a901this instance$/);
     expect(state).toHaveTextContent('not joined yet');
     expect(addresses.textContent).toBe('');
+  });
+
+  // The same landing once main holds the record (record_state active): the
+  // join is accepted, and the card says so; a left row says the master
+  // revokes it (leave means revoke).
+  // SABOTAGE: headline 'Joined the fleet' whatever record_state says -> the
+  // pending case above is red; keep 'certificate valid until revoked' -> red.
+  it('the joined landing says accepted once the record is on main, and a left row says the master revokes it', async () => {
+    stubFleetFetch({ 'GET /api/v1/fleet/members': { body: { members: [
+      { agent: '5be2d8f4a901', state: 'active' }, { agent: 'c0ffee000001', state: 'left' },
+    ] } } });
+    const me: FleetStatus = { ...master, agent_id: '5be2d8f4a901', master: false, hosting: 'https://kb-01.acme.example:7443/git/fleet', record_state: 'active', sync_interval_seconds: 300 };
+    render(<FleetMembers fleet={me} landing={{ kind: 'joined', rootFingerprint: 'SHA256:root' }} onDismissLanding={() => {}} onChanged={() => {}} />);
+    const card = screen.getByTestId('fleet-landing');
+    expect(card).toHaveTextContent('Joined the fleet');
+    expect(card).toHaveTextContent("The master accepted this instance: its record is on the fleet's main.");
+    expect(card).not.toHaveTextContent('pending');
+    expect(card.getAttribute('data-tone')).toBe('good');
+    const row = (await screen.findAllByTestId('fleet-member-row')).find(r => r.getAttribute('data-agent') === 'c0ffee000001') as HTMLElement;
+    expect(row).toHaveTextContent('the master revokes its certificate on its next round');
   });
 
   it('shows a refused enroll verbatim with its code, and offers the revoke for `enrolled`', async () => {

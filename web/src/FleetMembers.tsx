@@ -37,6 +37,10 @@ export function FleetMembers({ fleet, landing, onDismissLanding, onChanged }: {
   const acts = master && local;
   // A hub whose fleet listener is not up: nobody can join or push (B1).
   const hubDown = fleet.hosting === 'none' && fleet.host.listening !== true;
+  // The join's one rule (the server's recordStateOf): a record on this
+  // instance's branch only is pending; a record on the fleet's main is
+  // accepted. record_state says which; nothing else is read.
+  const accepted = !!fleet.record_state && fleet.record_state !== 'pending';
 
   const load = useCallback(() => {
     api.listFleetMembers()
@@ -74,11 +78,13 @@ export function FleetMembers({ fleet, landing, onDismissLanding, onChanged }: {
         )}
         {landing && (
           <div style={panel}>
-            <OutcomeCard tone="good" testid="fleet-landing"
-              headline={landing.kind === 'created' ? 'Fleet created' : 'Joined the fleet'}
+            <OutcomeCard tone={landing.kind === 'joined' && !accepted ? 'ask' : 'good'} testid="fleet-landing"
+              headline={landing.kind === 'created' ? 'Fleet created' : accepted ? 'Joined the fleet' : 'Join pending'}
               body={landing.kind === 'created'
                 ? 'This instance is the master and its first member. Enroll a member when another instance sends you its agent id and public key.'
-                : `Fleet root ${landing.rootFingerprint}. Your record is on your branch; it counts once the master's next round merges it into main, and this page shows it after this instance's next sync${fleet.sync_interval_seconds ? ` (every ${intervalText(fleet.sync_interval_seconds)})` : ''}.`}>
+                : accepted
+                  ? `Fleet root ${landing.rootFingerprint}. The master accepted this instance: its record is on the fleet's main.`
+                  : `Fleet root ${landing.rootFingerprint}. Your record is on your branch only: the master has not accepted it yet. It is accepted when the master's round merges it into main, and this page shows it after this instance's next sync${fleet.sync_interval_seconds ? ` (every ${intervalText(fleet.sync_interval_seconds)})` : ''}.`}>
               <button type="button" style={btn(false)} onClick={onDismissLanding}>Dismiss</button>
             </OutcomeCard>
           </div>
@@ -168,7 +174,7 @@ export function FleetMembers({ fleet, landing, onDismissLanding, onChanged }: {
       </div>
       <p style={policyFooter}>
         Member records on the fleet's main; revoked is read from the CRL on the same main.{' '}
-        {master ? 'Pushes from a left member are accepted until it is revoked.' : "Only the fleet's master enrolls, revokes and merges."}{' '}
+        {master ? "A member that left is revoked on this instance's next round." :"Only the fleet's master enrolls, revokes and merges."}{' '}
         Refreshes every 5 seconds.
       </p>
     </div>

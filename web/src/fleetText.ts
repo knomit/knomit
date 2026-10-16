@@ -31,7 +31,7 @@ export const STATE_ORDER: Record<FleetMember['state'], number> = { active: 0, en
 
 /** The line under a member's state chip. */
 export function stateSubline(m: FleetMember): string {
-  if (m.state === 'left') return 'certificate valid until revoked';
+  if (m.state === 'left') return "the master revokes its certificate on its next round";
   if (m.state === 'enrolled') return 'certificate on main; not joined yet';
   return '';
 }

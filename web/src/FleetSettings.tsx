@@ -126,7 +126,9 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         <div style={dim}>
           {master
             ? "This instance is the fleet's master: it holds the root key, issues certificates and merges every member's branch into main."
-            : "This instance is a member: its record is on the fleet's main, and the master merges its branch."}
+            : fleet.record_state === 'pending'
+              ? "This instance's record is on its own branch only: the master has not accepted it yet. It is a member once the master merges it into the fleet's main."
+              : "This instance is a member: its record is on the fleet's main, and the master merges its branch."}
         </div>
         <Kv testid="fleet-settings-instance" rows={[
           ['Agent id', <CopyValue key="a" text={fleet.agent_id} label="Copy agent id" testid="fleet-agent-id" />],
@@ -391,7 +393,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         <div style={dangerBox}>
           <DangerRow title="Leave the fleet" action={confirm !== 'leave' && (
             <button type="button" data-testid="fleet-leave" style={btn(false, 'danger')} onClick={() => setConfirm('leave')}>Leave…</button>
-          )} note="Pushes a left record, then removes the fleet repository and this instance's certificate. The master revokes the certificate. Works offline." />
+          )} note="Pushes a left record, then removes the fleet repository and this instance's certificate here. Once the left record is on the fleet's main, the master revokes the certificate on its next round. Works offline; if the record cannot be pushed, the master's operator revokes it by hand." />
           {confirm === 'leave' && <LeaveConfirm onCancel={() => setConfirm(null)} onDone={done} />}
         </div>
       ),
@@ -619,7 +621,7 @@ function LeaveConfirm({ onCancel, onDone }: { onCancel: () => void; onDone: () =
   return (
     <div data-testid="fleet-leave-confirm" style={confirmBox}>
       <div style={lead}>
-        Leave the fleet? A left record is pushed once, then the fleet repository and this instance's certificate are removed here, whatever the push did. To join again later, the master revokes the old certificate, enrolls this instance again and sends a new bundle.
+        Leave the fleet? A left record is pushed once, then the fleet repository and this instance's certificate are removed here, whatever the push did. Once the left record is on the fleet's main, the master revokes the certificate on its next round; if the push fails, the master's operator has to revoke it by hand. To join again later, the master enrolls this instance again and sends a new bundle.
       </div>
       <Refusal err={err} testid="fleet-leave-error" />
       <Buttons testid="fleet-leave-submit" busy={busy} label="Leave fleet" busyLabel="Leaving…" variant="danger"
