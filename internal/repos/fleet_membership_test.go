@@ -196,7 +196,10 @@ func TestFleetMembership_ForgeEnrollJoinAdmitLeaveRevokeDecommission(t *testing.
 	require.ErrorIs(t, err, os.ErrNotExist, "the root key is deleted")
 	_, err = os.Stat(filepath.Join(f.master.deps.Cfg.TLS.Dir, pki.RootCertFile))
 	require.ErrorIs(t, err, os.ErrNotExist, "the trust material is uninstalled")
-	require.Equal(t, mainBefore, f.rev(t, "main"), "the forge keeps its copy, inert")
+	// User ruling 7: the forge keeps its copy, and its main no longer names
+	// a master, so another holder of the root key could claim the fleet.
+	require.NotEqual(t, mainBefore, f.rev(t, "main"), "the decommission published the marker's deletion")
+	require.False(t, f.onForgeMain(t, fact.FleetMasterPath), "the forge's main names no master")
 }
 
 func runGitOut(dir string, args ...string) (string, error) {
@@ -256,7 +259,12 @@ func TestFleetMembership_ForgeRootMovesAndTheOldMasterStandsDown(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, wantID, got.RootFingerprint)
 	ari := alpha.fleetRepo()
-	require.NoError(t, ari.WithRead(func(svc *store.Service) { require.True(t, ari.isFleetMaster(svc), "alpha is the master now") }))
+	// User ruling 6: holding the root is not being the master while main
+	// names another instance (#531 re-review S4).
+	require.NoError(t, ari.WithRead(func(svc *store.Service) {
+		require.False(t, ari.isFleetMaster(svc), "alpha holds the root, but main names the master")
+		require.True(t, alpha.holdsFleetRoot(svc))
+	}))
 	_, err = alpha.InstallFleetRoot(root.Files)
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
@@ -269,30 +277,89 @@ func TestFleetMembership_ForgeRootMovesAndTheOldMasterStandsDown(t *testing.T) {
 	err = f.master.StandDown(ctx)
 	_, code = fleetCode(t, err)
 	require.Equal(t, "no_root", code)
+	require.False(t, f.onForgeMain(t, fact.FleetMasterPath), "the stand-down published the marker's deletion")
+	// alpha's next round: main names no master, so it claims the role.
+	round(t, ari)
 	st, err := alpha.FleetStatus(ctx)
 	require.NoError(t, err)
-	require.True(t, st.Master)
+	require.True(t, st.Master, "alpha claimed the role: %+v", st)
+	require.Equal(t, "alpha", st.ActingMaster)
 }
 
-// The hub (the master's copy has no origin) cannot stand down: point it at
-// the new master first. Its detach pre-flight is the create's: the listener
-// and an address.
-// SABOTAGE: drop the hub check in StandDown -> the root is deleted -> red.
-func TestFleetMembership_TheHubCannotStandDown(t *testing.T) {
+// The hub stands down FIRST (user ruling 2026-10-16): no precondition. The
+// create wrote the master marker (artifacts/fleet/master) naming this
+// instance; the stand-down's last act as master deletes it on main (a fleet
+// with no acting master), the host record unchanged; then the root key goes.
+// From then on the hub takes no member push (FleetPushRefusalStoodDown) and
+// does no master work: enroll is refused, and its round claims no marker.
+// SABOTAGE: StandDown skips deleteFleetMaster -> main still names it -> red;
+// drop the hub's not-master refusal in FleetPushRefusal -> "" -> red.
+func TestFleetMembership_TheHubStandsDownFirst(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
 	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
 	require.NoError(t, err)
-	err = m.StandDown(ctx)
-	status, code := fleetCode(t, err)
-	require.Equal(t, http.StatusConflict, status)
-	require.Equal(t, "hub", code)
+	ri := m.fleetRepo()
+	before, err := m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.NotEmpty(t, before)
+	named, err := m.fleetMasterAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, m.AgentID(), named, "setup: the create names this instance the acting master")
+	require.Empty(t, m.FleetPushRefusal(ri), "setup: the hub takes pushes while it is the master")
+
+	require.NoError(t, m.StandDown(ctx))
 	_, err = os.Stat(filepath.Join(m.fleetRootDir(), pki.RootKeyFile))
-	require.NoError(t, err, "the root key stays")
+	require.True(t, os.IsNotExist(err), "the root key is gone: %v", err)
+	named, err = m.fleetMasterAtMain(ri)
+	require.NoError(t, err)
+	require.Empty(t, named, "main has no acting master")
+	after, err := m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "the host record is unchanged")
+
+	require.Contains(t, m.FleetPushRefusal(ri), FleetPushRefusalStoodDown)
+	_, err = m.EnrollFleetMember(ctx, "zed", keyLine("zed"), "")
+	_, code := fleetCode(t, err)
+	require.Equal(t, "not_master", code)
+	_ = ri.WithRead(func(svc *store.Service) { ri.fleetHostRound(ctx, svc) })
+	named, err = m.fleetMasterAtMain(ri)
+	require.NoError(t, err)
+	require.Empty(t, named, "a stood-down hub claims no marker")
 	st, err := m.FleetStatus(ctx)
 	require.NoError(t, err)
-	require.True(t, st.Master)
-	require.Equal(t, "none", st.Hosting)
+	require.False(t, st.Master)
+	require.Empty(t, st.ActingMaster)
+}
+
+// A fleet created before the marker has none: the root holder's round writes
+// it once, naming itself; a marker naming anyone is never overwritten there.
+// SABOTAGE: drop claimFleetMasterOnce from fleetHostRound -> no marker -> red.
+func TestFleetMaster_LegacyFleetIsClaimedOnceByTheRootHolder(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
+	require.NoError(t, err)
+	ri := m.fleetRepo()
+	require.NoError(t, m.commitFleetMasterDeletion(ctx, ri, m.AgentID()))
+	require.NoError(t, m.publishFleetMainNow(ctx, ri))
+	named, err := m.fleetMasterAtMain(ri)
+	require.NoError(t, err)
+	require.Empty(t, named, "setup: a fleet with no marker")
+
+	_ = ri.WithRead(func(svc *store.Service) { ri.fleetHostRound(ctx, svc) })
+	require.NoError(t, m.publishFleetMainNow(ctx, ri))
+	named, err = m.fleetMasterAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, m.AgentID(), named)
+
+	// Someone else's marker stays.
+	require.NoError(t, m.writeFleetArtifacts(ctx, ri, map[string]string{fact.FleetMasterPath: fact.RenderFleetMaster("other")}, "other"))
+	require.NoError(t, m.publishFleetMainNow(ctx, ri))
+	_ = ri.WithRead(func(svc *store.Service) { ri.fleetHostRound(ctx, svc) })
+	named, err = m.fleetMasterAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, "other", named)
 }
 
 // POST /fleet/host's guard (R3.3): a member keeps its origin;
@@ -883,6 +950,6 @@ func TestFleetActivity_HostChangedDetailCarriesNoUserinfo(t *testing.T) {
 
 // hostHere is POST /fleet/host's call, its error only.
 func hostHere(ctx context.Context, m *Manager) error {
-	_, err := m.HostFleetHere(ctx)
+	_, err := m.HostFleetHere(ctx, FleetHostSpec{})
 	return err
 }

@@ -79,7 +79,9 @@ func newLaunderFixture(t *testing.T, master bool) *launderFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := map[string][]byte{repos.OntologyPath: ont}
+	// main names bravo the acting master: a root holder main does not name is
+	// no master (user ruling 2026-10-16).
+	files := map[string][]byte{repos.OntologyPath: ont, fact.FleetMasterPath: []byte(fact.RenderFleetMaster("bravo"))}
 	for _, name := range []string{pki.RootCertFile, pki.CRLFile} {
 		b, err := os.ReadFile(filepath.Join(f.Dir, name))
 		if err != nil {

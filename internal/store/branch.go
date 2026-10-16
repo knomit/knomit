@@ -75,6 +75,11 @@ type repoHandler struct {
 	// every authored commit. Never derived from a branch name.
 	agentID string
 
+	// replaySkip (SetReplaySkipPaths) is the set of paths a rewind replay
+	// never carries: a non-merge commit that changes nothing but these is
+	// dropped from the replay (unpushedCommits).
+	replaySkip map[string]bool
+
 	// changes holds each derived commit's tree diff until its commit_log rows
 	// are built from it: one diff per commit (changeLists).
 	changes changeLists

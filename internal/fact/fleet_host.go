@@ -42,3 +42,25 @@ func ParseFleetHost(raw []byte) ([]string, error) {
 	}
 	return urls, nil
 }
+
+// The master marker (FleetMasterPath) is the acting master's agent id on one
+// line, and nothing else.
+
+// RenderFleetMaster is the master marker naming agentID.
+func RenderFleetMaster(agentID string) string {
+	return agentID + "\n"
+}
+
+// ParseFleetMaster reads a master marker: one line holding the agent id
+// (surrounding whitespace and a final newline are ignored). Anything else is
+// an error.
+func ParseFleetMaster(raw []byte) (string, error) {
+	id := strings.TrimSpace(string(raw))
+	if id == "" {
+		return "", fmt.Errorf("the master marker names no agent")
+	}
+	if strings.ContainsAny(id, " \t\r\n") {
+		return "", fmt.Errorf("the master marker is not one agent id on one line")
+	}
+	return id, nil
+}

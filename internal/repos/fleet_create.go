@@ -439,6 +439,9 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 	if err := m.writeFleetHost(ctx, ri, hosted); err != nil {
 		return nil, err
 	}
+	if err := m.writeFleetMaster(ctx, ri); err != nil {
+		return nil, err
+	}
 	if err := fleetCreateStep("committed"); err != nil {
 		return nil, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -94,6 +95,16 @@ type fleetPeers struct {
 	// that cleared since (refusals keeps only each branch's current one). In
 	// memory only, like refusals.
 	ring []PeerRefusal
+	// claim is a candidate's claim to the master role in its origin round
+	// (RepoInstance.fleetMasterClaimRound); nil-safe.
+	claim func(context.Context, *store.Service)
+}
+
+// claimMaster runs the master marker claim of this round; no-op on nil.
+func (p *fleetPeers) claimMaster(ctx context.Context, svc *store.Service) {
+	if p != nil && p.claim != nil {
+		p.claim(ctx, svc)
+	}
 }
 
 // refusalRing is how many refusals fleetPeers.ring keeps.
@@ -266,23 +277,90 @@ func (p *fleetPeers) mayMerge(ctx context.Context, svc *store.Service, branch, o
 	return false
 }
 
+// FleetPausedNotHosting is fleetMasterPause's reason (GET /fleet
+// master_paused): this master's copy follows another instance of the fleet.
+const FleetPausedNotHosting = "not_hosting"
+
+// fleetMasterPause is why this instance, a holder of the fleet's root,
+// does no master work now and claims nothing, or "": FleetPausedNotHosting
+// while its copy follows another instance of the fleet (a cert origin). In a
+// self-hosted fleet the master is the host: a master that follows another
+// instance is an old master that was replaced (it came back after the new
+// master hosted with the dead-master confirm, and pointed at it) or a new
+// master that has not hosted yet. A forge origin pauses nothing: a
+// forge-hosted fleet's master works through the forge.
+func (m *Manager) fleetMasterPause(ri *RepoInstance) string {
+	if o, err := m.originOf(ri); err == nil && o != nil && o.AuthMethod == "cert" {
+		return FleetPausedNotHosting
+	}
+	return ""
+}
+
+// actsAsFleetMaster: ri is the fleet repository and this instance is its
+// master (isFleetMaster) and does master work now (no fleetMasterPause): the
+// merger, the master's origin round, the hub's host-record round and the
+// ontology refresh ask it. holdsFleetRoot says who holds the root.
+func (ri *RepoInstance) actsAsFleetMaster(svc *store.Service) bool {
+	return ri.isFleetMaster(svc) && ri.env.m.fleetMasterPause(ri) == ""
+}
+
+// refuseMasterPaused is masterFleet's refusal for a master that does no
+// master work now.
+func (m *Manager) refuseMasterPaused(ri *RepoInstance) error {
+	if m.fleetMasterPause(ri) == FleetPausedNotHosting {
+		return fleetErr(http.StatusConflict, "master_paused", "this instance holds the fleet's root key but its copy follows another instance of the fleet, which hosts it: it enrolls, revokes and merges nothing here. Act on the instance that hosts the fleet, or host the fleet here")
+	}
+	return nil
+}
+
+// fleetMasterClaimRound is a forge copy's claim to the master role in its
+// origin round, right after the fetch (the hub's is in fleetHostRound): a
+// root holder whose fresh main names no master (fleetCandidate) publishes
+// the marker naming itself (claimFleetMaster). A main naming anyone is left
+// alone. fleetOpMu is TryLocked like the hub's round.
+func (ri *RepoInstance) fleetMasterClaimRound(ctx context.Context, svc *store.Service) {
+	if ri == nil || !ri.fleetDoor || !ri.IsFleet() || svc == nil {
+		return
+	}
+	m := ri.env.m
+	if !m.fleetOpMu.TryLock() {
+		return
+	}
+	defer m.fleetOpMu.Unlock()
+	if !ri.fleetCandidate(svc) {
+		return
+	}
+	m.claimFleetMaster(ctx, ri)
+}
+
 // isFleetMaster: ri is the fleet repository, mounted through the fleet door,
-// and this instance is its master (Manager.isFleetMaster: the root key file
-// is here and its certificate is the root on main). The one predicate for
-// the merger and for the master's origin round.
+// and this instance is its master (Manager.isFleetMaster: it holds the root
+// and the master marker on main names it).
 func (ri *RepoInstance) isFleetMaster(svc *store.Service) bool {
 	return ri.fleetDoor && ri.IsFleet() && ri.env.m.isFleetMaster(svc)
 }
 
 // publishesFleetMain: a push round of ri publishes main. ri is the fleet
-// repository, mounted through the fleet door, and this instance holds its
-// root, either as the master (the root on main) or before main ever held it
-// (the root on the agent branch only: a forge create whose publish of main
-// failed, #518). Every push path of the fleet repository asks this one
-// predicate: the sync loop's round (fleetPeers.publish) and FleetRetry
-// (Manager.pushFleet); fleetPushed only reads the outcome.
+// repository, mounted through the fleet door, and this instance is its
+// master (isFleetMaster: the root, and main names it), or holds the root
+// before main ever held it (the root and the marker on the agent branch
+// only: a forge create whose publish of main failed, #518). A root holder
+// that main does not name publishes nothing, nor does one whose copy follows
+// another instance (fleetMasterPause). Every push path of the fleet
+// repository asks this one predicate: the sync loop's round
+// (fleetPeers.publish) and FleetRetry (Manager.pushFleet); fleetPushed only
+// reads the outcome.
 func (ri *RepoInstance) publishesFleetMain(svc *store.Service) bool {
-	return ri.isFleetMaster(svc) || (ri.fleetDoor && ri.IsFleet() && ri.env.m.holdsFleetRootAt(svc, ri.AgentBranch()))
+	if ri.env.m.fleetMasterPause(ri) != "" {
+		return false
+	}
+	if ri.isFleetMaster(svc) {
+		return true
+	}
+	// A forge create whose publish failed (#518): the root, and the marker,
+	// are on the agent branch only; main has never held the root.
+	m := ri.env.m
+	return ri.fleetDoor && ri.IsFleet() && m.holdsFleetRootAt(svc, ri.AgentBranch()) && !m.holdsFleetRootAt(svc, svc.UpstreamBranch())
 }
 
 // admit judges every fetched member branch whose (tip, main) was not judged
@@ -388,8 +466,20 @@ func (m *Manager) FleetPushRefusal(ri *RepoInstance) string {
 		// origin URL may carry credentials.
 		return fmt.Sprintf("knomit: this copy of the fleet repository %q %s, not to this instance", ri.Name(), FleetPushRefusalHasOrigin)
 	}
+	// The hub takes pushes only while this instance is the fleet's master:
+	// once it stood down nothing merges them, and the new master hosts the
+	// fleet with what main held at the stand-down.
+	master := false
+	if err := ri.WithRead(func(svc *store.Service) { master = ri.isFleetMaster(svc) }); err != nil || !master {
+		return fmt.Sprintf("knomit: this copy of the fleet repository %q: %s; point this copy at the new host (Fleet → Settings → Point at the new host) once one hosts the fleet", ri.Name(), FleetPushRefusalStoodDown)
+	}
 	return ""
 }
+
+// FleetPushRefusalStoodDown is the part of the hub's refusal, once its
+// master stood down, that every refused pusher records as its sync error:
+// GET /fleet's last_error_stood_down reads it there.
+const FleetPushRefusalStoodDown = "its master stood down, and it takes no push"
 
 // FleetPushRefusalHasOrigin is the part of FleetPushRefusal's text for a
 // copy with an origin that every refused pusher records as its sync error:

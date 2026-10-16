@@ -254,6 +254,34 @@ func TestFleetStatus_LastErrorRefusedIsTheHandshakeRefusal(t *testing.T) {
 	}
 }
 
+// #528 N1: last_error_commit_refused is the host's judge refusing a commit
+// of this copy's push (the receive-pack text, as the push error carries it):
+// the page then never says "Retrying". The handshake refusal, a dial
+// failure and a success do not set it.
+// SABOTAGE: LastErrorCommitRefused = false -> the judged row reads false ->
+// red.
+func TestFleetStatus_LastErrorCommitRefusedIsTheJudgesRefusal(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	db := m.ControlDB()
+	judged := errors.New("Push: knomit: commit 5a6d21e8 " + store.CommitRefusedByJudge +
+		": host-record: agent \"alpha\" changes artifacts/fleet/host: only the fleet's master writes where the fleet is hosted")
+	for _, row := range []struct {
+		err     error
+		refused bool
+	}{
+		{judged, true},
+		{fmt.Errorf("push agent branch: %w: remote error: tls: bad certificate", pki.ErrRefusedByPeer), false},
+		{errors.New("dial tcp 127.0.0.1:18931: connect: connection refused"), false},
+		{nil, false},
+	} {
+		require.NoError(t, recordFleetAttempt(db, row.err, time.Now()))
+		st, err := m.FleetStatus(ctx)
+		require.NoError(t, err)
+		require.Equal(t, row.refused, st.LastErrorCommitRefused, "%v", row.err)
+	}
+}
+
 // PR #528 nit 11: with a repository already called fleet, a standalone
 // GET /fleet's would_serve and the create agree on a free name (fleet-2):
 // the URL the Hosting step shows is where members join, and the create is
@@ -384,7 +412,7 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	agent := "refs/heads/agent/test-fleet"
 	require.Equal(t, gitRev(t, bare, agent), gitRev(t, bare, "refs/heads/main"), "the forge's main is the agent tip")
 	hs := historyOf(t, bare, "refs/heads/main")
-	require.Len(t, hs, 6, "the forge's README commit, then the create's five: %+v", hs)
+	require.Len(t, hs, 7, "the forge's README commit, then the create's six: %+v", hs)
 	require.Equal(t, []string{"README.md"}, hs[0].paths)
 	require.Equal(t, []string{OntologyPath}, hs[1].paths, "the ontology commit")
 	require.ElementsMatch(t, []string{"artifacts/fleet/crl.pem", "artifacts/fleet/root.crt"}, hs[2].paths,
@@ -393,7 +421,12 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	require.ElementsMatch(t, []string{"artifacts/fleet/certs/test-fleet.pem", "artifacts/fleet/issued/" + serial + ".pem"}, hs[3].paths,
 		"then the creator's leaf and its one issuance record")
 	require.Equal(t, []string{memberRecordPath("kb", "test-fleet")}, hs[4].paths, "then the record")
-	require.Equal(t, []string{fact.FleetHostPath}, hs[5].paths, "then where the fleet is hosted, last")
+	require.Equal(t, []string{fact.FleetHostPath}, hs[5].paths, "then where the fleet is hosted")
+	require.Equal(t, []string{fact.FleetMasterPath}, hs[6].paths, "then who its acting master is, last")
+	named, err := m.fleetMasterAtMain(m.fleetRepo())
+	require.NoError(t, err)
+	require.Equal(t, "test-fleet", named, "the creator is the acting master")
+	require.Equal(t, "test-fleet", st.ActingMaster)
 	hosted, err := m.fleetHostAtMain(m.fleetRepo())
 	require.NoError(t, err)
 	require.Equal(t, []string{fileuri.New(bare)}, hosted, "the forge hosts it")
@@ -411,7 +444,7 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, store.VerifyEnforce, v.Mode, "the fleet ontology declares enforce")
-	require.Equal(t, 4, v.Checked, "root, leaf, record and host commits")
+	require.Equal(t, 5, v.Checked, "root, leaf, record, host and master-marker commits")
 	require.Empty(t, v.Refused)
 }
 

@@ -95,7 +95,12 @@ func (ri *RepoInstance) fleetHostRound(ctx context.Context, svc *store.Service) 
 		return
 	}
 	defer m.fleetOpMu.Unlock()
-	if !ri.isFleetMaster(svc) {
+	if ri.fleetCandidate(svc) {
+		// A hub whose main names no master and that holds the root: a fleet
+		// created before the marker. Its claim lands on its own main.
+		m.claimFleetMaster(ctx, ri)
+	}
+	if !ri.actsAsFleetMaster(svc) {
 		return
 	}
 	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil && ctx.Err() == nil {
@@ -264,4 +269,200 @@ func (m *Manager) fleetHostAtMain(ri *RepoInstance) ([]string, error) {
 		return nil, err
 	}
 	return fact.ParseFleetHost([]byte(raw))
+}
+
+// maxFleetMasterSize is what a reader reads of the master marker: the fleet
+// ontology's max_size for it.
+const maxFleetMasterSize = 1 << 10
+
+// fleetMasterAt is the agent id the master marker (fact.FleetMasterPath) at
+// branch of ri names; "" when there is none (a fleet with no acting master).
+// A marker that cannot be read is an error.
+func (m *Manager) fleetMasterAt(ri *RepoInstance, branch string) (string, error) {
+	var raw []byte
+	var ok bool
+	var rerr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			rerr = errors.New("fleet repository is not open")
+			return
+		}
+		if branch == "" {
+			branch = svc.UpstreamBranch()
+		}
+		raw, ok, rerr = svc.FileAt(branch, fact.FleetMasterPath, maxFleetMasterSize)
+	}); err != nil {
+		return "", err
+	}
+	if rerr != nil || !ok {
+		return "", rerr
+	}
+	return fact.ParseFleetMaster(raw)
+}
+
+// fleetMasterAtMain is fleetMasterAt the fleet repository's main.
+func (m *Manager) fleetMasterAtMain(ri *RepoInstance) (string, error) {
+	return m.fleetMasterAt(ri, "")
+}
+
+// writeFleetMaster commits the master marker naming this instance on ri's
+// agent branch, unless the branch already holds exactly that marker. The
+// caller is the master (create, Host here, the once-only claim) and
+// publishes main.
+func (m *Manager) writeFleetMaster(ctx context.Context, ri *RepoInstance) error {
+	id := m.AgentID()
+	if cur, err := m.fleetMasterAt(ri, ri.AgentBranch()); err == nil && cur == id {
+		return nil
+	}
+	return m.writeFleetArtifacts(ctx, ri, map[string]string{fact.FleetMasterPath: fact.RenderFleetMaster(id)},
+		"fleet: "+id+" is the fleet's acting master")
+}
+
+// deleteFleetMaster is the master's last commit as master (Stand down, and
+// a forge-hosted Decommission): the master marker deleted on main, so main
+// shows a fleet with no acting master. On the hub it is a commit on the agent
+// branch that main follows (published here); on a forge it is ONE commit
+// published straight onto the forge's main (store.PublishUpstreamChange):
+// the agent branch catches up at its next sync. A marker naming another
+// instance, or none, is left alone and nothing is committed. Any error means
+// main may still name this instance: the caller keeps the root.
+func (m *Manager) deleteFleetMaster(ctx context.Context, ri *RepoInstance) error {
+	id := m.AgentID()
+	onMain, err := m.fleetMasterAtMain(ri)
+	if err != nil {
+		return err
+	}
+	o, err := m.originOf(ri)
+	if err != nil {
+		return err
+	}
+	if o != nil {
+		if onMain != id {
+			return nil
+		}
+		return m.publishMarkerChange(ctx, ri, nil, "fleet: "+id+" stood down as the fleet's master")
+	}
+	cur, err := m.fleetMasterAt(ri, ri.AgentBranch())
+	if err != nil {
+		return err
+	}
+	if cur == id {
+		if err := m.commitFleetMasterDeletion(ctx, ri, id); err != nil {
+			return err
+		}
+	}
+	if cur != id && onMain != id {
+		return nil
+	}
+	return m.publishFleetMainNow(ctx, ri)
+}
+
+func (m *Manager) commitFleetMasterDeletion(ctx context.Context, ri *RepoInstance, id string) error {
+	var werr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			werr = errors.New("fleet repository is not open")
+			return
+		}
+		_, _, werr = svc.Facts().BatchWriteFacts(ctx, ri.AgentBranch(), nil, []string{fact.FleetMasterPath},
+			"fleet: "+id+" stood down as the fleet's master", "deleted")
+	}); err != nil {
+		return err
+	}
+	return werr
+}
+
+// publishMarkerChange publishes one change of the master marker (content, or
+// nil to delete it) straight onto the origin's main, without force
+// (store.PublishUpstreamChange): a copy whose main moved meanwhile is
+// refused, which is how a lost claim race shows.
+func (m *Manager) publishMarkerChange(ctx context.Context, ri *RepoInstance, content *string, message string) error {
+	var perr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			perr = errors.New("fleet repository is not open")
+			return
+		}
+		remote, err := svc.Remote().GetRemote("origin")
+		if err != nil || remote == nil {
+			perr = fmt.Errorf("fleet repository has no origin: %v", err)
+			return
+		}
+		auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+		if err != nil {
+			perr = err
+			return
+		}
+		_, perr = svc.Remote().PublishUpstreamChange(ctx, fact.FleetMasterPath, content, message, auth)
+	}); err != nil {
+		return err
+	}
+	return perr
+}
+
+// fleetCandidate reports whether this instance may claim the master role
+// (user ruling 2026-10-16: "if each puts their own key in their own branches,
+// it means they're both candidates. Whoever the merge sets in main, that is
+// the true master, and the second one will be demoted to a member"): it holds
+// the fleet's root (holdsFleetRoot), main names NO master, and its copy does
+// not follow another instance of the fleet (that copy becomes the master by
+// Host here, never by a claim: it cannot publish another instance's main).
+func (ri *RepoInstance) fleetCandidate(svc *store.Service) bool {
+	if ri == nil || !ri.fleetDoor || !ri.IsFleet() || svc == nil {
+		return false
+	}
+	m := ri.env.m
+	if !m.holdsFleetRoot(svc) || m.fleetMasterPause(ri) != "" {
+		return false
+	}
+	named, err := fleetMasterOn(svc, svc.UpstreamBranch())
+	return err == nil && named == ""
+}
+
+// claimFleetMaster is a candidate's claim (fleetCandidate): the master marker
+// naming this instance, published to main. On the hub main is this copy's
+// own, so the claim always lands (a commit on the agent branch, main
+// follows). On a forge it is one commit published straight onto the forge's
+// main WITHOUT force: two candidates race, git decides, the first publish
+// wins. The loser's push is refused and nothing of the claim is left on its
+// branch (it never was there), so its next fetch shows another name on main
+// and it is a member, with nothing that its sync re-submits. A fleet created
+// before the marker existed is claimed the same way by its root holder. The
+// caller holds fleetOpMu and calls it after a fetch, so main is fresh.
+func (m *Manager) claimFleetMaster(ctx context.Context, ri *RepoInstance) {
+	id := m.AgentID()
+	o, err := m.originOf(ri)
+	if err != nil {
+		return
+	}
+	if o != nil {
+		body := fact.RenderFleetMaster(id)
+		if err := m.publishMarkerChange(ctx, ri, &body, "fleet: "+id+" is the fleet's acting master"); err != nil {
+			switch {
+			case ctx.Err() != nil:
+			case errors.Is(err, store.ErrUpstreamMoved):
+				// The race lost: the forge's main moved since this copy's
+				// fetch, so another publish came first. The next fetch shows
+				// who main names.
+				log.Info().Str("fleet", ri.Name()).
+					Msg("fleet: the claim to the master role lost: the forge's main moved since this copy's fetch (another root holder published first); the next fetch shows who main names")
+			default:
+				// Not a lost race: the push failed (auth, network, a refusal).
+				log.Warn().Err(credentialFreeErr(err)).Str("fleet", ri.Name()).
+					Msg("fleet: the claim to the master role could not be pushed; the next round tries again")
+			}
+			return
+		}
+		log.Info().Str("fleet", ri.Name()).Msg("fleet: claimed the master role on the forge's main")
+		return
+	}
+	if err := m.writeFleetMaster(ctx, ri); err != nil {
+		if ctx.Err() == nil {
+			log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: the master marker could not be written; the next round retries")
+		}
+		return
+	}
+	if err := m.publishFleetMainNow(ctx, ri); err != nil && ctx.Err() == nil {
+		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: main did not follow the claim yet; the local reconcile retries")
+	}
 }

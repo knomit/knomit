@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
@@ -288,25 +289,28 @@ func seedFleetForge(t *testing.T, bare string, root *pkitest.Fleet) {
 	runGit(t, work, "push", "-q", "origin", "main")
 }
 
-// A copy whose origin is not where main says the fleet is hosted cannot
-// stand down (#528 N4): a hub that followed a peer which does not host the
-// fleet would leave the fleet with no master at its host. Once main names
-// this copy's origin, it may.
-// SABOTAGE: drop refuseNotFollowingHost from StandDown -> the root is
-// deleted -> red.
-func TestFleetStandDown_RefusedWhileNotFollowingTheHost(t *testing.T) {
+// A forge-hosted master stands down with no precondition too: its last
+// commit as master, the master marker deleted, is published to the forge's
+// main, and only then does the root go. A publish that fails keeps the root
+// (stand_down_unpublished); the retry publishes the deletion it committed.
+// SABOTAGE: StandDown deletes the root when deleteFleetMaster fails -> red.
+func TestFleetStandDown_ForgeMasterPublishesItsMark(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
-	require.NoError(t, f.master.writeFleetHost(ctx, f.mri, []string{"https://elsewhere.example/git/fleet"}))
-	require.NoError(t, f.master.publishFleetMainNow(ctx, f.mri))
+	// The fixture's fleet predates the marker: the master writes it, as its
+	// round's once-only claim does, and publishes it.
+	require.NoError(t, f.master.writeFleetMaster(ctx, f.mri))
+	require.NoError(t, f.master.publishMasterWrite(ctx, f.mri))
+	require.True(t, f.onForgeMain(t, fact.FleetMasterPath), "setup: the marker is on the forge's main")
+	require.NoError(t, os.Rename(f.bare, f.bare+".away"))
 	err := f.master.StandDown(ctx)
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
-	require.Equal(t, "not_following_host", code)
-	_, serr := os.Stat(f.master.fleetRootDir())
+	require.Equal(t, "stand_down_unpublished", code)
+	_, serr := os.Stat(filepath.Join(f.master.fleetRootDir(), pki.RootKeyFile))
 	require.NoError(t, serr, "the root stays")
+	require.NoError(t, os.Rename(f.bare+".away", f.bare))
 
-	require.NoError(t, f.master.writeFleetHost(ctx, f.mri, []string{f.url}))
-	require.NoError(t, f.master.publishFleetMainNow(ctx, f.mri))
-	require.NoError(t, f.master.StandDown(ctx), "this copy follows the host on main")
+	require.NoError(t, f.master.StandDown(ctx))
+	require.False(t, f.onForgeMain(t, fact.FleetMasterPath), "the forge's main has no acting master")
 }

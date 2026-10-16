@@ -48,9 +48,11 @@ import (
 //     installed here at once.
 //   - DECOMMISSION (master): remove the fleet here and delete <home>/fleet.
 //   - ROOT (master switch): GET returns the files of <home>/fleet, PUT
-//     installs them where there are none, DELETE stands down (deletes them,
-//     keeps the membership), refused while this copy is the hub. One master at
-//     a time is the user's job: nothing here checks the other side.
+//     installs them where there are none, DELETE stands down (one last
+//     commit on main says so, then the files go; the membership stays). It is
+//     the switch's first step and needs nothing first; the new master's Host
+//     here checks its own main for the marker's absence. Nothing contacts the other
+//     side.
 
 // FleetEnrollment is what POST /fleet/enroll answers.
 type FleetEnrollment struct {
@@ -105,9 +107,24 @@ type FleetRoot struct {
 // certificate, the CRL and the two local audit logs.
 var fleetRootFiles = []string{pki.RootKeyFile, pki.RootCertFile, pki.CRLFile, pki.IssuedLogFile, pki.RevokedLogFile}
 
-// masterFleet is the fleet repository when this instance is its master, else
-// the refusal.
+// masterFleet is the fleet repository when this instance is its master and
+// does master work now (no fleetMasterPause), else the refusal: enroll,
+// revoke and decommission.
 func (m *Manager) masterFleet() (*RepoInstance, error) {
+	ri, err := m.masterFleetByRoot()
+	if err != nil {
+		return nil, err
+	}
+	if err := m.refuseMasterPaused(ri); err != nil {
+		return nil, err
+	}
+	return ri, nil
+}
+
+// masterFleetByRoot is the fleet repository when this instance is its master
+// (isFleetMaster: the root key is here and its root is on main), else the
+// refusal.
+func (m *Manager) masterFleetByRoot() (*RepoInstance, error) {
 	ri := m.fleetRepo()
 	if ri == nil {
 		return nil, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone: no fleet repository is mounted")
@@ -117,7 +134,7 @@ func (m *Manager) masterFleet() (*RepoInstance, error) {
 		return nil, err
 	}
 	if !master {
-		return nil, fleetErr(http.StatusConflict, "not_master", "this instance is not the fleet's master: "+filepath.Join(m.fleetRootDir(), pki.RootKeyFile)+" is not here, or its root.crt is not the root on the fleet's main")
+		return nil, fleetErr(http.StatusConflict, "not_master", "this instance is not the fleet's master: "+filepath.Join(m.fleetRootDir(), pki.RootKeyFile)+" is not here, its root.crt is not the root on the fleet's main, or the fleet's main does not name it the acting master ("+fact.FleetMasterPath+")")
 	}
 	return ri, nil
 }
@@ -711,12 +728,12 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 	}
 	var out FleetLeft
 	if ri != nil {
-		master := false
-		if err := ri.WithRead(func(svc *store.Service) { master = ri.isFleetMaster(svc) }); err != nil {
+		holds := false
+		if err := ri.WithRead(func(svc *store.Service) { holds = ri.fleetDoor && ri.IsFleet() && m.holdsFleetRoot(svc) }); err != nil {
 			return FleetLeft{}, err
 		}
-		if master {
-			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance is the fleet's master: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
+		if holds {
+			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance holds the fleet's root key: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
 		}
 		if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
 			out.PushError = "the left record was not written: " + err.Error()
@@ -862,6 +879,16 @@ func (m *Manager) DecommissionFleet(ctx context.Context) (FleetStatus, error) {
 	if err != nil {
 		return FleetStatus{}, err
 	}
+	// On a forge the fleet repository lives on: its main must stop naming
+	// this instance, so another holder of the root key can claim the role
+	// (user ruling 2026-10-16). On the hub the repository goes with it.
+	if o, oerr := m.originOf(ri); oerr != nil {
+		return FleetStatus{}, oerr
+	} else if o != nil {
+		if err := m.deleteFleetMaster(ctx, ri); err != nil {
+			return FleetStatus{}, fleetErr(http.StatusConflict, "decommission_unpublished", "the commit that removes this instance as the acting master did not reach the forge's main ("+credentialFreeErr(err).Error()+"): nothing is decommissioned. Try again")
+		}
+	}
 	if err := m.removeFleetHere(ri, "fleet decommissioned"); err != nil {
 		return FleetStatus{}, err
 	}
@@ -985,15 +1012,29 @@ func (m *Manager) InstallFleetRoot(files map[string]string) (FleetRoot, error) {
 		return fail(err)
 	}
 	id, _ := pki.RootID(root.Cert)
-	log.Info().Str("dir", dir).Str("root", id).Msg("fleet: root installed; this instance is the master once that root is on the fleet's main")
+	log.Info().Str("dir", dir).Str("root", id).Msg("fleet: root installed; this instance is the master once the fleet's main names it (Host here, or a claim while main names no master)")
 	return FleetRoot{Dir: dir, RootFingerprint: id, Files: map[string]string{}}, nil
 }
 
-// StandDown deletes <home>/fleet (DELETE /fleet/root) and keeps the
-// membership: the user's way to remove the key from the old master after a
-// switch. Refused while this copy of the fleet repository is the hub (no
-// origin): it would leave the hub without a master and the members without a
-// host.
+// StandDown is DELETE /fleet/root, the first step of a master switch (user
+// ruling 2026-10-16): this instance stops being the fleet's master, and it
+// needs nothing else first. While it still does master work
+// (actsAsFleetMaster) its last act as master is one commit on main
+// (deleteFleetMaster: the master marker, fact.FleetMasterPath, deleted, so
+// main shows a fleet with no acting master); then <home>/fleet,
+// the root key with it, is deleted, so from here it merges, enrolls, revokes
+// and writes no host record, and as the hub it takes no member push
+// (FleetPushRefusal). The membership stays. A merge pass in flight finishes
+// first, and none starts between the commit and the deletion.
+//
+// The new master then hosts the fleet (Host here), and checks only its own
+// main for the marker. A master that does no master work (its copy follows
+// another instance) writes nothing: it is not the host, and the host's judge
+// refuses a member's change to the marker (the host-record rule).
+//
+// A failed publish of that commit refuses the stand-down
+// (stand_down_unpublished) and keeps the root: a stand-down main never shows
+// would leave the new master without the commit it checks for.
 func (m *Manager) StandDown(ctx context.Context) error {
 	defer m.lockFleetOp()()
 	dir := m.fleetRootDir()
@@ -1003,15 +1044,18 @@ func (m *Manager) StandDown(ctx context.Context) error {
 		return fleetErr(http.StatusNotFound, "no_root", "this instance holds no fleet root ("+filepath.Join(dir, pki.RootKeyFile)+" is absent)")
 	}
 	if ri := m.fleetRepo(); ri != nil {
-		origin, err := m.hasOrigin(ri)
-		if err != nil {
+		if c := ri.consensus; c != nil {
+			c.runMu.Lock()
+			defer c.runMu.Unlock()
+		}
+		acts := false
+		if err := ri.WithRead(func(svc *store.Service) { acts = ri.actsAsFleetMaster(svc) }); err != nil {
 			return err
 		}
-		if !origin {
-			return fleetErr(http.StatusConflict, "hub", "this instance hosts the fleet (its copy of "+ri.Name()+" has no origin): host the fleet on the new master and point this copy at it first (Fleet → Settings → Point at the new host), or the fleet has no master and no host")
-		}
-		if err := m.refuseNotFollowingHost(ri); err != nil {
-			return err
+		if acts {
+			if err := m.deleteFleetMaster(ctx, ri); err != nil {
+				return fleetErr(http.StatusConflict, "stand_down_unpublished", "the commit that records the stand-down did not reach the fleet's main ("+credentialFreeErr(err).Error()+"): this instance is still the master. Try again")
+			}
 		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
@@ -1021,29 +1065,34 @@ func (m *Manager) StandDown(ctx context.Context) error {
 	return nil
 }
 
-// refuseNotFollowingHost is the stand-down's check that this copy follows
-// the fleet's host (#528 N4): its origin must be one of the URLs the host
-// record on its main names (GET /fleet's follows_host). A copy that follows
-// a peer which does not host the fleet (a hub pointed at a plain member) is
-// refused: standing down there leaves the fleet with no master at its host.
-// A main with no host record (a fleet that predates it) decides nothing.
-func (m *Manager) refuseNotFollowingHost(ri *RepoInstance) error {
-	o, err := m.originOf(ri)
-	if err != nil || o == nil {
+// refuseOldMasterActive is Host here's one check (old_master_active): the
+// master marker on this copy's main, as its ordinary sync left it, must name
+// no master (the old master stood down) or this instance. A marker naming
+// another instance means that master did not stand down, or this copy has not
+// synced since it did.
+func (m *Manager) refuseOldMasterActive(ri *RepoInstance, o *Origin) error {
+	named, err := m.fleetMasterAtMain(ri)
+	if err != nil {
 		return err
 	}
-	hosted, err := m.fleetHostAtMain(ri)
-	if err != nil || len(hosted) == 0 {
-		return err
+	if named == "" || named == m.AgentID() {
+		return nil
 	}
-	for _, u := range hosted {
-		if sameFleetURL(o.URL, u) {
-			return nil
+	host := originHost(o.URL)
+	return fleetErr(http.StatusConflict, "old_master_active",
+		"this copy's main still names "+named+" as the fleet's acting master: it has not stood down (stand down there first), or this copy has not synced since (last sync "+m.lastFleetSync(ri)+"). Hosting the fleet here now leaves out every change made on "+host+" after this copy's last sync. Confirm to host it here anyway")
+}
+
+// lastFleetSync is when this copy last fetched from its origin ("unknown"
+// when never, or when it cannot be read).
+func (m *Manager) lastFleetSync(ri *RepoInstance) string {
+	out := "unknown"
+	_ = ri.WithRead(func(svc *store.Service) {
+		if r, err := svc.Remote().GetRemote("origin"); err == nil && r != nil && r.LastSyncAt != nil && *r.LastSyncAt != "" {
+			out = *r.LastSyncAt
 		}
-	}
-	return fleetErr(http.StatusConflict, "not_following_host",
-		"this copy follows "+credentialFree(o.URL)+", but the fleet's main says it is hosted at "+strings.Join(credentialFreeAll(hosted), ", ")+
-			": standing down now would leave the fleet without a master where it is hosted. Point this copy at the fleet's host (Fleet → Settings → Point at the new host); right after pointing it, wait for its first sync, then stand down")
+	})
+	return out
 }
 
 // FleetIndexRebuild is what POST /fleet/index-rebuild answers: the index job
@@ -1090,14 +1139,28 @@ func (m *Manager) RebuildFleetIndex(ctx context.Context) (FleetIndexRebuild, err
 // The detach stands when the write fails, and it is answered as done: the
 // hub's local reconcile re-asserts the record every round
 // (RepoInstance.fleetHostRound), so the next round writes it.
-func (m *Manager) HostFleetHere(ctx context.Context) (FleetStatus, error) {
-	if err := m.hostFleetHere(ctx); err != nil {
+//
+// It hosts only when the master marker on its own main, from its ordinary
+// sync, names no master (the old master stood down) or this instance
+// (refuseOldMasterActive), or with spec.ConfirmLoss: the old master is gone,
+// or this copy has not synced since it stood down, and what it changed after
+// this copy's last sync is left out (the dead-master fallback). Nothing asks
+// the old host anything. Hosting writes the marker naming this instance.
+func (m *Manager) HostFleetHere(ctx context.Context, spec FleetHostSpec) (FleetStatus, error) {
+	if err := m.hostFleetHere(ctx, spec); err != nil {
 		return FleetStatus{}, err
 	}
 	return m.FleetStatus(ctx)
 }
 
-func (m *Manager) hostFleetHere(ctx context.Context) error {
+// FleetHostSpec is what POST /fleet/host takes. ConfirmLoss is the user's
+// confirm that changes made on the old host after this copy's last sync are
+// not included (read only when main's master marker names another instance).
+type FleetHostSpec struct {
+	ConfirmLoss bool
+}
+
+func (m *Manager) hostFleetHere(ctx context.Context, spec FleetHostSpec) error {
 	defer m.lockFleetOp()()
 	ri := m.fleetRepo()
 	if ri == nil {
@@ -1111,8 +1174,28 @@ func (m *Manager) hostFleetHere(ctx context.Context) error {
 	if err := m.guardFleetDetach(ri); err != nil {
 		return err
 	}
+	if o, err := m.originOf(ri); err != nil {
+		return err
+	} else if o != nil && !spec.ConfirmLoss {
+		if err := m.refuseOldMasterActive(ri, o); err != nil {
+			return err
+		}
+	}
 	if _, err := m.Send(ctx, ri, DetachOrigin()); err != nil {
 		return err
+	}
+	// This instance is the acting master now (fact.FleetMasterPath), the
+	// marker a confirmed takeover overwrites; published with the host record
+	// below.
+	if err := m.writeFleetMaster(ctx, ri); err != nil {
+		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: this instance hosts the fleet now, but the master marker was not written")
+	}
+	// A push this copy made to the old host (refused once its master stood
+	// down) is no sync error of the host: it pushes nowhere now.
+	if db := m.ControlDB(); db != nil {
+		if err := recordFleetAttempt(db, nil, time.Now()); err != nil {
+			log.Warn().Err(err).Msg("fleet: clearing the last sync error after hosting failed")
+		}
 	}
 	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil {
 		log.Warn().Err(err).Str("fleet", ri.Name()).
@@ -1259,12 +1342,12 @@ func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o
 // the master's detach makes its copy the hub, which needs the mTLS listener
 // and an address to advertise.
 func (m *Manager) guardFleetDetach(ri *RepoInstance) error {
-	master := false
-	if err := ri.WithRead(func(svc *store.Service) { master = ri.isFleetMaster(svc) }); err != nil {
+	holds := false
+	if err := ri.WithRead(func(svc *store.Service) { holds = ri.fleetDoor && ri.IsFleet() && m.holdsFleetRoot(svc) }); err != nil {
 		return err
 	}
-	if !master {
-		return fleetErr(http.StatusConflict, "member_keeps_origin", "a member's fleet copy keeps its origin; only the master hosts the fleet")
+	if !holds {
+		return fleetErr(http.StatusConflict, "member_keeps_origin", "a member's fleet copy keeps its origin; only the holder of the fleet's root key hosts the fleet (it becomes the master)")
 	}
 	return m.refuseNoHubListener()
 }

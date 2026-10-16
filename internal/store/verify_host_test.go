@@ -35,7 +35,7 @@ func (f *rangeFixture) judgeEntry(c *object.Commit) (Refusal, bool) {
 }
 
 // The host-record rule: on the fleet repository no commit of a member's
-// branch may change artifacts/fleet/host, which the fleet ontology DECLARES
+// branch may change artifacts/fleet/host or artifacts/fleet/master, which the fleet ontology DECLARES
 // (so the record-owner rule exempts it) and only the fleet's master writes.
 // Every refused row is signed by agent-x, an active member with a valid
 // leaf, or by a joiner whose self-registration rule A would otherwise admit,
@@ -44,7 +44,8 @@ func (f *rangeFixture) judgeEntry(c *object.Commit) (Refusal, bool) {
 //
 // SABOTAGE: make hostRecord return ok unconditionally -> every host-record
 // row is admitted (the declared path passes the owner rule) -> red; compare
-// the path exactly instead of in any case -> the HOST row is admitted -> red.
+// the path exactly instead of in any case -> the HOST row is admitted -> red;
+// drop the FleetMasterPath check -> the master-marker rows are admitted -> red.
 func TestHostRecord_AMemberBranchNeverWritesIt(t *testing.T) {
 	const own = "kb/members/agent-x/1.md"
 	x, j := namedSigner(t, "x"), namedSigner(t, "joiner")
@@ -61,6 +62,10 @@ func TestHostRecord_AMemberBranchNeverWritesIt(t *testing.T) {
 		{"rewrites the host record", true, func(b map[string]string) map[string]string { return with(b, fact.FleetHostPath, evil) }, "agent-x", RuleHostRecord},
 		{"deletes the host record", true, func(b map[string]string) map[string]string { return without(b, fact.FleetHostPath) }, "agent-x", RuleHostRecord},
 		{"adds it in another case spelling", false, func(b map[string]string) map[string]string { return with(b, "artifacts/fleet/HOST", hostV1) }, "agent-x", RuleHostRecord},
+		// The master marker (fact.FleetMasterPath) is guarded by the same rule.
+		{"names itself the acting master", false, func(b map[string]string) map[string]string { return with(b, fact.FleetMasterPath, "agent-x\n") }, "agent-x", RuleHostRecord},
+		{"rewrites the master marker", true, func(b map[string]string) map[string]string { return with(b, fact.FleetMasterPath, "agent-x\n") }, "agent-x", RuleHostRecord},
+		{"deletes the master marker", true, func(b map[string]string) map[string]string { return without(b, fact.FleetMasterPath) }, "agent-x", RuleHostRecord},
 		{"a self-registration that also writes it", false, func(b map[string]string) map[string]string {
 			return with(b, "kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, j.PublicKey()), fact.FleetHostPath, hostV1)
 		}, "joiner", RuleHostRecord},
@@ -80,6 +85,7 @@ func TestHostRecord_AMemberBranchNeverWritesIt(t *testing.T) {
 			arts[own] = memberFile("agent-x", fact.MemberActive, x.PublicKey())
 			if row.host {
 				arts[fact.FleetHostPath] = hostV1
+				arts[fact.FleetMasterPath] = "boss\n"
 			}
 			f, main, base := selfRegFixture(t, arts)
 			signer := x
@@ -97,7 +103,7 @@ func TestHostRecord_AMemberBranchNeverWritesIt(t *testing.T) {
 			ran++
 		})
 	}
-	require.Equal(t, 7, ran)
+	require.Equal(t, 10, ran)
 }
 
 // A member's clean merge of main, where the master changed the host record,

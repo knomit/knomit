@@ -485,6 +485,10 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 				}
 				if master {
 					peers.admit(ctx, svc, agentBranch, &lg)
+				} else {
+					// A root holder whose fresh main names no master claims
+					// the role (fleetMasterClaimRound); master next round.
+					peers.claimMaster(ctx, svc)
 				}
 			}
 		}

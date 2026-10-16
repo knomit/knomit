@@ -2495,8 +2495,9 @@ paths:
         push did, so it works offline: the fleet repository is dropped from
         every lens that reads it and deleted, the trust material is
         uninstalled, the state is `standalone`. The master's revoke is the
-        authoritative half. The master is refused (`is_master`, 409):
-        decommission, or hand the root on and stand down first. Refusals:
+        authoritative half. A holder of the fleet's root key, master or not,
+        is refused (`is_master`, 409): decommission, or hand the root on and
+        stand down first. Refusals:
         `not_registered` (409).
       operationId: leaveFleet
       responses:
@@ -2566,16 +2567,22 @@ paths:
         LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
         any other transport is 403 and runs nothing.
 
-        The master only. The fleet repository here is dropped from every
-        lens and deleted (a forge keeps its copy, inert), the trust material
-        is uninstalled and `<home>/fleet` (the root key included) is
-        deleted; state `standalone`. Members' syncs then fail, and each
-        leaves. Refusals: `not_master`, `not_registered` (409).
+        The master only. On a forge-hosted fleet the master first publishes
+        the deletion of the master marker (`artifacts/fleet/master`) to the
+        forge's main, so the fleet there names no master and any other
+        holder of the root key can claim it (user ruling 2026-10-16); if that
+        publish fails nothing is decommissioned (`decommission_unpublished`,
+        409). Then the fleet repository here is dropped from every lens and
+        deleted (a forge keeps its copy), the trust material is uninstalled
+        and `<home>/fleet` (the root key included) is deleted; state
+        `standalone`. On a knomit-hosted fleet the repository goes with it:
+        members' syncs then fail, and each leaves. Refusals: `not_master`,
+        `not_registered`, `decommission_unpublished` (409).
       operationId: decommissionFleet
       responses:
         "200": { description: Decommissioned, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
         "403": { description: Not the local authenticated listener }
-        "409": { description: "not_master or not_registered" }
+        "409": { description: "not_master, not_registered or decommission_unpublished" }
   /fleet/root:
     get:
       tags: [fleet]
@@ -2586,9 +2593,8 @@ paths:
 
         The files of `<home>/fleet` as one document: `root.key` (the root
         PRIVATE key), `root.crt`, `crl.pem`, `issued.jsonl`, `revoked.jsonl`
-        (those present). Install them on the new master with `PUT`, then
-        stand down here with `DELETE`. One master at a time is the user's
-        job: nothing checks the other side. Refusals: `no_root` (404).
+        (those present). Install them on the new master with `PUT`; stand
+        down here with `DELETE`. Refusals: `no_root` (404).
       operationId: getFleetRoot
       responses:
         "200":
@@ -2610,8 +2616,11 @@ paths:
         and `root.crt` are required (`root_incomplete`, 422), only the five
         root file names are taken (`unknown_file`, 422), and the key must be
         the certificate's (`root_invalid`, 422). The files land in a private
-        directory and are moved into place. This instance is the master once
-        that root is the one on the fleet's main.
+        directory and are moved into place. Holding the root does not make
+        this instance the master: the master is the instance the master
+        marker on the fleet's main names (GET /fleet `acting_master`). A
+        holder becomes it by Host here, or, while main names no master, by
+        its claim at its next sync (the first publish wins).
       operationId: putFleetRoot
       requestBody:
         required: true
@@ -2638,22 +2647,25 @@ paths:
         LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
         any other transport is 403 and runs nothing.
 
-        Deletes `<home>/fleet` and keeps the membership: the user's way to
-        remove the key from the old master after a switch. Refused while
-        this instance's copy of the fleet repository has no origin (`hub`,
-        409): it hosts the fleet, so point it at the new host first (the
-        Fleet page's Fleet → Settings → Point at the new host, `POST
-        /fleet/follow`). Refused too while this copy's origin is not one of
-        the URLs the host record on its main names (`not_following_host`,
-        409: a hub pointed at a peer that does not host the fleet would leave
-        the fleet with no master at its host; right after pointing it, wait
-        for its first sync). Refusals: `no_root` (404).
+        The first step of a master switch, and it needs nothing first. While
+        this instance does master work, its last act as master is one
+        commit on main: the master marker (`artifacts/fleet/master`, the
+        acting master's agent id) deleted, so main shows a fleet with no
+        acting master (GET /fleet `acting_master` absent). Then
+        `<home>/fleet`, the root key with it, is deleted, and the membership
+        stays: from here this instance merges, enrolls and revokes nothing,
+        and as the hub it refuses members' pushes (they record
+        `last_error_stood_down`). The new master's `POST /fleet/host`
+        checks its own main for the marker. A master whose copy follows
+        another instance of the fleet commits nothing (it is not the host). Refusals: `no_root` (404),
+        `stand_down_unpublished` (409: the commit did not reach the fleet's
+        main, e.g. the forge refused it; the root stays, try again).
       operationId: standDownFleetRoot
       responses:
         "204": { description: Stood down }
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
-        "409": { description: "hub or not_following_host" }
+        "409": { description: stand_down_unpublished }
   /fleet/host:
     post:
       tags: [fleet]
@@ -2669,12 +2681,34 @@ paths:
         `host_record`). The master check and the detach are one step under
         the lock. A record write that fails does not undo the detach (it is
         answered as done): the hub's local reconcile re-asserts the record
-        every round. Refusals, nothing changed: `member_keeps_origin` (409:
-        only the master hosts the fleet), `hub` (409: this copy already has
-        no origin), `not_registered` (409), `listener_required` and
-        `addresses_required` (422: hosting needs [tls].addr and
-        external_addresses).
+        every round.
+
+        The one check is this copy's own main, as its ordinary sync left it:
+        the master marker there (`artifacts/fleet/master`, GET /fleet
+        `acting_master`) must be absent (the old master stood down) or name
+        this instance. While it names another instance, that master did not
+        stand down (it may be gone) or this copy has not synced since, and
+        the answer is `old_master_active` (409) unless the body says
+        `confirm_loss: true`: hosting then leaves out every change made on
+        the old host after this copy's last sync. Nothing is asked of the
+        old host. Hosting writes the marker naming this instance.
+
+        Refusals, nothing changed: `member_keeps_origin` (409: only the
+        master hosts the fleet), `hub` (409: this copy already has no
+        origin), `old_master_active` (409), `not_registered` (409),
+        `listener_required` and `addresses_required` (422: hosting needs
+        [tls].addr and external_addresses).
       operationId: hostFleet
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm_loss:
+                  type: boolean
+                  description: "Host although this copy's main still names another instance as the acting master: changes made on the old host after this copy's last sync are not included."
       responses:
         "200":
           description: Hosted here; the new state
@@ -2682,7 +2716,7 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/FleetStatus" }
         "403": { description: Not the local authenticated listener }
-        "409": { description: "member_keeps_origin, hub or not_registered" }
+        "409": { description: "member_keeps_origin, hub, old_master_active or not_registered" }
         "422": { description: "listener_required or addresses_required" }
   /fleet/follow:
     post:
@@ -4205,6 +4239,12 @@ components:
         last_error_refused:
           type: boolean
           description: "true when last_error is the fleet refusing this instance's certificate at the TLS handshake (revoked, or the fleet moved to another root): a retry does not help. Read from the recorded error; absent otherwise."
+        last_error_commit_refused:
+          type: boolean
+          description: "true when last_error is the fleet's host refusing a commit of this copy's push with its commit judge (the text names the commit, the rule and the reason). A retry does not help: every sync sends the same commit. Under the host-record and artifact rules, which read the commit against its own parents, no later main admits it either; the way out is to leave the fleet, have the master revoke this instance's certificate (until Leave revokes it by itself) and enroll it again, then join again. It is the residue of the dead-master fallback (an old master's master write the new host's main lacks). Read from the recorded error; absent otherwise."
+        last_error_stood_down:
+          type: boolean
+          description: "true when last_error is this copy's host refusing its push because the master there stood down: the push goes to the new host once this copy points at it (POST /fleet/follow). Read from the recorded error; absent otherwise."
         sync_interval_seconds:
           type: integer
           description: "How often this copy's origin round runs (the origin's interval, push_interval when shorter, 300 when unset): a member sees what the master merged into main only after its next round. Absent on the hub (no origin)."
@@ -4253,7 +4293,8 @@ components:
         record_current: { type: boolean, description: "The own record matches what the current config and binary advertise (absent when there is no record). Updated at boot." }
         record_pending_update: { type: boolean, description: "The fleet's main holds an older version of the own record: waiting for a merge" }
         notice: { type: string, description: "Set while external_addresses is empty" }
-        master: { type: boolean, description: "This instance is the fleet's master: its <home>/fleet/root.key is here and its root.crt is the root on the fleet's main" }
+        master: { type: boolean, description: "This instance is the fleet's master (user ruling 2026-10-16): its <home>/fleet/root.key is here, its root.crt is the root on the fleet's main, AND the master marker on main (acting_master) names it" }
+        root_held: { type: boolean, description: "This instance holds the fleet's root key (the key is here and its root is the one on main), master or not. A holder main does not name is a member: while main names no master it claims the role (a forge copy at its next sync, the first publish wins; a copy that follows another instance by Host here); while main names another instance it does no master work." }
         hosting: { type: string, description: "Where this copy of the fleet repository syncs: none (no origin: this instance is the hub) or the origin URL; absent with no fleet repository" }
         root_dir: { type: string, description: "<home>/fleet, where a master's root key lives" }
         fleet_urls:
@@ -4301,6 +4342,13 @@ components:
           properties:
             record_is_here: { type: boolean }
             move_back_to: { type: string }
+        master_paused:
+          type: string
+          enum: [not_hosting]
+          description: "On the master (master true): why it does no master work now (no merges, enroll, revoke, host-record write). not_hosting: its copy follows another instance of the fleet, which hosts it. Absent otherwise."
+        acting_master:
+          type: string
+          description: "The fleet's acting master: the agent id the master marker on main (artifacts/fleet/master) names. Written at create and by Host here, deleted by the master's stand-down; absent when the fleet has no acting master (or its master has not written the marker yet: a fleet created before it gets it from the root holder's next round). A marker for readers: who holds the root key decides master work (master)."
         last_error_fleet_moved:
           type: boolean
           description: "true when this copy follows an old host (follows_host false) and last_error is that host refusing its push because the host's copy has an origin now: the fleet moved, and a retry does not help until this copy points at the new host. Read from the recorded error; absent otherwise."

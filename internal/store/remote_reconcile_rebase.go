@@ -48,39 +48,56 @@ import (
 // (every local commit back to root is replayed onto upstreamTip),
 // disjoint=false otherwise.
 //
+// Whatever the stop point, the walk also stops at the first commit that
+// upstreamTip's history holds: a commit already upstream is never replayed.
+// "Holds" is upstreamTip's whole history (every parent, not its first-parent
+// chain): a member's commits reach a fleet's main through the SECOND parent
+// of the master's merge. Stopping there can never skip a local commit:
+// ancestry is closed, so everything below a held commit is held too.
+//
 // Returns empty (and disjoint=false) when localTip is an ancestor of
 // upstreamTip (nothing local to replay — caller will fast-forward), OR
 // when upstreamTip is an ancestor of localTip (local is a strict linear
 // extension — caller's force-push will fast-forward origin without
 // rewriting commit hashes).
 func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumbing.Hash) ([]*object.Commit, bool, error) {
+	commits, disjoint, _, err := rh.unpushedCommitsDropping(localTip, upstreamTip, explicitBase)
+	return commits, disjoint, err
+}
+
+// unpushedCommitsDropping is unpushedCommits that also reports whether the
+// walk dropped a commit that changes only replay-skipped paths
+// (SetReplaySkipPaths): the branch must then be rebuilt on the upstream even
+// when nothing else is left to replay, or it would carry the dropped commit
+// as it stands.
+func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBase plumbing.Hash) (collectedOut []*object.Commit, disjointOut, droppedOut bool, errOut error) {
 	if localTip == upstreamTip {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 
 	local, err := rh.repo.CommitObject(localTip)
 	if err != nil {
-		return nil, false, fmt.Errorf("unpushedCommits: local commit %s: %w", localTip, err)
+		return nil, false, false, fmt.Errorf("unpushedCommits: local commit %s: %w", localTip, err)
 	}
 	upstream, err := rh.repo.CommitObject(upstreamTip)
 	if err != nil {
-		return nil, false, fmt.Errorf("unpushedCommits: upstream commit %s: %w", upstreamTip, err)
+		return nil, false, false, fmt.Errorf("unpushedCommits: upstream commit %s: %w", upstreamTip, err)
 	}
 
 	isAncestor, err := local.IsAncestor(upstream)
 	if err != nil {
-		return nil, false, fmt.Errorf("unpushedCommits: IsAncestor (local→upstream): %w", err)
+		return nil, false, false, fmt.Errorf("unpushedCommits: IsAncestor (local→upstream): %w", err)
 	}
 	if isAncestor {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 
 	upstreamAncestor, err := upstream.IsAncestor(local)
 	if err != nil {
-		return nil, false, fmt.Errorf("unpushedCommits: IsAncestor (upstream→local): %w", err)
+		return nil, false, false, fmt.Errorf("unpushedCommits: IsAncestor (upstream→local): %w", err)
 	}
 	if upstreamAncestor {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 
 	var stopAt plumbing.Hash
@@ -90,7 +107,7 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 	} else {
 		bases, err := local.MergeBase(upstream)
 		if err != nil {
-			return nil, false, fmt.Errorf("unpushedCommits: MergeBase: %w", err)
+			return nil, false, false, fmt.Errorf("unpushedCommits: MergeBase: %w", err)
 		}
 		if len(bases) == 0 {
 			disjoint = true
@@ -100,14 +117,39 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 		}
 	}
 
+	// A commit the upstream already holds is never replayed, whatever the
+	// stop point says. The watermark can lie far behind: a copy with no
+	// origin (a hub) never advances it, so the first rewind after it attaches
+	// one walks back to its InitRepo seed. Replaying a commit that is already
+	// upstream re-submits it with the local side winning every conflict, so
+	// any later upstream change to a path it wrote is reverted, and the
+	// replayed commit is re-signed by THIS copy: the old fleet master's
+	// create-time host record and a member's first leaf, after a master
+	// switch, refused by the new host's judge on every push (#528 N1).
+	var onUpstream map[plumbing.Hash]bool
+	if !disjoint {
+		onUpstream = map[plumbing.Hash]bool{}
+		if err := walkHistory(rh.gits, upstreamTip, nil, func(c *object.Commit) { onUpstream[c.Hash] = true }); err != nil {
+			return nil, false, false, fmt.Errorf("unpushedCommits: upstream history: %w", err)
+		}
+	}
+
 	var collected []*object.Commit
 	cur := local
 	for {
-		if cur.Hash == stopAt {
+		if cur.Hash == stopAt || onUpstream[cur.Hash] {
 			break
 		}
 		if cur.NumParents() <= 1 {
-			collected = append(collected, cur)
+			if skip, err := rh.replaySkips(cur); err != nil {
+				return nil, false, false, fmt.Errorf("unpushedCommits: %w", err)
+			} else if skip {
+				droppedOut = true
+				log.Info().Str("commit", cur.Hash.String()[:8]).
+					Msg("unpushedCommits: dropping a commit that changes only paths a replay never carries")
+			} else {
+				collected = append(collected, cur)
+			}
 		} else {
 			log.Debug().
 				Str("commit", cur.Hash.String()[:8]).
@@ -119,7 +161,7 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 		}
 		parent, err := cur.Parents().Next()
 		if err != nil {
-			return nil, false, fmt.Errorf("unpushedCommits: walk first-parent at %s: %w", cur.Hash, err)
+			return nil, false, false, fmt.Errorf("unpushedCommits: walk first-parent at %s: %w", cur.Hash, err)
 		}
 		cur = parent
 	}
@@ -127,7 +169,7 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
 		collected[i], collected[j] = collected[j], collected[i]
 	}
-	return collected, disjoint, nil
+	return collected, disjoint, droppedOut, nil
 }
 
 // replayCommit synthesizes a new commit by applying orig's tree-delta
@@ -324,7 +366,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	}
 	localTip := localRef.Hash()
 
-	commits, disjoint, err := rh.unpushedCommits(localTip, upstreamTip, explicitBase)
+	commits, disjoint, dropped, err := rh.unpushedCommitsDropping(localTip, upstreamTip, explicitBase)
 	if err != nil {
 		return AgentReconcileResult{}, err
 	}
@@ -335,7 +377,10 @@ func (rh *repoHandler) replayOntoUpstream(
 	//   2. upstream is an ancestor of local → local is a strict linear
 	//      extension; the caller's force-push will fast-forward origin.
 	//      Do NOT rewind local — that would orphan its branch_commits rows.
-	if len(commits) == 0 {
+	// Neither applies when the walk DROPPED a commit (SetReplaySkipPaths):
+	// keeping the branch as it stands would carry the dropped commit, so the
+	// replay below rebuilds the branch on upstream with what is left.
+	if len(commits) == 0 && !dropped {
 		if localTip == upstreamTip {
 			return AgentReconcileResult{Mode: ModeNoop}, nil
 		}
@@ -506,4 +551,55 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, up
 		return res, fmt.Errorf("reconcileAgentRebase: write watermark: %w", err)
 	}
 	return res, nil
+}
+
+// SetReplaySkipPaths names the paths a rewind replay never carries: a
+// non-merge commit of this branch that changes nothing but these paths is
+// dropped from the replay instead of being re-submitted onto the new
+// upstream. The fleet repository sets its master marker
+// (fact.FleetMasterPath): a copy that is not the master on the new upstream
+// never re-submits its own claim to the role, or its stand-down, which the
+// host's judge would refuse for good (user ruling 2026-10-16: the loser
+// drops its own claim). Any other repository sets nothing.
+func (s *Service) SetReplaySkipPaths(paths ...string) {
+	set := map[string]bool{}
+	for _, p := range paths {
+		set[p] = true
+	}
+	s.rh.replaySkip = set
+}
+
+// replaySkips reports whether c changes only replay-skipped paths (and at
+// least one).
+func (rh *repoHandler) replaySkips(c *object.Commit) (bool, error) {
+	if len(rh.replaySkip) == 0 || c.NumParents() != 1 {
+		return false, nil
+	}
+	parent, err := c.Parents().Next()
+	if err != nil {
+		return false, err
+	}
+	pt, err := parent.Tree()
+	if err != nil {
+		return false, err
+	}
+	ct, err := c.Tree()
+	if err != nil {
+		return false, err
+	}
+	changes, err := object.DiffTree(pt, ct)
+	if err != nil {
+		return false, err
+	}
+	if len(changes) == 0 {
+		return false, nil
+	}
+	for _, ch := range changes {
+		for _, name := range []string{ch.From.Name, ch.To.Name} {
+			if name != "" && !rh.replaySkip[name] {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }

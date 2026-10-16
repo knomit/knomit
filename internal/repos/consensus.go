@@ -93,6 +93,10 @@ type consensusMerger struct {
 	// refused maps a pushed branch to the tip whose merge was refused: that
 	// tip is not tried again, a new one is.
 	refused map[string]plumbing.Hash
+	// runMu makes passes one at a time; a stand-down (StandDown) holds it
+	// so a pass in flight finishes before the master's last commit and none
+	// starts until the root is gone.
+	runMu sync.Mutex
 	// warned holds the keys of every WARN already logged.
 	warned map[string]bool
 	stats  consensusStats
@@ -187,6 +191,8 @@ func blobKey(data []byte) string {
 // runOnce is one pass: read the setting at the consensus branch's tip, then try
 // every pushed branch.
 func (m *consensusMerger) runOnce(ctx context.Context) {
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
 	defer func() {
 		m.mu.Lock()
 		m.stats.Runs++
@@ -207,8 +213,10 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 	if m.ri.IsFleet() {
 		// The fleet repository: merging is the master's duty, on every
 		// hosting (R-merge). The origin is transport only, and `consensus`
-		// is not read: the fleet ontology does not declare it.
-		if !m.ri.isFleetMaster(svc) {
+		// is not read: the fleet ontology does not declare it. A root holder
+		// that main does not name, or whose copy follows another instance,
+		// merges nothing (actsAsFleetMaster).
+		if !m.ri.actsAsFleetMaster(svc) {
 			return
 		}
 		mainTip, err := svc.Branches().HeadCommit(ctx, upstream)

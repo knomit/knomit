@@ -42,7 +42,9 @@ func newForgeFleet(t *testing.T, leaves map[string]ssh.Signer) *forgeFleet {
 	t.Helper()
 	f := &forgeFleet{dir: t.TempDir(), root: pkitest.New(t)}
 	f.bare = filepath.Join(f.dir, "fleet.git")
-	files := map[string][]byte{OntologyPath: []byte(fleetOntologyYAML(t))}
+	// main names the master (fact.FleetMasterPath): a root holder main does
+	// not name is no master (user ruling 2026-10-16).
+	files := map[string][]byte{OntologyPath: []byte(fleetOntologyYAML(t)), fact.FleetMasterPath: []byte(fact.RenderFleetMaster("master"))}
 	for _, name := range []string{pki.RootCertFile, pki.CRLFile} {
 		b, err := os.ReadFile(filepath.Join(f.root.Dir, name))
 		require.NoError(t, err)

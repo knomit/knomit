@@ -177,6 +177,11 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 	}
 	svc.SetSigner(env.signer)
 	svc.SetAgentID(env.agentID)
+	if r.fleetDoor {
+		// A copy that is not the master on main never re-submits its own
+		// claim to the role, or its stand-down (user ruling 2026-10-16).
+		svc.SetReplaySkipPaths(fact.FleetMasterPath)
+	}
 	if m := env.m; m != nil {
 		svc.SetAcceptList(m.acceptListFor(r.uid))
 		svc.SetOwnKeys(m.ownFleetKeys)
@@ -511,7 +516,7 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 // mount that is not admitted (admitFleetOntology) writes nothing either. It
 // returns the ontology in force.
 func (r *RepoInstance) refreshFleetOntology(ctx context.Context, svc *store.Service, read, srcPath string, ont *fact.Ontology) *fact.Ontology {
-	if r.subscribed || !r.fleetDoor || !r.env.m.isFleetMaster(svc) {
+	if r.subscribed || !r.fleetDoor || !r.env.m.isFleetMaster(svc) || r.env.m.fleetMasterPause(r) != "" {
 		return ont
 	}
 	builtIn := fact.FleetOntology()

@@ -502,15 +502,14 @@ func requireFleetActivity(t *testing.T, hub *fleetNode, charlieSerial string) {
 
 // The master switch on a knomit-hosted fleet (R3.2), over the real routes:
 // alpha is the hub and master, bravo and charlie members. The root files go
-// from alpha (GET /fleet/root) to bravo (PUT); alpha's stand-down is refused
-// while it is the hub; bravo detaches its origin (it hosts the fleet now);
-// alpha re-points at bravo and stands down; charlie re-points; charlie's and
+// from alpha (GET /fleet/root) to bravo (PUT); alpha stands down first (its
+// last commit as master deletes the master marker); bravo syncs and detaches its origin (it
+// hosts the fleet now); alpha re-points at bravo; charlie re-points; charlie's and
 // alpha's next pushes reach bravo, which judges and merges them. A member's
 // detach, a member's upstream PATCH and the old hub's manual merge of a dead
 // pushed branch are refused.
-// SABOTAGE: drop the hub check in StandDown -> alpha stands down while it is
-// the hub -> red; drop the master check of guardFleetDetach -> charlie's
-// detach is 204 -> red.
+// SABOTAGE: drop the master check of guardFleetDetach -> charlie's detach is
+// 204 -> red.
 func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -550,9 +549,11 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	if _, err := bravo.mgr.InstallFleetRoot(files.Files); err != nil {
 		t.Fatal(err)
 	}
-	if code := fleetCodeOf(t, alpha.mgr.StandDown(ctx)); code != "hub" {
-		t.Fatalf("the hub's stand-down: %s, want hub", code)
+	// The old master stands down first; the new one syncs and hosts.
+	if err := alpha.mgr.StandDown(ctx); err != nil {
+		t.Fatalf("the hub stands down first: %v", err)
 	}
+	bravo.round(t)
 
 	bravo.serve(t)
 	if rec := bravo.localAPI(http.MethodPost, "/fleet/host", "{}"); rec.Code != http.StatusOK {
@@ -562,21 +563,21 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 		t.Fatalf("bravo after the detach: %+v", bst)
 	}
 	// The new host records where the fleet is hosted on its main; the old
-	// hub's main still says the old host.
+	// hub's main still says the old host, with no acting master.
 	if got, want := readAt(t, bravo.fleet(t), "main", fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
 		t.Fatalf("bravo's host record after the detach: %q, want it to end %q", got, want)
 	}
 	if got, want := readAt(t, alpha.fleet(t), "main", fact.FleetHostPath), "url: "+alpha.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
 		t.Fatalf("alpha's host record (written at create): %q, want it to end %q", got, want)
 	}
+	if got := readAt(t, bravo.fleet(t), "main", fact.FleetMasterPath); got != "bravo\n" {
+		t.Fatalf("bravo's master marker after hosting: %q, want bravo", got)
+	}
 
 	alpha.asClient(t)
 	body := `{"url":"` + bravo.fleetURL() + `"}`
 	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", body); rec.Code != http.StatusOK {
 		t.Fatalf("the old master re-points at the new one: %d %s", rec.Code, rec.Body.String())
-	}
-	if err := alpha.mgr.StandDown(ctx); err != nil {
-		t.Fatalf("the old master stands down once it has an origin: %v", err)
 	}
 	if ast, _ := alpha.mgr.FleetStatus(ctx); ast.Master || ast.Hosting != bravo.fleetURL() {
 		t.Fatalf("alpha after the stand-down: %+v", ast)

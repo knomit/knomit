@@ -58,18 +58,45 @@ func (m *Manager) fleetRootDir() string {
 }
 
 // isFleetMaster reports whether this instance is the master of the fleet
+// whose repository svc is (user ruling 2026-10-16, "whoever the merge sets in
+// main, that is the true master"): it holds the fleet's root
+// (holdsFleetRoot) AND the master marker on the fleet repository's main
+// (fact.FleetMasterPath) names this instance. A root holder that main does
+// not name is a member: a CANDIDATE while main names no master (it may claim,
+// claimFleetMaster), demoted while main names another instance. Every error
+// answers no, so an unreadable home or main never makes an instance the
+// master.
+func (m *Manager) isFleetMaster(svc *store.Service) bool {
+	if svc == nil || !m.holdsFleetRoot(svc) {
+		return false
+	}
+	named, err := fleetMasterOn(svc, svc.UpstreamBranch())
+	return err == nil && named != "" && named == m.AgentID()
+}
+
+// holdsFleetRoot reports whether this instance holds the root of the fleet
 // whose repository svc is: the fleet root key file is in <home>/fleet AND the
 // root certificate beside it is THIS fleet's root, the one
 // artifacts/fleet/root.crt holds on the fleet repository's main. A key file
 // alone is not enough: a member that holds a stray root.key (another fleet's,
-// an undecommissioned one) is not the master. The key is never read or
-// opened here. Every error answers no, so an unreadable home or main never
-// makes an instance the master.
-func (m *Manager) isFleetMaster(svc *store.Service) bool {
+// an undecommissioned one) holds nothing. The key is never read or opened
+// here. Holding the root is not being the master (isFleetMaster): main must
+// name this instance too.
+func (m *Manager) holdsFleetRoot(svc *store.Service) bool {
 	if svc == nil {
 		return false
 	}
 	return m.holdsFleetRootAt(svc, svc.UpstreamBranch())
+}
+
+// fleetMasterOn is the agent id the master marker at branch names, "" when
+// there is none.
+func fleetMasterOn(svc *store.Service, branch string) (string, error) {
+	raw, ok, err := svc.FileAt(branch, fact.FleetMasterPath, maxFleetMasterSize)
+	if err != nil || !ok {
+		return "", err
+	}
+	return fact.ParseFleetMaster(raw)
 }
 
 // holdsFleetRootAt is isFleetMaster's test against any branch of the fleet

@@ -205,14 +205,23 @@ func handleDeleteFleetRoot(m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// handleHostFleet: POST /api/v1/fleet/host, "Host the fleet here": this
-// instance's copy of the fleet repository drops its origin and becomes the
-// hub (repos.Manager.HostFleetHere). A member is member_keeps_origin; a
-// master with no mTLS listener or no external address is listener_required
-// or addresses_required; a copy that already hosts the fleet is hub.
+// handleHostFleet: POST /api/v1/fleet/host {confirm_loss?}, "Host the fleet
+// here": this instance's copy of the fleet repository drops its origin and
+// becomes the hub (repos.Manager.HostFleetHere). A member is
+// member_keeps_origin; a master with no mTLS listener or no external address
+// is listener_required or addresses_required; a copy that already hosts the
+// fleet is hub. A copy that follows another instance of the fleet whose main
+// does not say the old master stood down is old_master_active unless
+// confirm_loss is given.
 func handleHostFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		st, err := m.HostFleetHere(r.Context())
+		var req struct {
+			ConfirmLoss bool `json:"confirm_loss"`
+		}
+		if !decodeOptionalJSON(w, r, &req, 0) {
+			return
+		}
+		st, err := m.HostFleetHere(r.Context(), repos.FleetHostSpec{ConfirmLoss: req.ConfirmLoss})
 		if err != nil {
 			writeFleetError(w, r, err)
 			return
