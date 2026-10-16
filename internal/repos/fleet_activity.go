@@ -114,11 +114,42 @@ func (m *Manager) FleetActivity(ctx context.Context, limit int) ([]FleetEvent, e
 		events = append(events, FleetEvent{At: r.At, Kind: FleetEventRefused, Agent: agent,
 			Branch: r.Branch, Tip: r.Tip, Detail: r.Reason})
 	}
-	sort.SliceStable(events, func(i, j int) bool { return events[i].At.After(events[j].At) })
+	sortFleetEvents(events)
 	if len(events) > limit {
 		events = events[:limit]
 	}
 	return events, nil
+}
+
+// fleetKindOrder ranks the kinds for events at the same instant, newest
+// first: the later step of a member's lifecycle first (a revocation in the
+// second of the join it ends reads above it), the creation last.
+var fleetKindOrder = map[string]int{
+	FleetEventLeft: 0, FleetEventRevoked: 1, FleetEventRefused: 2, FleetEventHostChanged: 3,
+	FleetEventAdmitted: 4, FleetEventJoined: 5, FleetEventEnrolled: 6, FleetEventCreated: 7,
+}
+
+// sortFleetEvents orders events newest first by their full timestamp (a
+// commit's is whole seconds; the issuance log, the CRL and the ring keep what
+// they have, sub-second included), then, at the same instant, by a stable
+// key: the kind (fleetKindOrder), the agent, the serial, the branch, the tip,
+// the detail. Never by the order the sources were read in (PR #527 N4).
+func sortFleetEvents(events []FleetEvent) {
+	sort.Slice(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		if !a.At.Equal(b.At) {
+			return a.At.After(b.At)
+		}
+		if ka, kb := fleetKindOrder[a.Kind], fleetKindOrder[b.Kind]; ka != kb {
+			return ka < kb
+		}
+		for _, c := range [][2]string{{a.Agent, b.Agent}, {a.Serial, b.Serial}, {a.Branch, b.Branch}, {a.Tip, b.Tip}, {a.Detail, b.Detail}} {
+			if c[0] != c[1] {
+				return c[0] < c[1]
+			}
+		}
+		return false
+	})
 }
 
 // mainEvents is what one first-parent commit of main says, in the order a

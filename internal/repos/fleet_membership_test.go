@@ -438,6 +438,32 @@ func TestCredentialFree(t *testing.T) {
 	}
 }
 
+// Activity's order (PR #527 N4): newest first by the full timestamp, a
+// sub-second one included, then at the same instant by a stable key (the
+// kind, then agent, serial, branch, tip, detail), whatever order the sources
+// were read in: every permutation of the input sorts the same.
+// SABOTAGE: sort by At alone (stable, the source order) -> the reversed input
+// keeps joined above revoked -> red; drop the kind key -> red.
+func TestSortFleetEvents_SameSecondIsNotSourceOrder(t *testing.T) {
+	sec := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	want := []FleetEvent{
+		{At: sec.Add(1500 * time.Millisecond), Kind: FleetEventRefused, Agent: "bravo", Tip: "t2"},
+		{At: sec.Add(300 * time.Millisecond), Kind: FleetEventEnrolled, Agent: "charlie", Serial: "0c"},
+		{At: sec, Kind: FleetEventRevoked, Agent: "bravo", Serial: "0b"},
+		{At: sec, Kind: FleetEventAdmitted, Agent: "bravo", Tip: "t1"},
+		{At: sec, Kind: FleetEventJoined, Agent: "alpha"},
+		{At: sec, Kind: FleetEventJoined, Agent: "bravo"},
+	}
+	for _, in := range [][]int{{0, 1, 2, 3, 4, 5}, {5, 4, 3, 2, 1, 0}, {4, 5, 3, 0, 2, 1}} {
+		events := make([]FleetEvent, len(in))
+		for i, k := range in {
+			events[i] = want[k]
+		}
+		sortFleetEvents(events)
+		require.Equal(t, want, events, "input order %v", in)
+	}
+}
+
 // Review N5: the fleet repository's detach (check and detach) takes the
 // fleet lock, so a stand-down cannot run between the master check and the
 // detach.
