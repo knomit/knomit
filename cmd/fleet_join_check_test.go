@@ -51,7 +51,8 @@ func requireNoJoinCheckTemp(t *testing.T, d, why string) {
 // nothing is installed here, so the answer is hosting master with the root
 // fingerprint the operator confirms; a credential for the hub is
 // auth_invalid; a bundle naming a host that does not answer is unreachable;
-// a bundle for another agent is agent_mismatch. Each check leaves nothing
+// a bundle for another agent is agent_mismatch, and the join of that dead
+// host says unreachable too. Each check leaves nothing
 // behind (its temporary material directory included), and the join after a
 // good check succeeds.
 // SABOTAGE: classify against this instance's [tls].dir instead of the
@@ -106,6 +107,14 @@ func TestFleetJoinCheck_KnomitHosted(t *testing.T) {
 	}
 	requireNothingInstalled(t, bravo, "after the unreachable check")
 	requireNoJoinCheckTemp(t, tmp, "after the unreachable check")
+	// The join says the same for the same cause (NEW-1): unreachable 502,
+	// not clone_failed, and nothing is kept.
+	_, err = bravo.mgr.JoinFleet(ctx, repos.FleetJoinSpec{Bundle: dead})
+	var fe *repos.FleetError
+	if !errors.As(err, &fe) || fe.Code != "unreachable" || fe.Status != 502 {
+		t.Fatalf("join of a dead host: %v, want 502 unreachable", err)
+	}
+	requireNothingInstalled(t, bravo, "after the unreachable join")
 
 	charlie := newFleetNode(t, dir, "charlie")
 	_, err = charlie.mgr.CheckFleetJoin(ctx, repos.FleetJoinSpec{Bundle: []byte(enr.Bundle)})

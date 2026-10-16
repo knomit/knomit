@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"os"
@@ -610,4 +612,37 @@ func TestFleetMembership_JoinNeedsTheBundlesURL(t *testing.T) {
 	require.ErrorContains(t, err, "names no fleet repository URL")
 	_, err = os.Stat(filepath.Join(m.deps.Cfg.TLS.Dir, pki.InstanceCertFile))
 	require.ErrorIs(t, err, os.ErrNotExist, "nothing was installed")
+}
+
+// joinReachErr is the one mapping join and join:check share (NEW-1): only a
+// genuine refusal is bundle_refused (422); every other failure to classify
+// the bundle's URL is unreachable (502). Each row is the error as
+// pki.ClassifyOrigin words it, and, for the join, as ResolveOrigin wraps it.
+// SABOTAGE: bundle_refused for anything not pki.ErrOriginUnreachable (the
+// pre-NEW-1 mapping) -> the hang-up, handshake and trust-file rows red; drop
+// the ErrOriginCertRefused arm -> the revoked row red.
+func TestJoinReachErr_OnlyARefusalIsBundleRefused(t *testing.T) {
+	for _, tc := range []struct {
+		cause  string
+		err    error
+		code   string
+		status int
+	}{
+		{"the host refused the bundle's certificate", fmt.Errorf("pki: the origin h:1 is an instance of this fleet, but: %w: remote error: tls: bad certificate", pki.ErrRefusedByPeer), "bundle_refused", 422},
+		{"our verifier refused the host's certificate", fmt.Errorf("%w (h:1): %w", pki.ErrOriginCertRefused, pki.ErrRevoked), "bundle_refused", 422},
+		{"no TCP connection", fmt.Errorf("%w: can't reach h:1: connection refused", pki.ErrOriginUnreachable), "unreachable", 502},
+		{"a hang-up after the handshake", errors.New("pki: the origin h:1 is an instance of this fleet, but: pki: peer did not answer after the handshake: EOF"), "unreachable", 502},
+		{"a handshake that failed after our verifier accepted", errors.New("pki: the origin h:1 presents a certificate of this fleet, but the handshake failed: read: connection reset by peer"), "unreachable", 502},
+		{"this instance's trust files unusable", errors.New("pki: this instance's fleet trust files are unusable, so the origin h:1 cannot be judged: no CRL"), "unreachable", 502},
+	} {
+		for _, wrapped := range []struct {
+			route string
+			err   error
+		}{{"join:check", tc.err}, {"join", fmt.Errorf("%w: %w", ErrOriginUnreachable, tc.err)}} {
+			fe := joinReachErr("h:1", wrapped.err)
+			if fe.Code != tc.code || fe.Status != tc.status {
+				t.Errorf("%s, %s: %d %s, want %d %s", tc.cause, wrapped.route, fe.Status, fe.Code, tc.status, tc.code)
+			}
+		}
+	}
 }

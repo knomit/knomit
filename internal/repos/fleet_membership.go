@@ -405,9 +405,9 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoine
 		return refuse(nil, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", err.Error()))
 	}
 	// On the clone path ErrOriginUnreachable comes only from ResolveOrigin's
-	// classification: the hub reached but refusing (a revoked bundle) is
-	// bundle_refused, as join:check says.
-	if errors.Is(err, ErrOriginUnreachable) && !errors.Is(err, pki.ErrOriginUnreachable) {
+	// classification, which join:check makes too: the same cause answers the
+	// same code on both routes (joinReachErr).
+	if errors.Is(err, ErrOriginUnreachable) {
 		return refuse(nil, joinReachErr(originHost(b.FleetURL), err))
 	}
 	if err != nil {
@@ -505,9 +505,9 @@ type FleetJoinCheck struct {
 // removed before returning). An instance of that fleet is hosting "master"
 // (a credential for it is auth_invalid); anything else is a forge, probed
 // with the joiner's credential (cert as input is auth_invalid). A host that
-// cannot be reached is unreachable (502); a host reached that refuses the
-// bundle, or whose certificate this bundle refuses, is bundle_refused (422,
-// see joinReachErr). It writes nothing.
+// refuses the bundle, or whose certificate this bundle refuses, is
+// bundle_refused (422); any other failure to classify is unreachable (502),
+// as the join says for the same cause (joinReachErr). It writes nothing.
 func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (FleetJoinCheck, error) {
 	defer m.lockFleetOp()()
 	db := m.ControlDB()
@@ -569,17 +569,20 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 	return out, nil
 }
 
-// joinReachErr names a failed classification of the bundle's fleet URL: a
-// host that could not be reached (pki.ErrOriginUnreachable) is unreachable
-// (502); anything else means the host WAS reached and the fleet's TLS
-// exchange with the bundle's certificate failed (our verifier refused the
-// host, or the host refused the certificate: typically a bundle revoked
-// since it was issued), which is bundle_refused (422).
+// joinReachErr names a failed classification of the bundle's fleet URL, for
+// join and join:check alike. Only a genuine refusal is bundle_refused (422):
+// the host refused this bundle's certificate (pki.ErrRefusedByPeer: typically
+// a bundle revoked since it was issued), or our verifier refused the
+// certificate the host presents as one of this fleet's
+// (pki.ErrOriginCertRefused). Everything else is unreachable (502): no TCP
+// connection, a timeout or a reset after the handshake, this instance's own
+// trust material unusable. Those are no verdict on the bundle, and "ask for a
+// new bundle" would send the operator the wrong way.
 func joinReachErr(host string, err error) *FleetError {
-	if errors.Is(err, pki.ErrOriginUnreachable) {
-		return fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+host+": "+err.Error())
+	if errors.Is(err, pki.ErrRefusedByPeer) || errors.Is(err, pki.ErrOriginCertRefused) {
+		return fleetErr(http.StatusUnprocessableEntity, "bundle_refused", "the fleet at "+host+" refused this bundle ("+err.Error()+"): ask the fleet's master for a new bundle")
 	}
-	return fleetErr(http.StatusUnprocessableEntity, "bundle_refused", "the fleet at "+host+" refused this bundle ("+err.Error()+"): ask the fleet's master for a new bundle")
+	return fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+host+": "+err.Error())
 }
 
 // originHost is the host an origin URL names: host[:port] of a URL, the
