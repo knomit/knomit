@@ -453,7 +453,16 @@ describe('FleetSettings', () => {
     expect(screen.getByTestId('fleet-last-error')).toHaveTextContent('Last sync failed: ' + raw);
     expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("The fleet's host refuses a commit on this instance's branch");
     expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent('When the rule is host-record or an artifact rule, the refusal is permanent');
-    expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("leave the fleet here, ask the fleet's master to revoke this instance's certificate (until Leave revokes it by itself) and enroll it again, then join again");
+    // #532: the master revokes by itself only when the left record reaches
+    // main; a refused Leave push never gets it there, so the copy says when
+    // the master's operator still revokes by hand.
+    // SABOTAGE: restore the pre-#532 "(until Leave revokes it by itself)"
+    // sentence -> red.
+    const notice = screen.getByTestId('fleet-commit-refused-notice');
+    expect(notice).toHaveTextContent("leave the fleet here, have the fleet's master enroll this instance again, then join again");
+    expect(notice).toHaveTextContent("The master revokes this instance's certificate by itself only once the left record that Leave pushes reaches the fleet's main");
+    expect(notice).toHaveTextContent("while this commit is on the branch, that push is refused like every other, so ask the fleet's master to revoke the certificate by hand before the enroll");
+    expect(notice).not.toHaveTextContent('until Leave revokes it by itself');
     expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
     expect(screen.queryByTestId('fleet-refused-notice')).toBeNull();
   });

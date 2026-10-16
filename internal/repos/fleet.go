@@ -61,9 +61,11 @@ type FleetStatus struct {
 	// the text names the commit, the rule and the reason). Every sync sends
 	// the same commit, so a retry does not help. Under the host-record and
 	// artifact rules, which read the commit against its own parents, no later
-	// main admits it either: the way out is to leave, have the master revoke
-	// this instance's certificate (until Leave revokes it by itself) and
-	// enroll it again, then join again.
+	// main admits it either: the way out is to leave, have the master enroll
+	// this instance again, then join again. The master's leave duty revokes
+	// the old certificate only once the left record is on main, and the Leave
+	// push carrying it is refused too while the commit is on the branch: the
+	// master's operator revokes it by hand first.
 	// It is the dead-master fallback's residue (an old master's master write
 	// the new host's main lacks). It is also set for a commit that adds or
 	// changes a fact failing the ontology's validations
