@@ -278,7 +278,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           </div>
         )}
         {!serverOpen && facets.length > 0 && (
-          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" style={{ display: 'flex', alignItems: 'stretch' }}>
+          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" style={facetTabs}>
             {facets.map(f => {
               const on = f === facet;
               return (
@@ -378,6 +378,13 @@ const CHIP_TONE: Record<NonNullable<TargetLabel['chip']>['tone'], CSSProperties>
   // record pending: a normal state the master's next round resolves, so
   // informational blue, never amber (amber is for what fails, 3f1b3342).
   pending: { color: '#8ab6d6', background: '#131d26', border: '1px solid #244056' },
+};
+
+// The facet tabs give way at a narrow width rather than push the gear off
+// the bar: they scroll sideways inside their own strip (PR #528 nit 9), and
+// the target label keeps its share.
+const facetTabs: CSSProperties = {
+  display: 'flex', alignItems: 'stretch', minWidth: 0, flexShrink: 1, overflowX: 'auto', scrollbarWidth: 'none',
 };
 
 // PanelIcon is the rail toggle's glyph: a window with its left column ruled off.

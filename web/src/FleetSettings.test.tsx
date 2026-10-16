@@ -179,6 +179,18 @@ describe('FleetSettings', () => {
 
   // B1 on Host here: configured but not listening -> no "from now on".
   // SABOTAGE: drop notUp -> "from now on" with the listener down -> red.
+  // A master whose copy has an origin may be the new master or the old one
+  // already following the new host: the page names the host, never "the old
+  // master" (browser walk of the fix: the old hub after Point at read "the
+  // old master" for the new one).
+  // SABOTAGE: restore "the old master" -> red.
+  it('a master with an origin names the host without guessing which master it is', async () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    mount({ ...member, master: true });
+    expect(await screen.findByTestId('fleet-hosted-by')).toHaveTextContent("kb-01.acme.example — the fleet's host");
+    expect(document.body.textContent).not.toContain('old master');
+  });
+
   it('Host here with the listener configured but not running says members push once it runs', async () => {
     stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
     mount({ ...member, master: true, host: { listener_on: true, listening: false, listener_reason: 'no_certificate', external_addresses: ['https://ci.example:7443'], would_serve: ['https://served.example:7443/git/fleet'] } });

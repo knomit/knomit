@@ -121,7 +121,10 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   const listening = fleet.host.listening === true;
   const hostedBy = hub ? (listening ? 'this instance — members push to it' : 'this instance — its fleet listener is not running, so members cannot push to it yet')
     : forge ? "a forge — the master fetches every member's branch, merges, and pushes main"
-      : `${hostOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'} — ${master ? 'the old master' : "the fleet's master"}`;
+      // A master with an origin may be the new master still following the
+      // old host, or the old master already following the new one: the page
+      // cannot tell, so it names the host only (4b9101b3).
+      : `${hostOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'} — ${master ? "the fleet's host" : "the fleet's master"}`;
   const stale = fleet.follows_host === false;
   const wouldServe = fleet.host.would_serve ?? [];
   sections.push({
@@ -158,7 +161,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
               <button type="button" data-testid="fleet-host-here" style={btn(false, 'primary')} onClick={() => setConfirm('host')}>Host the fleet here…</button>
             </div>
             <div style={fieldHint}>
-              The fleet is still hosted {forge ? 'on the forge' : 'at the old master'}. Hosting it here removes this copy's origin; members then point at {wouldServe.length ? wouldServe.join(', ') : 'this instance'}.
+              The fleet is hosted {forge ? 'on the forge' : `at ${hostOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'}`}. Hosting it here removes this copy's origin; members then point at {wouldServe.length ? wouldServe.join(', ') : 'this instance'}.
             </div>
             {confirm === 'host' && <HostConfirm fleet={fleet} onCancel={() => setConfirm(null)} onDone={done} />}
           </div>

@@ -173,6 +173,21 @@ describe('the fleet target', () => {
     expect(m.status.mock.calls.some(c => c[0] === 'fleet')).toBe(false);
   });
 
+  // The rail is forced open only while the repository draft is the page:
+  // over the fleet target a closed rail stays closed, so a fleet-only
+  // instance at a phone width has room for its pages (browser walk, 375 px).
+  // SABOTAGE: force the rail by noRepos alone -> the rail stays -> red.
+  it('with only the fleet repository and the rail closed, the fleet target closes the forced rail', async () => {
+    localStorage.setItem('knomit.rail', '0');
+    const m = await primeApi();
+    m.repos.mockResolvedValue([{ name: 'fleet', uid: 'u-fleet', fleet: true }]);
+    render(<App />);
+    const row = await screen.findByTestId('rail-fleet-row');
+    await act(async () => { fireEvent.click(row); });
+    expect(await screen.findByTestId('fleet-members')).toBeInTheDocument();
+    expect(screen.queryByTestId('target-rail')).toBeNull();
+  });
+
   it('leaves the fleet target when GET /fleet says the fleet is gone', async () => {
     const m = await primeApi();
     await mountApp();

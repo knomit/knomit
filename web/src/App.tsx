@@ -1512,7 +1512,10 @@ export default function App() {
   // With no repositories the rail is forced open (not persisted): the draft is
   // the only row, and a row nobody can see would leave the reader with no
   // idea what they are creating or where it will appear.
-  const showRail = railShown(view, noRepos);
+  // The rail is forced open while the repository draft IS the page (no
+  // repository to show); over the fleet target the reader's preference holds,
+  // or a fleet-only instance at a phone width has no room for its pages.
+  const showRail = railShown(view, noRepos && displayed.kind === 'draft');
   const pinnedOrContext = displayed.kind === 'draft' ? null : displayed;
   const draftShownKind = displayed.kind === 'draft' ? displayed.draft : null;
   return (
