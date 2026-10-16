@@ -393,7 +393,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         <div style={dangerBox}>
           <DangerRow title="Leave the fleet" action={confirm !== 'leave' && (
             <button type="button" data-testid="fleet-leave" style={btn(false, 'danger')} onClick={() => setConfirm('leave')}>Leave…</button>
-          )} note="Pushes a left record, then removes the fleet repository and this instance's certificate here. Once the left record is on the fleet's main, the master revokes the certificate on its next round. Works offline; if the record cannot be pushed, the master's operator revokes it by hand." />
+          )} note="Pushes a left record, then removes the fleet repository and this instance's certificate here. Once the left record is on the fleet's main, the fleet's acting master revokes the certificate when it runs its round. Works offline; if the record cannot be pushed, the master's operator revokes it by hand." />
           {confirm === 'leave' && <LeaveConfirm onCancel={() => setConfirm(null)} onDone={done} />}
         </div>
       ),
@@ -621,7 +621,7 @@ function LeaveConfirm({ onCancel, onDone }: { onCancel: () => void; onDone: () =
   return (
     <div data-testid="fleet-leave-confirm" style={confirmBox}>
       <div style={lead}>
-        Leave the fleet? A left record is pushed once, then the fleet repository and this instance's certificate are removed here, whatever the push did. Once the left record is on the fleet's main, the master revokes the certificate on its next round; if the push fails, the master's operator has to revoke it by hand. To join again later, the master enrolls this instance again and sends a new bundle.
+        Leave the fleet? A left record is pushed once, then the fleet repository and this instance's certificate are removed here, whatever the push did. Once the left record is on the fleet's main, the fleet's acting master revokes the certificate when it runs its round; if the push fails, the master's operator has to revoke it by hand. To join again later, the master enrolls this instance again and sends a new bundle.
       </div>
       <Refusal err={err} testid="fleet-leave-error" />
       <Buttons testid="fleet-leave-submit" busy={busy} label="Leave fleet" busyLabel="Leaving…" variant="danger"

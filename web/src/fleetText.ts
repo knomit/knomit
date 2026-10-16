@@ -29,10 +29,15 @@ export const CHIP_TONES: Record<ChipTone, { color: string; background: string; b
 /** The members table's order: active, enrolled, left, revoked. */
 export const STATE_ORDER: Record<FleetMember['state'], number> = { active: 0, enrolled: 1, left: 2, revoked: 3 };
 
-/** The line under a member's state chip. */
-export function stateSubline(m: FleetMember): string {
-  if (m.state === 'left') return "the master revokes its certificate on its next round";
-  if (m.state === 'enrolled') return 'certificate on main; not joined yet';
+/** The line under a member's state chip. A left row says the master revokes
+ *  it only when the server says the leave duty will (revoke_due: the record
+ *  names the leaf main holds, not yet on the CRL); a rejoin's brief left row,
+ *  or a record that names no leaf, keeps its certificate until revoked.
+ *  ownJoinPending: the row is this instance's own, enrolled on main, while
+ *  its join's record is on its branch only (the landing's "Join pending"). */
+export function stateSubline(m: FleetMember, ownJoinPending = false): string {
+  if (m.state === 'left') return m.revoke_due ? 'the master revokes its certificate once it runs its round' : 'certificate valid until revoked';
+  if (m.state === 'enrolled') return ownJoinPending ? 'join pending: the record is on this instance’s branch only' : 'certificate on main; not joined yet';
   return '';
 }
 

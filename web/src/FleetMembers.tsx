@@ -111,7 +111,7 @@ export function FleetMembers({ fleet, landing, onDismissLanding, onChanged }: {
             <tbody>
               {rows.map(m => {
                 const mine = m.agent === fleet.agent_id;
-                const sub = m.state === 'revoked' ? '' : stateSubline(m);
+                const sub = m.state === 'revoked' ? '' : stateSubline(m, mine && fleet.record_state === 'pending');
                 const canRevoke = acts && !mine && m.state !== 'revoked';
                 return (
                   <Fragment key={m.path ?? m.agent}>
@@ -174,7 +174,9 @@ export function FleetMembers({ fleet, landing, onDismissLanding, onChanged }: {
       </div>
       <p style={policyFooter}>
         Member records on the fleet's main; revoked is read from the CRL on the same main.{' '}
-        {master ? "A member that left is revoked on this instance's next round." :"Only the fleet's master enrolls, revokes and merges."}{' '}
+        {fleet.revokes_left
+          ? "A member that leaves is revoked by this instance's next round once its left record is on main."
+          : master ? 'Pushes from a left member are accepted until it is revoked.' : "Only the fleet's master enrolls, revokes and merges."}{' '}
         Refreshes every 5 seconds.
       </p>
     </div>
