@@ -51,6 +51,35 @@ func TestParseMember_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestParseMember_LeafSerial: a left record's leaf_serial is read lowercase,
+// written back after capabilities, and absent from a record without one (and
+// from what an older writer rendered). Not an advertised field.
+func TestParseMember_LeafSerial(t *testing.T) {
+	m, err := ParseMember("agent: a\nstate: left\nkey: " + testSignerKey + "\nleaf_serial: 1F2A\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LeafSerial != "1f2a" {
+		t.Fatalf("leaf_serial %q", m.LeafSerial)
+	}
+	out := RenderMember(m)
+	if !strings.HasSuffix(out, "leaf_serial: 1f2a\n") {
+		t.Fatalf("rendered %q", out)
+	}
+	if back, _ := ParseMember(out); back.LeafSerial != "1f2a" {
+		t.Fatalf("round trip %q", back.LeafSerial)
+	}
+	m.LeafSerial = ""
+	if strings.Contains(RenderMember(m), "leaf_serial") {
+		t.Fatal("an empty leaf_serial is written")
+	}
+	o := m
+	o.LeafSerial = "1f2a"
+	if !m.SameAdvertised(o) {
+		t.Fatal("leaf_serial is not advertised")
+	}
+}
+
 // TestParseMember_Malformed: each missing or bad field is ErrMalformedMember.
 func TestParseMember_Malformed(t *testing.T) {
 	for name, body := range map[string]string{

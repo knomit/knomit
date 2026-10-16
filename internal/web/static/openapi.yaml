@@ -2162,9 +2162,14 @@ paths:
       description: |
         The membership state: `standalone` (no fleet), `registering` (a forge
         create whose publish of `main` is still pending, retried on the sync
-        loop) or `registered` (in a fleet; the own record is `pending` on the
-        fleet's main until the fleet's master merges it, then `active`,
-        `left` or `revoked` as that main says). `last_error` is the latest
+        loop) or `registered` (this instance has the fleet repository).
+        Whether the fleet ACCEPTED this instance is `record_state`, read from the record
+        on this instance's own agent branch and the one on the fleet's main,
+        nothing else: `pending` while the record is on the branch only (or
+        main holds it in another state, as a rejoin's `active` record while
+        main still says `left`), then main's state, `active`, `left` or
+        `revoked` (the CRL on that main lists the leaf); absent when neither
+        holds a record. `last_error` is the latest
         push or fetch failure, cleared on success. `master` says this
         instance is the fleet's master (its `<home>/fleet/root.key` is here
         and its `root.crt` is the root on the fleet's main), `hosting` where
@@ -2387,8 +2392,11 @@ paths:
         fails after it (`clone_failed`, 502), or any other refusal undoes
         all of it: no repository, no recorded uid, no installed material, no
         agent branch left on the origin, state standalone. 200 with state
-        `registered` and the installed root's `root_fingerprint`; the record
-        counts once the master admits it into `main`.
+        `registered` (this instance has the fleet repository), the installed
+        root's `root_fingerprint`, and `record_state: pending`: the record is
+        on this instance's own agent branch only (on a forge nothing has
+        judged it yet), and it is accepted once the master merges it into
+        `main` (see `record_state` on `GET /fleet`).
 
         The classification of the bundle's URL answers the SAME code on the
         join and on `POST /fleet/join:check`, for the same cause:
@@ -2494,10 +2502,21 @@ paths:
         (`pushed`, or `push_error`), then removes the fleet here whatever the
         push did, so it works offline: the fleet repository is dropped from
         every lens that reads it and deleted, the trust material is
-        uninstalled, the state is `standalone`. The master's revoke is the
-        authoritative half. A holder of the fleet's root key, master or not,
-        is refused (`is_master`, 409): decommission, or hand the root on and
-        stand down first. Refusals:
+        uninstalled, the state is `standalone`. Leave means revoke: the `left`
+        record names the certificate this instance leaves with
+        (`leaf_serial`), and once that record is on the fleet's main, the
+        round of the instance acting as master (main's master marker names
+        it, it holds the root key and is not `master_paused`) revokes that
+        certificate as `POST /fleet/revoke` does: once (a leaf already on the
+        CRL is left alone), and only while main's certificate for this id is
+        still that one (a left record merged after a manual revoke and a new
+        enroll revokes nothing). A later rejoin then needs only a new enroll.
+        A `left` record that was never pushed (`push_error`), or one written
+        before `leaf_serial` existed, is not revoked automatically: the
+        master's operator revokes by hand. A
+        holder of the fleet's root key, master or not, is refused
+        (`is_master`, 409): decommission, or hand the root on and stand down
+        first. Refusals:
         `not_registered` (409).
       operationId: leaveFleet
       responses:
@@ -2527,7 +2546,11 @@ paths:
         statement (`revocations/<serial>.txt`), committed on the master's
         agent branch and published (`published` / `publish_error`); the CRL
         is installed here at once (`install_error`) and copied to
-        `<home>/fleet`. Members install the newer CRL from `main`. Refusals:
+        `<home>/fleet`. Only the master installs it: no member installs the
+        newer CRL from `main` (not built). A member whose `left` record is
+        on main, naming the certificate main holds for it, is revoked the
+        same way by the master's own round, with no call, while main's master
+        marker names this instance and it is not paused. Refusals:
         `not_enrolled` (404), `already_revoked`, `own_id`, `not_master`,
         `not_registered` (409), `revoke_failed` (422).
       operationId: revokeFleetMember
@@ -2918,6 +2941,7 @@ paths:
                         addresses: { type: array, items: { type: string }, description: "As the record has it; never validated or used" }
                         git: { type: string, description: "Path suffix a peer appends to an address (/git), absent when not served" }
                         capabilities: { type: object, additionalProperties: { type: string }, description: "os, arch, version, read_only, as the record has them" }
+                        revoke_due: { type: boolean, description: "Present (true) on a left record whose certificate the acting master's leave duty revokes: the record names the leaf main holds for the id (leaf_serial) and the CRL does not list it yet" }
                         last_refusal:
                           type: object
                           description: |
@@ -4231,7 +4255,14 @@ components:
             mutations make, so true means they are served to this caller and
             false means every one of them is 403. Decided by the listener the
             request arrived on; nothing the client sends sets it.
-        record_state: { type: string, enum: [pending, active, left, revoked] }
+        record_state:
+          type: string
+          enum: [pending, active, left, revoked]
+          description: |
+            `pending`: this instance's record is on its own agent branch and
+            not on the fleet's main in that state (not accepted yet). Any
+            other value is the record on main (accepted), `revoked` derived
+            from main's CRL. Absent: no record on either.
         since: { type: string, format: date-time }
         registered_at: { type: string, format: date-time }
         last_attempt: { type: string, format: date-time }
@@ -4346,6 +4377,9 @@ components:
           type: string
           enum: [not_hosting]
           description: "On the master (master true): why it does no master work now (no merges, enroll, revoke, host-record write). not_hosting: its copy follows another instance of the fleet, which hosts it. Absent otherwise."
+        revokes_left:
+          type: boolean
+          description: "true when THIS instance's rounds revoke the members that leave (the leave duty): it is the master (master true), not master_paused, and the fleet's main holds the PKI with a CRL. Absent otherwise."
         acting_master:
           type: string
           description: "The fleet's acting master: the agent id the master marker on main (artifacts/fleet/master) names. Written at create and by Host here, deleted by the master's stand-down; absent when the fleet has no acting master (or its master has not written the marker yet: a fleet created before it gets it from the root holder's next round). A marker for readers: who holds the root key decides master work (master)."

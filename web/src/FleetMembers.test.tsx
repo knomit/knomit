@@ -134,11 +134,62 @@ describe('FleetMembers', () => {
     const me: FleetStatus = { ...master, agent_id: '5be2d8f4a901', master: false, hosting: 'https://kb-01.acme.example:7443/git/fleet', record_state: 'pending', sync_interval_seconds: 300 };
     render(<FleetMembers fleet={me} landing={{ kind: 'joined', rootFingerprint: 'SHA256:root' }} onDismissLanding={() => {}} onChanged={() => {}} />);
     expect(screen.getByTestId('fleet-landing')).toHaveTextContent("this page shows it after this instance's next sync (every 5 min)");
+    // The join's one rule: the record on this instance's branch only is
+    // pending, never "Joined" (user ruling 2026-10-16).
+    expect(screen.getByTestId('fleet-landing')).toHaveTextContent('Join pending');
+    expect(screen.getByTestId('fleet-landing')).toHaveTextContent('the master has not accepted it yet');
+    expect(screen.getByTestId('fleet-landing')).not.toHaveTextContent('Joined the fleet');
+    expect(screen.getByTestId('fleet-landing').getAttribute('data-tone')).toBe('ask');
     const row = (await screen.findAllByTestId('fleet-member-row')).find(r => r.getAttribute('data-agent') === '5be2d8f4a901') as HTMLElement;
     const [instance, state, addresses] = Array.from(row.querySelectorAll('td'));
     expect(instance).toHaveTextContent(/^5be2d8f4a901this instance$/);
-    expect(state).toHaveTextContent('not joined yet');
+    // #532 review N5: under "Join pending" the joiner's own enrolled row says
+    // the same thing, not "not joined yet".
+    // SABOTAGE: drop ownJoinPending -> "not joined yet" -> red.
+    expect(state).toHaveTextContent('join pending: the record is on this instance’s branch only');
+    expect(state).not.toHaveTextContent('not joined yet');
     expect(addresses.textContent).toBe('');
+  });
+
+  // The same landing once main holds the record (record_state active): the
+  // join is accepted, and the card says so; a left row the leave duty will
+  // revoke (revoke_due) says the master revokes it; a left row it will not
+  // (a rejoin's brief left row, a record naming no leaf) does not claim it
+  // (#532 review N3). A member's footer never says this instance revokes.
+  // SABOTAGE: headline 'Joined the fleet' whatever record_state says -> the
+  // pending case above is red; ignore revoke_due in stateSubline -> red.
+  it('the joined landing says accepted once the record is on main, and a left row says the master revokes it only when due', async () => {
+    stubFleetFetch({ 'GET /api/v1/fleet/members': { body: { members: [
+      { agent: '5be2d8f4a901', state: 'active' }, { agent: 'c0ffee000001', state: 'left', revoke_due: true },
+      { agent: 'c0ffee000002', state: 'left' },
+    ] } } });
+    const me: FleetStatus = { ...master, agent_id: '5be2d8f4a901', master: false, hosting: 'https://kb-01.acme.example:7443/git/fleet', record_state: 'active', sync_interval_seconds: 300 };
+    render(<FleetMembers fleet={me} landing={{ kind: 'joined', rootFingerprint: 'SHA256:root' }} onDismissLanding={() => {}} onChanged={() => {}} />);
+    const card = screen.getByTestId('fleet-landing');
+    expect(card).toHaveTextContent('Joined the fleet');
+    expect(card).toHaveTextContent("The master accepted this instance: its record is on the fleet's main.");
+    expect(card).not.toHaveTextContent('pending');
+    expect(card.getAttribute('data-tone')).toBe('good');
+    const row = (await screen.findAllByTestId('fleet-member-row')).find(r => r.getAttribute('data-agent') === 'c0ffee000001') as HTMLElement;
+    expect(row).toHaveTextContent('the master revokes its certificate once it runs its round');
+    const notDue = (await screen.findAllByTestId('fleet-member-row')).find(r => r.getAttribute('data-agent') === 'c0ffee000002') as HTMLElement;
+    expect(notDue).toHaveTextContent('certificate valid until revoked');
+    expect(notDue).not.toHaveTextContent('the master revokes');
+    expect(screen.getByTestId('fleet-members')).not.toHaveTextContent("is revoked by this instance's next round");
+  });
+
+  // #532 review N3: the master's footer says its next round revokes a leaver
+  // only when the server says its rounds do (revokes_left: acting master, not
+  // paused, PKI on main); a paused master's footer does not.
+  // SABOTAGE: key the footer on `master` instead of revokes_left -> red.
+  it("the master's footer says it revokes leavers only while its rounds do", async () => {
+    stubFleetFetch({ 'GET /api/v1/fleet/members': { body: { members: [] } } });
+    const { unmount } = render(<FleetMembers fleet={{ ...master, revokes_left: true }} landing={null} onDismissLanding={() => {}} onChanged={() => {}} />);
+    expect(screen.getByTestId('fleet-members')).toHaveTextContent("A member that leaves is revoked by this instance's next round once its left record is on main.");
+    unmount();
+    render(<FleetMembers fleet={{ ...master, master_paused: 'not_hosting' }} landing={null} onDismissLanding={() => {}} onChanged={() => {}} />);
+    expect(screen.getByTestId('fleet-members')).not.toHaveTextContent('is revoked by this instance');
+    expect(screen.getByTestId('fleet-members')).toHaveTextContent('Pushes from a left member are accepted until it is revoked.');
   });
 
   it('shows a refused enroll verbatim with its code, and offers the revoke for `enrolled`', async () => {

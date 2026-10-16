@@ -110,8 +110,12 @@ type FleetStatus struct {
 	// whose master has not written it yet.
 	MasterPaused string `json:"master_paused,omitempty"`
 	ActingMaster string `json:"acting_master,omitempty"`
-	Hosting      string `json:"hosting,omitempty"`
-	RootDir      string `json:"root_dir"`
+	// RevokesLeft says THIS instance's rounds revoke the members that leave
+	// (the leave duty): it acts as the fleet's master (Master, and not
+	// MasterPaused) and the fleet's main holds its PKI with a CRL.
+	RevokesLeft bool   `json:"revokes_left,omitempty"`
+	Hosting     string `json:"hosting,omitempty"`
+	RootDir     string `json:"root_dir"`
 
 	// FleetURLs is the fleet repository URL(s) members use: on the hub, one
 	// https://<address>/git/<repo> per https external address; on any other
@@ -308,6 +312,11 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	if st.RootHeld {
 		st.MasterPaused = m.fleetMasterPause(ri)
 	}
+	if st.Master && st.MasterPaused == "" {
+		if f, ferr := m.fleetAtMain(ri); ferr == nil && f.PKI != nil && f.PKI.CRL != nil {
+			st.RevokesLeft = true
+		}
+	}
 	if named, merr := m.fleetMasterAtMain(ri); merr == nil {
 		st.ActingMaster = named
 	} else {
@@ -344,21 +353,57 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		}
 	}
 	st.LastErrorFleetMoved = st.FollowsHost != nil && !*st.FollowsHost && strings.Contains(row.LastError, FleetPushRefusalHasOrigin)
-	st.RecordState = "pending"
-	members, lerr := m.fleetMembersAtMain(ri)
-	if lerr == nil {
-		for _, mem := range members {
+	if f, lerr := m.fleetAtMain(ri); lerr == nil {
+		var onMain bool
+		var written store.FleetMember
+		for _, mem := range f.Members {
 			if mem.Agent == row.AgentID {
-				st.RecordState = mem.State
-				// The RECORD differs, not "the branch is ahead": the sync
-				// loop merges main into the agent branch, so the branch is
-				// routinely ahead by merge commits with nothing to accept.
-				st.RecordPendingUpdate = onHead && mem.Blob != head.Blob
+				onMain, written = true, mem
 				break
 			}
 		}
+		st.RecordState = recordStateOf(head, onHead, written, onMain, f.PKI.Revoked(row.AgentID))
+		// The RECORD differs, not "the branch is ahead": the sync loop
+		// merges main into the agent branch, so the branch is routinely
+		// ahead by merge commits with nothing to accept.
+		st.RecordPendingUpdate = onHead && onMain && st.RecordState != RecordPending && written.Blob != head.Blob
+	} else if onHead {
+		// main cannot be read: as far as this copy can tell, the record is
+		// on its branch only.
+		st.RecordState = RecordPending
 	}
 	return st, nil
+}
+
+// RecordPending is FleetStatus.RecordState for a candidate record: on this
+// instance's own agent branch, and not (in that state) on the fleet's main.
+const RecordPending = "pending"
+
+// recordStateOf is the ONE rule for FleetStatus.RecordState (user ruling
+// 2026-10-16: "our candidate record in our branch means pending. our record
+// in main means accepted"). It reads the record on this instance's agent
+// branch (branch, onBranch) and the record on the fleet's main as written
+// (main, onMain), and nothing else:
+//
+//   - on the branch, and main holds none or holds it in another state (a
+//     rejoin's active record while main still says left): "pending", the
+//     candidate is not accepted yet;
+//   - on main in the branch's state (or on main only): accepted, and the
+//     state is main's: active, left, or revoked when main's CRL lists the
+//     leaf at main's certificate path (revokedAtMain; M6: derived, never
+//     written). A newer version of an accepted record that differs only in
+//     its advertised fields is record_pending_update, not pending;
+//   - on neither: "" (no record; the field is omitted).
+func recordStateOf(branch store.FleetMember, onBranch bool, main store.FleetMember, onMain, revokedAtMain bool) string {
+	switch {
+	case onBranch && (!onMain || main.State != branch.State):
+		return RecordPending
+	case !onMain:
+		return ""
+	case revokedAtMain:
+		return fact.MemberRevoked
+	}
+	return main.State
 }
 
 // interruptedMove is FleetStatus.InterruptedMove for the master whose forge
@@ -394,10 +439,13 @@ const maxFleetWalk = 2000
 // record: State MemberEnrolled, or revoked when the CRL lists the leaf; Path
 // the leaf's). Since is the committer time of the commit that brought the
 // row's current version (the record, else the leaf) onto main; nil when that
-// is older than the maxFleetWalk commits walked.
+// is older than the maxFleetWalk commits walked. RevokeDue: the record is a
+// `left` record whose leaf the master's leave duty revokes (leftLeafDue),
+// which it does once an instance that acts as the master runs its round.
 type FleetMemberRow struct {
 	store.FleetMember
-	Since *time.Time
+	Since     *time.Time
+	RevokeDue bool
 }
 
 // FleetMembers returns the rows of GET /fleet/members at the fleet
@@ -412,11 +460,15 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 	if err != nil {
 		return nil, err
 	}
+	due := map[string]bool{}
+	for _, mem := range f.Members {
+		due[mem.Path] = leftLeafDue(f, mem) != nil
+	}
 	deriveRevoked(f)
 	rows := make([]FleetMemberRow, 0, len(f.Members))
 	recorded := map[string]bool{}
 	for _, mem := range f.Members {
-		rows = append(rows, FleetMemberRow{FleetMember: mem})
+		rows = append(rows, FleetMemberRow{FleetMember: mem, RevokeDue: due[mem.Path]})
 		recorded[mem.Agent] = true
 	}
 	for _, id := range f.PKI.CertIDs() {
@@ -634,6 +686,13 @@ func (m *Manager) guardFleetRemoval(name string) error {
 func (m *Manager) writeOwnRecord(ctx context.Context, ri *RepoInstance, state string) error {
 	rec := m.advertised()
 	rec.State = state
+	if state == fact.MemberLeft {
+		// The leaf this instance leaves with: the only one the master's leave
+		// duty revokes for this record (a stale left record never names a
+		// later re-enroll's leaf). None installed: the record names none and
+		// the master's operator revokes by hand.
+		rec.LeafSerial = m.installedLeafSerial()
+	}
 	return m.writeRecord(ctx, ri, rec, "fleet: "+rec.Agent+" is "+state, "")
 }
 

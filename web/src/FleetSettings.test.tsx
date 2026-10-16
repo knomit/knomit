@@ -366,14 +366,23 @@ describe('FleetSettings', () => {
     expect(calls.map(c => c.route)).toContain('DELETE /api/v1/fleet/root');
   });
 
-  it('Leave posts /fleet/leave; its confirm says a rejoin needs the old certificate revoked', async () => {
+  // Leave means revoke (user ruling 2026-10-16): the copy says what happens,
+  // the master's round revokes once the left record is on main, and a rejoin
+  // needs only a new enroll.
+  // SABOTAGE: restore "The master revokes the certificate." as the row's
+  // note -> red.
+  it('Leave posts /fleet/leave; its copy says the master revokes once the left record is on main', async () => {
     const { calls } = stubFleetFetch({
       'GET /api/v1/repos/fleet/origin': ORIGIN_CERT,
       'POST /api/v1/fleet/leave': { body: { state: 'standalone', agent_id: '5be2d8f4a901', pushed: true } },
     });
     const onChanged = mount(member);
+    expect(screen.getByTestId('fleet-settings')).toHaveTextContent("Once the left record is on the fleet's main, the fleet's acting master revokes the certificate when it runs its round.");
+    expect(screen.getByTestId('fleet-settings')).toHaveTextContent('if the record cannot be pushed, the master\'s operator revokes it by hand');
     fireEvent.click(screen.getByTestId('fleet-leave'));
-    expect(screen.getByTestId('fleet-leave-confirm')).toHaveTextContent('the master revokes the old certificate, enrolls this instance again and sends a new bundle');
+    expect(screen.getByTestId('fleet-leave-confirm')).toHaveTextContent("Once the left record is on the fleet's main, the fleet's acting master revokes the certificate when it runs its round");
+    expect(screen.getByTestId('fleet-leave-confirm')).toHaveTextContent('To join again later, the master enrolls this instance again and sends a new bundle.');
+    expect(screen.getByTestId('fleet-leave-confirm')).not.toHaveTextContent('the master revokes the old certificate, enrolls');
     expect(screen.getByTestId('fleet-leave-confirm')).not.toHaveTextContent('new agent id');
     fireEvent.click(screen.getByTestId('fleet-leave-submit'));
     await waitFor(() => expect(calls.map(c => c.route)).toContain('POST /api/v1/fleet/leave'));

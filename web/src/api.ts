@@ -2110,6 +2110,9 @@ export interface FleetStatus {
   // a member, a candidate while main names no master).
   root_held?: boolean;
   acting_master?: string;
+  // revokes_left: THIS instance's rounds revoke the members that leave: it
+  // acts as the master (master, not master_paused) and main holds the PKI.
+  revokes_left?: boolean;
   sync_interval_seconds?: number;
   // F10: what this instance offers to host a fleet (listener: its mTLS
   // listener's bind, '' when off, sent to a local caller only; listener_on:
@@ -2182,6 +2185,9 @@ export interface FleetMember {
   git?: string;
   capabilities?: Record<string, string>;
   last_refusal?: FleetRefusalRow;
+  // revoke_due: a left record whose leaf the master's leave duty revokes (it
+  // names the certificate main still holds for it, not yet on the CRL).
+  revoke_due?: boolean;
 }
 
 export interface FleetRefusalRow {

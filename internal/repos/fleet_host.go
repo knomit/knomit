@@ -78,7 +78,8 @@ func (m *Manager) writeFleetHost(ctx context.Context, ri *RepoInstance, urls []s
 
 // fleetHostRound is the hub's duty in each round of its local reconcile,
 // before main follows the agent branch (runLocalReconcileLoop: only a copy
-// with NO origin runs it, so only the hub): re-assert the host record with
+// with NO origin runs it, so only the hub): revoke the members that left
+// (fleetLeaveRound), and re-assert the host record with
 // the hub's URLs as the current config gives them (hubFleetURLs). It writes
 // nothing when the record is current, so a round costs one read; it repairs
 // a detach whose record write failed (HostFleetHere answers the detach as
@@ -106,6 +107,9 @@ func (ri *RepoInstance) fleetHostRound(ctx context.Context, svc *store.Service) 
 	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil && ctx.Err() == nil {
 		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: the host record could not be re-asserted; the next round retries")
 	}
+	// The leave duty (fleet_leave.go; it checks actsAsFleetMaster itself):
+	// main follows its revocations in this same round.
+	ri.fleetLeaveRound(ctx, svc)
 }
 
 // credentialFreeAll is credentialFree of each of urls, in order.

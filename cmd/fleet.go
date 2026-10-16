@@ -89,7 +89,14 @@ func printFleetStatus(out io.Writer, st fleetStatusJSON) {
 	fmt.Fprintf(out, "agent:  %s\n", st.AgentID)
 	if st.FleetRepo != "" {
 		fmt.Fprintf(out, "fleet:  %s (hosting: %s)\n", st.FleetRepo, st.Hosting)
-		fmt.Fprintf(out, "record: %s\n", st.RecordState)
+		switch st.RecordState {
+		case "":
+			fmt.Fprintln(out, "record: none")
+		case "pending":
+			fmt.Fprintln(out, "record: pending (on this instance's branch only; accepted once the fleet's master merges it into main)")
+		default:
+			fmt.Fprintf(out, "record: %s (on the fleet's main)\n", st.RecordState)
+		}
 		fmt.Fprintf(out, "fleet master: %t (fleet root directory: %s)\n", st.Master, st.RootDir)
 	}
 	if len(st.Host.ExternalAddresses) > 0 {
