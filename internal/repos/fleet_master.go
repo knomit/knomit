@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -456,6 +457,42 @@ func (p *fleetPeers) publish(ctx context.Context, svc *store.Service, own string
 		}
 	}
 	return res, err
+}
+
+// noteOwnJudge records a refusal of this instance's own commits by the judge
+// that runs before the fleet's main moves (store.ErrOwnCommitRefused: main
+// was NOT moved) as the fleet's last error, so GET /fleet last_error shows it
+// rather than a log line only; and, given nil (main moved), clears such a
+// recorded refusal. Any other outcome is not its to record: the callers that
+// own those errors record them.
+func (m *Manager) noteOwnJudge(err error) {
+	db := m.ControlDB()
+	if db == nil {
+		return
+	}
+	if errors.Is(err, store.ErrOwnCommitRefused) {
+		if rerr := recordFleetAttempt(db, err, time.Now()); rerr != nil {
+			log.Warn().Err(rerr).Msg("fleet: recording the judge's refusal of this instance's own commit failed")
+		}
+		return
+	}
+	if err != nil {
+		return
+	}
+	row, rerr := readFleetRow(db)
+	if rerr == nil && strings.Contains(row.LastError, store.OwnCommitRefusedText) {
+		_ = recordFleetAttempt(db, nil, time.Now())
+	}
+}
+
+// fleetMainAdvanced is the local reconcile's after hook (the hub's main
+// following its agent branch): on the fleet repository it records the
+// advance's outcome with noteOwnJudge. Every other repository: nothing.
+func (ri *RepoInstance) fleetMainAdvanced(err error) {
+	if ri == nil || !ri.fleetDoor || !ri.IsFleet() {
+		return
+	}
+	ri.env.m.noteOwnJudge(err)
 }
 
 // FleetPushRefusal is why ri accepts no push over /git, or "": a copy of the

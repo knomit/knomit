@@ -397,9 +397,12 @@ func (m *Manager) publishMarkerChange(ctx context.Context, ri *RepoInstance, con
 			perr = err
 			return
 		}
-		_, perr = svc.Remote().PublishUpstreamChange(ctx, fact.FleetMasterPath, content, message, auth)
+		_, perr = svc.Remote().PublishUpstreamChange(ctx, ri.AgentBranch(), fact.FleetMasterPath, content, message, auth)
 	}); err != nil {
 		return err
+	}
+	if perr != nil {
+		m.noteOwnJudge(perr)
 	}
 	return perr
 }

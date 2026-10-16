@@ -257,6 +257,9 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine, addre
 	if err := refuseEnrolledID(f.PKI, agentID, pub); err != nil {
 		return FleetEnrollment{}, err
 	}
+	if err := m.refuseRenewalWithoutRecord(ri, f.PKI, agentID); err != nil {
+		return FleetEnrollment{}, err
+	}
 	email, err := pki.AgentEmail(agentID)
 	if err != nil {
 		return FleetEnrollment{}, err
@@ -270,7 +273,7 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine, addre
 	if err != nil {
 		return FleetEnrollment{}, err
 	}
-	is, err := pki.IssueLeaf(root, pub, email, fleetLeafValidity, time.Now())
+	is, err := pki.IssueLeaf(root, pub, email, fleetLeafValidity, m.renewalIssueTime(ri, agentID))
 	if err != nil {
 		return FleetEnrollment{}, err
 	}
@@ -306,6 +309,75 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine, addre
 	}
 	log.Info().Str("agent", agentID).Str("serial", rec.Serial).Msg("fleet: member enrolled")
 	return out, nil
+}
+
+// refuseRenewalWithoutRecord refuses (409 never_joined) an enroll that would
+// REPLACE the leaf main holds for agentID while the master's agent branch
+// holds no member record for that id (exactly one is required): an id that
+// was enrolled and revoked but never joined. The fleet ontology's
+// replace_when: leaf-renewal admits a replaced leaf only for the one member
+// record of its id, and the judge holds the master's own commits to it
+// before they reach main (judgeOwnRange), so writing this leaf would leave a
+// commit on the master's branch that main can never take. The §1.5 rejoin,
+// of an id whose record is on the branch, is unaffected.
+func (m *Manager) refuseRenewalWithoutRecord(ri *RepoInstance, onMain *store.FleetPKI, agentID string) error {
+	if leaf, err := onMain.Cert(agentID); err != nil || leaf == nil {
+		return err
+	}
+	n := 0
+	var rerr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			rerr = errors.New("fleet repository is not open")
+			return
+		}
+		f, err := svc.FleetAt(ri.AgentBranch())
+		if err != nil {
+			rerr = err
+			return
+		}
+		for _, mem := range f.Members {
+			if mem.Agent == agentID {
+				n++
+			}
+		}
+	}); err != nil {
+		return err
+	}
+	if rerr != nil {
+		return rerr
+	}
+	if n != 1 {
+		return fleetErr(http.StatusConflict, "never_joined", "agent "+agentID+" has a revoked certificate but no member record: its certificate can be replaced only for a member that joined (a rejoin); enroll it under a new agent id")
+	}
+	return nil
+}
+
+// renewalIssueTime is the issue time of a leaf for agentID: now, or, when the
+// master's agent branch already holds a leaf for that id that the new one
+// replaces, late enough that the new leaf's NotBefore is strictly after the
+// old one's (pki.IssueTimeAfter). The judge refuses the master's own commit
+// otherwise (artifact-replace, replace_when: leaf-renewal) and main would
+// not move: a revoke and a re-enroll within one second issue two leaves with
+// the same NotBefore.
+func (m *Manager) renewalIssueTime(ri *RepoInstance, agentID string) time.Time {
+	now := time.Now()
+	var old *x509.Certificate
+	_ = ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		if f, err := svc.FleetAt(ri.AgentBranch()); err == nil && f.PKI != nil {
+			old, _ = f.PKI.Cert(agentID)
+		}
+	})
+	if old == nil {
+		return now
+	}
+	if after := pki.IssueTimeAfter(old.NotBefore); after.After(now) {
+		return after
+	}
+	return now
 }
 
 // fleetURLForBundle is the fleet repository URL an enroll's bundle carries:

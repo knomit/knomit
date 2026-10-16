@@ -30,6 +30,9 @@ type RangeInput struct {
 	FleetDir  string // the fleet repository checkout; untouched when verification is off
 	FleetRev  string // the fleet revision holding the accepted records ("" = "HEAD")
 	FleetRoot string // the fleet's fact root ("" = "kb")
+	// KBRoot is the judged knowledge base's fact root, where RuleValidation
+	// finds its facts ("" = FleetRoot, then "kb").
+	KBRoot string
 }
 
 // RangeVerdict is the acceptance gate's answer for one candidate.
@@ -39,13 +42,16 @@ type RangeVerdict struct {
 	Refused []Refusal `json:"refused"`
 }
 
-// ExitCode is the gate's contract for a CI job: 0 mergeable (verification
-// off, a clean range, or failures in log mode, which are reported only), 1
-// blocked (failures in enforce). "Could not run" (2) is an error from
+// ExitCode is the gate's contract for a CI job: 0 mergeable (a clean range,
+// or signature failures in log mode or with verification off, which are
+// reported only), 1 blocked (failures in enforce, or ANY RuleValidation
+// refusal, which no mode waives). "Could not run" (2) is an error from
 // CheckRange, never a verdict.
 func (v RangeVerdict) ExitCode() int {
-	if v.Mode == VerifyEnforce && len(v.Refused) > 0 {
-		return 1
+	for _, r := range v.Refused {
+		if v.Mode == VerifyEnforce || r.Rule == RuleValidation {
+			return 1
+		}
 	}
 	return 0
 }
@@ -61,8 +67,11 @@ func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
 // knowledge base's main (the merge job, via `knomit verify ci`), over plain git
 // checkouts so it needs no knomit instance.
 //
-//  1. verify_signatures is read at Main's tip FIRST. Off or absent: the verdict
-//     is off and nothing else runs; the fleet is never touched.
+//  0. Every commit in Candidate ∖ Main is checked against the ontology's
+//     validations at Main's tip (RuleValidation: each fact it adds or
+//     changes), in EVERY mode, the fleet untouched; a refusal blocks.
+//  1. verify_signatures is read at Main's tip. Off or absent: the verdict is
+//     off and nothing else runs; the fleet is never touched.
 //  2. The fleet's member records and certificate artifacts (the files its
 //     ontology declares pki: root, crl and leaf) are loaded from the ONE fleet
 //     revision (malformed records skipped and logged). A missing or unreadable
@@ -92,17 +101,45 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 		return RangeVerdict{}, fmt.Errorf("verify: verify_signatures at %s has an unknown value", in.Main)
 	}
 	out := RangeVerdict{Mode: settings.Mode, Refused: []Refusal{}}
-	if settings.Mode == VerifyOff {
-		return out, nil
-	}
-	// The artifact rules (R7) are read from the SAME ontology, at main's tip.
-	// One that does not parse cannot say which rules hold: the gate could not
+	// The ontology at main's tip says which validations hold (RuleValidation,
+	// every mode) and, with verification on, the artifact rules (R7). One
+	// that does not parse cannot say which rules hold: the gate could not
 	// run, never a pass.
 	var ont *fact.Ontology
 	if raw != nil {
 		if ont, err = fact.ParseOntology(raw); err != nil {
 			return RangeVerdict{}, fmt.Errorf("verify: ontology at %s: %w", in.Main, err)
 		}
+	}
+	candC, err := resolveCommit(kb, in.Candidate)
+	if err != nil {
+		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
+	}
+	onMain := map[plumbing.Hash]bool{}
+	if err := walkHistory(kb.Storer, mainC.Hash, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
+		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
+	}
+	var commits []*object.Commit
+	if err := walkHistory(kb.Storer, candC.Hash, onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
+	}
+	// RuleValidation first, in EVERY mode and every repository: a fact a
+	// commit adds or changes must keep the ontology's validations, as the MCP
+	// write path requires. A commit refused here is not judged further.
+	kbRoot := in.KBRoot
+	if kbRoot == "" {
+		kbRoot = in.FleetRoot
+	}
+	invalid := map[plumbing.Hash]bool{}
+	for _, c := range commits {
+		if r, ok := commitFactsValid(c, ont, kbRoot); !ok {
+			out.Refused = append(out.Refused, r)
+			invalid[c.Hash] = true
+		}
+	}
+	if settings.Mode == VerifyOff {
+		// Checked counts the commits the signature rules judged: none.
+		return out, nil
 	}
 
 	if in.FleetDir == "" {
@@ -125,26 +162,14 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 		}
 	}
 	gate := newJudge(fleet, selfRoot, ont, in.FleetRoot)
-
-	candC, err := resolveCommit(kb, in.Candidate)
-	if err != nil {
-		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
-	}
-	onMain := map[plumbing.Hash]bool{}
-	if err := walkHistory(kb.Storer, mainC.Hash, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
-		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
-	}
-	if onMain[candC.Hash] {
-		return out, nil
-	}
-	err = walkHistory(kb.Storer, candC.Hash, onMain, func(c *object.Commit) {
+	for _, c := range commits {
 		out.Checked++
+		if invalid[c.Hash] {
+			continue
+		}
 		if r, ok := gate.judgeCommit(c); !ok {
 			out.Refused = append(out.Refused, r)
 		}
-	})
-	if err != nil {
-		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
 	return out, nil
 }
@@ -192,6 +217,24 @@ type judge struct {
 	// host-record rule (hostRecord) runs only there. CheckRange judges any
 	// range, the master's own commits included, so it is false there.
 	entry bool
+	// ownOntology lets the record-owner rule admit a change of the
+	// repository's ontology file (fact.OntologyPathsNewestFirst). Only
+	// judgeOwnRange sets it, for this instance's OWN commits: the fleet
+	// ontology is written by the instance that creates the fleet and
+	// refreshed by its master (refreshFleetOntology), never by a member
+	// (a pushed branch never changes a private path: privatePathClosure,
+	// guardPrivate).
+	ownOntology bool
+}
+
+// isOntologyPath reports whether p is one of the ontology file's paths.
+func isOntologyPath(p string) bool {
+	for _, o := range fact.OntologyPathsNewestFirst() {
+		if p == o {
+			return true
+		}
+	}
+	return false
 }
 
 // newJudge builds the judge for one fleet revision. selfRoot is the judged
@@ -648,7 +691,7 @@ func (j judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
 		}
 		for _, ch := range changes {
 			for _, name := range []string{ch.From.Name, ch.To.Name} {
-				if name != "" && !strings.HasPrefix(name, dir) && !j.declaredArtifact(name) {
+				if name != "" && !strings.HasPrefix(name, dir) && !j.declaredArtifact(name) && !(j.ownOntology && isOntologyPath(name)) {
 					return refuse(fmt.Sprintf("agent %q changes %s: a member writes only under %s (and declared artifact paths)", id, name, dir))
 				}
 			}

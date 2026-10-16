@@ -118,6 +118,13 @@ func (s *Service) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstrea
 			Msg("AdvanceLocalUpstream: upstream is not an ancestor of the agent branch; skipping (never resets)")
 		return MainReconcileResult{Mode: ModeNoop}, nil
 	}
+	// The fleet repository's own commits are judged before its main moves
+	// (judgeOwnRange; every other repository returns at once). A refusal
+	// leaves main where it is.
+	own, _ := rh.ownAgentID(agentBranch)
+	if err := rh.judgeOwnRange(upstream, upRef.Hash(), agentRef.Hash(), own, agentRef.Hash()); err != nil {
+		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %w", err)
+	}
 	if _, err := rh.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: ensure %s: %w", upstream, err)
 	}

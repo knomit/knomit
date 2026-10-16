@@ -65,8 +65,12 @@ type FleetStatus struct {
 	// this instance's certificate (until Leave revokes it by itself) and
 	// enroll it again, then join again.
 	// It is the dead-master fallback's residue (an old master's master write
-	// the new host's main lacks). Read from the recorded error only, as
-	// LastErrorRefused is.
+	// the new host's main lacks). It is also set for a commit that adds or
+	// changes a fact failing the ontology's validations
+	// (store.CommitRefusedByValidation), and on the master itself when the
+	// judge of its OWN commits held its main back (store.OwnCommitRefusedText:
+	// main was not moved; the commit must go from its agent branch). Read
+	// from the recorded error only, as LastErrorRefused is.
 	LastErrorCommitRefused bool `json:"last_error_commit_refused,omitempty"`
 	// LastErrorStoodDown: LastError is the fleet's old host refusing this
 	// copy's push because its master stood down (FleetPushRefusalStoodDown):
@@ -260,7 +264,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
 		LastErrorRefused:       strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
-		LastErrorCommitRefused: strings.Contains(row.LastError, store.CommitRefusedByJudge),
+		LastErrorCommitRefused: strings.Contains(row.LastError, store.CommitRefusedByJudge) || strings.Contains(row.LastError, store.CommitRefusedByValidation),
 		LastErrorStoodDown:     strings.Contains(row.LastError, FleetPushRefusalStoodDown),
 		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
 			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},

@@ -2320,7 +2320,9 @@ paths:
         Refusals: `invalid_agent_id`, `invalid_key`, the address codes above
         (422); `own_id`, `not_registered`, `not_master`, `enrolled` (the id
         has an unrevoked leaf on `main`: revoke it first), `rekey_unsupported`
-        (the id has a leaf for another key) (409).
+        (the id has a leaf for another key), `never_joined` (the id has a
+        revoked leaf but no member record: only a member that joined can
+        rejoin, so enroll it under a new agent id) (409).
       operationId: enrollFleetMember
       requestBody:
         required: true
@@ -2349,7 +2351,7 @@ paths:
                   published: { type: boolean }
                   publish_error: { type: string }
         "403": { description: Not the local authenticated listener }
-        "409": { description: "not_registered, not_master, own_id, enrolled or rekey_unsupported" }
+        "409": { description: "not_registered, not_master, own_id, enrolled, rekey_unsupported or never_joined" }
         "422":
           description: "invalid_agent_id, invalid_key, addresses_required, address_required, address_unknown, address_not_https or address_not_applicable; address_required and address_unknown carry choices"
           content:

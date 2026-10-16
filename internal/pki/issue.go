@@ -135,6 +135,15 @@ type Issuance struct {
 	Line []byte
 }
 
+// IssueTimeAfter is the earliest issue time (IssueLeaf's now) whose leaf's
+// NotBefore is strictly later than prev, at the one-second precision a
+// certificate's times have: a leaf that REPLACES another must start after it
+// (the fleet ontology's replace_when: leaf-renewal), even when both are
+// issued within one second.
+func IssueTimeAfter(prev time.Time) time.Time {
+	return prev.Truncate(time.Second).Add(time.Second + clockSkew)
+}
+
 // newSerial is the serial source. A variable only so a test can pin it to
 // compare two issuances field by field; production never reassigns it.
 var newSerial = randomSerial

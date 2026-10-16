@@ -390,14 +390,54 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 // a commit of its branch from a failure a retry can cure.
 const CommitRefusedByJudge = "refused by verify_signatures=enforce"
 
+// CommitRefusedByValidation is the part of a refusal text that says a commit
+// adds or changes a fact that fails the ontology's validations
+// (RuleValidation): "knomit: commit <hash> refused by the ontology's
+// validations: validation: <reason>". Like CommitRefusedByJudge, a retry
+// cannot cure it: the commit must go.
+const CommitRefusedByValidation = "refused by the ontology's validations"
+
+// incomingValid is RuleValidation over the commits entering this repository
+// (judgeIncoming's first pass), with the ontology at upstream's tip, in every
+// verify_signatures mode and in every repository. Returns the refusal text,
+// or "".
+func (rh *repoHandler) incomingValid(ctx context.Context, upstream string, commits []*object.Commit) string {
+	if len(commits) == 0 {
+		return ""
+	}
+	h, err := rh.resolveRef(ctx, upstream)
+	if err != nil {
+		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
+	}
+	c, err := object.GetCommit(rh.gits, h)
+	if err != nil {
+		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
+	}
+	ont, err := ontologyOf(c)
+	if err != nil {
+		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
+	}
+	for _, c := range commits {
+		if r, ok := commitFactsValid(c, ont, rh.ontologyRoot()); !ok {
+			return fmt.Sprintf("knomit: commit %s %s: %s: %s", c.Hash, CommitRefusedByValidation, r.Rule, r.Reason)
+		}
+	}
+	return ""
+}
+
 // judgeIncoming is the judge where a branch ENTERS this repository, shared by
 // the two entries: receive-pack (a push to a knomit host, verify) and the
-// fleet master's fetch (AdmitPeerBranch, a forge). It reads verify_signatures
-// at upstream's tip, loads the fleet from fleet, and judges every commit with
-// judgeCommit; signer, when not nil, is one more rule for a commit judgeCommit
-// accepted (receive-pack's signer = pusher; a fetch has no pusher). Returns
-// the refusal text, or "".
+// fleet master's fetch (AdmitPeerBranch, a forge). It first runs the
+// ontology's validations on every fact the commits add or change
+// (incomingValid, every mode), then reads verify_signatures at upstream's tip,
+// loads the fleet from fleet, and judges every commit with judgeCommit;
+// signer, when not nil, is one more rule for a commit judgeCommit accepted
+// (receive-pack's signer = pusher; a fetch has no pusher). Returns the
+// refusal text, or "".
 func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleetOf func(context.Context) (Fleet, error), signer func(*object.Commit) (Refusal, bool), commits []*object.Commit, lg zerolog.Logger) string {
+	if msg := rh.incomingValid(ctx, upstream, commits); msg != "" {
+		return msg
+	}
 	mode, ont, err := rh.verifyModeAt(ctx, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: verify_signatures at %s could not be read: %v", upstream, err)

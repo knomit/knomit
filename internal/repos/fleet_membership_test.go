@@ -353,9 +353,26 @@ func TestFleetMaster_LegacyFleetIsClaimedOnceByTheRootHolder(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, m.AgentID(), named)
 
-	// Someone else's marker stays.
+	// The master's own branch never names another agent: a marker naming
+	// "other" written there is refused (host-record) BEFORE main moves, and
+	// GET /fleet says why (judgeOwnRange).
 	require.NoError(t, m.writeFleetArtifacts(ctx, ri, map[string]string{fact.FleetMasterPath: fact.RenderFleetMaster("other")}, "other"))
-	require.NoError(t, m.publishFleetMainNow(ctx, ri))
+	mainBefore := localTip(t, ri, "main")
+	err = m.publishFleetMainNow(ctx, ri)
+	require.ErrorIs(t, err, store.ErrOwnCommitRefused)
+	require.Contains(t, err.Error(), "host-record")
+	require.Equal(t, mainBefore, localTip(t, ri, "main"), "main did not move")
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Contains(t, st.LastError, store.OwnCommitRefusedText)
+	require.Contains(t, st.LastError, "host-record")
+
+	// Someone else's marker on main (here written onto main directly, as a
+	// copy that follows another master's main would hold it) stays.
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, _, werr := svc.Facts().BatchWriteFacts(ctx, svc.UpstreamBranch(), map[string]string{fact.FleetMasterPath: fact.RenderFleetMaster("other")}, nil, "other", "created")
+		require.NoError(t, werr)
+	}))
 	_ = ri.WithRead(func(svc *store.Service) { ri.fleetHostRound(ctx, svc) })
 	named, err = m.fleetMasterAtMain(ri)
 	require.NoError(t, err)
@@ -418,7 +435,7 @@ func localRound(t *testing.T, ri *RepoInstance) {
 	svc, release, err := ri.Acquire()
 	require.NoError(t, err)
 	defer release()
-	runLocalReconcileLoop(context.Background(), svc, ri.Name(), ri.agentBranch, time.Hour, nil, nil, nil, true, ri.fleetHostRound)
+	runLocalReconcileLoop(context.Background(), svc, ri.Name(), ri.agentBranch, time.Hour, nil, nil, nil, true, ri.fleetHostRound, nil)
 }
 
 // The hub re-asserts the host record in every round of its local reconcile
@@ -645,6 +662,16 @@ func TestAgentBranchAlreadyPushed_FleetIsNotOfferedToAdopt(t *testing.T) {
 	require.Contains(t, join, "the refused join takes that branch back")
 }
 
+// leafOf is the leaf the forge's main holds for id ("" when none).
+func leafOf(t *testing.T, f *forgeFleet, id string) string {
+	t.Helper()
+	out, err := runGitOut(f.bare, "show", "main:artifacts/fleet/certs/"+id+".pem")
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
 // B1 (PR #525 review): an enroll over an id that already has a leaf on main.
 // Refused while that leaf is not on main's CRL (`enrolled`), and for a
 // different key at any time (`rekey_unsupported`, §1.5: a lost or rotated key
@@ -692,6 +719,15 @@ func TestFleetMembership_EnrollOverAnExistingID(t *testing.T) {
 	a, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
 	require.NoError(t, err)
 	require.True(t, a.Published, a.PublishError)
+	// alpha joins and the master admits it: a §1.5 rejoin is of a member,
+	// whose record the replacing leaf renews (replace_when: leaf-renewal).
+	alpha := f.namedMember(t, "alpha")
+	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(a.Bundle)})
+	require.NoError(t, err)
+	round(t, f.mri)
+	settleMerger(t, f.mri)
+	round(t, f.mri)
+	require.True(t, f.onForgeMain(t, memberRecordPath("kb", "alpha")), "alpha's record is on main")
 
 	refused("alpha", "enrolled")
 	refused("alpha-other-key", "rekey_unsupported")
@@ -710,6 +746,23 @@ func TestFleetMembership_EnrollOverAnExistingID(t *testing.T) {
 	rv, err = f.master.RevokeFleetMember(ctx, "alpha", "left again")
 	require.NoError(t, err)
 	require.Equal(t, b.Serial, rv.Serial)
+
+	// An id enrolled and revoked that never joined has no record for a new
+	// leaf to renew: never_joined, before anything is issued or written, so
+	// the master's branch never holds a commit main cannot take.
+	g, err := f.master.EnrollFleetMember(ctx, "gamma", keyLine("gamma"), "")
+	require.NoError(t, err)
+	require.True(t, g.Published, g.PublishError)
+	_, err = f.master.RevokeFleetMember(ctx, "gamma", "lost bundle")
+	require.NoError(t, err)
+	gammaLeaf, lines := leafOf(t, f, "gamma"), issuedLines()
+	_, err = f.master.EnrollFleetMember(ctx, "gamma", keyLine("gamma"), "")
+	status, code := fleetCode(t, err)
+	require.Equal(t, http.StatusConflict, status)
+	require.Equal(t, "never_joined", code)
+	require.Equal(t, gammaLeaf, leafOf(t, f, "gamma"), "the leaf on main is as it was")
+	require.Equal(t, lines, issuedLines(), "and no issuance is logged")
+	require.NoError(t, f.master.publishMasterWrite(ctx, f.mri), "main still moves: nothing illegal was written")
 	crl := crlOnMain()
 	for _, s := range []string{a.Serial, b.Serial} {
 		n, ok := new(big.Int).SetString(s, 16)

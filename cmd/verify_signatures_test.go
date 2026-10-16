@@ -35,7 +35,9 @@ func TestVerifyCmd_SignatureSubcommandsRegistered(t *testing.T) {
 		require.NotNil(t, accept.Flags().Lookup(f), "accept --%s", f)
 	}
 	ci, _, _ := c.Find([]string{"ci"})
-	require.Contains(t, ci.Long, "verify_signatures at the upstream's tip FIRST")
+	require.Contains(t, ci.Long, "First, in every mode and every knowledge base, every fact a commit of the\ncandidate adds or changes")
+	require.Contains(t, ci.Long, "Then reads verify_signatures at the upstream's tip")
+	require.NotNil(t, ci.Flags().Lookup("kb-root"))
 	require.NotNil(t, ci.Flags().Lookup("fleet"))
 }
 
@@ -123,7 +125,7 @@ func TestVerifyCI_ExitCodes(t *testing.T) {
 	off := ciRepo(t, "")
 	out, err := run("--dir", off)
 	require.Equal(t, 0, code(err), "off: exit 0 with no --fleet at all")
-	require.Contains(t, out, "nothing to check")
+	require.Contains(t, out, "no signature to check; every new fact keeps the ontology's validations")
 
 	enforce := ciRepo(t, "enforce")
 	fleet := fleetRepo(t)

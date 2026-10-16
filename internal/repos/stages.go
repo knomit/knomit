@@ -797,7 +797,7 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 	name := "local-reconcile"
 	run := func(ctx context.Context) {
 		runLocalReconcileLoop(ctx, svc, r.Name(), r.agentBranch, cfg.Git.LocalReconcileInterval,
-			r.triggerKick, r.syncWake, mode(), once, r.fleetHostRound)
+			r.triggerKick, r.syncWake, mode(), once, r.fleetHostRound, r.fleetMainAdvanced)
 	}
 	if hasOrigin {
 		if remote != nil {

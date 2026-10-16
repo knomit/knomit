@@ -50,6 +50,16 @@ func newForgeFleet(t *testing.T, leaves map[string]ssh.Signer) *forgeFleet {
 		require.NoError(t, err)
 		files["artifacts/fleet/"+name] = b
 	}
+	// The master is a member like any (create writes its leaf and record):
+	// its own commits are judged before they reach main (judgeOwnRange), and
+	// a master with no record on main would have every one refused no-record.
+	{
+		pub := testsigner.Named("master").PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey().(ed25519.PublicKey)
+		leaf, _, err := pki.IssueInstance(f.root.Dir, f.root.Root, pub, "master@agents.knomit.io", time.Hour)
+		require.NoError(t, err)
+		files["artifacts/fleet/certs/master.pem"] = leaf
+		files[memberRecordPath("kb", "master")] = activeRecordFile(t, "master", pub)
+	}
 	for id, k := range leaves {
 		pub := k.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey().(ed25519.PublicKey)
 		leaf, _, err := pki.IssueInstance(f.root.Dir, f.root.Root, pub, id+"@agents.knomit.io", time.Hour)
@@ -276,8 +286,10 @@ func TestFleetMaster_TrustsTheForgesMainAndNeverForcesItsPush(t *testing.T) {
 		other = f.rev(t, "main")
 	}})
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
-		_, err := svc.Facts().WriteFact(context.Background(), f.mri.AgentBranch(), "kb/notes/x.md",
-			"---\ntype: observation\n---\n# x\n\nx\n", "x", "created")
+		// A write the master may make (its own folder, a policy fact): the
+		// judge of its own commits admits it, so only the forge refuses.
+		_, err := svc.Facts().WriteFact(context.Background(), f.mri.AgentBranch(), "kb/members/master/x.md",
+			"---\nkind: pragmatic\ntype: policy\n---\n# x\n\nx\n", "x", "created")
 		require.NoError(t, err)
 	}))
 	var pushErr error
@@ -297,7 +309,7 @@ func TestFleetMaster_TrustsTheForgesMainAndNeverForcesItsPush(t *testing.T) {
 	round(t, f.mri)
 	require.Equal(t, localTip(t, f.mri, "agent/master"), f.rev(t, "main"), "converged")
 	runGit(t, f.bare, "merge-base", "--is-ancestor", other, "main")
-	require.True(t, f.onForgeMain(t, "kb/notes/x.md"))
+	require.True(t, f.onForgeMain(t, "kb/members/master/x.md"))
 }
 
 // The merger's gate on the fleet repository is the master predicate, with or
@@ -389,8 +401,8 @@ func TestFleetMaster_RoundPublishesAMainCreateFailedToPublish(t *testing.T) {
 	// As create leaves it after a failed publish: a commit on the agent
 	// branch, pushed, and main behind it.
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
-		_, err := svc.Facts().WriteFact(context.Background(), f.mri.AgentBranch(), "kb/notes/created.md",
-			"---\ntype: observation\n---\n# c\n\nc\n", "c", "created")
+		_, err := svc.Facts().WriteFact(context.Background(), f.mri.AgentBranch(), "kb/members/master/created.md",
+			"---\nkind: pragmatic\ntype: policy\n---\n# c\n\nc\n", "c", "created")
 		require.NoError(t, err)
 		_, err = svc.Remote().Push(context.Background(), f.mri.AgentBranch(), nil)
 		require.NoError(t, err)

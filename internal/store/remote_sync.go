@@ -460,6 +460,12 @@ func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth tr
 	if _, err := ri.rh.repo.CommitObject(tip); err != nil {
 		return PushResult{}, fmt.Errorf("PublishUpstream: tip %s is unreadable: %w", tip, err)
 	}
+	// The commits the publish adds to the origin's main are judged first
+	// (judgeOwnRange): tip ∖ the main this copy last fetched from the origin
+	// (its local main when it has no tracking ref yet).
+	if err := ri.rh.judgeOwnRange(upstream, ri.publishBase(upstream), tip, ri.ownID(from), tip); err != nil {
+		return PushResult{}, fmt.Errorf("PublishUpstream: %w", err)
+	}
 	refspec := fmt.Sprintf("%s:refs/heads/%s", tip, upstream)
 	pushCtx, cancel := ri.rh.netCtx(ctx)
 	defer cancel()
@@ -510,6 +516,15 @@ func (ri *remoteIndex) PublishTo(ctx context.Context, gitURL, from, upstream str
 	}
 	if _, err := ri.rh.repo.CommitObject(tip); err != nil {
 		return fmt.Errorf("PublishTo: tip %s is unreadable: %w", tip, err)
+	}
+	// The seed becomes the forge's main: judged first (judgeOwnRange), tip ∖
+	// this copy's own main.
+	base := plumbing.ZeroHash
+	if ref, err := ri.rh.gits.Reference(plumbing.NewBranchReferenceName(upstream)); err == nil {
+		base = ref.Hash()
+	}
+	if err := ri.rh.judgeOwnRange(upstream, base, tip, ri.ownID(from), tip); err != nil {
+		return fmt.Errorf("PublishTo: %w", err)
 	}
 	rem := gogit.NewRemote(ri.rh.repo.Storer, &gogitconfig.RemoteConfig{Name: "publish-to", URLs: []string{gitURL}})
 	pushCtx, cancel := ri.rh.netCtx(ctx)
@@ -687,7 +702,7 @@ var ErrUpstreamMoved = errors.New("the origin's upstream moved: the change is no
 // It is the fleet's way to publish the master marker on a forge (claim,
 // stand-down, decommission: repos claimFleetMaster and friends): git decides
 // a race between two claims, the first publish wins.
-func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, path string, content *string, message string, auth transport.AuthMethod) (plumbing.Hash, error) {
+func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, from, path string, content *string, message string, auth transport.AuthMethod) (plumbing.Hash, error) {
 	remote, err := ri.GetRemote("origin")
 	if err != nil || remote == nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: no origin: %v", err)
@@ -747,6 +762,11 @@ func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, path string, c
 	c := &object.Commit{Author: author, Committer: committer, Message: message, TreeHash: root, ParentHashes: []plumbing.Hash{parent}}
 	h, err := storeCommit(rh.gits, signer, c)
 	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
+	}
+	// The one commit this publishes onto main is judged first
+	// (judgeOwnRange); a refused one is left unreachable and nothing moves.
+	if err := rh.judgeOwnRange(upstream, parent, h, ri.ownID(upstream), ri.branchTip(from)); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
 	pushCtx, cancel := rh.netCtx(ctx)
