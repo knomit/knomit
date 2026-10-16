@@ -2540,9 +2540,10 @@ paths:
         statement (`revocations/<serial>.txt`), committed on the master's
         agent branch and published (`published` / `publish_error`); the CRL
         is installed here at once (`install_error`) and copied to
-        `<home>/fleet`. Members install the newer CRL from `main`. A member
-        whose `left` record is on main is revoked the same way by the
-        master's own round, with no call. Refusals:
+        `<home>/fleet`. Only the master installs it: no member installs the
+        newer CRL from `main` (not built). A member whose `left` record is
+        on main is revoked the same way by the master's own round, with no
+        call, when main's master marker names this instance. Refusals:
         `not_enrolled` (404), `already_revoked`, `own_id`, `not_master`,
         `not_registered` (409), `revoke_failed` (422).
       operationId: revokeFleetMember

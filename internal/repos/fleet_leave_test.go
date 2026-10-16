@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
@@ -146,6 +147,68 @@ func TestFleetLeave_ForgeMasterRevokesTheLeaverAndTheRejoinIsAccepted(t *testing
 	st, err = alpha.FleetStatus(ctx)
 	require.NoError(t, err)
 	require.Equal(t, fact.MemberActive, st.RecordState, "the rejoin is accepted")
+}
+
+// The leave duty is master work (#531's predicate): a holder of the fleet's
+// root key whom main's master marker does NOT name revokes no leaver, neither
+// through its own origin rounds (peers.isMaster) nor when its duty is called
+// directly (fleetMasterDuty re-checks actsAsFleetMaster). The left record is
+// on main and the leaf unrevoked while beta runs; the named master then
+// revokes it (positive control: the fixture could have revoked).
+// SABOTAGE: gate fleetMasterDuty on holdsFleetRoot instead of
+// actsAsFleetMaster -> beta revokes alpha -> red.
+func TestFleetLeave_ARootHolderMainDoesNotNameRevokesNoLeaver(t *testing.T) {
+	ctx := context.Background()
+	beta := testsigner.Named("beta")
+	f := newForgeFleet(t, map[string]ssh.Signer{"beta": beta})
+	installMasterLeaf(t, f)
+	bm, bri := f.join(t, "beta", beta)
+	alpha := f.namedMember(t, "alpha")
+	f.enrollAndJoin(t, alpha, "alpha")
+	f.masterRounds(t)
+	installFleetRoot(t, bm, f.root)
+	round(t, bri)
+
+	left, err := alpha.LeaveFleet(ctx)
+	require.NoError(t, err)
+	require.True(t, left.Pushed, left.PushError)
+	// The master merges and publishes the left record with its duty off, so
+	// main holds a leaver only beta could revoke; the duty is back on below.
+	duty := f.mri.peers.duty
+	f.mri.peers.duty = nil
+	f.masterRounds(t)
+	f.mri.peers.duty = duty
+	rec, err := runGitOut(f.bare, "show", "main:"+memberRecordPath("kb", "alpha"))
+	require.NoError(t, err)
+	require.Contains(t, rec, "state: left", "fixture: the left record is on main")
+	require.Equal(t, int64(1), f.mainCRLNumber(t), "fixture: alpha's leaf is not revoked yet")
+
+	mainBefore := f.rev(t, "main")
+	tlsCRL := filepath.Join(bm.deps.Cfg.TLS.Dir, pki.CRLFile)
+	crlBefore, _ := os.ReadFile(tlsCRL)
+	round(t, bri)
+	round(t, bri)
+	require.NoError(t, bri.WithRead(func(svc *store.Service) {
+		require.True(t, bm.holdsFleetRoot(svc), "setup: beta holds the root")
+		require.False(t, bri.actsAsFleetMaster(svc), "main names the master, not beta")
+		bri.fleetMasterDuty(ctx, svc)
+	}))
+	round(t, bri)
+	require.Equal(t, mainBefore, f.rev(t, "main"), "beta publishes nothing to main")
+	require.Equal(t, int64(1), f.mainCRLNumber(t), "beta revokes no leaver")
+	branchCRL, err := runGitOut(f.bare, "show", "agent/beta:artifacts/fleet/crl.pem")
+	require.NoError(t, err)
+	mainCRL, err := runGitOut(f.bare, "show", "main:artifacts/fleet/crl.pem")
+	require.NoError(t, err)
+	require.Equal(t, mainCRL, branchCRL, "no revocation on beta's branch either")
+	crlAfter, _ := os.ReadFile(tlsCRL)
+	require.Equal(t, crlBefore, crlAfter, "beta installs no CRL")
+	_, err = os.Stat(filepath.Join(bm.fleetRootDir(), pki.RevokedLogFile))
+	require.True(t, os.IsNotExist(err), "beta logs no revocation: %v", err)
+
+	// The named master does it.
+	round(t, f.mri)
+	require.Equal(t, int64(2), f.mainCRLNumber(t), "the master revokes the leaver")
 }
 
 // The leave duty never builds a CRL from main's while the master's agent
