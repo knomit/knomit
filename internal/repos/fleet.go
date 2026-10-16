@@ -50,6 +50,12 @@ type FleetStatus struct {
 	RegisteredAt *time.Time `json:"registered_at,omitempty"`
 	LastAttempt  *time.Time `json:"last_attempt,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`
+	// LastErrorRefused: LastError is the fleet refusing this instance's
+	// certificate at the TLS handshake (pki.ErrRefusedByPeer, as the recorded
+	// error text carries it): revoked, or the fleet moved to another root.
+	// A retry does not help, and the member cannot read the CRL to tell
+	// which. Read from the recorded error only; nothing new is kept.
+	LastErrorRefused bool `json:"last_error_refused,omitempty"`
 	// SyncIntervalSeconds is how often this copy's origin round runs (the
 	// origin record's interval, push_interval when shorter, 300 s when
 	// unset): a member sees what the master's round merged into main only
@@ -197,6 +203,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st := FleetStatus{
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
+		LastErrorRefused: strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
 		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
 			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
 		RootDir:   m.fleetRootDir(),

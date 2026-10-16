@@ -2,6 +2,8 @@ package repos
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -222,6 +224,34 @@ func TestFleetStatus_ListeningIsTheLiveListener(t *testing.T) {
 	require.False(t, st.Host.ListenerOn)
 	require.False(t, st.Host.Listening)
 	require.Empty(t, st.Host.ListenerReason, "no reason for a listener that is not configured")
+}
+
+// Review S2 (PR #528): last_error_refused is read from the recorded error
+// alone: a push refused at the TLS handshake (pki.ErrRefusedByPeer, as the
+// transport wraps it) says so, any other failure does not, and a success
+// clears both.
+// SABOTAGE: LastErrorRefused = LastError != "" -> the unreachable row reads
+// true -> red.
+func TestFleetStatus_LastErrorRefusedIsTheHandshakeRefusal(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	db := m.ControlDB()
+	for _, row := range []struct {
+		err     error
+		refused bool
+	}{
+		{fmt.Errorf("push agent branch: %w: remote error: tls: bad certificate", pki.ErrRefusedByPeer), true},
+		{errors.New("dial tcp 127.0.0.1:18931: connect: connection refused"), false},
+		{nil, false},
+	} {
+		require.NoError(t, recordFleetAttempt(db, row.err, time.Now()))
+		st, err := m.FleetStatus(ctx)
+		require.NoError(t, err)
+		require.Equal(t, row.refused, st.LastErrorRefused, "%v", row.err)
+		if row.err == nil {
+			require.Empty(t, st.LastError)
+		}
+	}
 }
 
 // PR #528 nit 11: with a repository already called fleet, a standalone
