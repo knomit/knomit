@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
@@ -124,9 +125,13 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	s := &Server{Manager: m, Grants: localWriteGrants()}
 
 	out := getFleetJSON(t, s)
-	require.Equal(t, []any{}, out["external_addresses"], "unset is an empty array, never null")
+	require.Equal(t, map[string]any{"listener_on": false, "external_addresses": []any{}}, out["host"], "unset is an empty array, never null")
 	require.Contains(t, out["notice"], "external_addresses")
 	require.NotContains(t, out, "record")
+	require.NotContains(t, out, "fleet_url", "fleet_url is gone: fleet_urls")
+	require.Equal(t, []any{}, out["fleet_urls"], "standalone: no fleet URL")
+	require.NotContains(t, out, "root_fingerprint", "no root installed")
+	require.Equal(t, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(testsigner.Named("rest-fleet").PublicKey()))), out["public_key"])
 
 	join := joinOverSocket(t, s, key, url, root)
 	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
@@ -139,6 +144,9 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	require.Equal(t, repos.FleetRegistered, out["state"])
 	require.Equal(t, false, out["master"])
 	require.Equal(t, url, out["hosting"])
+	require.Equal(t, []any{url}, out["fleet_urls"], "main holds no host record: the origin")
+	require.NotContains(t, out, "host_record")
+	require.Equal(t, rootID, out["root_fingerprint"], "the installed root")
 	require.Equal(t, filepath.Join(dir, "home", "fleet"), out["root_dir"])
 	rec, ok := out["record"].(map[string]any)
 	require.True(t, ok, "registered: the own record is shown: %v", out)
@@ -153,49 +161,118 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	require.Equal(t, false, out["record_pending_update"])
 }
 
+// GET /fleet's `local` is the edge's verdict on how the request came in, the
+// same test RequireLocalVia makes: true over the local listener, false over
+// loopback TCP however the client dresses the request up.
+// SABOTAGE: set local from a request header -> the spoofed row is true ->
+// red; set it true always -> the TCP row is true -> red.
+func TestFleetREST_LocalIsTheListenerNotTheClient(t *testing.T) {
+	m, _ := restFleetManager(t, t.TempDir())
+	s := &Server{Manager: m, Grants: localWriteGrants()}
+	get := func(req *http.Request) map[string]any {
+		rec := httptest.NewRecorder()
+		s.NewAPIRouter().ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		return out
+	}
+	require.Equal(t, true, get(localPeer(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over the local listener")
+	require.Equal(t, false, get(fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over loopback TCP")
+	spoofed := fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet?local=true", nil))
+	spoofed.Header.Set("X-Knomit-Via", string(auth.LocalVia))
+	spoofed.Header.Set("X-Forwarded-For", "unix")
+	spoofed.Header.Set("Origin", "app://knomit")
+	require.Equal(t, false, get(spoofed)["local"], "nothing the client sends makes it local")
+}
+
+// GET /fleet's host.listener (the [tls].addr bind) is shown to a local caller
+// only; over TCP the page learns that the listener is on (listener_on), not
+// where it is bound (PR #527).
+// SABOTAGE: drop the delete in fleetView -> the TCP row has the bind -> red;
+// drop listener_on -> red.
+func TestFleetREST_ListenerIsShownOnlyLocally(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	require.NoError(t, os.MkdirAll(home, 0o755))
+	key, err := testsigner.WriteNamedKey(home, "rest-fleet")
+	require.NoError(t, err)
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", TLS: config.TLSConfig{Dir: filepath.Join(home, "pki"), Addr: "0.0.0.0:7443"}},
+		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), KeyPath: key, Machine: repos.Options{Synchronous: true},
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+	s := &Server{Manager: m, Grants: localWriteGrants()}
+	get := func(req *http.Request) map[string]any {
+		rec := httptest.NewRecorder()
+		s.NewAPIRouter().ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		return out
+	}
+	local := get(localPeer(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["host"].(map[string]any)
+	require.Equal(t, "0.0.0.0:7443", local["listener"], "a local caller sees the bind")
+	require.Equal(t, true, local["listener_on"])
+	tcp := get(fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["host"].(map[string]any)
+	require.NotContains(t, tcp, "listener", "over TCP the bind is not shown")
+	require.Equal(t, true, tcp["listener_on"], "only that the listener is on")
+}
+
 // F10: a member row shows every advertised field as the record has it, even
 // someone else's odd values; addresses is always an array.
 func TestFleetMemberRow(t *testing.T) {
-	row := fleetMemberRow(store.FleetMember{Member: fact.Member{
+	since := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	row := fleetMemberRow(repos.FleetMemberRow{FleetMember: store.FleetMember{Member: fact.Member{
 		Agent: "peer", State: fact.MemberActive, Host: "h", Addresses: []string{"not-a-url"}, Git: "/git",
 		Capabilities: map[string]string{"os": "plan9"},
-	}, Path: "kb/members/peer/x.md"})
+	}, Path: "kb/members/peer/x.md"}, Since: &since})
 	raw, err := json.Marshal(row)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"agent":"peer","state":"active","host":"h","branch":"","path":"kb/members/peer/x.md",
-		"addresses":["not-a-url"],"git":"/git","capabilities":{"os":"plan9"}}`, string(raw))
+		"addresses":["not-a-url"],"git":"/git","capabilities":{"os":"plan9"},"since":"2026-10-15T12:00:00Z"}`, string(raw))
 
-	raw, err = json.Marshal(fleetMemberRow(store.FleetMember{Member: fact.Member{Agent: "old", State: fact.MemberActive}}))
+	raw, err = json.Marshal(fleetMemberRow(repos.FleetMemberRow{FleetMember: store.FleetMember{Member: fact.Member{Agent: "old", State: fact.MemberActive}}}))
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
 	require.Equal(t, []any{}, m["addresses"], "an F09 record without addresses is []")
 	require.Equal(t, map[string]any{}, m["capabilities"])
+	require.NotContains(t, m, "since", "no since found: none shown")
 }
 
 // GET /fleet/members carries the master's last refusal of a member's branch
 // on THAT member's row (matched by the record's branch) and nowhere else; a
-// record with no branch never matches.
-// SABOTAGE: drop the last_refusal assignment in fleetMemberRows -> red.
+// record with no branch never matches. An ENROLLED id (a leaf, no record, so
+// no branch) carries the newest refusal whose tip its agent authored: a first
+// join refused in flight (PR #527 SF3); a record without a branch does not.
+// SABOTAGE: drop the last_refusal assignment in fleetMemberRows -> red; drop
+// the enrolled arm -> d's row has none -> red; keep the oldest refusal by
+// agent -> d's is "old" -> red.
 func TestFleetMemberRows_LastRefusal(t *testing.T) {
 	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	refused := map[string]repos.PeerRefusal{
-		"agent/b": {Branch: "agent/b", Tip: "abc", Reason: "knomit: commit abc refused", At: at},
-		"":        {Branch: "", Tip: "zzz", Reason: "never shown"},
+		"agent/b":  {Branch: "agent/b", Tip: "abc", Reason: "knomit: commit abc refused", At: at},
+		"":         {Branch: "", Tip: "zzz", Reason: "never shown"},
+		"agent/d":  {Branch: "agent/d", Tip: "def", Agent: "d", Reason: "no-cert", At: at.Add(time.Minute)},
+		"agent/d2": {Branch: "agent/d2", Tip: "old", Agent: "d", Reason: "old", At: at},
+		"agent/c":  {Branch: "agent/c", Tip: "ccc", Agent: "c", Reason: "c has a record", At: at},
 	}
-	rows := fleetMemberRows([]store.FleetMember{
-		{Member: fact.Member{Agent: "a", State: fact.MemberActive, Branch: "agent/a"}},
-		{Member: fact.Member{Agent: "b", State: fact.MemberActive, Branch: "agent/b"}},
-		{Member: fact.Member{Agent: "c", State: fact.MemberActive}},
+	rows := fleetMemberRows([]repos.FleetMemberRow{
+		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "a", State: fact.MemberActive, Branch: "agent/a"}}},
+		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "b", State: fact.MemberActive, Branch: "agent/b"}}},
+		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "c", State: fact.MemberActive}}},
+		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "d", State: repos.MemberEnrolled}}},
 	}, refused)
 	raw, err := json.Marshal(rows)
 	require.NoError(t, err)
 	var got []map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
-	require.Len(t, got, 3)
+	require.Len(t, got, 4)
 	require.NotContains(t, got[0], "last_refusal")
 	require.Equal(t, map[string]any{"branch": "agent/b", "tip": "abc", "reason": "knomit: commit abc refused", "at": "2026-10-15T12:00:00Z"}, got[1]["last_refusal"])
-	require.NotContains(t, got[2], "last_refusal")
+	require.NotContains(t, got[2], "last_refusal", "a record without a branch is never matched by agent")
+	require.Equal(t, map[string]any{"branch": "agent/d", "tip": "def", "agent": "d", "reason": "no-cert", "at": "2026-10-15T12:01:00Z"}, got[3]["last_refusal"])
 }
 
 // The fleet repository is read-only for the fact REST routes: a create on its
@@ -225,7 +302,7 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	const fact = `{"title":"T","body":"b","domain":["x"]}`
 	rec := post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
 
 	rec = post("/repos/"+st.FleetRepo+"/experiments", `{"name":"exp-a"}`)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
@@ -263,10 +340,10 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	before := head()
 	rec = send(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
 	rec = send(http.MethodPatch, "/repos/"+st.FleetRepo, `{"description":"hello","license":"MIT"}`)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
 	require.Equal(t, before, head(), "nothing was committed on the fleet repository")
 
 	rec = send(http.MethodPatch, "/repos/kb", `{"description":"hello"}`)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
@@ -200,7 +201,7 @@ func TestCreateFleet_HostedHere(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, FleetRegistered, st.State)
 	require.Equal(t, "fleet", st.FleetRepo)
-	require.Empty(t, st.FleetURL, "hosted here: no origin")
+	require.Equal(t, "none", st.Hosting, "hosted here: no origin")
 	require.Equal(t, fact.MemberActive, st.RecordState, "main holds the active record at once")
 
 	dir := m.fleetRootDir()
@@ -218,6 +219,17 @@ func TestCreateFleet_HostedHere(t *testing.T) {
 	rootID, err := pki.RootID(root.Cert)
 	require.NoError(t, err)
 	require.Equal(t, rootID, installed.Fingerprint, "the bundle is this instance's TLS identity")
+	// GET /fleet's hosting fields: the hub's own URLs, the record on main,
+	// what it offers, its key and the installed root.
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, st.FleetURLs, "the hub: one URL per https external address")
+	require.Equal(t, st.FleetURLs, st.HostRecord, "main records the same")
+	require.Equal(t, FleetHostOffer{Listener: "127.0.0.1:0", ListenerOn: true, ExternalAddresses: []string{"https://fleet-host.example:19279"}}, st.Host,
+		"the hub hosts already: no would_serve")
+	require.NotNil(t, st.FollowsHost)
+	require.True(t, *st.FollowsHost, "the hub is the host")
+	require.Equal(t, rootID, st.RootFingerprint)
+	require.True(t, strings.HasPrefix(st.PublicKey, "ssh-ed25519 "), st.PublicKey)
+	require.Equal(t, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(m.deps.Signer.PublicKey()))), st.PublicKey)
 
 	f, err := m.FleetAtMain(ctx)
 	require.NoError(t, err)
@@ -228,6 +240,9 @@ func TestCreateFleet_HostedHere(t *testing.T) {
 	uid, err := recordedFleetRepo(m.ControlDB())
 	require.NoError(t, err)
 	require.Equal(t, ri.UID(), uid, "recorded as this instance's fleet repository")
+	hosted, err := m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, hosted, "main records where the fleet is hosted: here")
 }
 
 // The created fleet mounts again after a restart: CreateFleet records it in
@@ -275,7 +290,7 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	agent := "refs/heads/agent/test-fleet"
 	require.Equal(t, gitRev(t, bare, agent), gitRev(t, bare, "refs/heads/main"), "the forge's main is the agent tip")
 	hs := historyOf(t, bare, "refs/heads/main")
-	require.Len(t, hs, 5, "the forge's README commit, then the create's four: %+v", hs)
+	require.Len(t, hs, 6, "the forge's README commit, then the create's five: %+v", hs)
 	require.Equal(t, []string{"README.md"}, hs[0].paths)
 	require.Equal(t, []string{OntologyPath}, hs[1].paths, "the ontology commit")
 	require.ElementsMatch(t, []string{"artifacts/fleet/crl.pem", "artifacts/fleet/root.crt"}, hs[2].paths,
@@ -283,7 +298,18 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	serial := issuedSerials(t, m.deps.Cfg.Home)[0]
 	require.ElementsMatch(t, []string{"artifacts/fleet/certs/test-fleet.pem", "artifacts/fleet/issued/" + serial + ".pem"}, hs[3].paths,
 		"then the creator's leaf and its one issuance record")
-	require.Equal(t, []string{memberRecordPath("kb", "test-fleet")}, hs[4].paths, "then the record, last")
+	require.Equal(t, []string{memberRecordPath("kb", "test-fleet")}, hs[4].paths, "then the record")
+	require.Equal(t, []string{fact.FleetHostPath}, hs[5].paths, "then where the fleet is hosted, last")
+	hosted, err := m.fleetHostAtMain(m.fleetRepo())
+	require.NoError(t, err)
+	require.Equal(t, []string{fileuri.New(bare)}, hosted, "the forge hosts it")
+	require.Equal(t, fileuri.New(bare), st.Hosting)
+	require.Equal(t, []string{fileuri.New(bare)}, st.FleetURLs, "a copy with an origin: the record on main")
+	require.Equal(t, []string{fileuri.New(bare)}, st.HostRecord)
+	require.NotNil(t, st.FollowsHost)
+	require.True(t, *st.FollowsHost, "the copy syncs with the host the record names")
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, st.Host.WouldServe,
+		"the master on a forge: the URLs members would use if it hosted the fleet here")
 
 	v, err := store.CheckRange(store.RangeInput{
 		KBDir: bare, Main: hs[1].hash, Candidate: "refs/heads/main",
@@ -291,7 +317,7 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, store.VerifyEnforce, v.Mode, "the fleet ontology declares enforce")
-	require.Equal(t, 3, v.Checked, "root, leaf and record commits")
+	require.Equal(t, 4, v.Checked, "root, leaf, record and host commits")
 	require.Empty(t, v.Refused)
 }
 
@@ -409,4 +435,17 @@ func TestCreateFleet_RepeatIsFleetPresent(t *testing.T) {
 	require.Same(t, orig, m.fleetRepo())
 	require.Nil(t, m.Get("fleet-two"))
 	require.Len(t, issuedSerials(t, m.deps.Cfg.Home), 1, "no second leaf was issued")
+}
+
+// The hub's fleet URLs are one per external address that is https://, with
+// /git/<repo> after it (a trailing slash dropped); an http:// address is no
+// fleet URL: members reach the hub's mTLS listener over https only.
+// SABOTAGE: keep the non-https address -> red.
+func TestHubFleetURLs_HTTPSAddressesOnly(t *testing.T) {
+	m := newFleetHost(t, t.TempDir(), func(d *Deps) {
+		d.Cfg.ExternalAddresses = []string{"https://a.example/", "http://b.example:8080", "HTTPS://c.example:7443"}
+	})
+	_, err := m.CreateFleet(context.Background(), FleetCreateSpec{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://a.example/git/fleet", "HTTPS://c.example:7443/git/fleet"}, m.hubFleetURLs(m.fleetRepo()))
 }

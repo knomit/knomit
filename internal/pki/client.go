@@ -144,6 +144,16 @@ func peerError(err error) error {
 // fleet. The caller refuses the origin rather than guessing.
 var ErrOriginUnreachable = errors.New("pki: can't reach the origin")
 
+// ErrOriginCertRefused: ClassifyOrigin reached the origin, and our verifier
+// refused the certificate it presents as one of this fleet's (revoked,
+// expired, a CRL or key failure). It always wraps the verdict. With
+// ErrRefusedByPeer (the origin refusing OUR certificate) it is the only
+// classification error that means the origin answered with a refusal: every
+// other one (no TCP connection, a handshake or an answer that failed for a
+// reason that is no verdict, this instance's own trust files) is a failure
+// to reach a verdict, and a caller tells the operator so.
+var ErrOriginCertRefused = errors.New("pki: the origin presents a certificate of this fleet that is refused")
+
 // ClassifyOrigin decides whether rawURL is an instance of THIS fleet: a
 // server whose certificate VerifyInstanceChain accepts against the root
 // installed in dir, and which accepts this instance's certificate. It is
@@ -161,9 +171,9 @@ var ErrOriginUnreachable = errors.New("pki: can't reach the origin")
 //     holds a fleet root, so a misjudged peer still fails at its handshake,
 //     before any request or credential is sent.
 //   - any other verdict of our verifier (ErrRevoked, ErrExpired, a CRL or
-//     key error), or the peer refusing our certificate (ErrRefusedByPeer):
-//     the error, never "not a peer" — so a revoked peer can never be
-//     re-classified onto stock https.
+//     key error): ErrOriginCertRefused wrapping it; the peer refusing our
+//     certificate: ErrRefusedByPeer. Never "not a peer", so a revoked peer
+//     can never be re-classified onto stock https.
 //   - a handshake that failed before our verifier ran (no TLS 1.3, not TLS,
 //     no certificate): not a peer.
 //
@@ -222,7 +232,7 @@ func ClassifyOrigin(ctx context.Context, dir, keyPath, rawURL string) (bool, err
 		case verified && errors.Is(verdict, ErrUntrustedRoot):
 			return false, nil
 		case verified && verdict != nil:
-			return false, fmt.Errorf("pki: the origin %s presents a certificate of this fleet that is refused: %w", addr, verdict)
+			return false, fmt.Errorf("%w (%s): %w", ErrOriginCertRefused, addr, verdict)
 		case verified:
 			return false, fmt.Errorf("pki: the origin %s presents a certificate of this fleet, but the handshake failed: %w", addr, err)
 		case ctx.Err() != nil:

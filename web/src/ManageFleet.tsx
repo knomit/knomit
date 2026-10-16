@@ -133,7 +133,7 @@ export function FleetPage() {
               <span style={kvKey}>Fleet repository</span>
               <span>
                 <span style={{ color: '#ddd' }}>{st.fleet_repo}</span>
-                {st.fleet_url && <span style={{ ...mono, display: 'block' }}>{st.fleet_url}</span>}
+                {(st.fleet_urls ?? []).map((u) => <span key={u} style={{ ...mono, display: 'block' }}>{u}</span>)}
               </span>
               <span style={kvKey}>Record on main</span>
               <span data-testid="fleet-record-state" style={{ color: '#ddd' }}>
@@ -144,7 +144,7 @@ export function FleetPage() {
           )}
           <span style={kvKey}>External addresses</span>
           <span data-testid="fleet-external-addresses" style={mono}>
-            {(st.external_addresses ?? []).length > 0 ? (st.external_addresses ?? []).join(' ') : <span style={dim}>none</span>}
+            {(st.host?.external_addresses ?? []).length > 0 ? (st.host?.external_addresses ?? []).join(' ') : <span style={dim}>none</span>}
           </span>
           {st.record && (
             <>

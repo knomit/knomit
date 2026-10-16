@@ -73,7 +73,7 @@ func goLocalLoop(ctx context.Context, svc *store.Service, repo, agent string, in
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runLocalReconcileLoop(ctx, svc, repo, agent, interval, nil, nil, nil, false)
+		runLocalReconcileLoop(ctx, svc, repo, agent, interval, nil, nil, nil, false, nil)
 	}()
 	return wg.Wait
 }

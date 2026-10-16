@@ -116,7 +116,7 @@ func TestWriteHandlers_RejectTheFleetRepository(t *testing.T) {
 			result, err := h(ctx, req)
 			require.NoError(t, err)
 			require.True(t, result.IsError, "%s must reject writes to the fleet repository", name)
-			require.Contains(t, resultText(t, result), "changes only through the fleet API", name)
+			require.Contains(t, resultText(t, result), "changes only through the fleet's own actions", name)
 		})
 	}
 	for _, action := range []string{"open", "commit", "rollback", "sync"} {
@@ -126,7 +126,7 @@ func TestWriteHandlers_RejectTheFleetRepository(t *testing.T) {
 			result, err := ExperimentHandler(nil)(ctx, req)
 			require.NoError(t, err)
 			require.True(t, result.IsError)
-			require.Contains(t, resultText(t, result), "changes only through the fleet API", action)
+			require.Contains(t, resultText(t, result), "changes only through the fleet's own actions", action)
 		})
 	}
 }

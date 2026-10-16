@@ -172,7 +172,8 @@ func TestPostRepos_FleetOntologyReserved(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p), rec.Body.String())
 		require.Equal(t, "Fleet ontology reserved", p.Title)
-		require.Contains(t, p.Detail, "/api/v1/fleet")
+		require.Contains(t, p.Detail, "only creating or joining a fleet makes (Fleet → Create or join a fleet)")
+		require.NotContains(t, p.Detail, "/api/v1/", "the text names the Fleet page's action, not a route")
 		require.Nil(t, m.Get("f1"))
 	}
 }

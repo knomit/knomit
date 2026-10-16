@@ -45,6 +45,7 @@ func TestRefClassification_HasNoSecondImplementation(t *testing.T) {
 		filepath.Join("internal", "okf", "source", "history.go"):     "selects fact files out of a git tree",
 		filepath.Join("internal", "store", "fleet_read.go"):          "selects member record files out of a fleet repository's git tree",
 		filepath.Join("internal", "store", "verify_range.go"):        "selects the member record files a judged commit writes (record-owner rule)",
+		filepath.Join("internal", "store", "fleet_activity.go"):      "selects the member record files a commit of the fleet's main changes (GET /fleet/activity)",
 		filepath.Join("internal", "store", "templates.go"):           "selects template fact files out of a source repository's git tree (F24)",
 		filepath.Join("internal", "okf", "source", "facts.go"):       "selects fact files out of a git tree",
 		filepath.Join("internal", "okf", "validate.go"):              "validates a fact FILE name",

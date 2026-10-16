@@ -2,6 +2,7 @@ package pki
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
@@ -41,8 +42,8 @@ func TestClassifyOrigin_ARevokedPeerIsAnErrorNotStockHTTPS(t *testing.T) {
 	x := newTwoInstances(t)
 	x.f.revoke(t, x.b, x.aDir) // A's CRL now lists B
 	peer, err := ClassifyOrigin(ctx10(t), x.aDir, x.a.keyPath, peerURL(x.addr))
-	if peer || !errors.Is(err, ErrRevoked) {
-		t.Fatalf("peer=%v err=%v, want ErrRevoked", peer, err)
+	if peer || !errors.Is(err, ErrRevoked) || !errors.Is(err, ErrOriginCertRefused) {
+		t.Fatalf("peer=%v err=%v, want ErrOriginCertRefused wrapping ErrRevoked", peer, err)
 	}
 }
 
@@ -155,6 +156,49 @@ func TestClassifyOrigin_AStalledHandshakeIsRefusedNamed(t *testing.T) {
 	}
 	if peer || !errors.Is(err, ErrOriginUnreachable) {
 		t.Fatalf("peer=%v err=%v, want ErrOriginUnreachable", peer, err)
+	}
+}
+
+// A peer of this fleet that completes the handshake and then hangs up
+// without answering (an overloaded hub, a dropped connection): our verifier
+// accepted it and it sent no alert, so the error is NEITHER of the two
+// refusals (ErrRefusedByPeer, ErrOriginCertRefused). A caller must not tell
+// the operator the bundle was refused (NEW-1).
+// SABOTAGE: peerError mapping every error to ErrRefusedByPeer -> red.
+func TestClassifyOrigin_AHangUpAfterTheHandshakeIsNoRefusal(t *testing.T) {
+	x := newTwoInstances(t)
+	cfg, err := ServerConfig(x.bDir, x.b.keyPath, (&recorder{}).logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var handshakes atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			tc := tls.Server(c, cfg)
+			if tc.Handshake() == nil {
+				handshakes.Add(1)
+			}
+			tc.Close() // hang up without an answer
+		}
+	}()
+	peer, err := ClassifyOrigin(ctx10(t), x.aDir, x.a.keyPath, peerURL(ln.Addr().String()))
+	if handshakes.Load() != 1 {
+		t.Fatalf("%d completed handshakes, want 1 (this row is about a hang-up AFTER it)", handshakes.Load())
+	}
+	if peer || err == nil {
+		t.Fatalf("peer=%v err=%v, want an error", peer, err)
+	}
+	if errors.Is(err, ErrRefusedByPeer) || errors.Is(err, ErrOriginCertRefused) {
+		t.Fatalf("err=%v: a hang-up is no refusal", err)
 	}
 }
 

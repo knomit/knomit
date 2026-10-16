@@ -65,7 +65,7 @@ func GitURL(u string, fleetPeer bool) (string, error) {
 
 // ErrNotEnrolled: this instance holds no fleet certificate, so it cannot
 // fetch from an origin that is a fleet instance.
-var ErrNotEnrolled = errors.New("this instance holds no fleet certificate, so fleet origins cannot be fetched (POST /api/v1/fleet/join)")
+var ErrNotEnrolled = errors.New("this instance holds no fleet certificate, so fleet origins cannot be fetched (join a fleet: Fleet → Create or join a fleet)")
 
 // fleetSource resolves the mTLS client LAZILY from the files under dir, so
 // an instance enrolled after boot fetches on its next session without a

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
+	"knomit/internal/fact"
 	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/fileuri"
@@ -630,6 +632,40 @@ func TestFleetMaster_ARefusedTipIsAdmittedWhenItsLeafLandsOnMain(t *testing.T) {
 	require.Equal(t, betaTip, f.rev(t, "agent/beta"), "fixture: beta did not push again")
 	require.Equal(t, betaTip, localTip(t, f.mri, "agent/beta"), "the same tip is admitted once main holds the leaf")
 	require.NotContains(t, f.mri.peers.Refusals(), "agent/beta", "the refusal is cleared")
+
+	// GET /fleet/activity still shows the refusal that cleared (the ring), with
+	// its branch, tip and reason.
+	events, err := f.master.FleetActivity(context.Background(), MaxFleetActivity)
+	require.NoError(t, err)
+	var refused []FleetEvent
+	for _, e := range events {
+		if e.Kind == FleetEventRefused {
+			refused = append(refused, e)
+		}
+	}
+	require.Len(t, refused, 1, "%+v", events)
+	require.Equal(t, "agent/beta", refused[0].Branch)
+	require.Equal(t, betaTip, refused[0].Tip)
+	require.Contains(t, refused[0].Detail, "refused by verify_signatures=enforce")
+}
+
+// The ring keeps the last refusalRing refusals, newest first, whatever later
+// admissions clear from the per-branch refusals.
+// SABOTAGE: keep the first refusalRing instead of the last -> the newest is
+// missing -> red; drop the ring append -> empty -> red.
+func TestFleetPeers_TheRingKeepsTheLastRefusals(t *testing.T) {
+	p := newFleetPeers(nil, nil)
+	main := plumbing.NewHash("1111111111111111111111111111111111111111")
+	for i := range refusalRing + 5 {
+		p.record("agent/a", peerKey{tip: plumbing.NewHash(fmt.Sprintf("%040x", i+1)), main: main}, fmt.Sprintf("refusal %d", i), "", true)
+	}
+	p.record("agent/a", peerKey{tip: plumbing.NewHash(fmt.Sprintf("%040x", 9999)), main: main}, "", "", true)
+	require.Empty(t, p.Refusals(), "the admission cleared the branch's refusal")
+	log := p.RefusalLog()
+	require.Len(t, log, refusalRing)
+	require.Equal(t, fmt.Sprintf("refusal %d", refusalRing+4), log[0].Reason, "newest first")
+	require.Equal(t, "refusal 5", log[refusalRing-1].Reason, "the 5 oldest are gone")
+	require.Empty(t, (*fleetPeers)(nil).RefusalLog(), "nil-safe")
 }
 
 // A member branch deleted on the forge is forgotten by the master (PR #524
@@ -785,8 +821,8 @@ func TestFleetPeers_AMergerAdmissionOfAnOlderTipKeepsTheRefusal(t *testing.T) {
 	old := peerKey{tip: plumbing.NewHash("2222222222222222222222222222222222222222"), main: main}
 	y := peerKey{tip: plumbing.NewHash("3333333333333333333333333333333333333333"), main: main}
 
-	p.record("agent/alpha", y, "commit X refused", true) // the fetch judge
-	p.record("agent/alpha", old, "", false)              // the merger, on the older local tip
+	p.record("agent/alpha", y, "commit X refused", "", true) // the fetch judge
+	p.record("agent/alpha", old, "", "", false)              // the merger, on the older local tip
 	r, ok := p.Refusals()["agent/alpha"]
 	require.True(t, ok, "Y's refusal survives the merger's admission of the older tip")
 	require.Equal(t, y.tip.String(), r.Tip)
@@ -797,13 +833,97 @@ func TestFleetPeers_AMergerAdmissionOfAnOlderTipKeepsTheRefusal(t *testing.T) {
 
 	// The merger re-judging Y itself, admitted at a newer main, clears it.
 	newer := peerKey{tip: y.tip, main: plumbing.NewHash("4444444444444444444444444444444444444444")}
-	p.record("agent/alpha", newer, "", false)
+	p.record("agent/alpha", newer, "", "", false)
 	require.NotContains(t, p.Refusals(), "agent/alpha", "an admission of the refused tip clears its refusal")
 	_, seen = p.verdictAt("agent/alpha", y)
 	require.False(t, seen, "entries at an older main are dropped")
 
 	// The fetch judge's admission of a newer tip clears an older tip's refusal.
-	p.record("agent/alpha", peerKey{tip: old.tip, main: newer.main}, "refused", false)
-	p.record("agent/alpha", peerKey{tip: plumbing.NewHash("5555555555555555555555555555555555555555"), main: newer.main}, "", true)
+	p.record("agent/alpha", peerKey{tip: old.tip, main: newer.main}, "refused", "", false)
+	p.record("agent/alpha", peerKey{tip: plumbing.NewHash("5555555555555555555555555555555555555555"), main: newer.main}, "", "", true)
 	require.NotContains(t, p.Refusals(), "agent/alpha")
+}
+
+// A branch refused again at the same tip for the same reason (main moved,
+// the memo key changed, or the same push came again) is ONE entry of the
+// ring, and its last_refusal keeps the first time (PR #527 N3); a new tip or
+// a new reason is a new entry. A push the hub admits clears the branch's
+// refusal.
+// SABOTAGE: drop the same-tip-same-reason arm of verdictLocked -> the ring
+// holds 3 of the first refusal -> red; record a push's admission with
+// latest=false -> the refusal stays -> red.
+func TestFleetPeers_ARefusalRepeatedAtTheSameTipIsOneEntry(t *testing.T) {
+	p := newFleetPeers(nil, nil)
+	tip := plumbing.NewHash("2222222222222222222222222222222222222222")
+	for i := range 3 {
+		p.record("agent/a", peerKey{tip: tip, main: plumbing.NewHash(fmt.Sprintf("%040x", i+1))}, "no-cert", "a", true)
+	}
+	first := p.Refusals()["agent/a"].At
+	p.pushed("agent/a", tip.String(), "no-cert", "a")
+	require.Len(t, p.RefusalLog(), 1, "%+v", p.RefusalLog())
+	require.Equal(t, first, p.Refusals()["agent/a"].At, "the last_refusal is the first one")
+
+	p.record("agent/a", peerKey{tip: tip, main: plumbing.NewHash(fmt.Sprintf("%040x", 9))}, "revoked", "a", true)
+	p.pushed("agent/a", "3333333333333333333333333333333333333333", "revoked", "a")
+	require.Len(t, p.RefusalLog(), 3, "a new reason and a new tip are new entries")
+
+	p.pushed("agent/a", "4444444444444444444444444444444444444444", "", "")
+	require.NotContains(t, p.Refusals(), "agent/a", "an admitted push clears the branch's refusal")
+	require.Len(t, p.RefusalLog(), 3, "the ring keeps what cleared")
+	(*fleetPeers)(nil).pushed("agent/a", tip.String(), "x", "a") // nil-safe
+}
+
+// The host-record rule on the forge's fetch judge (PR #527 N9): alpha holds a
+// leaf on main and joined (its record is on its branch on the forge, not on
+// main), then commits the host record on its branch and pushes. The master's
+// round refuses the tip host-record, and the record never reaches main. The
+// refusal names alpha, the refused tip's author (SF3): alpha has no record on
+// main, so its Members row is the enrolled one, and the agent is the only
+// thing that ties the refusal to it; Activity's refused event says alpha too.
+// SABOTAGE: drop `gate.entry = true` from store.judgeIncoming -> admitted ->
+// red; drop the agent of the refusal in fleetPeers.admit -> red.
+func TestFleetMaster_FetchedHostRecordIsRefusedNamingItsAuthor(t *testing.T) {
+	ctx := context.Background()
+	alpha := testsigner.Named("alpha")
+	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha})
+	_, ari := f.join(t, "alpha", alpha)
+	require.NoError(t, ari.WithRead(func(svc *store.Service) {
+		_, _, err := svc.Facts().BatchWriteFacts(ctx, ari.AgentBranch(),
+			map[string]string{fact.FleetHostPath: fact.RenderFleetHost([]string{"https://evil.example/git/fleet"})}, nil, "moved", "created")
+		require.NoError(t, err)
+	}))
+	round(t, ari)
+	require.NoError(t, exec.Command("git", "-C", f.bare, "cat-file", "-e", "agent/alpha:"+fact.FleetHostPath).Run(),
+		"fixture: the host record is on alpha's branch on the forge")
+
+	round(t, f.mri)
+	r := f.mri.peers.Refusals()["agent/alpha"]
+	require.Equal(t, f.rev(t, "agent/alpha"), r.Tip, "the refusal is of the pushed tip")
+	require.Contains(t, r.Reason, "host-record")
+	require.Equal(t, "alpha", r.Agent, "the refusal names the tip's author")
+	require.Empty(t, localTip(t, f.mri, "agent/alpha"), "the refused tip never becomes a local branch")
+
+	rows, err := f.master.FleetMembers(ctx)
+	require.NoError(t, err)
+	states := map[string]string{}
+	for _, row := range rows {
+		states[row.Agent] = row.State
+	}
+	require.Equal(t, MemberEnrolled, states["alpha"], "fixture: alpha has no record on main: %v", states)
+
+	events, err := f.master.FleetActivity(ctx, MaxFleetActivity)
+	require.NoError(t, err)
+	n := 0
+	for _, e := range events {
+		if e.Kind == FleetEventRefused {
+			n++
+			require.Equal(t, "alpha", e.Agent, "%+v", e)
+			require.Equal(t, "agent/alpha", e.Branch)
+		}
+	}
+	require.Equal(t, 1, n, "%+v", events)
+
+	settleMerger(t, f.mri)
+	round(t, f.mri)
+	require.False(t, f.onForgeMain(t, fact.FleetHostPath), "the member's host record never reaches main")
 }

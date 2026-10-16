@@ -51,6 +51,14 @@ type PushPolicy struct {
 	// verify_signatures is log or enforce; nil or an error means this instance
 	// has no fleet to judge against.
 	Fleet func(context.Context) (Fleet, error)
+	// Judged, when set, is told the commit judge's verdict on the pushed
+	// branch: refusal is the text the pusher was refused with by the
+	// private-path closure or verify, or "" when the push was admitted and
+	// registered. Whole-request refusals (the policy's, the one-ref rule's)
+	// and broken packs are not verdicts and are not told. tip is the pushed
+	// tip, agent its author's agent id ("" when not an agent address). The
+	// fleet hub keeps it as the master's refusals (repos.FleetPushJudged).
+	Judged func(branch, tip, agent, refusal string)
 }
 
 type pushPolicyKey struct{}
@@ -249,11 +257,24 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(fmt.Sprintf("knomit: the push is incomplete: %v", err))
 		return
 	}
+	branch := cmd.Name.Short()
+	judged := func(refusal string) {
+		if pol.Judged == nil {
+			return
+		}
+		agent := ""
+		if c, err := object.GetCommit(q, cmd.New); err == nil {
+			agent = agentIDOfAuthor(c.Author.Email)
+		}
+		pol.Judged(branch, cmd.New.String(), agent, refusal)
+	}
 	if msg := rp.privatePathClosure(r.Context(), q, commits); msg != "" {
+		judged(msg)
 		refuse(msg)
 		return
 	}
 	if msg := rp.verify(r.Context(), pol, commits, lg); msg != "" {
+		judged(msg)
 		refuse(msg)
 		return
 	}
@@ -268,8 +289,8 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		reply.refuse(fmt.Sprintf("knomit: %s could not be registered: %v", cmd.Name, err))
 		return
 	}
+	judged("")
 
-	branch := cmd.Name.Short()
 	ev := lg.Info().Str("old", shortRefHash(cmd.Old)).Str("new", shortRefHash(cmd.New)).
 		Int("commits", len(commits)).Int("objects", len(objs))
 	switch {
@@ -400,6 +421,9 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 		}
 	}
 	gate := newJudge(fleet, selfRoot, ont, rh.factRoot)
+	// A member's branch, never this instance's own: the host-record rule
+	// applies (hostRecord).
+	gate.entry = true
 	for _, c := range commits {
 		ref, ok := gate.judgeCommit(c)
 		if ok && signer != nil {

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/pki"
 	"knomit/internal/store"
 )
 
@@ -37,27 +38,31 @@ func fleetErr(status int, code, msg string) *FleetError {
 
 // FleetStatus is what GET /api/v1/fleet reports.
 type FleetStatus struct {
-	State        string     `json:"state"` // standalone | registering | registered
-	FleetRepo    string     `json:"fleet_repo,omitempty"`
-	FleetURL     string     `json:"fleet_url,omitempty"`
-	AgentID      string     `json:"agent_id"`
+	State     string `json:"state"` // standalone | registering | registered
+	FleetRepo string `json:"fleet_repo,omitempty"`
+	AgentID   string `json:"agent_id"`
+	// PublicKey is this instance's ssh-ed25519 key line, the key a master
+	// enrolls (with the agent id) and every certificate of this instance
+	// names.
+	PublicKey    string     `json:"public_key"`
 	RecordState  string     `json:"record_state,omitempty"` // pending | active | left | revoked, read at the fleet's main
 	Since        *time.Time `json:"since,omitempty"`
 	RegisteredAt *time.Time `json:"registered_at,omitempty"`
 	LastAttempt  *time.Time `json:"last_attempt,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`
 
-	// F10. ExternalAddresses is the configured list ([] when unset). Record is
-	// this instance's own record on its agent branch head (nil when there is
-	// none); RecordCurrent says whether it matches what the current config
-	// and binary advertise; RecordPendingUpdate says the fleet's main still
-	// holds an older version of it. Notice is set while no external address
-	// is configured.
-	ExternalAddresses   []string      `json:"external_addresses"`
-	Record              *MemberFields `json:"record,omitempty"`
-	RecordCurrent       *bool         `json:"record_current,omitempty"`
-	RecordPendingUpdate bool          `json:"record_pending_update"`
-	Notice              string        `json:"notice,omitempty"`
+	// F10. Host is what this instance offers to host a fleet: its mTLS
+	// listener and its external addresses. Record is this instance's own
+	// record on its agent branch head (nil when there is none);
+	// RecordCurrent says whether it matches what the current config and
+	// binary advertise; RecordPendingUpdate says the fleet's main still holds
+	// an older version of it. Notice is set while no external address is
+	// configured.
+	Host                FleetHostOffer `json:"host"`
+	Record              *MemberFields  `json:"record,omitempty"`
+	RecordCurrent       *bool          `json:"record_current,omitempty"`
+	RecordPendingUpdate bool           `json:"record_pending_update"`
+	Notice              string         `json:"notice,omitempty"`
 
 	// Master says this instance is the fleet's master (isFleetMaster: the
 	// root key file is here and its root is the one on the fleet's main).
@@ -68,6 +73,39 @@ type FleetStatus struct {
 	Master  bool   `json:"master"`
 	Hosting string `json:"hosting,omitempty"`
 	RootDir string `json:"root_dir"`
+
+	// FleetURLs is the fleet repository URL(s) members use: on the hub, one
+	// https://<address>/git/<repo> per https external address; on any other
+	// copy, what the host record on the fleet's main says, else the origin
+	// URL. Empty with no fleet repository. HostRecord is that host record as
+	// main holds it (omitted when main holds none, or one that cannot be
+	// read). FollowsHost is the server's comparison of the two: true on the
+	// hub (it is the host), and on a copy with an origin whether that origin
+	// is one of the host record's URLs (sameFleetURL: scheme and host in any
+	// case, a default port, a trailing slash and credentials do not count);
+	// nil when there is nothing to compare (no fleet repository, or no host
+	// record on main). false is "this copy follows an old host". Every URL
+	// here, Hosting's included, is shown without its userinfo.
+	FleetURLs   []string `json:"fleet_urls"`
+	HostRecord  []string `json:"host_record,omitempty"`
+	FollowsHost *bool    `json:"follows_host,omitempty"`
+	// RootFingerprint is the fleet root installed in [tls].dir (omitted when
+	// none is).
+	RootFingerprint string `json:"root_fingerprint,omitempty"`
+}
+
+// FleetHostOffer is what this instance offers to host a fleet: its mTLS
+// listener address ([tls].addr; "" when it has none, and a fleet hosted here
+// is refused listener_required; GET /fleet shows it only to a local caller)
+// and whether it has one (ListenerOn), its external_addresses ([] when
+// unset), and WouldServe: on the fleet's master while its copy has an origin
+// (so it is not the host), the fleet repository URLs members would use if it
+// hosted the fleet here (hubFleetURLs), what the Host-here confirm names.
+type FleetHostOffer struct {
+	Listener          string   `json:"listener"`
+	ListenerOn        bool     `json:"listener_on"`
+	ExternalAddresses []string `json:"external_addresses"`
+	WouldServe        []string `json:"would_serve,omitempty"`
 }
 
 // MemberFields are a member record's advertised, informational fields as the
@@ -140,11 +178,19 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st := FleetStatus{
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
-		ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...),
-		RootDir:           m.fleetRootDir(),
+		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
+			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
+		RootDir:   m.fleetRootDir(),
+		FleetURLs: []string{},
 	}
-	if len(st.ExternalAddresses) == 0 {
+	if m.deps.Signer != nil {
+		st.PublicKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(m.deps.Signer.PublicKey())))
+	}
+	if len(st.Host.ExternalAddresses) == 0 {
 		st.Notice = NoAddressesNotice
+	}
+	if root, err := pki.InstalledRoot(m.deps.Cfg.TLS.Dir); err == nil {
+		st.RootFingerprint = root.Fingerprint
 	}
 	ri := m.fleetRepo()
 	if ri == nil {
@@ -158,13 +204,32 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		st.RecordCurrent = &current
 	}
 	st.FleetRepo = ri.Name()
-	if o, oerr := m.originOf(ri); oerr == nil {
-		st.Hosting = "none"
-		if o != nil {
-			st.FleetURL, st.Hosting = o.URL, o.URL
-		}
+	if hosted, herr := m.fleetHostAtMain(ri); herr != nil {
+		log.Warn().Err(herr).Str("fleet", ri.Name()).Msg("fleet: the host record on main cannot be read")
+	} else if len(hosted) > 0 {
+		st.HostRecord = credentialFreeAll(hosted)
 	}
 	_ = ri.WithRead(func(svc *store.Service) { st.Master = ri.isFleetMaster(svc) })
+	if o, oerr := m.originOf(ri); oerr == nil {
+		st.Hosting = "none"
+		switch {
+		case o == nil:
+			st.FleetURLs = credentialFreeAll(m.hubFleetURLs(ri))
+			st.FollowsHost = boolPtr(true)
+		case len(st.HostRecord) > 0:
+			st.Hosting, st.FleetURLs = credentialFree(o.URL), st.HostRecord
+			follows := false
+			for _, u := range st.HostRecord {
+				follows = follows || sameFleetURL(o.URL, u)
+			}
+			st.FollowsHost = &follows
+		default:
+			st.Hosting, st.FleetURLs = credentialFree(o.URL), []string{credentialFree(o.URL)}
+		}
+		if o != nil && st.Master {
+			st.Host.WouldServe = credentialFreeAll(m.hubFleetURLs(ri))
+		}
+	}
 	st.RecordState = "pending"
 	members, lerr := m.fleetMembersAtMain(ri)
 	if lerr == nil {
@@ -182,13 +247,81 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	return st, nil
 }
 
-// FleetMembers returns the member records at the fleet repository's main.
-func (m *Manager) FleetMembers(ctx context.Context) ([]store.FleetMember, error) {
+// MemberEnrolled is the derived state of an agent id that has a leaf on the
+// fleet's main and no member record: the master enrolled it and it has not
+// joined yet (or its join is not merged). Never written to a record.
+const MemberEnrolled = "enrolled"
+
+// maxFleetWalk bounds every walk of the fleet repository's main for the
+// Fleet page (FleetMembers' since, FleetActivity): that many first-parent
+// commits, newest first.
+const maxFleetWalk = 2000
+
+// FleetMemberRow is one row of GET /fleet/members: a member record as
+// readers see it (fleetMembersAtMain), or an enrolled id (a leaf on main, no
+// record: State MemberEnrolled, or revoked when the CRL lists the leaf; Path
+// the leaf's). Since is the committer time of the commit that brought the
+// row's current version (the record, else the leaf) onto main; nil when that
+// is older than the maxFleetWalk commits walked.
+type FleetMemberRow struct {
+	store.FleetMember
+	Since *time.Time
+}
+
+// FleetMembers returns the rows of GET /fleet/members at the fleet
+// repository's main: every member record, then every enrolled id, each with
+// its since.
+func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 	ri := m.fleetRepo()
 	if ri == nil {
 		return nil, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone: no fleet repository is mounted")
 	}
-	return m.fleetMembersAtMain(ri)
+	f, err := m.fleetAtMain(ri)
+	if err != nil {
+		return nil, err
+	}
+	deriveRevoked(f)
+	rows := make([]FleetMemberRow, 0, len(f.Members))
+	recorded := map[string]bool{}
+	for _, mem := range f.Members {
+		rows = append(rows, FleetMemberRow{FleetMember: mem})
+		recorded[mem.Agent] = true
+	}
+	for _, id := range f.PKI.CertIDs() {
+		if recorded[id] {
+			continue
+		}
+		state := MemberEnrolled
+		if f.PKI.Revoked(id) {
+			state = fact.MemberRevoked
+		}
+		rows = append(rows, FleetMemberRow{FleetMember: store.FleetMember{
+			Member: fact.Member{Agent: id, State: state, Addresses: []string{}}, Path: f.PKI.Layout.LeafPath(id)}})
+	}
+	paths := make([]string, len(rows))
+	for i := range rows {
+		paths[i] = rows[i].Path
+	}
+	var since map[string]time.Time
+	var serr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			serr = errors.New("fleet repository is not open")
+			return
+		}
+		since, serr = svc.FleetSince(svc.UpstreamBranch(), paths, maxFleetWalk)
+	}); err != nil {
+		return nil, err
+	}
+	if serr != nil {
+		return nil, serr
+	}
+	for i := range rows {
+		if t, ok := since[rows[i].Path]; ok {
+			rows[i].Since = &t
+		}
+	}
+	return rows, nil
 }
 
 // FleetAtMain returns what the commit judge reads from the fleet repository's
@@ -209,12 +342,18 @@ func (m *Manager) FleetAtMain(ctx context.Context) (store.Fleet, error) {
 // (FleetAtMain) and refuses a revoked leaf by rule B.
 func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, error) {
 	f, err := m.fleetAtMain(ri)
+	deriveRevoked(f)
+	return f.Members, err
+}
+
+// deriveRevoked sets State revoked on every record of f whose leaf the CRL of
+// the same revision lists (M6).
+func deriveRevoked(f store.Fleet) {
 	for i := range f.Members {
 		if f.PKI.Revoked(f.Members[i].Agent) {
 			f.Members[i].State = fact.MemberRevoked
 		}
 	}
-	return f.Members, err
 }
 
 // fleetAtMain reads the fleet at the fleet repository's consensus branch: the
@@ -352,7 +491,7 @@ func (m *Manager) guardFleetRemoval(name string) error {
 	if !m.IsFleetRepo(name) {
 		return nil
 	}
-	return fleetErr(http.StatusConflict, "fleet_repository", "this is the fleet repository: it is never archived or deleted directly; leave with `POST /api/v1/fleet/leave` (Fleet page); the master decommissions with `POST /api/v1/fleet/decommission`")
+	return fleetErr(http.StatusConflict, "fleet_repository", "this is the fleet repository: it is never archived or deleted directly; leave the fleet (Fleet → Settings → Leave), or, on the master, decommission it (Fleet → Settings → Decommission)")
 }
 
 // writeOwnRecord writes this instance's member record on the fleet

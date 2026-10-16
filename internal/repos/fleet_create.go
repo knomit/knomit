@@ -46,7 +46,8 @@ import (
 //     (recordFleetRepo, so it mounts again after a restart);
 //  3. on the agent branch, as separate commits: ROOT FIRST root.crt and
 //     crl.pem (kb/conventions/fleet/setup/root-first); this instance's leaf
-//     and its one issued/<serial>.pem; its member record, state active;
+//     and its one issued/<serial>.pem; its member record, state active; the
+//     host record (fleet_host.go: the hub's URLs, or the forge's);
 //  4. install the bundle (leaf, root, CRL) as this instance's TLS identity;
 //  5. move the staging directory to <home>/fleet;
 //  6. set the fleet state and delete the marker, in one transaction
@@ -99,6 +100,9 @@ type fleetCreateHooks struct {
 	// contended runs when a fleet operation finds fleetOpMu held and is
 	// about to wait for it.
 	contended func()
+	// hostWrite runs before the host record is written (writeFleetHost). An
+	// error is the write's result.
+	hostWrite func() error
 }
 
 // fleetCreateSteps are the names the step hook sees, in order.
@@ -263,10 +267,10 @@ func (m *Manager) refuseFleetPresent(db *sql.DB) error {
 		return err
 	}
 	if row.State != FleetStandalone {
-		return fleetErr(http.StatusConflict, "fleet_present", "this instance is in a fleet (state "+row.State+"): leave it first (POST /api/v1/fleet/leave)")
+		return fleetErr(http.StatusConflict, "fleet_present", "this instance is in a fleet (state "+row.State+"): leave the fleet first (Fleet → Settings → Leave)")
 	}
 	if ri := m.fleetRepo(); ri != nil {
-		return fleetErr(http.StatusConflict, "fleet_present", fmt.Sprintf("this instance has a fleet repository, %q, whose join did not finish (state standalone): remove it with POST /api/v1/fleet/leave", ri.Name()))
+		return fleetErr(http.StatusConflict, "fleet_present", fmt.Sprintf("this instance has a fleet repository, %q, whose join did not finish (state standalone): remove it by leaving the fleet (Fleet → Settings → Leave)", ri.Name()))
 	}
 	uid, err := recordedFleetRepo(db)
 	if err != nil {
@@ -279,7 +283,7 @@ func (m *Manager) refuseFleetPresent(db *sql.DB) error {
 				name = u.Record.Name
 			}
 		}
-		return fleetErr(http.StatusConflict, "fleet_present", "this instance has a recorded fleet repository (uid "+uid+") that is not mounted: archive it (DELETE /api/v1/repos/"+name+") if it is still listed, then purge it (DELETE /api/v1/archived/"+uid+")")
+		return fleetErr(http.StatusConflict, "fleet_present", "this instance has a recorded fleet repository (uid "+uid+") that is not mounted: archive "+name+" if it is still listed (its Settings → Danger zone → Archive), then purge it from Archived")
 	}
 	return nil
 }
@@ -413,6 +417,13 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 		return nil, err
 	}
 	if err := m.writeOwnRecord(ctx, ri, fact.MemberActive); err != nil {
+		return nil, err
+	}
+	hosted := m.hubFleetURLs(ri)
+	if cs.Origin != nil {
+		hosted = []string{cs.Origin.URL}
+	}
+	if err := m.writeFleetHost(ctx, ri, hosted); err != nil {
 		return nil, err
 	}
 	if err := fleetCreateStep("committed"); err != nil {

@@ -59,7 +59,7 @@ func TestFleetCLI_ThinClientOverTheLocalListener(t *testing.T) {
 func TestFleetCLI_PrintsAddressesAndRecord(t *testing.T) {
 	var st fleetStatusJSON
 	require.NoError(t, json.Unmarshal([]byte(`{"state":"registered","agent_id":"box","fleet_repo":"fleet","record_state":"active",
-		"external_addresses":["https://new.example"],
+		"host":{"external_addresses":["https://new.example"]},
 		"record":{"addresses":["https://old.example"],"capabilities":{"os":"linux","arch":"amd64"}},
 		"record_current":false,"record_pending_update":false}`), &st))
 	var out bytes.Buffer
@@ -71,7 +71,7 @@ func TestFleetCLI_PrintsAddressesAndRecord(t *testing.T) {
 
 	st = fleetStatusJSON{}
 	require.NoError(t, json.Unmarshal([]byte(`{"state":"registered","agent_id":"box","fleet_repo":"fleet","record_state":"active",
-		"external_addresses":[],"record":{"addresses":[],"capabilities":{}},"record_current":true,"record_pending_update":true,
+		"host":{"external_addresses":[]},"record":{"addresses":[],"capabilities":{}},"record_current":true,"record_pending_update":true,
 		"notice":"no external addresses configured; set `+"`external_addresses`"+` in knomit.toml"}`), &st))
 	out.Reset()
 	printFleetStatus(&out, st)

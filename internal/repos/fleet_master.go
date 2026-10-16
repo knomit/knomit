@@ -48,11 +48,17 @@ import (
 // A member's round is untouched: it fetches main and its own branch, pushes
 // its own branch and never merges.
 
-// PeerRefusal is the fleet master's last refusal of one member branch it
-// fetched: left behind, not retried until the branch or main moves.
+// PeerRefusal is the fleet master's refusal of one member branch: one it
+// fetched (left behind, not retried until the branch or main moves), one its
+// merger re-judged, or one pushed to the hub (refused to the pusher's face).
+// Agent is the agent id of the refused tip's author (store.CommitAgent, the
+// address the judge reads), "" when it is not an agent address: a refused
+// first join has no record on main, so this is what ties the refusal to the
+// enrolled id.
 type PeerRefusal struct {
 	Branch string    `json:"branch"`
 	Tip    string    `json:"tip"`
+	Agent  string    `json:"agent,omitempty"`
 	Reason string    `json:"reason"`
 	At     time.Time `json:"at"`
 }
@@ -83,7 +89,15 @@ type fleetPeers struct {
 	// again.
 	judged   map[string]map[peerKey]bool
 	refusals map[string]PeerRefusal
+	// ring is every refusal recorded, oldest first, the last refusalRing of
+	// them: what GET /fleet/activity shows as "refused", including refusals
+	// that cleared since (refusals keeps only each branch's current one). In
+	// memory only, like refusals.
+	ring []PeerRefusal
 }
+
+// refusalRing is how many refusals fleetPeers.ring keeps.
+const refusalRing = 200
 
 func newFleetPeers(master, publishes func(*store.Service) bool) *fleetPeers {
 	return &fleetPeers{master: master, publishes: publishes, judged: map[string]map[peerKey]bool{}, refusals: map[string]PeerRefusal{}}
@@ -107,11 +121,12 @@ func (p *fleetPeers) verdictAt(branch string, key peerKey) (refused, ok bool) {
 	return refused, ok
 }
 
-// record stores branch's verdict at key. A refusal is kept as the branch's
-// last_refusal. An admission clears it when it is of the same tip, or when
-// latest says this verdict is of the branch's current tip (the fetch judge);
-// the merger's admission of an older local tip leaves a newer tip's refusal.
-func (p *fleetPeers) record(branch string, key peerKey, reason string, latest bool) {
+// record stores branch's verdict at key (agent: the tip's author's id). A
+// refusal is kept as the branch's last_refusal. An admission clears it when
+// it is of the same tip, or when latest says this verdict is of the branch's
+// current tip (the fetch judge); the merger's admission of an older local tip
+// leaves a newer tip's refusal.
+func (p *fleetPeers) record(branch string, key peerKey, reason, agent string, latest bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	m := p.judged[branch]
@@ -125,12 +140,51 @@ func (p *fleetPeers) record(branch string, key peerKey, reason string, latest bo
 		}
 	}
 	m[key] = reason != ""
+	p.verdictLocked(branch, key.tip.String(), reason, agent, latest)
+}
+
+// pushed records receive-pack's verdict on a push of branch at tip, on the
+// hub (Manager.FleetPushJudged): a refusal is the branch's last_refusal and
+// goes into the ring like the fetch judge's; an admission is of the branch's
+// new tip, so it clears the branch's refusal. The memo is not touched: the
+// merger re-judges an admitted tip against the main it merges into.
+func (p *fleetPeers) pushed(branch, tip, reason, agent string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.verdictLocked(branch, tip, reason, agent, true)
+}
+
+// verdictLocked is the refusal bookkeeping record and pushed share, under
+// p.mu. The same branch refused again at the same tip for the same reason
+// (main moved, or the same push was retried) is not a new refusal: the
+// last_refusal and the ring keep the first one (PR #527 N3), so one stuck
+// branch cannot fill the ring.
+func (p *fleetPeers) verdictLocked(branch, tip, reason, agent string, latest bool) {
+	cur, refused := p.refusals[branch]
 	switch {
+	case reason != "" && refused && cur.Tip == tip && cur.Reason == reason:
 	case reason != "":
-		p.refusals[branch] = PeerRefusal{Branch: branch, Tip: key.tip.String(), Reason: reason, At: time.Now().UTC()}
-	case latest || p.refusals[branch].Tip == key.tip.String():
+		r := PeerRefusal{Branch: branch, Tip: tip, Agent: agent, Reason: reason, At: time.Now().UTC()}
+		p.refusals[branch] = r
+		p.ring = append(p.ring, r)
+		if over := len(p.ring) - refusalRing; over > 0 {
+			p.ring = append(p.ring[:0:0], p.ring[over:]...)
+		}
+	case latest || cur.Tip == tip:
 		delete(p.refusals, branch)
 	}
+}
+
+// refusedAgent is the agent id of a refused tip's author; "" for an
+// admission, which reads nothing.
+func refusedAgent(svc *store.Service, reason string, tip plumbing.Hash) string {
+	if reason == "" {
+		return ""
+	}
+	return svc.CommitAgent(tip)
 }
 
 // demote removes the local agent/<branch> after a refusal, if it is still at
@@ -202,7 +256,7 @@ func (p *fleetPeers) mayMerge(ctx context.Context, svc *store.Service, branch, o
 		lg.Warn().Err(err).Str("branch", branch).Msg("fleet master: branch not re-judged; not merged this run")
 		return false
 	}
-	p.record(branch, key, reason, false)
+	p.record(branch, key, reason, refusedAgent(svc, reason, tip), false)
 	if reason == "" {
 		return true
 	}
@@ -271,7 +325,7 @@ func (p *fleetPeers) admit(ctx context.Context, svc *store.Service, own string, 
 			lg.Warn().Err(err).Str("branch", branch).Msg("fleet master: member branch not judged; retried next round")
 			continue
 		}
-		p.record(branch, key, reason, true)
+		p.record(branch, key, reason, refusedAgent(svc, reason, key.tip), true)
 		if reason != "" {
 			lg.Warn().Str("branch", branch).Str("tip", shortHash(key.tip.String())).Str("reason", reason).
 				Msg("fleet master: member branch refused; left behind")
@@ -337,18 +391,45 @@ func (m *Manager) FleetPushRefusal(ri *RepoInstance) string {
 	return ""
 }
 
+// FleetPushJudged is the receive-pack verdict callback for ri
+// (store.PushPolicy.Judged): on the fleet repository, the copy that takes
+// pushes is the hub (FleetPushRefusal refuses every other copy before the
+// judge), the master's, and receive-pack IS its judge, so its verdicts go
+// where the fetch judge's do (fleetPeers.pushed): a refusal is the branch's
+// last_refusal and an entry of the ring GET /fleet/activity shows. nil for
+// any other repository.
+func (m *Manager) FleetPushJudged(ri *RepoInstance) func(branch, tip, agent, refusal string) {
+	if ri == nil || !ri.IsFleet() || ri.peers == nil {
+		return nil
+	}
+	return func(branch, tip, agent, refusal string) { ri.peers.pushed(branch, tip, refusal, agent) }
+}
+
 // FleetRefusals is the fleet master's last refusal of each member branch it
-// left behind, by branch: refused at the fetch (a forge), or refused by the
-// merger's re-judge against a main that moved (both hostings). Empty on a
-// member and with no fleet repository mounted; a push receive-pack refuses
-// is refused to the pusher's face instead. Held in memory: a restart judges
-// again.
+// left behind, by branch: refused at the fetch (a forge), by the merger's
+// re-judge against a main that moved (both hostings), or by the hub's
+// receive-pack (to the pusher's face, and kept here). Empty on a member and
+// with no fleet repository mounted. Held in memory: a restart judges again.
 func (m *Manager) FleetRefusals() map[string]PeerRefusal {
 	ri := m.fleetRepo()
 	if ri == nil {
 		return map[string]PeerRefusal{}
 	}
 	return ri.peers.Refusals()
+}
+
+// RefusalLog is a copy of the ring, newest first; nil-safe.
+func (p *fleetPeers) RefusalLog() []PeerRefusal {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]PeerRefusal, len(p.ring))
+	for i, r := range p.ring {
+		out[len(p.ring)-1-i] = r
+	}
+	return out
 }
 
 // Refusals is a copy of the current refusals, by branch; nil-safe.

@@ -47,6 +47,11 @@ const (
 	// a path outside artifacts/ that is not under members/<its own id>/, or
 	// deletes a file there (the record-owner rule, recordOwner).
 	RuleNotOwner = "not-owner"
+	// RuleHostRecord: the fleet repository, a member's branch entering it
+	// only (receive-pack, the master's peer judge; not CheckRange) — a signed
+	// commit that is not a clean merge changes artifacts/fleet/host, which
+	// only the fleet's master writes (the host-record rule, hostRecord).
+	RuleHostRecord = "host-record"
 	// RuleRevoked: the leaf artifact for the author's id at the fleet revision
 	// is for the signing key, chains to the fleet root, and its serial is on
 	// the fleet CRL (rule B; or a self-registration on a revoked leaf).
@@ -146,6 +151,18 @@ type AcceptList interface {
 func (s *Service) CommitExists(h plumbing.Hash) bool {
 	_, err := object.GetCommit(s.rh.gits, h)
 	return err == nil
+}
+
+// CommitAgent is the agent id in the author address of commit h (the lookup
+// the commit judge makes, agentIDOfAuthor): "" when this repository does not
+// hold h or its author is not an agent address. Nothing is derived from a
+// branch name.
+func (s *Service) CommitAgent(h plumbing.Hash) string {
+	c, err := object.GetCommit(s.rh.gits, h)
+	if err != nil {
+		return ""
+	}
+	return agentIDOfAuthor(c.Author.Email)
 }
 
 // SetAcceptList installs the accept list, bound to this repository. Like

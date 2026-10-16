@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -307,9 +308,18 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 	if _, ok := memberStates(t, alpha)["bravo"]; ok {
 		t.Fatal("a refused join left a member record on main")
 	}
+	// The hub's receive-pack is the master's judge (PR #527 SF2): its refusal
+	// is the master's, with the refused tip's author (SF3).
+	refused := alpha.mgr.FleetRefusals()["agent/bravo"]
+	if refused.Agent != "bravo" || refused.Tip == "" || !strings.Contains(refused.Reason, "no artifacts/fleet/certs/bravo.pem") {
+		t.Fatalf("the hub's push refusal is not the master's: %+v", refused)
+	}
 
 	before := alpha.receives.Load()
 	bravo.join(t, alpha)
+	if _, ok := alpha.mgr.FleetRefusals()["agent/bravo"]; ok {
+		t.Error("the admitted push did not clear bravo's refusal")
+	}
 	if got := alpha.receives.Load() - before; got != 2 {
 		t.Errorf("the join reached the hub with %d pushes, want 2 (the mount's round, the record)", got)
 	}
@@ -368,6 +378,7 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireFleetActivity(t, alpha, enr.Serial)
 	if _, err := pki.InstallBundle(charlie.cfg.TLS.Dir, charlie.key, []byte(enr.Bundle), pki.InstallOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -399,6 +410,70 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 	}
 	if _, err := os.Stat(rootDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the root survived the decommission: %v", err)
+	}
+}
+
+// requireFleetActivity: GET /fleet/activity on the hub after the scenario of
+// TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission (create,
+// bravo's refused join, enroll, join, leave, revoke, charlie's enroll with
+// serial charlieSerial) shows each from its source, newest first: the
+// creating commit, the host record, the issuance log (the race's local
+// issuance included: it IS one), the merges into main and the records they
+// brought, and the CRL with the revocation's reason.
+func requireFleetActivity(t *testing.T, hub *fleetNode, charlieSerial string) {
+	t.Helper()
+	rec := hub.api(http.MethodGet, "/fleet/activity", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /fleet/activity: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Events []repos.FleetEvent `json:"events"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for i, e := range out.Events {
+		got[e.Kind+" "+e.Agent]++
+		if i > 0 && e.At.After(out.Events[i-1].At) {
+			t.Fatalf("event %d (%s) is newer than the one before it: not newest first", i, e.Kind)
+		}
+		switch {
+		case e.Kind == repos.FleetEventAdmitted && (e.Branch != "agent/bravo" || e.Tip == ""):
+			t.Errorf("admitted: %+v, want bravo's branch and tip", e)
+		case e.Kind == repos.FleetEventRevoked && !strings.HasSuffix(e.Detail, ": left"):
+			t.Errorf("revoked: %+v, want the statement's reason", e)
+		case e.Kind == repos.FleetEventHostChanged && e.Detail != "hosted at "+hub.fleetURL():
+			t.Errorf("host-changed: %+v", e)
+		}
+	}
+	want := map[string]int{
+		"created alpha": 1, "host-changed alpha": 1, "joined alpha": 1,
+		"enrolled alpha": 1, "enrolled bravo": 2, "enrolled charlie": 1,
+		"joined bravo": 1, "admitted bravo": 2, "left bravo": 1, "revoked bravo": 1,
+		"refused bravo": 1, // the first join, refused by the hub's receive-pack
+	}
+	for k, n := range want {
+		if got[k] != n {
+			t.Errorf("activity has %d %q, want %d (all: %v)", got[k], k, n, got)
+		}
+	}
+	if len(out.Events) != 13 {
+		t.Errorf("%d events, want 13: %v", len(out.Events), got)
+	}
+	found := false
+	for _, e := range out.Events {
+		found = found || e.Kind == repos.FleetEventEnrolled && e.Serial == charlieSerial
+	}
+	if !found {
+		t.Errorf("no enrolled event with charlie's serial %s", charlieSerial)
+	}
+	if rec := hub.api(http.MethodGet, "/fleet/activity?limit=3", ""); !strings.Contains(rec.Body.String(), `"events"`) ||
+		strings.Count(rec.Body.String(), `"kind"`) != 3 {
+		t.Errorf("limit=3: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := hub.api(http.MethodGet, "/fleet/activity?limit=0", ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("limit=0: %d, want 400", rec.Code)
 	}
 }
 
@@ -456,6 +531,14 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	if bst, _ := bravo.mgr.FleetStatus(ctx); !bst.Master || bst.Hosting != "none" {
 		t.Fatalf("bravo after the detach: %+v", bst)
 	}
+	// The new host records where the fleet is hosted on its main; the old
+	// hub's main still says the old host.
+	if got, want := readAt(t, bravo.fleet(t), "main", fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("bravo's host record after the detach: %q, want it to end %q", got, want)
+	}
+	if got, want := readAt(t, alpha.fleet(t), "main", fact.FleetHostPath), "url: "+alpha.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("alpha's host record (written at create): %q, want it to end %q", got, want)
+	}
 
 	alpha.asClient(t)
 	body := `{"url":"` + bravo.fleetURL() + `"}`
@@ -479,9 +562,33 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 		t.Fatalf("the old hub's manual merge: %d %s", rec.Code, rec.Body.String())
 	}
 
+	// Charlie still follows the old host. Once the old host's main holds the
+	// new master's host record (alpha's round fetched it from bravo),
+	// charlie's next fetch from alpha brings it: GET /fleet then shows the
+	// record (fleet_urls, host_record) apart from where charlie syncs
+	// (hosting), which is how the page tells "this copy follows the old
+	// host". Charlie's push there is refused (alpha has an origin now).
+	alpha.round(t)
 	charlie.asClient(t)
+	_, _ = charlie.mgr.Send(ctx, charlie.fleet(t), repos.AttachOrigin(repos.OriginSpec{URL: alpha.fleetURL()}))
+	cst, err := charlie.mgr.FleetStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cst.Hosting != alpha.fleetURL() || len(cst.HostRecord) != 1 || cst.HostRecord[0] != bravo.fleetURL() ||
+		len(cst.FleetURLs) != 1 || cst.FleetURLs[0] != bravo.fleetURL() {
+		t.Fatalf("charlie on the old host: hosting %q host_record %v fleet_urls %v; want %q, [%s], [%s]",
+			cst.Hosting, cst.HostRecord, cst.FleetURLs, alpha.fleetURL(), bravo.fleetURL(), bravo.fleetURL())
+	}
+	if cst.FollowsHost == nil || *cst.FollowsHost {
+		t.Fatalf("charlie on the old host: follows_host %v, want false (the server's comparison)", cst.FollowsHost)
+	}
+
 	if rec := charlie.api(http.MethodPut, "/repos/fleet/origin", body); rec.Code/100 != 2 {
 		t.Fatalf("charlie re-points: %d %s", rec.Code, rec.Body.String())
+	}
+	if cst, err := charlie.mgr.FleetStatus(ctx); err != nil || cst.FollowsHost == nil || !*cst.FollowsHost {
+		t.Fatalf("charlie re-pointed at the host: follows_host %v (%v), want true", cst.FollowsHost, err)
 	}
 	editOwnRecord(t, charlie, charlie.cfg.ExternalAddresses[0], "https://charlie.moved.example")
 	before := bravo.receives.Load()
@@ -496,5 +603,13 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	hubPublishes(t, bravo, recordPath("alpha"), "https://alpha.moved.example")
 	if s := memberStates(t, bravo); s["alpha"] != fact.MemberActive || s["charlie"] != fact.MemberActive {
 		t.Fatalf("the new hub's main: %v", s)
+	}
+	// Charlie's and alpha's PUT origin wrote no host record: their pushes
+	// were admitted, and the hub refuses a member branch that changes it.
+	// Both copies follow the new host's record through main.
+	for _, n := range []*fleetNode{alpha, charlie} {
+		if got, want := readAt(t, n.fleet(t), "main", fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
+			t.Fatalf("%s's main after its round: host record %q, want it to end %q", n.id, got, want)
+		}
 	}
 }

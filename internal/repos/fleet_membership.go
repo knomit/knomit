@@ -83,14 +83,6 @@ type FleetLeft struct {
 	PushError string `json:"push_error,omitempty"`
 }
 
-// FleetJoined is what POST /fleet/join answers: the state after the join,
-// and the fingerprint of the root the bundle installed (§1.5 Join step 2:
-// supplying the bundle is the operator's consent to that root).
-type FleetJoined struct {
-	FleetStatus
-	RootFingerprint string `json:"root_fingerprint"`
-}
-
 // FleetRevocation is what POST /fleet/revoke answers.
 type FleetRevocation struct {
 	AgentID      string `json:"agent_id"`
@@ -364,7 +356,7 @@ func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) 
 		return fleetErr(http.StatusConflict, "rekey_unsupported", "agent "+agentID+" already has a certificate for another key: a lost or rotated key is a fresh start under a new agent id (a same-id rekey is not supported)")
 	}
 	if !pki.IsRevoked(p.CRL, leaf.SerialNumber) {
-		return fleetErr(http.StatusConflict, "enrolled", "agent "+agentID+" is enrolled (serial "+leaf.SerialNumber.Text(16)+" is not revoked): revoke it first (POST /api/v1/fleet/revoke)")
+		return fleetErr(http.StatusConflict, "enrolled", "agent "+agentID+" is enrolled (serial "+leaf.SerialNumber.Text(16)+" is not revoked): revoke it first (Fleet → Members → Revoke certificate)")
 	}
 	return nil
 }
@@ -372,29 +364,30 @@ func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) 
 // JoinFleet joins the fleet at the bundle's URL with the bundle the master's
 // enroll returned (see the file comment). It answers registered: the record is on
 // the fleet's origin, and counts once the master admits it into main. The
-// answer carries the fingerprint of the root the bundle installed.
-func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoined, error) {
+// answer's root_fingerprint is the root the bundle installed (§1.5 Join step
+// 2: supplying the bundle is the operator's consent to that root).
+func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatus, error) {
 	defer m.lockFleetOp()()
 	if err := m.recoverFleetCreate(ctx); err != nil {
-		return FleetJoined{}, err
+		return FleetStatus{}, err
 	}
 	db := m.ControlDB()
 	if db == nil {
-		return FleetJoined{}, errors.New("fleet join: control.db is not open")
+		return FleetStatus{}, errors.New("fleet join: control.db is not open")
 	}
 	b, err := m.joinPreflight(db, spec.Bundle)
 	if err != nil {
-		return FleetJoined{}, err
+		return FleetStatus{}, err
 	}
 	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle, pki.InstallOptions{}); err != nil {
-		return FleetJoined{}, fmt.Errorf("fleet join: install the bundle: %w", err)
+		return FleetStatus{}, fmt.Errorf("fleet join: install the bundle: %w", err)
 	}
-	refuse := func(ri *RepoInstance, ferr *FleetError) (FleetJoined, error) {
+	refuse := func(ri *RepoInstance, ferr *FleetError) (FleetStatus, error) {
 		if uerr := m.undoJoin(context.WithoutCancel(ctx), ri); uerr != nil {
 			ferr.Msg += "; undoing the join failed (" + uerr.Error() + ")"
 		}
 		_ = recordFleetAttempt(db, ferr, time.Now())
-		return FleetJoined{}, ferr
+		return FleetStatus{}, ferr
 	}
 	// The clone decides the transport (ResolveOrigin) against the trust just
 	// installed: the hub's listener chains to the bundle's root -> cert; a
@@ -405,9 +398,9 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoine
 		return refuse(nil, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", err.Error()))
 	}
 	// On the clone path ErrOriginUnreachable comes only from ResolveOrigin's
-	// classification: the hub reached but refusing (a revoked bundle) is
-	// bundle_refused, as join:check says.
-	if errors.Is(err, ErrOriginUnreachable) && !errors.Is(err, pki.ErrOriginUnreachable) {
+	// classification, which join:check makes too: the same cause answers the
+	// same code on both routes (joinReachErr).
+	if errors.Is(err, ErrOriginUnreachable) {
 		return refuse(nil, joinReachErr(originHost(b.FleetURL), err))
 	}
 	if err != nil {
@@ -429,16 +422,13 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoine
 		return refuse(ri, fleetErr(http.StatusConflict, "join_refused", "the fleet did not take this instance's record: "+err.Error()+". Nothing is kept; join again (a leaf the master issued just now reaches the fleet's main on its next round)"))
 	}
 	if err := recordFleetAttempt(db, nil, time.Now()); err != nil {
-		return FleetJoined{}, err
+		return FleetStatus{}, err
 	}
 	if err := setFleetState(db, FleetRegistered, time.Now()); err != nil {
-		return FleetJoined{}, err
+		return FleetStatus{}, err
 	}
 	log.Info().Str("fleet", ri.Name()).Msg("fleet: joined; the record counts once the master admits it into main")
-	out := FleetJoined{}
-	out.RootFingerprint, _ = pki.RootID(b.Root)
-	out.FleetStatus, err = m.FleetStatus(ctx)
-	return out, err
+	return m.FleetStatus(ctx)
 }
 
 // joinPreflight is every refusal a join (and its check) makes before
@@ -460,6 +450,9 @@ func (m *Manager) joinPreflight(db *sql.DB, raw []byte) (pki.Bundle, error) {
 	if b.FleetURL == "" {
 		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", "the bundle names no fleet repository URL: enroll this instance again on the master")
 	}
+	if why := bundleURLProblem(b.FleetURL); why != "" {
+		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", "the bundle's fleet repository URL "+credentialFree(b.FleetURL)+" "+why+": enroll this instance again on the master")
+	}
 	if _, err := pki.PreviewBundle(m.deps.KeyPath, raw); err != nil {
 		if errors.Is(err, pki.ErrKeyMismatch) {
 			return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "key_mismatch", err.Error())
@@ -474,6 +467,42 @@ func (m *Manager) joinPreflight(db *sql.DB, raw []byte) (pki.Bundle, error) {
 		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "agent_mismatch", fmt.Sprintf("the bundle's certificate is for agent %q, not this instance's %q", leafID, m.AgentID()))
 	}
 	return b, nil
+}
+
+// bundleURLProblem is why a bundle's url: line is not a fleet repository URL
+// a join can clone, or "": the line is unauthenticated (SplitBundle checks
+// only the agent, the root and the serial), so the join checks its shape
+// before anything dials it, and join and join:check refuse a bad one with
+// the same code (bundle_invalid; PR #527 N1). A master's enroll writes one of
+// two shapes: a hub's plain https://<address>/git/<repo> (an https URL with a
+// host, never the internal fleet scheme pki.GitURL derives), or a forge-hosted fleet's
+// origin URL, which the origin routes accept as https, ssh:// or scp-style
+// git@host:path, or file:// under a local origin root. Anything else (another
+// scheme, plain http, a URL with no host) is refused.
+func bundleURLProblem(u string) string {
+	if !strings.Contains(u, "://") {
+		if at, colon := strings.Index(u, "@"), strings.Index(u, ":"); at > 0 && colon > at+1 && colon < len(u)-1 {
+			return "" // scp-style git@host:path, a forge's ssh origin
+		}
+		return "is not a URL"
+	}
+	p, err := url.Parse(u)
+	if err != nil {
+		return "is not a URL"
+	}
+	switch p.Scheme {
+	case "https", "ssh":
+		if p.Hostname() == "" {
+			return "names no host"
+		}
+		return ""
+	case "file":
+		if p.Path == "" {
+			return "names no path"
+		}
+		return ""
+	}
+	return "is not https:// (a hub's) or a forge origin's (https://, ssh://, git@host:path, file://)"
 }
 
 // The two FleetJoinCheck.Hosting values.
@@ -505,9 +534,9 @@ type FleetJoinCheck struct {
 // removed before returning). An instance of that fleet is hosting "master"
 // (a credential for it is auth_invalid); anything else is a forge, probed
 // with the joiner's credential (cert as input is auth_invalid). A host that
-// cannot be reached is unreachable (502); a host reached that refuses the
-// bundle, or whose certificate this bundle refuses, is bundle_refused (422,
-// see joinReachErr). It writes nothing.
+// refuses the bundle, or whose certificate this bundle refuses, is
+// bundle_refused (422); any other failure to classify is unreachable (502),
+// as the join says for the same cause (joinReachErr). It writes nothing.
 func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (FleetJoinCheck, error) {
 	defer m.lockFleetOp()()
 	db := m.ControlDB()
@@ -569,17 +598,47 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 	return out, nil
 }
 
-// joinReachErr names a failed classification of the bundle's fleet URL: a
-// host that could not be reached (pki.ErrOriginUnreachable) is unreachable
-// (502); anything else means the host WAS reached and the fleet's TLS
-// exchange with the bundle's certificate failed (our verifier refused the
-// host, or the host refused the certificate: typically a bundle revoked
-// since it was issued), which is bundle_refused (422).
+// joinReachErr names a failed classification of the bundle's fleet URL, for
+// join and join:check alike. Only a genuine refusal is bundle_refused (422):
+// the host refused this bundle's certificate (pki.ErrRefusedByPeer: typically
+// a bundle revoked since it was issued), or our verifier refused the
+// certificate the host presents as one of this fleet's
+// (pki.ErrOriginCertRefused). Everything else is unreachable (502): no TCP
+// connection, a timeout or a reset after the handshake, this instance's own
+// trust material unusable. Those are no verdict on the bundle, and "ask for a
+// new bundle" would send the operator the wrong way.
+//
+// The text is the classification's own: the join's ResolveOrigin wrap
+// (ErrOriginUnreachable, "origin was not attached") is dropped (reachCause),
+// so both routes say the same words for the same cause.
 func joinReachErr(host string, err error) *FleetError {
-	if errors.Is(err, pki.ErrOriginUnreachable) {
-		return fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+host+": "+err.Error())
+	cause := reachCause(err).Error()
+	if errors.Is(err, pki.ErrRefusedByPeer) || errors.Is(err, pki.ErrOriginCertRefused) {
+		return fleetErr(http.StatusUnprocessableEntity, "bundle_refused", "the fleet at "+host+" refused this bundle ("+cause+"): ask the fleet's master for a new bundle")
 	}
-	return fleetErr(http.StatusUnprocessableEntity, "bundle_refused", "the fleet at "+host+" refused this bundle ("+err.Error()+"): ask the fleet's master for a new bundle")
+	return fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+host+": "+cause)
+}
+
+// reachCause is err without ResolveOrigin's wrap (fmt.Errorf("%w: %w",
+// ErrOriginUnreachable, cause)): the cause. Any other error is itself.
+func reachCause(err error) error {
+	m, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return err
+	}
+	var rest []error
+	wrapped := false
+	for _, e := range m.Unwrap() {
+		if e == ErrOriginUnreachable {
+			wrapped = true
+			continue
+		}
+		rest = append(rest, e)
+	}
+	if !wrapped || len(rest) != 1 {
+		return err
+	}
+	return rest[0]
 }
 
 // originHost is the host an origin URL names: host[:port] of a URL, the
@@ -640,7 +699,7 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 			return FleetLeft{}, err
 		}
 		if master {
-			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance is the fleet's master: decommission the fleet (POST /api/v1/fleet/decommission), or hand the root to another member (GET and PUT /api/v1/fleet/root) and stand down (DELETE /api/v1/fleet/root) first")
+			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance is the fleet's master: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
 		}
 		if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
 			out.PushError = "the left record was not written: " + err.Error()
@@ -932,7 +991,7 @@ func (m *Manager) StandDown(ctx context.Context) error {
 			return err
 		}
 		if !origin {
-			return fleetErr(http.StatusConflict, "hub", "this instance hosts the fleet (its copy of "+ri.Name()+" has no origin): point it at the new master first (PUT /api/v1/repos/"+ri.Name()+"/origin), or the fleet has no master and no host")
+			return fleetErr(http.StatusConflict, "hub", "this instance hosts the fleet (its copy of "+ri.Name()+" has no origin): host the fleet on the new master and point this copy at it first (Fleet → Settings → Point at the new host), or the fleet has no master and no host")
 		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
@@ -948,15 +1007,34 @@ func (m *Manager) StandDown(ctx context.Context) error {
 // stand-down (DELETE /fleet/root, which passes while the copy has an origin)
 // cannot remove the key between the master check and the detach and leave a
 // hub with no master.
+//
+// On the fleet repository a detach that succeeded makes this master the host,
+// so it records that on main: the host record (fleet_host.go) with the hub's
+// URLs, committed on the agent branch and published (main fast-forwards here:
+// there is no origin any more; a fast-forward that fails now is the local
+// reconcile's to retry). The detach stands when the write fails, and it is
+// answered as done: the hub's local reconcile re-asserts the record every
+// round (RepoInstance.fleetHostRound), so the next round writes it.
 func (m *Manager) DetachRepoOrigin(ctx context.Context, ri *RepoInstance) error {
-	if ri != nil && ri.IsFleet() {
+	fleet := ri != nil && ri.IsFleet()
+	if fleet {
 		defer m.lockFleetOp()()
 		if err := m.guardFleetDetach(ri); err != nil {
 			return err
 		}
 	}
-	_, err := m.Send(ctx, ri, DetachOrigin())
-	return err
+	if _, err := m.Send(ctx, ri, DetachOrigin()); err != nil || !fleet {
+		return err
+	}
+	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil {
+		log.Warn().Err(err).Str("fleet", ri.Name()).
+			Msg("fleet: this instance hosts the fleet now, but the host record was not written; the local reconcile's next round writes it")
+		return nil
+	}
+	if err := m.publishFleetMainNow(ctx, ri); err != nil {
+		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: main did not follow the host record yet; the local reconcile retries")
+	}
+	return nil
 }
 
 // guardFleetDetach is the fleet repository's detach check (R3.3): a member's

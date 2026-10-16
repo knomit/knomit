@@ -54,7 +54,6 @@ func withFleetAPI(fn func(*http.Client) error) error {
 type fleetStatusJSON struct {
 	State       string `json:"state"`
 	FleetRepo   string `json:"fleet_repo"`
-	FleetURL    string `json:"fleet_url"`
 	AgentID     string `json:"agent_id"`
 	RecordState string `json:"record_state"`
 	Since       string `json:"since"`
@@ -64,8 +63,10 @@ type fleetStatusJSON struct {
 	Hosting     string `json:"hosting"`
 	RootDir     string `json:"root_dir"`
 	// F10
-	ExternalAddresses []string `json:"external_addresses"`
-	Record            *struct {
+	Host struct {
+		ExternalAddresses []string `json:"external_addresses"`
+	} `json:"host"`
+	Record *struct {
 		Addresses    []string          `json:"addresses"`
 		Capabilities map[string]string `json:"capabilities"`
 	} `json:"record"`
@@ -91,8 +92,8 @@ func printFleetStatus(out io.Writer, st fleetStatusJSON) {
 		fmt.Fprintf(out, "record: %s\n", st.RecordState)
 		fmt.Fprintf(out, "fleet master: %t (fleet root directory: %s)\n", st.Master, st.RootDir)
 	}
-	if len(st.ExternalAddresses) > 0 {
-		fmt.Fprintf(out, "addresses (knomit.toml): %s\n", strings.Join(st.ExternalAddresses, " "))
+	if len(st.Host.ExternalAddresses) > 0 {
+		fmt.Fprintf(out, "addresses (knomit.toml): %s\n", strings.Join(st.Host.ExternalAddresses, " "))
 	}
 	if st.Record != nil {
 		fmt.Fprintf(out, "addresses (record):      %s\n", strings.Join(st.Record.Addresses, " "))

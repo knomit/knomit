@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"os"
@@ -103,7 +105,7 @@ func TestFleetMembership_ForgeEnrollJoinAdmitLeaveRevokeDecommission(t *testing.
 	require.Equal(t, "not_registered", code, "a standalone instance enrolls nobody")
 	joined, err := alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
-	st := joined.FleetStatus
+	st := joined
 	require.Equal(t, FleetRegistered, st.State)
 	require.NotEmpty(t, enr.RootFingerprint)
 	require.Equal(t, enr.RootFingerprint, joined.RootFingerprint, "the join names the root it installed (review N7)")
@@ -323,6 +325,143 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	origin, err = f.master.hasOrigin(f.mri)
 	require.NoError(t, err)
 	require.False(t, origin, "the master's copy is the hub now")
+}
+
+// localRound runs ONE round of ri's origin-less local reconcile, as the Sync
+// stage's loop does (with the fleet hub's host-record duty).
+func localRound(t *testing.T, ri *RepoInstance) {
+	t.Helper()
+	svc, release, err := ri.Acquire()
+	require.NoError(t, err)
+	defer release()
+	runLocalReconcileLoop(context.Background(), svc, ri.Name(), ri.agentBranch, time.Hour, nil, nil, nil, true, ri.fleetHostRound)
+}
+
+// The hub re-asserts the host record in every round of its local reconcile
+// (PR #527 SF1). A detach whose record write fails is answered as done (the
+// detach stood) and leaves main without the hub's record; the next round,
+// here the Sync stage's own round after a rebuild, writes it and main follows.
+// A round with nothing to change commits nothing, and a change of
+// external_addresses is followed by the next round, written without the
+// address's credentials (SF4).
+// SABOTAGE: make fleetHostRound return at once -> main never holds the
+// record -> red; pass nil for it in the Sync stage -> the rebuild's round
+// does not write it -> red; DetachRepoOrigin returns the write's error again
+// -> red.
+func TestFleetHost_TheHubReassertsItsRecordEachRound(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	f.master.deps.Cfg.TLS.Addr = "127.0.0.1:0"
+	f.master.deps.Cfg.ExternalAddresses = []string{"https://master.example"}
+	fails := 1
+	setFleetHooks(t, fleetCreateHooks{hostWrite: func() error {
+		if fails > 0 {
+			fails--
+			return errors.New("the disk is full (test seam)")
+		}
+		return nil
+	}})
+	require.NoError(t, f.master.DetachRepoOrigin(ctx, f.mri), "the detach stood: it is answered as done")
+	require.Zero(t, fails, "fixture: the record write failed once")
+	ri := f.master.Get("fleet")
+	origin, err := f.master.hasOrigin(ri)
+	require.NoError(t, err)
+	require.False(t, origin, "fixture: the master's copy is the hub")
+	hosted, err := f.master.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Empty(t, hosted, "fixture: main holds no host record after the failed write")
+
+	// The next round: the Sync stage's own first round, here at a restart
+	// (Synchronous: one round, inline).
+	deps := f.master.deps
+	deps.Cfg.Git.LocalReconcileInterval = time.Hour // the fixture's 0 runs no local loop at all
+	require.NoError(t, f.master.Close())
+	m := New(context.Background(), deps)
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { m.Close() })
+	m.fleetBootWg.Wait()
+	ri = m.Get("fleet")
+	require.NotNil(t, ri, "fixture: the fleet repository mounts again")
+	hosted, err = m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://master.example/git/fleet"}, hosted, "the next round wrote the hub's record and main followed")
+
+	tip := localTip(t, ri, "main")
+	localRound(t, ri)
+	require.Equal(t, tip, localTip(t, ri, "main"), "a current record: the round commits nothing")
+
+	m.deps.Cfg.ExternalAddresses = []string{"https://user:s3cret-token@moved.example:8443/"}
+	localRound(t, ri)
+	hosted, err = m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://moved.example:8443/git/fleet"}, hosted, "the round follows the addresses, without credentials")
+	// GET /fleet shows no URL's credentials either (SF4).
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://moved.example:8443/git/fleet"}, st.FleetURLs, "the hub's own URLs, without credentials")
+	require.Equal(t, st.FleetURLs, st.HostRecord)
+}
+
+// sameFleetURL is the follows_host comparison: credentials, the case of the
+// scheme and host, a default port and a trailing slash do not count; the
+// path does.
+// SABOTAGE: compare the strings exactly -> the equal rows are red.
+func TestSameFleetURL(t *testing.T) {
+	for _, row := range []struct {
+		a, b string
+		same bool
+	}{
+		{"https://hub.example:7443/git/fleet", "https://hub.example:7443/git/fleet", true},
+		{"https://HUB.example:7443/git/fleet/", "https://hub.example:7443/git/fleet", true},
+		{"https://tok@hub.example/git/fleet", "https://hub.example:443/git/fleet", true},
+		{"https://hub.example/git/fleet", "https://hub.example/git/Fleet", false},
+		{"https://hub.example:7443/git/fleet", "https://other.example:7443/git/fleet", false},
+		{"https://hub.example:7443/git/fleet", "https://hub.example:7444/git/fleet", false},
+		{"git@github.com:org/fleet.git", "git@github.com:org/fleet.git", true},
+	} {
+		require.Equal(t, row.same, sameFleetURL(row.a, row.b), "%s vs %s", row.a, row.b)
+	}
+}
+
+// credentialFree drops a URL's userinfo, a token in it included (PR #527
+// SF4), and leaves what is not a URL with a scheme as it is.
+// SABOTAGE: return u unchanged -> the token rows are red.
+func TestCredentialFree(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://x-access-token:ghp_abc123@github.com/org/fleet.git": "https://github.com/org/fleet.git",
+		"https://oauth2@gitlab.example/org/fleet":                    "https://gitlab.example/org/fleet",
+		"https://hub.example:7443/git/fleet":                         "https://hub.example:7443/git/fleet",
+		"git@github.com:org/fleet.git":                               "git@github.com:org/fleet.git",
+		"ssh://git:pw@host/org/fleet":                                "ssh://host/org/fleet",
+	} {
+		require.Equal(t, want, credentialFree(in), in)
+	}
+}
+
+// Activity's order (PR #527 N4): newest first by the full timestamp, a
+// sub-second one included, then at the same instant by a stable key (the
+// kind, then agent, serial, branch, tip, detail), whatever order the sources
+// were read in: every permutation of the input sorts the same.
+// SABOTAGE: sort by At alone (stable, the source order) -> the reversed input
+// keeps joined above revoked -> red; drop the kind key -> red.
+func TestSortFleetEvents_SameSecondIsNotSourceOrder(t *testing.T) {
+	sec := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	want := []FleetEvent{
+		{At: sec.Add(1500 * time.Millisecond), Kind: FleetEventRefused, Agent: "bravo", Tip: "t2"},
+		{At: sec.Add(300 * time.Millisecond), Kind: FleetEventEnrolled, Agent: "charlie", Serial: "0c"},
+		{At: sec, Kind: FleetEventRevoked, Agent: "bravo", Serial: "0b"},
+		{At: sec, Kind: FleetEventAdmitted, Agent: "bravo", Tip: "t1"},
+		{At: sec, Kind: FleetEventJoined, Agent: "alpha"},
+		{At: sec, Kind: FleetEventJoined, Agent: "bravo"},
+	}
+	for _, in := range [][]int{{0, 1, 2, 3, 4, 5}, {5, 4, 3, 2, 1, 0}, {4, 5, 3, 0, 2, 1}} {
+		events := make([]FleetEvent, len(in))
+		for i, k := range in {
+			events[i] = want[k]
+		}
+		sortFleetEvents(events)
+		require.Equal(t, want, events, "input order %v", in)
+	}
 }
 
 // Review N5: the fleet repository's detach (check and detach) takes the
@@ -610,4 +749,121 @@ func TestFleetMembership_JoinNeedsTheBundlesURL(t *testing.T) {
 	require.ErrorContains(t, err, "names no fleet repository URL")
 	_, err = os.Stat(filepath.Join(m.deps.Cfg.TLS.Dir, pki.InstanceCertFile))
 	require.ErrorIs(t, err, os.ErrNotExist, "nothing was installed")
+}
+
+// joinReachErr is the one mapping join and join:check share (NEW-1): only a
+// genuine refusal is bundle_refused (422); every other failure to classify
+// the bundle's URL is unreachable (502). Each row is the error as
+// pki.ClassifyOrigin words it, and, for the join, as ResolveOrigin wraps it.
+// SABOTAGE: bundle_refused for anything not pki.ErrOriginUnreachable (the
+// pre-NEW-1 mapping) -> the hang-up, handshake and trust-file rows red; drop
+// the ErrOriginCertRefused arm -> the revoked row red.
+func TestJoinReachErr_OnlyARefusalIsBundleRefused(t *testing.T) {
+	for _, tc := range []struct {
+		cause  string
+		err    error
+		code   string
+		status int
+	}{
+		{"the host refused the bundle's certificate", fmt.Errorf("pki: the origin h:1 is an instance of this fleet, but: %w: remote error: tls: bad certificate", pki.ErrRefusedByPeer), "bundle_refused", 422},
+		{"our verifier refused the host's certificate", fmt.Errorf("%w (h:1): %w", pki.ErrOriginCertRefused, pki.ErrRevoked), "bundle_refused", 422},
+		{"no TCP connection", fmt.Errorf("%w: can't reach h:1: connection refused", pki.ErrOriginUnreachable), "unreachable", 502},
+		{"a hang-up after the handshake", errors.New("pki: the origin h:1 is an instance of this fleet, but: pki: peer did not answer after the handshake: EOF"), "unreachable", 502},
+		{"a handshake that failed after our verifier accepted", errors.New("pki: the origin h:1 presents a certificate of this fleet, but the handshake failed: read: connection reset by peer"), "unreachable", 502},
+		{"this instance's trust files unusable", errors.New("pki: this instance's fleet trust files are unusable, so the origin h:1 cannot be judged: no CRL"), "unreachable", 502},
+	} {
+		var texts []string
+		for _, wrapped := range []struct {
+			route string
+			err   error
+		}{{"join:check", tc.err}, {"join", fmt.Errorf("%w: %w", ErrOriginUnreachable, tc.err)}} {
+			fe := joinReachErr("h:1", wrapped.err)
+			if fe.Code != tc.code || fe.Status != tc.status {
+				t.Errorf("%s, %s: %d %s, want %d %s", tc.cause, wrapped.route, fe.Status, fe.Code, tc.status, tc.code)
+			}
+			if strings.Contains(fe.Msg, ErrOriginUnreachable.Error()) {
+				t.Errorf("%s, %s: the wrap's prefix leaks into the text: %s", tc.cause, wrapped.route, fe.Msg)
+			}
+			texts = append(texts, fe.Msg)
+		}
+		if texts[0] != texts[1] {
+			t.Errorf("%s: join and join:check say different words: %q vs %q", tc.cause, texts[0], texts[1])
+		}
+	}
+}
+
+// The bundle's url: line is unauthenticated, so the join checks its shape
+// before anything dials it, on join and join:check alike (PR #527 N1): the
+// internal scheme, plain http, another scheme and a URL with no host are
+// bundle_invalid (422) on both routes, and nothing is installed. The shapes a
+// master's enroll writes (a hub's https URL, a forge origin's) pass this
+// check (they then fail later here, as there is no fleet at them).
+// SABOTAGE: drop the bundleURLProblem check from joinPreflight -> the
+// internal-scheme row is unreachable on join:check and clone_failed or
+// unreachable on the join -> red.
+func TestFleetMembership_JoinRefusesABundleURLThatIsNoFleetURL(t *testing.T) {
+	dir := t.TempDir()
+	_, root := seedJoinableFleet(t, filepath.Join(dir, "fleet.git"))
+	m := newFleetManager(t, dir)
+	bundle := root.Bundle(t, root.Enroll(t, "test-fleet@"+pki.AgentEmailDomain, m.deps.KeyPath))
+	// The internal scheme, derived as the transport derives it (only pki spells it).
+	internalForm, err := pki.GitURL("https://hub.example:7443/git/fleet", true)
+	require.NoError(t, err)
+	refused := 0
+	for _, u := range []string{internalForm,"http://hub.example/git/fleet", "ftp://hub.example/fleet", "https:///git/fleet", "not a url"} {
+		withURL := pkitest.WithURL(t, bundle, u)
+		_, err := m.JoinFleet(context.Background(), FleetJoinSpec{Bundle: withURL})
+		status, code := fleetCode(t, err)
+		require.Equal(t, "bundle_invalid", code, "join %s: %v", u, err)
+		require.Equal(t, http.StatusUnprocessableEntity, status)
+		_, err = m.CheckFleetJoin(context.Background(), FleetJoinSpec{Bundle: withURL})
+		_, code = fleetCode(t, err)
+		require.Equal(t, "bundle_invalid", code, "join:check %s: %v", u, err)
+		_, err = os.Stat(filepath.Join(m.deps.Cfg.TLS.Dir, pki.InstanceCertFile))
+		require.ErrorIs(t, err, os.ErrNotExist, "nothing was installed")
+		refused++
+	}
+	require.Equal(t, 5, refused)
+	for _, u := range []string{"https://hub.example:7443/git/fleet", "ssh://git@forge.example/org/fleet.git", "git@forge.example:org/fleet.git", "file:///srv/fleet.git"} {
+		require.Empty(t, bundleURLProblem(u), u)
+	}
+}
+
+// GET /fleet/members' rows: after an enroll, the enrolled id (a leaf on main,
+// no record) is a row of its own, state enrolled, at its leaf's path, since
+// the enroll's commit; the master's own record keeps the since of the commit
+// that wrote it. Once the leaf is revoked the enrolled row reads revoked.
+// SABOTAGE: drop the enrolled rows -> one row -> red; give every row the
+// tip's time -> the master's since is after the enroll began -> red.
+func TestFleetMembers_EnrolledRowsAndSince(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
+	require.NoError(t, err)
+	time.Sleep(1100 * time.Millisecond) // commit times have whole seconds
+	before := time.Now().UTC().Truncate(time.Second)
+	_, err = m.EnrollFleetMember(ctx, "bravo", keyLine("bravo"), "")
+	require.NoError(t, err)
+	after := time.Now().UTC()
+
+	rows, err := m.FleetMembers(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "%+v", rows)
+	own, enrolled := rows[0], rows[1]
+	require.Equal(t, m.AgentID(), own.Agent)
+	require.Equal(t, fact.MemberActive, own.State)
+	require.NotNil(t, own.Since)
+	require.True(t, own.Since.Before(before), "the record's since is its own commit's (%v), not the enroll's (after %v)", own.Since, before)
+	require.Equal(t, "bravo", enrolled.Agent)
+	require.Equal(t, MemberEnrolled, enrolled.State)
+	require.Equal(t, "artifacts/fleet/certs/bravo.pem", enrolled.Path)
+	require.NotNil(t, enrolled.Since)
+	require.False(t, enrolled.Since.Before(before) || enrolled.Since.After(after), "the enroll's commit: %v in [%v, %v]", enrolled.Since, before, after)
+
+	_, err = m.RevokeFleetMember(ctx, "bravo", "")
+	require.NoError(t, err)
+	rows, err = m.FleetMembers(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, fact.MemberRevoked, rows[1].State, "an enrolled id whose leaf is on the CRL is revoked")
 }

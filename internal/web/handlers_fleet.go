@@ -4,21 +4,32 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
-// fleetView is a FleetStatus as HAL.
-func fleetView(b hal.URLBuilder, st repos.FleetStatus) map[string]any {
+// fleetView is a FleetStatus as HAL, with `local`: the request came in over
+// the local authenticated listener (isLocalVia, the test RequireLocalVia
+// makes), so the fleet's mutations are reachable from where the caller runs.
+// host.listener (the [tls].addr bind) is shown only to a local caller; any
+// other principal the edge admits sees host.listener_on, whether there is
+// one, and not where it is bound.
+func fleetView(b hal.URLBuilder, r *http.Request, st repos.FleetStatus) map[string]any {
+	local := isLocalVia(r)
 	raw, _ := json.Marshal(st)
 	out := map[string]any{}
 	_ = json.Unmarshal(raw, &out)
+	if host, ok := out["host"].(map[string]any); ok && !local {
+		delete(host, "listener")
+	}
+	out["local"] = local
 	links := hal.LinkMap{"self": {Href: b.APIRoot() + "/fleet"}}
 	if st.FleetRepo != "" {
 		links["members"] = hal.Link{Href: b.APIRoot() + "/fleet/members"}
+		links["activity"] = hal.Link{Href: b.APIRoot() + "/fleet/activity"}
 	}
 	out["_links"] = links
 	return out
@@ -47,7 +58,7 @@ func handleGetFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			writeFleetError(w, r, err)
 			return
 		}
-		hal.WriteHAL(w, http.StatusOK, fleetView(b, st))
+		hal.WriteHAL(w, http.StatusOK, fleetView(b, r, st))
 	}
 }
 
@@ -99,35 +110,83 @@ func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
 			return
 		}
-		hal.WriteHAL(w, createdFleetStatus(st), fleetView(b, st))
+		hal.WriteHAL(w, createdFleetStatus(st), fleetView(b, r, st))
 	}
 }
 
 // fleetMemberRow is one member as GET /api/v1/fleet/members shows it: every
 // field as the record has it (someone else's odd values are shown, never
 // used) except state, which is "revoked" when the CRL at the same main lists
-// the member's leaf (repos.Manager.FleetMembers derives it); addresses always
-// an array and capabilities always an object.
-func fleetMemberRow(mem store.FleetMember) map[string]any {
+// the member's leaf, and "enrolled" for an id with a leaf on main and no
+// record (repos.Manager.FleetMembers derives both); addresses always an array
+// and capabilities always an object; since when the walk found it.
+func fleetMemberRow(mem repos.FleetMemberRow) map[string]any {
 	f := repos.MemberFieldsOf(mem.Member)
-	return map[string]any{
+	row := map[string]any{
 		"agent": mem.Agent, "state": mem.State, "host": mem.Host, "branch": mem.Branch, "path": mem.Path,
 		"addresses": f.Addresses, "git": f.Git, "capabilities": f.Capabilities,
 	}
+	if mem.Since != nil {
+		row["since"] = mem.Since
+	}
+	return row
 }
 
-// fleetMemberRows is one row per record; a member whose branch (the record's
-// `branch`) the fleet's master last refused carries it as last_refusal.
-func fleetMemberRows(ms []store.FleetMember, refused map[string]repos.PeerRefusal) []map[string]any {
+// fleetMemberRows is one row per record or enrolled id; a member whose branch
+// (the record's `branch`) the fleet's master last refused carries it as
+// last_refusal. An enrolled id has no record and so no branch: it carries the
+// newest refusal whose refused tip its agent authored (PeerRefusal.Agent, the
+// commit's author address, as the judge reads it; nothing is parsed out of a
+// branch name), which is a first join refused in flight.
+func fleetMemberRows(ms []repos.FleetMemberRow, refused map[string]repos.PeerRefusal) []map[string]any {
+	byAgent := map[string]repos.PeerRefusal{}
+	for _, r := range refused {
+		if cur, ok := byAgent[r.Agent]; r.Agent != "" && (!ok || r.At.After(cur.At)) {
+			byAgent[r.Agent] = r
+		}
+	}
 	rows := make([]map[string]any, 0, len(ms))
 	for _, mem := range ms {
 		row := fleetMemberRow(mem)
 		if r, ok := refused[mem.Branch]; ok && mem.Branch != "" {
 			row["last_refusal"] = r
+		} else if r, ok := byAgent[mem.Agent]; ok && mem.Branch == "" && mem.State == repos.MemberEnrolled {
+			row["last_refusal"] = r
 		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// handleFleetActivity: GET /api/v1/fleet/activity?limit=N, the fleet's newest
+// events (repos.Manager.FleetActivity), newest first. limit defaults to and
+// is capped at repos.MaxFleetActivity; one that is not a positive integer is
+// 400. Read-only and open to any principal the edge admits, like members; a
+// page polls it.
+func handleFleetActivity(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := repos.MaxFleetActivity
+		if s := r.URL.Query().Get("limit"); s != "" {
+			n, err := strconv.Atoi(s)
+			if err != nil || n < 1 {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid limit", "limit must be a positive integer", r.URL.Path)
+				return
+			}
+			limit = min(n, repos.MaxFleetActivity)
+		}
+		events, err := m.FleetActivity(r.Context(), limit)
+		if err != nil {
+			writeFleetError(w, r, err)
+			return
+		}
+		if events == nil {
+			events = []repos.FleetEvent{}
+		}
+		hal.WriteHAL(w, http.StatusOK, map[string]any{
+			"events": events,
+			"_links": hal.LinkMap{"self": {Href: b.APIRoot() + "/fleet/activity"}},
+		})
+	}
 }
 
 // handleFleetMembers: GET /api/v1/fleet/members, the member records at the
