@@ -100,6 +100,9 @@ type fleetCreateHooks struct {
 	// contended runs when a fleet operation finds fleetOpMu held and is
 	// about to wait for it.
 	contended func()
+	// hostWrite runs before the host record is written (writeFleetHost). An
+	// error is the write's result.
+	hostWrite func() error
 }
 
 // fleetCreateSteps are the names the step hook sees, in order.

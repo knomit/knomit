@@ -327,6 +327,91 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	require.False(t, origin, "the master's copy is the hub now")
 }
 
+// localRound runs ONE round of ri's origin-less local reconcile, as the Sync
+// stage's loop does (with the fleet hub's host-record duty).
+func localRound(t *testing.T, ri *RepoInstance) {
+	t.Helper()
+	svc, release, err := ri.Acquire()
+	require.NoError(t, err)
+	defer release()
+	runLocalReconcileLoop(context.Background(), svc, ri.Name(), ri.agentBranch, time.Hour, nil, nil, nil, true, ri.fleetHostRound)
+}
+
+// The hub re-asserts the host record in every round of its local reconcile
+// (PR #527 SF1). A detach whose record write fails is answered as done (the
+// detach stood) and leaves main without the hub's record; the next round,
+// here the Sync stage's own round after a rebuild, writes it and main follows.
+// A round with nothing to change commits nothing, and a change of
+// external_addresses is followed by the next round, written without the
+// address's credentials (SF4).
+// SABOTAGE: make fleetHostRound return at once -> main never holds the
+// record -> red; pass nil for it in the Sync stage -> the rebuild's round
+// does not write it -> red; DetachRepoOrigin returns the write's error again
+// -> red.
+func TestFleetHost_TheHubReassertsItsRecordEachRound(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	f.master.deps.Cfg.TLS.Addr = "127.0.0.1:0"
+	f.master.deps.Cfg.ExternalAddresses = []string{"https://master.example"}
+	fails := 1
+	setFleetHooks(t, fleetCreateHooks{hostWrite: func() error {
+		if fails > 0 {
+			fails--
+			return errors.New("the disk is full (test seam)")
+		}
+		return nil
+	}})
+	require.NoError(t, f.master.DetachRepoOrigin(ctx, f.mri), "the detach stood: it is answered as done")
+	require.Zero(t, fails, "fixture: the record write failed once")
+	ri := f.master.Get("fleet")
+	origin, err := f.master.hasOrigin(ri)
+	require.NoError(t, err)
+	require.False(t, origin, "fixture: the master's copy is the hub")
+	hosted, err := f.master.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Empty(t, hosted, "fixture: main holds no host record after the failed write")
+
+	// The next round: the Sync stage's own first round, here at a restart
+	// (Synchronous: one round, inline).
+	deps := f.master.deps
+	deps.Cfg.Git.LocalReconcileInterval = time.Hour // the fixture's 0 runs no local loop at all
+	require.NoError(t, f.master.Close())
+	m := New(context.Background(), deps)
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { m.Close() })
+	m.fleetBootWg.Wait()
+	ri = m.Get("fleet")
+	require.NotNil(t, ri, "fixture: the fleet repository mounts again")
+	hosted, err = m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://master.example/git/fleet"}, hosted, "the next round wrote the hub's record and main followed")
+
+	tip := localTip(t, ri, "main")
+	localRound(t, ri)
+	require.Equal(t, tip, localTip(t, ri, "main"), "a current record: the round commits nothing")
+
+	m.deps.Cfg.ExternalAddresses = []string{"https://user:s3cret-token@moved.example:8443/"}
+	localRound(t, ri)
+	hosted, err = m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://moved.example:8443/git/fleet"}, hosted, "the round follows the addresses, without credentials")
+}
+
+// credentialFree drops a URL's userinfo, a token in it included (PR #527
+// SF4), and leaves what is not a URL with a scheme as it is.
+// SABOTAGE: return u unchanged -> the token rows are red.
+func TestCredentialFree(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://x-access-token:ghp_abc123@github.com/org/fleet.git": "https://github.com/org/fleet.git",
+		"https://oauth2@gitlab.example/org/fleet":                    "https://gitlab.example/org/fleet",
+		"https://hub.example:7443/git/fleet":                         "https://hub.example:7443/git/fleet",
+		"git@github.com:org/fleet.git":                               "git@github.com:org/fleet.git",
+		"ssh://git:pw@host/org/fleet":                                "ssh://host/org/fleet",
+	} {
+		require.Equal(t, want, credentialFree(in), in)
+	}
+}
+
 // Review N5: the fleet repository's detach (check and detach) takes the
 // fleet lock, so a stand-down cannot run between the master check and the
 // detach.

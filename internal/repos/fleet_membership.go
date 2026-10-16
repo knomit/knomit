@@ -946,8 +946,9 @@ func (m *Manager) StandDown(ctx context.Context) error {
 // so it records that on main: the host record (fleet_host.go) with the hub's
 // URLs, committed on the agent branch and published (main fast-forwards here:
 // there is no origin any more; a fast-forward that fails now is the local
-// reconcile's to retry). The detach is not undone if the write fails; the
-// error says the record is missing.
+// reconcile's to retry). The detach stands when the write fails, and it is
+// answered as done: the hub's local reconcile re-asserts the record every
+// round (RepoInstance.fleetHostRound), so the next round writes it.
 func (m *Manager) DetachRepoOrigin(ctx context.Context, ri *RepoInstance) error {
 	fleet := ri != nil && ri.IsFleet()
 	if fleet {
@@ -960,7 +961,9 @@ func (m *Manager) DetachRepoOrigin(ctx context.Context, ri *RepoInstance) error 
 		return err
 	}
 	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil {
-		return fmt.Errorf("this instance hosts the fleet now, but recording that on main failed: %w", err)
+		log.Warn().Err(err).Str("fleet", ri.Name()).
+			Msg("fleet: this instance hosts the fleet now, but the host record was not written; the local reconcile's next round writes it")
+		return nil
 	}
 	if err := m.publishFleetMainNow(ctx, ri); err != nil {
 		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: main did not follow the host record yet; the local reconcile retries")

@@ -623,13 +623,20 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 // agents' branches: main follows only this machine's agent branch.
 //
 // once runs the first round and returns (Synchronous).
-func runLocalReconcileLoop(ctx context.Context, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}, mode *syncMode, once bool) {
+//
+// before (nil-safe) runs in each round that advances, before the advance:
+// the fleet hub's re-assertion of the host record (fleetHostRound), so main
+// follows it in the same round.
+func runLocalReconcileLoop(ctx context.Context, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}, mode *syncMode, once bool, before func(context.Context, *store.Service)) {
 	runLocalReconcile(ctx, repo, agentBranch, interval, mode, once,
 		func() (bool, error) {
 			r, err := svc.Remote().GetRemote("origin")
 			return r != nil, err
 		},
 		func() error {
+			if before != nil {
+				before(ctx, svc)
+			}
 			_, err := svc.AdvanceLocalUpstream(ctx, agentBranch, svc.UpstreamBranch())
 			return err
 		},
