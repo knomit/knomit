@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 )
@@ -664,4 +666,101 @@ func remoteSays(sideband string) string {
 		return ""
 	}
 	return "\n" + strings.Join(lines, "\n")
+}
+
+// PublishUpstreamChange commits ONE change on top of the local upstream
+// branch's tip (path set to *content, or deleted when content is nil), signed
+// by this store's signer and authored as this instance, and pushes that
+// commit to the origin's upstream branch WITHOUT force. Only when the origin
+// took it does the local upstream follow (as a fetch would). The agent branch
+// is never touched: a refused push leaves nothing but an unreachable commit
+// object, so the caller has nothing to undo. The local upstream should be
+// fresh (a fetch this round): a push from a stale tip is refused by the
+// remote as not a fast-forward, which is the answer "someone else published
+// first".
+//
+// It is the fleet's way to publish the master marker on a forge (claim,
+// stand-down, decommission: repos claimFleetMaster and friends): git decides
+// a race between two claims, the first publish wins.
+func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, path string, content *string, message string, auth transport.AuthMethod) (plumbing.Hash, error) {
+	remote, err := ri.GetRemote("origin")
+	if err != nil || remote == nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: no origin: %v", err)
+	}
+	upstream := remote.Branch
+	if upstream == "" {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: the origin has no branch: %w", ErrNoConsensusBranch)
+	}
+	rh := ri.rh
+	signer, err := rh.commitSigner()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
+	}
+	defer rh.lockPush(upstream)()
+	parent, err := rh.resolveRef(ctx, upstream)
+	if err != nil || parent == plumbing.ZeroHash {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: local %s: %v", upstream, err)
+	}
+	pc, err := object.GetCommit(rh.gits, parent)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
+	}
+	tree, err := pc.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
+	}
+	var root plumbing.Hash
+	if content != nil {
+		blob := rh.gits.NewEncodedObject()
+		blob.SetType(plumbing.BlobObject)
+		w, err := blob.Writer()
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		if _, err := io.WriteString(w, *content); err != nil {
+			w.Close()
+			return plumbing.ZeroHash, err
+		}
+		w.Close()
+		bh, err := rh.gits.SetEncodedObject(blob)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		if root, err = buildTree(rh.gits, tree, path, bh); err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
+		}
+	} else if root, err = deleteFromTree(rh.gits, tree, path); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
+	}
+	if root == tree.Hash {
+		return parent, nil // nothing to change
+	}
+	author, committer, err := rh.commitSigs(ctx, upstream, "updated")
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
+	}
+	c := &object.Commit{Author: author, Committer: committer, Message: message, TreeHash: root, ParentHashes: []plumbing.Hash{parent}}
+	h, err := storeCommit(rh.gits, signer, c)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
+	}
+	pushCtx, cancel := rh.netCtx(ctx)
+	defer cancel()
+	var srv bytes.Buffer
+	if err := rh.repo.PushContext(pushCtx, &gogit.PushOptions{
+		RemoteName: "origin",
+		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(fmt.Sprintf("%s:refs/heads/%s", h, upstream))},
+		Auth:       auth,
+		Progress:   &srv,
+	}); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w%s", err, remoteSays(srv.String()))
+	}
+	unlock := rh.lockBranch(upstream)
+	_, _, err = rh.advanceBranchTo(context.WithoutCancel(ctx), upstream, h)
+	unlock()
+	if err != nil {
+		log.Warn().Err(err).Str("upstream", upstream).Msg("PublishUpstreamChange: pushed; the local upstream did not follow yet (the next fetch moves it)")
+	}
+	log.Info().Str("upstream", upstream).Str("path", path).Str("commit", h.String()).Msg("PublishUpstreamChange: pushed")
+	return h, nil
 }

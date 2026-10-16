@@ -51,7 +51,7 @@ import (
 //     installs them where there are none, DELETE stands down (one last
 //     commit on main says so, then the files go; the membership stays). It is
 //     the switch's first step and needs nothing first; the new master's Host
-//     here checks its own main for that commit. Nothing contacts the other
+//     here checks its own main for the marker's absence. Nothing contacts the other
 //     side.
 
 // FleetEnrollment is what POST /fleet/enroll answers.
@@ -134,7 +134,7 @@ func (m *Manager) masterFleetByRoot() (*RepoInstance, error) {
 		return nil, err
 	}
 	if !master {
-		return nil, fleetErr(http.StatusConflict, "not_master", "this instance is not the fleet's master: "+filepath.Join(m.fleetRootDir(), pki.RootKeyFile)+" is not here, or its root.crt is not the root on the fleet's main")
+		return nil, fleetErr(http.StatusConflict, "not_master", "this instance is not the fleet's master: "+filepath.Join(m.fleetRootDir(), pki.RootKeyFile)+" is not here, its root.crt is not the root on the fleet's main, or the fleet's main does not name it the acting master ("+fact.FleetMasterPath+")")
 	}
 	return ri, nil
 }
@@ -728,12 +728,12 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 	}
 	var out FleetLeft
 	if ri != nil {
-		master := false
-		if err := ri.WithRead(func(svc *store.Service) { master = ri.isFleetMaster(svc) }); err != nil {
+		holds := false
+		if err := ri.WithRead(func(svc *store.Service) { holds = ri.fleetDoor && ri.IsFleet() && m.holdsFleetRoot(svc) }); err != nil {
 			return FleetLeft{}, err
 		}
-		if master {
-			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance is the fleet's master: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
+		if holds {
+			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance holds the fleet's root key: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
 		}
 		if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
 			out.PushError = "the left record was not written: " + err.Error()
@@ -878,6 +878,16 @@ func (m *Manager) DecommissionFleet(ctx context.Context) (FleetStatus, error) {
 	ri, err := m.masterFleet()
 	if err != nil {
 		return FleetStatus{}, err
+	}
+	// On a forge the fleet repository lives on: its main must stop naming
+	// this instance, so another holder of the root key can claim the role
+	// (user ruling 2026-10-16). On the hub the repository goes with it.
+	if o, oerr := m.originOf(ri); oerr != nil {
+		return FleetStatus{}, oerr
+	} else if o != nil {
+		if err := m.deleteFleetMaster(ctx, ri); err != nil {
+			return FleetStatus{}, fleetErr(http.StatusConflict, "decommission_unpublished", "the commit that removes this instance as the acting master did not reach the forge's main ("+credentialFreeErr(err).Error()+"): nothing is decommissioned. Try again")
+		}
 	}
 	if err := m.removeFleetHere(ri, "fleet decommissioned"); err != nil {
 		return FleetStatus{}, err
@@ -1332,12 +1342,12 @@ func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o
 // the master's detach makes its copy the hub, which needs the mTLS listener
 // and an address to advertise.
 func (m *Manager) guardFleetDetach(ri *RepoInstance) error {
-	master := false
-	if err := ri.WithRead(func(svc *store.Service) { master = ri.isFleetMaster(svc) }); err != nil {
+	holds := false
+	if err := ri.WithRead(func(svc *store.Service) { holds = ri.fleetDoor && ri.IsFleet() && m.holdsFleetRoot(svc) }); err != nil {
 		return err
 	}
-	if !master {
-		return fleetErr(http.StatusConflict, "member_keeps_origin", "a member's fleet copy keeps its origin; only the master hosts the fleet")
+	if !holds {
+		return fleetErr(http.StatusConflict, "member_keeps_origin", "a member's fleet copy keeps its origin; only the holder of the fleet's root key hosts the fleet (it becomes the master)")
 	}
 	return m.refuseNoHubListener()
 }

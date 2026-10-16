@@ -140,6 +140,42 @@ describe('FleetSettings', () => {
     expect(screen.getByTestId('fleet-hosted-by')).toHaveTextContent('its master stood down, so it takes no pushes');
   });
 
+  // #531 re-review N2: on a root holder the stood-down notice names its own
+  // way to the role, never "point elsewhere".
+  // SABOTAGE: drop the holder branch of the notice -> red.
+  it('the stood-down notice on a root holder says host here, not point at', () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    mount({ ...member, root_held: true, master_paused: 'not_hosting', last_error: 'x: its master stood down, and it takes no push', last_error_stood_down: true });
+    expect(screen.getByTestId('fleet-last-error-stood-down')).toHaveTextContent('host the fleet here (Hosting, below) to become the master');
+    expect(screen.getByTestId('fleet-last-error-stood-down')).not.toHaveTextContent('point this copy at it');
+  });
+
+  // #531 re-review N4: the loss card says how long the wait for a sync is.
+  // SABOTAGE: drop the interval -> red.
+  it('the loss card names how long the next sync can take', async () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    mount({ ...member, master: false, root_held: true, master_paused: 'not_hosting', acting_master: 'a3f9c0d12e7b', sync_interval_seconds: 300,
+      host: { listener_on: true, listening: true, external_addresses: ['https://ci.example:7443'], would_serve: ['https://served.example:7443/git/fleet'] } });
+    fireEvent.click(await screen.findByTestId('fleet-host-here'));
+    expect(screen.getByTestId('fleet-host-loss')).toHaveTextContent("wait for this copy's next sync (within 5 min)");
+  });
+
+  // User ruling 6 on a forge: a root holder main does not name is a member;
+  // the Export steps put the stand-down BEFORE the import (#531 re-review S4).
+  // SABOTAGE: show the self-hosted order on a forge -> red.
+  it('a forge root holder main does not name says so, and the forge export order stands down first', async () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: 'https://github.com/acme/fleet', branch: 'main', auth_method: 'token' } } });
+    const forgeCopy: FleetStatus = { ...member, hosting: 'https://github.com/acme/fleet', root_held: true, acting_master: 'a3f9c0d12e7b' };
+    const { unmount } = render(<FleetSettings fleet={forgeCopy} onChanged={vi.fn()} />);
+    expect(await screen.findByTestId('fleet-root-not-named')).toHaveTextContent("The fleet's main names a3f9c0d12e7b as the master");
+    unmount();
+    mount({ ...forgeCopy, master: true, root_held: true, acting_master: forgeCopy.agent_id });
+    fireEvent.click(await screen.findByTestId('fleet-export'));
+    await waitFor(() => expect(screen.getByTestId('fleet-export-confirm')).toHaveTextContent('Here: Stand down.'));
+    const text = screen.getByTestId('fleet-export-confirm').textContent ?? '';
+    expect(text.indexOf('Here: Stand down.')).toBeLessThan(text.indexOf('Import root key. It takes the role at its next sync.'));
+  });
+
   // SABOTAGE: drop the master_paused card -> red.
   it('a master whose copy follows another instance says it does no master work', async () => {
     stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
@@ -405,7 +441,7 @@ describe('FleetSettings', () => {
     expect(screen.getByTestId('fleet-last-error')).toHaveTextContent('Last sync failed: ' + raw);
     expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("The fleet's host refuses a commit on this instance's branch");
     expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent('When the rule is host-record or an artifact rule, the refusal is permanent');
-    expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("leave the fleet here and ask the fleet's master to enroll this instance again");
+    expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("leave the fleet here, ask the fleet's master to revoke this instance's certificate (until Leave revokes it by itself) and enroll it again, then join again");
     expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
     expect(screen.queryByTestId('fleet-refused-notice')).toBeNull();
   });

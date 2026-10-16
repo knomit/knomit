@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useFacetLayout } from './facetLayout';
 
@@ -30,7 +31,13 @@ export function FacetSplitter({ onMouseDown, testId }: { onMouseDown?: (e: React
 }
 
 /** FacetColumns lays out [left at the Library's width | splitter | right]. The
- *  right column is the scroll container; `scrollRef` hands it to the caller. */
+ *  right column is the scroll container; `scrollRef` hands it to the caller.
+ *  Below FACET_NARROW_PX of its own width (a phone, a narrow window, the rail
+ *  open beside it) the index is STACKED above the content instead, full
+ *  width, so the content keeps the whole width: side by side, a 375px page
+ *  left the content about 150px and a confirm card 50px (#531 re-review S5).
+ *  The width is the container's own, measured, so it follows the rail and
+ *  the window alike; unmeasured (0, as in jsdom) is the side-by-side layout. */
 export function FacetColumns({ left, children, scrollRef, testId }: {
   left: ReactNode;
   children: ReactNode;
@@ -38,14 +45,37 @@ export function FacetColumns({ left, children, scrollRef, testId }: {
   testId?: string;
 }) {
   const { width, onSplitterDown } = useFacetLayout();
+  const box = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(false);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => setNarrow(el.clientWidth > 0 && el.clientWidth < FACET_NARROW_PX);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  if (narrow) {
+    return (
+      <div ref={box} data-testid={testId} data-layout="stacked" style={{ ...row, flexDirection: 'column' }}>
+        <div data-testid="facet-index-column" style={stackedLeft}>{left}</div>
+        <div ref={scrollRef} data-testid="settings-scroll" style={rightCol}>{children}</div>
+      </div>
+    );
+  }
   return (
-    <div data-testid={testId} style={row}>
+    <div ref={box} data-testid={testId} style={row}>
       <div data-testid="facet-index-column" style={{ ...leftCol, width }}>{left}</div>
       <FacetSplitter onMouseDown={onSplitterDown} testId="facet-splitter" />
       <div ref={scrollRef} data-testid="settings-scroll" style={rightCol}>{children}</div>
     </div>
   );
 }
+
+/** Below this width of its own the facet stacks its index above the content. */
+export const FACET_NARROW_PX = 640;
 
 // flex '1 1 0' with minHeight 0, so the body is bounded by its parent and the
 // right column scrolls inside it instead of the page growing to its content
@@ -57,6 +87,13 @@ const row: CSSProperties = {
 const leftCol: CSSProperties = {
   flexShrink: 0, overflowY: 'auto', background: '#0f0f0f',
   padding: '16px 10px', boxSizing: 'border-box',
+};
+// Stacked: the index across the top, at most a third of the height (it
+// scrolls), ruled off from the content below.
+const stackedLeft: CSSProperties = {
+  flexShrink: 0, overflowY: 'auto', background: '#0f0f0f',
+  padding: '10px 10px 8px', boxSizing: 'border-box', width: '100%', maxHeight: '34%',
+  borderBottom: '1px solid #222',
 };
 const rightCol: CSSProperties = {
   flex: 1, minWidth: 0, overflowY: 'auto',

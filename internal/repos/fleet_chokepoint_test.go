@@ -375,7 +375,10 @@ func seedFleetRemoteWithRoot(t *testing.T, bare, ontYAML string, rootPEM []byte)
 	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
-	for path, body := range map[string][]byte{OntologyPath: []byte(ontYAML), "artifacts/fleet/" + pki.RootCertFile: rootPEM} {
+	// main names the master (fact.FleetMasterPath): the root holder these
+	// fixtures mount is "test-fleet".
+	for path, body := range map[string][]byte{OntologyPath: []byte(ontYAML), "artifacts/fleet/" + pki.RootCertFile: rootPEM,
+		fact.FleetMasterPath: []byte(fact.RenderFleetMaster("test-fleet"))} {
 		require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(path)), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(work, path), body, 0o644))
 	}

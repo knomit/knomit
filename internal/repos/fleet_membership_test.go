@@ -195,7 +195,10 @@ func TestFleetMembership_ForgeEnrollJoinAdmitLeaveRevokeDecommission(t *testing.
 	require.ErrorIs(t, err, os.ErrNotExist, "the root key is deleted")
 	_, err = os.Stat(filepath.Join(f.master.deps.Cfg.TLS.Dir, pki.RootCertFile))
 	require.ErrorIs(t, err, os.ErrNotExist, "the trust material is uninstalled")
-	require.Equal(t, mainBefore, f.rev(t, "main"), "the forge keeps its copy, inert")
+	// User ruling 7: the forge keeps its copy, and its main no longer names
+	// a master, so another holder of the root key could claim the fleet.
+	require.NotEqual(t, mainBefore, f.rev(t, "main"), "the decommission published the marker's deletion")
+	require.False(t, f.onForgeMain(t, fact.FleetMasterPath), "the forge's main names no master")
 }
 
 func runGitOut(dir string, args ...string) (string, error) {
@@ -255,7 +258,12 @@ func TestFleetMembership_ForgeRootMovesAndTheOldMasterStandsDown(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, wantID, got.RootFingerprint)
 	ari := alpha.fleetRepo()
-	require.NoError(t, ari.WithRead(func(svc *store.Service) { require.True(t, ari.isFleetMaster(svc), "alpha is the master now") }))
+	// User ruling 6: holding the root is not being the master while main
+	// names another instance (#531 re-review S4).
+	require.NoError(t, ari.WithRead(func(svc *store.Service) {
+		require.False(t, ari.isFleetMaster(svc), "alpha holds the root, but main names the master")
+		require.True(t, alpha.holdsFleetRoot(svc))
+	}))
 	_, err = alpha.InstallFleetRoot(root.Files)
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
@@ -268,9 +276,13 @@ func TestFleetMembership_ForgeRootMovesAndTheOldMasterStandsDown(t *testing.T) {
 	err = f.master.StandDown(ctx)
 	_, code = fleetCode(t, err)
 	require.Equal(t, "no_root", code)
+	require.False(t, f.onForgeMain(t, fact.FleetMasterPath), "the stand-down published the marker's deletion")
+	// alpha's next round: main names no master, so it claims the role.
+	round(t, ari)
 	st, err := alpha.FleetStatus(ctx)
 	require.NoError(t, err)
-	require.True(t, st.Master)
+	require.True(t, st.Master, "alpha claimed the role: %+v", st)
+	require.Equal(t, "alpha", st.ActingMaster)
 }
 
 // The hub stands down FIRST (user ruling 2026-10-16): no precondition. The

@@ -31,6 +31,11 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
 }) {
   const local = fleet.local === true;
   const master = fleet.master === true;
+  // holder: this instance holds the root key, master or not (user ruling 6:
+  // the master is the instance main names; a holder main does not name is a
+  // member, a candidate while main names no master).
+  const holder = master || fleet.root_held === true;
+  const nextSync = fleet.sync_interval_seconds ? ` (within ${intervalText(fleet.sync_interval_seconds)})` : '';
   const hub = fleet.hosting === 'none';
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [flow, setFlow] = useState<FleetFollowMode | null>(null);
@@ -139,7 +144,11 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
           // The host this copy follows stood down as master: its pushes wait
           // for the new host. The plain sentence, never "Retrying".
           <div data-testid="fleet-last-error-stood-down" role="status" style={{ ...errBox, marginTop: 0 }}>
-            The fleet's master stood down on the instance this copy follows, so it takes no pushes now. Once the new master hosts the fleet, point this copy at it (Hosting, below); nothing this copy wrote is lost.
+            {holder
+              // A root holder is the one that may become the new master: never
+              // tell it to point elsewhere (#531 re-review N2).
+              ? "The fleet's master stood down on the instance this copy follows, so it takes no pushes now. This instance holds the root key: host the fleet here (Hosting, below) to become the master; nothing this copy wrote is lost."
+              : "The fleet's master stood down on the instance this copy follows, so it takes no pushes now. Once the new master hosts the fleet, point this copy at it (Hosting, below); nothing this copy wrote is lost."}
           </div>
         )}
         {fleet.last_error && fleet.last_error_fleet_moved && (
@@ -158,7 +167,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
                 // The host's judge refused a commit of this copy's branch
                 // (#528 N1): every sync sends the same commit, so "Retrying"
                 // would never be true.
-                ? <div data-testid="fleet-commit-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet's host refuses a commit on this instance's branch (the rule is named above). Retrying will not help: every sync sends the same commit. When the rule is host-record or an artifact rule, the refusal is permanent: to clear it, leave the fleet here and ask the fleet's master to enroll this instance again; what this instance wrote that the host does not hold is lost. Otherwise ask the fleet's master.</div>
+                ? <div data-testid="fleet-commit-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet's host refuses a commit on this instance's branch (the rule is named above). Retrying will not help: every sync sends the same commit. When the rule is host-record or an artifact rule, the refusal is permanent: to clear it, leave the fleet here, ask the fleet's master to revoke this instance's certificate (until Leave revokes it by itself) and enroll it again, then join again; what this instance wrote that the host does not hold is lost. Otherwise ask the fleet's master.</div>
                 : <div style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>Retrying on the next sync.</div>}
           </div>
         )}
@@ -259,7 +268,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
             </div>
           </div>
         )}
-        {local && master && !hub && (
+        {local && holder && !hub && (
           <div>
             <div style={btns}>
               <button type="button" data-testid="fleet-host-here" style={btn(false, 'primary')} onClick={() => setConfirm('host')}>Host the fleet here…</button>
@@ -298,9 +307,20 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   // ── Master role ──
   sections.push({
     id: 'master-role', title: 'Master role', hint: 'who holds the root key',
-    body: master ? (
+    body: holder ? (
       <div style={col}>
-        <div style={dim}>The root key is here. To make another member the master, export the key, import it there, then stand down here; the new master then hosts the fleet.</div>
+        <div style={dim}>{master
+          ? (forge
+            ? 'The root key is here, and the fleet’s main names this instance the master. To make another member the master: export the key, stand down here, then import it there; it takes the role at its next sync.'
+            : 'The root key is here, and the fleet’s main names this instance the master. To make another member the master: export the key, import it there, stand down here; the new master then hosts the fleet.')
+          : 'The root key is here, but the fleet’s main does not name this instance the master, so it does no master work: no merges, enroll or revoke.'}</div>
+        {!master && !fleet.master_paused && (
+          // A forge copy (or the hub) that holds the root but is not named.
+          <OutcomeCard tone="ask" testid="fleet-root-not-named" headline={fleet.acting_master ? `The fleet's main names ${fleet.acting_master} as the master` : 'The fleet has no acting master'}
+            body={fleet.acting_master
+              ? 'This instance holds the root key as a member. If it should be the master, the named master stands down first; this instance then takes the role at its next sync. To drop the key here, stand down.'
+              : `This instance takes the role at its next sync${nextSync}: it publishes its claim to the fleet’s main, and the first root holder to publish wins.`} />
+        )}
         {fleet.master_paused === 'not_hosting' && (
           <OutcomeCard tone="ask" testid="fleet-master-paused" headline="This instance does no master work here"
             body={fleet.acting_master
@@ -314,7 +334,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
           </div>
         )}
         {confirm === 'export' && <ExportConfirm fleet={fleet} forge={forge} onCancel={() => setConfirm(null)} />}
-        {confirm === 'standdown' && <StandDownConfirm master hub={hub} onCancel={() => setConfirm(null)} onDone={done} />}
+        {confirm === 'standdown' && <StandDownConfirm master={master} hub={hub} onCancel={() => setConfirm(null)} onDone={done} />}
       </div>
     ) : (
       <div style={col}>
@@ -453,9 +473,18 @@ function ExportConfirm({ fleet, forge, onCancel }: { fleet: FleetStatus; forge: 
       <div style={rule}>{ONE_MASTER}</div>
       <ol style={steps}>
         <li>Save the key file here and carry it to the new master by a channel you trust. It is the fleet's identity: anyone holding it can enroll and revoke.</li>
-        <li>On the new master: Fleet → Settings → Master role → Import root key.</li>
-        <li>Back here: Stand down. This instance stops all master work and records that on the fleet's main.</li>
-        <li>{forge ? 'The new master pushes main to the forge from then on.' : 'The new master then hosts the fleet (its Settings → Hosting), and this copy points at it.'}</li>
+        {forge ? (
+          <>
+            <li>Here: Stand down. This instance stops all master work, and the fleet's main names no master.</li>
+            <li>On the new master: Fleet → Settings → Master role → Import root key. It takes the role at its next sync.</li>
+          </>
+        ) : (
+          <>
+            <li>On the new master: Fleet → Settings → Master role → Import root key.</li>
+            <li>Back here: Stand down. This instance stops all master work, and the fleet's main names no master.</li>
+            <li>The new master then hosts the fleet (its Settings → Hosting), and this copy points at it.</li>
+          </>
+        )}
       </ol>
       <Refusal err={err} testid="fleet-export-error" />
       {notSaved && <div data-testid="fleet-export-not-saved" role="status" style={{ ...fieldHint, color: notSaved.kind === 'failed' ? '#e2c07a' : '#bbb' }}>{saveOutcomeLine(notSaved)}</div>}
@@ -496,8 +525,10 @@ function ImportConfirm({ forge, onCancel, onDone, onRemove }: { forge: boolean; 
       {readErr && <div role="alert" style={{ ...fieldHint, color: '#e2c07a' }}>{readErr}</div>}
       <ol style={steps}>
         <li>The key is installed; this instance is the master once that root is on the fleet's main.</li>
-        <li>On the old master: Stand down.</li>
-        <li>{forge ? 'This instance pushes main to the forge from its next round.' : "Then, once this copy has synced: Settings → Hosting → Host the fleet here, and every member points at this instance."}</li>
+        <li>{forge
+          ? 'The old master stands down first. While the fleet’s main names it, this instance does no master work; once main names no master, this instance takes the role at its next sync.'
+          : 'On the old master: Stand down.'}</li>
+        {!forge && <li>Then, once this copy has synced: Settings → Hosting → Host the fleet here, and every member points at this instance.</li>}
       </ol>
       <Refusal err={err} testid="fleet-import-error" />
       {code === 'root_present' && (
@@ -520,7 +551,7 @@ function StandDownConfirm({ master, hub, onCancel, onDone }: { master: boolean; 
       {master && (
         <ol style={steps} data-testid="fleet-standdown-steps">
           <li>This instance stops all master work now: it merges, enrolls and revokes nothing{hub ? ", and members' pushes to it are refused until they point at the new host" : ''}.</li>
-          <li>Its last commit as master removes it as the acting master on the fleet's main; the new master hosts the fleet once its copy has synced that.</li>
+          <li>Its last commit as master removes it as the acting master on the fleet's main; the new master takes the role once its copy has synced that.</li>
           <li>Export the root key first if another instance is to be the master: without it the fleet has none.</li>
         </ol>
       )}
@@ -570,7 +601,7 @@ function HostConfirm({ fleet, interrupted, oldMaster, onCancel, onDone }: {
       )}
       {lossFrom && (
         <OutcomeCard tone="bad" testid="fleet-host-loss" headline={`Main still names ${lossFrom} as the acting master`}
-          body={`This copy's main says ${lossFrom} is the fleet's acting master: it has not stood down, or this copy has not synced since it did. Stand down there first and wait for this copy's next sync. Hosting now leaves out every change made on ${oldHost} after this copy's last sync.`} />
+          body={`This copy's main says ${lossFrom} is the fleet's acting master: it has not stood down, or this copy has not synced since it did. Stand down there first and wait for this copy's next sync${fleet.sync_interval_seconds ? ` (within ${intervalText(fleet.sync_interval_seconds)})` : ''}. Hosting now leaves out every change made on ${oldHost} after this copy's last sync.`} />
       )}
       {code !== 'old_master_active' && <Refusal err={err} note="Nothing changed." testid="fleet-host-error" />}
       <Buttons testid="fleet-host-submit" busy={busy} label={lossFrom ? 'Host here without those changes' : 'Host the fleet here'} busyLabel="Hosting…"

@@ -69,3 +69,48 @@ func TestReconcileAgentRebase_ExperimentMergeSurvivesARewind(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/exp.md"), "the experiment's committed knowledge must survive the rewind")
 }
+
+// A rewind replay never carries a commit that changes only replay-skipped
+// paths (SetReplaySkipPaths, the fleet's master marker): it is dropped, and
+// the branch is rebuilt on the new upstream even when nothing else is left
+// to replay (kept as it stood, it would still carry the dropped commit).
+// The agent's other commit upstream lacks is replayed.
+// SABOTAGE: report no drop from the walk (droppedOut stays false) -> the
+// empty-walk shape keeps the branch with the marker commit -> red; replay a
+// skipped commit -> the marker is on the rebuilt branch -> red.
+func TestReconcileAgentRebase_DropsCommitsThatChangeOnlySkippedPaths(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(ctx, map[string]string{}, "agent/test"))
+	svc.SetReplaySkipPaths("artifacts/fleet/master")
+
+	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
+	_, _, err = svc.Facts().BatchWriteFacts(ctx, "agent/test", map[string]string{"artifacts/fleet/master": "me\n"}, nil, "claim", "created")
+	require.NoError(t, err)
+
+	// Only the marker commit beyond the new upstream: nothing to replay.
+	u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	res, err := svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, 0, res.NumReplayed)
+	require.False(t, hasFileAt(t, svc, "agent/test", "artifacts/fleet/master"), "the marker-only commit is dropped")
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/u.md"), "the branch is rebuilt on the new upstream")
+
+	// A marker commit plus a commit of the agent's own: only the latter.
+	_, _, err = svc.Facts().BatchWriteFacts(ctx, "agent/test", map[string]string{"artifacts/fleet/master": "me\n"}, nil, "claim", "created")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "agent/test", "kb/own.md", "Own", "mine")
+	// A rewind: upstream moves to a sibling of what local holds.
+	u3 := upstreamCommit(t, svc, u, "kb/u3.md", "---\ntype: observation\n---\n# U3\n\nu3\n")
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u3)))
+	res, err = svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.NumReplayed, "only kb/own.md is replayed")
+	require.False(t, hasFileAt(t, svc, "agent/test", "artifacts/fleet/master"))
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/own.md"))
+}

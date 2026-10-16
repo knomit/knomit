@@ -487,4 +487,12 @@ describe('TargetRail: the Fleet section', () => {
     expect(screen.getByTestId('rail-fleet-role')).toHaveTextContent('member');
     expect(screen.getByTestId('rail-fleet-health')).toHaveAttribute('title', 'fetch: connection refused');
   });
+
+  // #531 re-review N3: a push refused because the master stood down is a
+  // wait the Settings page calls normal, not a failure.
+  // SABOTAGE: drop the last_error_stood_down exception -> the dot shows -> red.
+  it('a push refused because the master stood down carries no red dot', () => {
+    renderRail({ fleet: { ...inFleet, master: false, last_error: 'x: its master stood down, and it takes no push', last_error_stood_down: true } });
+    expect(screen.queryByTestId('rail-fleet-health')).toBeNull();
+  });
 });

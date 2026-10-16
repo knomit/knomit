@@ -2105,6 +2105,10 @@ export interface FleetStatus {
   // the fleet has no acting master, e.g. its master stood down). Host here
   // asks the loss confirm while it names another instance.
   master_paused?: 'not_hosting';
+  // root_held: this instance holds the fleet's root key, master or not (the
+  // master is the instance acting_master names; a holder it does not name is
+  // a member, a candidate while main names no master).
+  root_held?: boolean;
   acting_master?: string;
   sync_interval_seconds?: number;
   // F10: what this instance offers to host a fleet (listener: its mTLS

@@ -208,6 +208,11 @@ type RemoteIndex interface {
 	// repository's main. A main on the origin that is not an ancestor of the
 	// tip is refused by the origin, as an ordinary push error.
 	PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error)
+	// PublishUpstreamChange commits one change (path set to *content, or
+	// deleted when nil) on top of the local upstream tip and pushes that
+	// commit to the origin's upstream WITHOUT force; the agent branch is not
+	// touched, and the local upstream follows only a push the origin took.
+	PublishUpstreamChange(ctx context.Context, path string, content *string, message string, auth transport.AuthMethod) (plumbing.Hash, error)
 	// PublishTo pushes from's tip to gitURL, which need not be the origin:
 	// refs/heads/<upstream> WITHOUT force and refs/heads/<from> with force,
 	// in one push, through a remote that exists for this call only (the git

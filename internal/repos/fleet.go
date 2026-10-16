@@ -61,7 +61,9 @@ type FleetStatus struct {
 	// the text names the commit, the rule and the reason). Every sync sends
 	// the same commit, so a retry does not help. Under the host-record and
 	// artifact rules, which read the commit against its own parents, no later
-	// main admits it either: the way out is to leave and be enrolled again.
+	// main admits it either: the way out is to leave, have the master revoke
+	// this instance's certificate (until Leave revokes it by itself) and
+	// enroll it again, then join again.
 	// It is the dead-master fallback's residue (an old master's master write
 	// the new host's main lacks). Read from the recorded error only, as
 	// LastErrorRefused is.
@@ -89,13 +91,17 @@ type FleetStatus struct {
 	RecordPendingUpdate bool           `json:"record_pending_update"`
 	Notice              string         `json:"notice,omitempty"`
 
-	// Master says this instance is the fleet's master (isFleetMaster: the
-	// root key file is here and its root is the one on the fleet's main).
+	// Master says this instance is the fleet's master (isFleetMaster: it
+	// holds the root, and the master marker on the fleet's main names it).
+	// RootHeld says it holds the root (the key file is here and its root is
+	// the one on main), master or not: a root holder that main does not name
+	// is a member, a candidate while main names no master.
 	// Hosting is where the fleet repository's copy here syncs: "none" (no
 	// origin: this instance is the hub) or the origin's URL; empty when no
 	// fleet repository is mounted. RootDir is <home>/fleet, where the root
 	// key lives on the master (and where a master switch copies it to).
-	Master bool `json:"master"`
+	Master   bool `json:"master"`
+	RootHeld bool `json:"root_held,omitempty"`
 	// MasterPaused, on the master, is why it does no master work now (no
 	// merges, enroll, revoke, decommission, host-record write):
 	// FleetPausedNotHosting; empty otherwise. ActingMaster is the agent id
@@ -295,8 +301,11 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	} else if len(hosted) > 0 {
 		st.HostRecord = credentialFreeAll(hosted)
 	}
-	_ = ri.WithRead(func(svc *store.Service) { st.Master = ri.isFleetMaster(svc) })
-	if st.Master {
+	_ = ri.WithRead(func(svc *store.Service) {
+		st.Master = ri.isFleetMaster(svc)
+		st.RootHeld = ri.fleetDoor && ri.IsFleet() && m.holdsFleetRoot(svc)
+	})
+	if st.RootHeld {
 		st.MasterPaused = m.fleetMasterPause(ri)
 	}
 	if named, merr := m.fleetMasterAtMain(ri); merr == nil {
@@ -320,7 +329,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		default:
 			st.Hosting, st.FleetURLs = credentialFree(o.URL), []string{credentialFree(o.URL)}
 		}
-		if o != nil && st.Master {
+		if o != nil && st.RootHeld {
 			st.Host.WouldServe = credentialFreeAll(m.hubFleetURLs(ri))
 		}
 		if o != nil && st.Master && o.AuthMethod != "cert" && st.FollowsHost != nil && !*st.FollowsHost {
