@@ -137,13 +137,17 @@ describe('FleetSettings', () => {
     unmount();
     mount({ ...hub, master: false });
     expect(screen.getByTestId('fleet-acting-master')).toHaveTextContent('no master');
+    expect(screen.getByTestId('fleet-hosted-by')).toHaveTextContent('its master stood down, so it takes no pushes');
   });
 
   // SABOTAGE: drop the master_paused card -> red.
   it('a master whose copy follows another instance says it does no master work', async () => {
     stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    const { unmount } = render(<FleetSettings fleet={{ ...member, master: true, master_paused: 'not_hosting', acting_master: 'a3f9c0d12e7b' }} onChanged={vi.fn()} />);
+    expect(screen.getByTestId('fleet-master-paused')).toHaveTextContent("names a3f9c0d12e7b as the acting master: it merges, enrolls and revokes nothing");
+    unmount();
     mount({ ...member, master: true, master_paused: 'not_hosting' });
-    expect(screen.getByTestId('fleet-master-paused')).toHaveTextContent('it merges, enrolls and revokes nothing');
+    expect(screen.getByTestId('fleet-master-paused')).toHaveTextContent('the fleet has no acting master: host the fleet here to become it');
   });
 
   it('Point at the new host succeeds through POST /fleet/follow and returns to Settings', async () => {

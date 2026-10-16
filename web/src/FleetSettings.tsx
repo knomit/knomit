@@ -169,7 +169,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   // ── Hosting ──
   const urls = fleet.fleet_urls ?? [];
   const listening = fleet.host.listening === true;
-  const hostedBy = hub ? (listening ? 'this instance — members push to it' : 'this instance — its fleet listener is not running, so members cannot push to it yet')
+  const hostedBy = hub ? (!master ? 'this instance — its master stood down, so it takes no pushes' : listening ? 'this instance — members push to it' : 'this instance — its fleet listener is not running, so members cannot push to it yet')
     // A stale copy: where main says the fleet is now, which may be a forge
     // or an instance; this page does not know which (#529 N-e).
     : stale ? `${hostPortOf(urls[0] ?? '') || urls[0] || 'elsewhere'} — where the fleet's main says it is hosted now`
@@ -303,7 +303,9 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         <div style={dim}>The root key is here. To make another member the master, export the key, import it there, then stand down here; the new master then hosts the fleet.</div>
         {fleet.master_paused === 'not_hosting' && (
           <OutcomeCard tone="ask" testid="fleet-master-paused" headline="This instance does no master work here"
-            body={`It holds the root key, but its copy follows ${hostPortOf(fleet.hosting ?? '') || 'another instance'}, which hosts the fleet: it merges, enrolls and revokes nothing. If that instance replaced this one as the master, stand down. To make this instance the master again, host the fleet here.`} />
+            body={fleet.acting_master
+              ? `It holds the root key, but its copy follows ${hostPortOf(fleet.hosting ?? '') || 'another instance'}, and the fleet's main names ${fleet.acting_master} as the acting master: it merges, enrolls and revokes nothing. If that instance replaced this one as the master, stand down. To make this instance the master, host the fleet here.`
+              : `It holds the root key, and the fleet has no acting master: host the fleet here to become it. Until then it merges, enrolls and revokes nothing.`} />
         )}
         {local && (
           <div style={btns}>
@@ -518,7 +520,7 @@ function StandDownConfirm({ master, hub, onCancel, onDone }: { master: boolean; 
       {master && (
         <ol style={steps} data-testid="fleet-standdown-steps">
           <li>This instance stops all master work now: it merges, enrolls and revokes nothing{hub ? ", and members' pushes to it are refused until they point at the new host" : ''}.</li>
-          <li>Its last commit as master records the stand-down on the fleet's main; the new master hosts the fleet once its copy has synced that.</li>
+          <li>Its last commit as master removes it as the acting master on the fleet's main; the new master hosts the fleet once its copy has synced that.</li>
           <li>Export the root key first if another instance is to be the master: without it the fleet has none.</li>
         </ol>
       )}
@@ -554,7 +556,7 @@ function HostConfirm({ fleet, interrupted, oldMaster, onCancel, onDone }: {
         ) : (
           <>
             <li>Tell every member the new URL: each points its copy at it (Settings → Hosting → Point at the new host).</li>
-            <li>The old master, which stood down first, points its copy here too.</li>
+            <li>The old master points its copy here too.</li>
           </>
         )}
       </ol>
