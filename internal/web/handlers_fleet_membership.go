@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 
+	"knomit/internal/pki"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
@@ -11,18 +12,20 @@ import (
 // one is mounted behind RequireLocalVia (router): it uses the fleet root key,
 // or installs or removes this instance's trust material.
 
-// handleEnrollFleet: POST /api/v1/fleet/enroll {agent_id, public_key}, the
-// master issues a joiner's leaf and returns its bundle. 201.
+// handleEnrollFleet: POST /api/v1/fleet/enroll {agent_id, public_key,
+// address?}, the master issues a joiner's leaf and returns its bundle, which
+// carries the fleet repository URL. 201.
 func handleEnrollFleet(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			AgentID   string `json:"agent_id"`
 			PublicKey string `json:"public_key"`
+			Address   string `json:"address,omitempty"`
 		}
 		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
-		out, err := m.EnrollFleetMember(r.Context(), req.AgentID, req.PublicKey)
+		out, err := m.EnrollFleetMember(r.Context(), req.AgentID, req.PublicKey, req.Address)
 		if err != nil {
 			writeFleetError(w, r, err)
 			return
@@ -31,27 +34,18 @@ func handleEnrollFleet(m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// handleJoinFleet: POST /api/v1/fleet/join {url, auth_method, auth_token,
-// bundle}, join the fleet at url with the bundle its master's enroll
-// returned. 200, state registered, with the installed root's
-// root_fingerprint; a refusal leaves nothing behind.
+// handleJoinFleet: POST /api/v1/fleet/join {bundle, auth_method, auth_token},
+// join the fleet at the URL the bundle (its master's enroll) names; the
+// credential is the joiner's own, for a forge-hosted fleet only. 200, state
+// registered, with the installed root's root_fingerprint; a refusal leaves
+// nothing behind.
 func handleJoinFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			URL        string `json:"url"`
-			AuthMethod string `json:"auth_method,omitempty"`
-			AuthToken  string `json:"auth_token,omitempty"`
-			Bundle     string `json:"bundle"`
-		}
-		if !decodeJSON(w, r, &req, 0) {
+		req, ok := decodeJoinRequest(w, r)
+		if !ok {
 			return
 		}
-		if req.URL == "" || req.Bundle == "" {
-			hal.WriteProblemWithExtra(w, http.StatusBadRequest, "URL and bundle required",
-				"the body must carry a non-empty url and bundle", r.URL.Path, map[string]any{"code": "url_and_bundle_required"})
-			return
-		}
-		st, err := m.JoinFleet(r.Context(), repos.FleetJoinSpec{URL: req.URL, AuthMethod: req.AuthMethod, AuthToken: req.AuthToken, Bundle: []byte(req.Bundle)})
+		st, err := m.JoinFleet(r.Context(), repos.FleetJoinSpec{AuthMethod: req.AuthMethod, AuthToken: req.AuthToken, Bundle: []byte(req.Bundle)})
 		if err != nil {
 			writeFleetError(w, r, err)
 			return
@@ -59,6 +53,58 @@ func handleJoinFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		view := fleetView(b, st.FleetStatus)
 		view["root_fingerprint"] = st.RootFingerprint
 		hal.WriteHAL(w, http.StatusOK, view)
+	}
+}
+
+// joinRequest is the body of POST /fleet/join and /fleet/join:check.
+type joinRequest struct {
+	AuthMethod string `json:"auth_method,omitempty"`
+	AuthToken  string `json:"auth_token,omitempty"`
+	Bundle     string `json:"bundle"`
+}
+
+// decodeJoinRequest reads a join body and runs its edge checks: a bundle is
+// required (bundle_required), and auth_method must fit the URL the bundle
+// names, as for every other origin (auth_invalid; cert is never an input).
+// A bundle that does not parse is left to JoinFleet's bundle_invalid.
+func decodeJoinRequest(w http.ResponseWriter, r *http.Request) (joinRequest, bool) {
+	var req joinRequest
+	if !decodeJSON(w, r, &req, 0) {
+		return req, false
+	}
+	if req.Bundle == "" {
+		hal.WriteProblemWithExtra(w, http.StatusBadRequest, "Bundle required",
+			"the body must carry a non-empty bundle", r.URL.Path, map[string]any{"code": "bundle_required"})
+		return req, false
+	}
+	if bundle, err := pki.SplitBundle([]byte(req.Bundle)); err == nil && bundle.FleetURL != "" {
+		if verr := validateURLAuth(bundle.FleetURL, req.AuthMethod); verr != nil {
+			hal.WriteProblemWithExtra(w, http.StatusUnprocessableEntity, "Invalid origin auth",
+				verr.Error(), r.URL.Path, map[string]any{"code": "auth_invalid"})
+			return req, false
+		}
+	}
+	return req, true
+}
+
+// handleCheckFleetJoin: POST /api/v1/fleet/join:check {bundle, auth_method,
+// auth_token}, the join's Check step: its pre-flights, then the bundle's URL
+// reached with the bundle's certificate and judged against the bundle's
+// root, installing nothing. 200 {url, hosting, host, root_fingerprint,
+// agent_id, auth_required, detail}: the operator confirms the root
+// fingerprint before the join installs it (#299).
+func handleCheckFleetJoin(m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, ok := decodeJoinRequest(w, r)
+		if !ok {
+			return
+		}
+		out, err := m.CheckFleetJoin(r.Context(), repos.FleetJoinSpec{AuthMethod: req.AuthMethod, AuthToken: req.AuthToken, Bundle: []byte(req.Bundle)})
+		if err != nil {
+			writeFleetError(w, r, err)
+			return
+		}
+		hal.WriteHAL(w, http.StatusOK, out)
 	}
 }
 

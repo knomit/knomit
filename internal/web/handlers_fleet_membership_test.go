@@ -14,11 +14,13 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/auth"
 	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // Every fleet operation is served on the local listener only: over loopback
@@ -41,7 +43,8 @@ func TestFleetMembership_EveryOperationIsLocalOnly(t *testing.T) {
 	routes := []struct{ method, path, body string }{
 		{http.MethodPost, "/fleet/create", `{}`},
 		{http.MethodPost, "/fleet/enroll", `{"agent_id":"alpha","public_key":"ssh-ed25519 AAAA"}`},
-		{http.MethodPost, "/fleet/join", `{"url":"https://forge.example/fleet.git","bundle":"x"}`},
+		{http.MethodPost, "/fleet/join", `{"bundle":"x"}`},
+		{http.MethodPost, "/fleet/join:check", `{"bundle":"x"}`},
 		{http.MethodPost, "/fleet/leave", `{}`},
 		{http.MethodPost, "/fleet/revoke", `{"agent_id":"alpha"}`},
 		{http.MethodPost, "/fleet/decommission", `{}`},
@@ -225,4 +228,55 @@ func TestFleetREST_MasterMergeIsReJudged(t *testing.T) {
 	rec := merge("agent/y", plant("agent/y", "kb/members/"+own+"/note.md"))
 	require.Less(t, rec.Code, 300, "control: an own-folder edit is merged: %s", rec.Body.String())
 	require.NotEqual(t, before, ownTip(), "control: the master's branch moved")
+}
+
+// POST /fleet/join takes the bundle alone (it names the fleet URL) and runs
+// the same URL/auth edge as every other origin against that URL: cert is not
+// an input (422 auth_invalid), and nothing is installed.
+func TestFleetREST_JoinRefusesCertAsInput(t *testing.T) {
+	s, home := fleetCreateServer(t, "127.0.0.1:0")
+	f := pkitest.New(t)
+	bundle := pkitest.WithURL(t, f.Bundle(t, f.Enroll(t, "rest-fleet@"+pki.AgentEmailDomain)), "https://hub.example:19279/git/fleet")
+	body, err := json.Marshal(map[string]string{"bundle": string(bundle), "auth_method": "cert"})
+	require.NoError(t, err)
+	req := localPeer(httptest.NewRequest(http.MethodPost, "/fleet/join", strings.NewReader(string(body))))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"auth_invalid"`)
+	_, err = os.Stat(filepath.Join(home, "pki", pki.InstanceCertFile))
+	require.ErrorIs(t, err, os.ErrNotExist, "nothing was installed")
+}
+
+// POST /fleet/enroll answers the bundle's fleet URL, and an address that is
+// not one of external_addresses is 422 address_unknown listing the choices.
+func TestFleetREST_EnrollNamesTheFleetURL(t *testing.T) {
+	s, _ := fleetCreateServer(t, "127.0.0.1:0")
+	require.Equal(t, http.StatusCreated, postFleetCreate(s, `{}`, true).Code)
+	key := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(testsigner.Named("alpha").PublicKey())))
+	enroll := func(extra string) *httptest.ResponseRecorder {
+		req := localPeer(httptest.NewRequest(http.MethodPost, "/fleet/enroll",
+			strings.NewReader(`{"agent_id":"alpha","public_key":"`+key+`"`+extra+`}`)))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.NewAPIRouter().ServeHTTP(rec, req)
+		return rec
+	}
+	rec := enroll(`,"address":"https://elsewhere.example"`)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"address_unknown"`)
+	require.Contains(t, rec.Body.String(), `"choices":["https://fleet-host.example:19279"]`)
+
+	rec = enroll(``)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var out struct {
+		FleetURL string `json:"fleet_url"`
+		Bundle   string `json:"bundle"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+	require.Equal(t, "https://fleet-host.example:19279/git/fleet", out.FleetURL)
+	b, err := pki.SplitBundle([]byte(out.Bundle))
+	require.NoError(t, err)
+	require.Equal(t, out.FleetURL, b.FleetURL)
 }

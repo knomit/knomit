@@ -44,14 +44,14 @@ func TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	aBranch := "agent/alpha-" + pki.Short(aMember.Fingerprint())
-	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: aDir}},
 		KeyPath: aKey, Signer: keySigner(t, aKey), AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { aMgr.Close() })
 	riA, err := aMgr.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "clone",
-		Origin: &repos.OriginSpec{URL: pki.GitScheme + "://" + host.tlsAddr + "/git/kb", AuthMethod: "cert"}}, nil)
+		Origin: &repos.OriginSpec{URL: "https://" + host.tlsAddr + "/git/kb"}}, nil)
 	if err != nil {
 		t.Fatalf("clone from the host: %v", err)
 	}

@@ -5,7 +5,7 @@ import { GlobeIcon } from './icons';
 import { btn, card } from './manageStyles';
 import { repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
 import { originURL } from './wizardState';
-import { isKnomitURL, isSSHURL, urlAuthMismatch } from './originAuth';
+import { isSSHURL, urlAuthMismatch } from './originAuth';
 
 type Step =
   | 'idle' | 'creating' | 'testing' | 'tested'
@@ -42,9 +42,10 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   const [url, setUrl] = useState('');
   // '' = auto-detect (backend infers SSH for git@/ssh:// URLs, else anonymous).
   // 'none' forces anonymous even for SSH-style URLs. handleTest sends '' as an
-  // omitted auth_method so the backend's auto-promotion can run.
-  // 'cert' = the instance certificate, offered only for knomit+https URLs.
-  const [authMethod, setAuthMethod] = useState<'' | 'none' | 'ssh' | 'token' | 'basic' | 'cert'>('');
+  // omitted auth_method so the backend's auto-promotion can run. Another
+  // knomit instance of this fleet is an https URL with Auto-detect: the
+  // server decides it is one.
+  const [authMethod, setAuthMethod] = useState<'' | 'none' | 'ssh' | 'token' | 'basic'>('');
   const [token, setToken] = useState('');
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
@@ -108,8 +109,10 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
     api.getOrigin(repo).then(o => {
       if (cancelled || !o) return;
       if (o.url) setUrl(o.url);
+      // A stored 'cert' is the server's decision, never an input: it maps to
+      // Auto-detect, so a re-submit is decided again.
       const m = o.auth_method;
-      if (m === 'none' || m === 'ssh' || m === 'token' || m === 'basic' || m === 'cert') setAuthMethod(m);
+      if (m === 'none' || m === 'ssh' || m === 'token' || m === 'basic') setAuthMethod(m);
     }).catch(() => { /* leave blank */ });
     return () => { cancelled = true; };
   }, [repo]);
@@ -285,7 +288,6 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   };
 
   const isSSH = isSSHURL(sendURL);
-  const isKnomit = isKnomitURL(sendURL);
   const authMismatch = urlAuthMismatch(sendURL, authMethod);
   // Non-blocking advisory: 'none' on an SSH-style URL is a deliberate override
   // (force anonymous), but it almost always fails to authenticate. Warn without
@@ -373,7 +375,6 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
                   <option value="ssh">SSH (knomit key)</option>
                   <option value="token">Token</option>
                   <option value="basic">Basic (user / password)</option>
-                  {(isKnomit || authMethod === 'cert') && <option value="cert">Instance certificate</option>}
                 </select>
                 {authMethod === 'token' && (<>
                   <label style={label} htmlFor="wizard-token">Token</label>

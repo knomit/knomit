@@ -1,7 +1,10 @@
 package web
 
 import (
+	"knomit/internal/pki"
+	"knomit/internal/repos"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,36 +51,48 @@ func TestIsGitURL(t *testing.T) {
 	}
 }
 
-// TestValidateURLAuth_FleetScheme is the table the wizard's
-// urlAuthMismatch test mirrors (web/src/originAuth.test.ts);
-// the two must not disagree. The fleet scheme is matched case-insensitively,
-// as go-git matches it.
+// internalForms is the fleet transport's internal URL for an https URL, as
+// pki.GitURL derives it, in lower and upper case: the scheme must be refused
+// as input however it is spelled (go-git lowercases it).
+func internalForms(t *testing.T, https string) []string {
+	t.Helper()
+	u, err := pki.GitURL(https, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheme, rest, _ := strings.Cut(u, "://")
+	return []string{u, strings.ToUpper(scheme) + "://" + rest}
+}
+
+// TestValidateURLAuth_FleetPeersAreDecidedNotTyped is the table the wizard's
+// urlAuthMismatch test mirrors (web/src/originAuth.test.ts) for the rows both
+// apply; the two must not disagree. A fleet peer is typed as plain https and
+// knomit decides it is one, so cert is never an input and the internal
+// scheme is refused.
 //
-// SABOTAGE (against d2382b76's code, before a comment-only amend): isKnomit forced false turns this red; dropping
-// the fleet line from urlAuthMismatch turns six rows of the vitest table and
-// the wizard render test red.
-func TestValidateURLAuth_FleetScheme(t *testing.T) {
-	const knomitWrong = "knomit+https origins authenticate with the instance certificate — use auth method cert"
-	const certWrong = "cert auth is only valid with knomit+https:// URLs"
-	for _, tc := range []struct {
-		url, method, want string
-	}{
+// SABOTAGE: dropping the cert rule turns the cert rows red; dropping the
+// scheme rule turns the internal-form rows red.
+func TestValidateURLAuth_FleetPeersAreDecidedNotTyped(t *testing.T) {
+	certWrong := repos.ErrCertNotAnInput.Error()
+	schemeWrong := pki.ErrUnsupportedOriginScheme.Error()
+	type row struct{ url, method, want string }
+	rows := []row{
 		{"https://github.com/o/r.git", "token", ""},
+		{"https://h:8443/git/kb", "", ""},
+		{"https://h:8443/git/kb", "basic", ""},
 		{"https://github.com/o/r.git", "cert", certWrong},
-		{"knomit+https://h:8443/git/kb", "cert", ""},
-		{"knomit+https://h:8443/git/kb", "", ""},
-		{"KNOMIT+HTTPS://h:8443/git/kb", "cert", ""},
-		{"knomit+https://h:8443/git/kb", "token", knomitWrong},
-		{"knomit+https://h:8443/git/kb", "basic", knomitWrong},
-		{"knomit+https://h:8443/git/kb", "none", knomitWrong},
-		{"KNOMIT+HTTPS://h:8443/git/kb", "token", knomitWrong},
 		{"git@github.com:o/r.git", "cert", certWrong},
-		{"ssh://git@github.com/o/r.git", "cert", certWrong},
 		{"/srv/kb", "cert", certWrong},
-		// isHTTP stays false for the fleet scheme: ssh on it is refused by
-		// the fleet rule, not by the HTTP one.
-		{"knomit+https://h:8443/git/kb", "ssh", knomitWrong},
-	} {
+		{"https://github.com/o/r.git", "ssh", "SSH auth cannot be used with HTTP/HTTPS URLs — use a token or basic auth instead"},
+		{"git@github.com:o/r.git", "token", "token/basic auth cannot be used with SSH URLs — use SSH auth instead"},
+		{"ssh://git@github.com/o/r.git", "basic", "token/basic auth cannot be used with SSH URLs — use SSH auth instead"},
+	}
+	for _, u := range internalForms(t, "https://h:8443/git/kb") {
+		for _, method := range []string{"", "cert", "token", "ssh"} {
+			rows = append(rows, row{u, method, schemeWrong})
+		}
+	}
+	for _, tc := range rows {
 		err := validateURLAuth(tc.url, tc.method)
 		got := ""
 		if err != nil {

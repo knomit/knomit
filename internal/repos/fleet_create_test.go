@@ -355,8 +355,6 @@ func TestCreateFleet_PreflightRefusals(t *testing.T) {
 			status: http.StatusUnprocessableEntity, code: "listener_required"},
 		{name: "no external addresses", mod: func(d *Deps) { d.Cfg.ExternalAddresses = nil },
 			status: http.StatusUnprocessableEntity, code: "addresses_required"},
-		{name: "knomit-hosted origin", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "knomit+https://hub.example:19279/git/fleet"}},
-			status: http.StatusUnprocessableEntity, code: "knomit_origin"},
 		{name: "root.crt installed", setup: trustFile(pki.RootCertFile), status: http.StatusConflict, code: "trust_installed"},
 		{name: "crl.pem installed", setup: trustFile(pki.CRLFile), status: http.StatusConflict, code: "trust_installed"},
 		{name: "instance.crt installed", setup: trustFile(pki.InstanceCertFile), status: http.StatusConflict, code: "trust_installed"},

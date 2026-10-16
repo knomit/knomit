@@ -95,7 +95,7 @@ func localWriteGrants() auth.StaticGrants {
 func joinOverSocket(t *testing.T, s *Server, key, url string, root *pkitest.Fleet) *httptest.ResponseRecorder {
 	t.Helper()
 	bundle := root.Bundle(t, root.Enroll(t, "rest-fleet@"+pki.AgentEmailDomain, key))
-	body, err := json.Marshal(map[string]string{"url": url, "bundle": string(bundle)})
+	body, err := json.Marshal(map[string]string{"bundle": string(pkitest.WithURL(t, bundle, url))})
 	require.NoError(t, err)
 	req := localPeer(httptest.NewRequest(http.MethodPost, "/fleet/join", strings.NewReader(string(body))))
 	req.Header.Set("Content-Type", "application/json")

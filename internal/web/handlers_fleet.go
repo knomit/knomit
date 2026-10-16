@@ -29,7 +29,11 @@ func fleetView(b hal.URLBuilder, st repos.FleetStatus) map[string]any {
 func writeFleetError(w http.ResponseWriter, r *http.Request, err error) {
 	var fe *repos.FleetError
 	if errors.As(err, &fe) {
-		hal.WriteProblemWithExtra(w, fe.Status, http.StatusText(fe.Status), fe.Msg, r.URL.Path, map[string]any{"code": fe.Code})
+		extra := map[string]any{"code": fe.Code}
+		if len(fe.Choices) > 0 {
+			extra["choices"] = fe.Choices
+		}
+		hal.WriteProblemWithExtra(w, fe.Status, http.StatusText(fe.Status), fe.Msg, r.URL.Path, extra)
 		return
 	}
 	hal.WriteProblem(w, http.StatusInternalServerError, "Fleet operation failed", err.Error(), r.URL.Path)

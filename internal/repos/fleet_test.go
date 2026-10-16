@@ -76,7 +76,7 @@ func pushCount(t *testing.T, bare, ref string) int {
 func joinTestFleet(t *testing.T, m *Manager, url string, root *pkitest.Fleet) (FleetStatus, error) {
 	t.Helper()
 	mem := root.Enroll(t, m.AgentID()+"@"+pki.AgentEmailDomain, m.deps.KeyPath)
-	j, err := m.JoinFleet(context.Background(), FleetJoinSpec{URL: url, Bundle: root.Bundle(t, mem)})
+	j, err := m.JoinFleet(context.Background(), FleetJoinSpec{Bundle: pkitest.WithURL(t, root.Bundle(t, mem), url)})
 	return j.FleetStatus, err
 }
 
@@ -326,7 +326,7 @@ func TestFleet_RefusedJoinLeavesNothingBehind(t *testing.T) {
 		{"another agent", url, root.Bundle(t, root.Enroll(t, "someone@"+pki.AgentEmailDomain, m.deps.KeyPath)), http.StatusUnprocessableEntity, "agent_mismatch", bare},
 		{"push refused", rejURL, rejRoot.Bundle(t, rejRoot.Enroll(t, "test-fleet@"+pki.AgentEmailDomain, m.deps.KeyPath)), http.StatusConflict, "join_refused", rejecting},
 	} {
-		_, err := m.JoinFleet(ctx, FleetJoinSpec{URL: tc.url, Bundle: tc.bundle})
+		_, err := m.JoinFleet(ctx, FleetJoinSpec{Bundle: pkitest.WithURL(t, tc.bundle, tc.url)})
 		status, code := fleetCode(t, err)
 		require.Equal(t, tc.status, status, tc.name)
 		require.Equal(t, tc.code, code, tc.name)
@@ -391,4 +391,36 @@ func TestFleet_RegisteringRetriedOnPush(t *testing.T) {
 	st, _ = m.FleetStatus(ctx)
 	require.Equal(t, FleetRegistered, st.State)
 	require.Empty(t, st.LastError)
+}
+
+// POST /fleet/join:check on a forge-hosted fleet: the bundle's URL is not an
+// instance of the bundle's fleet, so hosting forge, the bundle's root
+// fingerprint, nothing installed; a bundle for another key is key_mismatch
+// before anything is reached.
+func TestCheckFleetJoin_Forge(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	url, root := seedJoinableFleet(t, filepath.Join(dir, "fleet.git"))
+	m := newFleetManager(t, dir)
+	bundle := pkitest.WithURL(t, root.Bundle(t, root.Enroll(t, "test-fleet@"+pki.AgentEmailDomain, m.deps.KeyPath)), url)
+	chk, err := m.CheckFleetJoin(ctx, FleetJoinSpec{Bundle: bundle})
+	require.NoError(t, err)
+	rootID, err := pki.RootID(root.Root.Cert)
+	require.NoError(t, err)
+	require.Equal(t, FleetJoinCheck{URL: url, Hosting: "forge", RootFingerprint: rootID, AgentID: "test-fleet"}, chk)
+	requireNothingJoined(t, m, "check")
+
+	// cert is never an input: the forge probe vets the caller's method.
+	_, err = m.CheckFleetJoin(ctx, FleetJoinSpec{Bundle: bundle, AuthMethod: "cert"})
+	status, code := fleetCode(t, err)
+	require.Equal(t, http.StatusUnprocessableEntity, status)
+	require.Equal(t, "auth_invalid", code)
+	require.ErrorContains(t, err, ErrCertNotAnInput.Error())
+	requireNothingJoined(t, m, "cert check")
+
+	other := pkitest.WithURL(t, root.Bundle(t, root.Enroll(t, "test-fleet@"+pki.AgentEmailDomain)), url)
+	_, err = m.CheckFleetJoin(ctx, FleetJoinSpec{Bundle: other})
+	_, code = fleetCode(t, err)
+	require.Equal(t, "key_mismatch", code)
+	requireNothingJoined(t, m, "key_mismatch check")
 }

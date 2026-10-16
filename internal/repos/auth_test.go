@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -14,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
+	"knomit/internal/pki"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
 )
@@ -69,7 +71,7 @@ func TestManager_ResolveAuth_SSHUsesManagerKeyPath(t *testing.T) {
 		KeyPath:     keyPath,
 	})
 
-	auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
+	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
 	require.NoError(t, err)
 	require.NotNil(t, auth)
 }
@@ -86,7 +88,7 @@ func TestManager_ResolveAuth_SSHAutoDetectedFromURL(t *testing.T) {
 		KeyPath:     keyPath,
 	})
 
-	auth, err := m.ResolveAuth(config.RemoteAuthConfig{}, "git@github.com:user/repo.git")
+	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{}, "git@github.com:user/repo.git")
 	require.NoError(t, err)
 	require.NotNil(t, auth)
 }
@@ -100,7 +102,7 @@ func TestManager_ResolveAuth_SSHNoKeyFails(t *testing.T) {
 		KeyPath:     "",
 	})
 
-	_, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
+	_, _, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key path")
 }
@@ -113,7 +115,7 @@ func TestManager_ResolveAuth_TokenNoKey(t *testing.T) {
 		KeyPath:     "",
 	})
 
-	auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_abc"}, "https://github.com/user/repo.git")
+	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_abc"}, "https://github.com/user/repo.git")
 	require.NoError(t, err)
 	require.NotNil(t, auth)
 }
@@ -140,7 +142,7 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 		fileuri.New(hostAbs(t, "/srv/kb")),
 		hostAbs(t, "/srv/kb"),
 	} {
-		auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, url)
+		_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, url)
 		require.NoError(t, err, url)
 		require.Nil(t, auth, url)
 	}
@@ -153,20 +155,20 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 func TestManager_ResolveAuth_GatesLocalOrigin(t *testing.T) {
 	// No root configured: local origins are disabled, network origins pass.
 	off := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
-	_, err := off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/srv/kb"))
+	_, _, err := off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/srv/kb"))
 	require.Error(t, err)
-	_, err = off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "x"}, "https://github.com/u/r.git")
+	_, _, err = off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "x"}, "https://github.com/u/r.git")
 	require.NoError(t, err)
 
 	// Root configured: in-root local origin passes, out-of-root is rejected.
 	on := New(context.Background(), Deps{Cfg: config.Config{LocalOriginRoot: hostAbs(t, "/srv/kb")}, AgentBranch: "agent/test"})
-	_, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, filepath.Join(hostAbs(t, "/srv/kb"), "work"))
+	_, _, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, filepath.Join(hostAbs(t, "/srv/kb"), "work"))
 	require.NoError(t, err)
-	_, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/etc/passwd"))
+	_, _, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/etc/passwd"))
 	require.Error(t, err)
 }
 
-// cert means the credential is the instance certificate on the knomit+https
+// cert means the credential is the instance certificate on the fleet
 // transport, so there is no go-git AuthMethod to return.
 func TestResolveAuth_CertIsTransportLevel(t *testing.T) {
 	auth, err := resolveAuth(config.RemoteAuthConfig{AuthMethod: "cert"}, "")
@@ -174,61 +176,75 @@ func TestResolveAuth_CertIsTransportLevel(t *testing.T) {
 	require.Nil(t, auth)
 }
 
-// For a fleet URL the method is FORCED to cert: "", "none" and "ssh" all
-// resolve to no go-git auth (ssh with no key path would otherwise be an
-// error, so the ssh row shows the forcing, not a pass-through), and an
-// explicit token or basic is an error. The scheme is matched case-
-// insensitively because go-git lowercases it.
-func TestResolveAuthWithOrigin_FleetURLForcesCert(t *testing.T) {
-	for _, url := range []string{"knomit+https://h:8443/git/kb", "KNOMIT+HTTPS://h:8443/git/kb"} {
-		for _, method := range []string{"", "cert", "none", "ssh"} {
-			auth, err := resolveAuthWithOrigin(config.RemoteAuthConfig{AuthMethod: method, SSHKey: ""}, "", url)
-			require.NoError(t, err, "%s %q", url, method)
-			require.Nil(t, auth, "%s %q", url, method)
-		}
-		for _, method := range []string{"token", "basic"} {
-			_, err := resolveAuthWithOrigin(config.RemoteAuthConfig{AuthMethod: method, Token: "ghp_x", User: "u", Password: "p"}, "", url)
-			require.Error(t, err, "%s %q", url, method)
-			require.Contains(t, err.Error(), "instance certificate", "%s %q", url, method)
-		}
+// cert is never a caller's input, whatever the URL: ResolveOrigin refuses it
+// by name before classifying, so no layer behind the edge stores a cert
+// origin knomit did not decide (the edge's validateURLAuth refuses it first;
+// this pins the repos layer on its own).
+func TestResolveOrigin_CertIsNotAnInput(t *testing.T) {
+	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
+	for _, u := range []string{"https://github.com/o/r.git", "https://h:8443/git/kb", "ssh://git@h/kb"} {
+		_, err := m.ResolveOrigin(context.Background(), OriginSpec{URL: u, AuthMethod: "cert"})
+		require.ErrorIs(t, err, ErrCertNotAnInput, u)
 	}
 }
 
-// cert on a non-fleet URL is NOT rejected here: that is validateURLAuth's job
-// at the API edge (internal/web/helpers.go), which the wizard mirrors.
-func TestResolveAuthWithOrigin_CertOnHTTPSIsLeftToTheEdge(t *testing.T) {
-	auth, err := resolveAuthWithOrigin(config.RemoteAuthConfig{AuthMethod: "cert"}, "", "https://github.com/o/r.git")
+// The go-git URL is keyed on the stored METHOD, never on the URL: cert hands
+// go-git the internal fleet form of the same https URL and no go-git auth;
+// every other method the URL unchanged. A URL that already carries the
+// internal scheme is refused for every method (it is never input and never
+// stored), and cert on a non-https URL is refused.
+func TestResolveAuthWithOrigin_MethodKeyedGitURL(t *testing.T) {
+	gitURL, auth, err := resolveAuthWithOrigin(config.RemoteAuthConfig{AuthMethod: "cert"}, "", "https://h:8443/git/kb")
 	require.NoError(t, err)
 	require.Nil(t, auth)
+	internalWant, err := pki.GitURL("https://h:8443/git/kb", true)
+	require.NoError(t, err)
+	require.Equal(t, internalWant, gitURL)
+
+	gitURL, auth, err = resolveAuthWithOrigin(config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_x"}, "", "https://h:8443/git/kb")
+	require.NoError(t, err)
+	require.NotNil(t, auth)
+	require.Equal(t, "https://h:8443/git/kb", gitURL, "a non-cert origin goes to stock https unchanged")
+
+	internal, err := pki.GitURL("https://h:8443/git/kb", true)
+	require.NoError(t, err)
+	scheme, rest, _ := strings.Cut(internal, "://")
+	for _, method := range []string{"", "cert", "none", "token"} {
+		for _, url := range []string{internal, strings.ToUpper(scheme) + "://" + rest} {
+			_, _, err := resolveAuthWithOrigin(config.RemoteAuthConfig{AuthMethod: method, Token: "t"}, "", url)
+			require.ErrorIs(t, err, pki.ErrUnsupportedOriginScheme, "%s %q", url, method)
+		}
+	}
+	_, _, err = resolveAuthWithOrigin(config.RemoteAuthConfig{AuthMethod: "cert"}, "", "http://h:8443/git/kb")
+	require.Error(t, err, "cert over plain http")
 }
 
-// SABOTAGE (run against 800d35bc's code, before a comment-only amend): deleting remoteAuthFromRecord's fleet
-// early return turns this red; disabling resolveAuthWithOrigin's fleet branch
-// turns this and TestResolveAuthWithOrigin_FleetURLForcesCert red.
+// SABOTAGE: keying remoteAuthFromRecord's early return back on the URL (or
+// deleting it) turns this red.
 //
 // A global [remote] token (KNOMIT_REMOTE_AUTH=token) must never be sent to a
-// fleet peer: for a knomit+https origin the sync loop's auth ignores the
-// global fallback entirely. Positive control: the same fallback on an https
-// origin does produce the token.
-func TestRemoteAuthFromRecord_FleetOriginIgnoresGlobalCredential(t *testing.T) {
+// fleet peer: for an origin stored with method cert the sync loop's auth
+// ignores the global fallback entirely, whatever its URL looks like.
+// Positive control: the same fallback on a token origin at the same URL does
+// produce the token.
+func TestRemoteAuthFromRecord_CertOriginIgnoresGlobalCredential(t *testing.T) {
 	global := config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_global"}
 
-	fleet := &store.Remote{URL: "knomit+https://h:8443/git/kb"}
+	fleet := &store.Remote{URL: "https://h:8443/git/kb", AuthMethod: "cert"}
 	cfg := remoteAuthFromRecord(fleet, global)
 	require.Empty(t, cfg.Token, "the global token was copied into a fleet origin's config")
-	auth, err := resolveAuthWithOrigin(cfg, "", fleet.URL)
+	require.Equal(t, "cert", cfg.AuthMethod)
+	gitURL, auth, err := resolveAuthWithOrigin(cfg, "", fleet.URL)
 	require.NoError(t, err)
 	require.Nil(t, auth)
+	want, err := pki.GitURL(fleet.URL, true)
+	require.NoError(t, err)
+	require.Equal(t, want, gitURL)
 
-	forge := &store.Remote{URL: "https://github.com/o/r.git"}
-	auth, err = resolveAuthWithOrigin(remoteAuthFromRecord(forge, global), "", forge.URL)
+	forge := &store.Remote{URL: "https://h:8443/git/kb"}
+	_, auth, err = resolveAuthWithOrigin(remoteAuthFromRecord(forge, global), "", forge.URL)
 	require.NoError(t, err)
 	ba, ok := auth.(*githttp.BasicAuth)
 	require.True(t, ok, "positive control: %T", auth)
 	require.Equal(t, "ghp_global", ba.Password)
-
-	// An EXPLICIT token on the fleet origin's own record is an error, not
-	// silently dropped.
-	_, err = resolveAuthWithOrigin(remoteAuthFromRecord(&store.Remote{URL: fleet.URL, AuthMethod: "token", AuthToken: "ghp_x"}, global), "", fleet.URL)
-	require.Error(t, err)
 }

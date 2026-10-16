@@ -131,7 +131,10 @@ func awaitPushWindow(ctx context.Context, wake <-chan struct{}) bool {
 func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remoteAuthFn {
 	return func(remote *store.Remote) (transport.AuthMethod, error) {
 		authCfg := remoteAuthFromRecord(remote, fallbackAuth)
-		auth, err := resolveAuthWithOrigin(authCfg, keyPath, remote.URL)
+		// The URL go-git uses is the derived .git/config; this resolves the
+		// credential and refuses a URL stored with the fleet transport's
+		// internal scheme before anything is dialled.
+		_, auth, err := resolveAuthWithOrigin(authCfg, keyPath, remote.URL)
 		if err != nil {
 			// Do NOT downgrade to anonymous here: a configured-but-unresolvable
 			// credential must fail visibly so the reconcile tick records the

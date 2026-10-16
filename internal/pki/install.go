@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -83,18 +84,117 @@ func (e *RootDiffersError) Error() string {
 
 func (e *RootDiffersError) Is(target error) bool { return target == ErrRootDiffers }
 
-// Bundle is an enrollment bundle split into its three parts.
+// Bundle is an enrollment bundle split into its parts.
 type Bundle struct {
 	Leaf    *x509.Certificate
 	Root    *x509.Certificate
 	RootPEM []byte
 	CRLPEM  []byte
 	CRL     *x509.RevocationList
+	// FleetURL is the fleet repository URL members use (the hub's https URL
+	// at the external address the master chose, or the forge's URL), from
+	// the bundle document's `url:` line; "" for a bare PEM bundle (the
+	// create's own install). It is not trust material: the join classifies
+	// it (ResolveOrigin) and checks the cloned repository's root against the
+	// bundle's.
+	FleetURL string
+}
+
+// BundleHeader is the first line of an enroll's bundle document. The
+// document is the header, `url:`, `agent:`, `root:` (fingerprint) and
+// `serial:` lines, then the PEM blocks (leaf, root, CRL). The agent, root
+// and serial lines are for a reader; SplitBundle checks each against the
+// PEM blocks, so they can never disagree with what is installed.
+const BundleHeader = "# knomit fleet bundle v1"
+
+// FleetBundle is the bundle document for raw (bare PEM: leaf, root, CRL)
+// naming url as the fleet repository URL.
+func FleetBundle(raw []byte, url string) ([]byte, error) {
+	b, err := SplitBundle(raw)
+	if err != nil {
+		return nil, err
+	}
+	if b.FleetURL != "" {
+		return nil, malformed(errors.New("bundle already names a fleet URL"))
+	}
+	if url == "" || strings.ContainsAny(url, "\r\n") {
+		return nil, malformed(fmt.Errorf("fleet URL %q is not one line", url))
+	}
+	agent, root, serial, err := bundleFacts(b)
+	if err != nil {
+		return nil, err
+	}
+	head := fmt.Sprintf("%s\nurl: %s\nagent: %s\nroot: %s\nserial: %s\n", BundleHeader, url, agent, root, serial)
+	return append([]byte(head), raw...), nil
+}
+
+// bundleFacts are the header's agent, root fingerprint and serial, read from
+// the PEM blocks.
+func bundleFacts(b Bundle) (agent, root, serial string, err error) {
+	if len(b.Leaf.EmailAddresses) == 1 {
+		agent = AgentIDOfEmail(b.Leaf.EmailAddresses[0])
+	}
+	root, err = RootID(b.Root)
+	if err != nil {
+		return "", "", "", malformed(err)
+	}
+	return agent, root, b.Leaf.SerialNumber.Text(16), nil
+}
+
+// splitHeader separates a bundle document's header lines from its PEM. A
+// bare PEM bundle has none.
+func splitHeader(raw []byte) (map[string]string, []byte, error) {
+	text := string(raw)
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "#") {
+		return nil, raw, nil
+	}
+	i := strings.Index(trimmed, "-----BEGIN ")
+	if i < 0 {
+		i = len(trimmed)
+	}
+	lines := strings.Split(strings.TrimSpace(trimmed[:i]), "\n")
+	if strings.TrimSpace(lines[0]) != BundleHeader {
+		return nil, nil, malformed(fmt.Errorf("not a %q document: %q", BundleHeader, strings.TrimSpace(lines[0])))
+	}
+	fields := map[string]string{}
+	for _, l := range lines[1:] {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(l, ":")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || v == "" {
+			return nil, nil, malformed(fmt.Errorf("bundle header line %q is not key: value", l))
+		}
+		switch k {
+		case "url", "agent", "root", "serial":
+		default:
+			return nil, nil, malformed(fmt.Errorf("bundle header has an unexpected %q line", k))
+		}
+		if _, dup := fields[k]; dup {
+			return nil, nil, malformed(fmt.Errorf("bundle header has two %q lines", k))
+		}
+		fields[k] = v
+	}
+	for _, k := range []string{"url", "agent", "root", "serial"} {
+		if fields[k] == "" {
+			return nil, nil, malformed(fmt.Errorf("bundle header has no %q line", k))
+		}
+	}
+	return fields, []byte(trimmed[i:]), nil
 }
 
 // SplitBundle returns the instance certificate, the root certificate and the
-// CRL from a bundle, refusing anything else in it.
+// CRL (exactly one of each) and, for a bundle document, its fleet URL,
+// refusing anything else in it and a header whose agent, root or serial
+// does not match the PEM blocks.
 func SplitBundle(raw []byte) (Bundle, error) {
+	header, raw, err := splitHeader(raw)
+	if err != nil {
+		return Bundle{}, err
+	}
 	var b Bundle
 	for rest := raw; ; {
 		var blk *pem.Block
@@ -135,6 +235,18 @@ func SplitBundle(raw []byte) (Bundle, error) {
 	}
 	if b.Leaf == nil || b.Root == nil || b.CRL == nil {
 		return Bundle{}, malformed(errors.New("bundle must hold an instance certificate, a root certificate and a CRL"))
+	}
+	if header != nil {
+		agent, root, serial, err := bundleFacts(b)
+		if err != nil {
+			return Bundle{}, err
+		}
+		for k, want := range map[string]string{"agent": agent, "root": root, "serial": serial} {
+			if !strings.EqualFold(header[k], want) {
+				return Bundle{}, malformed(fmt.Errorf("bundle header says %s %q, its certificates say %q", k, header[k], want))
+			}
+		}
+		b.FleetURL = header["url"]
 	}
 	return b, nil
 }
@@ -246,7 +358,7 @@ func InstallBundle(dir, keyPath string, raw []byte, opts InstallOptions) (Identi
 // it changes nothing for another fleet, and it still refuses an older CRL if
 // this root is ever installed again. The instance key is never touched.
 //
-// The knomit+https client resolves dir at each session, so its next session
+// The fleet transport's client resolves dir at each session, so its next session
 // finds no certificate (ErrNotEnrolled). A running mTLS listener adopts the
 // uninstalled state (all three files absent) on its next handshake or tick:
 // it refuses every handshake and cuts every established connection, without

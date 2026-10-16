@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,12 +25,18 @@ import (
 func TestInstallGitTransport_RegistersTheSchemeEvenUnenrolled(t *testing.T) {
 	home := t.TempDir()
 	installGitTransport(filepath.Join(home, "pki"), filepath.Join(home, "id_ed25519"))
-	if _, ok := transportclient.Protocols[pki.GitScheme]; !ok {
-		t.Fatalf("%s is not registered after boot", pki.GitScheme)
+	// The URL go-git is handed for an origin stored with method cert.
+	gitURL, err := pki.GitURL("https://127.0.0.1:1/git/kb", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheme, _, _ := strings.Cut(gitURL, "://")
+	if _, ok := transportclient.Protocols[scheme]; !ok {
+		t.Fatalf("%s is not registered after boot", scheme)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := gogit.PlainCloneContext(ctx, t.TempDir(), false, &gogit.CloneOptions{URL: pki.GitScheme + "://127.0.0.1:1/git/kb"})
+	_, err = gogit.PlainCloneContext(ctx, t.TempDir(), false, &gogit.CloneOptions{URL: gitURL})
 	if !errors.Is(err, pki.ErrNotEnrolled) {
 		t.Fatalf("err=%v, want ErrNotEnrolled", err)
 	}

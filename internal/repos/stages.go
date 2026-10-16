@@ -197,7 +197,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 	}
 	// The git remote is a DERIVED CACHE of control.db, rewritten at every open.
 	if origin != nil && origin.URL != "" {
-		if err := svc.ConfigureRemote(origin.URL, r.upstreamMain, r.agentBranch); err != nil {
+		if err := ConfigureGitRemote(svc, origin.URL, origin.AuthMethod, r.upstreamMain, r.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", r.Name()).
 				Msg("configure git remote from control.db failed; sync may not reach the origin")
 		}

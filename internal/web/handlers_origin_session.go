@@ -198,7 +198,17 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			User:       sess.Auth.User,
 			Password:   sess.Auth.Password,
 		}
-		auth, err := rm.ResolveAuth(authCfg, sess.URL)
+		// The transport is decided first (a fleet peer is cloned over the
+		// fleet transport); the commit's attach or swap decides again from
+		// the same input.
+		decided, err := rm.ResolveOrigin(r.Context(), repos.OriginSpec{URL: sess.URL, AuthMethod: sess.Auth.Method,
+			AuthToken: assembleAuthToken(sess.Auth.Method, sess.Auth.Token, sess.Auth.User, sess.Auth.Password)})
+		if err != nil {
+			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("origin refused: %v", err)})
+			return
+		}
+		authCfg.AuthMethod = decided.AuthMethod
+		gitURL, auth, err := rm.ResolveAuth(authCfg, sess.URL)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("auth resolution failed: %v", err)})
 			return
@@ -228,7 +238,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			sendEvent(map[string]string{"phase": "cloning", "progress": msg})
 		}
 
-		cloneErr := remoteSvc.CloneFrom(sess.URL, auth, progressFn)
+		cloneErr := remoteSvc.CloneFrom(gitURL, auth, progressFn)
 		if cloneErr != nil {
 			remoteSvc.Close()
 			msg := fmt.Sprintf("clone failed: %v", cloneErr)

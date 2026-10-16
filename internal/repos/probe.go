@@ -103,7 +103,19 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 	// Empty unknown/false). initializeProbeErr (lifecycle.go) orders
 	// !Reachable → AuthRequired → Empty, so this lands in its authentication
 	// arm rather than telling the user to go create a branch they already have.
-	auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
+	//
+	// The transport is decided first (a no-op when the caller already did):
+	// a host that cannot be reached is unreachable, a credential typed for a
+	// fleet peer is an auth problem (the access step is where it is removed),
+	// and a peer whose certificate is refused is unreachable with the reason.
+	o, err := m.ResolveOrigin(ctx, o)
+	switch {
+	case errors.Is(err, ErrPeerCredential):
+		return ProbeResult{Reachable: true, AuthRequired: true, Branches: []string{}, Detail: err.Error()}, nil
+	case err != nil:
+		return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
+	}
+	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
 	if err != nil {
 		return ProbeResult{
 			Reachable:    true,
@@ -119,7 +131,7 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 	}
 	rem, err := repo.CreateRemote(&gogitconfig.RemoteConfig{
 		Name: "origin",
-		URLs: []string{o.URL},
+		URLs: []string{gitURL},
 	})
 	if err != nil {
 		return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
@@ -146,7 +158,7 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 			// to 65% and failed on "not allowed to push".
 			wa, wd := "", ""
 			if withWrite {
-				wa, wd = m.probeWrite(ctx, o, auth)
+				wa, wd = m.probeWrite(ctx, gitURL, auth)
 			}
 			return ProbeResult{
 				Reachable:      true,
@@ -170,7 +182,7 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 
 	res := ProbeResult{Reachable: true, Branches: []string{}}
 	if withWrite {
-		res.WriteAccess, res.WriteDetail = m.probeWrite(ctx, o, auth)
+		res.WriteAccess, res.WriteDetail = m.probeWrite(ctx, gitURL, auth)
 	}
 	var head string
 	for _, ref := range refs {
@@ -238,8 +250,8 @@ func advertisesShallow(adv *packp.AdvRefs) bool {
 // It is called only on the path where a ref listing already succeeded, so a
 // remote that could not be read is never asked a second question it has no way
 // to answer.
-func (m *Manager) probeWrite(ctx context.Context, o OriginSpec, auth transport.AuthMethod) (string, string) {
-	ep, err := transport.NewEndpoint(o.URL)
+func (m *Manager) probeWrite(ctx context.Context, gitURL string, auth transport.AuthMethod) (string, string) {
+	ep, err := transport.NewEndpoint(gitURL)
 	if err != nil {
 		return writeUnknown, ""
 	}

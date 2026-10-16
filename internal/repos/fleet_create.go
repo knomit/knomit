@@ -31,8 +31,11 @@ import (
 // material installed in [tls].dir, an empty fleet root directory
 // (<home>/fleet), this instance's ssh-ed25519 key, and the hosting's own
 // needs (none: [tls].addr and external_addresses, or members could never
-// reach the master; a forge: not a knomit+https URL, reachable and not yet
-// initialized). Then, in order:
+// reach the master; a forge: reachable and not yet initialized). Another
+// knomit instance cannot be the origin: refuseInstalledTrust guarantees this
+// instance holds no fleet trust yet, so such an origin never classifies as
+// a peer and fails the reachability probe at its TLS handshake. Then, in
+// order:
 //
 //  0. write the create marker (control.db instance_fleet_create);
 //  1. mint the root, an empty CRL and this instance's leaf into a staging
@@ -240,9 +243,6 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 			return CreateSpec{}, err
 		}
 	} else {
-		if pki.IsFleetURL(spec.Origin.URL) {
-			return CreateSpec{}, fleetErr(http.StatusUnprocessableEntity, "knomit_origin", "a knomit-hosted fleet is hosted by its master: create it without an origin, or give a forge URL")
-		}
 		o := *spec.Origin
 		cs.Mode, cs.Origin = "initialize", &o
 	}

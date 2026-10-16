@@ -392,7 +392,7 @@ func applyAttach(r *RepoInstance, o OriginSpec) error {
 	if branch == "" {
 		branch = svc.UpstreamBranch()
 	}
-	if err := svc.ConfigureRemote(o.URL, branch, r.agentBranch); err != nil {
+	if err := ConfigureGitRemote(svc, o.URL, o.AuthMethod, branch, r.agentBranch); err != nil {
 		return err
 	}
 	// Carry the stored mode through: Origins.Set is a full replacement and an
@@ -448,7 +448,7 @@ func applyDetach(r *RepoInstance) error {
 func restoreRemote(svc *store.Service, r *RepoInstance, prev *store.Remote) {
 	var err error
 	if prev != nil && prev.URL != "" {
-		err = svc.ConfigureRemote(prev.URL, prev.Branch, r.agentBranch)
+		err = ConfigureGitRemote(svc, prev.URL, prev.AuthMethod, prev.Branch, r.agentBranch)
 	} else {
 		err = svc.Remote().DeleteRemote("origin")
 	}

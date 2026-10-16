@@ -205,17 +205,17 @@ func startGitServer(t *testing.T, dir, keyPath string, repo *servedRepo) (string
 // unsynchronised map.
 func useSource(t *testing.T, dir, keyPath string) *fleetSource {
 	t.Helper()
-	prevEntry, had := client.Protocols[GitScheme]
+	prevEntry, had := client.Protocols[gitScheme]
 	prevSrc := activeSource.Load()
 	src := &fleetSource{dir: dir, keyPath: keyPath}
 	activeSource.Store(src)
-	client.InstallProtocol(GitScheme, gitTransport{})
+	client.InstallProtocol(gitScheme, gitTransport{})
 	t.Cleanup(func() {
 		activeSource.Store(prevSrc)
 		if had {
-			client.InstallProtocol(GitScheme, prevEntry)
+			client.InstallProtocol(gitScheme, prevEntry)
 		} else {
-			client.InstallProtocol(GitScheme, nil)
+			client.InstallProtocol(gitScheme, nil)
 		}
 	})
 	return src
@@ -230,7 +230,7 @@ func resetInstall(t *testing.T) {
 		defer install.mu.Unlock()
 		install.installed, install.dir, install.keyPath = false, "", ""
 		activeSource.Store(nil)
-		client.InstallProtocol(GitScheme, nil)
+		client.InstallProtocol(gitScheme, nil)
 	}
 	reset()
 	t.Cleanup(reset)
@@ -248,7 +248,7 @@ func closeIdle(t *testing.T, src *fleetSource) {
 	src.hc.CloseIdleConnections()
 }
 
-func fleetURL(addr string) string { return GitScheme + "://" + addr + "/git/kb" }
+func fleetURL(addr string) string { return gitScheme + "://" + addr + "/git/kb" }
 
 // twoInstances is one fleet with a serving instance B and a fetching
 // instance A, each with its own installed dir.
@@ -416,18 +416,8 @@ func TestGitTransport_HTTPSProtocolEntryUntouched(t *testing.T) {
 	if client.Protocols["https"] != before || client.Protocols["http"] != beforeHTTP {
 		t.Fatal("installing the fleet transport replaced go-git's http(s) transport, which carries forge traffic")
 	}
-	if _, ok := client.Protocols[GitScheme].(gitTransport); !ok {
-		t.Fatalf("%s is %T, want the fleet transport", GitScheme, client.Protocols[GitScheme])
-	}
-}
-
-// go-git lowercases the scheme, so an upper-case URL reaches the fleet
-// transport and is served over mTLS, not refused as an unknown scheme.
-func TestGitTransport_SchemeIsCaseInsensitive(t *testing.T) {
-	x := newTwoInstances(t)
-	x.useA(t)
-	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: "KNOMIT+HTTPS://" + x.addr + "/git/kb"}); err != nil {
-		t.Fatalf("clone: %v", err)
+	if _, ok := client.Protocols[gitScheme].(gitTransport); !ok {
+		t.Fatalf("%s is %T, want the fleet transport", gitScheme, client.Protocols[gitScheme])
 	}
 }
 
@@ -541,7 +531,7 @@ func TestGitTransport_RedirectStaysHTTPS(t *testing.T) {
 	if c.Protocol != "https" || c.String() != "https://h.example:8443/git/kb" {
 		t.Fatalf("copy is %q (%s), want https://h.example:8443/git/kb", c.String(), c.Protocol)
 	}
-	if ep.Protocol != GitScheme {
+	if ep.Protocol != gitScheme {
 		t.Fatalf("the caller's endpoint was mutated to %q", ep.Protocol)
 	}
 }
@@ -565,8 +555,8 @@ func TestGitTransport_InstallIsIdempotentAndRaceFree(t *testing.T) {
 		}
 	}
 	src := activeSource.Load()
-	if _, ok := client.Protocols[GitScheme].(gitTransport); !ok || src == nil || src.dir != x.aDir {
-		t.Fatalf("%s is %T with source %+v", GitScheme, client.Protocols[GitScheme], src)
+	if _, ok := client.Protocols[gitScheme].(gitTransport); !ok || src == nil || src.dir != x.aDir {
+		t.Fatalf("%s is %T with source %+v", gitScheme, client.Protocols[gitScheme], src)
 	}
 }
 
@@ -579,12 +569,12 @@ func TestGitTransport_ReinstallSameFilesIsANoOp(t *testing.T) {
 	}
 	src := activeSource.Load()
 	sentinel := &gitTransportSentinel{}
-	client.Protocols[GitScheme] = sentinel // any write by the next call would replace it
+	client.Protocols[gitScheme] = sentinel // any write by the next call would replace it
 	logs := captureZerolog(t)
 	if err := InstallGitTransport(x.aDir, x.a.keyPath); err != nil {
 		t.Fatalf("same-files reinstall: %v", err)
 	}
-	if client.Protocols[GitScheme] != sentinel {
+	if client.Protocols[gitScheme] != sentinel {
 		t.Fatal("a same-files reinstall wrote go-git's protocol map")
 	}
 	if activeSource.Load() != src {
@@ -613,17 +603,17 @@ func TestGitTransport_ReinstallWithOtherFilesSwapsTheIdentity(t *testing.T) {
 		t.Fatalf("server saw %v, want A %s", got, Fingerprint(x.a.pub))
 	}
 
-	registered := client.Protocols[GitScheme]
+	registered := client.Protocols[gitScheme]
 	sentinel := &gitTransportSentinel{}
-	client.Protocols[GitScheme] = sentinel
+	client.Protocols[gitScheme] = sentinel
 	logs := captureZerolog(t)
 	if err := InstallGitTransport(cDir, c.keyPath); err != nil {
 		t.Fatalf("install as C: %v", err)
 	}
-	if client.Protocols[GitScheme] != sentinel {
+	if client.Protocols[gitScheme] != sentinel {
 		t.Fatal("the swap wrote go-git's protocol map a second time")
 	}
-	client.Protocols[GitScheme] = registered
+	client.Protocols[gitScheme] = registered
 	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(x.addr)}); err != nil {
 		t.Fatalf("clone as C: %v", err)
 	}
@@ -677,7 +667,7 @@ func TestGitTransport_TLSOptionsAndCredentialsAreRefused(t *testing.T) {
 		"InsecureSkipTLS": {URL: fleetURL(x.addr), InsecureSkipTLS: true},
 		"CABundle":        {URL: fleetURL(x.addr), CABundle: []byte("x")},
 		"basic auth":      {URL: fleetURL(x.addr), Auth: &githttp.BasicAuth{Username: "x-token", Password: "ghp_secret"}},
-		"URL userinfo":    {URL: GitScheme + "://x-token:ghp_secret@" + x.addr + "/git/kb"},
+		"URL userinfo":    {URL: gitScheme + "://x-token:ghp_secret@" + x.addr + "/git/kb"},
 	} {
 		_, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, opts)
 		if err == nil {
@@ -686,22 +676,5 @@ func TestGitTransport_TLSOptionsAndCredentialsAreRefused(t *testing.T) {
 	}
 	if n := accepts[x.addr].Load(); n != 0 {
 		t.Fatalf("the server accepted %d connections; refusals must come before any dial", n)
-	}
-}
-
-func TestIsFleetURL(t *testing.T) {
-	for u, want := range map[string]bool{
-		"knomit+https://h/git/kb": true,
-		"KNOMIT+HTTPS://h/git/kb": true,
-		"Knomit+Https://h/git/kb": true,
-		"https://h/git/kb":        false,
-		"knomit+http://h/git/kb":  false,
-		"knomit+https:/h":         false,
-		"":                        false,
-		"xknomit+https://h":       false,
-	} {
-		if got := IsFleetURL(u); got != want {
-			t.Errorf("IsFleetURL(%q) = %v, want %v", u, got, want)
-		}
 	}
 }

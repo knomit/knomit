@@ -43,8 +43,8 @@ import (
 // a nil error — the kept-alive connection from before the revocation is
 // reused and the revoked instance still fetches.
 //
-// F19 phase 2b end to end: knomit's go-git client (the knomit+https
-// transport) fetching from knomit's REAL /git handler — web.Server with
+// F19 phase 2b end to end: knomit's go-git client (the fleet transport,
+// chosen by classifying the plain https URL) fetching from knomit's REAL /git handler — web.Server with
 // GitHandler = web.GitRemoteHandler, AuthMiddleware and the write gate —
 // served on the real mTLS listener from app.OpenTLSServer. The pki tests prove
 // the transport against a minimal upload-pack server; this proves the pair.
@@ -59,10 +59,17 @@ import (
 type headerLog struct {
 	mu   sync.Mutex
 	hits []string
+	// tls counts every request that came in on the TLS listener.
+	tls int
 }
 
 func (h *headerLog) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil {
+			h.mu.Lock()
+			h.tls++
+			h.mu.Unlock()
+		}
 		if r.Header.Get("Authorization") != "" {
 			h.mu.Lock()
 			via := "plain"
@@ -74,6 +81,12 @@ func (h *headerLog) wrap(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (h *headerLog) tlsRequests() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.tls
 }
 
 func (h *headerLog) count(via string) int {
@@ -185,6 +198,8 @@ type fleetServer struct {
 	plain, tlsAddr string
 	hdrs           *headerLog
 	principals     *principalLog
+	// member is B's enrolled certificate.
+	member pkitest.Member
 	// key and signer are B's own key. signer is set only by
 	// newSignedFleetServer; otherwise B's commits carry the test binary's
 	// fallback key, shared with every other store in this process.
@@ -233,7 +248,8 @@ func newFleetServerOpts(t *testing.T, f *pkitest.Fleet, signed bool) *fleetServe
 		Grants:     auth.NewSQLGrants(bMgr.ControlDB()),
 	}
 	hdrs := &headerLog{}
-	f.Install(t, f.Enroll(t, "bravo@agents.knomit.io", bKey), bCfg.TLS.Dir)
+	bMember := f.Enroll(t, "bravo@agents.knomit.io", bKey)
+	f.Install(t, bMember, bCfg.TLS.Dir)
 	plain, tlsAddr := serveFleetNode(t, hdrs.wrap(bSrv.Handler()), bKey, bCfg.TLS)
 
 	kb, err := bMgr.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
@@ -246,7 +262,7 @@ func newFleetServerOpts(t *testing.T, f *pkitest.Fleet, signed bool) *fleetServe
 		t.Fatal(err)
 	}
 	publish(t, kb2, fleetServerAgent, "plainfact")
-	return &fleetServer{cfg: bCfg, kb: kb, kb2: kb2, plain: plain, tlsAddr: tlsAddr, hdrs: hdrs, principals: principals, key: bKey, signer: bSigner}
+	return &fleetServer{cfg: bCfg, kb: kb, kb2: kb2, plain: plain, tlsAddr: tlsAddr, hdrs: hdrs, principals: principals, member: bMember, key: bKey, signer: bSigner}
 }
 
 // keySigner reads an OpenSSH private key file (pkitest.NewKey's) as a commit
@@ -283,19 +299,19 @@ func TestFleetOrigin_ReinstallPresentsTheNewPrincipal(t *testing.T) {
 	ctx := context.Background()
 	f := pkitest.New(t)
 	b := newFleetServer(t, f)
-	url := pki.GitScheme + "://" + b.tlsAddr + "/git/kb"
+	url := "https://" + b.tlsAddr + "/git/kb"
 
 	for _, host := range []string{"alpha", "charlie"} {
 		dir, key, _, principal := newFleetFetcherHome(t, f, host)
 		if err := pki.InstallGitTransport(dir, key); err != nil {
 			t.Fatalf("install %s: %v", host, err)
 		}
-		mgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		mgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: dir}},
 			KeyPath: key, AgentBranch: "agent/" + host + "-00000000", Machine: repos.Options{Synchronous: true}})
 		if err := mgr.Start(); err != nil {
 			t.Fatal(err)
 		}
-		res, err := mgr.ProbeOrigin(ctx, repos.OriginSpec{URL: url, AuthMethod: "cert"})
+		res, err := mgr.ProbeOrigin(ctx, repos.OriginSpec{URL: url})
 		mgr.Close()
 		if err != nil || !res.Reachable {
 			t.Fatalf("%s probe: %+v %v", host, res, err)
@@ -306,7 +322,7 @@ func TestFleetOrigin_ReinstallPresentsTheNewPrincipal(t *testing.T) {
 	}
 }
 
-func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
+func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverTheFleetTransport(t *testing.T) {
 	ctx := context.Background()
 	f := pkitest.New(t)
 
@@ -321,7 +337,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	if err := pki.InstallGitTransport(aDir, aKey); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	aCfg := config.Config{Home: aHome, OntologyRoot: "kb",
+	aCfg := config.Config{Home: aHome, OntologyRoot: "kb", TLS: config.TLSConfig{Dir: aDir},
 		Remote: config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_global_forge_token"}}
 	aMgr := repos.New(ctx, repos.Deps{Cfg: aCfg, KeyPath: aKey, AgentBranch: "agent/alpha-00000000", Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
@@ -329,24 +345,28 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	}
 	t.Cleanup(func() { aMgr.Close() })
 
-	fleetURL := pki.GitScheme + "://" + tlsAddr + "/git/kb"
+	// The plain https URL of B's TLS listener: what a user types. knomit
+	// decides it is a fleet peer (ResolveOrigin).
+	fleetURL := "https://" + tlsAddr + "/git/kb"
 
-	// 1. Probe over knomit+https: B's branches, through B's real handler.
-	res, err := aMgr.ProbeOrigin(ctx, repos.OriginSpec{URL: fleetURL, AuthMethod: "cert"})
+	// 1. Probe over the fleet transport: B's branches, through B's real
+	//    handler.
+	res, err := aMgr.ProbeOrigin(ctx, repos.OriginSpec{URL: fleetURL})
 	if err != nil || !res.Reachable || res.UpstreamBranch != "main" {
 		t.Fatalf("probe: %+v err=%v", res, err)
 	}
 
-	// 2. Subscribe (clone) with NO auth method — the S1 case: the stored
-	//    origin has no method, so the sync below resolves from the record
-	//    plus the GLOBAL token config. (An origin stored as "cert" overrides
-	//    the global method by itself and would not exercise the rule; the
-	//    explicit cert method is covered by the probe above.)
+	// 2. Subscribe (clone) with NO auth method: knomit classifies the URL
+	//    as a peer and stores method cert, so the sync below resolves from
+	//    the record alone, never from the GLOBAL token config. The stored
+	//    origin is the https URL; only the derived .git/config holds the
+	//    internal form.
 	riA, err := aMgr.Create(ctx, repos.CreateSpec{Name: "peer", Mode: "subscribe",
 		Origin: &repos.OriginSpec{URL: fleetURL}}, nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
+	requireCertOrigin(t, aMgr, riA, fleetURL)
 	if !hasFact(t, riA, "first") {
 		t.Fatal("A's clone does not hold B's fact")
 	}
@@ -423,7 +443,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 
 	// 7. The probe carries the named refusal in detail (the JSON field the
 	//    create wizard renders for an unreachable remote).
-	res, err = aMgr.ProbeOrigin(ctx, repos.OriginSpec{URL: fleetURL, AuthMethod: "cert"})
+	res, err = aMgr.ProbeOrigin(ctx, repos.OriginSpec{URL: fleetURL})
 	if err != nil || res.Reachable || !strings.Contains(res.Detail, pki.ErrRefusedByPeer.Error()) {
 		t.Fatalf("probe after revocation: %+v err=%v", res, err)
 	}
@@ -447,7 +467,7 @@ func lastSyncError(t *testing.T, ri *repos.RepoInstance) string {
 }
 
 // F11 end to end (T12): an enrolled peer whose repo's ORIGIN is another
-// knomit instance pushes its own agent branch over knomit+https, through the
+// knomit instance pushes its own agent branch over the fleet transport, through the
 // host's REAL /git stack on the mTLS listener — AuthMiddleware, the write
 // gate, pushPermission, GitRemoteHandler, the store's receive-pack — and the
 // host registers and indexes it. The push is the peer's ordinary origin-sync
@@ -457,7 +477,7 @@ func lastSyncError(t *testing.T, ri *repos.RepoInstance) string {
 // auth.CertGrants' implicit set turns this red ("principal instance:… does
 // not hold push:own"): with push:own implicit, this test is what pins the
 // wiring (review M4).
-func TestFleetOrigin_PeerPushesOwnBranchOverKnomitHTTPS(t *testing.T) {
+func TestFleetOrigin_PeerPushesOwnBranchOverTheFleetTransport(t *testing.T) {
 	ctx := context.Background()
 	f := pkitest.New(t)
 	host := newFleetServer(t, f)
@@ -467,16 +487,16 @@ func TestFleetOrigin_PeerPushesOwnBranchOverKnomitHTTPS(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	aBranch := "agent/alpha-" + pki.Short(aMember.Fingerprint())
-	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: aDir}},
 		KeyPath: aKey, AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { aMgr.Close() })
 
-	fleetURL := pki.GitScheme + "://" + host.tlsAddr + "/git/kb"
+	fleetURL := "https://" + host.tlsAddr + "/git/kb"
 	riA, err := aMgr.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "clone",
-		Origin: &repos.OriginSpec{URL: fleetURL, AuthMethod: "cert"}}, nil)
+		Origin: &repos.OriginSpec{URL: fleetURL}}, nil)
 	if err != nil {
 		t.Fatalf("clone from the host: %v", err)
 	}

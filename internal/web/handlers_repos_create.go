@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/pki"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
@@ -365,6 +366,14 @@ func createErrStatus(err error) (int, string) {
 	// server understood perfectly and declined on policy.
 	case errors.Is(err, repos.ErrLocalOriginDenied):
 		return http.StatusBadRequest, "Origin not allowed"
+	// The transport decision (repos.Manager.ResolveOrigin). A credential for
+	// a fleet peer, cert as input or the internal scheme is a bad request;
+	// a host that cannot be reached, or a peer whose certificate is refused,
+	// is the origin's failure.
+	case errors.Is(err, repos.ErrPeerCredential), errors.Is(err, repos.ErrCertNotAnInput), errors.Is(err, pki.ErrUnsupportedOriginScheme):
+		return http.StatusBadRequest, "Invalid origin"
+	case errors.Is(err, repos.ErrOriginUnreachable):
+		return http.StatusBadGateway, "Origin not reachable"
 	// F24 template refusals. The source or template is not there: 404. The
 	// source is mounted but not open: 503, worth retrying. The template is
 	// there and wrong: 422 — the request is well-formed, the content is not

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,13 +43,30 @@ type fleetNode struct {
 	receives atomic.Int32
 }
 
+// fleetFreePort is a TCP port free on 127.0.0.1 a moment ago (every OS:
+// serve_supervised_test.go's freePort is not built on Windows).
+func fleetFreePort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	return port
+}
+
 func newFleetNode(t *testing.T, dir, id string) *fleetNode {
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.Home = filepath.Join(dir, id)
 	cfg.OntologyRoot = "kb"
-	cfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: filepath.Join(cfg.Home, "pki")}
-	cfg.ExternalAddresses = []string{"https://" + id + ".fleet.example"}
+	// The mTLS listener's port is fixed up front so external_addresses can
+	// name it: an enroll's bundle carries https://<that address>/git/fleet,
+	// the URL a joiner clones.
+	addr := "127.0.0.1:" + fleetFreePort(t)
+	cfg.TLS = config.TLSConfig{Addr: addr, Dir: filepath.Join(cfg.Home, "pki")}
+	cfg.ExternalAddresses = []string{"https://" + addr}
 	key, _ := pkitest.NewKey(t)
 	n := &fleetNode{id: id, cfg: cfg, key: key, signer: keySigner(t, key)}
 	n.mgr = repos.New(context.Background(), repos.Deps{Cfg: cfg, KeyPath: key, Signer: n.signer, AgentID: id,
@@ -75,9 +93,11 @@ func (n *fleetNode) serve(t *testing.T) {
 	_, n.tlsAddr = serveFleetNode(t, counted, n.key, n.cfg.TLS)
 }
 
-func (n *fleetNode) fleetURL() string { return pki.GitScheme + "://" + n.tlsAddr + "/git/fleet" }
+// fleetURL is the plain https URL of n's fleet repository on its mTLS
+// listener: what n's enroll puts in a bundle, and what a member stores.
+func (n *fleetNode) fleetURL() string { return "https://" + n.tlsAddr + "/git/fleet" }
 
-// asClient makes n the process's knomit+https client identity: the
+// asClient makes n the process's fleet transport client identity: the
 // transport is one per process, so a test with several instances switches
 // it before each one talks to another.
 func (n *fleetNode) asClient(t *testing.T) {
@@ -130,15 +150,21 @@ func (n *fleetNode) round(t *testing.T) {
 // join enrolls n with master m's API-level enroll and joins m's fleet.
 func (n *fleetNode) join(t *testing.T, m *fleetNode) {
 	t.Helper()
-	enr, err := m.mgr.EnrollFleetMember(context.Background(), n.id, n.keyLine())
+	enr, err := m.mgr.EnrollFleetMember(context.Background(), n.id, n.keyLine(), "")
 	if err != nil || !enr.Published {
 		t.Fatalf("enroll %s: %v (%+v)", n.id, err, enr)
 	}
 	n.asClient(t)
-	st, err := n.mgr.JoinFleet(context.Background(), repos.FleetJoinSpec{URL: m.fleetURL(), Bundle: []byte(enr.Bundle)})
+	if enr.FleetURL != m.fleetURL() {
+		t.Fatalf("enroll %s: the bundle names %q, want the hub's %q", n.id, enr.FleetURL, m.fleetURL())
+	}
+	st, err := n.mgr.JoinFleet(context.Background(), repos.FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	if err != nil || st.State != repos.FleetRegistered {
 		t.Fatalf("join %s: %v (state %q)", n.id, err, st.State)
 	}
+	// The join classified the bundle's https URL against the trust it had
+	// just installed: the hub is a peer.
+	requireCertOrigin(t, n.mgr, n.fleet(t), m.fleetURL())
 }
 
 func recordPath(id string) string {
@@ -262,7 +288,7 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 		early = append(early, b...)
 	}
 	bravo.asClient(t)
-	_, err = bravo.mgr.JoinFleet(ctx, repos.FleetJoinSpec{URL: alpha.fleetURL(), Bundle: early})
+	_, err = bravo.mgr.JoinFleet(ctx, repos.FleetJoinSpec{Bundle: pkitest.WithURL(t, early, alpha.fleetURL())})
 	if code := fleetCodeOf(t, err); code != "join_refused" {
 		t.Fatalf("a join whose leaf is not on main: %s (%v), want join_refused", code, err)
 	}
@@ -338,7 +364,7 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 	// A member still enrolled reaches the hub's running mTLS listener until
 	// the decommission, and not after it: no restart (review B2).
 	charlie := newFleetNode(t, dir, "charlie")
-	enr, err := alpha.mgr.EnrollFleetMember(ctx, "charlie", charlie.keyLine())
+	enr, err := alpha.mgr.EnrollFleetMember(ctx, "charlie", charlie.keyLine(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +458,7 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	}
 
 	alpha.asClient(t)
-	body := `{"url":"` + bravo.fleetURL() + `","auth_method":"cert"}`
+	body := `{"url":"` + bravo.fleetURL() + `"}`
 	if rec := alpha.api(http.MethodPut, "/repos/fleet/origin", body); rec.Code/100 != 2 {
 		t.Fatalf("the old master re-points at the new one: %d %s", rec.Code, rec.Body.String())
 	}
@@ -457,7 +483,7 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	if rec := charlie.api(http.MethodPut, "/repos/fleet/origin", body); rec.Code/100 != 2 {
 		t.Fatalf("charlie re-points: %d %s", rec.Code, rec.Body.String())
 	}
-	editOwnRecord(t, charlie, "https://charlie.fleet.example", "https://charlie.moved.example")
+	editOwnRecord(t, charlie, charlie.cfg.ExternalAddresses[0], "https://charlie.moved.example")
 	before := bravo.receives.Load()
 	charlie.round(t)
 	if bravo.receives.Load() == before {
@@ -465,7 +491,7 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	}
 	hubPublishes(t, bravo, recordPath("charlie"), "https://charlie.moved.example")
 
-	editOwnRecord(t, alpha, "https://alpha.fleet.example", "https://alpha.moved.example")
+	editOwnRecord(t, alpha, alpha.cfg.ExternalAddresses[0], "https://alpha.moved.example")
 	alpha.round(t)
 	hubPublishes(t, bravo, recordPath("alpha"), "https://alpha.moved.example")
 	if s := memberStates(t, bravo); s["alpha"] != fact.MemberActive || s["charlie"] != fact.MemberActive {

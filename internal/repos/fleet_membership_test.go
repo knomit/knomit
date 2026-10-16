@@ -85,18 +85,23 @@ func TestFleetMembership_ForgeEnrollJoinAdmitLeaveRevokeDecommission(t *testing.
 	require.NoError(t, err)
 	f.root.Install(t, f.root.Enroll(t, "master@"+pki.AgentEmailDomain, mk), f.master.deps.Cfg.TLS.Dir)
 
-	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"))
+	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
 	require.NoError(t, err)
 	require.True(t, enr.Published, enr.PublishError)
 	require.Equal(t, []string{"CERTIFICATE", "CERTIFICATE", "X509 CRL"}, pemTypes(enr.Bundle), "leaf, root, CRL: nothing else")
+	require.True(t, strings.HasPrefix(enr.Bundle, pki.BundleHeader+"\nurl: "+f.url+"\nagent: alpha\nroot: "+enr.RootFingerprint+"\nserial: "+enr.Serial+"\n"), "the v1 document header: %q", enr.Bundle)
+	require.Equal(t, f.url, enr.FleetURL, "a forge-hosted fleet's bundle names the forge URL")
+	parsed, err := pki.SplitBundle([]byte(enr.Bundle))
+	require.NoError(t, err)
+	require.Equal(t, f.url, parsed.FleetURL, "and carries it")
 	require.True(t, f.onForgeMain(t, "artifacts/fleet/certs/alpha.pem"), "the leaf is on the forge's main")
 	require.True(t, f.onForgeMain(t, "artifacts/fleet/issued/"+enr.Serial+".pem"), "and its issuance record")
 
 	alpha := f.namedMember(t, "alpha")
-	_, err = alpha.EnrollFleetMember(ctx, "beta", keyLine("beta"))
+	_, err = alpha.EnrollFleetMember(ctx, "beta", keyLine("beta"), "")
 	_, code := fleetCode(t, err)
 	require.Equal(t, "not_registered", code, "a standalone instance enrolls nobody")
-	joined, err := alpha.JoinFleet(ctx, FleetJoinSpec{URL: f.url, Bundle: []byte(enr.Bundle)})
+	joined, err := alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
 	st := joined.FleetStatus
 	require.Equal(t, FleetRegistered, st.State)
@@ -104,7 +109,7 @@ func TestFleetMembership_ForgeEnrollJoinAdmitLeaveRevokeDecommission(t *testing.
 	require.Equal(t, enr.RootFingerprint, joined.RootFingerprint, "the join names the root it installed (review N7)")
 	require.Equal(t, 2, pushCount(t, f.bare, "agent/alpha"), "the mount's round, then the join's one push")
 
-	_, err = alpha.EnrollFleetMember(ctx, "beta", keyLine("beta"))
+	_, err = alpha.EnrollFleetMember(ctx, "beta", keyLine("beta"), "")
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
 	require.Equal(t, "not_master", code, "a member enrolls nobody")
@@ -207,10 +212,10 @@ func runGitOut(dir string, args ...string) (string, error) {
 func TestFleetMembership_ForgeRootMovesAndTheOldMasterStandsDown(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
-	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"))
+	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
 	require.NoError(t, err)
 	alpha := f.namedMember(t, "alpha")
-	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{URL: f.url, Bundle: []byte(enr.Bundle)})
+	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
 	syncFleet(t, alpha)
 
@@ -294,10 +299,10 @@ func TestFleetMembership_TheHubCannotStandDown(t *testing.T) {
 func TestFleetMembership_DetachGuard(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
-	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"))
+	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
 	require.NoError(t, err)
 	alpha := f.namedMember(t, "alpha")
-	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{URL: f.url, Bundle: []byte(enr.Bundle)})
+	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
 
 	err = alpha.DetachRepoOrigin(ctx, alpha.fleetRepo())
@@ -347,6 +352,43 @@ func TestFleetMembership_DetachTakesTheFleetLock(t *testing.T) {
 	<-done
 }
 
+// Review N5, follow-up: the master check and the detach are ONE step under
+// the fleet lock. The detach waits on the lock; while it waits a stand-down
+// lands (the root key goes), and only then is the lock released. The check
+// therefore runs after the stand-down: the copy is no longer the master's,
+// the detach is refused and the origin stays.
+// SABOTAGE: take the lock AFTER guardFleetDetach (check outside, detach
+// inside) -> the check passed before the stand-down -> the origin is
+// detached -> red.
+func TestFleetMembership_DetachChecksAndDetachesAsOneStep(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	f.master.deps.Cfg.TLS.Addr = "127.0.0.1:0"
+	f.master.deps.Cfg.ExternalAddresses = []string{"https://master.example"}
+	standDown := make(chan struct{})
+	setFleetHooks(t, fleetCreateHooks{contended: func() {
+		require.NoError(t, os.Remove(filepath.Join(f.master.fleetRootDir(), pki.RootKeyFile)))
+		close(standDown)
+	}})
+	f.master.fleetOpMu.Lock()
+	errc := make(chan error, 1)
+	go func() { errc <- f.master.DetachRepoOrigin(ctx, f.mri) }()
+	select {
+	case <-standDown:
+	case err := <-errc:
+		f.master.fleetOpMu.Unlock()
+		t.Fatalf("the detach ran without waiting for the fleet lock: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the detach neither waited nor returned")
+	}
+	f.master.fleetOpMu.Unlock()
+	_, code := fleetCode(t, <-errc)
+	require.Equal(t, "member_keeps_origin", code, "the check ran after the stand-down")
+	origin, err := f.master.hasOrigin(f.mri)
+	require.NoError(t, err)
+	require.True(t, origin, "the refused detach left the origin")
+}
+
 // The operator's merge of a pushed branch on the fleet repository (R3.3,
 // PR #524 residue): only the master merges, and it re-judges the branch
 // (tip minus main) first. A local agent/x whose one commit edits another
@@ -391,10 +433,10 @@ func TestFleetMembership_ManualMergeIsMasterOnlyAndReJudged(t *testing.T) {
 
 	// A member (no root here) is refused before any judging.
 	f := newForgeFleet(t, nil)
-	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"))
+	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
 	require.NoError(t, err)
 	alpha := f.namedMember(t, "alpha")
-	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{URL: f.url, Bundle: []byte(enr.Bundle)})
+	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
 	ari := alpha.fleetRepo()
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
@@ -455,7 +497,7 @@ func TestFleetMembership_EnrollOverAnExistingID(t *testing.T) {
 	refused := func(key, want string) {
 		t.Helper()
 		leaf, lines := leafOnMain(), issuedLines()
-		_, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine(key))
+		_, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine(key), "")
 		status, code := fleetCode(t, err)
 		require.Equal(t, http.StatusConflict, status)
 		require.Equal(t, want, code)
@@ -472,7 +514,7 @@ func TestFleetMembership_EnrollOverAnExistingID(t *testing.T) {
 		return crl
 	}
 
-	a, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"))
+	a, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
 	require.NoError(t, err)
 	require.True(t, a.Published, a.PublishError)
 
@@ -485,7 +527,7 @@ func TestFleetMembership_EnrollOverAnExistingID(t *testing.T) {
 
 	refused("alpha-other-key", "rekey_unsupported")
 
-	b, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"))
+	b, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
 	require.NoError(t, err, "the same key with its old leaf on the CRL is the rejoin")
 	require.True(t, b.Published, b.PublishError)
 	require.NotEqual(t, a.Serial, b.Serial)
@@ -499,4 +541,73 @@ func TestFleetMembership_EnrollOverAnExistingID(t *testing.T) {
 		require.True(t, ok)
 		require.True(t, pki.IsRevoked(crl, n), "serial %s is on main's CRL", s)
 	}
+}
+
+// The fleet URL an enroll's bundle carries is the one members use, and the
+// master chooses it: a hub with one external address needs no choice; with
+// several, no address is address_required listing them, a chosen one is
+// used, one that is not configured is address_unknown, and a non-https one
+// is address_not_https; a forge-hosted fleet's bundle names the forge, and
+// an address there is address_not_applicable. Every refusal issues nothing.
+// SABOTAGE: fleetURLForBundle defaulting to the first address when several
+// are configured -> the address_required row passes the enroll -> red.
+func TestFleetMembership_EnrollBundleNamesTheFleetURL(t *testing.T) {
+	ctx := context.Background()
+	two := []string{"https://hub-a.example:19279", "https://hub-b.example"}
+	for _, tc := range []struct {
+		name    string
+		addrs   []string
+		address string
+		want    string
+		code    string
+		choices []string
+	}{
+		{name: "one address", addrs: []string{"https://hub.example:19279"}, want: "https://hub.example:19279/git/fleet"},
+		{name: "several, none chosen", addrs: two, code: "address_required", choices: two},
+		{name: "several, one chosen", addrs: two, address: two[1], want: "https://hub-b.example/git/fleet"},
+		{name: "not configured", addrs: two, address: "https://elsewhere.example", code: "address_unknown", choices: two},
+		{name: "not https", addrs: []string{"https://hub.example:19279", "http://10.0.0.5:19278"}, address: "http://10.0.0.5:19278", code: "address_not_https"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newFleetHost(t, t.TempDir(), func(d *Deps) { d.Cfg.ExternalAddresses = tc.addrs })
+			_, err := m.CreateFleet(ctx, FleetCreateSpec{})
+			require.NoError(t, err)
+			enr, err := m.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), tc.address)
+			if tc.code != "" {
+				var fe *FleetError
+				require.ErrorAs(t, err, &fe)
+				require.Equal(t, tc.code, fe.Code, err.Error())
+				require.Equal(t, tc.choices, fe.Choices)
+				require.Len(t, issuedSerials(t, m.deps.Cfg.Home), 1, "a refused enroll issues nothing")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, enr.FleetURL)
+			b, err := pki.SplitBundle([]byte(enr.Bundle))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, b.FleetURL)
+		})
+	}
+
+	t.Run("forge-hosted with an address", func(t *testing.T) {
+		f := newForgeFleet(t, nil)
+		_, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "https://hub.example")
+		_, code := fleetCode(t, err)
+		require.Equal(t, "address_not_applicable", code)
+	})
+}
+
+// A join reads the fleet URL from the bundle: one without it is refused
+// before anything is installed.
+func TestFleetMembership_JoinNeedsTheBundlesURL(t *testing.T) {
+	dir := t.TempDir()
+	_, root := seedJoinableFleet(t, filepath.Join(dir, "fleet.git"))
+	m := newFleetManager(t, dir)
+	bundle := root.Bundle(t, root.Enroll(t, "test-fleet@"+pki.AgentEmailDomain, m.deps.KeyPath))
+	_, err := m.JoinFleet(context.Background(), FleetJoinSpec{Bundle: bundle})
+	_, code := fleetCode(t, err)
+	require.Equal(t, "bundle_invalid", code)
+	require.ErrorContains(t, err, "names no fleet repository URL")
+	_, err = os.Stat(filepath.Join(m.deps.Cfg.TLS.Dir, pki.InstanceCertFile))
+	require.ErrorIs(t, err, os.ErrNotExist, "nothing was installed")
 }

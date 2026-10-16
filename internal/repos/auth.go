@@ -1,6 +1,8 @@
 package repos
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -77,10 +79,10 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 		return publicKeys, nil
 
 	case "cert":
-		// The credential is the instance certificate, presented by the
-		// knomit+https transport itself (pki.InstallGitTransport), so there
-		// is no go-git AuthMethod. On a non-fleet URL this is anonymous;
-		// validateURLAuth refuses that combination at the API edge.
+		// The credential is the instance certificate, presented by the fleet
+		// transport itself (pki.InstallGitTransport), so there is no go-git
+		// AuthMethod. pki.GitURL hands go-git the internal form of the URL,
+		// and refuses anything that is not https://.
 		return nil, nil
 
 	case "", "none":
@@ -96,13 +98,13 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 // remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
 // falling back to the global config for fields not set in the record.
 //
-// A knomit+https origin inherits NOTHING from the fallback: the global
-// [remote] credential is a forge credential, and a fleet peer must never
-// receive it. Only the record's own method reaches resolveAuthWithOrigin,
-// which forces cert and refuses an explicit token or basic.
+// An origin stored with method cert (a fleet peer, decided once by
+// ResolveOrigin when it was set) inherits NOTHING from the fallback: the
+// global [remote] credential is a forge credential, and a fleet peer must
+// never receive it. It is keyed on the stored method, never on the URL.
 func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
-	if pki.IsFleetURL(remote.URL) {
-		return config.RemoteAuthConfig{AuthMethod: remote.AuthMethod}
+	if remote.AuthMethod == "cert" {
+		return config.RemoteAuthConfig{AuthMethod: "cert"}
 	}
 	cfg := fallback
 	if remote.AuthMethod != "" {
@@ -123,27 +125,90 @@ func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig
 }
 
 // resolveAuthWithOrigin resolves auth, auto-detecting SSH for git@ or ssh://
-// URLs and forcing cert for knomit+https URLs.
-//
-// The fleet rule is enforced in TWO layers on purpose. validateURLAuth (and
-// the wizard, which mirrors it) refuses a mismatched pair at the API edge
-// with a message the user can act on. This layer is the one every clone,
-// probe and sync goes through, including origins stored before the edge
-// check existed and the global [remote] fallback, which the edge never sees.
-// An explicit token or basic here is an error rather than being dropped, so
-// a misconfiguration is visible instead of silently changing what is sent.
-func resolveAuthWithOrigin(cfg config.RemoteAuthConfig, defaultKeyPath, originURL string) (transport.AuthMethod, error) {
-	if pki.IsFleetURL(originURL) {
-		switch cfg.AuthMethod {
-		case "token", "basic":
-			return nil, fmt.Errorf("%s origins authenticate with the instance certificate; auth method %q is refused", pki.GitScheme, cfg.AuthMethod)
-		}
-		return resolveAuth(config.RemoteAuthConfig{AuthMethod: "cert"}, defaultKeyPath)
+// URLs, and returns the URL go-git is handed (pki.GitURL). It never
+// classifies: method cert (decided when the origin was set) is the fleet
+// transport, every other method the URL as written. A URL carrying the
+// fleet transport's internal scheme is refused here, so an origin stored
+// with it fails at every open and sync before anything is dialled.
+func resolveAuthWithOrigin(cfg config.RemoteAuthConfig, defaultKeyPath, originURL string) (string, transport.AuthMethod, error) {
+	gitURL, err := pki.GitURL(originURL, cfg.AuthMethod == "cert")
+	if err != nil {
+		return "", nil, err
 	}
 	if cfg.AuthMethod == "" && originURL != "" {
 		if strings.HasPrefix(originURL, "git@") || strings.HasPrefix(originURL, "ssh://") {
 			cfg.AuthMethod = "ssh"
 		}
 	}
-	return resolveAuth(cfg, defaultKeyPath)
+	auth, err := resolveAuth(cfg, defaultKeyPath)
+	if err != nil {
+		return "", nil, err
+	}
+	return gitURL, auth, nil
+}
+
+// ErrPeerCredential refuses a credential given for an origin that is an
+// instance of this fleet: it authenticates with this instance's certificate,
+// and a typed credential is never silently dropped.
+var ErrPeerCredential = errors.New("this origin is a knomit instance of your fleet; it authenticates with this instance's certificate: remove the credential")
+
+// ErrCertNotAnInput refuses auth method cert from a caller: knomit sets it
+// when an origin classifies as a fleet peer.
+var ErrCertNotAnInput = errors.New("auth method cert is chosen by knomit, not given: leave the auth method empty for another knomit instance of your fleet")
+
+// ResolveOrigin decides, ONCE, how o is reached, when an origin enters from
+// a caller (create in every mode, join, attach, a connect session, a probe):
+// pki.ClassifyOrigin dials an https URL with the fleet client when this
+// instance holds fleet trust. A fleet peer gets auth method cert, which the
+// store keeps as the "known peer" bit; anything else keeps the caller's
+// auth. Every refusal names its cause: a credential for a peer
+// (ErrPeerCredential), a host that cannot be reached (ErrOriginUnreachable:
+// no guess is stored), a peer whose certificate is refused (the verifier's
+// error), the internal scheme (pki.ErrUnsupportedOriginScheme) and cert as
+// input (ErrCertNotAnInput). The returned spec is marked decided, so passing
+// it on to the next step of the same operation costs no second dial.
+func (m *Manager) ResolveOrigin(ctx context.Context, o OriginSpec) (OriginSpec, error) {
+	if o.decided {
+		return o, nil
+	}
+	if o.AuthMethod == "cert" {
+		return o, ErrCertNotAnInput
+	}
+	if d := m.deps.Cfg.Git.NetworkTimeout; d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
+	peer, err := pki.ClassifyOrigin(ctx, m.deps.Cfg.TLS.Dir, m.deps.KeyPath, o.URL)
+	switch {
+	case errors.Is(err, pki.ErrUnsupportedOriginScheme):
+		return o, err
+	case err != nil:
+		// Unreachable, or a peer whose certificate is refused (revoked,
+		// refusing us, unusable trust files): the origin is not attached,
+		// and the cause stays reachable by errors.Is.
+		return o, fmt.Errorf("%w: %w", ErrOriginUnreachable, err)
+	}
+	if peer {
+		if (o.AuthMethod != "" && o.AuthMethod != "none") || o.AuthToken != "" {
+			return o, ErrPeerCredential
+		}
+		o.AuthMethod = "cert"
+	}
+	o.decided = true
+	return o, nil
+}
+
+// ConfigureGitRemote points svc's git remote "origin" at an origin as go-git
+// is to read it: pki.GitURL derives the URL from the stored one and its
+// method (the internal fleet form for cert). The derived .git/config is the
+// only place that form is written; control.db, the API and the UI hold the
+// https URL. Every ConfigureRemote of a stored or attached origin goes
+// through here, so nothing outside the derivation spells the scheme.
+func ConfigureGitRemote(svc *store.Service, url, authMethod, branch, agentBranch string) error {
+	gitURL, err := pki.GitURL(url, authMethod == "cert")
+	if err != nil {
+		return err
+	}
+	return svc.ConfigureRemote(gitURL, branch, agentBranch)
 }

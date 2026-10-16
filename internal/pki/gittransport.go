@@ -22,24 +22,50 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// GitScheme is the go-git URL scheme for a git origin that is another
-// enrolled knomit instance: knomit+https://<host>:<tls port>/git/<repo>.
-// Forge clones keep using https://, whose go-git transport knomit never
-// replaces. go-git parses the URL with url.Parse, which lowercases the
-// scheme, so KNOMIT+HTTPS:// reaches this transport too; checks on the raw
-// URL string elsewhere must be case-insensitive for the same reason.
-const GitScheme = "knomit+https"
+// gitScheme is the go-git URL scheme of the fleet transport. It is an
+// INTERNAL key: go-git picks a transport by URL scheme alone, so an origin
+// stored with auth method cert (an https URL that classified as a fleet peer,
+// ClassifyOrigin) is handed to go-git as gitScheme://… by GitURL, and only
+// there and in the derived .git/config. Nothing a user types, no API value and
+// no control.db row carries it. go-git parses the URL with url.Parse, which
+// lowercases the scheme.
+const gitScheme = "knomit+https"
 
-// IsFleetURL reports whether u names a knomit+https origin. The scheme is
-// matched case-insensitively, as go-git (url.Parse) matches it.
-func IsFleetURL(u string) bool {
-	const prefix = GitScheme + "://"
+// ErrUnsupportedOriginScheme: an origin URL written with the fleet
+// transport's internal scheme, as input or found stored. A fleet peer is
+// named by its plain https URL.
+var ErrUnsupportedOriginScheme = errors.New("not a supported origin URL: use https://")
+
+// hasScheme reports whether u starts with scheme:// (case-insensitive, as
+// go-git's url.Parse reads it).
+func hasScheme(u, scheme string) bool {
+	prefix := scheme + "://"
 	return len(u) >= len(prefix) && strings.EqualFold(u[:len(prefix)], prefix)
 }
 
-// ErrNotEnrolled: this instance has no fleet certificate, so it cannot fetch
-// from a knomit+https origin.
-var ErrNotEnrolled = errors.New("this instance has no fleet certificate; knomit+https origins need this instance in a fleet (POST /api/v1/fleet/join)")
+// GitURL is the URL go-git is handed for an origin: for a fleet peer (an
+// origin stored with auth method cert) the same https URL under the internal
+// scheme, so go-git dispatches it to the fleet transport; for any other
+// origin the URL unchanged. It is the ONE place that reads or writes the
+// internal scheme on a URL: a URL that already carries it is refused
+// (ErrUnsupportedOriginScheme), which closes the scheme to input and to
+// anything stored, and a peer URL that is not https:// is refused.
+func GitURL(u string, fleetPeer bool) (string, error) {
+	if hasScheme(u, gitScheme) {
+		return "", fmt.Errorf("%w (%s)", ErrUnsupportedOriginScheme, u)
+	}
+	if !fleetPeer {
+		return u, nil
+	}
+	if !hasScheme(u, "https") {
+		return "", fmt.Errorf("pki: an origin served by the fleet transport must be an https:// URL, not %q", u)
+	}
+	return gitScheme + u[len("https"):], nil
+}
+
+// ErrNotEnrolled: this instance holds no fleet certificate, so it cannot
+// fetch from an origin that is a fleet instance.
+var ErrNotEnrolled = errors.New("this instance holds no fleet certificate, so fleet origins cannot be fetched (POST /api/v1/fleet/join)")
 
 // fleetSource resolves the mTLS client LAZILY from the files under dir, so
 // an instance enrolled after boot fetches on its next session without a
@@ -72,7 +98,7 @@ func (s *fleetSource) transport() (transport.Transport, error) {
 		b, err := os.ReadFile(filepath.Join(s.dir, name))
 		if err != nil {
 			s.dropLocked()
-			return nil, fmt.Errorf("pki: %s transport unavailable: %w", GitScheme, err)
+			return nil, fmt.Errorf("pki: fleet transport unavailable: %w", err)
 		}
 		h.Write(b)
 		h.Write([]byte{0})
@@ -85,7 +111,7 @@ func (s *fleetSource) transport() (transport.Transport, error) {
 	hc, err := HTTPClient(s.dir, s.keyPath)
 	if err != nil {
 		s.dropLocked()
-		return nil, fmt.Errorf("pki: %s transport unavailable: %w", GitScheme, err)
+		return nil, fmt.Errorf("pki: fleet transport unavailable: %w", err)
 	}
 	s.dropLocked()
 	s.sum, s.hc, s.inner = sum, hc, githttp.NewClient(hc)
@@ -110,13 +136,13 @@ var install struct {
 	dir, keyPath string
 }
 
-// InstallGitTransport registers the fleet transport under GitScheme with
+// InstallGitTransport registers the fleet transport under gitScheme with
 // go-git EXACTLY ONCE per process, and points it at a client source for dir
 // and keyPath that is resolved at each session. client.Protocols is an
 // unsynchronised map: the first call must come from app.New before
 // Manager.Start and before any goroutine that may clone or sync. Call it
 // whether or not the instance is enrolled — the scheme must ALWAYS be
-// recognised, so an unenrolled instance fails a knomit+https origin with
+// recognised, so an unenrolled instance fails a fleet origin with
 // ErrNotEnrolled instead of falling through to anything else.
 //
 // A later call with the SAME dir and keyPath is a no-op. A later call with a
@@ -141,10 +167,10 @@ func InstallGitTransport(dir, keyPath string) error {
 		old.dropLocked()
 		old.mu.Unlock()
 		log.Info().Str("old_dir", old.dir).Str("new_dir", dir).
-			Msg("knomit+https transport: client identity swapped to other pki files")
+			Msg("fleet transport: client identity swapped to other pki files")
 	}
 	if !install.installed {
-		client.InstallProtocol(GitScheme, gitTransport{})
+		client.InstallProtocol(gitScheme, gitTransport{})
 	}
 	install.installed, install.dir, install.keyPath = true, dir, keyPath
 	_, err := src.transport()
@@ -160,7 +186,7 @@ func RewriteEndpoint(ep *transport.Endpoint) *transport.Endpoint {
 	return &c
 }
 
-// gitTransport is what go-git finds under GitScheme. It holds no state: each
+// gitTransport is what go-git finds under gitScheme. It holds no state: each
 // session resolves the current fleet client through activeSource.
 type gitTransport struct{}
 
@@ -208,16 +234,16 @@ func (t gitTransport) NewReceivePackSession(ep *transport.Endpoint, auth transpo
 // certificate and nothing else.
 func checkFleetEndpoint(ep *transport.Endpoint, auth transport.AuthMethod) error {
 	switch {
-	case ep.Protocol != GitScheme:
-		return fmt.Errorf("pki: %s transport called for %q", GitScheme, ep.Protocol)
+	case ep.Protocol != gitScheme:
+		return fmt.Errorf("pki: the fleet transport called for %q", ep.Protocol)
 	case len(ep.ClientCert) > 0 || len(ep.ClientKey) > 0 || len(ep.CaBundle) > 0 || ep.InsecureSkipTLS:
-		return fmt.Errorf("pki: %s origins verify with the fleet root and present the instance certificate; go-git TLS options are refused", GitScheme)
+		return errors.New("pki: fleet origins verify with the fleet root and present the instance certificate; go-git TLS options are refused")
 	case ep.Proxy.URL != "":
-		return fmt.Errorf("pki: %s origins do not go through a proxy", GitScheme)
+		return errors.New("pki: fleet origins do not go through a proxy")
 	case auth != nil:
-		return fmt.Errorf("pki: %s origins authenticate with the instance certificate; a %s credential is refused", GitScheme, auth.Name())
+		return fmt.Errorf("pki: fleet origins authenticate with the instance certificate; a %s credential is refused", auth.Name())
 	case ep.User != "" || ep.Password != "":
-		return fmt.Errorf("pki: %s origins authenticate with the instance certificate; credentials in the URL are refused", GitScheme)
+		return errors.New("pki: fleet origins authenticate with the instance certificate; credentials in the URL are refused")
 	}
 	return nil
 }
