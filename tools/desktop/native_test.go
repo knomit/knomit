@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -38,6 +39,13 @@ func TestWriteFile_WritesIntoExportsDir(t *testing.T) {
 	base, _ := exportsDir()
 	if !strings.HasPrefix(got, base+string(filepath.Separator)) {
 		t.Errorf("wrote outside exports dir: %q not under %q", got, base)
+	}
+	// The Fleet page saves the fleet root key through WriteFile (PR #528 S1):
+	// owner-only. SABOTAGE: write 0o644 -> red.
+	if fi, err := os.Stat(got); err != nil {
+		t.Fatal(err)
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, want 0600", fi.Mode().Perm())
 	}
 }
 

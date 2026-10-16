@@ -54,6 +54,32 @@ export const btn = (
   cursor: disabled ? 'default' : 'pointer',
 });
 
+/** The create wizards' right column (CreateRepoWizard, FleetWizard):
+ *  measured like a settings page's blocks, not stretched; and their footer
+ *  (Back · Next or the primary action · Cancel). */
+export const wizardBody: React.CSSProperties = { maxWidth: 760, padding: '24px 32px 48px' };
+export const wizardFooter: React.CSSProperties = { display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' };
+
+/** wizardErr is a refusal under the wizard's primary button (and the fleet
+ *  pages' actions): the server's own words, amber (the attempt failed,
+ *  nothing of the reader's is lost), with its line structure kept — hosts
+ *  wrap prose and format remedies as lists. wizardErrNote is the line under
+ *  it that says what was (not) kept. */
+export const wizardErr: React.CSSProperties = {
+  marginTop: 12, padding: '10px 12px', borderRadius: 6,
+  background: '#262013', border: '1px solid #4a3f22',
+  color: '#e2c07a', fontSize: 13, lineHeight: 1.55, maxWidth: '74ch',
+  whiteSpace: 'pre-wrap',
+};
+export const wizardErrNote: React.CSSProperties = { color: '#a08a54', fontSize: 12, marginTop: 6 };
+
+/** A wizard step's field: its label, the hint under it, the input, and the
+ *  caveat box (StepSource, FleetWizard). */
+export const fieldLabel: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, marginTop: 12, display: 'block' };
+export const fieldHint: React.CSSProperties = { fontSize: 12, color: '#666', marginTop: 8, lineHeight: 1.5 };
+export const fieldInput: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#111', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
+export const fieldCaveat: React.CSSProperties = { marginTop: 10, padding: '8px 10px', borderRadius: 5, background: '#131313', border: '1px solid #242424', fontSize: 11.5, lineHeight: 1.55, color: '#666' };
+
 export const confirmBox: React.CSSProperties = {
   marginTop: 14, padding: 14,
   background: '#111', border: '1px solid #333', borderRadius: 6,

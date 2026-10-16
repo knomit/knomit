@@ -3,7 +3,7 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { AppState } from './state';
 import { isLensContext } from './state';
 import type { RepoInfo } from './api';
-import { BookIcon, GearIcon, LayersIcon } from './icons';
+import { BookIcon, FleetIcon, GearIcon, LayersIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { otherRepoFailing } from './facets';
 import type { Facet, ServerPage, TargetLabel } from './facets';
@@ -40,6 +40,9 @@ interface Props {
   /** The server pages, while they are on screen. The target crumb is then
    *  gone, the tabs are the server's, and the gear is lit. */
   server?: ServerBar | null;
+  /** Whether the server has any page behind the gear (serverPagesFor). A
+   *  read-only server has none, and then there is no gear. */
+  gear?: boolean;
 }
 
 /** What the bar shows over the server pages. */
@@ -61,7 +64,7 @@ export interface ServerBar {
 // the dropdown that used to hang off the name is gone; the branch picker and
 // the filter moved to the Browse toolbar, because they act on the data being
 // read and must not stay on screen over a page that reads none.
-export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onGear, server = null }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onGear, server = null, gear = true }: Props) {
   const lensCtx = isLensContext(state);
   const serverOpen = server !== null;
   // Held while a connect commit runs in the Settings facet: opening the server
@@ -142,12 +145,14 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
     : { kind: 'repo', name: state.repo });
   const label = {
     name: target.name,
-    color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : '#7c9',
-    icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} /> : <BookIcon color="currentColor" size={13} />,
+    color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : '#7c9',
+    icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} />
+      : target.kind === 'fleet' ? <FleetIcon color="currentColor" size={13} />
+        : <BookIcon color="currentColor" size={13} />,
   };
   // Where the gear returns to from the server pages: the target under them,
   // named in its tooltip so the destination is one hover away.
-  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: fleet, logs and authorizations';
+  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: logs and authorizations';
   const tabStyle = (on: boolean, disabled: boolean): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '0 11px', fontSize: 12, border: 'none', borderRadius: 0, background: 'none',
@@ -180,8 +185,8 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             onMouseDown={noMouseFocus}
             disabled={serverOpen}
             aria-pressed={railOpen}
-            aria-label={serverOpen ? RAIL_HIDDEN : railOpen ? 'Hide repositories and lenses' : 'Show repositories and lenses'}
-            title={serverOpen ? RAIL_HIDDEN : railOpen ? 'Hide repositories and lenses  (⌘B)' : 'Show repositories and lenses  (⌘B)'}
+            aria-label={serverOpen ? RAIL_HIDDEN : railOpen ? 'Hide repositories, lenses and fleet' : 'Show repositories, lenses and fleet'}
+            title={serverOpen ? RAIL_HIDDEN : railOpen ? 'Hide repositories, lenses and fleet  (⌘B)' : 'Show repositories, lenses and fleet  (⌘B)'}
             style={{
               width: 26, height: 26, flexShrink: 0, position: 'relative',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -223,7 +228,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           <>
             <span data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
             <span data-testid="target-label" style={{
-              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
+              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden',
               fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
               color: label.color,
             }}>
@@ -273,7 +278,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           </div>
         )}
         {!serverOpen && facets.length > 0 && (
-          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" style={{ display: 'flex', alignItems: 'stretch' }}>
+          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" style={facetTabs}>
             {facets.map(f => {
               const on = f === facet;
               return (
@@ -311,7 +316,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             the indicator, so the glyph never changes. No red dot: the gear is
             server-only, and a failing remote is a fact about a target — its
             dot is on the Settings tab. */}
-        <button
+        {(gear || serverOpen) && <button
           data-testid="server-toggle"
           data-nodrag
           onClick={onGear}
@@ -333,7 +338,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : serverOpen ? '#dfe9e2' : '#666'; }}
         >
           <GearIcon color="currentColor" size={15} />
-        </button>
+        </button>}
       </div>
     </div>
   );
@@ -341,10 +346,10 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
 // The rail is not shown over the server pages, which are not about a target;
 // the toggle stays so the bar does not shift, and says why it is off.
-const RAIL_HIDDEN = 'Repositories and lenses are hidden over the server pages';
+const RAIL_HIDDEN = 'Repositories, lenses and fleet are hidden over the server pages';
 
-const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings' };
-const SERVER_LABEL: Record<ServerPage, string> = { fleet: 'Fleet', logs: 'Logs', auth: 'Authorizations' };
+const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings', members: 'Members' };
+const SERVER_LABEL: Record<ServerPage, string> = { logs: 'Logs', auth: 'Authorizations' };
 
 // The Authorizations tab's waiting count: the green badge it carried in Manage.
 const tabBadge: CSSProperties = {
@@ -354,6 +359,8 @@ const tabBadge: CSSProperties = {
 
 // The spec's lens accent, for the label.
 const LENS_ACCENT = '#b9a6f0';
+// The fleet's teal (Q5): its row, its crumb and the master chip.
+const FLEET_ACCENT = '#8ad6c8';
 
 // The label's state chip: the rail's chip geometry, in the spec's tones —
 // archive warm, error red, creating blue.
@@ -366,6 +373,18 @@ const CHIP_TONE: Record<NonNullable<TargetLabel['chip']>['tone'], CSSProperties>
   archived: { color: '#c4b29a', background: '#221d16', border: '1px solid #453a2a' },
   bad: { color: '#e8a0a0', background: '#1f1414', border: '1px solid #4a2626' },
   creating: { color: '#8ab6d6', background: '#131d26', border: '1px solid #244056' },
+  fleet: { color: FLEET_ACCENT, background: '#121f1d', border: '1px solid #24453f' },
+  neutral: { color: '#999', background: '#1a1a1a', border: '1px solid #2a2a2a' },
+  // record pending: a normal state the master's next round resolves, so
+  // informational blue, never amber (amber is for what fails, 3f1b3342).
+  pending: { color: '#8ab6d6', background: '#131d26', border: '1px solid #244056' },
+};
+
+// The facet tabs give way at a narrow width rather than push the gear off
+// the bar: they scroll sideways inside their own strip (PR #528 nit 9), and
+// the target label keeps its share.
+const facetTabs: CSSProperties = {
+  display: 'flex', alignItems: 'stretch', minWidth: 0, flexShrink: 1, overflowX: 'auto', scrollbarWidth: 'none',
 };
 
 // PanelIcon is the rail toggle's glyph: a window with its left column ruled off.

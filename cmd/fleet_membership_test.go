@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -124,6 +125,25 @@ func (n *fleetNode) api(method, p, body string) *httptest.ResponseRecorder {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.RemoteAddr, req.Host = "127.0.0.1:1", "localhost"
+	rec := httptest.NewRecorder()
+	n.srv.NewAPIRouter().ServeHTTP(rec, req)
+	return rec
+}
+
+// localAPI is api over the local authenticated listener, as the desktop app
+// reaches it: the /fleet operations are served there only.
+func (n *fleetNode) localAPI(method, p, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, p, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	peer := auth.Peer{ID: "uid:" + strconv.Itoa(os.Getuid()), Via: auth.LocalVia, PID: 7}
+	// The operator's grant on its own socket, as `knomit grant` gives it.
+	g := n.srv.Grants.(*auth.SQLGrants)
+	if err := g.Grant(req.Context(), auth.Principal{Kind: auth.KindBridge, ID: peer.ID, Via: auth.LocalVia}, auth.Write, "test"); err != nil {
+		panic(err)
+	}
+	req = req.WithContext(auth.WithPeer(req.Context(), peer))
 	rec := httptest.NewRecorder()
 	n.srv.NewAPIRouter().ServeHTTP(rec, req)
 	return rec
@@ -505,12 +525,19 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	bravo.round(t)
 	charlie.round(t)
 
-	// A member keeps its origin and its consensus branch.
-	if rec := charlie.api(http.MethodDelete, "/repos/fleet/origin", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "member_keeps_origin") {
-		t.Fatalf("a member's detach: %d %s", rec.Code, rec.Body.String())
+	// A member keeps its origin (POST /fleet/host), and no generic route
+	// changes the fleet repository (user ruling 2026-10-16).
+	if rec := charlie.localAPI(http.MethodPost, "/fleet/host", "{}"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "member_keeps_origin") {
+		t.Fatalf("a member's host-here: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := charlie.api(http.MethodPatch, "/repos/fleet/origin/upstream", `{"branch":"trunk"}`); rec.Code != http.StatusConflict {
-		t.Fatalf("a member's upstream PATCH: %d %s", rec.Code, rec.Body.String())
+	for _, rt := range [][3]string{
+		{http.MethodDelete, "/repos/fleet/origin", ""},
+		{http.MethodPatch, "/repos/fleet/origin/upstream", `{"branch":"trunk"}`},
+		{http.MethodPut, "/repos/fleet/origin", `{"url":"` + alpha.fleetURL() + `"}`},
+	} {
+		if rec := charlie.localAPI(rt[0], rt[1], rt[2]); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "fleet_repository") {
+			t.Fatalf("%s %s on the fleet repository: %d %s", rt[0], rt[1], rec.Code, rec.Body.String())
+		}
 	}
 
 	files, err := alpha.mgr.FleetRootFiles()
@@ -525,7 +552,7 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	}
 
 	bravo.serve(t)
-	if rec := bravo.api(http.MethodDelete, "/repos/fleet/origin", ""); rec.Code != http.StatusNoContent {
+	if rec := bravo.localAPI(http.MethodPost, "/fleet/host", "{}"); rec.Code != http.StatusOK {
 		t.Fatalf("the new master hosts the fleet: %d %s", rec.Code, rec.Body.String())
 	}
 	if bst, _ := bravo.mgr.FleetStatus(ctx); !bst.Master || bst.Hosting != "none" {
@@ -542,7 +569,7 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 
 	alpha.asClient(t)
 	body := `{"url":"` + bravo.fleetURL() + `"}`
-	if rec := alpha.api(http.MethodPut, "/repos/fleet/origin", body); rec.Code/100 != 2 {
+	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", body); rec.Code != http.StatusOK {
 		t.Fatalf("the old master re-points at the new one: %d %s", rec.Code, rec.Body.String())
 	}
 	if err := alpha.mgr.StandDown(ctx); err != nil {
@@ -550,16 +577,6 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	}
 	if ast, _ := alpha.mgr.FleetStatus(ctx); ast.Master || ast.Hosting != bravo.fleetURL() {
 		t.Fatalf("alpha after the stand-down: %+v", ast)
-	}
-	// The old hub still holds the pushed branches it received; it may not
-	// merge them by hand: it is not the master.
-	var tip string
-	_ = alpha.fleet(t).WithRead(func(s *store.Service) { tip, _ = s.Branches().HeadCommit(ctx, "agent/charlie") })
-	if tip == "" {
-		t.Fatal("fixture: the old hub holds charlie's pushed branch")
-	}
-	if rec := alpha.api(http.MethodPost, "/repos/fleet/branches/agent:charlie/merge", `{"expected_tip":"`+tip+`"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not_master") {
-		t.Fatalf("the old hub's manual merge: %d %s", rec.Code, rec.Body.String())
 	}
 
 	// Charlie still follows the old host. Once the old host's main holds the
@@ -584,7 +601,7 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 		t.Fatalf("charlie on the old host: follows_host %v, want false (the server's comparison)", cst.FollowsHost)
 	}
 
-	if rec := charlie.api(http.MethodPut, "/repos/fleet/origin", body); rec.Code/100 != 2 {
+	if rec := charlie.localAPI(http.MethodPost, "/fleet/follow", body); rec.Code != http.StatusOK {
 		t.Fatalf("charlie re-points: %d %s", rec.Code, rec.Body.String())
 	}
 	if cst, err := charlie.mgr.FleetStatus(ctx); err != nil || cst.FollowsHost == nil || !*cst.FollowsHost {

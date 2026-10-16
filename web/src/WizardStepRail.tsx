@@ -29,20 +29,40 @@ const LABELS: Record<StepId, string> = {
 
 export function WizardStepRail({ state, dispatch }: { state: WizardState; dispatch: (a: WizardAction) => void }) {
   const steps = stepsFor(state);
-  const active = steps.indexOf(currentStep(state));
+  return (
+    <StepRail
+      steps={steps.map(id => ({ id, label: LABELS[id], summary: stepSummary(state, id) }))}
+      active={steps.indexOf(currentStep(state))}
+      onGoto={id => dispatch({ type: 'GOTO', step: id as StepId })}
+    />
+  );
+}
 
+/** One step of a StepRail: its id, its label, and the summary shown once it
+ *  is done. */
+export interface RailStep { id: string; label: string; summary: string }
+
+/**
+ * StepRail is the rail itself, for any wizard in this paradigm (the
+ * repository wizard above, New fleet): the caller derives the steps (its own
+ * stepsFor), labels and summaries; the rail draws them and offers the done
+ * ones as buttons (onGoto). Everything said above about the repository
+ * wizard's rail holds for every caller.
+ */
+export function StepRail({ steps, active, onGoto }: { steps: RailStep[]; active: number; onGoto: (id: string) => void }) {
   return (
     <nav style={rail} aria-label="Progress">
-      {steps.map((id, i) => {
+      {steps.map((step, i) => {
+        const id = step.id;
         const st: StepState = i === active ? 'active' : i < active ? 'done' : 'todo';
         const testid = `wizard-step-${i + 1}`;
-        const summary = st === 'done' ? stepSummary(state, id) : '';
+        const summary = st === 'done' ? step.summary : '';
         const inner = (
           <>
             <span data-testid={st === 'done' ? `${testid}-check` : undefined} style={railMark(st)}>
               {st === 'done' ? <Check /> : i + 1}
             </span>
-            <span style={{ flexShrink: 0 }}>{LABELS[id]}</span>
+            <span style={{ flexShrink: 0 }}>{step.label}</span>
             {summary && <span data-testid={`${testid}-summary`} style={summaryStyle}>{summary}</span>}
           </>
         );
@@ -50,7 +70,7 @@ export function WizardStepRail({ state, dispatch }: { state: WizardState; dispat
           return (
             <button key={id} type="button" data-testid={testid} style={{ ...railItem(st), cursor: 'pointer' }}
               title={summary || undefined}
-              onClick={() => dispatch({ type: 'GOTO', step: id })}>
+              onClick={() => onGoto(id)}>
               {inner}
             </button>
           );

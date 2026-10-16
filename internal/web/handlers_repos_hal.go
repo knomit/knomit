@@ -71,6 +71,11 @@ type repoSummary struct {
 	// as its detail.
 	OntologyError string `json:"ontology_error,omitempty"`
 
+	// Fleet marks this instance's fleet repository (its ontology id is
+	// fleet), so a client can keep it out of every browse context without
+	// first reading GET /fleet. Absent on every other row.
+	Fleet bool `json:"fleet,omitempty"`
+
 	// Remote is the persisted health of the repo's origin: the two status
 	// columns (remotes.last_status / last_push_status), `ok | error | ""`
 	// each, "" meaning that half has never run. ABSENT (a nil pointer, so the
@@ -122,6 +127,7 @@ func summaryFor(b hal.URLBuilder, name string, ri *repos.RepoInstance) repoSumma
 		IndexTotal:    st.Index.Total,
 		IndexReason:   st.Index.Reason,
 		OntologyError: ontErr,
+		Fleet:         ri.IsFleet(),
 		Links:         hal.LinkMap{"self": {Href: b.Repo(name)}},
 	}
 }

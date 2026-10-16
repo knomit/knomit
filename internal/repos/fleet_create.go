@@ -85,6 +85,10 @@ type FleetCreateSpec struct {
 	Origin *OriginSpec
 }
 
+// defaultFleetRepoName is the fleet repository's name when a create names
+// none (the New fleet wizard never does).
+const defaultFleetRepoName = "fleet"
+
 // fleetCreateHooks are test seams for the fleet create. Every field is nil
 // in production.
 type fleetCreateHooks struct {
@@ -238,7 +242,10 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 	}
 	name := spec.Name
 	if name == "" {
-		name = "fleet"
+		// The default name, made unique as a join's mount name is: a
+		// repository already called fleet does not refuse the create (and
+		// GET /fleet's standalone would_serve names the same URL).
+		name = m.freeFleetName(defaultFleetRepoName)
 	}
 	cs := CreateSpec{Name: name, Mode: "custom", OntologyYAML: string(y), fleetDoor: true}
 	if spec.Origin == nil {
@@ -248,6 +255,9 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 		}
 	} else {
 		o := *spec.Origin
+		if err := refuseFleetOrigin(strings.TrimSpace(o.URL)); err != nil {
+			return CreateSpec{}, err
+		}
 		cs.Mode, cs.Origin = "initialize", &o
 	}
 	// The repo create's own refusals (name, origin in use, reachability, an

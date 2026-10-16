@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -308,10 +307,13 @@ func (m *Manager) fleetURLForBundle(ri *RepoInstance, address string) (string, e
 		return "", err
 	}
 	if o != nil {
+		// Without its userinfo: a joiner supplies its own credential, and a
+		// token in the origin URL is the master's own (#527 F3).
+		u := credentialFree(o.URL)
 		if address != "" {
-			return "", fleetErr(http.StatusUnprocessableEntity, "address_not_applicable", "this fleet's repository syncs with "+o.URL+", the URL members use: enroll without an address")
+			return "", fleetErr(http.StatusUnprocessableEntity, "address_not_applicable", "this fleet's repository syncs with "+u+", the URL members use: enroll without an address")
 		}
-		return o.URL, nil
+		return u, nil
 	}
 	addrs := m.deps.Cfg.ExternalAddresses
 	switch {
@@ -503,6 +505,21 @@ func bundleURLProblem(u string) string {
 		return ""
 	}
 	return "is not https:// (a hub's) or a forge origin's (https://, ssh://, git@host:path, file://)"
+}
+
+// refuseFleetOrigin refuses an origin for the fleet repository that no
+// member's join could clone (#527 F1): the bundle carries the master's origin
+// URL, and a join refuses every shape bundleURLProblem refuses (plain http,
+// another scheme, no host). Asked where the choice is made, a forge create
+// and an attach to the fleet repository, so the operator is not sent to
+// re-enroll joiners for a scheme the master's own origin has.
+func refuseFleetOrigin(u string) error {
+	if why := bundleURLProblem(u); why != "" {
+		return fleetErr(http.StatusUnprocessableEntity, "origin_invalid",
+			"the fleet repository's origin "+credentialFree(u)+" "+why+
+				": members join only an https://, ssh://, git@host:path or file:// origin, so a fleet cannot live there")
+	}
+	return nil
 }
 
 // The two FleetJoinCheck.Hosting values.
@@ -1001,29 +1018,42 @@ func (m *Manager) StandDown(ctx context.Context) error {
 	return nil
 }
 
-// DetachRepoOrigin is DELETE /repos/{repo}/origin: the detach, and on the
-// fleet repository first the R3.3 check (guardFleetDetach). For the fleet
-// repository the check and the detach run under fleetOpMu as one step, so a
-// stand-down (DELETE /fleet/root, which passes while the copy has an origin)
-// cannot remove the key between the master check and the detach and leave a
-// hub with no master.
+// HostFleetHere is POST /fleet/host, "Host the fleet here": this instance's
+// copy of the fleet repository drops its origin and becomes the hub. The
+// check (guardFleetDetach) and the detach run under fleetOpMu as one step, so
+// a stand-down (DELETE /fleet/root, which passes while the copy has an
+// origin) cannot remove the key between the master check and the detach and
+// leave a hub with no master.
 //
-// On the fleet repository a detach that succeeded makes this master the host,
-// so it records that on main: the host record (fleet_host.go) with the hub's
-// URLs, committed on the agent branch and published (main fast-forwards here:
-// there is no origin any more; a fast-forward that fails now is the local
-// reconcile's to retry). The detach stands when the write fails, and it is
-// answered as done: the hub's local reconcile re-asserts the record every
-// round (RepoInstance.fleetHostRound), so the next round writes it.
-func (m *Manager) DetachRepoOrigin(ctx context.Context, ri *RepoInstance) error {
-	fleet := ri != nil && ri.IsFleet()
-	if fleet {
-		defer m.lockFleetOp()()
-		if err := m.guardFleetDetach(ri); err != nil {
-			return err
-		}
+// A detach that succeeded makes this master the host, so it records that on
+// main: the host record (fleet_host.go) with the hub's URLs, committed on the
+// agent branch and published (main fast-forwards here: there is no origin
+// any more; a fast-forward that fails now is the local reconcile's to retry).
+// The detach stands when the write fails, and it is answered as done: the
+// hub's local reconcile re-asserts the record every round
+// (RepoInstance.fleetHostRound), so the next round writes it.
+func (m *Manager) HostFleetHere(ctx context.Context) (FleetStatus, error) {
+	if err := m.hostFleetHere(ctx); err != nil {
+		return FleetStatus{}, err
 	}
-	if _, err := m.Send(ctx, ri, DetachOrigin()); err != nil || !fleet {
+	return m.FleetStatus(ctx)
+}
+
+func (m *Manager) hostFleetHere(ctx context.Context) error {
+	defer m.lockFleetOp()()
+	ri := m.fleetRepo()
+	if ri == nil {
+		return fleetErr(http.StatusConflict, "not_registered", "this instance is in no fleet")
+	}
+	if origin, err := m.hasOrigin(ri); err != nil {
+		return err
+	} else if !origin {
+		return fleetErr(http.StatusConflict, "hub", "this instance already hosts the fleet: its copy of "+ri.Name()+" has no origin")
+	}
+	if err := m.guardFleetDetach(ri); err != nil {
+		return err
+	}
+	if _, err := m.Send(ctx, ri, DetachOrigin()); err != nil {
 		return err
 	}
 	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil {
@@ -1035,6 +1065,53 @@ func (m *Manager) DetachRepoOrigin(ctx context.Context, ri *RepoInstance) error 
 		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: main did not follow the host record yet; the local reconcile retries")
 	}
 	return nil
+}
+
+// FollowFleetHost is POST /fleet/follow, "Point at the new host": this
+// instance's copy of the fleet repository follows the fleet from url (after
+// a master switch, the new master's URL). It is the one way an origin is
+// attached to the fleet repository, under fleetOpMu like every fleet
+// operation, and it runs the attach's own checks (guardAttach): an origin no
+// member's join could clone is origin_invalid (#527 F1), an unreachable one
+// is refused, and the remote's ontology must be the fleet's.
+//
+// The same-knowledge-base check: the URL must be an instance of THIS fleet,
+// i.e. its certificate chains to this fleet's root (the classification
+// ResolveOrigin makes for every attach, which then stores auth method cert).
+// Anything else (a forge, another fleet's hub, plain https) is 422
+// not_this_fleet: a fleet hosted on a forge keeps its URL across a master
+// switch, so there is nothing to point at. A credential is refused for a peer
+// (ErrPeerCredential): the certificate is the credential.
+func (m *Manager) FollowFleetHost(ctx context.Context, o OriginSpec) (FleetStatus, error) {
+	if err := m.followFleetHost(ctx, o); err != nil {
+		return FleetStatus{}, err
+	}
+	return m.FleetStatus(ctx)
+}
+
+func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) error {
+	defer m.lockFleetOp()()
+	ri := m.fleetRepo()
+	if ri == nil {
+		return fleetErr(http.StatusConflict, "not_registered", "this instance is in no fleet")
+	}
+	o.URL = strings.TrimSpace(o.URL)
+	if err := refuseFleetOrigin(o.URL); err != nil {
+		return err
+	}
+	decided, err := m.ResolveOrigin(ctx, o)
+	if err != nil {
+		return err
+	}
+	if decided.AuthMethod != "cert" {
+		return fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
+			credentialFree(o.URL)+" is not an instance of this fleet: its certificate does not chain to this fleet's root. Point this copy at the new master's fleet URL (its Fleet → Settings → Hosting)")
+	}
+	if err := ri.WithRead(func(svc *store.Service) { decided.Branch = svc.UpstreamBranch() }); err != nil {
+		return err
+	}
+	_, err = m.Send(ctx, ri, AttachOrigin(decided))
+	return err
 }
 
 // guardFleetDetach is the fleet repository's detach check (R3.3): a member's
@@ -1050,30 +1127,4 @@ func (m *Manager) guardFleetDetach(ri *RepoInstance) error {
 		return fleetErr(http.StatusConflict, "member_keeps_origin", "a member's fleet copy keeps its origin; only the master hosts the fleet")
 	}
 	return m.refuseNoHubListener()
-}
-
-// ErrFleetUpstreamFixed refuses PATCH /repos/{fleet}/origin/upstream (R3.3).
-var ErrFleetUpstreamFixed = errors.New("the fleet repository's consensus branch is fixed at create")
-
-// FleetMergeRefusal is the check of an operator's merge of the pushed branch
-// at tip on the fleet repository (R3.3): only the master merges, and it
-// merges only what the fleet's judge admits against main NOW (tip ∖ main,
-// the core the master's merger re-judges with), so a branch admitted at entry
-// and refused since (a revocation, an edit of another member's folder) is not
-// merged by hand either. Any other repository: nil.
-func (ri *RepoInstance) FleetMergeRefusal(ctx context.Context, svc *store.Service, branch string, tip plumbing.Hash) error {
-	if !ri.IsFleet() {
-		return nil
-	}
-	if !ri.isFleetMaster(svc) {
-		return fleetErr(http.StatusConflict, "not_master", "only the fleet's master merges")
-	}
-	reason, err := svc.JudgePeerBranch(ctx, branch, ri.AgentBranch(), tip, nil)
-	if err != nil {
-		return err
-	}
-	if reason != "" {
-		return fleetErr(http.StatusConflict, "judge_refused", "the fleet's judge refuses "+branch+" at "+shortHash(tip.String())+" against main: "+reason)
-	}
-	return nil
 }

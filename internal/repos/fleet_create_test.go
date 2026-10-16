@@ -2,6 +2,8 @@ package repos
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -188,6 +190,89 @@ func requireNoForgeBranch(t *testing.T, bare string) {
 	require.Empty(t, strings.TrimSpace(string(out)), "the forge keeps no agent branch")
 }
 
+// Review B1 (PR #528): GET /fleet's host.listening is the mTLS listener's
+// LIVE state, apart from listener_on (configured). With nobody reporting it
+// is false; configured but not started it is false with the reason; bound it
+// is true with no reason; and the reason is never shown for a listener that
+// is not configured at all.
+// SABOTAGE: Listening = ListenerOn -> the no_certificate row reads true ->
+// red; ignore the reported reason -> red.
+func TestFleetStatus_ListeningIsTheLiveListener(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.True(t, st.Host.ListenerOn, "fixture: [tls].addr is set")
+	require.False(t, st.Host.Listening, "nobody reported a bound listener")
+
+	m.SetTLSListener(func() (string, string) { return "", "no_certificate" })
+	st, err = m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.False(t, st.Host.Listening)
+	require.Equal(t, "no_certificate", st.Host.ListenerReason)
+
+	m.SetTLSListener(func() (string, string) { return "127.0.0.1:18931", "" })
+	st, err = m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.True(t, st.Host.Listening)
+	require.Empty(t, st.Host.ListenerReason)
+
+	off := newFleetHost(t, t.TempDir(), func(d *Deps) { d.Cfg.TLS.Addr = "" })
+	off.SetTLSListener(func() (string, string) { return "", "off" })
+	st, err = off.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.False(t, st.Host.ListenerOn)
+	require.False(t, st.Host.Listening)
+	require.Empty(t, st.Host.ListenerReason, "no reason for a listener that is not configured")
+}
+
+// Review S2 (PR #528): last_error_refused is read from the recorded error
+// alone: a push refused at the TLS handshake (pki.ErrRefusedByPeer, as the
+// transport wraps it) says so, any other failure does not, and a success
+// clears both.
+// SABOTAGE: LastErrorRefused = LastError != "" -> the unreachable row reads
+// true -> red.
+func TestFleetStatus_LastErrorRefusedIsTheHandshakeRefusal(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	db := m.ControlDB()
+	for _, row := range []struct {
+		err     error
+		refused bool
+	}{
+		{fmt.Errorf("push agent branch: %w: remote error: tls: bad certificate", pki.ErrRefusedByPeer), true},
+		{errors.New("dial tcp 127.0.0.1:18931: connect: connection refused"), false},
+		{nil, false},
+	} {
+		require.NoError(t, recordFleetAttempt(db, row.err, time.Now()))
+		st, err := m.FleetStatus(ctx)
+		require.NoError(t, err)
+		require.Equal(t, row.refused, st.LastErrorRefused, "%v", row.err)
+		if row.err == nil {
+			require.Empty(t, st.LastError)
+		}
+	}
+}
+
+// PR #528 nit 11: with a repository already called fleet, a standalone
+// GET /fleet's would_serve and the create agree on a free name (fleet-2):
+// the URL the Hosting step shows is where members join, and the create is
+// not refused for the name.
+// SABOTAGE: would_serve names defaultFleetRepoName again -> /git/fleet -> red;
+// the create keeps the bare default -> refused for the name -> red.
+func TestCreateFleet_DefaultNameTakenUsesAFreeOne(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	createRepo(t, m, "fleet")
+	pre, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet-2"}, pre.Host.WouldServe)
+	st, err := m.CreateFleet(ctx, FleetCreateSpec{})
+	require.NoError(t, err)
+	require.Equal(t, "fleet-2", st.FleetRepo)
+	require.Equal(t, pre.Host.WouldServe, st.FleetURLs, "members join where the Hosting step said")
+}
+
 // A fleet hosted here (no origin): a fresh root is minted into <home>/fleet
 // (root.key a plain owner-only file), the repository holds root, leaf and
 // record on main at once, the bundle is installed, and this instance is the
@@ -196,6 +281,15 @@ func requireNoForgeBranch(t *testing.T, bare string) {
 func TestCreateFleet_HostedHere(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
+
+	// Before the create, a standalone instance says where members would join
+	// a fleet created here (the New fleet wizard's Hosting step), built by
+	// the server like every fleet URL.
+	// SABOTAGE: no would_serve on a standalone instance -> red.
+	pre, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Equal(t, FleetStandalone, pre.State)
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, pre.Host.WouldServe)
 
 	st, err := m.CreateFleet(ctx, FleetCreateSpec{})
 	require.NoError(t, err)
@@ -395,6 +489,15 @@ func TestCreateFleet_PreflightRefusals(t *testing.T) {
 		{name: "state not standalone", setup: func(t *testing.T, m *Manager) {
 			require.NoError(t, setFleetState(m.ControlDB(), FleetRegistering, time.Now()))
 		}, status: http.StatusConflict, code: "fleet_present"},
+		// #527 F1: a forge origin no member's join could clone.
+		{name: "http origin", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "http://gitea.lan/org/fleet.git"}},
+			status: http.StatusUnprocessableEntity, code: "origin_invalid"},
+		{name: "ftp origin", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "ftp://forge.example/fleet.git"}},
+			status: http.StatusUnprocessableEntity, code: "origin_invalid"},
+		// PR #528 S6: a URL that does not parse is refused without its
+		// userinfo in the text (asserted below for every row).
+		{name: "unparseable origin with a token", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "https://u:tok@exa mple.com/x"}},
+			status: http.StatusUnprocessableEntity, code: "origin_invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newFleetHost(t, t.TempDir(), tc.mod)
@@ -407,6 +510,7 @@ func TestCreateFleet_PreflightRefusals(t *testing.T) {
 			status, code := fleetCode(t, err)
 			require.Equal(t, tc.status, status, err.Error())
 			require.Equal(t, tc.code, code, err.Error())
+			require.NotContains(t, err.Error(), "tok@", "a refusal's text carries no userinfo")
 			require.Nil(t, m.fleetRepo())
 			require.Nil(t, m.Get("fleet"), "no repository was created")
 			if tc.code == "root_present" {

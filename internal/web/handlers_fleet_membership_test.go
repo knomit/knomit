@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -101,16 +100,25 @@ func TestFleetREST_MasterAndHosting(t *testing.T) {
 	require.Equal(t, filepath.Join(home, pki.FleetRootDirName), out["root_dir"])
 }
 
-// R3.3 on a member's copy of the fleet repository, through the routes: DELETE
-// origin is refused (a member keeps its origin), PATCH origin/upstream is
-// refused (the consensus branch is fixed at create), and the operator's merge
-// of a pushed branch is refused (only the master merges). The origin is still
-// there afterwards.
-// SABOTAGE: handleHALDeleteOrigin sends DetachOrigin without DetachRepoOrigin -> 204
-// and the origin is gone -> red; drop the IsFleet check in
-// handleHALSetOriginUpstream -> 200 -> red; drop the FleetMergeRefusal call
-// in handlePushedMerge -> the member merges -> red.
-func TestFleetREST_MemberOriginAndMergeGuards(t *testing.T) {
+// POST /fleet/host and POST /fleet/follow on a MEMBER's copy (user ruling
+// 2026-10-16: the fleet operations the generic origin routes used to serve).
+// Host here is refused member_keeps_origin (only the master hosts the
+// fleet). Follow refuses, each before anything changes and with the origin
+// unchanged afterwards:
+//   - an http:// URL, origin_invalid (#527 F1; PR #528 S3: this is the
+//     connect path's check now, the origin-session commit being refused for
+//     the fleet repository outright);
+//   - an unparseable URL with a token, origin_invalid with no userinfo in the
+//     text (S6);
+//   - a URL that is not an instance of this fleet (the file:// bare the fleet
+//     lives on is not a peer), not_this_fleet.
+//
+// Over loopback TCP both routes are 403 (RequireLocalVia).
+// SABOTAGE: drop refuseFleetOrigin from followFleetHost -> the http URL is
+// probed and refused as not_this_fleet or unreachable instead -> red; drop
+// the cert check -> the file:// URL is attached -> red; drop guardFleetDetach
+// from hostFleetHere -> the member detaches -> red.
+func TestFleetREST_HostAndFollowOnAMember(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	url, root := seedFleetBare(t, dir)
@@ -120,114 +128,59 @@ func TestFleetREST_MemberOriginAndMergeGuards(t *testing.T) {
 	st, err := m.FleetStatus(ctx)
 	require.NoError(t, err)
 	ri := m.Get(st.FleetRepo)
-	var tip string
-	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/x", svc.UpstreamBranch()))
-		_, err := svc.Facts().WriteFact(ctx, "agent/x", "kb/members/x/r.md", "---\nkind: pragmatic\ntype: policy\n---\n# x\n\nx\n", "x", "")
-		require.NoError(t, err)
-		tip, err = svc.Branches().HeadCommit(ctx, "agent/x")
-		require.NoError(t, err)
-	}))
-	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
-	send := func(method, path, body string) *httptest.ResponseRecorder {
+	r := (&Server{Manager: m, Grants: localOperatorGrants(), AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
+	send := func(path, body string, local bool) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(method, path, strings.NewReader(body)))
-		if body != "" {
-			req.Header.Set("Content-Type", "application/json")
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if local {
+			req = localPeer(req)
+		} else {
+			req = fromLoopback(req)
 		}
 		r.ServeHTTP(rec, req)
 		return rec
 	}
+	origin := func() string {
+		var u string
+		require.NoError(t, ri.WithRead(func(svc *store.Service) {
+			o, err := svc.Remote().GetRemote("origin")
+			require.NoError(t, err)
+			require.NotNil(t, o, "the member's copy keeps an origin")
+			u = o.URL
+		}))
+		return u
+	}
 
-	rec := send(http.MethodDelete, "/repos/"+st.FleetRepo+"/origin", "")
+	rec := send("/fleet/host", `{}`, true)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"code":"member_keeps_origin"`)
-	require.Contains(t, rec.Body.String(), "only the master hosts the fleet")
-	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		o, err := svc.Remote().GetRemote("origin")
-		require.NoError(t, err)
-		require.NotNil(t, o, "the origin is still there")
-	}))
+	require.Equal(t, url, origin())
 
-	rec = send(http.MethodPatch, "/repos/"+st.FleetRepo+"/origin/upstream", `{"branch":"trunk"}`)
-	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "consensus branch is fixed at create")
+	rec = send("/fleet/follow", `{"url":"http://gitea.lan/org/fleet.git"}`, true)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"origin_invalid"`)
+	require.Equal(t, url, origin())
 
-	rec = send(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/x")+"/merge", `{"expected_tip":"`+tip+`"}`)
-	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), `"code":"not_master"`)
-	require.Contains(t, rec.Body.String(), "only the fleet's master merges")
-}
+	rec = send("/fleet/follow", `{"url":"https://u:tok@exa mple.com/x"}`, true)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"origin_invalid"`)
+	require.NotContains(t, rec.Body.String(), "tok@")
+	require.Equal(t, url, origin())
 
-// Review N6: on the MASTER, the merge route re-judges the pushed branch at
-// the expected tip against main before merging. A branch whose one commit
-// edits another member's folder is refused 409 judge_refused naming
-// not-owner, and the master's branch does not move; one that edits only the
-// master's own folder is merged (control).
-//
-// The master's background merger judges the same branch and demotes (deletes)
-// a refused one, so the route can find it gone (404). That is a lost race,
-// not an answer: the test plants a fresh branch and asks again. What must
-// never happen is a merge.
-// SABOTAGE: handlePushedMerge passes main's tip instead of expected_tip to
-// FleetMergeRefusal -> nothing to judge -> the not-owner branch merges -> red.
-func TestFleetREST_MasterMergeIsReJudged(t *testing.T) {
-	ctx := context.Background()
-	s, _ := fleetCreateServer(t, "127.0.0.1:0")
-	require.Equal(t, http.StatusCreated, postFleetCreate(s, `{}`, true).Code)
-	m := s.Manager
-	st, err := m.FleetStatus(ctx)
-	require.NoError(t, err)
-	ri := m.Get(st.FleetRepo)
-	own := m.AgentID()
-	plant := func(branch, path string) string {
-		var tip string
-		require.NoError(t, ri.WithRead(func(svc *store.Service) {
-			require.NoError(t, svc.Branches().CreateBranch(ctx, branch, svc.UpstreamBranch()))
-			_, err := svc.Facts().WriteFact(ctx, branch, path, "---\nkind: pragmatic\ntype: policy\n---\n# x\n\nx\n", "plant", "")
-			require.NoError(t, err)
-			tip, err = svc.Branches().HeadCommit(ctx, branch)
-			require.NoError(t, err)
-		}))
-		return tip
+	rec = send("/fleet/follow", `{"url":"`+url+`"}`, true)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"not_this_fleet"`)
+	require.Equal(t, url, origin())
+
+	rec = send("/fleet/follow", `{}`, true)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"url_required"`)
+
+	for _, p := range []string{"/fleet/host", "/fleet/follow"} {
+		rec = send(p, `{"url":"https://x.example/git/fleet"}`, false)
+		require.Equal(t, http.StatusForbidden, rec.Code, "%s over TCP: %s", p, rec.Body.String())
 	}
-	ownTip := func() string {
-		var tip string
-		require.NoError(t, ri.WithRead(func(svc *store.Service) {
-			var err error
-			tip, err = svc.Branches().HeadCommit(ctx, ri.AgentBranch())
-			require.NoError(t, err)
-		}))
-		return tip
-	}
-	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
-	merge := func(branch, tip string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch(branch)+"/merge", strings.NewReader(`{"expected_tip":"`+tip+`"}`)))
-		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(rec, req)
-		return rec
-	}
-
-	before := ownTip()
-	refused := false
-	for i := 0; i < 20 && !refused; i++ {
-		branch := fmt.Sprintf("agent/x%d", i)
-		rec := merge(branch, plant(branch, "kb/members/somebody/evil.md"))
-		if rec.Code == http.StatusNotFound {
-			continue // the merger demoted it first
-		}
-		require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
-		require.Contains(t, rec.Body.String(), `"code":"judge_refused"`)
-		require.Contains(t, rec.Body.String(), "not-owner")
-		refused = true
-	}
-	require.True(t, refused, "the route never reached a planted branch before the merger demoted it")
-	require.Equal(t, before, ownTip(), "nothing was merged into the master's branch")
-
-	rec := merge("agent/y", plant("agent/y", "kb/members/"+own+"/note.md"))
-	require.Less(t, rec.Code, 300, "control: an own-folder edit is merged: %s", rec.Body.String())
-	require.NotEqual(t, before, ownTip(), "control: the master's branch moved")
 }
 
 // POST /fleet/join takes the bundle alone (it names the fleet URL) and runs

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Call, Clipboard, Window } from '@wailsio/runtime'
 import { SettingsForm, type FleetProps, type SaveAck, type Settings } from './SettingsForm.tsx'
-import type { FleetIdentity, InstallResult } from './fleet.ts'
+import type { FleetIdentity } from './fleet.ts'
 import './App.css'
 
 // Bound-method names are packagePath.TypeName.MethodName, which Wails builds in
@@ -15,10 +15,9 @@ const GET = 'main.NativeService.GetSettings'
 const SAVE = 'main.NativeService.SaveSettings'
 const RESTART = 'main.NativeService.RestartServer'
 const REVEAL = 'main.NativeService.RevealLogFile'
-// Fleet identity (knomit#256). INSTALL, PUBKEY and SAVE are refused by Go
+// Fleet identity (knomit#256). PUBKEY and SAVE are refused by Go
 // unless they come from THIS window (callerIsSettings in identity.go).
 const IDENTITY = 'main.NativeService.GetIdentity'
-const INSTALL = 'main.NativeService.InstallBundle'
 const PUBKEY = 'main.NativeService.PublicKeyLine'
 
 // Kept separate from settings.tsx (which only mounts it) so it can be rendered
@@ -45,9 +44,6 @@ export function SettingsApp() {
     // context, and whether wails:// is one is not something to find out from
     // a user's bug report.
     onCopyPublicKey: () => Call.ByName(PUBKEY).then((line: string) => Clipboard.SetText(line)),
-    onReadClipboard: () => Clipboard.Text(),
-    onInstall: (raw, confirmFrom, confirmTo) =>
-      Call.ByName(INSTALL, raw, confirmFrom, confirmTo) as Promise<InstallResult>,
   }
 
   if (loadError) {

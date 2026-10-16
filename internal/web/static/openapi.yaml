@@ -17,6 +17,19 @@ servers:
 tags:
   - name: discovery
   - name: repos
+    description: |
+      The FLEET repository (the one whose ontology id is `fleet`) is never
+      created, changed or removed through these routes, by any caller, the
+      local socket included: every mutating request (any method but GET,
+      HEAD and OPTIONS) under `/repos/{repo}` that names it — rename, archive,
+      the repo PATCH, PUT and DELETE origin, the upstream, origin sessions,
+      the pushed-branch merge, fact, branch and experiment writes, index and
+      synthesis jobs, and every other route there, the MCP mount aside —
+      answers 409 with `code: fleet_repository`, and the operation does not
+      run. It changes only through `/fleet` (POST /fleet/host,
+      POST /fleet/follow, /fleet/leave, /fleet/decommission, …). Reads stay
+      open, and so does MCP (its writes are refused on the fleet repository
+      by the write gate). Any other repository is unaffected.
   - name: ontologies
     description: |
       Repo-independent ontology helpers the create wizard calls before any
@@ -775,10 +788,8 @@ paths:
             conflicting_paths, paths_without_base, base_commit, host_commit and
             peer_commit. "Branch moved" carries expected_tip and actual_tip.
             Also "Unrelated histories", "Cannot sign", "Repository has no agent
-            branch". On the fleet repository (code set): `not_master` (only
-            the fleet's master merges) and `judge_refused` (the master
-            re-judges the branch, tip minus main, against main now, as its
-            merger does, and refuses what the judge refuses).
+            branch". On the fleet repository: `fleet_repository` (no manual
+            merge; the master's merger merges, re-judging every branch).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1887,6 +1898,9 @@ paths:
         ref listing within the configured git network timeout, else 502 and
         nothing changes. Refused with 409 "Repo is indexing" while the index
         job runs; that problem links to the cancel-index action.
+
+        On the fleet repository: 409 `fleet_repository` (POST /fleet/follow
+        points it at a new host).
       requestBody:
         required: true
         content:
@@ -1923,17 +1937,13 @@ paths:
       responses:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Problem" }
-        "422": { description: "The fleet's master hosting it here needs [tls].addr (listener_required) and external_addresses (addresses_required)" }
         "409":
           description: >
             Subscription requires its origin — a repo that follows its origin
             read-only has no content of its own; archive it instead. Or "Repo
             is indexing", carrying `_links.cancel-index` {href, method: POST}.
-            On the fleet repository, a member's copy keeps its origin
-            (`member_keeps_origin`): only the master hosts the fleet, and on
-            the master the detach makes its copy the hub and records it on
-            main (the host record artifacts/fleet/host, the hub's URLs; see
-            GET /fleet's host_record). A PUT of the origin never writes it.
+            On the fleet repository: `fleet_repository` (POST /fleet/host
+            hosts the fleet here).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1965,7 +1975,7 @@ paths:
               schema: { $ref: "#/components/schemas/UpstreamSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { description: "fleet_upstream_fixed: the fleet repository's consensus branch is fixed at create" }
+        "409": { description: "fleet_repository: the fleet repository's consensus branch is fixed at create" }
         "500": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin-sessions:
@@ -2204,7 +2214,11 @@ paths:
         fleet always gets a fresh root, and the one there belongs to another
         fleet). Without `origin` this instance hosts the fleet, so
         `[tls].addr` (`listener_required`, 422) and `external_addresses`
-        (`addresses_required`, 422) must be set. With `origin` the repo
+        (`addresses_required`, 422) must be set. With `origin` its URL must be
+        one a member's join can clone (`https://` or `ssh://` with a host,
+        `git@host:path`, `file://` with a path; `origin_invalid`, 422, for
+        plain `http://`, another scheme or no host: the bundle carries this
+        URL and a join refuses those), then the repo
         create's own checks apply (reachable, a branch to cut from, not yet a
         knowledge base). Another knomit instance cannot be the origin: this
         instance holds no fleet trust yet (`trust_installed`), so such a URL
@@ -2245,7 +2259,7 @@ paths:
             schema:
               type: object
               properties:
-                name: { type: string, description: "The fleet repository's local name (default fleet)" }
+                name: { type: string, description: "The fleet repository's local name (default fleet, or fleet-2, fleet-3, … when a repository called fleet exists; GET /fleet's standalone would_serve names the same)" }
                 origin:
                   type: object
                   required: [url]
@@ -2261,7 +2275,7 @@ paths:
         "400": { description: Invalid name or request }
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present, trust_installed, root_present, create_unfinished, or a repo create conflict (name, origin in use)" }
-        "422": { description: "listener_required, addresses_required, or a refused origin" }
+        "422": { description: "listener_required, addresses_required, origin_invalid, or a refused origin" }
   /fleet/enroll:
     post:
       tags: [fleet]
@@ -2282,7 +2296,12 @@ paths:
         join needs nothing more.
 
         The fleet URL: when the fleet repository here syncs with an origin (a
-        forge, or the hub when this master is not it), that origin's URL, and
+        forge, or the hub when this master is not it), that origin's URL
+        without its userinfo (a token in the origin URL is the master's own
+        credential; a joiner supplies its own, so neither the bundle, nor
+        `fleet_url`, nor a refusal's text carries it; an `ssh://` URL keeps
+        its user, the login, and loses only a password; a URL that does not
+        parse loses everything before the last `@` of its authority), and
         `address` is refused (`address_not_applicable`, 422). When this
         instance is the hub, `https://<address>/git/<repo>` at one of this
         instance's `external_addresses`: with none configured, the enroll is
@@ -2320,7 +2339,7 @@ paths:
                   agent_id: { type: string }
                   serial: { type: string }
                   bundle: { type: string, description: "The bundle document: a `# knomit fleet bundle v1` header with url, agent, root (fingerprint) and serial lines, then the leaf, root and CRL PEM blocks" }
-                  fleet_url: { type: string, description: "The fleet repository URL the bundle carries" }
+                  fleet_url: { type: string, description: "The fleet repository URL the bundle carries, never with userinfo" }
                   root_fingerprint: { type: string }
                   published: { type: boolean }
                   publish_error: { type: string }
@@ -2630,6 +2649,79 @@ paths:
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
         "409": { description: hub }
+  /fleet/host:
+    post:
+      tags: [fleet]
+      summary: Host the fleet here
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing. Takes the fleet lock.
+
+        The Fleet page's "Host the fleet here" after a master switch: this
+        instance's copy of the fleet repository drops its origin and becomes
+        the hub, members push to it, and it records that on main (the host
+        record `artifacts/fleet/host`, the hub's URLs; see GET /fleet's
+        `host_record`). The master check and the detach are one step under
+        the lock. A record write that fails does not undo the detach (it is
+        answered as done): the hub's local reconcile re-asserts the record
+        every round. Refusals, nothing changed: `member_keeps_origin` (409:
+        only the master hosts the fleet), `hub` (409: this copy already has
+        no origin), `not_registered` (409), `listener_required` and
+        `addresses_required` (422: hosting needs [tls].addr and
+        external_addresses).
+      operationId: hostFleet
+      responses:
+        "200":
+          description: Hosted here; the new state
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FleetStatus" }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "member_keeps_origin, hub or not_registered" }
+        "422": { description: "listener_required or addresses_required" }
+  /fleet/follow:
+    post:
+      tags: [fleet]
+      summary: Point this copy at the fleet's new host
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing. Takes the fleet lock.
+
+        The Fleet page's "Point at the new host" after a master switch: this
+        instance's copy of the fleet repository follows the fleet from `url`
+        (the new master's fleet URL, its Fleet → Settings → Hosting). The
+        one way an origin is attached to the fleet repository. Refusals,
+        nothing changed: `url_required` (400); `origin_invalid` (422: a URL
+        no member's join could clone, plain `http://`, another scheme, no
+        host, or one that does not parse; the text never carries the URL's
+        userinfo); `not_this_fleet` (422: the URL is not an instance of this
+        fleet, its certificate does not chain to this fleet's root; 409 when
+        the remote's ontology is not the fleet's); `auth_invalid` (422: a
+        credential for a peer, whose certificate is its credential);
+        `unreachable` (502); `not_registered` (409).
+      operationId: followFleet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, description: "The new host's fleet URL" }
+                auth_method: { type: string, description: "Never needed for an instance of this fleet; a credential is refused (auth_invalid)" }
+                auth_token: { type: string }
+      responses:
+        "200":
+          description: This copy follows the new host; the new state
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FleetStatus" }
+        "400": { description: url_required }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "not_registered, or not_this_fleet (a different knowledge base)" }
+        "422": { description: "origin_invalid, not_this_fleet or auth_invalid" }
+        "502": { description: unreachable }
   /fleet/activity:
     get:
       tags: [fleet]
@@ -2645,7 +2737,12 @@ paths:
         time when they have it); events at the same instant are ordered by a
         stable key, the kind (left, revoked, refused, host-changed, admitted,
         joined, enrolled, created), then agent, serial, branch, tip and
-        detail, never by the order the sources were read. Read-only, open to any principal the edge admits; polled like
+        detail, never by the order the sources were read. Nothing adds
+        precision a source lacks, so within one second the order across
+        sources is not the order things happened: a commit's time is
+        truncated to the second, and a joined that landed at :00.9 is
+        stored as :00.0, below a revoked at :00.3 (seconds apart, the order
+        is exact). Read-only, open to any principal the edge admits; polled like
         /fleet/members, not a stream. The walk of main reads at most 2000
         first-parent commits and stops once it has `limit` entries, so an
         event older than that is not shown.
@@ -2720,7 +2817,14 @@ paths:
                           properties:
                             branch: { type: string }
                             tip: { type: string }
-                            agent: { type: string, description: "The refused tip's author's agent id; absent when the author is not an agent address" }
+                            agent:
+                              type: string
+                              description: |
+                                The agent id the refused tip's author address CLAIMS; absent
+                                when the author is not an agent address. The tip was refused,
+                                so nothing verified it: any member that can push the branch can
+                                write any author. It is a display and lookup key only (which
+                                enrolled row shows the refusal), never who pushed it.
                             reason: { type: string }
                             at: { type: string, format: date-time }
         "409": { description: not_registered }
@@ -4015,13 +4119,31 @@ components:
         registered_at: { type: string, format: date-time }
         last_attempt: { type: string, format: date-time }
         last_error: { type: string, description: "The latest push or fetch failure; empty after a success" }
+        last_error_refused:
+          type: boolean
+          description: "true when last_error is the fleet refusing this instance's certificate at the TLS handshake (revoked, or the fleet moved to another root): a retry does not help. Read from the recorded error; absent otherwise."
+        sync_interval_seconds:
+          type: integer
+          description: "How often this copy's origin round runs (the origin's interval, push_interval when shorter, 300 when unset): a member sees what the master merged into main only after its next round. Absent on the hub (no origin)."
         host:
           type: object
           required: [listener_on, external_addresses]
           description: "What this instance offers to host a fleet, so a page can say before a create or a host-here that it would be refused (listener_required, addresses_required)"
           properties:
             listener: { type: string, description: "[tls].addr, the mTLS listener's bind; empty when it is off. Sent only when `local` is true: any other caller gets listener_on, not where it is bound." }
-            listener_on: { type: boolean, description: "This instance has the mTLS listener members push to ([tls].addr is set)" }
+            listener_on: { type: boolean, description: "The mTLS listener is CONFIGURED ([tls].addr is set). It says nothing about whether it is up: see listening." }
+            listening:
+              type: boolean
+              description: |
+                The mTLS listener is bound and serving NOW (what server.json's
+                listeners.tls.listening says). Only this means members can reach
+                this instance. A listener configured before any certificate was
+                installed (a fresh instance that then creates, joins or hosts a
+                fleet) stays off until knomit restarts or `knomit reload` runs.
+            listener_reason:
+              type: string
+              enum: [no_certificate, addr_in_use]
+              description: "Why a configured listener is not listening; absent when it is listening or not configured"
             external_addresses:
               type: array
               items: { type: string }
@@ -4033,8 +4155,10 @@ components:
                 On the fleet's master while its copy has an origin (it is not the
                 host): the fleet repository URLs members would use if it hosted the
                 fleet here (one https://<address>/git/<repo> per https external
-                address, as fleet_urls on a hub), for the Host-here confirm. Absent
-                otherwise. Built by the server; a page never builds a URL.
+                address, as fleet_urls on a hub), for the Host-here confirm. On a
+                standalone instance: the same URLs for a fleet created here with the
+                default name (fleet), for the New fleet wizard's Hosting step.
+                Absent otherwise. Built by the server; a page never builds a URL.
         record:
           type: object
           description: "This instance's own member record on its agent branch head (absent when there is none)"
@@ -4078,7 +4202,8 @@ components:
             switch). Absent when there is nothing to compare: no fleet
             repository, or no host record on main. No URL in this response
             (hosting, fleet_urls, host_record, host.would_serve) carries
-            credentials: userinfo is removed.
+            credentials: userinfo is removed (an `ssh://` URL keeps its user,
+            the login, and loses only a password).
         root_fingerprint: { type: string, description: "The fleet root installed in [tls].dir (absent when none is): the root a member compares out of band; after a join, the root the bundle installed" }
     FleetEvent:
       type: object
@@ -4105,7 +4230,7 @@ components:
             re-judge. The same branch refused again at the same tip for the
             same reason is one event, at its first time). A root key import,
             a stand-down and a decommission leave no record and are no events.
-        agent: { type: string, description: "The agent id the event is about; for refused, the refused tip's author (the commit's author address, as the judge reads it), so a refused first join names its agent too; empty when nothing names one" }
+        agent: { type: string, description: "The agent id the event is about; for refused, the agent id the refused tip's author address CLAIMS (the commit's author, as the judge reads it; unverified, since the tip was refused, so any member that can push the branch can write any author), so a refused first join names its agent too; empty when nothing names one" }
         serial: { type: string, description: "enrolled, revoked: the certificate serial (lowercase hex)" }
         branch: { type: string, description: "joined, left, admitted, refused: the member's agent branch" }
         tip: { type: string, description: "admitted: the merged tip; refused: the refused tip" }
@@ -4212,6 +4337,14 @@ components:
             an ontology, while it has not been identified yet (a repo being
             created), and on a non-active row. A symlinked ontology is not
             reported here: it refuses the repo, which is then `unopenable`.
+        fleet:
+          type: boolean
+          description: |
+            true on this instance's fleet repository (its ontology id is
+            `fleet`); absent on every other row. The web app's fleet target
+            is that repository's only page: it is never a browse context, and
+            its mutations are served to the local listener only (see the
+            `repos` tag).
         remote:
           type: object
           required: [sync, push]

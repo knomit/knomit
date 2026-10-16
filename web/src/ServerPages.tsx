@@ -1,11 +1,11 @@
-import { FleetPage } from './ManageFleet';
 import { LogsFacet } from './LogsFacet';
 import { AuthPage } from './ManageOAuth';
 import type { ServerPage } from './facets';
 
 // ServerPages is the body behind the gear: the server's own pages, which
-// belong to no repository or lens. Fleet and Authorizations are indexed pages
-// like a target's Settings; Logs is a toolbar over the log.
+// belong to no repository, lens or fleet. Authorizations is an indexed page
+// like a target's Settings; Logs is a toolbar over the log. The fleet is not
+// here: it is a target in the rail, with its own tabs.
 //
 // Which pages exist is App's to decide (serverPagesFor, from the read-only
 // flag and the OAuth probe); `page` here is always one of them.
@@ -16,7 +16,6 @@ export function ServerPages({ page, onAuthCount }: {
 }) {
   return (
     <div data-testid="server-pages" style={body}>
-      {page === 'fleet' && <FleetPage />}
       {page === 'logs' && <LogsFacet />}
       {page === 'auth' && <AuthPage onCount={onAuthCount} />}
     </div>

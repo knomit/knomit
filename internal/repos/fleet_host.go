@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -16,7 +17,7 @@ import (
 // The host record (artifacts/fleet/host, fact.FleetHostPath) is where the
 // fleet is hosted, on the fleet repository's main: the fleet repository
 // URL(s) members use. The fleet's master writes it when it founds the fleet
-// (CreateFleet) and when it becomes the host (DetachRepoOrigin on the master),
+// (CreateFleet) and when it becomes the host (HostFleetHere, POST /fleet/host),
 // and the hub re-asserts it in every round of its local reconcile
 // (fleetHostRound), so a failed write is repaired and a change of
 // external_addresses followed; nothing else writes it, it never carries a
@@ -35,10 +36,17 @@ const maxFleetHostSize = 4 << 10
 // out: members reach the hub's mTLS listener over https only (the enroll's
 // address_not_https).
 func (m *Manager) hubFleetURLs(ri *RepoInstance) []string {
+	return m.hubFleetURLsFor(ri.Name())
+}
+
+// hubFleetURLsFor is hubFleetURLs for a fleet repository named repo, which
+// need not exist yet: a standalone instance names where members would join
+// a fleet created here (GET /fleet host.would_serve).
+func (m *Manager) hubFleetURLsFor(repo string) []string {
 	urls := []string{}
 	for _, a := range m.deps.Cfg.ExternalAddresses {
 		if strings.HasPrefix(strings.ToLower(a), "https://") {
-			urls = append(urls, strings.TrimSuffix(a, "/")+"/git/"+ri.Name())
+			urls = append(urls, strings.TrimSuffix(a, "/")+"/git/"+repo)
 		}
 	}
 	return urls
@@ -73,7 +81,7 @@ func (m *Manager) writeFleetHost(ctx context.Context, ri *RepoInstance, urls []s
 // with NO origin runs it, so only the hub): re-assert the host record with
 // the hub's URLs as the current config gives them (hubFleetURLs). It writes
 // nothing when the record is current, so a round costs one read; it repairs
-// a detach whose record write failed (DetachRepoOrigin answers the detach as
+// a detach whose record write failed (HostFleetHere answers the detach as
 // done), and it follows a change of external_addresses. Only the fleet's
 // master writes it, as everywhere. A fleet operation in flight holds
 // fleetOpMu: the round skips (TryLock, never waits: a create or a detach runs
@@ -128,21 +136,44 @@ func sameFleetURL(a, b string) bool {
 // boolPtr is &b.
 func boolPtr(b bool) *bool { return &b }
 
-// credentialFree is u without its userinfo (user, password, token): what is
-// written to the host record and shown by GET /fleet. A string that is not a
-// URL with a scheme (an scp-style git@host:path names a user, not a secret)
-// is returned unchanged.
+// credentialFree is u without its secrets: what is written to the host
+// record, shown by GET /fleet, put in a bundle and quoted in a refusal.
+//
+//   - An http(s) URL (or any scheme but ssh) loses its whole userinfo: a
+//     token is often the user part (https://ghp_…@github.com).
+//   - An ssh:// URL keeps its user and loses only a password: the user is
+//     the account the transport logs in as (git@…), not a secret, and the
+//     bundle's URL stays the origin's.
+//   - A URL that does not parse still loses everything before the last @ of
+//     its authority (the `scheme://user:pass@` shape), so a typo in the host
+//     never puts the token into a refusal's text.
+//   - A string that is not a URL with a scheme (an scp-style git@host:path
+//     names a user, not a secret) is returned unchanged.
 func credentialFree(u string) string {
 	if !strings.Contains(u, "://") {
 		return u
 	}
 	p, err := url.Parse(u)
-	if err != nil || p.User == nil {
+	if err != nil {
+		return userinfoShape.ReplaceAllString(u, "$1")
+	}
+	if p.User == nil {
 		return u
+	}
+	if strings.EqualFold(p.Scheme, "ssh") {
+		if _, hasPassword := p.User.Password(); !hasPassword {
+			return u
+		}
+		p.User = url.User(p.User.Username())
+		return p.String()
 	}
 	p.User = nil
 	return p.String()
 }
+
+// userinfoShape is `scheme://` followed by an authority that holds an @: the
+// part up to its last @ is the userinfo, whatever it contains.
+var userinfoShape = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*@`)
 
 // fleetHostAt is the host record at branch of ri, as written; ok is false
 // when there is none.

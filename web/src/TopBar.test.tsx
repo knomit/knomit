@@ -154,11 +154,11 @@ describe('TopBar — the target label', () => {
     expect(screen.getByTestId('target-label')).toHaveTextContent('alpha');
     expect(screen.getByTestId('crumb-sep')).toBeInTheDocument();
     unmount();
-    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: null } }));
     expect(screen.queryByTestId('target-label')).toBeNull();
     expect(screen.queryByTestId('crumb-sep')).toBeNull();
     const row = screen.getByTestId('toknomitr-bar');
-    expect(row.textContent).toBe('knomitFleetLogsAuthorizations');
+    expect(row.textContent).toBe('knomitLogsAuthorizations');
     expect(row.textContent).not.toContain('localhost');
     const order = ['bar-brand', 'bar-divider', 'server-tabs'].map(i => screen.getByTestId(i));
     for (let i = 1; i < order.length; i++) {
@@ -205,17 +205,17 @@ describe('TopBar — the rail toggle', () => {
     const { unmount } = render(bar({ railOpen: true }));
     expect(screen.getByTestId('rail-toggle')).toBeEnabled();
     unmount();
-    render(bar({ railOpen: false, server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ railOpen: false, server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: null } }));
     const t = screen.getByTestId('rail-toggle');
     expect(t).toBeDisabled();
-    expect(t).toHaveAttribute('title', 'Repositories and lenses are hidden over the server pages');
+    expect(t).toHaveAttribute('title', 'Repositories, lenses and fleet are hidden over the server pages');
     expect(t).toHaveStyle({ width: '26px', height: '26px', color: '#3d3d3d' });
     expect(screen.getByTestId('server-toggle')).toBeInTheDocument();
   });
 
   it('a click on the disabled toggle asks for nothing', () => {
     const onToggleRail = vi.fn();
-    render(bar({ onToggleRail, server: { page: 'fleet', pages: ['fleet'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ onToggleRail, server: { page: 'logs', pages: ['logs'], onPage: vi.fn(), authCount: null } }));
     fireEvent.click(screen.getByTestId('rail-toggle'));
     expect(onToggleRail).not.toHaveBeenCalled();
   });
@@ -290,10 +290,10 @@ describe('TopBar — the gear', () => {
     const plain = screen.getByTestId('server-toggle');
     expect(plain).toHaveAttribute('aria-pressed', 'false');
     expect(plain).not.toHaveStyle({ background: '#1a231d' });
-    expect(plain.getAttribute('title')).toBe('Server: fleet, logs and authorizations');
+    expect(plain.getAttribute('title')).toBe('Server: logs and authorizations');
     const glyph = plain.innerHTML;
     unmount();
-    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: null } }));
     const lit = screen.getByTestId('server-toggle');
     expect(lit).toHaveAttribute('aria-pressed', 'true');
     expect(lit).toHaveStyle({ color: '#dfe9e2', background: '#1a231d', width: '26px', height: '26px' });
@@ -365,31 +365,31 @@ describe('TopBar — facet tabs', () => {
     const { unmount } = render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
     expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Browse', 'Activity', 'Settings']);
     unmount();
-    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: null } }));
     expect(screen.queryByTestId('facet-tabs')).toBeNull();
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Fleet', 'Logs', 'Authorizations']);
-    expect(screen.getByTestId('server-tab-fleet')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('server-tab-fleet')).toHaveStyle({ boxShadow: 'inset 0 -2px 0 #7c9', color: '#eee' });
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Logs', 'Authorizations']);
+    expect(screen.getByTestId('server-tab-logs')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('server-tab-logs')).toHaveStyle({ boxShadow: 'inset 0 -2px 0 #7c9', color: '#eee' });
   });
 
   it('draws exactly the server pages it is given', () => {
-    render(bar({ server: { page: 'fleet', pages: ['fleet'], onPage: vi.fn(), authCount: 3 } }));
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Fleet']);
+    render(bar({ server: { page: 'logs', pages: ['logs'], onPage: vi.fn(), authCount: 3 } }));
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Logs']);
     expect(screen.queryByTestId('server-tab-auth-badge')).toBeNull();
   });
 
   it('a server tab click asks for that page', () => {
     const onPage = vi.fn();
-    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs'], onPage, authCount: null } }));
-    fireEvent.click(screen.getByTestId('server-tab-logs'));
-    expect(onPage).toHaveBeenCalledWith('logs');
+    render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage, authCount: null } }));
+    fireEvent.click(screen.getByTestId('server-tab-auth'));
+    expect(onPage).toHaveBeenCalledWith('auth');
   });
 
   it('badges Authorizations with the waiting count above zero only', () => {
-    const { unmount } = render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: 2 } }));
+    const { unmount } = render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: 2 } }));
     expect(screen.getByTestId('server-tab-auth-badge')).toHaveTextContent(/^2$/);
     unmount();
-    render(bar({ server: { page: 'fleet', pages: ['fleet', 'logs', 'auth'], onPage: vi.fn(), authCount: 0 } }));
+    render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: 0 } }));
     expect(screen.getByTestId('server-tab-auth')).toBeInTheDocument();
     expect(screen.queryByTestId('server-tab-auth-badge')).toBeNull();
   });
@@ -457,5 +457,34 @@ describe('TopBar — no create indicator', () => {
     render(bar({ state: { ...baseState, headCommit: 'head0001234' } }));
     expect(screen.queryByTestId('create-indicator')).toBeNull();
     expect(screen.getByTestId('toknomitr-bar').textContent).not.toMatch(/create/i);
+  });
+});
+
+// The fleet target in the bar (PR 7): its crumb in the fleet's teal with the
+// chip GET /fleet decides, its tabs, and no gear when the server has no page.
+describe('the fleet target', () => {
+  it('names the fleet with its chip and draws Members, Activity and Settings', () => {
+    render(bar({ label: { kind: 'fleet', name: 'fleet', chip: { text: 'master', tone: 'fleet' } }, facets: ['members', 'activity', 'settings'], facet: 'members' }));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('fleet');
+    expect(screen.getByTestId('target-label')).toHaveStyle({ color: '#8ad6c8' });
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent('master');
+    expect(screen.getByTestId('target-label-chip')).toHaveAttribute('data-tone', 'fleet');
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Members', 'Activity', 'Settings']);
+    expect(screen.getByTestId('facet-tab-members')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('a New fleet draft reads in the draft blue', () => {
+    render(bar({ label: { kind: 'fleet', name: 'New fleet', draft: true } }));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New fleet');
+    expect(screen.getByTestId('target-label')).toHaveStyle({ color: '#8ab6d6' });
+  });
+
+  // SABOTAGE: always draw the gear -> red.
+  it('has no gear when the server has no page (control: it has one otherwise)', () => {
+    const { unmount } = render(bar({ gear: false }));
+    expect(screen.queryByTestId('server-toggle')).toBeNull();
+    unmount();
+    render(bar({ gear: true }));
+    expect(screen.getByTestId('server-toggle')).toBeInTheDocument();
   });
 });

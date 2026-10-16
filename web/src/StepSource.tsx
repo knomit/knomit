@@ -1,7 +1,7 @@
 import type { WizardAction, WizardState } from './wizardState';
 import { isValidRepoName, hostOf } from './wizardState';
 import { OutcomeCard } from './OutcomeCard';
-import { btn, segDisclosure } from './manageStyles';
+import { btn, segDisclosure, fieldLabel, fieldHint, fieldInput, fieldCaveat } from './manageStyles';
 import { SegmentedChoice } from './SegmentedChoice';
 
 // StepSource asks ONE question — where this repository's history lives — with a
@@ -162,9 +162,9 @@ function LocalPane({ state, dispatch }: { state: WizardState; dispatch: (a: Wiza
 // same wizard. Sharing only the styles is what let the two drift apart on
 // keyboard and screen-reader semantics once already.
 
-const label: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, marginTop: 12, display: 'block' };
-const hint: React.CSSProperties = { fontSize: 12, color: '#666', marginTop: 8, lineHeight: 1.5 };
-const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#111', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
-const caveat: React.CSSProperties = { marginTop: 10, padding: '8px 10px', borderRadius: 5, background: '#131313', border: '1px solid #242424', fontSize: 11.5, lineHeight: 1.55, color: '#666' };
+const label = fieldLabel;
+const hint = fieldHint;
+const input = fieldInput;
+const caveat = fieldCaveat;
 const link: React.CSSProperties = { color: '#6ea8fe' };
 const warnText: React.CSSProperties = { color: '#d2a24c', fontSize: 12, marginTop: 8 };

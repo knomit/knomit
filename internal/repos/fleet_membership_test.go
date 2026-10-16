@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
@@ -295,7 +294,7 @@ func TestFleetMembership_TheHubCannotStandDown(t *testing.T) {
 	require.Equal(t, "none", st.Hosting)
 }
 
-// DELETE /repos/{fleet}/origin's guard (R3.3): a member keeps its origin;
+// POST /fleet/host's guard (R3.3): a member keeps its origin;
 // the master may detach once [tls].addr and external_addresses are set.
 // SABOTAGE: guardFleetDetach returns nil for a member -> red.
 func TestFleetMembership_DetachGuard(t *testing.T) {
@@ -307,7 +306,21 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
 
-	err = alpha.DetachRepoOrigin(ctx, alpha.fleetRepo())
+	// PR #528 S5: GET /fleet names the member's own sync interval (the
+	// origin record's, 300 s by default), which is when it next sees main.
+	// SABOTAGE: drop SyncIntervalSeconds from FleetStatus -> 0 -> red.
+	ast, err := alpha.FleetStatus(ctx)
+	require.NoError(t, err)
+	var want int
+	require.NoError(t, alpha.fleetRepo().WithRead(func(svc *store.Service) {
+		r, rerr := svc.Remote().GetRemote("origin")
+		require.NoError(t, rerr)
+		want = int(loopInterval(r) / time.Second)
+	}))
+	require.Positive(t, want)
+	require.Equal(t, want, ast.SyncIntervalSeconds)
+
+	err = hostHere(ctx, alpha)
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
 	require.Equal(t, "member_keeps_origin", code)
@@ -315,16 +328,19 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, origin, "the refused detach left the member's origin")
 
-	_, code = fleetCode(t, f.master.DetachRepoOrigin(ctx, f.mri))
+	_, code = fleetCode(t, hostHere(ctx, f.master))
 	require.Equal(t, "listener_required", code)
 	f.master.deps.Cfg.TLS.Addr = "127.0.0.1:0"
-	_, code = fleetCode(t, f.master.DetachRepoOrigin(ctx, f.mri))
+	_, code = fleetCode(t, hostHere(ctx, f.master))
 	require.Equal(t, "addresses_required", code)
 	f.master.deps.Cfg.ExternalAddresses = []string{"https://master.example"}
-	require.NoError(t, f.master.DetachRepoOrigin(ctx, f.mri), "the master hosts the fleet here")
+	require.NoError(t, hostHere(ctx, f.master), "the master hosts the fleet here")
 	origin, err = f.master.hasOrigin(f.mri)
 	require.NoError(t, err)
 	require.False(t, origin, "the master's copy is the hub now")
+	mst, err := f.master.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Zero(t, mst.SyncIntervalSeconds, "the hub has no origin round")
 }
 
 // localRound runs ONE round of ri's origin-less local reconcile, as the Sync
@@ -346,7 +362,7 @@ func localRound(t *testing.T, ri *RepoInstance) {
 // address's credentials (SF4).
 // SABOTAGE: make fleetHostRound return at once -> main never holds the
 // record -> red; pass nil for it in the Sync stage -> the rebuild's round
-// does not write it -> red; DetachRepoOrigin returns the write's error again
+// does not write it -> red; HostFleetHere returns the write's error again
 // -> red.
 func TestFleetHost_TheHubReassertsItsRecordEachRound(t *testing.T) {
 	ctx := context.Background()
@@ -361,7 +377,7 @@ func TestFleetHost_TheHubReassertsItsRecordEachRound(t *testing.T) {
 		}
 		return nil
 	}})
-	require.NoError(t, f.master.DetachRepoOrigin(ctx, f.mri), "the detach stood: it is answered as done")
+	require.NoError(t, hostHere(ctx, f.master), "the detach stood: it is answered as done")
 	require.Zero(t, fails, "fixture: the record write failed once")
 	ri := f.master.Get("fleet")
 	origin, err := f.master.hasOrigin(ri)
@@ -424,15 +440,23 @@ func TestSameFleetURL(t *testing.T) {
 }
 
 // credentialFree drops a URL's userinfo, a token in it included (PR #527
-// SF4), and leaves what is not a URL with a scheme as it is.
-// SABOTAGE: return u unchanged -> the token rows are red.
+// SF4), keeps an ssh:// user (it is the login, not a secret; PR #528 nit 1),
+// strips the userinfo of a URL that does not parse too (PR #528 S6), and
+// leaves what is not a URL with a scheme as it is.
+// SABOTAGE: return u unchanged -> the token rows are red; return u when
+// url.Parse fails -> the unparseable rows keep u:tok@ -> red; drop the ssh
+// arm -> ssh://git@ loses its user -> red.
 func TestCredentialFree(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://x-access-token:ghp_abc123@github.com/org/fleet.git": "https://github.com/org/fleet.git",
 		"https://oauth2@gitlab.example/org/fleet":                    "https://gitlab.example/org/fleet",
 		"https://hub.example:7443/git/fleet":                         "https://hub.example:7443/git/fleet",
 		"git@github.com:org/fleet.git":                               "git@github.com:org/fleet.git",
-		"ssh://git:pw@host/org/fleet":                                "ssh://host/org/fleet",
+		"ssh://git:pw@host/org/fleet":                                "ssh://git@host/org/fleet",
+		"ssh://git@github.com/a/f.git":                               "ssh://git@github.com/a/f.git",
+		"https://u:tok@exa mple.com/x":                               "https://exa mple.com/x",
+		"HTTPS://u:t@k@exa%zzmple.com/x?y=1":                         "HTTPS://exa%zzmple.com/x?y=1",
+		"http://[::1:u:tok@host/x":                                   "http://host/x",
 	} {
 		require.Equal(t, want, credentialFree(in), in)
 	}
@@ -467,18 +491,17 @@ func TestSortFleetEvents_SameSecondIsNotSourceOrder(t *testing.T) {
 // Review N5: the fleet repository's detach (check and detach) takes the
 // fleet lock, so a stand-down cannot run between the master check and the
 // detach.
-// SABOTAGE: DetachRepoOrigin without lockFleetOp -> it returns at once -> red.
+// SABOTAGE: HostFleetHere without lockFleetOp -> it returns at once -> red.
 func TestFleetMembership_DetachTakesTheFleetLock(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
 	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
 	require.NoError(t, err)
-	ri := m.fleetRepo()
 	waiting := make(chan struct{}, 1)
 	setFleetHooks(t, fleetCreateHooks{contended: func() { waiting <- struct{}{} }})
 	m.fleetOpMu.Lock()
 	done := make(chan struct{})
-	go func() { _ = m.DetachRepoOrigin(ctx, ri); close(done) }()
+	go func() { _ = hostHere(ctx, m); close(done) }()
 	select {
 	case <-waiting:
 	case <-done:
@@ -511,7 +534,7 @@ func TestFleetMembership_DetachChecksAndDetachesAsOneStep(t *testing.T) {
 	}})
 	f.master.fleetOpMu.Lock()
 	errc := make(chan error, 1)
-	go func() { errc <- f.master.DetachRepoOrigin(ctx, f.mri) }()
+	go func() { errc <- hostHere(ctx, f.master) }()
 	select {
 	case <-standDown:
 	case err := <-errc:
@@ -526,62 +549,6 @@ func TestFleetMembership_DetachChecksAndDetachesAsOneStep(t *testing.T) {
 	origin, err := f.master.hasOrigin(f.mri)
 	require.NoError(t, err)
 	require.True(t, origin, "the refused detach left the origin")
-}
-
-// The operator's merge of a pushed branch on the fleet repository (R3.3,
-// PR #524 residue): only the master merges, and it re-judges the branch
-// (tip minus main) first. A local agent/x whose one commit edits another
-// member's folder is refused not-owner; one that edits only its author's own
-// folder is admitted.
-// SABOTAGE: drop the JudgePeerBranch call -> the not-owner branch is
-// admitted -> red; drop the isFleetMaster check -> the member row passes the
-// master check and is judged instead -> red.
-func TestFleetMembership_ManualMergeIsMasterOnlyAndReJudged(t *testing.T) {
-	ctx := context.Background()
-	// The persisted agent id, as production sets it: every commit here is
-	// authored by the master, whatever branch it lands on.
-	m := newFleetHost(t, t.TempDir(), func(d *Deps) { d.AgentID = "test-fleet" })
-	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
-	require.NoError(t, err)
-	ri := m.fleetRepo()
-	own := m.AgentID()
-	plant := func(branch, path string) plumbing.Hash {
-		var tip string
-		require.NoError(t, ri.WithRead(func(svc *store.Service) {
-			require.NoError(t, svc.Branches().CreateBranch(ctx, branch, svc.UpstreamBranch()))
-			_, err := svc.Facts().WriteFact(ctx, branch, path, "---\nkind: pragmatic\ntype: policy\n---\n# x\n\nx\n", "plant", "")
-			require.NoError(t, err)
-			tip, err = svc.Branches().HeadCommit(ctx, branch)
-			require.NoError(t, err)
-		}))
-		return plumbing.NewHash(tip)
-	}
-	bad := plant("agent/x", "kb/members/somebody/evil.md")
-	good := plant("agent/y", "kb/members/"+own+"/note.md")
-
-	var badErr, goodErr error
-	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		badErr = ri.FleetMergeRefusal(ctx, svc, "agent/x", bad)
-		goodErr = ri.FleetMergeRefusal(ctx, svc, "agent/y", good)
-	}))
-	status, code := fleetCode(t, badErr)
-	require.Equal(t, http.StatusConflict, status)
-	require.Equal(t, "judge_refused", code)
-	require.ErrorContains(t, badErr, "not-owner")
-	require.NoError(t, goodErr, "control: an own-folder edit is admitted")
-
-	// A member (no root here) is refused before any judging.
-	f := newForgeFleet(t, nil)
-	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
-	require.NoError(t, err)
-	alpha := f.namedMember(t, "alpha")
-	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
-	require.NoError(t, err)
-	ari := alpha.fleetRepo()
-	require.NoError(t, ari.WithRead(func(svc *store.Service) {
-		_, code := fleetCode(t, ari.FleetMergeRefusal(ctx, svc, "agent/x", bad))
-		require.Equal(t, "not_master", code)
-	}))
 }
 
 // #518 R4: the generic create's "creating this repository again will adopt
@@ -810,7 +777,7 @@ func TestFleetMembership_JoinRefusesABundleURLThatIsNoFleetURL(t *testing.T) {
 	internalForm, err := pki.GitURL("https://hub.example:7443/git/fleet", true)
 	require.NoError(t, err)
 	refused := 0
-	for _, u := range []string{internalForm,"http://hub.example/git/fleet", "ftp://hub.example/fleet", "https:///git/fleet", "not a url"} {
+	for _, u := range []string{internalForm, "http://hub.example/git/fleet", "ftp://hub.example/fleet", "https:///git/fleet", "not a url"} {
 		withURL := pkitest.WithURL(t, bundle, u)
 		_, err := m.JoinFleet(context.Background(), FleetJoinSpec{Bundle: withURL})
 		status, code := fleetCode(t, err)
@@ -866,4 +833,54 @@ func TestFleetMembers_EnrolledRowsAndSince(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	require.Equal(t, fact.MemberRevoked, rows[1].State, "an enrolled id whose leaf is on the CRL is revoked")
+}
+
+// F3 (#527 follow-up): an origin URL that embeds a credential (a forge token
+// in its userinfo) never leaves the master in a bundle, in the enroll's
+// fleet_url, or in the address_not_applicable text: a joiner supplies its own
+// auth, so the master's token would reach every joiner otherwise.
+// SABOTAGE: fleetURLForBundle returns o.URL as stored -> the token is in the
+// bundle -> red; the address_not_applicable text with o.URL -> red.
+func TestFleetMembership_NoBundleCarriesUserinfo(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	const secret = "ghp_s3cr3tT0k3n"
+	tokenURL := "https://x-access-token:" + secret + "@127.0.0.1:1/org/fleet.git"
+	org, err := f.master.originOf(f.mri)
+	require.NoError(t, err)
+	require.NotNil(t, org, "fixture: the forge fleet's copy has an origin")
+	org.URL = tokenURL
+	require.NoError(t, f.master.Origins().Set(f.mri.UID(), *org))
+
+	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
+	require.NoError(t, err)
+	require.Equal(t, "https://127.0.0.1:1/org/fleet.git", enr.FleetURL)
+	require.NotContains(t, enr.Bundle, secret)
+	require.NotContains(t, enr.Bundle, "x-access-token")
+	b, err := pki.SplitBundle([]byte(enr.Bundle))
+	require.NoError(t, err)
+	require.Equal(t, "https://127.0.0.1:1/org/fleet.git", b.FleetURL)
+
+	_, err = f.master.EnrollFleetMember(ctx, "bravo", keyLine("bravo"), "https://hub.example")
+	_, code := fleetCode(t, err)
+	require.Equal(t, "address_not_applicable", code)
+	require.NotContains(t, err.Error(), secret)
+	require.Contains(t, err.Error(), "https://127.0.0.1:1/org/fleet.git")
+}
+
+// F3: Activity's host-changed detail is read without userinfo, whatever the
+// record on main holds (every writer strips it today; the read does too).
+// SABOTAGE: mainEvents joins c.Host as read -> red.
+func TestFleetActivity_HostChangedDetailCarriesNoUserinfo(t *testing.T) {
+	evs := mainEvents(store.FleetMainCommit{At: time.Now(), Author: "master", HostChanged: true,
+		Host: []string{"https://u:ghp_tok@hub.example/git/fleet", "https://hub2.example/git/fleet"}}, nil)
+	require.Len(t, evs, 1)
+	require.Equal(t, FleetEventHostChanged, evs[0].Kind)
+	require.Equal(t, "hosted at https://hub.example/git/fleet, https://hub2.example/git/fleet", evs[0].Detail)
+}
+
+// hostHere is POST /fleet/host's call, its error only.
+func hostHere(ctx context.Context, m *Manager) error {
+	_, err := m.HostFleetHere(ctx)
+	return err
 }

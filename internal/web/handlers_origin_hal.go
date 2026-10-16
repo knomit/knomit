@@ -426,12 +426,6 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 				"branch name contains characters not allowed in a git ref", r.URL.Path)
 			return
 		}
-		if ri.IsFleet() {
-			hal.WriteProblemWithExtra(w, http.StatusConflict, "Fleet repository", repos.ErrFleetUpstreamFixed.Error(),
-				r.URL.Path, map[string]any{"code": "fleet_upstream_fixed"})
-			return
-		}
-
 		if err := op.SetOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
 			if errors.Is(err, errOriginNoStore) {
 				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
@@ -465,16 +459,10 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, _ originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		// The fleet repository (R3.3): a member keeps its origin; the
-		// master's detach makes its copy the hub. Its refusals are
-		// FleetErrors.
-		err := m.DetachRepoOrigin(r.Context(), ri)
-		var fe *repos.FleetError
+		_, err := m.Send(r.Context(), ri, repos.DetachOrigin())
 		switch {
 		case err == nil:
 			w.WriteHeader(http.StatusNoContent)
-		case errors.As(err, &fe):
-			writeFleetError(w, r, err)
 		case errors.Is(err, repos.ErrSubscriptionOrigin):
 			hal.WriteProblem(w, http.StatusConflict, "Subscription requires its origin",
 				"this repo follows its origin read-only and has no content of its own; archive it instead of detaching the origin",

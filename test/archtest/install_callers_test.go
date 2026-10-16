@@ -19,10 +19,10 @@ import (
 // also served on the mTLS listener and by `knomit serve`, so an install
 // reachable there would be callable by remote peers (knomit#256). Only the
 // local listener (the unix socket, or the named pipe on Windows) may reach
-// one, and only behind RequireLocalVia. The callers are:
+// one, and only behind RequireLocalVia. The desktop app has no install
+// binding of its own: its main window joins through POST /fleet/join. The
+// callers are:
 //
-//   - the desktop's Settings window binding (gated to that window; it goes
-//     with the Fleet UI, which joins through POST /fleet/join instead);
 //   - internal/repos/fleet_create.go, the fleet create. It installs this
 //     instance's OWN leaf, which it has just issued from the fresh root it
 //     minted, so the material never comes from a request;
@@ -40,7 +40,6 @@ import (
 var installCallers = []string{
 	"internal/repos/fleet_create.go",
 	"internal/repos/fleet_membership.go",
-	"tools/desktop/identity.go",
 }
 
 // installCRLCallers are the ONLY production files that may call

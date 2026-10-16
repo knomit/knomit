@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType } from 'react'
 import { FleetIdentitySection } from './FleetIdentity.tsx'
-import { installNeedsRestart, type FleetIdentity, type InstallResult } from './fleet.ts'
+import type { FleetIdentity } from './fleet.ts'
 import { BroadcastIcon, FolderIcon, GearIcon, GlobeIcon } from './icons.tsx'
 import { Row } from './Row.tsx'
 
@@ -85,8 +85,6 @@ export const ALL_NETWORKS_WARNING =
 export interface FleetProps {
   identity: FleetIdentity | null
   onCopyPublicKey: () => Promise<void>
-  onReadClipboard: () => Promise<string>
-  onInstall: (raw: string, confirmFrom: string, confirmTo: string) => Promise<InstallResult>
 }
 
 interface Props {
@@ -261,12 +259,7 @@ export function SettingsForm({
   // What the last save's reload reported. Its restartNeeded is fresher than
   // the server record until the next refresh, and a restart clears it.
   const [ack, setAck] = useState<SaveAck | null>(null)
-  // The section's identity: the one loaded with the window, then whatever an
-  // install hands back, so the rows show what was just installed.
-  const [identity, setIdentity] = useState<FleetIdentity | null>(fleet?.identity ?? null)
-  useEffect(() => setIdentity(fleet?.identity ?? null), [fleet?.identity])
-  // An install whose listener only a restart can start (see installNeedsRestart).
-  const [installRestart, setInstallRestart] = useState(false)
+  const identity = fleet?.identity ?? null
 
   // "Saved." is a notification, not a state: it reports that something just
   // happened, so it has to expire. Left standing it becomes a claim about the
@@ -279,10 +272,9 @@ export function SettingsForm({
   }, [saved])
   // The port, the scope and [tls].addr are applied by the reload a save
   // triggers. What waits for a restart is what the SERVER says it could not
-  // apply (auth.require, ...), plus a first enrolment whose listener is wanted
-  // but not running.
+  // apply (auth.require, ...).
   const restartKeys = ack ? ack.restartNeeded : server.restartNeeded
-  const needsRestart = restartKeys.length > 0 || installRestart
+  const needsRestart = restartKeys.length > 0
 
   // envOverrides returns a NIL slice when nothing is set, and encoding/json
   // renders that as `null` rather than `[]`. That is the ordinary case, so
@@ -411,7 +403,6 @@ export function SettingsForm({
       await new Promise((r) => setTimeout(r, pollMs))
     }
     setAck(null)
-    setInstallRestart(false)
     setRestarting(false)
     setSaved('Server restarted.')
   }
@@ -715,12 +706,6 @@ export function SettingsForm({
               <FleetIdentitySection
                 identity={identity}
                 onCopyPublicKey={fleet.onCopyPublicKey}
-                onReadClipboard={fleet.onReadClipboard}
-                onInstall={fleet.onInstall}
-                onInstalled={(next) => {
-                  if (next) setIdentity(next)
-                  if (installNeedsRestart(next)) setInstallRestart(true)
-                }}
               />
             </section>
           )}
@@ -827,7 +812,7 @@ export function SettingsForm({
           {needsRestart && (
             <div className="restartbar">
               <p>
-                {restartReason(restartKeys, installRestart)}
+                {restartReason(restartKeys)}
                 {server.attached &&
                   ` The server was started outside the app${server.pid > 0 ? ` (pid ${server.pid})` : ''}: restart it where it was started.`}
               </p>
@@ -877,17 +862,8 @@ function pagesWithErrors(errs: Record<string, string>): Page[] {
  * One restart offer whatever owes it — not one bar per cause — saying what
  * the restart will apply.
  */
-function restartReason(keys: string[], install: boolean): string {
-  const parts: string[] = []
-  if (keys.length > 0) {
-    parts.push(`These settings take effect after a restart of the server: ${keys.join(', ')}.`)
-  }
-  if (install) {
-    parts.push(
-      'The fleet listener starts after a restart: installing a bundle does not start it in a running Knomit.',
-    )
-  }
-  return parts.join(' ')
+function restartReason(keys: string[]): string {
+  return `These settings take effect after a restart of the server: ${keys.join(', ')}.`
 }
 
 /** What the header calls the running server's address. */

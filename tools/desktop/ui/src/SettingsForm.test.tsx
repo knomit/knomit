@@ -1,8 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ALL_NETWORKS_WARNING, SettingsForm, type SaveAck, type Settings } from './SettingsForm.tsx'
-import type { FleetIdentity } from './fleet.ts'
-import { enrolled, notEnrolled } from './fleetFixtures.ts'
+import { notEnrolled } from './fleetFixtures.ts'
 import { ack, attachedServer, baseSettings as base, spawnedServer } from './settingsFixtures.ts'
 
 // Every prop is required, so a helper keeps each test naming only what it cares
@@ -38,8 +37,6 @@ const goTo = (page: RegExp) => fireEvent.click(navItem(page))
 const fleetProps = {
   identity: notEnrolled,
   onCopyPublicKey: vi.fn().mockResolvedValue(undefined),
-  onReadClipboard: vi.fn().mockResolvedValue(''),
-  onInstall: vi.fn(),
 }
 
 describe('SettingsForm sidebar', () => {
@@ -682,66 +679,5 @@ describe('SettingsForm fleet listener ([tls].addr)', () => {
   it('names the Fleet port in its hint', () => {
     renderForm()
     expect(screen.getByText(/fleet port, host:port/i)).toBeInTheDocument()
-  })
-})
-
-describe('SettingsForm restart after an install', () => {
-  const bundle = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n'
-  function withFleet(after: FleetIdentity) {
-    const onInstall = vi.fn().mockResolvedValue({
-      installed: true,
-      class: '',
-      message: '',
-      installedRootFingerprint: '',
-      bundleRootFingerprint: '',
-      bundlePrincipal: '',
-      identity: after,
-    })
-    render(
-      <SettingsForm
-        initial={base}
-        onSave={vi.fn().mockResolvedValue(ack())}
-        onRestart={vi.fn().mockReturnValue(new Promise<void>(() => {}))}
-        onRevealLog={vi.fn().mockResolvedValue(undefined)}
-        onCancel={vi.fn()}
-        fleet={{
-          identity: notEnrolled,
-          onCopyPublicKey: vi.fn().mockResolvedValue(undefined),
-          onReadClipboard: vi.fn().mockResolvedValue(bundle),
-          onInstall,
-        }}
-      />,
-    )
-  }
-  async function install() {
-    goTo(/fleet/i)
-    fireEvent.click(screen.getByRole('button', { name: /paste from clipboard/i }))
-    await screen.findByText(/bundle loaded/i)
-    fireEvent.click(screen.getByRole('button', { name: /^install$/i }))
-    await screen.findByText(/^installed\./i)
-  }
-
-  // The first enrolment of a desktop that already has [tls].addr set: its
-  // listener was off for lack of a certificate, and installing starts nothing.
-  it('offers it when a listener is wanted and not running', async () => {
-    withFleet({
-      ...enrolled,
-      tls: { booted: true, configured: '0.0.0.0:19279', listening: '', reason: 'no_certificate', configuredNow: '0.0.0.0:19279' },
-    })
-    await install()
-    expect(await screen.findByRole('button', { name: /restart server/i })).toBeInTheDocument()
-    expect(screen.getByText(/fleet listener starts after a restart/i)).toBeInTheDocument()
-  })
-
-  it('does not offer it when the listener is already running (it adopts the files)', async () => {
-    withFleet(enrolled)
-    await install()
-    expect(screen.queryByRole('button', { name: /restart server/i })).not.toBeInTheDocument()
-  })
-
-  it('does not offer it when no listener is configured', async () => {
-    withFleet({ ...enrolled, tls: { booted: true, configured: '', listening: '', reason: '', configuredNow: '' } })
-    await install()
-    expect(screen.queryByRole('button', { name: /restart server/i })).not.toBeInTheDocument()
   })
 })

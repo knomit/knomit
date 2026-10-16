@@ -106,7 +106,7 @@ describe('the zero-repo shell', () => {
     await screen.findByTestId('step-source');
     await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
     expect(await screen.findByTestId('server-pages')).toBeInTheDocument();
-    expect(screen.getByTestId('server-tab-fleet')).toBeInTheDocument();
+    expect(screen.getByTestId('server-tab-logs')).toBeInTheDocument();
     // The draft stays mounted underneath, hidden.
     expect(screen.getByTestId('draft-repo')).toHaveStyle({ display: 'none' });
     await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });

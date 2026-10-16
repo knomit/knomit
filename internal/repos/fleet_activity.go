@@ -134,6 +134,10 @@ var fleetKindOrder = map[string]int{
 // they have, sub-second included), then, at the same instant, by a stable
 // key: the kind (fleetKindOrder), the agent, the serial, the branch, the tip,
 // the detail. Never by the order the sources were read in (PR #527 N4).
+// No precision is invented: a commit's whole second is compared as it is, so
+// within one second two sources of different precision can read in the wrong
+// order (a commit at :00.9 is :00.0, below a CRL entry at :00.3); openapi
+// documents that granularity (#527 F4).
 func sortFleetEvents(events []FleetEvent) {
 	sort.Slice(events, func(i, j int) bool {
 		a, b := events[i], events[j]
@@ -160,7 +164,8 @@ func mainEvents(c store.FleetMainCommit, branchOf map[string]string) []FleetEven
 	if c.HostChanged {
 		d := "the host record is removed"
 		if len(c.Host) > 0 {
-			d = "hosted at " + strings.Join(c.Host, ", ")
+			// Read without userinfo, as GET /fleet reads the record (#527 F3).
+			d = "hosted at " + strings.Join(credentialFreeAll(c.Host), ", ")
 		}
 		out = append(out, FleetEvent{At: c.At, Kind: FleetEventHostChanged, Agent: c.Author, Detail: d})
 	}

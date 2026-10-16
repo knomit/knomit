@@ -3,8 +3,11 @@ import { api, createSession, streamTest, streamPreview, streamApply, streamCommi
 import type { SSEEvent, TestResult, PreviewResult, ApplyResult } from './api';
 import { GlobeIcon } from './icons';
 import { btn, card } from './manageStyles';
-import { repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
+import { repoHue, noMouseFocus } from './utils';
 import { originURL } from './wizardState';
+import {
+  actions, block, blockHead, blockHint, blockTitle, column, crumb, crumbLink, crumbSep, grid, iconBox, input, label, pageHead, rail, railItem, railLabel, railMark, railNote,
+} from './connectStyles';
 import { isSSHURL, urlAuthMismatch } from './originAuth';
 
 type Step =
@@ -559,51 +562,6 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
 // left here is the page's own structure, and the block/rail atoms mirror
 // SettingsPage's so the two pages read as one grammar.
 
-const crumb: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#888', marginBottom: 10,
-};
-const crumbLink = (disabled: boolean): React.CSSProperties => ({
-  background: 'none', border: 'none', padding: 0, fontSize: 12,
-  color: disabled ? '#555' : '#6ea8fe', cursor: disabled ? 'default' : 'pointer',
-});
-const crumbSep: React.CSSProperties = { color: '#444' };
-
-const pageHead: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 };
-// Tinted in the repo's own hue rather than a generic accent — this page belongs
-// to that repository, and the icon box is where every other detail head says so.
-const iconBox = (repo: string): React.CSSProperties => ({
-  width: 30, height: 30, borderRadius: 7, flexShrink: 0,
-  background: repoHueBg(repo), border: '1px solid ' + repoHueBorder(repo),
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-});
-
-// Same two-column split as SettingsPage, to the pixel: the rail must not move
-// when you cross from the repo's settings into this page.
-const grid: React.CSSProperties = {
-  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 178px', gap: 26, alignItems: 'start',
-};
-// A form reads worse the wider it gets, so the column is measured inside its
-// grid cell rather than filling it.
-const column: React.CSSProperties = { maxWidth: 470 };
-
-const block: React.CSSProperties = {
-  borderTop: '1px solid #202020', paddingTop: 16, marginTop: 16,
-  display: 'flex', flexDirection: 'column', gap: 10,
-};
-const blockHead: React.CSSProperties = { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' };
-const blockTitle: React.CSSProperties = { margin: 0, fontSize: 13.5, fontWeight: 650, color: '#e6e6e6' };
-const blockHint: React.CSSProperties = { fontSize: 11.5, color: '#6e6e6e' };
-
-// Actions sit under the content they act on. The old footer was pinned to the
-// window's bottom edge, which put "Test connection" 600px below the field it
-// tests.
-const actions: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 };
-
-const label: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, marginTop: 10, display: 'block' };
-const input: React.CSSProperties = {
-  width: '100%', boxSizing: 'border-box', background: '#0c0c0c', border: '1px solid #333',
-  color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13,
-};
 const sectionBox: React.CSSProperties = { ...card, marginTop: 0, fontSize: 13 };
 const errBox: React.CSSProperties = { ...card, marginTop: 0, background: '#1a1111', borderColor: '#533', fontSize: 13 };
 const errText: React.CSSProperties = { color: '#f88', fontSize: 12, marginTop: 8 };
@@ -611,38 +569,3 @@ const warnText: React.CSSProperties = { color: '#d2a24c', fontSize: 12, marginTo
 const progressText: React.CSSProperties = { fontSize: 13, color: '#8af', marginTop: 8 };
 const radio = (busy: boolean): React.CSSProperties => ({ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 });
 
-// ── progress rail ──
-// Sticky, same slot and same type sizes as SettingsPage's contents rail. It
-// keeps that rail's single green accent rather than importing a second one:
-// green already means "here" in this column, and a step tracker that introduced
-// blue would be saying the same thing in a new colour.
-const rail: React.CSSProperties = {
-  position: 'sticky', top: 0, display: 'flex', flexDirection: 'column', gap: 2, marginTop: 16,
-};
-const railLabel: React.CSSProperties = {
-  fontSize: 9.5, letterSpacing: '0.13em', textTransform: 'uppercase', color: '#4e4e4e', padding: '0 8px 6px',
-};
-type StepState = 'active' | 'done' | 'todo';
-const railItem = (state: StepState): React.CSSProperties => ({
-  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-  padding: '4px 9px', borderRadius: 4, fontSize: 11.5, textAlign: 'left',
-  background: state === 'active' ? '#1a231d' : 'transparent',
-  color: state === 'active' ? '#dfe9e2' : state === 'done' ? '#7f9a89' : '#5e5e5e',
-  boxShadow: state === 'active' ? 'inset 2px 0 0 -0.5px #7c9' : 'none',
-});
-// A 15px disc so the numerals sit on the rail's own type scale — the old 22px
-// dots were dialog furniture and would tower over an 11.5px label.
-const railMark = (state: StepState): React.CSSProperties => ({
-  width: 15, height: 15, borderRadius: '50%', flexShrink: 0,
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: 9, fontWeight: 700,
-  background: state === 'active' ? '#24352b' : state === 'done' ? '#1c2a20' : '#1c1c1c',
-  border: '1px solid ' + (state === 'active' ? '#3e5c4a' : state === 'done' ? '#2e4636' : '#2c2c2c'),
-  color: state === 'todo' ? '#666' : state === 'done' ? '#7c9' : '#dfe9e2',
-});
-// The safety line the flow never stated. It is a whole-page fact rather than a
-// per-step one, so it lives under the tracker instead of beside a button.
-const railNote: React.CSSProperties = {
-  margin: '12px 9px 0', paddingTop: 10, borderTop: '1px solid #242424',
-  fontSize: 10.5, color: '#5e5e5e', lineHeight: 1.5,
-};

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 
 	"knomit/internal/pki"
@@ -201,5 +202,66 @@ func handleDeleteFleetRoot(m *repos.Manager) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleHostFleet: POST /api/v1/fleet/host, "Host the fleet here": this
+// instance's copy of the fleet repository drops its origin and becomes the
+// hub (repos.Manager.HostFleetHere). A member is member_keeps_origin; a
+// master with no mTLS listener or no external address is listener_required
+// or addresses_required; a copy that already hosts the fleet is hub.
+func handleHostFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		st, err := m.HostFleetHere(r.Context())
+		if err != nil {
+			writeFleetError(w, r, err)
+			return
+		}
+		hal.WriteHAL(w, http.StatusOK, fleetView(b, r, st))
+	}
+}
+
+// followRequest is the body of POST /fleet/follow.
+type followRequest struct {
+	URL        string `json:"url"`
+	AuthMethod string `json:"auth_method,omitempty"`
+	AuthToken  string `json:"auth_token,omitempty"`
+}
+
+// handleFollowFleet: POST /api/v1/fleet/follow {url}, "Point at the new
+// host": this instance's copy of the fleet repository follows the fleet from
+// url (repos.Manager.FollowFleetHost). The URL must be an instance of this
+// fleet (not_this_fleet), one a join could clone (origin_invalid), and
+// reachable (unreachable); the attach's own refusals map as PUT origin's do.
+func handleFollowFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req followRequest
+		if !decodeJSON(w, r, &req, 0) {
+			return
+		}
+		req.URL = trimOriginURL(req.URL)
+		if req.URL == "" {
+			hal.WriteProblemWithExtra(w, http.StatusBadRequest, "URL required", "the body must carry the new host's fleet URL",
+				r.URL.Path, map[string]any{"code": "url_required"})
+			return
+		}
+		st, err := m.FollowFleetHost(r.Context(), repos.OriginSpec{URL: req.URL, AuthMethod: req.AuthMethod, AuthToken: req.AuthToken})
+		var fe *repos.FleetError
+		switch {
+		case err == nil:
+			hal.WriteHAL(w, http.StatusOK, fleetView(b, r, st))
+		case errors.As(err, &fe):
+			writeFleetError(w, r, err)
+		case errors.Is(err, repos.ErrPeerCredential), errors.Is(err, repos.ErrCertNotAnInput), errors.Is(err, pki.ErrUnsupportedOriginScheme):
+			hal.WriteProblemWithExtra(w, http.StatusUnprocessableEntity, "Invalid origin", err.Error(), r.URL.Path, map[string]any{"code": "auth_invalid"})
+		case errors.Is(err, repos.ErrOriginUnreachable):
+			hal.WriteProblemWithExtra(w, http.StatusBadGateway, "Unreachable", err.Error(), r.URL.Path, map[string]any{"code": "unreachable"})
+		case errors.Is(err, repos.ErrOriginOntologyConflict):
+			hal.WriteProblemWithExtra(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path, map[string]any{"code": "not_this_fleet"})
+		case isLifecycleRefusal(err):
+			writeLifecycleProblem(w, r, b, "", err)
+		default:
+			writeFleetError(w, r, err)
+		}
 	}
 }

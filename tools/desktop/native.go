@@ -77,7 +77,8 @@ func writeFile(name, contents string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return "", fmt.Errorf("create exports dir: %w", err)
 	}
-	if err := os.WriteFile(target, []byte(contents), 0o644); err != nil {
+	// Owner-only: the Fleet page saves the fleet ROOT KEY through here.
+	if err := os.WriteFile(target, []byte(contents), 0o600); err != nil {
 		return "", err
 	}
 	return target, nil
@@ -90,7 +91,7 @@ func writeFile(name, contents string) (string, error) {
 // reachable by anything on the machine.
 //
 // Every method has a POINTER receiver: the service is registered as
-// &NativeService{} and Wails binds the pointer's method set; installMu makes
+// &NativeService{} and Wails binds the pointer's method set; saveMu makes
 // copying the struct a vet error.
 type NativeService struct {
 	// configPath is <cfg.Home>/knomit.toml — the only file config.Load reads.
@@ -105,9 +106,6 @@ type NativeService struct {
 	// port and listeners, which GetSettings and GetIdentity read.
 	lockPath  string
 	autostart autostart.Toggler
-
-	// installMu serialises InstallBundle: see there.
-	installMu sync.Mutex
 
 	// revealInFileManager opens a path's containing directory in the OS file
 	// manager. Defaults to the platform's package-level revealInFileManager;

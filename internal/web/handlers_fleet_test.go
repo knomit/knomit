@@ -91,6 +91,14 @@ func localWriteGrants() auth.StaticGrants {
 	return auth.StaticGrants{local.String(): {auth.Read: {}, auth.Write: {}}}
 }
 
+// localOperatorGrants is the desktop app's principal on the local listener
+// with what the operator holds there: read, write, operator and admin. The
+// fleet operations (/fleet) are served to it only.
+func localOperatorGrants() auth.StaticGrants {
+	local := auth.Principal{Kind: auth.KindBridge, ID: "uid:501", Via: auth.LocalVia}
+	return auth.StaticGrants{local.String(): {auth.Read: {}, auth.Write: {}, auth.Operator: {}, auth.Admin: {}}}
+}
+
 // joinOverSocket is POST /fleet/join over the local listener with a bundle
 // root issues for the manager's key and agent id.
 func joinOverSocket(t *testing.T, s *Server, key, url string, root *pkitest.Fleet) *httptest.ResponseRecorder {
@@ -125,7 +133,7 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	s := &Server{Manager: m, Grants: localWriteGrants()}
 
 	out := getFleetJSON(t, s)
-	require.Equal(t, map[string]any{"listener_on": false, "external_addresses": []any{}}, out["host"], "unset is an empty array, never null")
+	require.Equal(t, map[string]any{"listener_on": false, "listening": false, "external_addresses": []any{}}, out["host"], "unset is an empty array, never null")
 	require.Contains(t, out["notice"], "external_addresses")
 	require.NotContains(t, out, "record")
 	require.NotContains(t, out, "fleet_url", "fleet_url is gone: fleet_urls")
@@ -273,103 +281,6 @@ func TestFleetMemberRows_LastRefusal(t *testing.T) {
 	require.Equal(t, map[string]any{"branch": "agent/b", "tip": "abc", "reason": "knomit: commit abc refused", "at": "2026-10-15T12:00:00Z"}, got[1]["last_refusal"])
 	require.NotContains(t, got[2], "last_refusal", "a record without a branch is never matched by agent")
 	require.Equal(t, map[string]any{"branch": "agent/d", "tip": "def", "agent": "d", "reason": "no-cert", "at": "2026-10-15T12:01:00Z"}, got[3]["last_refusal"])
-}
-
-// The fleet repository is read-only for the fact REST routes: a create on its
-// own agent branch is refused 403 with the one fleet message, and so is an
-// experiment open; an ordinary repo's create is not (control).
-// SABOTAGE: drop the IsFleet arm of RepoInstance.WritableBranch -> the create
-// is accepted -> red.
-func TestFleetREST_FactWritesRefused(t *testing.T) {
-	dir := t.TempDir()
-	url, root := seedFleetBare(t, dir)
-	m, key := restFleetManager(t, dir)
-	join := joinOverSocket(t, &Server{Manager: m, Grants: localWriteGrants()}, key, url, root)
-	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
-	_, err := m.Create(context.Background(), repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
-	require.NoError(t, err)
-	st, err := m.FleetStatus(context.Background())
-	require.NoError(t, err)
-	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
-
-	post := func(path, body string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
-		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(rec, req)
-		return rec
-	}
-	const fact = `{"title":"T","body":"b","domain":["x"]}`
-	rec := post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
-	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
-
-	rec = post("/repos/"+st.FleetRepo+"/experiments", `{"name":"exp-a"}`)
-	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "Fleet repository is read-only")
-
-	rec = post("/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
-	require.Equal(t, http.StatusCreated, rec.Code, "control: %s", rec.Body.String())
-
-	// Every other REST route that commits to a repo refuses the fleet
-	// repository the same way (PR #520 F2): a synthesis run (its reviewer
-	// writes dedup, synthesis and discovery facts on the agent branch) and
-	// the repo PATCH (README.md / LICENSE on the agent branch).
-	// SABOTAGE: drop the refuseUnwritableBranch call from
-	// handleStartSynthesis -> 201 -> red; from handleHALRepoPatch -> 200 and a
-	// README commit -> red.
-	rs := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb", LLMAdapter: &stubLLMAdapter{}}).NewAPIRouter()
-	send := func(method, path, body string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(method, path, strings.NewReader(body)))
-		req.Header.Set("Content-Type", "application/json")
-		rs.ServeHTTP(rec, req)
-		return rec
-	}
-	fleetRI := m.Get(st.FleetRepo)
-	head := func() string {
-		t.Helper()
-		var tip string
-		require.NoError(t, fleetRI.WithRead(func(svc *store.Service) {
-			h, err := svc.Branches().HeadCommit(context.Background(), "agent/rest-fleet")
-			require.NoError(t, err)
-			tip = h
-		}))
-		return tip
-	}
-	before := head()
-	rec = send(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
-	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
-	rec = send(http.MethodPatch, "/repos/"+st.FleetRepo, `{"description":"hello","license":"MIT"}`)
-	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
-	require.Equal(t, before, head(), "nothing was committed on the fleet repository")
-
-	rec = send(http.MethodPatch, "/repos/kb", `{"description":"hello"}`)
-	require.Equal(t, http.StatusOK, rec.Code, "control: %s", rec.Body.String())
-	// Control without running a review (the stub LLM cannot drive one): a
-	// synthesis already running on kb answers 409 from the hub, which the
-	// handler reaches only past the write gate.
-	release := make(chan struct{})
-	defer close(release)
-	_, err = m.Get("kb").TaskHub().Start("synth", func(ctx context.Context, _ func(repos.TaskEvent)) {
-		select {
-		case <-ctx.Done():
-		case <-release:
-		}
-	})
-	require.NoError(t, err)
-	rec = send(http.MethodPost, "/repos/kb/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
-	require.Equal(t, http.StatusConflict, rec.Code, "control: past the gate: %s", rec.Body.String())
-	require.Contains(t, rec.Body.String(), "Job already running")
-
-	// The operator's merge of a pushed member branch is NOT an authored write
-	// and stays open on the fleet repository: an unknown branch is a 404, not
-	// the read-only 403.
-	// SABOTAGE: drop the IsFleet exemption in handlePushedMerge -> 403 -> red.
-	rec = post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/peer")+"/merge", `{"expected_tip":"0123456789012345678901234567890123456789"}`)
-	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 }
 
 // A restore or a connect refused for the reserved fleet id is a 422 the

@@ -109,6 +109,12 @@ export interface RepoInfo {
    */
   ontology_error?: string;
   /**
+   * true on this instance's fleet repository. It is the fleet target's, never
+   * a browse context, and no generic repo action changes it (the server
+   * refuses them: fleet_repository).
+   */
+  fleet?: boolean;
+  /**
    * Where the repo's lifecycle has got to: populate | open | identify | index
    * | serve | sync | ready. Informational; gate on `state` and `index_state`.
    */
@@ -2074,6 +2080,12 @@ export interface FleetStatus {
   registered_at?: string;
   last_attempt?: string;
   last_error?: string;
+  // last_error_refused: last_error is the fleet refusing this instance's
+  // certificate at the TLS handshake (revoked, or the fleet moved): a retry
+  // does not help. sync_interval_seconds: how often this copy's origin round
+  // runs (absent on the hub), which is when it next sees main.
+  last_error_refused?: boolean;
+  sync_interval_seconds?: number;
   // F10: what this instance offers to host a fleet (listener: its mTLS
   // listener's bind, '' when off, sent to a local caller only; listener_on:
   // whether it has one; the configured external_addresses, [] when unset;
@@ -2082,7 +2094,11 @@ export interface FleetStatus {
   // branch, whether it matches the current config and binary, whether the
   // fleet's main still holds an older version, and the notice shown while no
   // address is configured.
-  host?: { listener?: string; listener_on: boolean; external_addresses: string[]; would_serve?: string[] };
+  // listener_on is CONFIGURED ([tls].addr set); listening is the listener
+  // UP now, the only thing that means members can reach it; listener_reason
+  // says why a configured one is not (no_certificate: a restart or `knomit
+  // reload` starts it once a certificate is installed).
+  host: { listener?: string; listener_on: boolean; listening?: boolean; listener_reason?: string; external_addresses: string[]; would_serve?: string[] };
   record?: FleetRecordFields;
   record_current?: boolean;
   record_pending_update?: boolean;
@@ -2112,39 +2128,159 @@ export interface FleetRecordFields {
   host?: string;
 }
 
+// FleetMember is one row of GET /fleet/members: a member record at the
+// fleet's main, or an `enrolled` id (a leaf on main, no record yet). `since`
+// is when the row's current version landed on main; last_refusal is the
+// master's last refusal of the row's branch, whose `agent` is the refused
+// tip's CLAIMED author (unverified: the tip was refused).
 export interface FleetMember {
   agent: string;
-  state: 'active' | 'left' | 'revoked';
+  state: 'active' | 'left' | 'revoked' | 'enrolled';
   host?: string;
   branch?: string;
   path?: string;
+  since?: string;
   addresses?: string[];
   git?: string;
   capabilities?: Record<string, string>;
+  last_refusal?: FleetRefusalRow;
+}
+
+export interface FleetRefusalRow {
+  branch: string;
+  tip: string;
+  agent?: string;
+  reason: string;
+  at: string;
+}
+
+// FleetEvent is one row of GET /fleet/activity, newest first.
+export type FleetEventKind = 'created' | 'enrolled' | 'joined' | 'admitted' | 'refused' | 'revoked' | 'left' | 'host-changed';
+export interface FleetEvent {
+  at: string;
+  kind: FleetEventKind;
+  agent: string;
+  serial?: string;
+  branch?: string;
+  tip?: string;
+  detail: string;
+}
+
+// FleetEnrollment is POST /fleet/enroll's answer. The bundle is carried to
+// the joiner and never rendered.
+export interface FleetEnrollment {
+  agent_id: string;
+  serial: string;
+  bundle: string;
+  fleet_url: string;
+  root_fingerprint: string;
+  published: boolean;
+  publish_error?: string;
+}
+
+// FleetJoinCheck is POST /fleet/join:check's answer.
+export interface FleetJoinCheck {
+  url: string;
+  hosting: 'master' | 'forge';
+  host: string;
+  root_fingerprint: string;
+  agent_id: string;
+  auth_required: boolean;
+  detail?: string;
+}
+
+// FleetRoot is GET /fleet/root's answer (and PUT's): the root files by name.
+export interface FleetRoot {
+  dir: string;
+  root_fingerprint?: string;
+  files: Record<string, string>;
+}
+
+export interface FleetOriginBody {
+  url: string;
+  auth_method?: string;
+  auth_token?: string;
 }
 
 // FleetRefusal carries the server's machine-readable refusal code
-// (not_registered, ...).
+// (not_registered, ...), the HTTP status, and the choices an address refusal
+// lists. A refusal with no code (a repo create's own) has code ''.
 export class FleetRefusal extends Error {
   code: string;
-  constructor(message: string, code: string) {
+  status: number;
+  choices: string[];
+  constructor(message: string, code: string, status = 0, choices: string[] = []) {
     super(message);
     this.code = code;
+    this.status = status;
+    this.choices = choices;
   }
 }
 
 async function fleetFailure(r: Response): Promise<Error> {
   let detail = r.statusText;
   let code = '';
+  let choices: string[] = [];
   try {
     const body = await r.json();
     detail = errorText(body, detail);
     code = typeof body?.code === 'string' ? body.code : '';
+    if (Array.isArray(body?.choices)) choices = body.choices.filter((c: unknown) => typeof c === 'string');
   } catch {
     // Non-JSON body; keep the statusText.
   }
-  return new FleetRefusal(detail, code);
+  return new FleetRefusal(detail, code, r.status, choices);
 }
+
+// fleetCall is one fleet route: JSON in, JSON out, a FleetRefusal on any
+// non-2xx. A 204 resolves to undefined.
+async function fleetCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const r = await fetch(apiUrl(`/api/v1/fleet${path}`), {
+    method,
+    headers: oauthHeaders(body !== undefined),
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!r.ok) throw await fleetFailure(r);
+  if (r.status === 204) return undefined as T;
+  return (await r.json()) as T;
+}
+
+/** createFleet answers the status with the HTTP code: 201 when main holds
+ *  the active record, 202 while a publish is pending. */
+async function createFleet(origin?: FleetOriginBody): Promise<{ status: number; fleet: FleetStatus }> {
+  const r = await fetch(apiUrl('/api/v1/fleet/create'), {
+    method: 'POST',
+    headers: oauthHeaders(true),
+    body: JSON.stringify(origin ? { origin } : {}),
+  });
+  if (!r.ok) throw await fleetFailure(r);
+  return { status: r.status, fleet: (await r.json()) as FleetStatus };
+}
+
+async function listFleetActivity(): Promise<FleetEvent[]> {
+  const data = await fleetCall<{ events?: FleetEvent[] }>('GET', '/activity');
+  return data.events ?? [];
+}
+
+const enrollFleetMember = (agent_id: string, public_key: string, address?: string) =>
+  fleetCall<FleetEnrollment>('POST', '/enroll', { agent_id, public_key, ...(address ? { address } : {}) });
+const checkFleetJoin = (bundle: string, auth_method?: string, auth_token?: string) =>
+  fleetCall<FleetJoinCheck>('POST', '/join:check', { bundle, ...(auth_method ? { auth_method } : {}), ...(auth_token ? { auth_token } : {}) });
+const joinFleet = (bundle: string, auth_method?: string, auth_token?: string) =>
+  fleetCall<FleetStatus>('POST', '/join', { bundle, ...(auth_method ? { auth_method } : {}), ...(auth_token ? { auth_token } : {}) });
+const revokeFleetMember = (agent_id: string, reason?: string) =>
+  fleetCall<{ agent_id: string; serial: string; published: boolean; publish_error?: string }>('POST', '/revoke', { agent_id, ...(reason ? { reason } : {}) });
+const leaveFleet = () => fleetCall<FleetStatus & { pushed?: boolean; push_error?: string }>('POST', '/leave', {});
+const decommissionFleet = () => fleetCall<FleetStatus>('POST', '/decommission', {});
+const exportFleetRoot = () => fleetCall<FleetRoot>('GET', '/root');
+const importFleetRoot = (files: Record<string, string>) => fleetCall<FleetRoot>('PUT', '/root', { files });
+const standDownFleetRoot = () => fleetCall<void>('DELETE', '/root');
+/** Host the fleet here (POST /fleet/host): this copy drops its origin and
+ *  becomes the hub. */
+const hostFleetHere = () => fleetCall<FleetStatus>('POST', '/host', {});
+/** Point at the new host (POST /fleet/follow): this copy follows the fleet
+ *  from url, an instance of this fleet. */
+const followFleetHost = (url: string) => fleetCall<FleetStatus>('POST', '/follow', { url });
 
 async function getFleet(): Promise<FleetStatus> {
   const r = await fetch(apiUrl('/api/v1/fleet'), { headers: oauthHeaders(false) });
@@ -2163,6 +2299,19 @@ export const api = {
   listOAuthPending,
   getFleet,
   listFleetMembers,
+  listFleetActivity,
+  createFleet,
+  enrollFleetMember,
+  checkFleetJoin,
+  joinFleet,
+  revokeFleetMember,
+  leaveFleet,
+  decommissionFleet,
+  exportFleetRoot,
+  importFleetRoot,
+  standDownFleetRoot,
+  hostFleetHere,
+  followFleetHost,
   approveOAuthPending,
   denyOAuthPending,
   listClientSessions,

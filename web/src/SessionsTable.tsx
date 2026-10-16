@@ -4,6 +4,7 @@ import type { ClientSession, ClientSessionBindingRow, ClientSessionMount, Client
 import { BookIcon, ChevronDownIcon, FlaskIcon, GitBranchIcon, LayersIcon } from './icons';
 import { LENS } from './utils';
 import type { SessionTarget } from './useTargetSessions';
+import { tableWrap, th, policyFooter } from './tableStyles';
 
 // relativeTime renders an age the way the table reads it. Not exported: this
 // module exports components only (react-refresh), and the test reads the
@@ -369,20 +370,6 @@ export function SessionsTable({ rows, policy, error, now, target }: {
 const root: CSSProperties = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
 const errorLine: CSSProperties = {
   color: '#f87171', fontSize: 12, margin: '6px 0 0', flexShrink: 0, padding: '0 12px',
-};
-// The only thing that gives when the body is short: it takes what is left and
-// scrolls both axes (the table is wider than the body on a narrow window).
-const tableWrap: CSSProperties = {
-  flex: 1, minHeight: 0, overflow: 'auto', padding: '0 12px',
-};
-const th: React.CSSProperties = {
-  position: 'sticky', top: 0, background: '#111',
-  boxShadow: 'inset 0 -1px 0 #222', padding: '2px 0',
-};
-// The table's footer. Pinned under the scroller (flexShrink 0), never inside it.
-const policyFooter: React.CSSProperties = {
-  color: '#666', fontSize: 11, flexShrink: 0,
-  margin: 0, padding: '8px 12px', borderTop: '1px solid #1c1c1c',
 };
 // One line per target, stacked. Each line wraps rather than overflowing: a
 // target with two divergent branch chips is wider than the column on a narrow

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { initView, viewReducer, railShown, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor, serverPagesFor } from './facets';
+import { initView, viewReducer, railShown, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor, serverPagesFor, fleetChip, FLEET_FACETS } from './facets';
 import type { ViewState } from './facets';
 import { RAIL_STORAGE_KEY, loadRailOpen, saveRailOpen } from './repoSelection';
 import type { RepoInfo, Lens, RepoCreateStatus } from './api';
@@ -319,10 +319,10 @@ describe('the server pages', () => {
   const ops = { kind: 'repo' as const, repo: 'ops-kb' };
   const onActivity: ViewState = { ...initView(), facet: 'activity', lastFacet: null, server: null };
 
-  it('the gear opens them on Fleet and closes them, leaving the facet, the pin and the draft untouched', () => {
+  it('the gear opens them on Logs and closes them, leaving the facet, the pin and the draft untouched', () => {
     const start: ViewState = { ...onActivity, pinned: { kind: 'archived', id: 'a1' }, draft: 'lens', draftShown: false };
     const open = viewReducer(start, { type: 'TOGGLE_SERVER' });
-    expect(open.server).toBe('fleet');
+    expect(open.server).toBe('logs');
     const closed = viewReducer({ ...open, server: 'logs' }, { type: 'TOGGLE_SERVER' });
     expect(closed).toEqual({ ...start, server: null });
   });
@@ -345,8 +345,8 @@ describe('the server pages', () => {
     const closed: ViewState = { ...onActivity, railOpen: false };
     expect(railShown(open)).toBe(true);
     expect(railShown(closed)).toBe(false);
-    expect(railShown({ ...open, server: 'fleet' })).toBe(false);
-    expect(railShown({ ...closed, server: 'fleet' }, true)).toBe(false);
+    expect(railShown({ ...open, server: 'logs' })).toBe(false);
+    expect(railShown({ ...closed, server: 'logs' }, true)).toBe(false);
     expect(railShown(closed, true)).toBe(true);
   });
 
@@ -369,7 +369,7 @@ describe('the server pages', () => {
   });
 
   it('picking the target that is already under them keeps its facet', () => {
-    const on: ViewState = { ...onActivity, server: 'fleet' };
+    const on: ViewState = { ...onActivity, server: 'auth' };
     const back = viewReducer(on, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] });
     expect(back).toEqual({ ...onActivity, server: null });
   });
@@ -399,10 +399,58 @@ describe('the server pages', () => {
     expect(initView().server).toBeNull();
   });
 
-  it('serverPagesFor omits Logs and Authorizations on a read-only server, and Authorizations without an issuer', () => {
-    expect(serverPagesFor(false, true)).toEqual(['fleet', 'logs', 'auth']);
-    expect(serverPagesFor(false, false)).toEqual(['fleet', 'logs']);
-    expect(serverPagesFor(true, true)).toEqual(['fleet']);
-    expect(serverPagesFor(true, false)).toEqual(['fleet']);
+  // The Fleet server page left the gear (Q1): the fleet is a rail target.
+  // SABOTAGE: put 'fleet' back in serverPagesFor -> red.
+  it('serverPagesFor is Logs and Authorizations (with an issuer), never Fleet, and nothing on a read-only server', () => {
+    expect(serverPagesFor(false, true)).toEqual(['logs', 'auth']);
+    expect(serverPagesFor(false, false)).toEqual(['logs']);
+    expect(serverPagesFor(true, true)).toEqual([]);
+    expect(serverPagesFor(true, false)).toEqual([]);
+  });
+});
+
+describe('the fleet target', () => {
+  const ops = { kind: 'repo' as const, repo: 'ops-kb' };
+  const onBrowse: ViewState = { ...initView(), facet: 'browse', lastFacet: null };
+
+  // SABOTAGE: facetsFor without the fleet arm (it falls to the lens arm and
+  // returns Browse, Activity, Settings) -> red.
+  it('facetsFor gives it Members, Activity and Settings, in that order', () => {
+    expect(facetsFor({ kind: 'fleet' }, [], [], [])).toEqual(['members', 'activity', 'settings']);
+    expect(FLEET_FACETS).toEqual(['members', 'activity', 'settings']);
+    // Control: no other target has Members.
+    expect(facetsFor(ops, [], [], [])).not.toContain('members');
+  });
+
+  it('picking it from Browse lands on Members, and leaving it restores Browse', () => {
+    const fleet = viewReducer(onBrowse, { type: 'SELECT_PINNED', target: { kind: 'fleet' }, available: FLEET_FACETS });
+    expect(fleet.pinned).toEqual({ kind: 'fleet' });
+    expect(fleet.facet).toBe('members');
+    const back = viewReducer(fleet, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] });
+    expect(back.pinned).toBeNull();
+    expect(back.facet).toBe('browse');
+  });
+
+  it('keeps Activity and Settings across the switch, and Members leaves for Browse when nothing is remembered', () => {
+    const onActivity: ViewState = { ...onBrowse, facet: 'activity' };
+    expect(viewReducer(onActivity, { type: 'SELECT_PINNED', target: { kind: 'fleet' }, available: FLEET_FACETS }).facet).toBe('activity');
+    const onMembers: ViewState = { ...onBrowse, pinned: { kind: 'fleet' }, facet: 'members', lastFacet: null };
+    expect(viewReducer(onMembers, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] }).facet).toBe('browse');
+    // A pinned repo with Settings only still lands on Settings.
+    expect(viewReducer(onMembers, { type: 'SELECT_PINNED', target: { kind: 'archived', id: 'a1' } }).facet).toBe('settings');
+  });
+
+  it('its label is the fleet repository with the chip GET /fleet decides', () => {
+    expect(targetLabelFor({ kind: 'fleet' }, [], [], [], { state: 'registered', agent_id: 'a', fleet_repo: 'fleet', master: true, record_state: 'active' } as never))
+      .toEqual({ kind: 'fleet', name: 'fleet', chip: { text: 'master', tone: 'fleet' } });
+    expect(fleetChip({ master: false, record_state: 'active' })).toEqual({ text: 'member', tone: 'neutral' });
+    expect(fleetChip({ master: false, record_state: 'pending' })).toEqual({ text: 'record pending', tone: 'pending' });
+    expect(fleetChip({ master: true, record_state: 'revoked' })).toEqual({ text: 'revoked', tone: 'bad' });
+    expect(targetLabelFor({ kind: 'draft', draft: 'fleet' }, [], [], [])).toEqual({ kind: 'fleet', name: 'New fleet', draft: true });
+  });
+
+  it('a fleet draft is cancellable even with no repositories', () => {
+    expect(draftCancellable('fleet', [])).toBe(true);
+    expect(draftCancellable('repo', [])).toBe(false);
   });
 });
