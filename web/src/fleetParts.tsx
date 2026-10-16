@@ -1,6 +1,7 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { CopyIcon } from './icons';
-import { wizardErr, wizardErrNote } from './manageStyles';
+import { fieldHint, fieldInput, fieldLabel, wizardErr, wizardErrNote } from './manageStyles';
+import type { FleetAuthMethod } from './fleetWizardState';
 import { CHIP_TONES, type ChipTone } from './fleetText';
 import type { FleetRefusal } from './api';
 
@@ -65,6 +66,54 @@ export function Refusal({ err, note, testid = 'fleet-refusal' }: { err: Error | 
       {code && <div data-testid={`${testid}-code`} style={codeLine}>{code}</div>}
       {note && <div style={wizardErrNote}>{note}</div>}
     </div>
+  );
+}
+
+/** CredentialFields is the forge credential of the fleet's Access steps
+ *  (New fleet → Access, and Settings' Point at / Update access / Move): the
+ *  repo Connect wizard's method, username and token fields, with the same
+ *  rule for which appear (no token for ssh, none or an SSH URL under
+ *  auto-detect). hint sits under the method, where the repo step puts it. */
+export function CredentialFields({ url, method, user, token, onMethod, onUser, onToken, hint, idPrefix = 'fleet', disabled }: {
+  url: string;
+  method: FleetAuthMethod;
+  user: string;
+  token: string;
+  onMethod: (m: FleetAuthMethod) => void;
+  onUser: (u: string) => void;
+  onToken: (t: string) => void;
+  hint?: ReactNode;
+  idPrefix?: string;
+  disabled?: boolean;
+}) {
+  const ssh = /^[^@/]+@[^:]+:|^ssh:\/\//.test(url);
+  return (
+    <>
+      <label style={fieldLabel} htmlFor={`${idPrefix}-auth-method`}>Auth method</label>
+      <select id={`${idPrefix}-auth-method`} data-testid={`${idPrefix}-auth-method`} style={fieldInput} value={method} disabled={disabled}
+        onChange={e => onMethod(e.target.value as FleetAuthMethod)}>
+        <option value="">auto-detect</option>
+        <option value="none">none</option>
+        <option value="token">token</option>
+        <option value="basic">basic</option>
+        <option value="ssh">ssh</option>
+      </select>
+      {hint && <div style={fieldHint}>{hint}</div>}
+      {method === 'basic' && (
+        <>
+          <label style={fieldLabel} htmlFor={`${idPrefix}-auth-user`}>Username</label>
+          <input id={`${idPrefix}-auth-user`} data-testid={`${idPrefix}-auth-user`} style={fieldInput} value={user} placeholder="username" disabled={disabled}
+            onChange={e => onUser(e.target.value)} />
+        </>
+      )}
+      {method !== 'ssh' && method !== 'none' && !(ssh && method === '') && (
+        <>
+          <label style={fieldLabel} htmlFor={`${idPrefix}-auth-token`}>{method === 'basic' ? 'Password' : 'Token'}</label>
+          <input id={`${idPrefix}-auth-token`} data-testid={`${idPrefix}-auth-token`} type="password" style={fieldInput} value={token} disabled={disabled}
+            placeholder="kept in knomit's credential store" onChange={e => onToken(e.target.value)} />
+        </>
+      )}
+    </>
   );
 }
 

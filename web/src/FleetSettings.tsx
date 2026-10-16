@@ -2,13 +2,13 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { api, type FleetRoot, type FleetStatus } from './api';
 import { SettingsPage, type Section } from './SettingsPage';
 import { OutcomeCard } from './OutcomeCard';
-import { FleetFollowFlow } from './FleetFollowFlow';
+import { FleetFollowFlow, type FleetFollowMode } from './FleetFollowFlow';
+import type { FleetAuthMethod } from './fleetWizardState';
 import { Chip, CopyValue, Kv, Refusal } from './fleetParts';
-import { ONE_MASTER, intervalText, listenerNotRunning, readTextFile } from './fleetText';
+import { ONE_MASTER, hostPortOf, intervalText, listenerNotRunning, readTextFile } from './fleetText';
 import { saveTextFile, saveOutcomeLine, type SaveOutcome } from './saveFile';
 import { btn, confirmBox, confirmInput, fieldHint, fieldLabel } from './manageStyles';
 import { dangerBox } from './settingsStyles';
-import { hostOf } from './wizardState';
 
 type Confirm = 'export' | 'import' | 'standdown' | 'host' | 'leave' | 'decommission' | null;
 
@@ -33,33 +33,50 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   const master = fleet.master === true;
   const hub = fleet.hosting === 'none';
   const [confirm, setConfirm] = useState<Confirm>(null);
-  const [connecting, setConnecting] = useState(false);
+  const [flow, setFlow] = useState<FleetFollowMode | null>(null);
+  const setConnecting = (on: boolean) => setFlow(on ? 'follow' : null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMsg, setRebuildMsg] = useState('');
+  const [rebuildErr, setRebuildErr] = useState<Error | null>(null);
   // Whether this copy's origin is another knomit instance of this fleet (the
-  // server decided `cert` at attach) or a forge. Only read for a copy with an
-  // origin.
+  // server decided `cert` at attach) or a forge, and the stored method. Only
+  // read for a copy with an origin.
   // Keyed by the origin it was read for, so a stale answer is never used.
   const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting}`;
-  const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null }>({ key: '', peer: null });
+  const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null; method: string }>({ key: '', peer: null, method: '' });
   useEffect(() => {
     if (!originKey || !fleet.fleet_repo) return;
     let live = true;
     api.getOrigin(fleet.fleet_repo)
-      .then(o => { if (live) setPeerRead({ key: originKey, peer: o ? o.auth_method === 'cert' : null }); })
-      .catch(() => { if (live) setPeerRead({ key: originKey, peer: null }); });
+      .then(o => { if (live) setPeerRead({ key: originKey, peer: o ? o.auth_method === 'cert' : null, method: o?.auth_method ?? '' }); })
+      .catch(() => { if (live) setPeerRead({ key: originKey, peer: null, method: '' }); });
     return () => { live = false; };
   }, [originKey, fleet.fleet_repo]);
   const peerOrigin = originKey && peerRead.key === originKey ? peerRead.peer : null;
   const forge = !hub && peerOrigin === false;
+  const storedMethod = forge ? peerRead.method : '';
+  const stale = fleet.follows_host === false;
 
-  if (connecting && fleet.fleet_repo) {
-    const back = () => setConnecting(false);
+  if (flow && fleet.fleet_repo) {
+    const back = () => setFlow(null);
     return (
       <div data-testid="fleet-connect-flow" style={connectFlow}>
-        <FleetFollowFlow fleetRepo={fleet.fleet_repo} onCancel={back}
+        <FleetFollowFlow fleetRepo={fleet.fleet_repo} mode={flow} onCancel={back}
+          initialUrl={flow === 'access' ? fleet.hosting ?? '' : flow === 'follow' && stale ? (fleet.host_record ?? [])[0] ?? '' : ''}
+          initialMethod={flow === 'access' && ['none', 'token', 'basic', 'ssh'].includes(storedMethod) ? storedMethod as FleetAuthMethod : ''}
+          hostRecord={stale ? fleet.host_record : undefined}
           onDone={() => { back(); onChanged(); }} onBusyChange={onBusyChange} />
       </div>
     );
   }
+  const rebuild = async () => {
+    setRebuilding(true); setRebuildMsg(''); setRebuildErr(null);
+    try {
+      await api.rebuildFleetIndex();
+      setRebuildMsg('✓ Rebuild started — re-indexing in the background.');
+    } catch (e) { setRebuildErr(e instanceof Error ? e : new Error(String(e))); }
+    setRebuilding(false);
+  };
 
   const done = () => { setConfirm(null); onChanged(); };
   const sections: Section[] = [];
@@ -69,8 +86,8 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
       id: 'browser', title: 'Opened in a browser',
       body: <OutcomeCard tone="ask" testid="fleet-settings-browser" headline="Fleet changes need the desktop app on this machine"
         body={`This page reaches knomit over the network, and ${master
-          ? 'enrolling and revoking members, hosting the fleet here, pointing this copy at a new host, exporting the root key, standing down and decommissioning'
-          : 'pointing this copy at a new host, importing the root key and leaving the fleet'} are served only to the desktop app. Everything here is read-only.`} />,
+          ? 'enrolling and revoking members, hosting the fleet here, moving it to a forge, pointing this copy at a new host, updating its forge access, rebuilding its index, exporting the root key, standing down and decommissioning'
+          : 'pointing this copy at a new host, updating its forge access, rebuilding its index, importing the root key and leaving the fleet'} are served only to the desktop app. Everything here is read-only.`} />,
     });
   }
 
@@ -124,8 +141,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
       // A master with an origin may be the new master still following the
       // old host, or the old master already following the new one: the page
       // cannot tell, so it names the host only (4b9101b3).
-      : `${hostOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'} — ${master ? "the fleet's host" : "the fleet's master"}`;
-  const stale = fleet.follows_host === false;
+      : `${hostPortOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'} — ${master ? "the fleet's host" : "the fleet's master"}`;
   const wouldServe = fleet.host.would_serve ?? [];
   sections.push({
     id: 'hosting', title: 'Hosting', hint: 'where the fleet repository lives', problem: stale,
@@ -137,6 +153,9 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
             ? <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{urls.map(u => <CopyValue key={u} text={u} label="Copy fleet URL" />)}</span>
             : <span style={dim}>none</span>],
           ['This copy syncs from', hub ? <span style={dim}>nowhere — it is the host</span> : <span style={mono}>{fleet.hosting}</span>],
+          ['Access', forge
+            ? <span key="m" data-testid="fleet-origin-access" style={mono}>{storedMethod || 'auto-detect'}</span>
+            : null],
           ['Root fingerprint', fleet.root_fingerprint ? <span style={mono}>{fleet.root_fingerprint}</span> : <span style={dim}>none</span>],
           ['Root directory', master ? <span style={mono}>{fleet.root_dir}</span> : null],
         ]} />
@@ -153,7 +172,27 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
           // follows_host false: the server compared this copy's origin with
           // the host record on main, and they differ.
           <OutcomeCard tone="bad" testid="fleet-follows-old-host" headline="This copy follows the old host" url={fleet.hosting}
-            body={`The fleet is now hosted at ${(fleet.host_record ?? urls).join(', ')}. Point this copy at the new host, below${master ? '; then stand down' : ''}.`} />
+            body={`The fleet is now hosted at ${(fleet.host_record ?? urls).join(', ')}. Point this copy at the new host, below${master ? '; then stand down' : ''}. Until then the old host refuses this copy's pushes; nothing it wrote is lost: it pushes its own branch again on its first sync at the new host.`} />
+        )}
+        {local && master && hub && (
+          <div>
+            <div style={btns}>
+              <button type="button" data-testid="fleet-move-forge" style={btn(false)} onClick={() => setFlow('move')}>Move the fleet to a forge…</button>
+            </div>
+            <div data-testid="fleet-move-forge-hint" style={fieldHint}>
+              This instance stays the master and keeps the root key; the fleet repository moves to a forge repository you name, and members follow it there with their own credentials.
+            </div>
+          </div>
+        )}
+        {local && forge && (
+          <div>
+            <div style={btns}>
+              <button type="button" data-testid="fleet-update-access" style={btn(false)} onClick={() => setFlow('access')}>Update access…</button>
+            </div>
+            <div style={fieldHint}>
+              Rotate this instance's token for the forge, change how it signs in, or point this copy at the forge repository's new URL.
+            </div>
+          </div>
         )}
         {local && master && !hub && (
           <div>
@@ -161,20 +200,22 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
               <button type="button" data-testid="fleet-host-here" style={btn(false, 'primary')} onClick={() => setConfirm('host')}>Host the fleet here…</button>
             </div>
             <div style={fieldHint}>
-              The fleet is hosted {forge ? 'on the forge' : `at ${hostOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'}`}. Hosting it here removes this copy's origin; members then point at {wouldServe.length ? wouldServe.join(', ') : 'this instance'}.
+              The fleet is hosted {forge ? 'on the forge' : `at ${hostPortOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'}`}. Hosting it here removes this copy's origin; members then point at {wouldServe.length ? wouldServe.join(', ') : 'this instance'}.
             </div>
             {confirm === 'host' && <HostConfirm fleet={fleet} onCancel={() => setConfirm(null)} onDone={done} />}
           </div>
         )}
-        {local && !forge && (hub ? master : peerOrigin !== null) && (
+        {local && (hub ? master : peerOrigin !== null && (!forge || stale)) && (
           <div>
             <div style={btns}>
               <button type="button" data-testid="fleet-point-at" style={btn(false)} onClick={() => setConnecting(true)}>Point at the new host…</button>
             </div>
             <div data-testid="fleet-point-at-hint" style={fieldHint}>
               {hub
-                ? 'The step after another instance hosts the fleet (it imported the root key and chose Host the fleet here): point this copy at its fleet URL, then stand down.'
-                : 'After a master switch: this copy follows the fleet from the URL the new master gives you.'}
+                ? 'The step after another instance hosts the fleet (it imported the root key and chose Host the fleet here): point this copy at its fleet URL, then stand down. Stand down waits until main says the fleet is hosted where this copy points.'
+                : stale
+                  ? "The fleet moved: this copy follows it from where main says it is hosted now. On a forge it asks for this instance's own credential."
+                  : 'After a master switch: this copy follows the fleet from the URL the new master gives you.'}
             </div>
           </div>
         )}
@@ -210,6 +251,27 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
           <ImportConfirm forge={forge} onCancel={() => setConfirm(null)} onDone={done} onRemove={() => setConfirm('standdown')} />
         )}
         {confirm === 'standdown' && <StandDownConfirm master={false} hub={hub} onCancel={() => setConfirm(null)} onDone={done} />}
+      </div>
+    ),
+  });
+
+  // ── Index ── the repository Settings' Index block, for the fleet
+  // repository (POST /fleet/index-rebuild: its generic route is refused).
+  sections.push({
+    id: 'index', title: 'Index', hint: "the search and recall index of this copy of the fleet repository",
+    action: local ? (
+      <button type="button" data-testid="fleet-rebuild" style={btn(rebuilding)} disabled={rebuilding} onClick={() => { void rebuild(); }}>
+        {rebuilding ? 'Rebuilding…' : 'Rebuild'}
+      </button>
+    ) : undefined,
+    body: (
+      <div style={col}>
+        <div style={{ fontSize: 12.5, color: '#888' }}>
+          {rebuildMsg
+            ? <span data-testid="fleet-rebuild-status" style={{ color: '#9c9' }}>{rebuildMsg}</span>
+            : 'Re-indexing runs in the background; the fleet repository stays readable throughout.'}
+        </div>
+        <Refusal err={rebuildErr} testid="fleet-rebuild-error" />
       </div>
     ),
   });

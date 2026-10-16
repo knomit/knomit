@@ -1361,6 +1361,10 @@ export interface ProbeResult {
    */
   write_access?: '' | 'ok' | 'denied';
   write_detail?: string;
+  /** The URL is an instance of the fleet this instance is in: its
+   *  certificate is the credential. The Fleet page's follow flow asks for a
+   *  forge credential only when this is absent. */
+  fleet_peer?: boolean;
 }
 
 // OntologyDiagnostic is one parse/validation error from POST
@@ -2278,9 +2282,15 @@ const standDownFleetRoot = () => fleetCall<void>('DELETE', '/root');
 /** Host the fleet here (POST /fleet/host): this copy drops its origin and
  *  becomes the hub. */
 const hostFleetHere = () => fleetCall<FleetStatus>('POST', '/host', {});
-/** Point at the new host (POST /fleet/follow): this copy follows the fleet
- *  from url, an instance of this fleet. */
-const followFleetHost = (url: string) => fleetCall<FleetStatus>('POST', '/follow', { url });
+/** POST /fleet/follow: this copy follows the fleet from url (an instance of
+ *  this fleet, or a forge holding this fleet's root, with this instance's own
+ *  credential). url '' on a forge copy keeps the stored URL and changes the
+ *  credential only. On the hosting master a forge URL moves the fleet there. */
+const followFleetHost = (url: string, cred: { auth_method?: string; auth_token?: string } = {}) =>
+  fleetCall<FleetStatus>('POST', '/follow', { ...(url ? { url } : {}), ...cred });
+/** POST /fleet/index-rebuild: the fleet repository's Rebuild. */
+const rebuildFleetIndex = () =>
+  fleetCall<{ id: string; kind: 'index-rebuild'; state: string; repo: string; branch: string }>('POST', '/index-rebuild', {});
 
 async function getFleet(): Promise<FleetStatus> {
   const r = await fetch(apiUrl('/api/v1/fleet'), { headers: oauthHeaders(false) });
@@ -2312,6 +2322,7 @@ export const api = {
   standDownFleetRoot,
   hostFleetHere,
   followFleetHost,
+  rebuildFleetIndex,
   approveOAuthPending,
   denyOAuthPending,
   listClientSessions,

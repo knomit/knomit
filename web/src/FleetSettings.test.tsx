@@ -73,7 +73,7 @@ describe('FleetSettings', () => {
   it('the hub master offers Point at the new host, and the hub refusal of Stand down leads to it', async () => {
     const { calls } = stubFleetFetch({
       'DELETE /api/v1/fleet/root': problem(409, 'hub', 'this instance hosts the fleet (its copy of fleet has no origin): host the fleet on the new master and point this copy at it first (Fleet → Settings → Point at the new host)'),
-      'POST /api/v1/repos:probe-origin': { body: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'] } },
+      'POST /api/v1/repos:probe-origin': { body: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'], fleet_peer: true } },
       'POST /api/v1/fleet/follow': problem(422, 'not_this_fleet', 'https://other.example/git/fleet is not an instance of this fleet'),
     });
     const onChanged = mount(hub);
@@ -99,7 +99,7 @@ describe('FleetSettings', () => {
   it('Point at the new host succeeds through POST /fleet/follow and returns to Settings', async () => {
     const { calls } = stubFleetFetch({
       'GET /api/v1/repos/fleet/origin': ORIGIN_CERT,
-      'POST /api/v1/repos:probe-origin': { body: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'] } },
+      'POST /api/v1/repos:probe-origin': { body: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'], fleet_peer: true } },
       'POST /api/v1/fleet/follow': { body: { ...member, hosting: 'https://new.example/git/fleet' } },
     });
     const onChanged = mount(member);
@@ -121,7 +121,7 @@ describe('FleetSettings', () => {
     expect(note).toHaveTextContent('Fleet changes need the desktop app on this machine');
     // S4: exactly what is desktop-only, now that no generic repo route
     // changes the fleet repository either.
-    expect(note).toHaveTextContent('enrolling and revoking members, hosting the fleet here, pointing this copy at a new host, exporting the root key, standing down and decommissioning are served only to the desktop app');
+    expect(note).toHaveTextContent('enrolling and revoking members, hosting the fleet here, moving it to a forge, pointing this copy at a new host, updating its forge access, rebuilding its index, exporting the root key, standing down and decommissioning are served only to the desktop app');
     expect(screen.getByTestId('toc-browser')).toBe(screen.getAllByRole('button').find(b => b.getAttribute('data-testid')?.startsWith('toc-')));
     const actions = screen.queryAllByRole('button').filter(b => !(b.getAttribute('data-testid') ?? '').startsWith('toc-') && b.getAttribute('aria-label') !== 'Copy agent id' && !(b.getAttribute('aria-label') ?? '').startsWith('Copy'));
     expect(actions).toEqual([]);
@@ -151,7 +151,7 @@ describe('FleetSettings', () => {
     stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
     mount(member);
     expect(await screen.findByTestId('fleet-point-at')).toBeInTheDocument();
-    expect(screen.getByTestId('fleet-hosted-by')).toHaveTextContent("kb-01.acme.example — the fleet's master");
+    expect(screen.getByTestId('fleet-hosted-by')).toHaveTextContent("kb-01.acme.example:7443 — the fleet's master");
     expect(screen.getByTestId('fleet-import')).toBeInTheDocument();
     expect(screen.getByTestId('fleet-leave')).toBeInTheDocument();
     expect(screen.queryByTestId('fleet-export')).toBeNull();
@@ -187,7 +187,7 @@ describe('FleetSettings', () => {
   it('a master with an origin names the host without guessing which master it is', async () => {
     stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
     mount({ ...member, master: true });
-    expect(await screen.findByTestId('fleet-hosted-by')).toHaveTextContent("kb-01.acme.example — the fleet's host");
+    expect(await screen.findByTestId('fleet-hosted-by')).toHaveTextContent("kb-01.acme.example:7443 — the fleet's host");
     expect(document.body.textContent).not.toContain('old master');
   });
 

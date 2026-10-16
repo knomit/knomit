@@ -5,11 +5,11 @@ import { IndexHeading } from './IndexColumn';
 import { StepRail } from './WizardStepRail';
 import { SegmentedChoice } from './SegmentedChoice';
 import { OutcomeCard } from './OutcomeCard';
-import { CopyValue, Kv, Refusal } from './fleetParts';
+import { CopyValue, CredentialFields, Kv, Refusal } from './fleetParts';
 import type { FleetLanding } from './FleetMembers';
 import {
   fleetWizardReducer, initialFleetWizardState, stepsFor, stepSummary, FLEET_STEP_LABEL,
-  accessURL, accessRequired, fleetAuth, type FleetAuthMethod, type FleetStepId, type FleetWizardState,
+  accessURL, accessRequired, fleetAuth, type FleetStepId, type FleetWizardState,
 } from './fleetWizardState';
 import { bundleHost, checkRefusalCard, joinRefusalNote, readTextFile } from './fleetText';
 import { hostOf } from './wizardState';
@@ -336,7 +336,6 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
   // A file:// remote has no host: the URL names it.
   const host = hostOf(url) || url;
   const asked = s.choice === 'create' ? !!s.probe?.auth_required : !!s.check?.auth_required;
-  const ssh = /^[^@/]+@[^:]+:|^ssh:\/\//.test(url);
   return (
     <div data-testid="fleet-step-access">
       {s.accessChecked ? (
@@ -362,34 +361,13 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
           <OutcomeCard tone="bad" testid="fleet-access-refused" headline={`${host || 'The remote'} refused those credentials`} url={url} detail={err.message} />
         </div>
       )}
-      <label style={fieldLabel} htmlFor="fleet-auth-method">Auth method</label>
-      <select id="fleet-auth-method" data-testid="fleet-auth-method" style={fieldInput} value={s.authMethod}
-        onChange={e => dispatch({ type: 'SET_AUTH_METHOD', method: e.target.value as FleetAuthMethod })}>
-        <option value="">auto-detect</option>
-        <option value="none">none</option>
-        <option value="token">token</option>
-        <option value="basic">basic</option>
-        <option value="ssh">ssh</option>
-      </select>
-      <div style={fieldHint}>
-        {asked
+      <CredentialFields url={url} method={s.authMethod} user={s.authUser} token={s.authToken}
+        onMethod={method => dispatch({ type: 'SET_AUTH_METHOD', method })}
+        onUser={user => dispatch({ type: 'SET_AUTH_USER', user })}
+        onToken={token => dispatch({ type: 'SET_TOKEN', token })}
+        hint={asked
           ? "knomit cannot read the fleet repository until it can get in. The token is this instance's own; a bundle is not a forge credential."
-          : 'Optional — the check above already succeeded. A private remote over HTTPS still needs a token here to WRITE, even when reading it worked.'}
-      </div>
-      {s.authMethod === 'basic' && (
-        <>
-          <label style={fieldLabel} htmlFor="fleet-auth-user">Username</label>
-          <input id="fleet-auth-user" data-testid="fleet-auth-user" style={fieldInput} value={s.authUser} placeholder="username"
-            onChange={e => dispatch({ type: 'SET_AUTH_USER', user: e.target.value })} />
-        </>
-      )}
-      {s.authMethod !== 'ssh' && s.authMethod !== 'none' && !(ssh && s.authMethod === '') && (
-        <>
-          <label style={fieldLabel} htmlFor="fleet-auth-token">{s.authMethod === 'basic' ? 'Password' : 'Token'}</label>
-          <input id="fleet-auth-token" data-testid="fleet-auth-token" type="password" style={fieldInput} value={s.authToken}
-            placeholder="kept in knomit's credential store" onChange={e => dispatch({ type: 'SET_TOKEN', token: e.target.value })} />
-        </>
-      )}
+          : 'Optional — the check above already succeeded. A private remote over HTTPS still needs a token here to WRITE, even when reading it worked.'} />
       <div style={{ ...btnRow, marginTop: 12 }}>
         <button type="button" data-testid="fleet-access-check" style={btn(checking || (asked && !s.authToken && s.authMethod !== 'ssh'))}
           disabled={checking || (asked && !s.authToken && s.authMethod !== 'ssh')} onClick={onCheck}>{checking ? 'Checking…' : 'Check access'}</button>

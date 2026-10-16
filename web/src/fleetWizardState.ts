@@ -151,8 +151,13 @@ export function accessRequired(s: FleetWizardState): boolean {
  *  the repo wizard's authFor assembles it: a token typed under auto-detect is
  *  token auth (not on an SSH URL), basic carries "user:password". */
 export function fleetAuth(s: FleetWizardState): { auth_method?: string; auth_token?: string } {
-  const url = accessURL(s);
-  const method = s.authMethod === '' && s.authToken.trim() !== '' && transportFor(url) !== 'ssh' ? 'token' : s.authMethod;
-  const token = method === 'basic' ? `${s.authUser}:${s.authToken}` : method === 'token' ? s.authToken : '';
+  return credentialFor(accessURL(s), s.authMethod, s.authUser, s.authToken);
+}
+
+/** credentialFor is fleetAuth's rule for any URL and fields: the Fleet
+ *  Settings' Point at / Update access / Move flows send the same shape. */
+export function credentialFor(url: string, authMethod: FleetAuthMethod, user: string, secret: string): { auth_method?: string; auth_token?: string } {
+  const method = authMethod === '' && secret.trim() !== '' && transportFor(url) !== 'ssh' ? 'token' : authMethod;
+  const token = method === 'basic' ? `${user}:${secret}` : method === 'token' ? secret : '';
   return { ...(method ? { auth_method: method } : {}), ...(token ? { auth_token: token } : {}) };
 }
