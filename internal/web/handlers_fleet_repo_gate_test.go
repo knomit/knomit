@@ -151,6 +151,15 @@ func TestFleetRepo_EveryGenericMutationIsRefused(t *testing.T) {
 				require.Contains(t, rec.Body.String(), `"code":"fleet_repository"`, "over %s", via)
 				require.Contains(t, rec.Body.String(), "Fleet page", "over %s: the text names the Fleet page", via)
 				require.NotContains(t, rec.Body.String(), "/api/v1/", "over %s: the text names no REST route", via)
+				// #529 N-c: the text names every Fleet page action that replaces a
+				// generic one, the generic Rebuild naming its own.
+				if strings.HasSuffix(rt[1], "/index-rebuilds") {
+					require.Contains(t, rec.Body.String(), "Fleet → Settings → Index → Rebuild", "over %s", via)
+				} else {
+					for _, action := range []string{"Move the fleet to a forge", "Update access", "Point at the new host", "Host the fleet here", "Index → Rebuild", "Leave", "Decommission"} {
+						require.Contains(t, rec.Body.String(), action, "over %s: the text names %s", via, action)
+					}
+				}
 			}
 			require.Equal(t, []string{"fleet", "kb"}, m.Names(), "the fleet repository kept its name")
 			require.Equal(t, fleetURL, originURL(), "the origin is unchanged")

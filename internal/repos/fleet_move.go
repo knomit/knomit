@@ -11,6 +11,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store"
@@ -37,10 +38,27 @@ type remoteRoot int
 
 const (
 	remoteRootUnknown remoteRoot = iota // could not look; detail says why
-	remoteMainEmpty                     // the remote has no such branch
+	remoteEmpty                         // the remote advertises no ref at all: no branch, no tag
 	remoteRootMatch                     // main carries this fleet's root
 	remoteRootDiffers                   // main carries another root, or none
+	remoteNoMain                        // no main, but other branches or tags: someone else's repository
 )
+
+// advEmpty is an advertisement with no ref at all: no branch and no tag
+// (a HEAD alone, pointing nowhere, is what a new repository advertises). A
+// remote whose main is missing but which holds master, trunk or a tag is
+// NOT empty (#529 B1): it is someone else's repository.
+func advEmpty(adv *packp.AdvRefs) bool {
+	if adv == nil {
+		return true
+	}
+	for name := range adv.References {
+		if name != plumbing.HEAD.String() {
+			return false
+		}
+	}
+	return len(adv.Peeled) == 0
+}
 
 // remoteFleetRoot reads rootPath at the tip of branch on the remote o names
 // (a shallow single-branch clone into the probe's budgeted memory store,
@@ -56,8 +74,10 @@ func (m *Manager) remoteFleetRoot(ctx context.Context, o OriginSpec, branch, roo
 		return remoteRootUnknown, rp.authErr.Error()
 	case rp.advErr != nil:
 		return remoteRootUnknown, rp.advErr.Error()
+	case advEmpty(rp.adv):
+		return remoteEmpty, ""
 	case !advHasBranch(rp.adv, branch):
-		return remoteMainEmpty, ""
+		return remoteNoMain, ""
 	}
 	opts := &gogit.CloneOptions{
 		URL: rp.gitURL, Auth: rp.auth, SingleBranch: true, Tags: gogit.NoTags,
@@ -136,19 +156,58 @@ func (m *Manager) localFleetRoot(ri *RepoInstance) (path string, pem []byte, ups
 	return layout.Root, pem, upstream, err
 }
 
-// followForge is followFleetHost for an origin that classified as a forge
-// (decided.AuthMethod is not cert). The caller holds fleetOpMu and ran F1.
-func (m *Manager) followForge(ctx context.Context, ri *RepoInstance, decided OriginSpec, prev *Origin) error {
+// followForge is followFleetHost for a forge URL other than the one this
+// copy follows (decided.AuthMethod is not cert; the stored forge is a
+// credential change, changeFleetCredential). The caller holds fleetOpMu and
+// ran F1. On the master it is a MOVE (moveFleetToForge); on a member it
+// follows the forge the fleet moved to.
+func (m *Manager) followForge(ctx context.Context, ri *RepoInstance, decided OriginSpec, prev *Origin) (string, error) {
 	master := false
 	if err := ri.WithRead(func(svc *store.Service) { master = ri.isFleetMaster(svc) }); err != nil {
-		return err
+		return "", err
 	}
 	rootPath, rootPEM, upstream, err := m.localFleetRoot(ri)
 	if err != nil {
-		return err
+		return "", err
 	}
 	decided.Branch = upstream
-	// Reachable with this credential, as the attach's own guard asks.
+	if err := m.probeFleetForge(ctx, decided); err != nil {
+		return "", err
+	}
+	state, detail := m.remoteFleetRoot(ctx, decided, upstream, rootPath, rootPEM)
+	switch state {
+	case remoteRootUnknown:
+		return "", fmt.Errorf("%w: could not read %s on %s: %s", ErrOriginUnreachable, upstream, credentialFree(decided.URL), detail)
+	case remoteRootDiffers:
+		return "", fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
+			credentialFree(decided.URL)+" holds another fleet or another repository: its "+upstream+" does not carry this fleet's root ("+rootPath+"). Use the URL of the forge repository this fleet lives on")
+	case remoteNoMain:
+		return "", fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
+			credentialFree(decided.URL)+" holds another repository: it has no "+upstream+", but other branches or tags. The fleet moves only to an EMPTY forge repository (no branch, no tag) or to the one this fleet lives on. Nothing changed")
+	case remoteEmpty:
+		if !master {
+			return "", fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
+				credentialFree(decided.URL)+" is empty: only the fleet's master moves the fleet to a new forge repository. Point this copy at it once the master has moved the fleet there")
+		}
+	}
+	if master {
+		if err := m.moveFleetToForge(ctx, ri, decided, prev); err != nil {
+			return "", err
+		}
+		return FleetFollowMoved, nil
+	}
+	if _, err := m.Send(ctx, ri, AttachOrigin(decided)); err != nil {
+		return "", err
+	}
+	return FleetFollowFollowed, nil
+}
+
+// probeFleetForge is the reachability check a forge follow makes with the
+// credential given, as the attach's own guard asks: unreachable, or a
+// credential the forge refused, is ErrOriginUnreachable (502 unreachable).
+// The detail quotes go-git and the HTTP client, which quote the URL:
+// FollowFleetHost's credentialFreeErr strips its userinfo.
+func (m *Manager) probeFleetForge(ctx context.Context, decided OriginSpec) error {
 	res, err := m.ProbeOriginRefs(ctx, decided)
 	if err != nil {
 		return err
@@ -159,24 +218,7 @@ func (m *Manager) followForge(ctx context.Context, ri *RepoInstance, decided Ori
 	case res.AuthRequired:
 		return fmt.Errorf("%w: the remote refused the credential: %s", ErrOriginUnreachable, res.Detail)
 	}
-	state, detail := m.remoteFleetRoot(ctx, decided, upstream, rootPath, rootPEM)
-	switch state {
-	case remoteRootUnknown:
-		return fmt.Errorf("%w: could not read %s on %s: %s", ErrOriginUnreachable, upstream, credentialFree(decided.URL), detail)
-	case remoteRootDiffers:
-		return fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
-			credentialFree(decided.URL)+" holds another fleet or another repository: its "+upstream+" does not carry this fleet's root ("+rootPath+"). Use the URL of the forge repository this fleet lives on")
-	case remoteMainEmpty:
-		if !master {
-			return fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
-				credentialFree(decided.URL)+" has no "+upstream+" yet: only the fleet's master moves the fleet to a new forge repository. Point this copy at it once the master has moved the fleet there")
-		}
-	}
-	if master {
-		return m.moveFleetToForge(ctx, ri, decided, prev)
-	}
-	_, err = m.Send(ctx, ri, AttachOrigin(decided))
-	return err
+	return nil
 }
 
 // moveFleetToForge is the master's move of the fleet onto the forge decided
@@ -209,6 +251,11 @@ func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decide
 			perr = errors.New("fleet repository is not open")
 			return
 		}
+		if h := currentFleetHooks().seedPublish; h != nil {
+			if perr = h(); perr != nil {
+				return
+			}
+		}
 		perr = svc.Remote().PublishTo(ctx, gitURL, ri.AgentBranch(), decided.Branch, auth)
 	}); werr != nil {
 		return werr
@@ -227,7 +274,8 @@ func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decide
 		return fmt.Errorf("fleet: the host record was not written, so this copy is back on its previous origin: %w", err)
 	}
 	if err := m.pushFleet(ctx, ri); err != nil {
-		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: main is not published on the forge yet; the origin round retries")
+		// The push error quotes the forge URL as go-git built it: credential-free.
+		log.Warn().Str("error", credentialFreeText(err.Error())).Str("fleet", ri.Name()).Msg("fleet: main is not published on the forge yet; the origin round retries")
 	}
 	log.Info().Str("fleet", ri.Name()).Str("forge", credentialFree(decided.URL)).Bool("from_hub", prev == nil).
 		Msg("fleet: the master moved the fleet onto a forge")

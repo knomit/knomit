@@ -100,9 +100,33 @@ type FleetStatus struct {
 	FleetURLs   []string `json:"fleet_urls"`
 	HostRecord  []string `json:"host_record,omitempty"`
 	FollowsHost *bool    `json:"follows_host,omitempty"`
+	// InterruptedMove is set on the MASTER whose copy follows a forge that the
+	// host record on main does not name (follows_host false): a move onto the
+	// forge stopped after the attach and before the host record (#529 S4).
+	// Members follow main, so the repair is the master's: put the fleet back
+	// where the record says. The page offers exactly these, never "Point at
+	// the new host" (that would follow this instance's own hub).
+	InterruptedMove *FleetInterruptedMove `json:"interrupted_move,omitempty"`
+	// LastErrorFleetMoved: this copy follows an old host (follows_host false)
+	// and its last sync error is that host refusing its push because the
+	// host's copy has an origin now (FleetPushRefusalHasOrigin): the fleet
+	// moved. Retrying does not help until this copy points at the new host.
+	// Read from the recorded error only, as LastErrorRefused is.
+	LastErrorFleetMoved bool `json:"last_error_fleet_moved,omitempty"`
 	// RootFingerprint is the fleet root installed in [tls].dir (omitted when
 	// none is).
 	RootFingerprint string `json:"root_fingerprint,omitempty"`
+}
+
+// FleetInterruptedMove is GET /fleet's interrupted_move: what the host
+// record names, which is where the fleet goes back to. RecordIsHere: it
+// names this instance (its hub URLs), so the move started at the hub and
+// Host the fleet here is the repair. MoveBackTo: it names a forge (the one
+// the move started from, credential-free), and Move the fleet there is the
+// repair; empty when RecordIsHere.
+type FleetInterruptedMove struct {
+	RecordIsHere bool   `json:"record_is_here"`
+	MoveBackTo   string `json:"move_back_to,omitempty"`
 }
 
 // FleetHostOffer is what this instance offers to host a fleet: its mTLS
@@ -267,6 +291,9 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		if o != nil && st.Master {
 			st.Host.WouldServe = credentialFreeAll(m.hubFleetURLs(ri))
 		}
+		if o != nil && st.Master && o.AuthMethod != "cert" && st.FollowsHost != nil && !*st.FollowsHost {
+			st.InterruptedMove = m.interruptedMove(ri, st.HostRecord)
+		}
 		if o != nil {
 			_ = ri.WithRead(func(svc *store.Service) {
 				if r, rerr := svc.Remote().GetRemote("origin"); rerr == nil && r != nil {
@@ -275,6 +302,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 			})
 		}
 	}
+	st.LastErrorFleetMoved = st.FollowsHost != nil && !*st.FollowsHost && strings.Contains(row.LastError, FleetPushRefusalHasOrigin)
 	st.RecordState = "pending"
 	members, lerr := m.fleetMembersAtMain(ri)
 	if lerr == nil {
@@ -290,6 +318,24 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		}
 	}
 	return st, nil
+}
+
+// interruptedMove is FleetStatus.InterruptedMove for the master whose forge
+// copy does not follow the host record hosted (credential-free): the record
+// names this instance's hub URLs (the move started at the hub), or a forge.
+func (m *Manager) interruptedMove(ri *RepoInstance, hosted []string) *FleetInterruptedMove {
+	for _, u := range hosted {
+		for _, h := range m.hubFleetURLs(ri) {
+			if sameFleetURL(u, h) {
+				return &FleetInterruptedMove{RecordIsHere: true}
+			}
+		}
+	}
+	out := &FleetInterruptedMove{}
+	if len(hosted) > 0 {
+		out.MoveBackTo = hosted[0]
+	}
+	return out
 }
 
 // MemberEnrolled is the derived state of an agent id that has a leaf on the

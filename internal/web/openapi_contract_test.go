@@ -208,13 +208,13 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 	}
 	// The follow's forge mode takes a credential as PUT origin does.
 	follow := fmt.Sprint(paths["/fleet/follow"])
-	for _, f := range []string{"user", "password", "auth_method", "auth_token"} {
+	for _, f := range []string{"user", "password", "auth_method", "auth_token", "change", "unchanged", "credential", "moved"} {
 		require.Contains(t, follow, f)
 	}
 	schema := doc["components"].(map[string]any)["schemas"].(map[string]any)["FleetStatus"].(map[string]any)
 	props := schema["properties"].(map[string]any)
 	require.ElementsMatch(t, []any{"standalone", "registering", "registered"}, props["state"].(map[string]any)["enum"])
-	for _, f := range []string{"master", "hosting", "root_dir", "local", "public_key", "host", "fleet_urls", "host_record", "root_fingerprint"} {
+	for _, f := range []string{"master", "hosting", "root_dir", "local", "public_key", "host", "fleet_urls", "host_record", "root_fingerprint", "interrupted_move", "last_error_fleet_moved"} {
 		require.Contains(t, props, f)
 	}
 	require.NotContains(t, props, "fleet_url", "fleet_url is gone: fleet_urls")

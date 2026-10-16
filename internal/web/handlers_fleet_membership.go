@@ -256,7 +256,11 @@ func handleFollowFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		var fe *repos.FleetError
 		switch {
 		case err == nil:
-			hal.WriteHAL(w, http.StatusOK, fleetView(b, r, st))
+			// change says what ran: followed, moved, credential, or unchanged
+			// (the stored forge and credential: nothing ran, nothing pushed).
+			view := fleetView(b, r, st.FleetStatus)
+			view["change"] = st.Change
+			hal.WriteHAL(w, http.StatusOK, view)
 		case errors.As(err, &fe):
 			writeFleetError(w, r, err)
 		case errors.Is(err, repos.ErrPeerCredential), errors.Is(err, repos.ErrCertNotAnInput), errors.Is(err, pki.ErrUnsupportedOriginScheme):

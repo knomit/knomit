@@ -2695,44 +2695,53 @@ paths:
         The one way an origin is attached to, or changed on, the fleet
         repository (its generic origin routes are refused): the Fleet page's
         "Point at the new host", "Update access" and "Move the fleet to a
-        forge". What it does depends on what `url` is:
+        forge". What it does is decided by `url` against the stored origin,
+        and the answer's `change` says which ran:
 
+        - No `url`, or the stored forge URL, on a forge copy: a CREDENTIAL
+          change (`credential`), on the master and on a member alike. The
+          new credential is probed and stored, and that is all: no push, no
+          host record, nothing a member sees. A credential not given keeps
+          the stored one (no `auth_method`, or the stored method with no
+          token); `auth_method: none` is the reset to anonymous. The stored
+          credential unchanged is `unchanged`: nothing runs.
         - An instance of THIS fleet (its certificate chains to this fleet's
           root, `fleet_peer` in the probe): this copy follows the fleet from
-          it, after a master switch. No credential: the certificate is the
-          credential (`auth_invalid` for one).
-        - A forge whose `main` carries this fleet's root
-          (`artifacts/fleet/root.crt`): this copy follows the fleet from it
-          with the credential given. That is a member pointing at the forge
-          the fleet moved to, a forge copy rotating its credential, or a
-          forge copy moving to another forge URL. On a forge copy `url` may
-          be omitted: the stored URL stays and the credential changes; a URL
-          equal to the stored one with no credential keeps the stored one
-          (`auth_method: none` is the reset to anonymous).
-        - On the fleet's MASTER, also a forge with no `main` yet: the master
-          moves the fleet onto it. It seeds the forge with its agent branch
-          as `main` (never forced) and as its own branch, attaches the forge
-          as the origin, writes the host record (the forge URL, without
+          it, after a master switch (`followed`). No credential: the
+          certificate is the credential (`auth_invalid` for one).
+        - Another forge URL, on a MEMBER: its `main` must carry this fleet's
+          root (`artifacts/fleet/root.crt`); this copy follows the fleet
+          from it with the credential given (`followed`): the member
+          pointing at the forge the fleet moved to.
+        - Another forge URL, on the fleet's MASTER: a MOVE (`moved`). The
+          forge's `main` must carry this fleet's root, or the forge must be
+          EMPTY: no branch and no tag at all (a repository with `master`,
+          `trunk` or a tag but no `main` is someone else's:
+          `not_this_fleet`). The master seeds the forge with its agent
+          branch as `main` (never forced) and as its own branch, attaches the
+          forge as the origin, writes the host record (the forge URL, without
           credentials) and publishes `main`. From then on the master is the
           fetching master. A failed host-record write restores the previous
           origin (none for the hub). Members' `follows_host` turns false;
-          their pushes to the old hub are refused until each follows the
+          from the hub their pushes are refused, from a forge they go to the
+          old forge where nothing merges them, until each follows the new
           forge with its own credential, and each re-pushes its own branch on
           its first sync there. New bundles carry the forge URL.
 
         Refusals, nothing changed: `url_required` (400: no `url` on a copy
         that is not on a forge); `origin_invalid` (422: a URL no member's
         join could clone, plain `http://`, another scheme, no host, or one
-        that does not parse; the text never carries the URL's userinfo);
-        `not_this_fleet` (422: a peer of another fleet, a forge whose `main`
-        carries another root or none, or an empty forge for a member; 409
+        that does not parse); `not_this_fleet` (422: a peer of another
+        fleet, a forge whose `main` carries another root or none, a
+        non-empty forge without `main`, or an empty forge for a member; 409
         when the remote's ontology is not the fleet's); `auth_invalid` (422:
-        a credential for a peer, or one the URL's scheme cannot use);
-        `publish_refused` (409: the forge refused the master's `main`, which
-        must be empty or behind this copy's); `indexing` (409: the fleet
-        repository is indexing; try again when it finishes);
-        `unreachable` (502, also a forge that refused the credential);
-        `not_registered` (409).
+        a credential for a peer, or one the URL's scheme cannot use, the
+        stored URL's included); `publish_refused` (409: the forge refused
+        the master's `main`, which must be empty or behind this copy's);
+        `indexing` (409: the fleet repository is indexing; try again when it
+        finishes); `unreachable` (502, also a forge that refused the
+        credential); `not_registered` (409). No refusal text carries a URL's
+        userinfo, a token in its user slot included.
       operationId: followFleet
       requestBody:
         required: true
@@ -2748,10 +2757,15 @@ paths:
                 password: { type: string }
       responses:
         "200":
-          description: This copy follows the fleet from url; the new state
+          description: "The new state (GET /fleet's), and `change`: followed, moved, credential or unchanged"
           content:
             application/hal+json:
-              schema: { $ref: "#/components/schemas/FleetStatus" }
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/FleetStatus"
+                  - type: object
+                    properties:
+                      change: { type: string, enum: [followed, moved, credential, unchanged] }
         "400": { description: url_required }
         "403": { description: Not the local authenticated listener }
         "409": { description: "not_registered, publish_refused, indexing, or not_this_fleet (a different knowledge base)" }
@@ -2769,9 +2783,11 @@ paths:
         Rebuild for the fleet repository, whose generic
         `index-rebuilds` route is refused like every generic mutation of it.
         It rebuilds the agent branch's search index in the background; the
-        repository stays readable. The job reads through the generic job
-        routes (`_links.job`). An identical rebuild already running absorbs
-        it (200). Refusals: `not_registered` (409).
+        repository stays readable. `_links.job` is the generic job route (a
+        read, open for the fleet repository): it answers the job's state
+        (running, done or error) while the repository's task hub holds it,
+        which is the latest rebuild. An identical rebuild already running
+        absorbs it (200). Refusals: `not_registered` (409).
       operationId: rebuildFleetIndex
       responses:
         "201":
@@ -4271,6 +4287,23 @@ components:
             (hosting, fleet_urls, host_record, host.would_serve) carries
             credentials: userinfo is removed (an `ssh://` URL keeps its user,
             the login, and loses only a password).
+        interrupted_move:
+          type: object
+          description: |
+            On the fleet's MASTER whose copy follows a forge that host_record
+            does not name (follows_host false): a move onto the forge stopped
+            after the attach and before the host record. Members follow main,
+            so the repair is the master's, back to where the record says:
+            `record_is_here` (the record names this instance: the move started
+            at the hub, and Host the fleet here is the repair) or
+            `move_back_to` (the forge the record names, credential-free:
+            moving the fleet there is the repair). Absent otherwise.
+          properties:
+            record_is_here: { type: boolean }
+            move_back_to: { type: string }
+        last_error_fleet_moved:
+          type: boolean
+          description: "true when this copy follows an old host (follows_host false) and last_error is that host refusing its push because the host's copy has an origin now: the fleet moved, and a retry does not help until this copy points at the new host. Read from the recorded error; absent otherwise."
         root_fingerprint: { type: string, description: "The fleet root installed in [tls].dir (absent when none is): the root a member compares out of band; after a join, the root the bundle installed" }
     FleetEvent:
       type: object

@@ -107,6 +107,9 @@ type fleetCreateHooks struct {
 	// hostWrite runs before the host record is written (writeFleetHost). An
 	// error is the write's result.
 	hostWrite func() error
+	// seedPublish runs before a move seeds the forge (moveFleetToForge's
+	// PublishTo). An error is the seed's result, and the seed does not run.
+	seedPublish func() error
 }
 
 // fleetCreateSteps are the names the step hook sees, in order.

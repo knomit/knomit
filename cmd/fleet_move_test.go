@@ -101,6 +101,11 @@ func TestFleetHubMovesToAForge(t *testing.T) {
 	if bst.FollowsHost == nil || *bst.FollowsHost || len(bst.HostRecord) != 1 || bst.HostRecord[0] != forge {
 		t.Fatalf("bravo on the old hub: follows %v host_record %v, want false and [%s]", bst.FollowsHost, bst.HostRecord, forge)
 	}
+	// #529 S5: its recorded error is the old hub's refusal, which the page
+	// names as "the fleet moved", never as the raw text with a retry.
+	if !bst.LastErrorFleetMoved {
+		t.Fatalf("bravo on the old hub: last_error_fleet_moved false, last_error %q", bst.LastError)
+	}
 
 	// Bravo follows the forge with its own credential (none, for file://).
 	bravo.asClient(t)
@@ -110,6 +115,9 @@ func TestFleetHubMovesToAForge(t *testing.T) {
 	bst, err = bravo.mgr.FleetStatus(ctx)
 	if err != nil || bst.Hosting != forge || bst.FollowsHost == nil || !*bst.FollowsHost {
 		t.Fatalf("bravo on the forge: hosting %q follows %v (%v)", bst.Hosting, bst.FollowsHost, err)
+	}
+	if bst.LastErrorFleetMoved {
+		t.Fatalf("bravo on the forge still flagged: last_error %q", bst.LastError)
 	}
 	if got, want := bareRev(t, bare, "agent/bravo"), localRev(t, bravo.fleet(t), "agent/bravo"); got == "" || got != want {
 		t.Fatalf("bravo's branch on the forge %q, want its own %q: its first sync pushes it", got, want)

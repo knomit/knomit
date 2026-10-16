@@ -166,20 +166,44 @@ func handleListJobs(jr *JobRegistry, kind string) http.HandlerFunc {
 }
 
 // handleGetJob serves GET .../synthesis-runs/{id} or .../index-rebuilds/{id}.
-func handleGetJob(jr *JobRegistry) http.HandlerFunc {
+// A job the registry does not hold is read from the repo's TaskHub, where
+// the lifecycle machine records its rebuilds (publishRebuildTask): that is
+// the job POST /fleet/index-rebuild links (#529 S1). The hub holds an op's
+// running task and its last terminal one, so an older job is 404.
+func handleGetJob(jr *JobRegistry, kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		if jr == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Job not found", "job "+id+" not found", r.URL.Path)
+		if jr != nil {
+			if e := jr.Get(id); e != nil {
+				hal.WriteHAL(w, http.StatusOK, jobEnvelopeFromEntry(e))
+				return
+			}
+		}
+		if env, ok := hubJob(repos.RepoFromContext(r.Context()), id, kind); ok {
+			hal.WriteHAL(w, http.StatusOK, env)
 			return
 		}
-		e := jr.Get(id)
-		if e == nil {
-			hal.WriteProblem(w, http.StatusNotFound, "Job not found", "job "+id+" not found", r.URL.Path)
-			return
-		}
-		hal.WriteHAL(w, http.StatusOK, jobEnvelopeFromEntry(e))
+		hal.WriteProblem(w, http.StatusNotFound, "Job not found", "job "+id+" not found", r.URL.Path)
 	}
+}
+
+// hubOps is the TaskHub op of each job kind.
+var hubOps = map[string]string{"index-rebuild": "rebuild", "synthesis-run": "synth"}
+
+// hubJob is the job id of kind as ri's TaskHub holds it.
+func hubJob(ri *repos.RepoInstance, id, kind string) (jobEnvelope, bool) {
+	if ri == nil || ri.TaskHub() == nil {
+		return jobEnvelope{}, false
+	}
+	ev, ok := ri.TaskHub().Task(id)
+	if !ok || ev.Op != hubOps[kind] {
+		return jobEnvelope{}, false
+	}
+	env := jobEnvelope{ID: ev.ID, Kind: kind, State: ev.Status}
+	if ev.Status == "error" {
+		env.Error = ev.Message
+	}
+	return env, true
 }
 
 // handleDeleteJob serves DELETE .../synthesis-runs/{id} or .../index-rebuilds/{id}.
@@ -208,15 +232,15 @@ func handleDeleteJob(jr *JobRegistry) http.HandlerFunc {
 
 // handleJobEvents serves GET .../synthesis-runs/{id}/events or .../index-rebuilds/{id}/events.
 // Streams SSE events from the TaskHub filtered to the given job ID.
-func handleJobEvents(jr *JobRegistry) http.HandlerFunc {
+func handleJobEvents(jr *JobRegistry, kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 
 		ri := repos.RepoFromContext(r.Context())
 
 		// If no registry, return 404 for unknown jobs.
-		if jr != nil {
-			if e := jr.Get(id); e == nil {
+		if jr != nil && jr.Get(id) == nil {
+			if _, onHub := hubJob(ri, id, kind); !onHub {
 				hal.WriteProblem(w, http.StatusNotFound, "Job not found",
 					"job "+id+" not found", r.URL.Path)
 				return

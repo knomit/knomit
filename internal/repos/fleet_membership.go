@@ -1125,67 +1125,149 @@ func (m *Manager) hostFleetHere(ctx context.Context) error {
 	return nil
 }
 
-// FollowFleetHost is POST /fleet/follow, "Point at the new host": this
-// instance's copy of the fleet repository follows the fleet from url (after
-// a master switch, the new master's URL). It is the one way an origin is
-// attached to the fleet repository, under fleetOpMu like every fleet
-// operation, and it runs the attach's own checks (guardAttach): an origin no
-// member's join could clone is origin_invalid (#527 F1), an unreachable one
-// is refused, and the remote's ontology must be the fleet's.
+// FollowFleetHost is POST /fleet/follow: this instance's copy of the fleet
+// repository follows the fleet from url, or changes its credential for the
+// forge it follows. It is the one way an origin is attached to the fleet
+// repository, under fleetOpMu like every fleet operation, and it runs the
+// attach's own checks (guardAttach): an origin no member's join could clone
+// is origin_invalid (#527 F1), an unreachable one is refused, and the
+// remote's ontology must be the fleet's.
 //
-// The same-knowledge-base check: the URL must be an instance of THIS fleet,
-// i.e. its certificate chains to this fleet's root (the classification
-// ResolveOrigin makes for every attach, which then stores auth method cert).
-// Anything else (a forge, another fleet's hub, plain https) is 422
-// not_this_fleet: a fleet hosted on a forge keeps its URL across a master
-// switch, so there is nothing to point at. A credential is refused for a peer
-// (ErrPeerCredential): the certificate is the credential.
-func (m *Manager) FollowFleetHost(ctx context.Context, o OriginSpec) (FleetStatus, error) {
-	if err := m.followFleetHost(ctx, o); err != nil {
-		return FleetStatus{}, err
+// What it does is decided by the URL against the stored origin (PR #529
+// S3), never by which page asked:
+//
+//   - the stored forge, or no url, on a forge copy: a CREDENTIAL change. The
+//     new credential is probed and stored, and that is all: no push, no host
+//     record, nothing a member sees. The stored credential unchanged is
+//     answered FleetFollowUnchanged and nothing runs;
+//   - an instance of THIS fleet (its certificate chains to this fleet's
+//     root): this copy follows it (a master switch). A credential is refused
+//     (ErrPeerCredential): the certificate is the credential;
+//   - another forge URL: followForge. The master MOVES the fleet there; a
+//     member follows the forge the fleet moved to.
+//
+// Every error text it answers is credential-free (credentialFreeErr): a
+// token in a URL's user slot is quoted by the HTTP client and by go-git.
+func (m *Manager) FollowFleetHost(ctx context.Context, o OriginSpec) (FleetFollowed, error) {
+	change, err := m.followFleetHost(ctx, o)
+	if err != nil {
+		return FleetFollowed{}, credentialFreeErr(err)
 	}
-	return m.FleetStatus(ctx)
+	st, err := m.FleetStatus(ctx)
+	return FleetFollowed{FleetStatus: st, Change: change}, err
 }
 
-func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) error {
+// FleetFollowed is what POST /fleet/follow answers: the new state and what
+// the follow changed.
+type FleetFollowed struct {
+	FleetStatus
+	Change string `json:"change"`
+}
+
+// The FleetFollowed.Change values.
+const (
+	FleetFollowFollowed   = "followed"   // this copy follows the fleet from the URL now
+	FleetFollowMoved      = "moved"      // the master moved the fleet onto the forge
+	FleetFollowCredential = "credential" // the same forge with a new credential
+	FleetFollowUnchanged  = "unchanged"  // the stored forge and credential: nothing ran
+)
+
+func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) (string, error) {
 	defer m.lockFleetOp()()
 	ri := m.fleetRepo()
 	if ri == nil {
-		return fleetErr(http.StatusConflict, "not_registered", "this instance is in no fleet")
+		return "", fleetErr(http.StatusConflict, "not_registered", "this instance is in no fleet")
 	}
 	prev, err := m.originOf(ri)
 	if err != nil {
-		return err
+		return "", err
 	}
+	forgeCopy := prev != nil && prev.AuthMethod != "cert"
 	o.URL = strings.TrimSpace(o.URL)
 	if o.URL == "" {
 		// A credential change on a forge copy: the stored URL stays.
-		if prev == nil || prev.AuthMethod == "cert" {
-			return fleetErr(http.StatusBadRequest, "url_required", "the body must carry the URL this copy follows the fleet from")
+		if !forgeCopy {
+			return "", fleetErr(http.StatusBadRequest, "url_required", "the body must carry the URL this copy follows the fleet from")
 		}
 		o.URL = prev.URL
 	}
 	if err := refuseFleetOrigin(o.URL); err != nil {
-		return err
+		return "", err
 	}
-	// The same forge with no credential given keeps the stored one, as the
-	// generic origin edit does: a URL-only follow is not a reset to anonymous
-	// (auth_method "none" is).
-	if prev != nil && prev.AuthMethod != "cert" && o.AuthMethod == "" && o.AuthToken == "" && sameFleetURL(prev.URL, o.URL) {
-		o.AuthMethod, o.AuthToken = prev.AuthMethod, prev.AuthToken
+	if forgeCopy && sameFleetURL(prev.URL, o.URL) {
+		return m.changeFleetCredential(ctx, ri, o, prev)
 	}
 	decided, err := m.ResolveOrigin(ctx, o)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if decided.AuthMethod != "cert" {
 		return m.followForge(ctx, ri, decided, prev)
 	}
 	if err := ri.WithRead(func(svc *store.Service) { decided.Branch = svc.UpstreamBranch() }); err != nil {
-		return err
+		return "", err
 	}
-	_, err = m.Send(ctx, ri, AttachOrigin(decided))
-	return err
+	if _, err = m.Send(ctx, ri, AttachOrigin(decided)); err != nil {
+		return "", err
+	}
+	return FleetFollowFollowed, nil
+}
+
+// changeFleetCredential is a follow of the forge this copy already follows
+// ("Update access", on the master and on a member alike). The URL stays the
+// stored one. A credential not given keeps the stored one: no method, or
+// the stored method with no token (the page prefills the method and never
+// holds the secret, #529 N-b); auth_method none is the explicit reset to
+// anonymous. The new credential must reach the forge (the probe the attach's
+// guard asks for) before it is stored. Then it is stored, and that is all: on
+// the master no seed, no host record, no publish (#529 S3, N-a).
+func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o OriginSpec, prev *Origin) (string, error) {
+	o.URL = prev.URL
+	if o.AuthToken == "" && (o.AuthMethod == "" || o.AuthMethod == prev.AuthMethod) {
+		o.AuthMethod, o.AuthToken = prev.AuthMethod, prev.AuthToken
+	}
+	if err := refuseMethodForURL(o.URL, o.AuthMethod); err != nil {
+		return "", err
+	}
+	if o.AuthMethod == prev.AuthMethod && o.AuthToken == prev.AuthToken {
+		return FleetFollowUnchanged, nil
+	}
+	decided, err := m.ResolveOrigin(ctx, o)
+	if err != nil {
+		return "", err
+	}
+	if decided.AuthMethod == "cert" {
+		return "", fleetErr(http.StatusConflict, "not_this_fleet",
+			credentialFree(o.URL)+" now answers as an instance of this fleet, not as a forge, and takes no credential. Point this copy at it (Fleet → Settings → Point at the new host)")
+	}
+	if err := ri.WithRead(func(svc *store.Service) { decided.Branch = svc.UpstreamBranch() }); err != nil {
+		return "", err
+	}
+	if err := m.probeFleetForge(ctx, decided); err != nil {
+		return "", err
+	}
+	if _, err := m.Send(ctx, ri, AttachOrigin(decided)); err != nil {
+		return "", err
+	}
+	log.Info().Str("fleet", ri.Name()).Str("forge", credentialFree(o.URL)).Str("auth_method", decided.AuthMethod).
+		Msg("fleet: this copy's credential for the forge changed")
+	return FleetFollowCredential, nil
+}
+
+// refuseMethodForURL is validateURLAuth's scheme check for a follow whose
+// URL is the stored one (no url in the body, so the REST edge had nothing to
+// check the method against, #529 N-d): an ssh method on an http(s) URL, or
+// a token or basic credential on an ssh URL, is 422 auth_invalid.
+func refuseMethodForURL(u, method string) error {
+	isSSH := strings.HasPrefix(u, "git@") || strings.HasPrefix(u, "ssh://")
+	isHTTP := strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+	switch {
+	case isHTTP && method == "ssh":
+		return fleetErr(http.StatusUnprocessableEntity, "auth_invalid", "SSH auth cannot be used with an https forge URL: use a token or basic auth instead")
+	case isSSH && (method == "token" || method == "basic"):
+		return fleetErr(http.StatusUnprocessableEntity, "auth_invalid", "token or basic auth cannot be used with an SSH forge URL: use SSH auth instead")
+	}
+	return nil
 }
 
 // guardFleetDetach is the fleet repository's detach check (R3.3): a member's
