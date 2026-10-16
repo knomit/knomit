@@ -159,9 +159,10 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	r.Get("/repo-events", handleRepoEvents(s.Manager))
 	r.Get("/logs/events", handleLogEvents(s.Logs, s.ReadOnly))
 	// F09 fleet membership: a TOP-LEVEL resource (the instance's state, not a
-	// repo's). The two reads are open to any principal the edge admits.
+	// repo's). The three reads are open to any principal the edge admits.
 	r.Get("/fleet", handleGetFleet(b, s.Manager))
 	r.Get("/fleet/members", handleFleetMembers(b, s.Manager))
+	r.Get("/fleet/activity", handleFleetActivity(b, s.Manager))
 	// Every fleet operation uses the fleet ROOT KEY or installs or removes
 	// this instance's trust material, so each is served to the local
 	// authenticated listener only (RequireLocalVia: the unix socket or named

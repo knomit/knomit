@@ -83,7 +83,15 @@ type fleetPeers struct {
 	// again.
 	judged   map[string]map[peerKey]bool
 	refusals map[string]PeerRefusal
+	// ring is every refusal recorded, oldest first, the last refusalRing of
+	// them: what GET /fleet/activity shows as "refused", including refusals
+	// that cleared since (refusals keeps only each branch's current one). In
+	// memory only, like refusals.
+	ring []PeerRefusal
 }
+
+// refusalRing is how many refusals fleetPeers.ring keeps.
+const refusalRing = 200
 
 func newFleetPeers(master, publishes func(*store.Service) bool) *fleetPeers {
 	return &fleetPeers{master: master, publishes: publishes, judged: map[string]map[peerKey]bool{}, refusals: map[string]PeerRefusal{}}
@@ -127,7 +135,12 @@ func (p *fleetPeers) record(branch string, key peerKey, reason string, latest bo
 	m[key] = reason != ""
 	switch {
 	case reason != "":
-		p.refusals[branch] = PeerRefusal{Branch: branch, Tip: key.tip.String(), Reason: reason, At: time.Now().UTC()}
+		r := PeerRefusal{Branch: branch, Tip: key.tip.String(), Reason: reason, At: time.Now().UTC()}
+		p.refusals[branch] = r
+		p.ring = append(p.ring, r)
+		if over := len(p.ring) - refusalRing; over > 0 {
+			p.ring = append(p.ring[:0:0], p.ring[over:]...)
+		}
 	case latest || p.refusals[branch].Tip == key.tip.String():
 		delete(p.refusals, branch)
 	}
@@ -349,6 +362,20 @@ func (m *Manager) FleetRefusals() map[string]PeerRefusal {
 		return map[string]PeerRefusal{}
 	}
 	return ri.peers.Refusals()
+}
+
+// RefusalLog is a copy of the ring, newest first; nil-safe.
+func (p *fleetPeers) RefusalLog() []PeerRefusal {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]PeerRefusal, len(p.ring))
+	for i, r := range p.ring {
+		out[len(p.ring)-1-i] = r
+	}
+	return out
 }
 
 // Refusals is a copy of the current refusals, by branch; nil-safe.

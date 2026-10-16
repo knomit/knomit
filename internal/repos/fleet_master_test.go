@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -630,6 +631,40 @@ func TestFleetMaster_ARefusedTipIsAdmittedWhenItsLeafLandsOnMain(t *testing.T) {
 	require.Equal(t, betaTip, f.rev(t, "agent/beta"), "fixture: beta did not push again")
 	require.Equal(t, betaTip, localTip(t, f.mri, "agent/beta"), "the same tip is admitted once main holds the leaf")
 	require.NotContains(t, f.mri.peers.Refusals(), "agent/beta", "the refusal is cleared")
+
+	// GET /fleet/activity still shows the refusal that cleared (the ring), with
+	// its branch, tip and reason.
+	events, err := f.master.FleetActivity(context.Background(), MaxFleetActivity)
+	require.NoError(t, err)
+	var refused []FleetEvent
+	for _, e := range events {
+		if e.Kind == FleetEventRefused {
+			refused = append(refused, e)
+		}
+	}
+	require.Len(t, refused, 1, "%+v", events)
+	require.Equal(t, "agent/beta", refused[0].Branch)
+	require.Equal(t, betaTip, refused[0].Tip)
+	require.Contains(t, refused[0].Detail, "refused by verify_signatures=enforce")
+}
+
+// The ring keeps the last refusalRing refusals, newest first, whatever later
+// admissions clear from the per-branch refusals.
+// SABOTAGE: keep the first refusalRing instead of the last -> the newest is
+// missing -> red; drop the ring append -> empty -> red.
+func TestFleetPeers_TheRingKeepsTheLastRefusals(t *testing.T) {
+	p := newFleetPeers(nil, nil)
+	main := plumbing.NewHash("1111111111111111111111111111111111111111")
+	for i := range refusalRing + 5 {
+		p.record("agent/a", peerKey{tip: plumbing.NewHash(fmt.Sprintf("%040x", i+1)), main: main}, fmt.Sprintf("refusal %d", i), true)
+	}
+	p.record("agent/a", peerKey{tip: plumbing.NewHash(fmt.Sprintf("%040x", 9999)), main: main}, "", true)
+	require.Empty(t, p.Refusals(), "the admission cleared the branch's refusal")
+	log := p.RefusalLog()
+	require.Len(t, log, refusalRing)
+	require.Equal(t, fmt.Sprintf("refusal %d", refusalRing+4), log[0].Reason, "newest first")
+	require.Equal(t, "refusal 5", log[refusalRing-1].Reason, "the 5 oldest are gone")
+	require.Empty(t, (*fleetPeers)(nil).RefusalLog(), "nil-safe")
 }
 
 // A member branch deleted on the forge is forgotten by the master (PR #524

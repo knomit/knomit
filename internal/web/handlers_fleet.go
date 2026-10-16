@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -21,6 +22,7 @@ func fleetView(b hal.URLBuilder, r *http.Request, st repos.FleetStatus) map[stri
 	links := hal.LinkMap{"self": {Href: b.APIRoot() + "/fleet"}}
 	if st.FleetRepo != "" {
 		links["members"] = hal.Link{Href: b.APIRoot() + "/fleet/members"}
+		links["activity"] = hal.Link{Href: b.APIRoot() + "/fleet/activity"}
 	}
 	out["_links"] = links
 	return out
@@ -136,6 +138,37 @@ func fleetMemberRows(ms []repos.FleetMemberRow, refused map[string]repos.PeerRef
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// handleFleetActivity: GET /api/v1/fleet/activity?limit=N, the fleet's newest
+// events (repos.Manager.FleetActivity), newest first. limit defaults to and
+// is capped at repos.MaxFleetActivity; one that is not a positive integer is
+// 400. Read-only and open to any principal the edge admits, like members; a
+// page polls it.
+func handleFleetActivity(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := repos.MaxFleetActivity
+		if s := r.URL.Query().Get("limit"); s != "" {
+			n, err := strconv.Atoi(s)
+			if err != nil || n < 1 {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid limit", "limit must be a positive integer", r.URL.Path)
+				return
+			}
+			limit = min(n, repos.MaxFleetActivity)
+		}
+		events, err := m.FleetActivity(r.Context(), limit)
+		if err != nil {
+			writeFleetError(w, r, err)
+			return
+		}
+		if events == nil {
+			events = []repos.FleetEvent{}
+		}
+		hal.WriteHAL(w, http.StatusOK, map[string]any{
+			"events": events,
+			"_links": hal.LinkMap{"self": {Href: b.APIRoot() + "/fleet/activity"}},
+		})
+	}
 }
 
 // handleFleetMembers: GET /api/v1/fleet/members, the member records at the

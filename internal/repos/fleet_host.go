@@ -17,49 +17,11 @@ import (
 // nothing else writes it, and the commit judge refuses a member commit that
 // changes it (the host-record rule). A member reads it at main to tell the
 // URL the fleet is hosted at now from the one its copy syncs from (GET
-// /fleet: fleet_urls and host_record).
-//
-// The document: the header line, then one "url: <URL>" line per URL, in the
-// order written.
-
-const fleetHostHeader = "# knomit fleet host v1"
+// /fleet: fleet_urls and host_record). The document is fact.RenderFleetHost's.
 
 // maxFleetHostSize is what a reader reads of the record: the fleet
 // ontology's max_size for it.
 const maxFleetHostSize = 4 << 10
-
-// renderFleetHost is the host record holding urls.
-func renderFleetHost(urls []string) string {
-	var b strings.Builder
-	b.WriteString(fleetHostHeader + "\n")
-	for _, u := range urls {
-		b.WriteString("url: " + u + "\n")
-	}
-	return b.String()
-}
-
-// parseFleetHost reads a host record: the header, then url lines (blank
-// lines are skipped). Anything else is an error: a record a reader cannot
-// read says nothing about the host.
-func parseFleetHost(raw []byte) ([]string, error) {
-	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != fleetHostHeader {
-		return nil, fmt.Errorf("the host record does not start with %q", fleetHostHeader)
-	}
-	urls := []string{}
-	for _, l := range lines[1:] {
-		l = strings.TrimSpace(l)
-		if l == "" {
-			continue
-		}
-		u, ok := strings.CutPrefix(l, "url: ")
-		if !ok || strings.TrimSpace(u) == "" {
-			return nil, fmt.Errorf("the host record's line %q is not a url line", l)
-		}
-		urls = append(urls, strings.TrimSpace(u))
-	}
-	return urls, nil
-}
 
 // hubFleetURLs is the fleet repository URL members use at each of this
 // instance's https external addresses, when this instance is the hub:
@@ -79,16 +41,16 @@ func (m *Manager) hubFleetURLs(ri *RepoInstance) []string {
 // writeFleetHost commits the host record holding urls on ri's agent branch,
 // unless the branch already holds exactly that record. The caller is the
 // master, under fleetOpMu, and publishes main.
-func (m *Manager) writeFleetHost(ctx context.Context, ri *RepoInstance, urls []string) (bool, error) {
-	want := renderFleetHost(urls)
+func (m *Manager) writeFleetHost(ctx context.Context, ri *RepoInstance, urls []string) error {
+	want := fact.RenderFleetHost(urls)
 	cur, ok, err := m.fleetHostAt(ri, ri.AgentBranch())
 	if err != nil {
-		return false, err
+		return err
 	}
 	if ok && cur == want {
-		return false, nil
+		return nil
 	}
-	return true, m.writeFleetArtifacts(ctx, ri, map[string]string{fact.FleetHostPath: want},
+	return m.writeFleetArtifacts(ctx, ri, map[string]string{fact.FleetHostPath: want},
 		"fleet: hosted at "+strings.Join(urls, ", "))
 }
 
@@ -129,5 +91,5 @@ func (m *Manager) fleetHostAtMain(ri *RepoInstance) ([]string, error) {
 	if err != nil || !ok {
 		return nil, err
 	}
-	return parseFleetHost([]byte(raw))
+	return fact.ParseFleetHost([]byte(raw))
 }

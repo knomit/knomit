@@ -959,7 +959,7 @@ func (m *Manager) DetachRepoOrigin(ctx context.Context, ri *RepoInstance) error 
 	if _, err := m.Send(ctx, ri, DetachOrigin()); err != nil || !fleet {
 		return err
 	}
-	if _, err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil {
+	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil {
 		return fmt.Errorf("this instance hosts the fleet now, but recording that on main failed: %w", err)
 	}
 	if err := m.publishFleetMainNow(ctx, ri); err != nil {

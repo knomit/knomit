@@ -1,6 +1,8 @@
 package pki
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -229,6 +231,32 @@ func IssueInstance(dir string, root Root, pub ed25519.PublicKey, email string, v
 // local audit log of every leaf it issued.
 func RecordIssuance(dir string, is Issuance) error {
 	return appendLine(filepath.Join(dir, IssuedLogFile), is.Line)
+}
+
+// LoadIssued reads the fleet root's issuance log (<dir>/issued.jsonl), in the
+// order written. An absent log is empty; blank lines are skipped; any other
+// line that is not an Issued is an error.
+func LoadIssued(dir string) ([]Issued, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, IssuedLogFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []Issued
+	sc := bufio.NewScanner(bytes.NewReader(raw))
+	for sc.Scan() {
+		if len(bytes.TrimSpace(sc.Bytes())) == 0 {
+			continue
+		}
+		var is Issued
+		if err := json.Unmarshal(sc.Bytes(), &is); err != nil {
+			return nil, fmt.Errorf("pki: %s: %w", IssuedLogFile, err)
+		}
+		out = append(out, is)
+	}
+	return out, sc.Err()
 }
 
 // appendLine appends one ledger line (already newline-terminated), 0600.

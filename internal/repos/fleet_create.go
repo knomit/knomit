@@ -420,7 +420,7 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 	if cs.Origin != nil {
 		hosted = []string{cs.Origin.URL}
 	}
-	if _, err := m.writeFleetHost(ctx, ri, hosted); err != nil {
+	if err := m.writeFleetHost(ctx, ri, hosted); err != nil {
 		return nil, err
 	}
 	if err := fleetCreateStep("committed"); err != nil {
