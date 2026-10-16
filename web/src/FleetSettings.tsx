@@ -73,7 +73,8 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
     const back = () => setFlow(null);
     return (
       <div data-testid="fleet-connect-flow" style={connectFlow}>
-        <FleetFollowFlow fleetRepo={fleet.fleet_repo} mode={flow} onCancel={back}
+        <FleetFollowFlow key={flow} fleetRepo={fleet.fleet_repo} mode={flow} onCancel={back}
+          onUpdateAccess={() => setFlow('access')}
           initialUrl={flow === 'access' ? fleet.hosting ?? '' : flow === 'move' ? moveUrl : flow === 'follow' && stale ? (fleet.host_record ?? [])[0] ?? '' : ''}
           initialMethod={flow === 'access' && ['none', 'token', 'basic', 'ssh'].includes(storedMethod) ? storedMethod as FleetAuthMethod : ''}
           fromForge={flow === 'move' && forge && !interrupted ? fleet.hosting : undefined}

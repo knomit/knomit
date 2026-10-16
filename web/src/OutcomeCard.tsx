@@ -53,10 +53,10 @@ export function OutcomeCard({ tone, headline, url, body, detail, detailLabel, ch
     <div data-testid={testid ?? 'outcome-card'} data-tone={tone} style={box(t)}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <span style={{ display: 'flex', flexShrink: 0 }} aria-hidden="true"><Glyph tone={tone} color={t.head} /></span>
-        <span style={{ fontSize: 13.5, fontWeight: 600, color: t.head }}>{headline}</span>
+        <span style={{ fontSize: 13.5, fontWeight: 600, color: t.head, minWidth: 0, overflowWrap: 'anywhere' }}>{headline}</span>
       </div>
       {url && <div style={{ ...indent, fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: t.url, wordBreak: 'break-all' }}>{url}</div>}
-      {body && <div style={{ ...indent, fontSize: 12.5, lineHeight: 1.55, color: t.body, maxWidth: '64ch' }}>{body}</div>}
+      {body && <div style={{ ...indent, fontSize: 12.5, lineHeight: 1.55, color: t.body, maxWidth: '64ch', overflowWrap: 'anywhere' }}>{body}</div>}
       {children && <div style={indent}>{children}</div>}
       {detail && (
         <div style={{ ...indent, marginTop: 10 }}>
@@ -106,7 +106,7 @@ const TONES: Record<OutcomeTone, Tone> = {
 };
 
 const box = (t: Tone): React.CSSProperties => ({
-  borderRadius: 6, padding: '12px 14px', background: t.bg, border: `1px solid ${t.border}`,
+  minWidth: 0, borderRadius: 6, padding: '12px 14px', background: t.bg, border: `1px solid ${t.border}`,
 });
 // Aligns continuation lines under the headline text rather than the glyph.
 const indent: React.CSSProperties = { margin: '8px 0 0 24px' };

@@ -4,12 +4,12 @@ import { GlobeIcon } from './icons';
 import { btn } from './manageStyles';
 import { OutcomeCard } from './OutcomeCard';
 import { CredentialFields, Refusal } from './fleetParts';
-import { hostPortOf } from './fleetText';
+import { hostPortOf, sameFleetURL } from './fleetText';
 import { credentialFor, type FleetAuthMethod } from './fleetWizardState';
 import { noMouseFocus } from './utils';
 import {
-  actions, block, blockHead, blockHint, blockTitle, column, crumb, crumbLink, crumbSep, grid, input, label,
-  pageHead, rail, railItem, railLabel, railMark, railNote,
+  actions, block, blockHead, blockHint, blockTitle, column, crumb, crumbLink, crumbSep, grid, gridClass, input, label,
+  pageHead, rail, railClass, railItem, railLabel, railMark, railNote,
 } from './connectStyles';
 
 const FLEET_ACCENT = '#8ad6c8';
@@ -44,7 +44,7 @@ const SUBTITLE: Record<FleetFollowMode, string> = {
  * step's credential fields (CredentialFields, the repo step's). The change is
  * POST /fleet/follow, which refuses a URL that is not this fleet's.
  */
-export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', initialMethod = '', fromForge, membersUnaffected, hostRecord, onCancel, onDone, onBusyChange }: {
+export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', initialMethod = '', fromForge, membersUnaffected, hostRecord, onUpdateAccess, onCancel, onDone, onBusyChange }: {
   fleetRepo: string;
   mode?: FleetFollowMode;
   /** Prefilled: the stored forge URL (access: shown, never edited), where
@@ -60,6 +60,8 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
   membersUnaffected?: boolean;
   /** The host record's URLs, for the Origin step's hint. */
   hostRecord?: string[];
+  /** move only: switch to Update access (the page's own item), offered when the typed URL is the forge the fleet is on. */
+  onUpdateAccess?: () => void;
   onCancel: () => void;
   onDone: () => void;
   onBusyChange?: (busy: boolean) => void;
@@ -91,6 +93,10 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
   // Update access with the stored method and no new secret changes nothing:
   // it sends nothing (the server would answer `unchanged`).
   const unchanged = access && method === initialMethod && !secret.trim() && !user.trim();
+  // Moving to the forge the fleet is on is no move (the server answers
+  // `unchanged` after submit): say so before Review, by the server's own
+  // comparison (sameFleetURL), and offer Update access instead.
+  const alreadyHere = mode === 'move' && !!fromForge && !!trimmed && sameFleetURL(trimmed, fromForge);
   const title = mode === 'move' && fromForge ? 'Move the fleet to another forge' : TITLE[mode];
 
   const test = async () => {
@@ -151,7 +157,7 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
         </div>
       </div>
 
-      <div style={grid}>
+      <div className={gridClass} style={grid}>
         <div style={column}>
           {step === 'origin' && (
             <section style={block}>
@@ -176,13 +182,21 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
                 <OutcomeCard tone="bad" testid="fleet-follow-unreachable" headline={host ? `Couldn't reach ${host}` : 'Could not reach that URL'}
                   url={trimmed} detail={probeErr || probe?.detail || undefined} />
               )}
+              {alreadyHere && (
+                <OutcomeCard tone="ask" testid="fleet-follow-already-here" headline="The fleet is already on this forge" url={trimmed} />
+              )}
               {peerForMove && (
                 <OutcomeCard tone="bad" testid="fleet-follow-peer-not-forge" headline={`${host || 'That URL'} is an instance of this fleet, not a forge`}
                   url={trimmed} body="To make another instance the host, export the root key there and choose Host the fleet here on it. Moving to a forge takes a forge repository's URL." />
               )}
               <div style={actions}>
-                <button type="button" data-testid="fleet-follow-test" style={btn(!trimmed || testing, 'primary')} disabled={!trimmed || testing}
-                  onClick={() => { void test(); }}>{testing ? 'Testing…' : 'Test connection →'}</button>
+                {alreadyHere && onUpdateAccess ? (
+                  <button type="button" data-testid="fleet-follow-update-access" style={btn(testing, 'primary')} disabled={testing}
+                    onClick={onUpdateAccess}>Update access…</button>
+                ) : (
+                  <button type="button" data-testid="fleet-follow-test" style={btn(!trimmed || testing || alreadyHere, 'primary')} disabled={!trimmed || testing || alreadyHere}
+                    onClick={() => { void test(); }}>{testing ? 'Testing…' : 'Test connection →'}</button>
+                )}
                 <button type="button" style={btn(testing)} disabled={testing} onClick={onCancel}>Cancel</button>
               </div>
             </section>
@@ -287,7 +301,7 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
             </section>
           )}
         </div>
-        <nav style={rail} aria-label="Progress">
+        <nav className={railClass} style={rail} aria-label="Progress">
           <div style={railLabel}>Progress</div>
           {steps.map((s, i) => {
             const at = steps.indexOf(step);

@@ -69,7 +69,7 @@ export const wizardErr: React.CSSProperties = {
   marginTop: 12, padding: '10px 12px', borderRadius: 6,
   background: '#262013', border: '1px solid #4a3f22',
   color: '#e2c07a', fontSize: 13, lineHeight: 1.55, maxWidth: '74ch',
-  whiteSpace: 'pre-wrap',
+  whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
 };
 export const wizardErrNote: React.CSSProperties = { color: '#a08a54', fontSize: 12, marginTop: 6 };
 

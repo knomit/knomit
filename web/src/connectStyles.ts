@@ -27,11 +27,15 @@ export const iconBox = (repo: string): React.CSSProperties => ({
 // Same two-column split as SettingsPage, to the pixel: the rail must not move
 // when you cross from the repo's settings into this page.
 export const grid: React.CSSProperties = {
-  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 178px', gap: 26, alignItems: 'start',
+  display: 'grid', gap: 26, alignItems: 'start',
 };
+// Class names carry the two-column template and its phone-width stack (App.css
+// .k-connect-grid): an inline style cannot hold a media query.
+export const gridClass = 'k-connect-grid';
+export const railClass = 'k-connect-rail';
 // A form reads worse the wider it gets, so the column is measured inside its
 // grid cell rather than filling it.
-export const column: React.CSSProperties = { maxWidth: 470 };
+export const column: React.CSSProperties = { maxWidth: 470, minWidth: 0 };
 
 export const block: React.CSSProperties = {
   borderTop: '1px solid #202020', paddingTop: 16, marginTop: 16,

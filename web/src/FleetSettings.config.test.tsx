@@ -212,13 +212,14 @@ describe('FleetSettings: the fleet repository configuration (PR7c)', () => {
     onChanged.mockClear();
     fireEvent.click(screen.getByTestId('fleet-move-forge'));
     fireEvent.change(screen.getByTestId('fleet-follow-url'), { target: { value: FORGE } });
-    fireEvent.click(screen.getByTestId('fleet-follow-test'));
-    fireEvent.click(await screen.findByTestId('fleet-follow-next'));
-    fireEvent.click(screen.getByTestId('fleet-follow-submit'));
-    expect(await screen.findByTestId('fleet-follow-not-moved')).toHaveTextContent('Nothing moved and nothing changed');
+    // Caught before Review (N-2): no Test connection, Update access instead.
+    expect(screen.getByTestId('fleet-follow-already-here')).toHaveTextContent('The fleet is already on this forge');
+    expect(screen.queryByTestId('fleet-follow-test')).toBeNull();
+    expect(screen.queryByTestId('fleet-follow-next')).toBeNull();
+    fireEvent.click(screen.getByTestId('fleet-follow-update-access'));
+    expect(screen.getByTestId('fleet-follow-flow')).toHaveAttribute('data-mode', 'access');
+    expect(screen.getByTestId('fleet-follow-access')).toBeInTheDocument();
     expect(onChanged).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('fleet-follow-done'));
-    expect(onChanged).toHaveBeenCalled();
   });
 
   // An interrupted move (#529 S4), from the server's interrupted_move: the

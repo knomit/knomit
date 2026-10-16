@@ -164,3 +164,23 @@ export function hostPortOf(url: string): string {
   if (!port || (s === 'https' && port === '443') || (s === 'http' && port === '80')) return host;
   return `${host}:${port}`;
 }
+
+/** sameFleetURL mirrors internal/repos/fleet_host.go sameFleetURL, the
+ *  server's own comparison, so the Move flow can say "already on this forge"
+ *  before Review: credentials dropped, scheme and host lowercased, a default
+ *  port (443 on https, 80 on http) dropped, a trailing slash ignored, the
+ *  path otherwise exact. A string that is not a URL with a scheme is
+ *  compared as it is (minus a trailing slash). */
+export function sameFleetURL(a: string, b: string): boolean {
+  const norm = (raw: string): string => {
+    const u = raw.trim();
+    const m = /^([a-z][a-z0-9+.-]*):\/\/(?:[^@/?#]*@)?(\[[^\]]+\]|[^/:?#]+)(?::(\d+))?([^?#]*)/i.exec(u);
+    if (!u.includes('://') || !m) return u.replace(/\/$/, '');
+    const scheme = m[1].toLowerCase();
+    let host = m[2].toLowerCase();
+    const port = m[3];
+    if (port && !((scheme === 'https' && port === '443') || (scheme === 'http' && port === '80'))) host += ':' + port;
+    return `${scheme}://${host}${m[4].replace(/\/$/, '')}`;
+  };
+  return norm(a) === norm(b);
+}
