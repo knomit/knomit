@@ -83,14 +83,6 @@ type FleetLeft struct {
 	PushError string `json:"push_error,omitempty"`
 }
 
-// FleetJoined is what POST /fleet/join answers: the state after the join,
-// and the fingerprint of the root the bundle installed (§1.5 Join step 2:
-// supplying the bundle is the operator's consent to that root).
-type FleetJoined struct {
-	FleetStatus
-	RootFingerprint string `json:"root_fingerprint"`
-}
-
 // FleetRevocation is what POST /fleet/revoke answers.
 type FleetRevocation struct {
 	AgentID      string `json:"agent_id"`
@@ -372,29 +364,30 @@ func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) 
 // JoinFleet joins the fleet at the bundle's URL with the bundle the master's
 // enroll returned (see the file comment). It answers registered: the record is on
 // the fleet's origin, and counts once the master admits it into main. The
-// answer carries the fingerprint of the root the bundle installed.
-func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoined, error) {
+// answer's root_fingerprint is the root the bundle installed (§1.5 Join step
+// 2: supplying the bundle is the operator's consent to that root).
+func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatus, error) {
 	defer m.lockFleetOp()()
 	if err := m.recoverFleetCreate(ctx); err != nil {
-		return FleetJoined{}, err
+		return FleetStatus{}, err
 	}
 	db := m.ControlDB()
 	if db == nil {
-		return FleetJoined{}, errors.New("fleet join: control.db is not open")
+		return FleetStatus{}, errors.New("fleet join: control.db is not open")
 	}
 	b, err := m.joinPreflight(db, spec.Bundle)
 	if err != nil {
-		return FleetJoined{}, err
+		return FleetStatus{}, err
 	}
 	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle, pki.InstallOptions{}); err != nil {
-		return FleetJoined{}, fmt.Errorf("fleet join: install the bundle: %w", err)
+		return FleetStatus{}, fmt.Errorf("fleet join: install the bundle: %w", err)
 	}
-	refuse := func(ri *RepoInstance, ferr *FleetError) (FleetJoined, error) {
+	refuse := func(ri *RepoInstance, ferr *FleetError) (FleetStatus, error) {
 		if uerr := m.undoJoin(context.WithoutCancel(ctx), ri); uerr != nil {
 			ferr.Msg += "; undoing the join failed (" + uerr.Error() + ")"
 		}
 		_ = recordFleetAttempt(db, ferr, time.Now())
-		return FleetJoined{}, ferr
+		return FleetStatus{}, ferr
 	}
 	// The clone decides the transport (ResolveOrigin) against the trust just
 	// installed: the hub's listener chains to the bundle's root -> cert; a
@@ -429,16 +422,13 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetJoine
 		return refuse(ri, fleetErr(http.StatusConflict, "join_refused", "the fleet did not take this instance's record: "+err.Error()+". Nothing is kept; join again (a leaf the master issued just now reaches the fleet's main on its next round)"))
 	}
 	if err := recordFleetAttempt(db, nil, time.Now()); err != nil {
-		return FleetJoined{}, err
+		return FleetStatus{}, err
 	}
 	if err := setFleetState(db, FleetRegistered, time.Now()); err != nil {
-		return FleetJoined{}, err
+		return FleetStatus{}, err
 	}
 	log.Info().Str("fleet", ri.Name()).Msg("fleet: joined; the record counts once the master admits it into main")
-	out := FleetJoined{}
-	out.RootFingerprint, _ = pki.RootID(b.Root)
-	out.FleetStatus, err = m.FleetStatus(ctx)
-	return out, err
+	return m.FleetStatus(ctx)
 }
 
 // joinPreflight is every refusal a join (and its check) makes before

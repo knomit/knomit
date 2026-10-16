@@ -2064,17 +2064,22 @@ export interface FleetStatus {
   state: FleetState;
   agent_id: string;
   fleet_repo?: string;
-  fleet_url?: string;
+  // local: this page reached knomit over the local listener (the desktop
+  // app), so the fleet's mutations are served to it. public_key: this
+  // instance's ssh-ed25519 key line.
+  local?: boolean;
+  public_key?: string;
   record_state?: 'pending' | 'active' | 'left' | 'revoked';
   since?: string;
   registered_at?: string;
   last_attempt?: string;
   last_error?: string;
-  // F10: the configured external_addresses ([] when unset), this instance's
+  // F10: what this instance offers to host a fleet (its mTLS listener, ''
+  // when off, and the configured external_addresses, [] when unset), its
   // own record on its agent branch, whether it matches the current config
   // and binary, whether the fleet's main still holds an older version, and
   // the notice shown while no address is configured.
-  external_addresses?: string[];
+  host?: { listener: string; external_addresses: string[] };
   record?: FleetRecordFields;
   record_current?: boolean;
   record_pending_update?: boolean;
@@ -2085,6 +2090,12 @@ export interface FleetStatus {
   master?: boolean;
   hosting?: string;
   root_dir?: string;
+  // fleet_urls: the fleet repository URL(s) members use (the hub's own, else
+  // the host record on main, else the origin); host_record: that record as
+  // main holds it; root_fingerprint: the installed fleet root.
+  fleet_urls?: string[];
+  host_record?: string[];
+  root_fingerprint?: string;
 }
 
 // FleetRecordFields are a member record's advertised fields, as written.

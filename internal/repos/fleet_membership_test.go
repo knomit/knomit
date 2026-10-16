@@ -105,7 +105,7 @@ func TestFleetMembership_ForgeEnrollJoinAdmitLeaveRevokeDecommission(t *testing.
 	require.Equal(t, "not_registered", code, "a standalone instance enrolls nobody")
 	joined, err := alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
-	st := joined.FleetStatus
+	st := joined
 	require.Equal(t, FleetRegistered, st.State)
 	require.NotEmpty(t, enr.RootFingerprint)
 	require.Equal(t, enr.RootFingerprint, joined.RootFingerprint, "the join names the root it installed (review N7)")

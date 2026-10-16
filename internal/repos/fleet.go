@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/pki"
 	"knomit/internal/store"
 )
 
@@ -37,27 +38,31 @@ func fleetErr(status int, code, msg string) *FleetError {
 
 // FleetStatus is what GET /api/v1/fleet reports.
 type FleetStatus struct {
-	State        string     `json:"state"` // standalone | registering | registered
-	FleetRepo    string     `json:"fleet_repo,omitempty"`
-	FleetURL     string     `json:"fleet_url,omitempty"`
-	AgentID      string     `json:"agent_id"`
+	State     string `json:"state"` // standalone | registering | registered
+	FleetRepo string `json:"fleet_repo,omitempty"`
+	AgentID   string `json:"agent_id"`
+	// PublicKey is this instance's ssh-ed25519 key line, the key a master
+	// enrolls (with the agent id) and every certificate of this instance
+	// names.
+	PublicKey    string     `json:"public_key"`
 	RecordState  string     `json:"record_state,omitempty"` // pending | active | left | revoked, read at the fleet's main
 	Since        *time.Time `json:"since,omitempty"`
 	RegisteredAt *time.Time `json:"registered_at,omitempty"`
 	LastAttempt  *time.Time `json:"last_attempt,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`
 
-	// F10. ExternalAddresses is the configured list ([] when unset). Record is
-	// this instance's own record on its agent branch head (nil when there is
-	// none); RecordCurrent says whether it matches what the current config
-	// and binary advertise; RecordPendingUpdate says the fleet's main still
-	// holds an older version of it. Notice is set while no external address
-	// is configured.
-	ExternalAddresses   []string      `json:"external_addresses"`
-	Record              *MemberFields `json:"record,omitempty"`
-	RecordCurrent       *bool         `json:"record_current,omitempty"`
-	RecordPendingUpdate bool          `json:"record_pending_update"`
-	Notice              string        `json:"notice,omitempty"`
+	// F10. Host is what this instance offers to host a fleet: its mTLS
+	// listener and its external addresses. Record is this instance's own
+	// record on its agent branch head (nil when there is none);
+	// RecordCurrent says whether it matches what the current config and
+	// binary advertise; RecordPendingUpdate says the fleet's main still holds
+	// an older version of it. Notice is set while no external address is
+	// configured.
+	Host                FleetHostOffer `json:"host"`
+	Record              *MemberFields  `json:"record,omitempty"`
+	RecordCurrent       *bool          `json:"record_current,omitempty"`
+	RecordPendingUpdate bool           `json:"record_pending_update"`
+	Notice              string         `json:"notice,omitempty"`
 
 	// Master says this instance is the fleet's master (isFleetMaster: the
 	// root key file is here and its root is the one on the fleet's main).
@@ -68,6 +73,26 @@ type FleetStatus struct {
 	Master  bool   `json:"master"`
 	Hosting string `json:"hosting,omitempty"`
 	RootDir string `json:"root_dir"`
+
+	// FleetURLs is the fleet repository URL(s) members use: on the hub, one
+	// https://<address>/git/<repo> per https external address; on any other
+	// copy, what the host record on the fleet's main says, else the origin
+	// URL. Empty with no fleet repository. HostRecord is that host record as
+	// main holds it (omitted when main holds none, or one that cannot be
+	// read): a copy whose Hosting is not one of its URLs follows an old host.
+	FleetURLs  []string `json:"fleet_urls"`
+	HostRecord []string `json:"host_record,omitempty"`
+	// RootFingerprint is the fleet root installed in [tls].dir (omitted when
+	// none is).
+	RootFingerprint string `json:"root_fingerprint,omitempty"`
+}
+
+// FleetHostOffer is what this instance offers to host a fleet: its mTLS
+// listener address ([tls].addr; "" when it has none, and a fleet hosted here
+// is refused listener_required) and its external_addresses ([] when unset).
+type FleetHostOffer struct {
+	Listener          string   `json:"listener"`
+	ExternalAddresses []string `json:"external_addresses"`
 }
 
 // MemberFields are a member record's advertised, informational fields as the
@@ -140,11 +165,18 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st := FleetStatus{
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
-		ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...),
-		RootDir:           m.fleetRootDir(),
+		Host:      FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
+		RootDir:   m.fleetRootDir(),
+		FleetURLs: []string{},
 	}
-	if len(st.ExternalAddresses) == 0 {
+	if m.deps.Signer != nil {
+		st.PublicKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(m.deps.Signer.PublicKey())))
+	}
+	if len(st.Host.ExternalAddresses) == 0 {
 		st.Notice = NoAddressesNotice
+	}
+	if root, err := pki.InstalledRoot(m.deps.Cfg.TLS.Dir); err == nil {
+		st.RootFingerprint = root.Fingerprint
 	}
 	ri := m.fleetRepo()
 	if ri == nil {
@@ -158,10 +190,20 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		st.RecordCurrent = &current
 	}
 	st.FleetRepo = ri.Name()
+	if hosted, herr := m.fleetHostAtMain(ri); herr != nil {
+		log.Warn().Err(herr).Str("fleet", ri.Name()).Msg("fleet: the host record on main cannot be read")
+	} else if len(hosted) > 0 {
+		st.HostRecord = hosted
+	}
 	if o, oerr := m.originOf(ri); oerr == nil {
 		st.Hosting = "none"
-		if o != nil {
-			st.FleetURL, st.Hosting = o.URL, o.URL
+		switch {
+		case o == nil:
+			st.FleetURLs = m.hubFleetURLs(ri)
+		case len(st.HostRecord) > 0:
+			st.Hosting, st.FleetURLs = o.URL, st.HostRecord
+		default:
+			st.Hosting, st.FleetURLs = o.URL, []string{o.URL}
 		}
 	}
 	_ = ri.WithRead(func(svc *store.Service) { st.Master = ri.isFleetMaster(svc) })

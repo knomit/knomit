@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
@@ -124,9 +125,13 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	s := &Server{Manager: m, Grants: localWriteGrants()}
 
 	out := getFleetJSON(t, s)
-	require.Equal(t, []any{}, out["external_addresses"], "unset is an empty array, never null")
+	require.Equal(t, map[string]any{"listener": "", "external_addresses": []any{}}, out["host"], "unset is an empty array, never null")
 	require.Contains(t, out["notice"], "external_addresses")
 	require.NotContains(t, out, "record")
+	require.NotContains(t, out, "fleet_url", "fleet_url is gone: fleet_urls")
+	require.Equal(t, []any{}, out["fleet_urls"], "standalone: no fleet URL")
+	require.NotContains(t, out, "root_fingerprint", "no root installed")
+	require.Equal(t, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(testsigner.Named("rest-fleet").PublicKey()))), out["public_key"])
 
 	join := joinOverSocket(t, s, key, url, root)
 	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
@@ -139,6 +144,9 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	require.Equal(t, repos.FleetRegistered, out["state"])
 	require.Equal(t, false, out["master"])
 	require.Equal(t, url, out["hosting"])
+	require.Equal(t, []any{url}, out["fleet_urls"], "main holds no host record: the origin")
+	require.NotContains(t, out, "host_record")
+	require.Equal(t, rootID, out["root_fingerprint"], "the installed root")
 	require.Equal(t, filepath.Join(dir, "home", "fleet"), out["root_dir"])
 	rec, ok := out["record"].(map[string]any)
 	require.True(t, ok, "registered: the own record is shown: %v", out)
@@ -151,6 +159,31 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	require.Equal(t, "false", caps["read_only"])
 	require.Equal(t, true, out["record_current"])
 	require.Equal(t, false, out["record_pending_update"])
+}
+
+// GET /fleet's `local` is the edge's verdict on how the request came in, the
+// same test RequireLocalVia makes: true over the local listener, false over
+// loopback TCP however the client dresses the request up.
+// SABOTAGE: set local from a request header -> the spoofed row is true ->
+// red; set it true always -> the TCP row is true -> red.
+func TestFleetREST_LocalIsTheListenerNotTheClient(t *testing.T) {
+	m, _ := restFleetManager(t, t.TempDir())
+	s := &Server{Manager: m, Grants: localWriteGrants()}
+	get := func(req *http.Request) map[string]any {
+		rec := httptest.NewRecorder()
+		s.NewAPIRouter().ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		return out
+	}
+	require.Equal(t, true, get(localPeer(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over the local listener")
+	require.Equal(t, false, get(fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over loopback TCP")
+	spoofed := fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet?local=true", nil))
+	spoofed.Header.Set("X-Knomit-Via", string(auth.LocalVia))
+	spoofed.Header.Set("X-Forwarded-For", "unix")
+	spoofed.Header.Set("Origin", "app://knomit")
+	require.Equal(t, false, get(spoofed)["local"], "nothing the client sends makes it local")
 }
 
 // F10: a member row shows every advertised field as the record has it, even

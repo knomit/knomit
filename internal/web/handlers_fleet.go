@@ -11,11 +11,14 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// fleetView is a FleetStatus as HAL.
-func fleetView(b hal.URLBuilder, st repos.FleetStatus) map[string]any {
+// fleetView is a FleetStatus as HAL, with `local`: the request came in over
+// the local authenticated listener (isLocalVia, the test RequireLocalVia
+// makes), so the fleet's mutations are reachable from where the caller runs.
+func fleetView(b hal.URLBuilder, r *http.Request, st repos.FleetStatus) map[string]any {
 	raw, _ := json.Marshal(st)
 	out := map[string]any{}
 	_ = json.Unmarshal(raw, &out)
+	out["local"] = isLocalVia(r)
 	links := hal.LinkMap{"self": {Href: b.APIRoot() + "/fleet"}}
 	if st.FleetRepo != "" {
 		links["members"] = hal.Link{Href: b.APIRoot() + "/fleet/members"}
@@ -47,7 +50,7 @@ func handleGetFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			writeFleetError(w, r, err)
 			return
 		}
-		hal.WriteHAL(w, http.StatusOK, fleetView(b, st))
+		hal.WriteHAL(w, http.StatusOK, fleetView(b, r, st))
 	}
 }
 
@@ -99,7 +102,7 @@ func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
 			return
 		}
-		hal.WriteHAL(w, createdFleetStatus(st), fleetView(b, st))
+		hal.WriteHAL(w, createdFleetStatus(st), fleetView(b, r, st))
 	}
 }
 

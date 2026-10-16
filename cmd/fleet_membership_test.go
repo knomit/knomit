@@ -487,7 +487,25 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 		t.Fatalf("the old hub's manual merge: %d %s", rec.Code, rec.Body.String())
 	}
 
+	// Charlie still follows the old host. Once the old host's main holds the
+	// new master's host record (alpha's round fetched it from bravo),
+	// charlie's next fetch from alpha brings it: GET /fleet then shows the
+	// record (fleet_urls, host_record) apart from where charlie syncs
+	// (hosting), which is how the page tells "this copy follows the old
+	// host". Charlie's push there is refused (alpha has an origin now).
+	alpha.round(t)
 	charlie.asClient(t)
+	_, _ = charlie.mgr.Send(ctx, charlie.fleet(t), repos.AttachOrigin(repos.OriginSpec{URL: alpha.fleetURL()}))
+	cst, err := charlie.mgr.FleetStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cst.Hosting != alpha.fleetURL() || len(cst.HostRecord) != 1 || cst.HostRecord[0] != bravo.fleetURL() ||
+		len(cst.FleetURLs) != 1 || cst.FleetURLs[0] != bravo.fleetURL() {
+		t.Fatalf("charlie on the old host: hosting %q host_record %v fleet_urls %v; want %q, [%s], [%s]",
+			cst.Hosting, cst.HostRecord, cst.FleetURLs, alpha.fleetURL(), bravo.fleetURL(), bravo.fleetURL())
+	}
+
 	if rec := charlie.api(http.MethodPut, "/repos/fleet/origin", body); rec.Code/100 != 2 {
 		t.Fatalf("charlie re-points: %d %s", rec.Code, rec.Body.String())
 	}

@@ -24,8 +24,8 @@ import (
 // operator visits approve a request.
 func RequireLocalVia(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, _ := auth.FromContext(r.Context())
-		if p.Via != auth.LocalVia {
+		if !isLocalVia(r) {
+			p, _ := auth.FromContext(r.Context())
 			hal.WriteProblem(w, http.StatusForbidden, "Permission denied",
 				"this operation is only available over the local authenticated listener (the unix socket, or the named pipe on Windows); principal "+p.String()+" did not arrive over it",
 				r.URL.Path)
@@ -33,6 +33,16 @@ func RequireLocalVia(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isLocalVia is RequireLocalVia's test: the request's principal came in over
+// the local authenticated listener (auth.LocalVia), as the edge vouched for
+// it. Nothing the client sends (a header, a query) can make it true. GET
+// /fleet reports it as `local`, so a page knows whether the mutations
+// RequireLocalVia guards are reachable from where it runs.
+func isLocalVia(r *http.Request) bool {
+	p, _ := auth.FromContext(r.Context())
+	return p.Via == auth.LocalVia
 }
 
 // mountOAuthPending adds the operator's side of consent path 1 to the PLAIN

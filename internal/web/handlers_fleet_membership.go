@@ -50,9 +50,7 @@ func handleJoinFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			writeFleetError(w, r, err)
 			return
 		}
-		view := fleetView(b, st.FleetStatus)
-		view["root_fingerprint"] = st.RootFingerprint
-		hal.WriteHAL(w, http.StatusOK, view)
+		hal.WriteHAL(w, http.StatusOK, fleetView(b, r, st))
 	}
 }
 
@@ -118,7 +116,7 @@ func handleLeaveFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			writeFleetError(w, r, err)
 			return
 		}
-		view := fleetView(b, out.FleetStatus)
+		view := fleetView(b, r, out.FleetStatus)
 		view["pushed"] = out.Pushed
 		if out.PushError != "" {
 			view["push_error"] = out.PushError
@@ -156,7 +154,7 @@ func handleDecommissionFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFun
 			writeFleetError(w, r, err)
 			return
 		}
-		hal.WriteHAL(w, http.StatusOK, fleetView(b, st))
+		hal.WriteHAL(w, http.StatusOK, fleetView(b, r, st))
 	}
 }
 

@@ -77,7 +77,7 @@ func joinTestFleet(t *testing.T, m *Manager, url string, root *pkitest.Fleet) (F
 	t.Helper()
 	mem := root.Enroll(t, m.AgentID()+"@"+pki.AgentEmailDomain, m.deps.KeyPath)
 	j, err := m.JoinFleet(context.Background(), FleetJoinSpec{Bundle: pkitest.WithURL(t, root.Bundle(t, mem), url)})
-	return j.FleetStatus, err
+	return j, err
 }
 
 // newFleetManager is a started manager that can sign (its member record is a

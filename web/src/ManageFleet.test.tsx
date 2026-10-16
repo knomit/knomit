@@ -16,7 +16,7 @@ const registering: FleetStatus = {
   state: 'registering',
   agent_id: 'mindev-local-8ef0cd32',
   fleet_repo: 'fleet',
-  fleet_url: 'https://github.com/knomit/fleet.git',
+  fleet_urls: ['https://github.com/knomit/fleet.git'],
   record_state: 'active',
   since: '2026-09-27T10:00:00Z',
   last_attempt: '2026-09-27T10:05:00Z',
@@ -47,7 +47,7 @@ describe('F10: addresses, capabilities and the own record', () => {
     agent_id: 'h1v302',
     fleet_repo: 'fleet',
     record_state: 'active',
-    external_addresses: ['https://h1v302.tail5113a7.ts.net'],
+    host: { listener: '', external_addresses: ['https://h1v302.tail5113a7.ts.net'] },
     record: {
       addresses: ['https://h1v302.tail5113a7.ts.net'],
       git: '/git',
@@ -77,7 +77,7 @@ describe('F10: addresses, capabilities and the own record', () => {
   it('says when the record differs from the config, and shows the notice with no addresses', async () => {
     vi.mocked(api.getFleet).mockResolvedValue({
       ...registered,
-      external_addresses: [],
+      host: { listener: '', external_addresses: [] },
       record_current: false,
       notice: 'no external addresses configured; set `external_addresses` in knomit.toml',
     });
