@@ -115,9 +115,10 @@ func TestFleetMove_TheHubMovesOntoAnEmptyForge(t *testing.T) {
 // the move seeds the forge with the hub's main BEFORE attaching it: the
 // first origin round then fetches a main equal to the hub's and rewinds
 // nothing. Every commit main had before the move is still on main after it.
-// SABOTAGE: drop the PublishTo seed in moveFleetToForge -> the first round
-// adopts the forge's older main and replays onto it -> the hub's main before
-// the move is no longer an ancestor of main -> red.
+// (Without the seed this case heals inside the first round: the round
+// rewinds local main to the forge's, replays nothing because the agent
+// branch descends from it, and publishes again. The seed's falsifying case
+// is the diverged forge below.)
 func TestFleetMove_BackOntoAForgeWhoseMainIsBehind(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
@@ -135,6 +136,37 @@ func TestFleetMove_BackOntoAForgeWhoseMainIsBehind(t *testing.T) {
 	out, gerr := exec.Command("git", "-C", f.bare, "merge-base", "--is-ancestor", mainBefore, mainAfter).CombinedOutput()
 	require.NoError(t, gerr, "the hub's main before the move is still on main after it (nothing rewound): %s", out)
 	require.Contains(t, bareFile(t, f.bare, "main", "artifacts/fleet/certs/gamma.pem"), "CERTIFICATE", "the hub-era enroll is on the forge's main")
+}
+
+// A forge whose main moved on without the hub (someone wrote to it after the
+// hub left) is refused before anything changes here: the seed pushes main
+// without force, the forge refuses it, and the move answers publish_refused
+// with the hub as it was. Attaching first would have adopted the forge's main
+// as fetched (trust-the-forge-main) and replayed the hub's branch onto it.
+// SABOTAGE: drop the PublishTo seed in moveFleetToForge -> the attach runs
+// and the hub has an origin -> red.
+func TestFleetMove_ADivergedForgeMainIsRefusedBeforeAnyChange(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	ri := hubOf(t, f)
+	work := t.TempDir()
+	runGit(t, "", "clone", f.bare, work)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("written past the hub\n"), 0o644))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "-c", "user.email=h@h", "-c", "user.name=h", "commit", "-q", "-m", "diverge")
+	runGit(t, work, "push", "-q", "origin", "main")
+	forgeMain := bareRev(t, f.bare, "main")
+	mainBefore := localTip(t, ri, "main")
+
+	_, err := f.master.FollowFleetHost(ctx, OriginSpec{URL: f.url})
+	status, code := fleetCode(t, err)
+	require.Equal(t, http.StatusConflict, status)
+	require.Equal(t, "publish_refused", code)
+	o, err := f.master.originOf(ri)
+	require.NoError(t, err)
+	require.Nil(t, o, "the hub has no origin: nothing changed here")
+	require.Equal(t, mainBefore, localTip(t, ri, "main"))
+	require.Equal(t, forgeMain, bareRev(t, f.bare, "main"), "the forge's main is untouched")
 }
 
 // A move whose host-record write fails leaves the copy exactly as it was:
