@@ -264,10 +264,10 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st := FleetStatus{
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
-		LastErrorRefused:       strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
+		LastErrorRefused: strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
 		LastErrorCommitRefused: (strings.Contains(row.LastError, store.CommitRefusedByJudge) || strings.Contains(row.LastError, store.CommitRefusedByValidation)) &&
 			!strings.Contains(row.LastError, store.OwnCommitRefusedText),
-		LastErrorStoodDown:     strings.Contains(row.LastError, FleetPushRefusalStoodDown),
+		LastErrorStoodDown: strings.Contains(row.LastError, FleetPushRefusalStoodDown),
 		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
 			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
 		RootDir:   m.fleetRootDir(),
