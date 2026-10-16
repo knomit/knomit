@@ -100,7 +100,9 @@ type FleetStatus struct {
 // and whether it has one (ListenerOn), its external_addresses ([] when
 // unset), and WouldServe: on the fleet's master while its copy has an origin
 // (so it is not the host), the fleet repository URLs members would use if it
-// hosted the fleet here (hubFleetURLs), what the Host-here confirm names.
+// hosted the fleet here (hubFleetURLs), what the Host-here confirm names; on a
+// standalone instance, the URLs of a fleet created here (the New fleet
+// wizard's Hosting step).
 type FleetHostOffer struct {
 	Listener          string   `json:"listener"`
 	ListenerOn        bool     `json:"listener_on"`
@@ -194,6 +196,11 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	}
 	ri := m.fleetRepo()
 	if ri == nil {
+		// Standalone: where members would join a fleet created here (the
+		// create's default name), for the New fleet wizard's Hosting step.
+		if st.State == FleetStandalone {
+			st.Host.WouldServe = credentialFreeAll(m.hubFleetURLsFor(defaultFleetRepoName))
+		}
 		return st, nil
 	}
 	head, onHead, _ := m.ownRecordAt(ri, ri.AgentBranch())

@@ -4059,8 +4059,10 @@ components:
                 On the fleet's master while its copy has an origin (it is not the
                 host): the fleet repository URLs members would use if it hosted the
                 fleet here (one https://<address>/git/<repo> per https external
-                address, as fleet_urls on a hub), for the Host-here confirm. Absent
-                otherwise. Built by the server; a page never builds a URL.
+                address, as fleet_urls on a hub), for the Host-here confirm. On a
+                standalone instance: the same URLs for a fleet created here with the
+                default name (fleet), for the New fleet wizard's Hosting step.
+                Absent otherwise. Built by the server; a page never builds a URL.
         record:
           type: object
           description: "This instance's own member record on its agent branch head (absent when there is none)"

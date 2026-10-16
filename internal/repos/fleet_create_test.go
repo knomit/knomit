@@ -197,6 +197,15 @@ func TestCreateFleet_HostedHere(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
 
+	// Before the create, a standalone instance says where members would join
+	// a fleet created here (the New fleet wizard's Hosting step), built by
+	// the server like every fleet URL.
+	// SABOTAGE: no would_serve on a standalone instance -> red.
+	pre, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Equal(t, FleetStandalone, pre.State)
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, pre.Host.WouldServe)
+
 	st, err := m.CreateFleet(ctx, FleetCreateSpec{})
 	require.NoError(t, err)
 	require.Equal(t, FleetRegistered, st.State)

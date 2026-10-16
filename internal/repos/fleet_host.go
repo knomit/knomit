@@ -35,10 +35,17 @@ const maxFleetHostSize = 4 << 10
 // out: members reach the hub's mTLS listener over https only (the enroll's
 // address_not_https).
 func (m *Manager) hubFleetURLs(ri *RepoInstance) []string {
+	return m.hubFleetURLsFor(ri.Name())
+}
+
+// hubFleetURLsFor is hubFleetURLs for a fleet repository named repo, which
+// need not exist yet: a standalone instance names where members would join
+// a fleet created here (GET /fleet host.would_serve).
+func (m *Manager) hubFleetURLsFor(repo string) []string {
 	urls := []string{}
 	for _, a := range m.deps.Cfg.ExternalAddresses {
 		if strings.HasPrefix(strings.ToLower(a), "https://") {
-			urls = append(urls, strings.TrimSuffix(a, "/")+"/git/"+ri.Name())
+			urls = append(urls, strings.TrimSuffix(a, "/")+"/git/"+repo)
 		}
 	}
 	return urls

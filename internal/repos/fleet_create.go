@@ -85,6 +85,10 @@ type FleetCreateSpec struct {
 	Origin *OriginSpec
 }
 
+// defaultFleetRepoName is the fleet repository's name when a create names
+// none (the New fleet wizard never does).
+const defaultFleetRepoName = "fleet"
+
 // fleetCreateHooks are test seams for the fleet create. Every field is nil
 // in production.
 type fleetCreateHooks struct {
@@ -238,7 +242,7 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 	}
 	name := spec.Name
 	if name == "" {
-		name = "fleet"
+		name = defaultFleetRepoName
 	}
 	cs := CreateSpec{Name: name, Mode: "custom", OntologyYAML: string(y), fleetDoor: true}
 	if spec.Origin == nil {
