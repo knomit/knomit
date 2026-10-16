@@ -502,15 +502,14 @@ func requireFleetActivity(t *testing.T, hub *fleetNode, charlieSerial string) {
 
 // The master switch on a knomit-hosted fleet (R3.2), over the real routes:
 // alpha is the hub and master, bravo and charlie members. The root files go
-// from alpha (GET /fleet/root) to bravo (PUT); alpha's stand-down is refused
-// while it is the hub; bravo detaches its origin (it hosts the fleet now);
-// alpha re-points at bravo and stands down; charlie re-points; charlie's and
+// from alpha (GET /fleet/root) to bravo (PUT); alpha stands down first (its
+// last commit as master marks main); bravo syncs and detaches its origin (it
+// hosts the fleet now); alpha re-points at bravo; charlie re-points; charlie's and
 // alpha's next pushes reach bravo, which judges and merges them. A member's
 // detach, a member's upstream PATCH and the old hub's manual merge of a dead
 // pushed branch are refused.
-// SABOTAGE: drop the hub check in StandDown -> alpha stands down while it is
-// the hub -> red; drop the master check of guardFleetDetach -> charlie's
-// detach is 204 -> red.
+// SABOTAGE: drop the master check of guardFleetDetach -> charlie's detach is
+// 204 -> red.
 func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -550,9 +549,11 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	if _, err := bravo.mgr.InstallFleetRoot(files.Files); err != nil {
 		t.Fatal(err)
 	}
-	if code := fleetCodeOf(t, alpha.mgr.StandDown(ctx)); code != "hub" {
-		t.Fatalf("the hub's stand-down: %s, want hub", code)
+	// The old master stands down first; the new one syncs and hosts.
+	if err := alpha.mgr.StandDown(ctx); err != nil {
+		t.Fatalf("the hub stands down first: %v", err)
 	}
+	bravo.round(t)
 
 	bravo.serve(t)
 	if rec := bravo.localAPI(http.MethodPost, "/fleet/host", "{}"); rec.Code != http.StatusOK {
@@ -562,21 +563,18 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 		t.Fatalf("bravo after the detach: %+v", bst)
 	}
 	// The new host records where the fleet is hosted on its main; the old
-	// hub's main still says the old host.
+	// hub's main still says the old host, marked stood down.
 	if got, want := readAt(t, bravo.fleet(t), "main", fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
 		t.Fatalf("bravo's host record after the detach: %q, want it to end %q", got, want)
 	}
-	if got, want := readAt(t, alpha.fleet(t), "main", fact.FleetHostPath), "url: "+alpha.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
-		t.Fatalf("alpha's host record (written at create): %q, want it to end %q", got, want)
+	if got, want := readAt(t, alpha.fleet(t), "main", fact.FleetHostPath), "url: "+alpha.fleetURL()+"\nstood-down: alpha\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("alpha's host record (its stand-down mark): %q, want it to end %q", got, want)
 	}
 
 	alpha.asClient(t)
 	body := `{"url":"` + bravo.fleetURL() + `"}`
 	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", body); rec.Code != http.StatusOK {
 		t.Fatalf("the old master re-points at the new one: %d %s", rec.Code, rec.Body.String())
-	}
-	if err := alpha.mgr.StandDown(ctx); err != nil {
-		t.Fatalf("the old master stands down once it has an origin: %v", err)
 	}
 	if ast, _ := alpha.mgr.FleetStatus(ctx); ast.Master || ast.Hosting != bravo.fleetURL() {
 		t.Fatalf("alpha after the stand-down: %+v", ast)
@@ -631,119 +629,5 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 		if got, want := readAt(t, n.fleet(t), "main", fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
 			t.Fatalf("%s's main after its round: host record %q, want it to end %q", n.id, got, want)
 		}
-	}
-}
-
-// N1 (PR #528 follow-up): the self-hosted master switch in the order a user
-// meets it. The new master (bravo) hosts while its main LAGS the old hub's:
-// alpha merged bravo's pushed branch, and wrote a record change of its own,
-// after bravo's last fetch. Before that fetch alpha revoked charlie and
-// re-enrolled the same key, so certs/charlie.pem on main is a REPLACED leaf.
-// alpha then points at bravo and stands down. Its round finds bravo's main
-// not a descendant of its own and replays its agent branch onto it. Before
-// the fix the replay walked back to the watermark alpha's create seeded (a
-// hub never advances it) and re-submitted alpha's whole hub history: the
-// create commit's host record and charlie's first leaf, the local side
-// winning, so bravo's judge refused the push (host-record; artifact-replace
-// leaf-renewal) on every retry. Now only what bravo's main lacks is replayed:
-// alpha's own record change arrives, and alpha's branch holds bravo's host
-// record and charlie's newer leaf.
-// SABOTAGE: unpushedCommits ignores the upstream's history -> the host record
-// and the replaced leaf regress on alpha's branch and bravo refuses it -> red.
-func TestFleetMasterSwitch_NewHostBehindTheOldHub(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	alpha := newFleetNode(t, dir, "alpha")
-	if _, err := alpha.mgr.CreateFleet(ctx, repos.FleetCreateSpec{}); err != nil {
-		t.Fatal(err)
-	}
-	alpha.serve(t)
-	bravo := newFleetNode(t, dir, "bravo")
-	charlie := newFleetNode(t, dir, "charlie")
-	bravo.join(t, alpha)
-	hubPublishes(t, alpha, recordPath("bravo"), "state: active")
-	charlie.join(t, alpha)
-	hubPublishes(t, alpha, recordPath("charlie"), "state: active")
-
-	// A replaced leaf on main: revoke charlie, re-enroll the same key. The
-	// re-issued leaf must start later than the first (leaf-renewal).
-	charliePEM := path.Join("artifacts", "fleet", "certs", "charlie.pem")
-	firstLeaf := readAt(t, alpha.fleet(t), "main", charliePEM)
-	if _, err := alpha.mgr.RevokeFleetMember(ctx, "charlie", "re-enrolled"); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(1100 * time.Millisecond)
-	if _, err := alpha.mgr.EnrollFleetMember(ctx, "charlie", charlie.keyLine(), ""); err != nil {
-		t.Fatal(err)
-	}
-	newLeaf := readAt(t, alpha.fleet(t), "main", charliePEM)
-	if firstLeaf == "" || newLeaf == firstLeaf {
-		t.Fatalf("certs/charlie.pem was not replaced on alpha's main (%d bytes before)", len(firstLeaf))
-	}
-
-	// bravo's last fetch: its main is alpha's main here.
-	bravo.round(t)
-	if got := readAt(t, bravo.fleet(t), "main", charliePEM); got != newLeaf {
-		t.Fatal("bravo's fetch did not bring the re-enrolled leaf")
-	}
-
-	// After it, alpha's main moves twice: alpha merges bravo's pushed branch
-	// (bravo's round pushes; the merge lands after its fetch), and alpha
-	// writes a change of its own record, a member's write that must reach the
-	// new host.
-	editOwnRecord(t, bravo, bravo.cfg.ExternalAddresses[0], "https://bravo.moved.example")
-	bravo.round(t)
-	hubPublishes(t, alpha, recordPath("bravo"), "https://bravo.moved.example")
-	editOwnRecord(t, alpha, alpha.cfg.ExternalAddresses[0], "https://alpha.moved.example")
-	hubPublishes(t, alpha, recordPath("alpha"), "https://alpha.moved.example")
-	if got := readAt(t, bravo.fleet(t), "main", recordPath("alpha")); strings.Contains(got, "alpha.moved.example") {
-		t.Fatal("bravo's main is not behind alpha's: the scenario needs it to lag")
-	}
-
-	// The switch, as the Settings page drives it.
-	files, err := alpha.mgr.FleetRootFiles()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := bravo.mgr.InstallFleetRoot(files.Files); err != nil {
-		t.Fatal(err)
-	}
-	bravo.serve(t)
-	if rec := bravo.localAPI(http.MethodPost, "/fleet/host", "{}"); rec.Code != http.StatusOK {
-		t.Fatalf("the new master hosts the fleet: %d %s", rec.Code, rec.Body.String())
-	}
-	alpha.asClient(t)
-	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", `{"url":"`+bravo.fleetURL()+`"}`); rec.Code != http.StatusOK {
-		t.Fatalf("the old master points at the new host: %d %s", rec.Code, rec.Body.String())
-	}
-	if err := alpha.mgr.StandDown(ctx); err != nil {
-		t.Fatalf("the old master stands down: %v", err)
-	}
-	alpha.round(t)
-
-	// Errorf, not Fatalf: each of the three names its own regression.
-	if ast, err := alpha.mgr.FleetStatus(ctx); err != nil || ast.LastError != "" {
-		t.Errorf("the old master's sync after the switch: %v %q", err, ast.LastError)
-	}
-	own := alpha.fleet(t).AgentBranch()
-	if got, want := readAt(t, alpha.fleet(t), own, fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
-		t.Errorf("alpha's branch after the replay: host record %q, want it to end %q (the new host's)", got, want)
-	}
-	if got := readAt(t, alpha.fleet(t), own, charliePEM); got != newLeaf {
-		t.Error("alpha's branch after the replay holds charlie's FIRST leaf, not the re-enrolled one")
-	}
-	if t.Failed() {
-		t.FailNow()
-	}
-	// Nothing alpha wrote as a member is lost: the new host admits and merges
-	// alpha's record change.
-	hubPublishes(t, bravo, recordPath("alpha"), "https://alpha.moved.example")
-	if r, ok := bravo.mgr.FleetRefusals()[own]; ok {
-		t.Fatalf("the new host refused alpha's branch: %+v", r)
-	}
-	// The next round stays clean (the refusal used to repeat on every one).
-	alpha.round(t)
-	if ast, _ := alpha.mgr.FleetStatus(ctx); ast.LastError != "" {
-		t.Fatalf("the old master's second round: %q", ast.LastError)
 	}
 }

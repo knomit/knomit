@@ -95,7 +95,10 @@ func (ri *RepoInstance) fleetHostRound(ctx context.Context, svc *store.Service) 
 		return
 	}
 	defer m.fleetOpMu.Unlock()
-	if !ri.isFleetMaster(svc) {
+	// A master whose copy follows another instance writes no record
+	// (actsAsFleetMaster): only a hub runs this round, so that is never this
+	// copy, but the predicate is the one every master duty asks.
+	if !ri.actsAsFleetMaster(svc) {
 		return
 	}
 	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil && ctx.Err() == nil {
@@ -244,6 +247,16 @@ func (m *Manager) fleetHostAt(ri *RepoInstance, branch string) (string, bool, er
 // holds: nil when main holds none, or one that cannot be read (logged by the
 // caller's error).
 func (m *Manager) fleetHostAtMain(ri *RepoInstance) ([]string, error) {
+	r, err := m.fleetHostRecordAtMain(ri)
+	if err != nil || r == nil {
+		return nil, err
+	}
+	return r.URLs, nil
+}
+
+// fleetHostRecordAtMain is the host record at the fleet repository's main,
+// nil when main holds none.
+func (m *Manager) fleetHostRecordAtMain(ri *RepoInstance) (*fact.FleetHostRecord, error) {
 	var upstream string
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc != nil {
@@ -259,5 +272,45 @@ func (m *Manager) fleetHostAtMain(ri *RepoInstance) ([]string, error) {
 	if err != nil || !ok {
 		return nil, err
 	}
-	return fact.ParseFleetHost([]byte(raw))
+	r, err := fact.ParseFleetHostRecord([]byte(raw))
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// writeStoodDown is the master's last commit as master (StandDown): the host
+// record as it stands, its URLs unchanged (main is still served there until a
+// new master hosts the fleet), plus this instance's agent id as the master
+// that stood down; then main is published. The new master's Host here reads
+// it on its own main (fleetHostRecordAtMain): with it, its main holds every
+// write the old master made as master. A record the branch does not hold
+// (a fleet older than the record) is written with the URLs a host here
+// would write: the hub's, or the origin's.
+func (m *Manager) writeStoodDown(ctx context.Context, ri *RepoInstance) error {
+	var urls []string
+	if raw, ok, err := m.fleetHostAt(ri, ri.AgentBranch()); err != nil {
+		return err
+	} else if ok {
+		if r, perr := fact.ParseFleetHostRecord([]byte(raw)); perr == nil {
+			urls = r.URLs
+		}
+	}
+	if len(urls) == 0 {
+		o, err := m.originOf(ri)
+		if err != nil {
+			return err
+		}
+		if o == nil {
+			urls = m.hubFleetURLs(ri)
+		} else {
+			urls = []string{o.URL}
+		}
+	}
+	id := m.AgentID()
+	rec := fact.RenderFleetHostRecord(fact.FleetHostRecord{URLs: credentialFreeAll(urls), StoodDown: id})
+	if err := m.writeFleetArtifacts(ctx, ri, map[string]string{fact.FleetHostPath: rec}, "fleet: "+id+" stood down as the fleet's master"); err != nil {
+		return err
+	}
+	return m.publishMasterWrite(ctx, ri)
 }

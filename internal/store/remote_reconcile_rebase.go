@@ -50,14 +50,16 @@ import (
 //
 // Whatever the stop point, the walk also stops at the first commit that
 // upstreamTip's history holds: a commit already upstream is never replayed.
+// "Holds" is upstreamTip's whole history (every parent, not its first-parent
+// chain): a member's commits reach a fleet's main through the SECOND parent
+// of the master's merge. Stopping there can never skip a local commit:
+// ancestry is closed, so everything below a held commit is held too.
 //
 // Returns empty (and disjoint=false) when localTip is an ancestor of
 // upstreamTip (nothing local to replay — caller will fast-forward), OR
 // when upstreamTip is an ancestor of localTip (local is a strict linear
 // extension — caller's force-push will fast-forward origin without
-// rewriting commit hashes). It is ALSO empty when the two diverged but
-// everything local beyond the upstream is merges: replayOntoUpstream then
-// moves the branch onto upstreamTip.
+// rewriting commit hashes).
 func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumbing.Hash) ([]*object.Commit, bool, error) {
 	if localTip == upstreamTip {
 		return nil, false, nil
@@ -351,20 +353,12 @@ func (rh *repoHandler) replayOntoUpstream(
 		return AgentReconcileResult{}, err
 	}
 
-	// No unpushed commits. unpushedCommits returns empty in three distinct
+	// No unpushed commits. unpushedCommits returns empty in two distinct
 	// ancestry shapes:
 	//   1. local is an ancestor of upstream → fast-forward local to upstream.
 	//   2. upstream is an ancestor of local → local is a strict linear
 	//      extension; the caller's force-push will fast-forward origin.
 	//      Do NOT rewind local — that would orphan its branch_commits rows.
-	//      The same when the two histories are DISJOINT (no common
-	//      ancestor): the branch keeps its own root, the repo's identity.
-	//   3. neither, on SHARED history: the two diverged and everything local
-	//      beyond upstream is merges (nothing of this branch's own to
-	//      carry). It falls through
-	//      to the replay below with no commits, which moves local onto
-	//      upstream. Pushing local as it stands would re-submit those merges,
-	//      and what they brought in, as this copy's own work.
 	if len(commits) == 0 {
 		if localTip == upstreamTip {
 			return AgentReconcileResult{Mode: ModeNoop}, nil
@@ -381,44 +375,25 @@ func (rh *repoHandler) replayOntoUpstream(
 		if err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: IsAncestor: %w", err)
 		}
-		keep := false
 		if !isLocalAncestor {
-			// Shape 2, or two DISJOINT histories (an origin with a root of
-			// its own): the branch keeps its own history, as it always has
-			// — its root commit is the repo's identity.
-			if keep, err = upstreamCommit.IsAncestor(localCommit); err != nil {
-				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: IsAncestor: %w", err)
-			}
-			if !keep {
-				bases, err := localCommit.MergeBase(upstreamCommit)
-				if err != nil {
-					return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: MergeBase: %w", err)
-				}
-				keep = len(bases) == 0
-			}
-		}
-		if keep {
 			// Local is strictly ahead of upstream — no replay, no fast-forward.
 			// Caller's force-push will advance origin to local.
 			return AgentReconcileResult{Mode: ModeNoop, NewTip: localTip.String()}, nil
 		}
-		if isLocalAncestor {
-			if err := rh.deriveBeforeAdvance(ctx, upstreamTip); err != nil {
-				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
-			}
-			newRef := plumbing.NewHashReference(localRefName, upstreamTip)
-			if err := rh.gits.SetReference(newRef); err != nil {
-				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
-			}
-			if err := rh.populateCommitLog(ctx, localBranch); err != nil {
-				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: populate after FF: %w", err)
-			}
-			if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
-				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
-			}
-			return AgentReconcileResult{Mode: ModeFF, NewTip: upstreamTip.String()}, nil
+		if err := rh.deriveBeforeAdvance(ctx, upstreamTip); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
 		}
-		// Shape 3: the replay below runs with no commits.
+		newRef := plumbing.NewHashReference(localRefName, upstreamTip)
+		if err := rh.gits.SetReference(newRef); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+		}
+		if err := rh.populateCommitLog(ctx, localBranch); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: populate after FF: %w", err)
+		}
+		if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
+		}
+		return AgentReconcileResult{Mode: ModeFF, NewTip: upstreamTip.String()}, nil
 	}
 
 	log.Info().

@@ -59,9 +59,17 @@ type FleetStatus struct {
 	// LastErrorCommitRefused: LastError is the fleet's host refusing a
 	// commit of this copy's push with its judge (store.CommitRefusedByJudge;
 	// the text names the commit, the rule and the reason). Every sync sends
-	// the same commit, so a retry is refused the same way until the fleet's
-	// main changes. Read from the recorded error only, as LastErrorRefused is.
+	// the same commit, so a retry does not help. Under the host-record and
+	// artifact rules, which read the commit against its own parents, no later
+	// main admits it either: the way out is to leave and be enrolled again.
+	// It is the dead-master fallback's residue (an old master's master write
+	// the new host's main lacks). Read from the recorded error only, as
+	// LastErrorRefused is.
 	LastErrorCommitRefused bool `json:"last_error_commit_refused,omitempty"`
+	// LastErrorStoodDown: LastError is the fleet's old host refusing this
+	// copy's push because its master stood down (FleetPushRefusalStoodDown):
+	// the push goes to the new host once this copy points at it.
+	LastErrorStoodDown bool `json:"last_error_stood_down,omitempty"`
 	// SyncIntervalSeconds is how often this copy's origin round runs (the
 	// origin record's interval, push_interval when shorter, 300 s when
 	// unset): a member sees what the master's round merged into main only
@@ -87,9 +95,16 @@ type FleetStatus struct {
 	// origin: this instance is the hub) or the origin's URL; empty when no
 	// fleet repository is mounted. RootDir is <home>/fleet, where the root
 	// key lives on the master (and where a master switch copies it to).
-	Master  bool   `json:"master"`
-	Hosting string `json:"hosting,omitempty"`
-	RootDir string `json:"root_dir"`
+	Master bool `json:"master"`
+	// MasterPaused, on the master, is why it does no master work now (no
+	// merges, enroll, revoke, decommission, host-record write):
+	// FleetPausedNotHosting; empty otherwise. HostStoodDown: the host record
+	// on main says the master that wrote it stood down
+	// (fact.FleetHostRecord.StoodDown), the agent id; empty otherwise.
+	MasterPaused  string `json:"master_paused,omitempty"`
+	HostStoodDown string `json:"host_stood_down,omitempty"`
+	Hosting       string `json:"hosting,omitempty"`
+	RootDir       string `json:"root_dir"`
 
 	// FleetURLs is the fleet repository URL(s) members use: on the hub, one
 	// https://<address>/git/<repo> per https external address; on any other
@@ -235,6 +250,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
 		LastErrorRefused:       strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
 		LastErrorCommitRefused: strings.Contains(row.LastError, store.CommitRefusedByJudge),
+		LastErrorStoodDown:     strings.Contains(row.LastError, FleetPushRefusalStoodDown),
 		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
 			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
 		RootDir:   m.fleetRootDir(),
@@ -279,6 +295,12 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		st.HostRecord = credentialFreeAll(hosted)
 	}
 	_ = ri.WithRead(func(svc *store.Service) { st.Master = ri.isFleetMaster(svc) })
+	if st.Master {
+		st.MasterPaused = m.fleetMasterPause(ri)
+	}
+	if rec, rerr := m.fleetHostRecordAtMain(ri); rerr == nil && rec != nil {
+		st.HostStoodDown = rec.StoodDown
+	}
 	if o, oerr := m.originOf(ri); oerr == nil {
 		st.Hosting = "none"
 		switch {

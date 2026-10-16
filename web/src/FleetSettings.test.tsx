@@ -70,30 +70,69 @@ describe('FleetSettings', () => {
   // then POST /fleet/follow {url}.
   // SABOTAGE: offer Point at only when !hub -> the hub has no button -> red;
   // send PUT /repos/fleet/origin -> no /fleet/follow call -> red.
-  it('the hub master offers Point at the new host, and the hub refusal of Stand down leads to it', async () => {
+  // Stand down comes first (user ruling 2026-10-16): the hub that stood down
+  // is no longer the master, and Point at is still its next step.
+  // SABOTAGE: offer Point at on the hub only while it is the master -> the
+  // stood-down hub has none -> red.
+  it('the hub offers Point at the new host, and still does once it stood down', async () => {
     const { calls } = stubFleetFetch({
-      'DELETE /api/v1/fleet/root': problem(409, 'hub', 'this instance hosts the fleet (its copy of fleet has no origin): host the fleet on the new master and point this copy at it first (Fleet → Settings → Point at the new host)'),
       'POST /api/v1/repos:probe-origin': { body: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'], fleet_peer: true } },
       'POST /api/v1/fleet/follow': problem(422, 'not_this_fleet', 'https://other.example/git/fleet is not an instance of this fleet'),
     });
-    const onChanged = mount(hub);
-    expect(screen.getByTestId('fleet-point-at')).toBeInTheDocument();
-    expect(screen.getByTestId('fleet-point-at-hint')).toHaveTextContent('The step after another instance hosts the fleet');
-    fireEvent.click(screen.getByTestId('fleet-standdown'));
-    fireEvent.click(screen.getByTestId('fleet-standdown-submit'));
-    fireEvent.click(await screen.findByTestId('fleet-standdown-point-at'));
-    expect(screen.getByTestId('fleet-follow-flow')).toBeInTheDocument();
+    const { unmount } = render(<FleetSettings fleet={hub} onChanged={vi.fn()} />);
+    expect(screen.getByTestId('fleet-point-at-hint')).toHaveTextContent('After this instance stood down and another instance hosts the fleet');
+    unmount();
+    const onChanged = mount({ ...hub, master: false, host_stood_down: hub.agent_id });
+    fireEvent.click(screen.getByTestId('fleet-point-at'));
     expect(screen.getByTestId('fleet-follow-flow')).toHaveTextContent('Fleet URL (from the new master\'s Settings → Hosting)');
     expect(screen.getByTestId('fleet-follow-flow')).not.toHaveTextContent('Auth method');
     fireEvent.change(screen.getByTestId('fleet-follow-url'), { target: { value: 'https://other.example/git/fleet' } });
     fireEvent.click(screen.getByTestId('fleet-follow-test'));
     expect(await screen.findByTestId('fleet-follow-reached')).toHaveTextContent('Reached other.example');
-    expect(calls.find(c => c.route === 'POST /api/v1/repos:probe-origin')?.body).toEqual({ url: 'https://other.example/git/fleet' });
     fireEvent.click(screen.getByTestId('fleet-follow-submit'));
     expect(await screen.findByTestId('fleet-follow-error-code')).toHaveTextContent('not_this_fleet');
     expect(calls.find(c => c.route === 'POST /api/v1/fleet/follow')?.body).toEqual({ url: 'https://other.example/git/fleet' });
-    expect(calls.map(c => c.route)).not.toContain('PUT /api/v1/repos/fleet/origin');
     expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  // Host here on a copy that follows another instance: with no stand-down on
+  // this copy's main the confirm says what is left out, and the click sends
+  // confirm_loss; with it, nothing is asked.
+  // SABOTAGE: drop the oldHost prop -> no loss card, body {} -> red.
+  it('Host here without the old master\'s stand-down on main asks the loss confirm', async () => {
+    const { calls } = stubFleetFetch({
+      'GET /api/v1/repos/fleet/origin': ORIGIN_CERT,
+      'POST /api/v1/fleet/host': { body: { ...hub } },
+    });
+    const newMaster: FleetStatus = { ...member, master: true, host: { listener_on: true, listening: true, external_addresses: ['https://ci.example:7443'], would_serve: ['https://served.example:7443/git/fleet'] } };
+    const first = render(<FleetSettings fleet={{ ...newMaster, host_stood_down: 'a3f9c0d12e7b' }} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId('fleet-host-here'));
+    expect(screen.queryByTestId('fleet-host-loss')).toBeNull();
+    expect(screen.getByTestId('fleet-host-submit')).toHaveTextContent('Host the fleet here');
+    first.unmount();
+    const onChanged = mount(newMaster);
+    fireEvent.click(await screen.findByTestId('fleet-host-here'));
+    expect(screen.getByTestId('fleet-host-loss')).toHaveTextContent('Hosting now leaves out every change made on kb-01.acme.example:7443 after this copy\'s last sync');
+    fireEvent.click(screen.getByTestId('fleet-host-submit'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(calls.find(c => c.route === 'POST /api/v1/fleet/host')?.body).toEqual({ confirm_loss: true });
+  });
+
+  // A refused push at a host whose master stood down is a plain wait, not a
+  // failure to retry.
+  // SABOTAGE: ignore last_error_stood_down -> "Retrying on the next sync." -> red.
+  it('a push refused because the master stood down says to point at the new host', () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    mount({ ...member, last_error: "Push: knomit: this copy of the fleet repository \"fleet\": its master stood down, and it takes no push", last_error_stood_down: true });
+    expect(screen.getByTestId('fleet-last-error-stood-down')).toHaveTextContent('Once the new master hosts the fleet, point this copy at it');
+    expect(screen.queryByTestId('fleet-last-error')).toBeNull();
+  });
+
+  // SABOTAGE: drop the master_paused card -> red.
+  it('a master whose copy follows another instance says it does no master work', async () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    mount({ ...member, master: true, master_paused: 'not_hosting' });
+    expect(screen.getByTestId('fleet-master-paused')).toHaveTextContent('it merges, enrolls and revokes nothing');
   });
 
   it('Point at the new host succeeds through POST /fleet/follow and returns to Settings', async () => {
@@ -225,7 +264,7 @@ describe('FleetSettings', () => {
     vi.stubGlobal('showSaveFilePicker', picker);
     mount(hub);
     fireEvent.click(screen.getByTestId('fleet-export'));
-    expect(screen.getByTestId('fleet-export-confirm')).toHaveTextContent('A fleet has one master. Copy the key to the new master and remove it from the old one; knomit does not check that you did.');
+    expect(screen.getByTestId('fleet-export-confirm')).toHaveTextContent('A fleet has one master at a time. The old master stands down first');
     fireEvent.click(screen.getByTestId('fleet-export-save'));
     const done = await screen.findByTestId('fleet-export-done');
     expect(calls.map(c => c.route)).toContain('GET /api/v1/fleet/root');
@@ -262,14 +301,18 @@ describe('FleetSettings', () => {
     }
   });
 
-  it('Stand down on the hub is refused `hub`, and says the key is still here', async () => {
-    stubFleetFetch({ 'DELETE /api/v1/fleet/root': problem(409, 'hub', 'this instance hosts the fleet (its copy of fleet has no origin)') });
+  // Stand down needs nothing first: the confirm says what stops, and a
+  // refusal says the key is still here.
+  // SABOTAGE: drop the hub clause of the steps -> red.
+  it('Stand down on the hub says what stops, and a refusal keeps the key', async () => {
+    const { calls } = stubFleetFetch({ 'DELETE /api/v1/fleet/root': problem(409, 'stand_down_unpublished', 'the commit that records the stand-down did not reach the fleet\'s main') });
     mount(hub);
     fireEvent.click(screen.getByTestId('fleet-standdown'));
-    expect(screen.getByTestId('fleet-standdown-confirm')).toHaveTextContent('This instance still hosts the fleet.');
+    expect(screen.getByTestId('fleet-standdown-steps')).toHaveTextContent("members' pushes to it are refused until they point at the new host");
     fireEvent.click(screen.getByTestId('fleet-standdown-submit'));
-    expect(await screen.findByTestId('fleet-standdown-error-code')).toHaveTextContent('hub');
+    expect(await screen.findByTestId('fleet-standdown-error-code')).toHaveTextContent('stand_down_unpublished');
     expect(screen.getByTestId('fleet-standdown-error')).toHaveTextContent('The root key is still here.');
+    expect(calls.map(c => c.route)).toContain('DELETE /api/v1/fleet/root');
   });
 
   it('Leave posts /fleet/leave; its confirm says a rejoin needs the old certificate revoked', async () => {
@@ -346,6 +389,8 @@ describe('FleetSettings', () => {
     mount({ ...member, last_error: raw, last_error_commit_refused: true });
     expect(screen.getByTestId('fleet-last-error')).toHaveTextContent('Last sync failed: ' + raw);
     expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("The fleet's host refuses a commit on this instance's branch");
+    expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent('When the rule is host-record or an artifact rule, the refusal is permanent');
+    expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("leave the fleet here and ask the fleet's master to enroll this instance again");
     expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
     expect(screen.queryByTestId('fleet-refused-notice')).toBeNull();
   });

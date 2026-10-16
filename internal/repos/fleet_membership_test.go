@@ -273,25 +273,48 @@ func TestFleetMembership_ForgeRootMovesAndTheOldMasterStandsDown(t *testing.T) {
 	require.True(t, st.Master)
 }
 
-// The hub (the master's copy has no origin) cannot stand down: point it at
-// the new master first. Its detach pre-flight is the create's: the listener
-// and an address.
-// SABOTAGE: drop the hub check in StandDown -> the root is deleted -> red.
-func TestFleetMembership_TheHubCannotStandDown(t *testing.T) {
+// The hub stands down FIRST (user ruling 2026-10-16): no precondition. Its
+// last act as master is one commit on main, the host record with its URLs
+// unchanged and marked stood down by this instance; then the root key goes.
+// From then on the hub takes no member push (FleetPushRefusalStoodDown) and
+// does no master work: enroll is refused, and its own round writes no host
+// record over the mark.
+// SABOTAGE: StandDown skips writeStoodDown -> main has no mark -> red; drop
+// the hub's not-master refusal in FleetPushRefusal -> "" -> red.
+func TestFleetMembership_TheHubStandsDownFirst(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
 	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
 	require.NoError(t, err)
-	err = m.StandDown(ctx)
-	status, code := fleetCode(t, err)
-	require.Equal(t, http.StatusConflict, status)
-	require.Equal(t, "hub", code)
+	ri := m.fleetRepo()
+	before, err := m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.NotEmpty(t, before)
+	require.Empty(t, m.FleetPushRefusal(ri), "setup: the hub takes pushes while it is the master")
+
+	require.NoError(t, m.StandDown(ctx))
 	_, err = os.Stat(filepath.Join(m.fleetRootDir(), pki.RootKeyFile))
-	require.NoError(t, err, "the root key stays")
+	require.True(t, os.IsNotExist(err), "the root key is gone: %v", err)
+	rec, err := m.fleetHostRecordAtMain(ri)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, m.AgentID(), rec.StoodDown, "main says who stood down")
+	require.Equal(t, before, rec.URLs, "the URLs main is served at are unchanged")
+
+	require.Contains(t, m.FleetPushRefusal(ri), FleetPushRefusalStoodDown)
+	_, err = m.EnrollFleetMember(ctx, "zed", keyLine("zed"), "")
+	_, code := fleetCode(t, err)
+	require.Equal(t, "not_master", code)
+	// The hub's round writes no record over the mark.
+	ri.fleetHostRound(ctx, nil)
+	_ = ri.WithRead(func(svc *store.Service) { ri.fleetHostRound(ctx, svc) })
+	rec, err = m.fleetHostRecordAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, m.AgentID(), rec.StoodDown)
 	st, err := m.FleetStatus(ctx)
 	require.NoError(t, err)
-	require.True(t, st.Master)
-	require.Equal(t, "none", st.Hosting)
+	require.False(t, st.Master)
+	require.Equal(t, m.AgentID(), st.HostStoodDown)
 }
 
 // POST /fleet/host's guard (R3.3): a member keeps its origin;
@@ -881,6 +904,6 @@ func TestFleetActivity_HostChangedDetailCarriesNoUserinfo(t *testing.T) {
 
 // hostHere is POST /fleet/host's call, its error only.
 func hostHere(ctx context.Context, m *Manager) error {
-	_, err := m.HostFleetHere(ctx)
+	_, err := m.HostFleetHere(ctx, FleetHostSpec{})
 	return err
 }

@@ -180,8 +180,8 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 		"/fleet/leave":         {"not_registered", "is_master"},
 		"/fleet/revoke":        {"not_enrolled", "already_revoked", "own_id", "not_master"},
 		"/fleet/decommission":  {"not_master"},
-		"/fleet/root":          {"no_root", "root_present", "root_incomplete", "unknown_file", "root_invalid", "hub", "not_following_host"},
-		"/fleet/host":          {"member_keeps_origin", "hub", "not_registered", "listener_required", "addresses_required"},
+		"/fleet/root":          {"no_root", "root_present", "root_incomplete", "unknown_file", "root_invalid", "stand_down_unpublished"},
+		"/fleet/host":          {"member_keeps_origin", "hub", "old_master_active", "not_registered", "listener_required", "addresses_required"},
 		"/fleet/follow":        {"url_required", "origin_invalid", "not_this_fleet", "auth_invalid", "unreachable", "not_registered", "publish_refused", "indexing"},
 		"/fleet/index-rebuild": {"not_registered"},
 	}

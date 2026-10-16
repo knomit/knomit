@@ -511,7 +511,7 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 // mount that is not admitted (admitFleetOntology) writes nothing either. It
 // returns the ontology in force.
 func (r *RepoInstance) refreshFleetOntology(ctx context.Context, svc *store.Service, read, srcPath string, ont *fact.Ontology) *fact.Ontology {
-	if r.subscribed || !r.fleetDoor || !r.env.m.isFleetMaster(svc) {
+	if r.subscribed || !r.fleetDoor || !r.env.m.isFleetMaster(svc) || r.env.m.fleetMasterPause(r) != "" {
 		return ont
 	}
 	builtIn := fact.FleetOntology()

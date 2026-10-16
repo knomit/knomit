@@ -1186,60 +1186,61 @@ func TestReconcileAgentRebase_NeverReplaysWhatUpstreamHolds(t *testing.T) {
 	require.NoError(t, err, "the agent's own write upstream lacks is carried")
 }
 
-// The same rewind with nothing of the agent's own beyond the new main:
-// everything there is a merge (the old hub's merges of members' branches).
-// The branch moves onto the new main. Before, an empty walk was taken for
-// "local strictly ahead" and the branch was pushed as it stood, its merges
-// and what they brought in re-submitted as this copy's own.
-// SABOTAGE: return Noop when the walk is empty and local is not an ancestor
-// of upstream (the old rule) -> the tip stays the merge -> red.
-func TestReplayOntoUpstream_OnlyMergesBeyondUpstreamMovesOntoIt(t *testing.T) {
+// "Upstream holds" is the upstream's WHOLE history, not its first-parent
+// chain. In a fleet a member's commits reach main through the SECOND parent
+// of the master's merge; when the member later rewinds onto a new host's
+// main, its earlier commit c1 is held only there. Only c2, the agent's
+// commit upstream lacks, is replayed.
+// SABOTAGE: collect onUpstream from upstreamTip's first-parent chain only ->
+// c1 is not held, the walk runs back to the watermark and replays it again
+// (2, not 1) -> red.
+func TestReconcileAgentRebase_UpstreamHoldsThroughASecondParent(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+	require.NoError(t, svc.InitRepo(ctx, map[string]string{}, "agent/test"))
 	seed, err := svc.rh.readAgentBase("agent/test")
 	require.NoError(t, err)
 
+	// The agent's earlier commit, and the new commit upstream lacks.
 	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
-	// A member's branch, merged into the agent branch with a merge commit.
-	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/member", "agent/test"))
-	memberTip := plumbing.NewHash(writeMergeFact(t, svc, "agent/member", "kb/member.md", "M", "theirs"))
-	merged, err := svc.MergeConsensus(context.Background(), "agent/member", "agent/test", memberTip)
-	require.NoError(t, err)
-	require.Equal(t, ModeMerge, merged.Mode, "setup needs a merge commit")
+	c2 := writeMergeFact(t, svc, "agent/test", "kb/own.md", "Own", "mine")
 
-	// The new main holds c1, and a change of its own, but not the merge.
-	u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
-	res, err := svc.rh.replayOntoUpstream(context.Background(), "agent/test", u, seed, StrategyLocalWins)
+	// The master's side: a commit of its own on the seed, then its merge of
+	// the agent's branch at c1 (first parent: its own line; second: c1),
+	// then one more of its own. c1 is on the upstream only through the
+	// merge's second parent.
+	m0 := upstreamCommit(t, svc, seed, "kb/m0.md", "---\ntype: observation\n---\n# M0\n\nmaster\n")
+	m0c, err := svc.rh.repo.CommitObject(m0)
 	require.NoError(t, err)
-	require.Equal(t, 0, res.NumReplayed)
-	require.Equal(t, u, mustHeadHash(t, svc, "agent/test"), "the branch moves onto the new main")
-}
+	c1c, err := svc.rh.repo.CommitObject(c1)
+	require.NoError(t, err)
+	// The merge's tree: m0's tree plus kb/a.md from c1, built by writing
+	// c1's file on top of m0 and taking that commit's tree.
+	aFile, err := c1c.File("kb/a.md")
+	require.NoError(t, err)
+	aBody, err := aFile.Contents()
+	require.NoError(t, err)
+	treeOf := upstreamCommit(t, svc, m0c.Hash, "kb/a.md", aBody)
+	tc, err := svc.rh.repo.CommitObject(treeOf)
+	require.NoError(t, err)
+	sig := object.Signature{Name: "master", Email: "m@m"}
+	merge := &object.Commit{Author: sig, Committer: sig, Message: "merge agent/test", TreeHash: tc.TreeHash,
+		ParentHashes: []plumbing.Hash{m0, c1}}
+	obj := svc.rh.repo.Storer.NewEncodedObject()
+	require.NoError(t, merge.Encode(obj))
+	mh, err := svc.rh.repo.Storer.SetEncodedObject(obj)
+	require.NoError(t, err)
+	u := upstreamCommit(t, svc, mh, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
 
-// The empty walk on DISJOINT histories (an origin with a root of its own,
-// nothing of the agent's beyond the watermark) keeps the branch where it is:
-// its root commit is the repo's identity (RepoInstance.ID), and moving onto
-// the origin's main would change it. Only shared history moves.
-// SABOTAGE: drop the MergeBase check (keep = false on disjoint) -> the
-// branch moves onto the disjoint root -> red (and repos
-// TestSwap_CopyFailureRestoresStoreAndOrigin, web
-// TestHandleCommit_Disjoint_FailedSwapRestartsThePreviousSyncMode).
-func TestReplayOntoUpstream_EmptyWalkOnDisjointHistoryKeepsTheBranch(t *testing.T) {
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	res, err := svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
-	seed, err := svc.rh.readAgentBase("agent/test")
+	require.Equal(t, ModeRebase, res.Mode)
+	require.Equal(t, 1, res.NumReplayed, "only c2 (%s) is replayed: c1 is upstream through the merge's second parent", c2[:8])
+	tip, err := svc.rh.repo.CommitObject(mustHeadHash(t, svc, "agent/test"))
 	require.NoError(t, err)
-	before := mustHeadHash(t, svc, "agent/test")
-	require.Equal(t, seed, before, "setup: nothing beyond the watermark")
-
-	disjoint := makeDisjointRoot(t, svc, "kb/theirs.md", "their own root")
-	res, err := svc.rh.replayOntoUpstream(context.Background(), "agent/test", disjoint, seed, StrategyLocalWins)
-	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode)
-	require.Equal(t, before, mustHeadHash(t, svc, "agent/test"), "the branch keeps its own root")
+	require.Equal(t, []plumbing.Hash{u}, tip.ParentHashes, "the one replayed commit sits on the new main")
 }

@@ -2091,9 +2091,20 @@ export interface FleetStatus {
   last_error_refused?: boolean;
   // last_error_commit_refused: last_error is the fleet's host refusing a
   // commit of this copy's push with its judge (commit, rule, reason in the
-  // text): every sync sends the same commit, so a retry does not help until
-  // the fleet's main changes (#528 N1).
+  // text). A retry does not help; under the host-record and artifact rules
+  // (read against the commit's own parents) nothing ever admits it: leave
+  // and be enrolled again.
   last_error_commit_refused?: boolean;
+  // last_error_stood_down: last_error is this copy's host refusing its push
+  // because the master there stood down: the push goes to the new host once
+  // this copy points at it.
+  last_error_stood_down?: boolean;
+  // master_paused (on the master): not_hosting while its copy follows
+  // another instance of the fleet: it does no master work here.
+  // host_stood_down: the agent id the host record on main names as the
+  // master that stood down; Host here needs it, or the loss confirm.
+  master_paused?: 'not_hosting';
+  host_stood_down?: string;
   sync_interval_seconds?: number;
   // F10: what this instance offers to host a fleet (listener: its mTLS
   // listener's bind, '' when off, sent to a local caller only; listener_on:
@@ -2298,8 +2309,9 @@ const exportFleetRoot = () => fleetCall<FleetRoot>('GET', '/root');
 const importFleetRoot = (files: Record<string, string>) => fleetCall<FleetRoot>('PUT', '/root', { files });
 const standDownFleetRoot = () => fleetCall<void>('DELETE', '/root');
 /** Host the fleet here (POST /fleet/host): this copy drops its origin and
- *  becomes the hub. */
-const hostFleetHere = () => fleetCall<FleetStatus>('POST', '/host', {});
+ *  becomes the hub. confirmLoss: host although this copy's main does not
+ *  show the old master's stand-down (old_master_active). */
+const hostFleetHere = (confirmLoss = false) => fleetCall<FleetStatus>('POST', '/host', confirmLoss ? { confirm_loss: true } : {});
 /** POST /fleet/follow: this copy follows the fleet from url (an instance of
  *  this fleet, or a forge holding this fleet's root, with this instance's own
  *  credential). url '' on a forge copy keeps the stored URL and changes the

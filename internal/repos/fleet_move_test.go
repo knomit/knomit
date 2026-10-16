@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
@@ -288,25 +289,30 @@ func seedFleetForge(t *testing.T, bare string, root *pkitest.Fleet) {
 	runGit(t, work, "push", "-q", "origin", "main")
 }
 
-// A copy whose origin is not where main says the fleet is hosted cannot
-// stand down (#528 N4): a hub that followed a peer which does not host the
-// fleet would leave the fleet with no master at its host. Once main names
-// this copy's origin, it may.
-// SABOTAGE: drop refuseNotFollowingHost from StandDown -> the root is
-// deleted -> red.
-func TestFleetStandDown_RefusedWhileNotFollowingTheHost(t *testing.T) {
+// A forge-hosted master stands down with no precondition too: its last
+// commit as master is published to the forge's main (the stood-down mark),
+// and only then does the root go. A publish that fails keeps the root
+// (stand_down_unpublished): a mark main never shows is no stand-down.
+// SABOTAGE: StandDown deletes the root when writeStoodDown fails -> red.
+func TestFleetStandDown_ForgeMasterPublishesItsMark(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
-	require.NoError(t, f.master.writeFleetHost(ctx, f.mri, []string{"https://elsewhere.example/git/fleet"}))
-	require.NoError(t, f.master.publishFleetMainNow(ctx, f.mri))
+	good := f.url
+	// An unreachable forge: the publish fails.
+	require.NoError(t, os.Rename(f.bare, f.bare+".away"))
 	err := f.master.StandDown(ctx)
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
-	require.Equal(t, "not_following_host", code)
-	_, serr := os.Stat(f.master.fleetRootDir())
+	require.Equal(t, "stand_down_unpublished", code)
+	_, serr := os.Stat(filepath.Join(f.master.fleetRootDir(), pki.RootKeyFile))
 	require.NoError(t, serr, "the root stays")
+	require.NoError(t, os.Rename(f.bare+".away", f.bare))
 
-	require.NoError(t, f.master.writeFleetHost(ctx, f.mri, []string{f.url}))
-	require.NoError(t, f.master.publishFleetMainNow(ctx, f.mri))
-	require.NoError(t, f.master.StandDown(ctx), "this copy follows the host on main")
+	require.NoError(t, f.master.StandDown(ctx))
+	out, gerr := exec.Command("git", "-C", f.bare, "show", "main:"+fact.FleetHostPath).Output()
+	require.NoError(t, gerr)
+	rec, perr := fact.ParseFleetHostRecord(out)
+	require.NoError(t, perr)
+	require.Equal(t, f.master.AgentID(), rec.StoodDown, "the forge's main carries the mark")
+	require.Equal(t, []string{good}, rec.URLs)
 }

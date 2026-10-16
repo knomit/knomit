@@ -80,7 +80,7 @@ export function when(iso: string): string {
 }
 
 /** The one-master sentence, verbatim in Export, Import and Stand down. */
-export const ONE_MASTER = 'A fleet has one master. Copy the key to the new master and remove it from the old one; knomit does not check that you did.';
+export const ONE_MASTER = 'A fleet has one master at a time. The old master stands down first; the new master hosts the fleet once its own copy of main shows that.';
 
 /** bundleHost is the host of the fleet URL a bundle's header names, for the
  *  `Couldn't reach <host>` and refused headlines. It reads the header the

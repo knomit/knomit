@@ -2586,9 +2586,8 @@ paths:
 
         The files of `<home>/fleet` as one document: `root.key` (the root
         PRIVATE key), `root.crt`, `crl.pem`, `issued.jsonl`, `revoked.jsonl`
-        (those present). Install them on the new master with `PUT`, then
-        stand down here with `DELETE`. One master at a time is the user's
-        job: nothing checks the other side. Refusals: `no_root` (404).
+        (those present). Install them on the new master with `PUT`; stand
+        down here with `DELETE`. Refusals: `no_root` (404).
       operationId: getFleetRoot
       responses:
         "200":
@@ -2638,22 +2637,25 @@ paths:
         LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
         any other transport is 403 and runs nothing.
 
-        Deletes `<home>/fleet` and keeps the membership: the user's way to
-        remove the key from the old master after a switch. Refused while
-        this instance's copy of the fleet repository has no origin (`hub`,
-        409): it hosts the fleet, so point it at the new host first (the
-        Fleet page's Fleet → Settings → Point at the new host, `POST
-        /fleet/follow`). Refused too while this copy's origin is not one of
-        the URLs the host record on its main names (`not_following_host`,
-        409: a hub pointed at a peer that does not host the fleet would leave
-        the fleet with no master at its host; right after pointing it, wait
-        for its first sync). Refusals: `no_root` (404).
+        The first step of a master switch, and it needs nothing first. While
+        this instance does master work, its last act as master is one
+        commit on main: the host record (`artifacts/fleet/host`) with its
+        URLs unchanged and a `stood-down: <agent id>` line (GET /fleet's
+        `host_stood_down`). Then `<home>/fleet`, the root key with it, is
+        deleted, and the membership stays: from here this instance merges,
+        enrolls and revokes nothing, and as the hub it refuses members'
+        pushes (they record `last_error_stood_down`). The new master's
+        `POST /fleet/host` checks its own main for that commit. A master
+        whose copy follows another instance of the fleet writes no commit
+        (it is not the host). Refusals: `no_root` (404),
+        `stand_down_unpublished` (409: the commit did not reach the fleet's
+        main, e.g. the forge refused it; the root stays, try again).
       operationId: standDownFleetRoot
       responses:
         "204": { description: Stood down }
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
-        "409": { description: "hub or not_following_host" }
+        "409": { description: stand_down_unpublished }
   /fleet/host:
     post:
       tags: [fleet]
@@ -2669,12 +2671,34 @@ paths:
         `host_record`). The master check and the detach are one step under
         the lock. A record write that fails does not undo the detach (it is
         answered as done): the hub's local reconcile re-asserts the record
-        every round. Refusals, nothing changed: `member_keeps_origin` (409:
-        only the master hosts the fleet), `hub` (409: this copy already has
-        no origin), `not_registered` (409), `listener_required` and
-        `addresses_required` (422: hosting needs [tls].addr and
-        external_addresses).
+        every round.
+
+        When this copy follows another instance of the fleet (the old host),
+        the one check is this copy's own main, as its ordinary sync left it:
+        the host record there must say the old master stood down (GET
+        /fleet `host_stood_down`). Otherwise the old master did not stand
+        down (it may be gone) or this copy has not synced since, and the
+        answer is `old_master_active` (409) unless the body says
+        `confirm_loss: true`: hosting then leaves out every change made on
+        the old host after this copy's last sync. Nothing is asked of the
+        old host. A forge origin is not checked.
+
+        Refusals, nothing changed: `member_keeps_origin` (409: only the
+        master hosts the fleet), `hub` (409: this copy already has no
+        origin), `old_master_active` (409), `not_registered` (409),
+        `listener_required` and `addresses_required` (422: hosting needs
+        [tls].addr and external_addresses).
       operationId: hostFleet
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm_loss:
+                  type: boolean
+                  description: "Host although this copy's main does not show the old master's stand-down: changes made on the old host after this copy's last sync are not included."
       responses:
         "200":
           description: Hosted here; the new state
@@ -2682,7 +2706,7 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/FleetStatus" }
         "403": { description: Not the local authenticated listener }
-        "409": { description: "member_keeps_origin, hub or not_registered" }
+        "409": { description: "member_keeps_origin, hub, old_master_active or not_registered" }
         "422": { description: "listener_required or addresses_required" }
   /fleet/follow:
     post:
@@ -4207,7 +4231,10 @@ components:
           description: "true when last_error is the fleet refusing this instance's certificate at the TLS handshake (revoked, or the fleet moved to another root): a retry does not help. Read from the recorded error; absent otherwise."
         last_error_commit_refused:
           type: boolean
-          description: "true when last_error is the fleet's host refusing a commit of this copy's push with its commit judge (the text names the commit, the rule and the reason): every sync sends the same commit, so a retry is refused the same way until the fleet's main changes. Read from the recorded error; absent otherwise."
+          description: "true when last_error is the fleet's host refusing a commit of this copy's push with its commit judge (the text names the commit, the rule and the reason). A retry does not help: every sync sends the same commit. Under the host-record and artifact rules, which read the commit against its own parents, no later main admits it either; the way out is to leave the fleet and be enrolled again. It is the residue of the dead-master fallback (an old master's master write the new host's main lacks). Read from the recorded error; absent otherwise."
+        last_error_stood_down:
+          type: boolean
+          description: "true when last_error is this copy's host refusing its push because the master there stood down: the push goes to the new host once this copy points at it (POST /fleet/follow). Read from the recorded error; absent otherwise."
         sync_interval_seconds:
           type: integer
           description: "How often this copy's origin round runs (the origin's interval, push_interval when shorter, 300 when unset): a member sees what the master merged into main only after its next round. Absent on the hub (no origin)."
@@ -4304,6 +4331,13 @@ components:
           properties:
             record_is_here: { type: boolean }
             move_back_to: { type: string }
+        master_paused:
+          type: string
+          enum: [not_hosting]
+          description: "On the master (master true): why it does no master work now (no merges, enroll, revoke, host-record write). not_hosting: its copy follows another instance of the fleet, which hosts it. Absent otherwise."
+        host_stood_down:
+          type: string
+          description: "The agent id the host record on main names as the master that stood down (its last commit as master, DELETE /fleet/root); absent while that master is the master. The new master's Host here needs it on its own main, or confirm_loss."
         last_error_fleet_moved:
           type: boolean
           description: "true when this copy follows an old host (follows_host false) and last_error is that host refusing its push because the host's copy has an origin now: the fleet moved, and a retry does not help until this copy points at the new host. Read from the recorded error; absent otherwise."
