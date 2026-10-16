@@ -125,7 +125,7 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	s := &Server{Manager: m, Grants: localWriteGrants()}
 
 	out := getFleetJSON(t, s)
-	require.Equal(t, map[string]any{"listener": "", "external_addresses": []any{}}, out["host"], "unset is an empty array, never null")
+	require.Equal(t, map[string]any{"listener_on": false, "external_addresses": []any{}}, out["host"], "unset is an empty array, never null")
 	require.Contains(t, out["notice"], "external_addresses")
 	require.NotContains(t, out, "record")
 	require.NotContains(t, out, "fleet_url", "fleet_url is gone: fleet_urls")
@@ -184,6 +184,39 @@ func TestFleetREST_LocalIsTheListenerNotTheClient(t *testing.T) {
 	spoofed.Header.Set("X-Forwarded-For", "unix")
 	spoofed.Header.Set("Origin", "app://knomit")
 	require.Equal(t, false, get(spoofed)["local"], "nothing the client sends makes it local")
+}
+
+// GET /fleet's host.listener (the [tls].addr bind) is shown to a local caller
+// only; over TCP the page learns that the listener is on (listener_on), not
+// where it is bound (PR #527).
+// SABOTAGE: drop the delete in fleetView -> the TCP row has the bind -> red;
+// drop listener_on -> red.
+func TestFleetREST_ListenerIsShownOnlyLocally(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	require.NoError(t, os.MkdirAll(home, 0o755))
+	key, err := testsigner.WriteNamedKey(home, "rest-fleet")
+	require.NoError(t, err)
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb", TLS: config.TLSConfig{Dir: filepath.Join(home, "pki"), Addr: "0.0.0.0:7443"}},
+		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), KeyPath: key, Machine: repos.Options{Synchronous: true},
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+	s := &Server{Manager: m, Grants: localWriteGrants()}
+	get := func(req *http.Request) map[string]any {
+		rec := httptest.NewRecorder()
+		s.NewAPIRouter().ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		return out
+	}
+	local := get(localPeer(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["host"].(map[string]any)
+	require.Equal(t, "0.0.0.0:7443", local["listener"], "a local caller sees the bind")
+	require.Equal(t, true, local["listener_on"])
+	tcp := get(fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["host"].(map[string]any)
+	require.NotContains(t, tcp, "listener", "over TCP the bind is not shown")
+	require.Equal(t, true, tcp["listener_on"], "only that the listener is on")
 }
 
 // F10: a member row shows every advertised field as the record has it, even

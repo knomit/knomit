@@ -223,7 +223,10 @@ func TestCreateFleet_HostedHere(t *testing.T) {
 	// what it offers, its key and the installed root.
 	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, st.FleetURLs, "the hub: one URL per https external address")
 	require.Equal(t, st.FleetURLs, st.HostRecord, "main records the same")
-	require.Equal(t, FleetHostOffer{Listener: "127.0.0.1:0", ExternalAddresses: []string{"https://fleet-host.example:19279"}}, st.Host)
+	require.Equal(t, FleetHostOffer{Listener: "127.0.0.1:0", ListenerOn: true, ExternalAddresses: []string{"https://fleet-host.example:19279"}}, st.Host,
+		"the hub hosts already: no would_serve")
+	require.NotNil(t, st.FollowsHost)
+	require.True(t, *st.FollowsHost, "the hub is the host")
 	require.Equal(t, rootID, st.RootFingerprint)
 	require.True(t, strings.HasPrefix(st.PublicKey, "ssh-ed25519 "), st.PublicKey)
 	require.Equal(t, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(m.deps.Signer.PublicKey()))), st.PublicKey)
@@ -303,6 +306,10 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	require.Equal(t, fileuri.New(bare), st.Hosting)
 	require.Equal(t, []string{fileuri.New(bare)}, st.FleetURLs, "a copy with an origin: the record on main")
 	require.Equal(t, []string{fileuri.New(bare)}, st.HostRecord)
+	require.NotNil(t, st.FollowsHost)
+	require.True(t, *st.FollowsHost, "the copy syncs with the host the record names")
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, st.Host.WouldServe,
+		"the master on a forge: the URLs members would use if it hosted the fleet here")
 
 	v, err := store.CheckRange(store.RangeInput{
 		KBDir: bare, Main: hs[1].hash, Candidate: "refs/heads/main",

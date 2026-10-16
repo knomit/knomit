@@ -55,10 +55,7 @@ func (m *Manager) writeFleetHost(ctx context.Context, ri *RepoInstance, urls []s
 			return err
 		}
 	}
-	clean := make([]string, len(urls))
-	for i, u := range urls {
-		clean[i] = credentialFree(u)
-	}
+	clean := credentialFreeAll(urls)
 	want := fact.RenderFleetHost(clean)
 	cur, ok, err := m.fleetHostAt(ri, ri.AgentBranch())
 	if err != nil {
@@ -97,6 +94,39 @@ func (ri *RepoInstance) fleetHostRound(ctx context.Context, svc *store.Service) 
 		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: the host record could not be re-asserted; the next round retries")
 	}
 }
+
+// credentialFreeAll is credentialFree of each of urls, in order.
+func credentialFreeAll(urls []string) []string {
+	out := make([]string, len(urls))
+	for i, u := range urls {
+		out[i] = credentialFree(u)
+	}
+	return out
+}
+
+// sameFleetURL reports whether a and b name the same fleet repository as a
+// member reaches it: compared without credentials, with the scheme and host
+// in any case, a default port (443 for https, 80 for http) dropped, and a
+// trailing slash ignored; the path is otherwise exact. A string that is not
+// a URL with a scheme is compared as it is.
+func sameFleetURL(a, b string) bool {
+	norm := func(u string) string {
+		u = credentialFree(u)
+		p, err := url.Parse(u)
+		if err != nil || !strings.Contains(u, "://") {
+			return strings.TrimSuffix(u, "/")
+		}
+		host := strings.ToLower(p.Hostname())
+		if port := p.Port(); port != "" && !(p.Scheme == "https" && port == "443" || p.Scheme == "http" && port == "80") {
+			host += ":" + port
+		}
+		return strings.ToLower(p.Scheme) + "://" + host + strings.TrimSuffix(p.EscapedPath(), "/")
+	}
+	return norm(a) == norm(b)
+}
+
+// boolPtr is &b.
+func boolPtr(b bool) *bool { return &b }
 
 // credentialFree is u without its userinfo (user, password, token): what is
 // written to the host record and shown by GET /fleet. A string that is not a

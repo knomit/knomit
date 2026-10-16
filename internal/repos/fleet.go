@@ -79,9 +79,16 @@ type FleetStatus struct {
 	// copy, what the host record on the fleet's main says, else the origin
 	// URL. Empty with no fleet repository. HostRecord is that host record as
 	// main holds it (omitted when main holds none, or one that cannot be
-	// read): a copy whose Hosting is not one of its URLs follows an old host.
-	FleetURLs  []string `json:"fleet_urls"`
-	HostRecord []string `json:"host_record,omitempty"`
+	// read). FollowsHost is the server's comparison of the two: true on the
+	// hub (it is the host), and on a copy with an origin whether that origin
+	// is one of the host record's URLs (sameFleetURL: scheme and host in any
+	// case, a default port, a trailing slash and credentials do not count);
+	// nil when there is nothing to compare (no fleet repository, or no host
+	// record on main). false is "this copy follows an old host". Every URL
+	// here, Hosting's included, is shown without its userinfo.
+	FleetURLs   []string `json:"fleet_urls"`
+	HostRecord  []string `json:"host_record,omitempty"`
+	FollowsHost *bool    `json:"follows_host,omitempty"`
 	// RootFingerprint is the fleet root installed in [tls].dir (omitted when
 	// none is).
 	RootFingerprint string `json:"root_fingerprint,omitempty"`
@@ -89,10 +96,16 @@ type FleetStatus struct {
 
 // FleetHostOffer is what this instance offers to host a fleet: its mTLS
 // listener address ([tls].addr; "" when it has none, and a fleet hosted here
-// is refused listener_required) and its external_addresses ([] when unset).
+// is refused listener_required; GET /fleet shows it only to a local caller)
+// and whether it has one (ListenerOn), its external_addresses ([] when
+// unset), and WouldServe: on the fleet's master while its copy has an origin
+// (so it is not the host), the fleet repository URLs members would use if it
+// hosted the fleet here (hubFleetURLs), what the Host-here confirm names.
 type FleetHostOffer struct {
 	Listener          string   `json:"listener"`
+	ListenerOn        bool     `json:"listener_on"`
 	ExternalAddresses []string `json:"external_addresses"`
+	WouldServe        []string `json:"would_serve,omitempty"`
 }
 
 // MemberFields are a member record's advertised, informational fields as the
@@ -165,7 +178,8 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st := FleetStatus{
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
-		Host:      FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
+		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
+			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
 		RootDir:   m.fleetRootDir(),
 		FleetURLs: []string{},
 	}
@@ -193,20 +207,29 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	if hosted, herr := m.fleetHostAtMain(ri); herr != nil {
 		log.Warn().Err(herr).Str("fleet", ri.Name()).Msg("fleet: the host record on main cannot be read")
 	} else if len(hosted) > 0 {
-		st.HostRecord = hosted
+		st.HostRecord = credentialFreeAll(hosted)
 	}
+	_ = ri.WithRead(func(svc *store.Service) { st.Master = ri.isFleetMaster(svc) })
 	if o, oerr := m.originOf(ri); oerr == nil {
 		st.Hosting = "none"
 		switch {
 		case o == nil:
-			st.FleetURLs = m.hubFleetURLs(ri)
+			st.FleetURLs = credentialFreeAll(m.hubFleetURLs(ri))
+			st.FollowsHost = boolPtr(true)
 		case len(st.HostRecord) > 0:
-			st.Hosting, st.FleetURLs = o.URL, st.HostRecord
+			st.Hosting, st.FleetURLs = credentialFree(o.URL), st.HostRecord
+			follows := false
+			for _, u := range st.HostRecord {
+				follows = follows || sameFleetURL(o.URL, u)
+			}
+			st.FollowsHost = &follows
 		default:
-			st.Hosting, st.FleetURLs = o.URL, []string{o.URL}
+			st.Hosting, st.FleetURLs = credentialFree(o.URL), []string{credentialFree(o.URL)}
+		}
+		if o != nil && st.Master {
+			st.Host.WouldServe = credentialFreeAll(m.hubFleetURLs(ri))
 		}
 	}
-	_ = ri.WithRead(func(svc *store.Service) { st.Master = ri.isFleetMaster(svc) })
 	st.RecordState = "pending"
 	members, lerr := m.fleetMembersAtMain(ri)
 	if lerr == nil {

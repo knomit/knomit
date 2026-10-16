@@ -14,11 +14,18 @@ import (
 // fleetView is a FleetStatus as HAL, with `local`: the request came in over
 // the local authenticated listener (isLocalVia, the test RequireLocalVia
 // makes), so the fleet's mutations are reachable from where the caller runs.
+// host.listener (the [tls].addr bind) is shown only to a local caller; any
+// other principal the edge admits sees host.listener_on, whether there is
+// one, and not where it is bound.
 func fleetView(b hal.URLBuilder, r *http.Request, st repos.FleetStatus) map[string]any {
+	local := isLocalVia(r)
 	raw, _ := json.Marshal(st)
 	out := map[string]any{}
 	_ = json.Unmarshal(raw, &out)
-	out["local"] = isLocalVia(r)
+	if host, ok := out["host"].(map[string]any); ok && !local {
+		delete(host, "listener")
+	}
+	out["local"] = local
 	links := hal.LinkMap{"self": {Href: b.APIRoot() + "/fleet"}}
 	if st.FleetRepo != "" {
 		links["members"] = hal.Link{Href: b.APIRoot() + "/fleet/members"}

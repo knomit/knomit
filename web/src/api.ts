@@ -2074,12 +2074,15 @@ export interface FleetStatus {
   registered_at?: string;
   last_attempt?: string;
   last_error?: string;
-  // F10: what this instance offers to host a fleet (its mTLS listener, ''
-  // when off, and the configured external_addresses, [] when unset), its
-  // own record on its agent branch, whether it matches the current config
-  // and binary, whether the fleet's main still holds an older version, and
-  // the notice shown while no address is configured.
-  host?: { listener: string; external_addresses: string[] };
+  // F10: what this instance offers to host a fleet (listener: its mTLS
+  // listener's bind, '' when off, sent to a local caller only; listener_on:
+  // whether it has one; the configured external_addresses, [] when unset;
+  // would_serve: on the master while it is not the host, the URLs members
+  // would use if it hosted the fleet here), its own record on its agent
+  // branch, whether it matches the current config and binary, whether the
+  // fleet's main still holds an older version, and the notice shown while no
+  // address is configured.
+  host?: { listener?: string; listener_on: boolean; external_addresses: string[]; would_serve?: string[] };
   record?: FleetRecordFields;
   record_current?: boolean;
   record_pending_update?: boolean;
@@ -2092,9 +2095,12 @@ export interface FleetStatus {
   root_dir?: string;
   // fleet_urls: the fleet repository URL(s) members use (the hub's own, else
   // the host record on main, else the origin); host_record: that record as
-  // main holds it; root_fingerprint: the installed fleet root.
+  // main holds it; follows_host: the server's comparison of the two (false =
+  // this copy follows an old host; absent when there is nothing to compare);
+  // root_fingerprint: the installed fleet root. No URL carries credentials.
   fleet_urls?: string[];
   host_record?: string[];
+  follows_host?: boolean;
   root_fingerprint?: string;
 }
 

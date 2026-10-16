@@ -47,7 +47,7 @@ describe('F10: addresses, capabilities and the own record', () => {
     agent_id: 'h1v302',
     fleet_repo: 'fleet',
     record_state: 'active',
-    host: { listener: '', external_addresses: ['https://h1v302.tail5113a7.ts.net'] },
+    host: { listener_on: false, external_addresses: ['https://h1v302.tail5113a7.ts.net'] },
     record: {
       addresses: ['https://h1v302.tail5113a7.ts.net'],
       git: '/git',
@@ -77,7 +77,7 @@ describe('F10: addresses, capabilities and the own record', () => {
   it('says when the record differs from the config, and shows the notice with no addresses', async () => {
     vi.mocked(api.getFleet).mockResolvedValue({
       ...registered,
-      host: { listener: '', external_addresses: [] },
+      host: { listener_on: false, external_addresses: [] },
       record_current: false,
       notice: 'no external addresses configured; set `external_addresses` in knomit.toml',
     });

@@ -395,6 +395,32 @@ func TestFleetHost_TheHubReassertsItsRecordEachRound(t *testing.T) {
 	hosted, err = m.fleetHostAtMain(ri)
 	require.NoError(t, err)
 	require.Equal(t, []string{"https://moved.example:8443/git/fleet"}, hosted, "the round follows the addresses, without credentials")
+	// GET /fleet shows no URL's credentials either (SF4).
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://moved.example:8443/git/fleet"}, st.FleetURLs, "the hub's own URLs, without credentials")
+	require.Equal(t, st.FleetURLs, st.HostRecord)
+}
+
+// sameFleetURL is the follows_host comparison: credentials, the case of the
+// scheme and host, a default port and a trailing slash do not count; the
+// path does.
+// SABOTAGE: compare the strings exactly -> the equal rows are red.
+func TestSameFleetURL(t *testing.T) {
+	for _, row := range []struct {
+		a, b string
+		same bool
+	}{
+		{"https://hub.example:7443/git/fleet", "https://hub.example:7443/git/fleet", true},
+		{"https://HUB.example:7443/git/fleet/", "https://hub.example:7443/git/fleet", true},
+		{"https://tok@hub.example/git/fleet", "https://hub.example:443/git/fleet", true},
+		{"https://hub.example/git/fleet", "https://hub.example/git/Fleet", false},
+		{"https://hub.example:7443/git/fleet", "https://other.example:7443/git/fleet", false},
+		{"https://hub.example:7443/git/fleet", "https://hub.example:7444/git/fleet", false},
+		{"git@github.com:org/fleet.git", "git@github.com:org/fleet.git", true},
+	} {
+		require.Equal(t, row.same, sameFleetURL(row.a, row.b), "%s vs %s", row.a, row.b)
+	}
 }
 
 // credentialFree drops a URL's userinfo, a token in it included (PR #527

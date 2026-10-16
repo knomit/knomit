@@ -580,9 +580,15 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 		t.Fatalf("charlie on the old host: hosting %q host_record %v fleet_urls %v; want %q, [%s], [%s]",
 			cst.Hosting, cst.HostRecord, cst.FleetURLs, alpha.fleetURL(), bravo.fleetURL(), bravo.fleetURL())
 	}
+	if cst.FollowsHost == nil || *cst.FollowsHost {
+		t.Fatalf("charlie on the old host: follows_host %v, want false (the server's comparison)", cst.FollowsHost)
+	}
 
 	if rec := charlie.api(http.MethodPut, "/repos/fleet/origin", body); rec.Code/100 != 2 {
 		t.Fatalf("charlie re-points: %d %s", rec.Code, rec.Body.String())
+	}
+	if cst, err := charlie.mgr.FleetStatus(ctx); err != nil || cst.FollowsHost == nil || !*cst.FollowsHost {
+		t.Fatalf("charlie re-pointed at the host: follows_host %v (%v), want true", cst.FollowsHost, err)
 	}
 	editOwnRecord(t, charlie, charlie.cfg.ExternalAddresses[0], "https://charlie.moved.example")
 	before := bravo.receives.Load()

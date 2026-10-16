@@ -4007,14 +4007,24 @@ components:
         last_error: { type: string, description: "The latest push or fetch failure; empty after a success" }
         host:
           type: object
-          required: [listener, external_addresses]
+          required: [listener_on, external_addresses]
           description: "What this instance offers to host a fleet, so a page can say before a create or a host-here that it would be refused (listener_required, addresses_required)"
           properties:
-            listener: { type: string, description: "[tls].addr, the mTLS listener members push to; empty when it is off" }
+            listener: { type: string, description: "[tls].addr, the mTLS listener's bind; empty when it is off. Sent only when `local` is true: any other caller gets listener_on, not where it is bound." }
+            listener_on: { type: boolean, description: "This instance has the mTLS listener members push to ([tls].addr is set)" }
             external_addresses:
               type: array
               items: { type: string }
               description: "knomit.toml external_addresses: the URLs PEERS use to reach this instance ([] when unset). Never derived, never probed."
+            would_serve:
+              type: array
+              items: { type: string }
+              description: |
+                On the fleet's master while its copy has an origin (it is not the
+                host): the fleet repository URLs members would use if it hosted the
+                fleet here (one https://<address>/git/<repo> per https external
+                address, as fleet_urls on a hub), for the Host-here confirm. Absent
+                otherwise. Built by the server; a page never builds a URL.
         record:
           type: object
           description: "This instance's own member record on its agent branch head (absent when there is none)"
@@ -4045,8 +4055,20 @@ components:
             The host record artifacts/fleet/host as the fleet's main holds it:
             the URL(s) the master recorded where the fleet is hosted, at
             create and when it became the host. Absent when main holds none
-            (or one that cannot be read). A copy whose `hosting` is not one of
-            these URLs follows an old host (after a master switch).
+            (or one that cannot be read). Whether this copy follows it is
+            follows_host, compared by the server.
+        follows_host:
+          type: boolean
+          description: |
+            The server's comparison of where this copy syncs with the host
+            record: true on the hub (it is the host); on a copy with an origin,
+            whether the origin is one of host_record's URLs (credentials, the
+            case of the scheme and host, a default port and a trailing slash do
+            not count). false is "this copy follows an old host" (after a master
+            switch). Absent when there is nothing to compare: no fleet
+            repository, or no host record on main. No URL in this response
+            (hosting, fleet_urls, host_record, host.would_serve) carries
+            credentials: userinfo is removed.
         root_fingerprint: { type: string, description: "The fleet root installed in [tls].dir (absent when none is): the root a member compares out of band; after a join, the root the bundle installed" }
     FleetEvent:
       type: object
