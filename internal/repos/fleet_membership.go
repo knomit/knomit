@@ -738,7 +738,14 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 		if holds {
 			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance holds the fleet's root key: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
 		}
-		if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
+		rec := m.advertised()
+		rec.State = fact.MemberLeft
+		// The leaf this instance leaves with: the only one the master's leave
+		// duty revokes for this record (a stale left record never names a
+		// later re-enroll's leaf). None installed: the record names none and
+		// the master's operator revokes by hand.
+		rec.LeafSerial = m.installedLeafSerial()
+		if err := m.writeRecord(ctx, ri, rec, "fleet: "+rec.Agent+" is "+rec.State, ""); err != nil {
 			out.PushError = "the left record was not written: " + err.Error()
 		} else if err := m.pushAgentBranch(ctx, ri); err != nil {
 			out.PushError = err.Error()
@@ -758,6 +765,17 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 	log.Info().Bool("pushed", out.Pushed).Msg("fleet: left; the master revokes the leaf once the left record is on main (by hand when it was not pushed)")
 	out.FleetStatus, err = m.FleetStatus(ctx)
 	return out, err
+}
+
+// installedLeafSerial is the serial (lowercase hex) of the instance
+// certificate installed in [tls].dir, "" when none is installed or it does
+// not parse.
+func (m *Manager) installedLeafSerial() string {
+	st, err := pki.Status(m.deps.Cfg.TLS.Dir, m.deps.KeyPath)
+	if err != nil || st.Cert == nil || st.Cert.Serial == nil {
+		return ""
+	}
+	return st.Cert.Serial.Text(16)
 }
 
 // removeFleetHere deletes the fleet repository here after dropping it from

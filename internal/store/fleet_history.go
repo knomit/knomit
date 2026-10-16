@@ -3,7 +3,6 @@ package store
 import (
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -25,39 +24,15 @@ import (
 // walked is left out, and so is one the tip does not hold.
 func (s *Service) FleetSince(branch string, paths []string, maxCommits int) (map[string]time.Time, error) {
 	out := map[string]time.Time{}
-	err := s.fleetLanded(branch, paths, maxCommits, func(p string, _ int, c *object.Commit) {
-		out[p] = c.Committer.When.UTC()
-	})
-	return out, err
-}
-
-// FleetLandedDepth is, for each repo path in paths that branch's tip holds,
-// how many first-parent commits back from the tip its current version landed
-// (FleetSince's commit, counted: 0 is the tip itself). The walk is not
-// bounded, so every path the tip holds is in the answer; one it does not hold
-// is left out. Of two paths, the smaller depth landed later.
-func (s *Service) FleetLandedDepth(branch string, paths []string) (map[string]int, error) {
-	out := map[string]int{}
-	err := s.fleetLanded(branch, paths, math.MaxInt, func(p string, depth int, _ *object.Commit) {
-		out[p] = depth
-	})
-	return out, err
-}
-
-// fleetLanded walks branch's first-parent chain from its tip, at most
-// maxCommits commits, and calls found once for each path of paths the tip
-// holds, with the oldest commit of the chain from which that path's blob is
-// the tip's and its depth (0: the tip).
-func (s *Service) fleetLanded(branch string, paths []string, maxCommits int, found func(p string, depth int, c *object.Commit)) error {
 	pending := map[string]plumbing.Hash{}
-	depth := -1
-	return s.walkFirstParent(branch, maxCommits, func(c *object.Commit, parent *object.Commit) error {
-		depth++
+	first := true
+	err := s.walkFirstParent(branch, maxCommits, func(c *object.Commit, parent *object.Commit) error {
 		tree, err := c.Tree()
 		if err != nil {
 			return err
 		}
-		if depth == 0 {
+		if first {
+			first = false
 			for _, p := range paths {
 				if h := fileHash(tree, p); !h.IsZero() {
 					pending[p] = h
@@ -72,7 +47,7 @@ func (s *Service) fleetLanded(branch string, paths []string, maxCommits int, fou
 		}
 		for p, h := range pending {
 			if fileHash(ptree, p) != h {
-				found(p, depth, c)
+				out[p] = c.Committer.When.UTC()
 				delete(pending, p)
 			}
 		}
@@ -81,6 +56,7 @@ func (s *Service) fleetLanded(branch string, paths []string, maxCommits int, fou
 		}
 		return nil
 	})
+	return out, err
 }
 
 // errStopWalk ends walkFirstParent early, without an error.

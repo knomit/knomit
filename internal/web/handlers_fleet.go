@@ -136,7 +136,9 @@ func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // used) except state, which is "revoked" when the CRL at the same main lists
 // the member's leaf, and "enrolled" for an id with a leaf on main and no
 // record (repos.Manager.FleetMembers derives both); addresses always an array
-// and capabilities always an object; since when the walk found it.
+// and capabilities always an object; since when the walk found it;
+// revoke_due (only when true) for a left record whose leaf the master's leave
+// duty revokes.
 func fleetMemberRow(mem repos.FleetMemberRow) map[string]any {
 	f := repos.MemberFieldsOf(mem.Member)
 	row := map[string]any{
@@ -145,6 +147,9 @@ func fleetMemberRow(mem repos.FleetMemberRow) map[string]any {
 	}
 	if mem.Since != nil {
 		row["since"] = mem.Since
+	}
+	if mem.RevokeDue {
+		row["revoke_due"] = true
 	}
 	return row
 }

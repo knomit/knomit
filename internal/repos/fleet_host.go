@@ -107,9 +107,9 @@ func (ri *RepoInstance) fleetHostRound(ctx context.Context, svc *store.Service) 
 	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil && ctx.Err() == nil {
 		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: the host record could not be re-asserted; the next round retries")
 	}
-	// The leave duty (fleet_leave.go): main follows its revocations in this
-	// same round.
-	ri.fleetLeaveRound(ctx)
+	// The leave duty (fleet_leave.go; it checks actsAsFleetMaster itself):
+	// main follows its revocations in this same round.
+	ri.fleetLeaveRound(ctx, svc)
 }
 
 // credentialFreeAll is credentialFree of each of urls, in order.

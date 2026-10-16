@@ -2,6 +2,8 @@ package repos
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,19 @@ import (
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
+
+// mainLeafSerial is the serial (lowercase hex) of id's leaf on the forge's
+// main.
+func (f *forgeFleet) mainLeafSerial(t *testing.T, id string) string {
+	t.Helper()
+	raw, err := runGitOut(f.bare, "show", "main:artifacts/fleet/certs/"+id+".pem")
+	require.NoError(t, err)
+	blk, _ := pem.Decode([]byte(raw))
+	require.NotNil(t, blk)
+	c, err := x509.ParseCertificate(blk.Bytes)
+	require.NoError(t, err)
+	return c.SerialNumber.Text(16)
+}
 
 // installMasterLeaf installs the forge master's own leaf in its [tls].dir,
 // as a real master's create does, so its InstallCRL has a root to check.
@@ -79,19 +94,20 @@ func (f *forgeFleet) masterRounds(t *testing.T) {
 //   - the join answers record_state pending (the record is on alpha's branch
 //     only, nothing judged it); after the master's round merges it into main
 //     and alpha syncs, active (accepted);
-//   - alpha leaves; the master's rounds, with no call, revoke its leaf once
-//     the left record is on main: the CRL and the statement on main, the CRL
+//   - alpha leaves with a left record naming its leaf (leaf_serial); the
+//     master's rounds, with no call, revoke that leaf once the left record is
+//     on main: the CRL and the statement on main, the CRL
 //     installed on the master and in its local copies; more rounds revoke
 //     nothing more;
 //   - the master enrolls alpha again (no `enrolled` refusal: no manual
 //     revoke), alpha rejoins and reads pending although main holds a record
 //     for it (`left`, not its candidate's state); the master's rounds do NOT
-//     revoke the fresh leaf (it landed on main after the left record) and the
+//     revoke the fresh leaf (the left record names the old serial) and the
 //     rejoin is accepted.
 //
 // SABOTAGE: drop `peers.runDuty` from the origin round -> the leaf is never
-// revoked -> red; drop the `ld < rd` skip in revokeLeftMembers -> the fresh
-// leaf is revoked on the rejoin -> red; drop `main.State != branch.State`
+// revoked -> red; drop the serial match in leftLeafDue -> the fresh leaf is
+// revoked on the rejoin -> red; drop `main.State != branch.State`
 // from recordStateOf -> the rejoin reads `left` -> red.
 func TestFleetLeave_ForgeMasterRevokesTheLeaverAndTheRejoinIsAccepted(t *testing.T) {
 	ctx := context.Background()
@@ -120,6 +136,7 @@ func TestFleetLeave_ForgeMasterRevokesTheLeaverAndTheRejoinIsAccepted(t *testing
 	rec, err := runGitOut(f.bare, "show", "main:"+memberRecordPath("kb", "alpha"))
 	require.NoError(t, err)
 	require.Contains(t, rec, "state: left", "the left record is on main")
+	require.Contains(t, rec, "leaf_serial: "+f.mainLeafSerial(t, "alpha")+"\n", "the left record names the leaf alpha left with")
 	require.Equal(t, int64(2), f.mainCRLNumber(t), "the master revoked alpha with no call")
 	require.Equal(t, fact.MemberRevoked, memberState(t, f.master, "alpha"), "derived from main's CRL")
 	statements, err := runGitOut(f.bare, "ls-tree", "--name-only", "main", "artifacts/fleet/revocations/")
@@ -151,12 +168,15 @@ func TestFleetLeave_ForgeMasterRevokesTheLeaverAndTheRejoinIsAccepted(t *testing
 
 // The leave duty is master work (#531's predicate): a holder of the fleet's
 // root key whom main's master marker does NOT name revokes no leaver, neither
-// through its own origin rounds (peers.isMaster) nor when its duty is called
-// directly (fleetMasterDuty re-checks actsAsFleetMaster). The left record is
-// on main and the leaf unrevoked while beta runs; the named master then
-// revokes it (positive control: the fixture could have revoked).
-// SABOTAGE: gate fleetMasterDuty on holdsFleetRoot instead of
-// actsAsFleetMaster -> beta revokes alpha -> red.
+// through its own origin rounds (peers.isMaster) nor when the duty is called
+// directly, as the forge's fleetMasterDuty and the hub's fleetHostRound call
+// it: fleetLeaveRound checks actsAsFleetMaster itself, so this one test pins
+// both hostings (#532 review SF2). The left record is on main and the leaf
+// unrevoked while beta runs (the members row says revoke_due, the master's
+// status revokes_left, beta's not); the named master then revokes it
+// (positive control: the fixture could have revoked).
+// SABOTAGE: drop the actsAsFleetMaster check from fleetLeaveRound (or gate it
+// on holdsFleetRoot) -> beta revokes alpha -> red.
 func TestFleetLeave_ARootHolderMainDoesNotNameRevokesNoLeaver(t *testing.T) {
 	ctx := context.Background()
 	beta := testsigner.Named("beta")
@@ -182,6 +202,20 @@ func TestFleetLeave_ARootHolderMainDoesNotNameRevokesNoLeaver(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, rec, "state: left", "fixture: the left record is on main")
 	require.Equal(t, int64(1), f.mainCRLNumber(t), "fixture: alpha's leaf is not revoked yet")
+	rows, err := f.master.FleetMembers(ctx)
+	require.NoError(t, err)
+	due := map[string]bool{}
+	for _, r := range rows {
+		due[r.Agent] = r.RevokeDue
+	}
+	require.True(t, due["alpha"], "the left row is revoke_due")
+	require.False(t, due["beta"])
+	mst, err := f.master.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.True(t, mst.RevokesLeft, "the acting master's rounds revoke leavers")
+	bst, err := bm.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.False(t, bst.RevokesLeft, "beta's do not")
 
 	mainBefore := f.rev(t, "main")
 	tlsCRL := filepath.Join(bm.deps.Cfg.TLS.Dir, pki.CRLFile)
@@ -192,6 +226,7 @@ func TestFleetLeave_ARootHolderMainDoesNotNameRevokesNoLeaver(t *testing.T) {
 		require.True(t, bm.holdsFleetRoot(svc), "setup: beta holds the root")
 		require.False(t, bri.actsAsFleetMaster(svc), "main names the master, not beta")
 		bri.fleetMasterDuty(ctx, svc)
+		bri.fleetLeaveRound(ctx, svc) // the hub's call, made directly
 	}))
 	round(t, bri)
 	require.Equal(t, mainBefore, f.rev(t, "main"), "beta publishes nothing to main")
@@ -321,5 +356,88 @@ func TestRecordStateOf(t *testing.T) {
 		{"main only", none, false, rec(fact.MemberActive), true, false, fact.MemberActive},
 	} {
 		require.Equal(t, c.want, recordStateOf(c.branch, c.onBranch, c.main, c.onMain, c.revoked), c.name)
+	}
+}
+
+// #532 review SF1: a stale `left` record, pushed before the operator revoked
+// alpha by hand and enrolled it again, is merged by the master AFTER the fresh
+// leaf landed on main. The record names the OLD leaf's serial, so the duty
+// revokes nothing: the fresh leaf stays valid and the rejoin is accepted.
+// SABOTAGE: drop the serial match from leftLeafDue -> the fresh leaf is
+// revoked (CRL 3) -> red.
+func TestFleetLeave_AStaleLeftMergedAfterAReenrollNeverRevokesTheFreshLeaf(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	installMasterLeaf(t, f)
+	alpha := f.namedMember(t, "alpha")
+	f.enrollAndJoin(t, alpha, "alpha")
+	f.masterRounds(t)
+	syncFleet(t, alpha)
+	oldSerial := f.mainLeafSerial(t, "alpha")
+
+	left, err := alpha.LeaveFleet(ctx)
+	require.NoError(t, err)
+	require.True(t, left.Pushed, left.PushError)
+	// The operator revokes by hand and enrolls alpha again before the
+	// master's round merged the left record.
+	_, err = f.master.RevokeFleetMember(ctx, "alpha", "by hand")
+	require.NoError(t, err)
+	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
+	require.NoError(t, err)
+	require.True(t, enr.Published, enr.PublishError)
+	require.Equal(t, int64(2), f.mainCRLNumber(t), "fixture: the manual revoke")
+	freshSerial := f.mainLeafSerial(t, "alpha")
+	require.NotEqual(t, oldSerial, freshSerial, "fixture: a fresh leaf on main")
+
+	f.masterRounds(t)
+	rec, err := runGitOut(f.bare, "show", "main:"+memberRecordPath("kb", "alpha"))
+	require.NoError(t, err)
+	require.Contains(t, rec, "state: left", "fixture: the stale left record landed on main after the fresh leaf")
+	require.Contains(t, rec, "leaf_serial: "+oldSerial+"\n", "it names the old leaf")
+	require.Equal(t, int64(2), f.mainCRLNumber(t), "the fresh leaf is not revoked by a stale left record")
+	rows, err := f.master.FleetMembers(ctx)
+	require.NoError(t, err)
+	for _, r := range rows {
+		require.False(t, r.RevokeDue, "nothing is due: %s", r.Agent)
+	}
+
+	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
+	require.NoError(t, err)
+	f.masterRounds(t)
+	require.Equal(t, int64(2), f.mainCRLNumber(t))
+	require.Equal(t, fact.MemberActive, memberState(t, f.master, "alpha"), "the rejoin is accepted")
+}
+
+// A `left` record written before leaf_serial existed names no leaf. The
+// choice (#532 review SF1): the duty never revokes for such a record, so it
+// can never revoke a later fresh leaf; its operator revokes by hand, as
+// before this change. Simulated by a leave with no certificate installed (the
+// record then names none).
+// SABOTAGE: let leftLeafDue accept an empty leaf_serial -> alpha's leaf is
+// revoked -> red.
+func TestFleetLeave_ALeftRecordNamingNoLeafIsNotRevokedAutomatically(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	installMasterLeaf(t, f)
+	alpha := f.namedMember(t, "alpha")
+	f.enrollAndJoin(t, alpha, "alpha")
+	f.masterRounds(t)
+	syncFleet(t, alpha)
+
+	require.NoError(t, os.Remove(filepath.Join(alpha.deps.Cfg.TLS.Dir, pki.InstanceCertFile)))
+	left, err := alpha.LeaveFleet(ctx)
+	require.NoError(t, err)
+	require.True(t, left.Pushed, left.PushError)
+	f.masterRounds(t)
+	rec, err := runGitOut(f.bare, "show", "main:"+memberRecordPath("kb", "alpha"))
+	require.NoError(t, err)
+	require.Contains(t, rec, "state: left", "fixture: the left record is on main")
+	require.NotContains(t, rec, "leaf_serial", "fixture: it names no leaf")
+	require.Equal(t, int64(1), f.mainCRLNumber(t), "not revoked automatically")
+	require.Equal(t, fact.MemberLeft, memberState(t, f.master, "alpha"))
+	rows, err := f.master.FleetMembers(ctx)
+	require.NoError(t, err)
+	for _, r := range rows {
+		require.False(t, r.RevokeDue, "not due: %s", r.Agent)
 	}
 }

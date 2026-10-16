@@ -44,16 +44,22 @@ type Member struct {
 	Addresses    []string
 	Git          string
 	Capabilities map[string]string
-	Notes        string // free text after the fields
+	// LeafSerial is, on a `left` record, the serial (lowercase hex) of the
+	// certificate the member held when it left: the one leaf the master's
+	// leave duty may revoke for it. Empty on any other record, and on a left
+	// record written before the field existed (the duty revokes nothing for
+	// such a record: its operator revokes by hand). Not advertised.
+	LeafSerial string
+	Notes      string // free text after the fields
 }
 
 // memberFields are the `field: value` lines a member record's body starts
 // with, in the order RenderMember writes them.
-var memberFields = []string{"agent", "state", "key", "host", "branch", "addresses", "git", "capabilities"}
+var memberFields = []string{"agent", "state", "key", "host", "branch", "addresses", "git", "capabilities", "leaf_serial"}
 
 // ParseMember reads a member record's body: one `field: value` line each for
-// agent, state and key (required) and host, branch, addresses, git and
-// capabilities (optional), then free text. Unknown fields are ignored so a newer writer's record still parses.
+// agent, state and key (required) and host, branch, addresses, git,
+// capabilities and leaf_serial (optional), then free text. Unknown fields are ignored so a newer writer's record still parses.
 func ParseMember(body string) (Member, error) {
 	m := Member{Addresses: []string{}}
 	var keyLine string
@@ -84,6 +90,8 @@ func ParseMember(body string) (Member, error) {
 					m.Git = strings.TrimSpace(v)
 				case "capabilities":
 					m.Capabilities = parseCapabilities(v)
+				case "leaf_serial":
+					m.LeafSerial = strings.ToLower(strings.TrimSpace(v))
 				}
 				continue
 			}
@@ -127,6 +135,7 @@ func RenderMember(m Member) string {
 		"addresses":    strings.Join(m.Addresses, " "),
 		"git":          m.Git,
 		"capabilities": renderCapabilities(m.Capabilities),
+		"leaf_serial":  m.LeafSerial,
 	}
 	if m.Key != nil {
 		vals["key"] = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(m.Key)))

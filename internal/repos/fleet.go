@@ -110,8 +110,12 @@ type FleetStatus struct {
 	// whose master has not written it yet.
 	MasterPaused string `json:"master_paused,omitempty"`
 	ActingMaster string `json:"acting_master,omitempty"`
-	Hosting      string `json:"hosting,omitempty"`
-	RootDir      string `json:"root_dir"`
+	// RevokesLeft says THIS instance's rounds revoke the members that leave
+	// (the leave duty): it acts as the fleet's master (Master, and not
+	// MasterPaused) and the fleet's main holds its PKI with a CRL.
+	RevokesLeft bool   `json:"revokes_left,omitempty"`
+	Hosting     string `json:"hosting,omitempty"`
+	RootDir     string `json:"root_dir"`
 
 	// FleetURLs is the fleet repository URL(s) members use: on the hub, one
 	// https://<address>/git/<repo> per https external address; on any other
@@ -308,6 +312,11 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	if st.RootHeld {
 		st.MasterPaused = m.fleetMasterPause(ri)
 	}
+	if st.Master && st.MasterPaused == "" {
+		if f, ferr := m.fleetAtMain(ri); ferr == nil && f.PKI != nil && f.PKI.CRL != nil {
+			st.RevokesLeft = true
+		}
+	}
 	if named, merr := m.fleetMasterAtMain(ri); merr == nil {
 		st.ActingMaster = named
 	} else {
@@ -430,10 +439,13 @@ const maxFleetWalk = 2000
 // record: State MemberEnrolled, or revoked when the CRL lists the leaf; Path
 // the leaf's). Since is the committer time of the commit that brought the
 // row's current version (the record, else the leaf) onto main; nil when that
-// is older than the maxFleetWalk commits walked.
+// is older than the maxFleetWalk commits walked. RevokeDue: the record is a
+// `left` record whose leaf the master's leave duty revokes (leftLeafDue),
+// which it does once an instance that acts as the master runs its round.
 type FleetMemberRow struct {
 	store.FleetMember
-	Since *time.Time
+	Since     *time.Time
+	RevokeDue bool
 }
 
 // FleetMembers returns the rows of GET /fleet/members at the fleet
@@ -448,11 +460,15 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 	if err != nil {
 		return nil, err
 	}
+	due := map[string]bool{}
+	for _, mem := range f.Members {
+		due[mem.Path] = leftLeafDue(f, mem) != nil
+	}
 	deriveRevoked(f)
 	rows := make([]FleetMemberRow, 0, len(f.Members))
 	recorded := map[string]bool{}
 	for _, mem := range f.Members {
-		rows = append(rows, FleetMemberRow{FleetMember: mem})
+		rows = append(rows, FleetMemberRow{FleetMember: mem, RevokeDue: due[mem.Path]})
 		recorded[mem.Agent] = true
 	}
 	for _, id := range f.PKI.CertIDs() {
