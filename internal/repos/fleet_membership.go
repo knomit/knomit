@@ -1012,7 +1012,7 @@ func (m *Manager) InstallFleetRoot(files map[string]string) (FleetRoot, error) {
 		return fail(err)
 	}
 	id, _ := pki.RootID(root.Cert)
-	log.Info().Str("dir", dir).Str("root", id).Msg("fleet: root installed; this instance is the master once that root is on the fleet's main")
+	log.Info().Str("dir", dir).Str("root", id).Msg("fleet: root installed; this instance is the master once the fleet's main names it (Host here, or a claim while main names no master)")
 	return FleetRoot{Dir: dir, RootFingerprint: id, Files: map[string]string{}}, nil
 }
 
