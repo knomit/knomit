@@ -364,7 +364,7 @@ func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) 
 		return fleetErr(http.StatusConflict, "rekey_unsupported", "agent "+agentID+" already has a certificate for another key: a lost or rotated key is a fresh start under a new agent id (a same-id rekey is not supported)")
 	}
 	if !pki.IsRevoked(p.CRL, leaf.SerialNumber) {
-		return fleetErr(http.StatusConflict, "enrolled", "agent "+agentID+" is enrolled (serial "+leaf.SerialNumber.Text(16)+" is not revoked): revoke it first (POST /api/v1/fleet/revoke)")
+		return fleetErr(http.StatusConflict, "enrolled", "agent "+agentID+" is enrolled (serial "+leaf.SerialNumber.Text(16)+" is not revoked): revoke it first (Fleet → Members → Revoke certificate)")
 	}
 	return nil
 }
@@ -643,7 +643,7 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 			return FleetLeft{}, err
 		}
 		if master {
-			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance is the fleet's master: decommission the fleet (POST /api/v1/fleet/decommission), or hand the root to another member (GET and PUT /api/v1/fleet/root) and stand down (DELETE /api/v1/fleet/root) first")
+			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance is the fleet's master: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
 		}
 		if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
 			out.PushError = "the left record was not written: " + err.Error()
@@ -935,7 +935,7 @@ func (m *Manager) StandDown(ctx context.Context) error {
 			return err
 		}
 		if !origin {
-			return fleetErr(http.StatusConflict, "hub", "this instance hosts the fleet (its copy of "+ri.Name()+" has no origin): point it at the new master first (PUT /api/v1/repos/"+ri.Name()+"/origin), or the fleet has no master and no host")
+			return fleetErr(http.StatusConflict, "hub", "this instance hosts the fleet (its copy of "+ri.Name()+" has no origin): host the fleet on the new master and point this copy at it first (Fleet → Settings → Point at the new host), or the fleet has no master and no host")
 		}
 	}
 	if err := os.RemoveAll(dir); err != nil {

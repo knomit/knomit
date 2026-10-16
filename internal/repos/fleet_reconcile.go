@@ -133,7 +133,7 @@ func (m *Manager) refreshOwnRecord(ctx context.Context, ri *RepoInstance) ([]str
 		return nil, err
 	}
 	if !found {
-		return nil, fmt.Errorf("fleet: this instance's member record is missing on %s; leave (POST /api/v1/fleet/leave) and join again to write it", ri.AgentBranch())
+		return nil, fmt.Errorf("fleet: this instance's member record is missing on %s; leave the fleet (Fleet → Settings → Leave) and join again to write it", ri.AgentBranch())
 	}
 	want := m.advertised()
 	changed := cur.Member.AdvertisedDiff(want)

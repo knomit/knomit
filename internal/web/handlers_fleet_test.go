@@ -225,7 +225,7 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	const fact = `{"title":"T","body":"b","domain":["x"]}`
 	rec := post("/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/facts", fact)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
 
 	rec = post("/repos/"+st.FleetRepo+"/experiments", `{"name":"exp-a"}`)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
@@ -263,10 +263,10 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	before := head()
 	rec = send(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch("agent/rest-fleet")+"/synthesis-runs", "")
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
 	rec = send(http.MethodPatch, "/repos/"+st.FleetRepo, `{"description":"hello","license":"MIT"}`)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "changes only through the fleet API")
+	require.Contains(t, rec.Body.String(), "changes only through the fleet's own actions")
 	require.Equal(t, before, head(), "nothing was committed on the fleet repository")
 
 	rec = send(http.MethodPatch, "/repos/kb", `{"description":"hello"}`)

@@ -263,10 +263,10 @@ func (m *Manager) refuseFleetPresent(db *sql.DB) error {
 		return err
 	}
 	if row.State != FleetStandalone {
-		return fleetErr(http.StatusConflict, "fleet_present", "this instance is in a fleet (state "+row.State+"): leave it first (POST /api/v1/fleet/leave)")
+		return fleetErr(http.StatusConflict, "fleet_present", "this instance is in a fleet (state "+row.State+"): leave the fleet first (Fleet → Settings → Leave)")
 	}
 	if ri := m.fleetRepo(); ri != nil {
-		return fleetErr(http.StatusConflict, "fleet_present", fmt.Sprintf("this instance has a fleet repository, %q, whose join did not finish (state standalone): remove it with POST /api/v1/fleet/leave", ri.Name()))
+		return fleetErr(http.StatusConflict, "fleet_present", fmt.Sprintf("this instance has a fleet repository, %q, whose join did not finish (state standalone): remove it by leaving the fleet (Fleet → Settings → Leave)", ri.Name()))
 	}
 	uid, err := recordedFleetRepo(db)
 	if err != nil {
@@ -279,7 +279,7 @@ func (m *Manager) refuseFleetPresent(db *sql.DB) error {
 				name = u.Record.Name
 			}
 		}
-		return fleetErr(http.StatusConflict, "fleet_present", "this instance has a recorded fleet repository (uid "+uid+") that is not mounted: archive it (DELETE /api/v1/repos/"+name+") if it is still listed, then purge it (DELETE /api/v1/archived/"+uid+")")
+		return fleetErr(http.StatusConflict, "fleet_present", "this instance has a recorded fleet repository (uid "+uid+") that is not mounted: archive "+name+" if it is still listed (its Settings → Danger zone → Archive), then purge it from Archived")
 	}
 	return nil
 }

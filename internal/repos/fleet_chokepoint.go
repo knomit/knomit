@@ -37,11 +37,11 @@ import (
 // doors (guardFleetRemoval).
 
 // ErrFleetOntologyReserved refuses a fleet-id ontology at a generic door.
-var ErrFleetOntologyReserved = errors.New("the ontology id \"fleet\" is reserved for the fleet repository, which only the fleet API (/api/v1/fleet/...) creates or joins")
+var ErrFleetOntologyReserved = errors.New("the ontology id \"fleet\" is reserved for the fleet repository, which only creating or joining a fleet makes (Fleet → Create or join a fleet)")
 
 // ErrFleetReadOnly is the one answer to an authored write (MCP, the fact
 // REST routes, an experiment) on the fleet repository.
-var ErrFleetReadOnly = errors.New("the fleet repository changes only through the fleet API (/api/v1/fleet/..., the Fleet page)")
+var ErrFleetReadOnly = errors.New("the fleet repository changes only through the fleet's own actions (the Fleet page)")
 
 // CauseFleetConflict: a registered repository holds an ontology with id
 // `fleet` but is not this instance's recorded fleet repository (an upstream

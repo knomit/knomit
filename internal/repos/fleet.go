@@ -352,7 +352,7 @@ func (m *Manager) guardFleetRemoval(name string) error {
 	if !m.IsFleetRepo(name) {
 		return nil
 	}
-	return fleetErr(http.StatusConflict, "fleet_repository", "this is the fleet repository: it is never archived or deleted directly; leave with `POST /api/v1/fleet/leave` (Fleet page); the master decommissions with `POST /api/v1/fleet/decommission`")
+	return fleetErr(http.StatusConflict, "fleet_repository", "this is the fleet repository: it is never archived or deleted directly; leave the fleet (Fleet → Settings → Leave), or, on the master, decommission it (Fleet → Settings → Decommission)")
 }
 
 // writeOwnRecord writes this instance's member record on the fleet
