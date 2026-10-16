@@ -2306,7 +2306,9 @@ paths:
         forge, or the hub when this master is not it), that origin's URL
         without its userinfo (a token in the origin URL is the master's own
         credential; a joiner supplies its own, so neither the bundle, nor
-        `fleet_url`, nor a refusal's text carries it), and
+        `fleet_url`, nor a refusal's text carries it; an `ssh://` URL keeps
+        its user, the login, and loses only a password; a URL that does not
+        parse loses everything before the last `@` of its authority), and
         `address` is refused (`address_not_applicable`, 422). When this
         instance is the hub, `https://<address>/git/<repo>` at one of this
         instance's `external_addresses`: with none configured, the enroll is
@@ -4116,7 +4118,8 @@ components:
             switch). Absent when there is nothing to compare: no fleet
             repository, or no host record on main. No URL in this response
             (hosting, fleet_urls, host_record, host.would_serve) carries
-            credentials: userinfo is removed.
+            credentials: userinfo is removed (an `ssh://` URL keeps its user,
+            the login, and loses only a password).
         root_fingerprint: { type: string, description: "The fleet root installed in [tls].dir (absent when none is): the root a member compares out of band; after a join, the root the bundle installed" }
     FleetEvent:
       type: object

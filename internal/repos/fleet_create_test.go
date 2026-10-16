@@ -409,6 +409,10 @@ func TestCreateFleet_PreflightRefusals(t *testing.T) {
 			status: http.StatusUnprocessableEntity, code: "origin_invalid"},
 		{name: "ftp origin", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "ftp://forge.example/fleet.git"}},
 			status: http.StatusUnprocessableEntity, code: "origin_invalid"},
+		// PR #528 S6: a URL that does not parse is refused without its
+		// userinfo in the text (asserted below for every row).
+		{name: "unparseable origin with a token", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "https://u:tok@exa mple.com/x"}},
+			status: http.StatusUnprocessableEntity, code: "origin_invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newFleetHost(t, t.TempDir(), tc.mod)
@@ -421,6 +425,7 @@ func TestCreateFleet_PreflightRefusals(t *testing.T) {
 			status, code := fleetCode(t, err)
 			require.Equal(t, tc.status, status, err.Error())
 			require.Equal(t, tc.code, code, err.Error())
+			require.NotContains(t, err.Error(), "tok@", "a refusal's text carries no userinfo")
 			require.Nil(t, m.fleetRepo())
 			require.Nil(t, m.Get("fleet"), "no repository was created")
 			if tc.code == "root_present" {

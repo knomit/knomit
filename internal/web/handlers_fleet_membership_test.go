@@ -170,6 +170,12 @@ func TestFleetREST_MemberOriginAndMergeGuards(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, url, o.URL, "the origin is unchanged")
 	}))
+	// PR #528 S6 on the attach surface: an unparseable URL with a token is
+	// refused (400 "invalid url", before any fleet check), and the text
+	// carries no userinfo.
+	rec = send(http.MethodPut, "/repos/"+st.FleetRepo+"/origin", `{"url":"https://u:tok@exa mple.com/x"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "tok@")
 }
 
 // Review N6: on the MASTER, the merge route re-judges the pushed branch at

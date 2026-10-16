@@ -137,4 +137,15 @@ func TestFleetCreate_Refusals(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"title":"Invalid name"`)
 	require.Empty(t, s.Manager.Names())
+
+	// PR #528 S6, the reviewer's case: a URL that does not parse is refused
+	// origin_invalid, and the refusal's text carries no userinfo.
+	// SABOTAGE: credentialFree returns u when url.Parse fails -> u:tok@ in
+	// the detail -> red.
+	rec = postFleetCreate(s, `{"origin":{"url":"https://u:tok@exa mple.com/x"}}`, true)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"origin_invalid"`)
+	require.NotContains(t, rec.Body.String(), "tok@")
+	require.Contains(t, rec.Body.String(), "https://exa mple.com/x", "the URL is named, without its userinfo")
+	require.Empty(t, s.Manager.Names())
 }

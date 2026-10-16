@@ -424,15 +424,23 @@ func TestSameFleetURL(t *testing.T) {
 }
 
 // credentialFree drops a URL's userinfo, a token in it included (PR #527
-// SF4), and leaves what is not a URL with a scheme as it is.
-// SABOTAGE: return u unchanged -> the token rows are red.
+// SF4), keeps an ssh:// user (it is the login, not a secret; PR #528 nit 1),
+// strips the userinfo of a URL that does not parse too (PR #528 S6), and
+// leaves what is not a URL with a scheme as it is.
+// SABOTAGE: return u unchanged -> the token rows are red; return u when
+// url.Parse fails -> the unparseable rows keep u:tok@ -> red; drop the ssh
+// arm -> ssh://git@ loses its user -> red.
 func TestCredentialFree(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://x-access-token:ghp_abc123@github.com/org/fleet.git": "https://github.com/org/fleet.git",
 		"https://oauth2@gitlab.example/org/fleet":                    "https://gitlab.example/org/fleet",
 		"https://hub.example:7443/git/fleet":                         "https://hub.example:7443/git/fleet",
 		"git@github.com:org/fleet.git":                               "git@github.com:org/fleet.git",
-		"ssh://git:pw@host/org/fleet":                                "ssh://host/org/fleet",
+		"ssh://git:pw@host/org/fleet":                                "ssh://git@host/org/fleet",
+		"ssh://git@github.com/a/f.git":                               "ssh://git@github.com/a/f.git",
+		"https://u:tok@exa mple.com/x":                               "https://exa mple.com/x",
+		"HTTPS://u:t@k@exa%zzmple.com/x?y=1":                         "HTTPS://exa%zzmple.com/x?y=1",
+		"http://[::1:u:tok@host/x":                                   "http://host/x",
 	} {
 		require.Equal(t, want, credentialFree(in), in)
 	}
@@ -810,7 +818,7 @@ func TestFleetMembership_JoinRefusesABundleURLThatIsNoFleetURL(t *testing.T) {
 	internalForm, err := pki.GitURL("https://hub.example:7443/git/fleet", true)
 	require.NoError(t, err)
 	refused := 0
-	for _, u := range []string{internalForm,"http://hub.example/git/fleet", "ftp://hub.example/fleet", "https:///git/fleet", "not a url"} {
+	for _, u := range []string{internalForm, "http://hub.example/git/fleet", "ftp://hub.example/fleet", "https:///git/fleet", "not a url"} {
 		withURL := pkitest.WithURL(t, bundle, u)
 		_, err := m.JoinFleet(context.Background(), FleetJoinSpec{Bundle: withURL})
 		status, code := fleetCode(t, err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -135,21 +136,44 @@ func sameFleetURL(a, b string) bool {
 // boolPtr is &b.
 func boolPtr(b bool) *bool { return &b }
 
-// credentialFree is u without its userinfo (user, password, token): what is
-// written to the host record and shown by GET /fleet. A string that is not a
-// URL with a scheme (an scp-style git@host:path names a user, not a secret)
-// is returned unchanged.
+// credentialFree is u without its secrets: what is written to the host
+// record, shown by GET /fleet, put in a bundle and quoted in a refusal.
+//
+//   - An http(s) URL (or any scheme but ssh) loses its whole userinfo: a
+//     token is often the user part (https://ghp_…@github.com).
+//   - An ssh:// URL keeps its user and loses only a password: the user is
+//     the account the transport logs in as (git@…), not a secret, and the
+//     bundle's URL stays the origin's.
+//   - A URL that does not parse still loses everything before the last @ of
+//     its authority (the `scheme://user:pass@` shape), so a typo in the host
+//     never puts the token into a refusal's text.
+//   - A string that is not a URL with a scheme (an scp-style git@host:path
+//     names a user, not a secret) is returned unchanged.
 func credentialFree(u string) string {
 	if !strings.Contains(u, "://") {
 		return u
 	}
 	p, err := url.Parse(u)
-	if err != nil || p.User == nil {
+	if err != nil {
+		return userinfoShape.ReplaceAllString(u, "$1")
+	}
+	if p.User == nil {
 		return u
+	}
+	if strings.EqualFold(p.Scheme, "ssh") {
+		if _, hasPassword := p.User.Password(); !hasPassword {
+			return u
+		}
+		p.User = url.User(p.User.Username())
+		return p.String()
 	}
 	p.User = nil
 	return p.String()
 }
+
+// userinfoShape is `scheme://` followed by an authority that holds an @: the
+// part up to its last @ is the userinfo, whatever it contains.
+var userinfoShape = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*@`)
 
 // fleetHostAt is the host record at branch of ri, as written; ok is false
 // when there is none.
