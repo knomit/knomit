@@ -51,6 +51,19 @@ func writeFleetError(w http.ResponseWriter, r *http.Request, err error) {
 		hal.WriteProblemWithExtra(w, fe.Status, http.StatusText(fe.Status), fe.Msg, r.URL.Path, extra)
 		return
 	}
+	// The fleet repository's lifecycle refused (an origin change while its
+	// index job runs). No cancel-index link: that is a generic repo route,
+	// refused for the fleet repository; the job ends on its own.
+	if errors.Is(err, repos.ErrIndexing) {
+		hal.WriteProblemWithExtra(w, http.StatusConflict, "Fleet repository is indexing",
+			"the fleet repository is indexing: wait for it to finish, then try again from Fleet → Settings", r.URL.Path,
+			map[string]any{"code": "indexing"})
+		return
+	}
+	if isLifecycleRefusal(err) {
+		writeLifecycleProblem(w, r, hal.URLBuilder{}, "", err)
+		return
+	}
 	hal.WriteProblem(w, http.StatusInternalServerError, "Fleet operation failed", err.Error(), r.URL.Path)
 }
 

@@ -350,9 +350,9 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverTheFleetTransport(t *testing
 	fleetURL := "https://" + tlsAddr + "/git/kb"
 
 	// 1. Probe over the fleet transport: B's branches, through B's real
-	//    handler.
+	//    handler, and fleet_peer: the URL is an instance of this fleet.
 	res, err := aMgr.ProbeOrigin(ctx, repos.OriginSpec{URL: fleetURL})
-	if err != nil || !res.Reachable || res.UpstreamBranch != "main" {
+	if err != nil || !res.Reachable || res.UpstreamBranch != "main" || !res.FleetPeer {
 		t.Fatalf("probe: %+v err=%v", res, err)
 	}
 
@@ -442,9 +442,11 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverTheFleetTransport(t *testing
 	}
 
 	// 7. The probe carries the named refusal in detail (the JSON field the
-	//    create wizard renders for an unreachable remote).
+	//    create wizard renders for an unreachable remote), without the
+	//    attach's "origin was not attached" wrap: a probe attaches nothing (#528 N5).
 	res, err = aMgr.ProbeOrigin(ctx, repos.OriginSpec{URL: fleetURL})
-	if err != nil || res.Reachable || !strings.Contains(res.Detail, pki.ErrRefusedByPeer.Error()) {
+	if err != nil || res.Reachable || !strings.Contains(res.Detail, pki.ErrRefusedByPeer.Error()) ||
+		strings.HasPrefix(res.Detail, repos.ErrOriginUnreachable.Error()) {
 		t.Fatalf("probe after revocation: %+v err=%v", res, err)
 	}
 }

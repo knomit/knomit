@@ -58,7 +58,7 @@ func fleetFreePort(t *testing.T) string {
 	return port
 }
 
-func newFleetNode(t *testing.T, dir, id string) *fleetNode {
+func newFleetNode(t *testing.T, dir, id string, mods ...func(*config.Config)) *fleetNode {
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.Home = filepath.Join(dir, id)
@@ -69,6 +69,9 @@ func newFleetNode(t *testing.T, dir, id string) *fleetNode {
 	addr := "127.0.0.1:" + fleetFreePort(t)
 	cfg.TLS = config.TLSConfig{Addr: addr, Dir: filepath.Join(cfg.Home, "pki")}
 	cfg.ExternalAddresses = []string{"https://" + addr}
+	for _, mod := range mods {
+		mod(&cfg)
+	}
 	key, _ := pkitest.NewKey(t)
 	n := &fleetNode{id: id, cfg: cfg, key: key, signer: keySigner(t, key)}
 	n.mgr = repos.New(context.Background(), repos.Deps{Cfg: cfg, KeyPath: key, Signer: n.signer, AgentID: id,

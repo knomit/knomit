@@ -226,6 +226,8 @@ type followRequest struct {
 	URL        string `json:"url"`
 	AuthMethod string `json:"auth_method,omitempty"`
 	AuthToken  string `json:"auth_token,omitempty"`
+	User       string `json:"user,omitempty"`
+	Password   string `json:"password,omitempty"`
 }
 
 // handleFollowFleet: POST /api/v1/fleet/follow {url}, "Point at the new
@@ -240,12 +242,17 @@ func handleFollowFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			return
 		}
 		req.URL = trimOriginURL(req.URL)
-		if req.URL == "" {
-			hal.WriteProblemWithExtra(w, http.StatusBadRequest, "URL required", "the body must carry the new host's fleet URL",
-				r.URL.Path, map[string]any{"code": "url_required"})
-			return
+		// The credential as PUT origin assembles it (basic: user:password).
+		// An empty url is a credential change on a forge copy: the stored URL
+		// stays, and repos refuses it (url_required) on any other copy.
+		token := assembleAuthToken(req.AuthMethod, req.AuthToken, req.User, req.Password)
+		if req.URL != "" {
+			if verr := validateURLAuth(req.URL, req.AuthMethod); verr != nil {
+				hal.WriteProblemWithExtra(w, http.StatusUnprocessableEntity, "Invalid origin", verr.Error(), r.URL.Path, map[string]any{"code": "auth_invalid"})
+				return
+			}
 		}
-		st, err := m.FollowFleetHost(r.Context(), repos.OriginSpec{URL: req.URL, AuthMethod: req.AuthMethod, AuthToken: req.AuthToken})
+		st, err := m.FollowFleetHost(r.Context(), repos.OriginSpec{URL: req.URL, AuthMethod: req.AuthMethod, AuthToken: token})
 		var fe *repos.FleetError
 		switch {
 		case err == nil:
@@ -258,10 +265,30 @@ func handleFollowFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblemWithExtra(w, http.StatusBadGateway, "Unreachable", err.Error(), r.URL.Path, map[string]any{"code": "unreachable"})
 		case errors.Is(err, repos.ErrOriginOntologyConflict):
 			hal.WriteProblemWithExtra(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path, map[string]any{"code": "not_this_fleet"})
-		case isLifecycleRefusal(err):
-			writeLifecycleProblem(w, r, b, "", err)
 		default:
 			writeFleetError(w, r, err)
 		}
+	}
+}
+
+// handleFleetIndexRebuild: POST /api/v1/fleet/index-rebuild, the fleet
+// repository's Rebuild (repos.Manager.RebuildFleetIndex): 201 with the job,
+// 200 when an identical rebuild absorbed it. Its progress reads through the
+// generic job route named in _links.job.
+func handleFleetIndexRebuild(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rb, err := m.RebuildFleetIndex(r.Context())
+		if err != nil {
+			writeFleetError(w, r, err)
+			return
+		}
+		status := http.StatusCreated
+		if rb.Absorbed {
+			status = http.StatusOK
+		}
+		hal.WriteHAL(w, status, map[string]any{
+			"id": rb.JobID, "kind": "index-rebuild", "state": "running", "repo": rb.Repo, "branch": rb.Branch,
+			"_links": hal.LinkMap{"job": {Href: b.Branch(rb.Repo, hal.Anchor{Branch: rb.Branch}) + "/index-rebuilds/" + rb.JobID}},
+		})
 	}
 }

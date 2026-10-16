@@ -1010,12 +1010,70 @@ func (m *Manager) StandDown(ctx context.Context) error {
 		if !origin {
 			return fleetErr(http.StatusConflict, "hub", "this instance hosts the fleet (its copy of "+ri.Name()+" has no origin): host the fleet on the new master and point this copy at it first (Fleet → Settings → Point at the new host), or the fleet has no master and no host")
 		}
+		if err := m.refuseNotFollowingHost(ri); err != nil {
+			return err
+		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
 	log.Info().Str("dir", dir).Msg("fleet: stood down as master; the root files are deleted here")
 	return nil
+}
+
+// refuseNotFollowingHost is the stand-down's check that this copy follows
+// the fleet's host (#528 N4): its origin must be one of the URLs the host
+// record on its main names (GET /fleet's follows_host). A copy that follows
+// a peer which does not host the fleet (a hub pointed at a plain member) is
+// refused: standing down there leaves the fleet with no master at its host.
+// A main with no host record (a fleet that predates it) decides nothing.
+func (m *Manager) refuseNotFollowingHost(ri *RepoInstance) error {
+	o, err := m.originOf(ri)
+	if err != nil || o == nil {
+		return err
+	}
+	hosted, err := m.fleetHostAtMain(ri)
+	if err != nil || len(hosted) == 0 {
+		return err
+	}
+	for _, u := range hosted {
+		if sameFleetURL(o.URL, u) {
+			return nil
+		}
+	}
+	return fleetErr(http.StatusConflict, "not_following_host",
+		"this copy follows "+credentialFree(o.URL)+", but the fleet's main says it is hosted at "+strings.Join(credentialFreeAll(hosted), ", ")+
+			": standing down now would leave the fleet without a master where it is hosted. Point this copy at the fleet's host (Fleet → Settings → Point at the new host); right after pointing it, wait for its first sync, then stand down")
+}
+
+// FleetIndexRebuild is what POST /fleet/index-rebuild answers: the index job
+// rebuilding the fleet repository's agent branch (Absorbed: an identical
+// rebuild already ran, and this is it).
+type FleetIndexRebuild struct {
+	JobID    string `json:"id"`
+	Repo     string `json:"repo"`
+	Branch   string `json:"branch"`
+	Absorbed bool   `json:"absorbed"`
+}
+
+// RebuildFleetIndex is POST /fleet/index-rebuild (user ruling 2026-10-16):
+// the repository Settings' Rebuild for the fleet repository, whose generic
+// route (POST /repos/{repo}/branches/{b}/index-rebuilds) is refused like
+// every generic mutation of it. The same lifecycle event (Rebuild) on the
+// agent branch, the one the generic Rebuild names; its progress reads through
+// the generic job routes. Under fleetOpMu like every fleet operation.
+func (m *Manager) RebuildFleetIndex(ctx context.Context) (FleetIndexRebuild, error) {
+	defer m.lockFleetOp()()
+	ri := m.fleetRepo()
+	if ri == nil {
+		return FleetIndexRebuild{}, fleetErr(http.StatusConflict, "not_registered", "this instance is in no fleet")
+	}
+	branch := ri.AgentBranch()
+	rep, err := m.Send(ctx, ri, Rebuild(branch))
+	if err != nil {
+		return FleetIndexRebuild{}, err
+	}
+	return FleetIndexRebuild{JobID: rep.JobID, Repo: ri.Name(), Branch: branch, Absorbed: rep.Absorbed}, nil
 }
 
 // HostFleetHere is POST /fleet/host, "Host the fleet here": this instance's
@@ -1095,17 +1153,33 @@ func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) error {
 	if ri == nil {
 		return fleetErr(http.StatusConflict, "not_registered", "this instance is in no fleet")
 	}
+	prev, err := m.originOf(ri)
+	if err != nil {
+		return err
+	}
 	o.URL = strings.TrimSpace(o.URL)
+	if o.URL == "" {
+		// A credential change on a forge copy: the stored URL stays.
+		if prev == nil || prev.AuthMethod == "cert" {
+			return fleetErr(http.StatusBadRequest, "url_required", "the body must carry the URL this copy follows the fleet from")
+		}
+		o.URL = prev.URL
+	}
 	if err := refuseFleetOrigin(o.URL); err != nil {
 		return err
+	}
+	// The same forge with no credential given keeps the stored one, as the
+	// generic origin edit does: a URL-only follow is not a reset to anonymous
+	// (auth_method "none" is).
+	if prev != nil && prev.AuthMethod != "cert" && o.AuthMethod == "" && o.AuthToken == "" && sameFleetURL(prev.URL, o.URL) {
+		o.AuthMethod, o.AuthToken = prev.AuthMethod, prev.AuthToken
 	}
 	decided, err := m.ResolveOrigin(ctx, o)
 	if err != nil {
 		return err
 	}
 	if decided.AuthMethod != "cert" {
-		return fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
-			credentialFree(o.URL)+" is not an instance of this fleet: its certificate does not chain to this fleet's root. Point this copy at the new master's fleet URL (its Fleet → Settings → Hosting)")
+		return m.followForge(ctx, ri, decided, prev)
 	}
 	if err := ri.WithRead(func(svc *store.Service) { decided.Branch = svc.UpstreamBranch() }); err != nil {
 		return err
