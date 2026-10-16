@@ -117,6 +117,10 @@ func credentialFreeAll(urls []string) []string {
 // in any case, a default port (443 for https, 80 for http) dropped, and a
 // trailing slash ignored; the path is otherwise exact. A string that is not
 // a URL with a scheme is compared as it is.
+//
+// The browser mirrors this in web/src/fleetText.ts (sameFleetURL, the Move
+// flow's "already on this forge"); both are held to the one table
+// internal/repos/testdata/same_fleet_url.json, so change them together.
 func sameFleetURL(a, b string) bool {
 	norm := func(u string) string {
 		u = credentialFree(u)

@@ -34,6 +34,8 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   const hub = fleet.hosting === 'none';
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [flow, setFlow] = useState<FleetFollowMode | null>(null);
+  // Update access chosen from inside the Move flow: the flow remounts, so its first field takes the keyboard focus.
+  const [handedOff, setHandedOff] = useState(false);
   // The URL a Move starts from: '' (the operator names the forge), or the
   // forge an interrupted move goes back to (interrupted_move.move_back_to).
   const [moveUrl, setMoveUrl] = useState('');
@@ -70,10 +72,11 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   const interrupted = master ? fleet.interrupted_move : undefined;
 
   if (flow && fleet.fleet_repo) {
-    const back = () => setFlow(null);
+    const back = () => { setFlow(null); setHandedOff(false); };
     return (
       <div data-testid="fleet-connect-flow" style={connectFlow}>
-        <FleetFollowFlow fleetRepo={fleet.fleet_repo} mode={flow} onCancel={back}
+        <FleetFollowFlow key={flow} fleetRepo={fleet.fleet_repo} mode={flow} onCancel={back}
+          onUpdateAccess={() => { setHandedOff(true); setFlow('access'); }} focusFirstField={flow === 'access' && handedOff}
           initialUrl={flow === 'access' ? fleet.hosting ?? '' : flow === 'move' ? moveUrl : flow === 'follow' && stale ? (fleet.host_record ?? [])[0] ?? '' : ''}
           initialMethod={flow === 'access' && ['none', 'token', 'basic', 'ssh'].includes(storedMethod) ? storedMethod as FleetAuthMethod : ''}
           fromForge={flow === 'move' && forge && !interrupted ? fleet.hosting : undefined}

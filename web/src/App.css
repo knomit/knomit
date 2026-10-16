@@ -13,3 +13,11 @@ a { color: inherit; }
    users via :focus-visible. */
 .k-bare:focus { outline: none; }
 .k-bare:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; border-radius: 4px; }
+
+/* The Connect page (RemoteConnectWizard, FleetFollowFlow): form beside a
+   progress rail, stacked with the rail above the form on a phone. */
+.k-connect-grid { grid-template-columns: minmax(0, 1fr) 178px; }
+@media (max-width: 640px) {
+  .k-connect-grid { grid-template-columns: minmax(0, 1fr); }
+  .k-connect-rail { order: -1; position: static !important; margin-top: 12px !important; }
+}

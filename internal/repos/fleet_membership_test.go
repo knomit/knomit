@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -420,22 +421,23 @@ func TestFleetHost_TheHubReassertsItsRecordEachRound(t *testing.T) {
 
 // sameFleetURL is the follows_host comparison: credentials, the case of the
 // scheme and host, a default port and a trailing slash do not count; the
-// path does.
+// path does. The rows are testdata/same_fleet_url.json, the ONE table the
+// browser's port (web/src/fleetText.ts sameFleetURL, read by
+// web/src/connectNarrow.test.tsx) is held to as well; the typed side is
+// trimmed, as followFleetHost trims it and the page trims what is typed.
 // SABOTAGE: compare the strings exactly -> the equal rows are red.
 func TestSameFleetURL(t *testing.T) {
-	for _, row := range []struct {
-		a, b string
-		same bool
-	}{
-		{"https://hub.example:7443/git/fleet", "https://hub.example:7443/git/fleet", true},
-		{"https://HUB.example:7443/git/fleet/", "https://hub.example:7443/git/fleet", true},
-		{"https://tok@hub.example/git/fleet", "https://hub.example:443/git/fleet", true},
-		{"https://hub.example/git/fleet", "https://hub.example/git/Fleet", false},
-		{"https://hub.example:7443/git/fleet", "https://other.example:7443/git/fleet", false},
-		{"https://hub.example:7443/git/fleet", "https://hub.example:7444/git/fleet", false},
-		{"git@github.com:org/fleet.git", "git@github.com:org/fleet.git", true},
-	} {
-		require.Equal(t, row.same, sameFleetURL(row.a, row.b), "%s vs %s", row.a, row.b)
+	raw, err := os.ReadFile("testdata/same_fleet_url.json")
+	require.NoError(t, err)
+	var rows []struct {
+		Typed  string `json:"typed"`
+		Stored string `json:"stored"`
+		Same   bool   `json:"same"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &rows))
+	require.GreaterOrEqual(t, len(rows), 30, "fixture: the shared table is read")
+	for _, row := range rows {
+		require.Equal(t, row.Same, sameFleetURL(strings.TrimSpace(row.Typed), row.Stored), "%q vs %q", row.Typed, row.Stored)
 	}
 }
 

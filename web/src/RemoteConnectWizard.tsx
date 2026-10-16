@@ -6,7 +6,7 @@ import { btn, card } from './manageStyles';
 import { repoHue, noMouseFocus } from './utils';
 import { originURL } from './wizardState';
 import {
-  actions, block, blockHead, blockHint, blockTitle, column, crumb, crumbLink, crumbSep, grid, iconBox, input, label, pageHead, rail, railItem, railLabel, railMark, railNote,
+  actions, block, blockHead, blockHint, blockTitle, column, crumb, crumbLink, crumbSep, grid, gridClass, iconBox, input, label, pageHead, rail, railClass, railItem, railLabel, railMark, railNote,
 } from './connectStyles';
 import { isSSHURL, urlAuthMismatch } from './originAuth';
 
@@ -356,7 +356,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
         </div>
       </div>
 
-      <div style={grid}>
+      <div className={gridClass} style={grid}>
         <div style={column}>
           {/* ── Step ① Connect ── */}
           {activeStep === 1 && (
@@ -526,7 +526,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
             tracker, not an index: the steps are not reachable out of order, so
             they are text rather than buttons — an inert-looking row is the
             honest rendering of a place you cannot click to. */}
-        <nav style={rail} aria-label="Progress">
+        <nav className={railClass} style={rail} aria-label="Progress">
           <div style={railLabel}>Progress</div>
           {([[1, 'Connect'], [2, 'Review'], [3, 'Sync']] as const).map(([n, lbl]) => {
             const state = step === 'done' ? 'done' : activeStep === n ? 'active' : activeStep > n ? 'done' : 'todo';

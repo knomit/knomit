@@ -211,14 +211,19 @@ describe('FleetSettings: the fleet repository configuration (PR7c)', () => {
     set('POST /api/v1/fleet/follow', { body: { ...forgeMaster, change: 'unchanged' } });
     onChanged.mockClear();
     fireEvent.click(screen.getByTestId('fleet-move-forge'));
-    fireEvent.change(screen.getByTestId('fleet-follow-url'), { target: { value: FORGE } });
-    fireEvent.click(screen.getByTestId('fleet-follow-test'));
-    fireEvent.click(await screen.findByTestId('fleet-follow-next'));
-    fireEvent.click(screen.getByTestId('fleet-follow-submit'));
-    expect(await screen.findByTestId('fleet-follow-not-moved')).toHaveTextContent('Nothing moved and nothing changed');
+    // Spelled differently (scheme and host case, a trailing slash, a credential):
+    // the server's comparison says the same forge, so the page's port must too.
+    fireEvent.change(screen.getByTestId('fleet-follow-url'), { target: { value: 'HTTPS://tok@GitHub.com/acme/fleet/' } });
+    // Caught before Review (N-2): no Test connection, Update access instead.
+    expect(screen.getByTestId('fleet-follow-already-here')).toHaveTextContent('The fleet is already on this forge');
+    expect(screen.queryByTestId('fleet-follow-test')).toBeNull();
+    expect(screen.queryByTestId('fleet-follow-next')).toBeNull();
+    fireEvent.click(screen.getByTestId('fleet-follow-update-access'));
+    expect(screen.getByTestId('fleet-follow-flow')).toHaveAttribute('data-mode', 'access');
+    expect(screen.getByTestId('fleet-follow-access')).toBeInTheDocument();
+    // The button that was clicked is gone: the keyboard lands on the first field, not <body>.
+    expect(document.activeElement).toBe(screen.getByTestId('fleet-follow-auth-method'));
     expect(onChanged).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('fleet-follow-done'));
-    expect(onChanged).toHaveBeenCalled();
   });
 
   // An interrupted move (#529 S4), from the server's interrupted_move: the
