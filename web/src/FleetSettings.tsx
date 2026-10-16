@@ -47,10 +47,11 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   // read for a copy with an origin.
   // Keyed by the origin it was read for, so a stale answer is never used.
   // originRev is bumped when a flow finishes: a credential change leaves
-  // fleet_repo and hosting as they were, and the stored method must be read
-  // again.
+  // fleet_repo and hosting as they were, so the stored method is read again;
+  // the previous read stays in use until the new one lands (same origin), so
+  // the Hosting actions do not blink out meanwhile.
   const [originRev, setOriginRev] = useState(0);
-  const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting} ${originRev}`;
+  const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting}`;
   const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null; method: string }>({ key: '', peer: null, method: '' });
   useEffect(() => {
     if (!originKey || !fleet.fleet_repo) return;
@@ -59,7 +60,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
       .then(o => { if (live) setPeerRead({ key: originKey, peer: o ? o.auth_method === 'cert' : null, method: o?.auth_method ?? '' }); })
       .catch(() => { if (live) setPeerRead({ key: originKey, peer: null, method: '' }); });
     return () => { live = false; };
-  }, [originKey, fleet.fleet_repo]);
+  }, [originKey, originRev, fleet.fleet_repo]);
   const peerOrigin = originKey && peerRead.key === originKey ? peerRead.peer : null;
   const forge = !hub && peerOrigin === false;
   const storedMethod = forge ? peerRead.method : '';

@@ -141,12 +141,25 @@ describe('FleetSettings: the fleet repository configuration (PR7c)', () => {
   // credential change leaves fleet_repo and hosting as they were, so the
   // origin read must not be keyed on them alone (found in the #529 browser
   // check: the row kept "none" after a rotation to a token).
-  // SABOTAGE: drop the re-read after a finished flow -> the row keeps "token" -> red.
+  // While the re-read is in flight the previous read stays in use, so the
+  // Hosting actions never blink out (CI caught a click on a vanished button).
+  // SABOTAGE: drop the re-read after a finished flow -> the row keeps "token"
+  // -> red; key the read on the revision -> the actions vanish while it is in
+  // flight -> red.
   it('the Access row re-reads the stored method after Update access finishes', async () => {
     const { set } = stubFleetFetch({
       'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'token' } },
       'POST /api/v1/repos:probe-origin': PROBE_FORGE_OK,
       'POST /api/v1/fleet/follow': { body: { ...forgeMember, change: 'credential' } },
+    });
+    // Hold every origin read after the first until released.
+    let release = () => {};
+    const gate = new Promise<void>(r => { release = r; });
+    const inner = globalThis.fetch;
+    let reads = 0;
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/repos/fleet/origin') && reads++ > 0) await gate;
+      return inner(input, init);
     });
     const onChanged = mount(forgeMember);
     expect(await screen.findByTestId('fleet-origin-access')).toHaveTextContent('token');
@@ -156,6 +169,9 @@ describe('FleetSettings: the fleet repository configuration (PR7c)', () => {
     set('GET /api/v1/repos/fleet/origin', { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'none' } });
     fireEvent.click(screen.getByTestId('fleet-follow-submit'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(screen.getByTestId('fleet-update-access')).toBeInTheDocument();
+    expect(screen.getByTestId('fleet-origin-access')).toHaveTextContent('token');
+    release();
     await waitFor(() => expect(screen.getByTestId('fleet-origin-access')).toHaveTextContent('none'));
   });
 
