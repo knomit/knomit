@@ -2259,7 +2259,7 @@ paths:
             schema:
               type: object
               properties:
-                name: { type: string, description: "The fleet repository's local name (default fleet)" }
+                name: { type: string, description: "The fleet repository's local name (default fleet, or fleet-2, fleet-3, … when a repository called fleet exists; GET /fleet's standalone would_serve names the same)" }
                 origin:
                   type: object
                   required: [url]

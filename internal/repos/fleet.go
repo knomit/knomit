@@ -223,7 +223,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		// Standalone: where members would join a fleet created here (the
 		// create's default name), for the New fleet wizard's Hosting step.
 		if st.State == FleetStandalone {
-			st.Host.WouldServe = credentialFreeAll(m.hubFleetURLsFor(defaultFleetRepoName))
+			st.Host.WouldServe = credentialFreeAll(m.hubFleetURLsFor(m.freeFleetName(defaultFleetRepoName)))
 		}
 		return st, nil
 	}

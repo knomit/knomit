@@ -224,6 +224,25 @@ func TestFleetStatus_ListeningIsTheLiveListener(t *testing.T) {
 	require.Empty(t, st.Host.ListenerReason, "no reason for a listener that is not configured")
 }
 
+// PR #528 nit 11: with a repository already called fleet, a standalone
+// GET /fleet's would_serve and the create agree on a free name (fleet-2):
+// the URL the Hosting step shows is where members join, and the create is
+// not refused for the name.
+// SABOTAGE: would_serve names defaultFleetRepoName again -> /git/fleet -> red;
+// the create keeps the bare default -> refused for the name -> red.
+func TestCreateFleet_DefaultNameTakenUsesAFreeOne(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	createRepo(t, m, "fleet")
+	pre, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet-2"}, pre.Host.WouldServe)
+	st, err := m.CreateFleet(ctx, FleetCreateSpec{})
+	require.NoError(t, err)
+	require.Equal(t, "fleet-2", st.FleetRepo)
+	require.Equal(t, pre.Host.WouldServe, st.FleetURLs, "members join where the Hosting step said")
+}
+
 // A fleet hosted here (no origin): a fresh root is minted into <home>/fleet
 // (root.key a plain owner-only file), the repository holds root, leaf and
 // record on main at once, the bundle is installed, and this instance is the
