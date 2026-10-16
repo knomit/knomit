@@ -485,6 +485,7 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 				}
 				if master {
 					peers.admit(ctx, svc, agentBranch, &lg)
+					peers.claimMaster(ctx, svc)
 				}
 			}
 		}

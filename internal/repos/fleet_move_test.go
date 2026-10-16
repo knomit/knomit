@@ -290,15 +290,18 @@ func seedFleetForge(t *testing.T, bare string, root *pkitest.Fleet) {
 }
 
 // A forge-hosted master stands down with no precondition too: its last
-// commit as master is published to the forge's main (the stood-down mark),
-// and only then does the root go. A publish that fails keeps the root
-// (stand_down_unpublished): a mark main never shows is no stand-down.
-// SABOTAGE: StandDown deletes the root when writeStoodDown fails -> red.
+// commit as master, the master marker deleted, is published to the forge's
+// main, and only then does the root go. A publish that fails keeps the root
+// (stand_down_unpublished); the retry publishes the deletion it committed.
+// SABOTAGE: StandDown deletes the root when deleteFleetMaster fails -> red.
 func TestFleetStandDown_ForgeMasterPublishesItsMark(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
-	good := f.url
-	// An unreachable forge: the publish fails.
+	// The fixture's fleet predates the marker: the master writes it, as its
+	// round's once-only claim does, and publishes it.
+	require.NoError(t, f.master.writeFleetMaster(ctx, f.mri))
+	require.NoError(t, f.master.publishMasterWrite(ctx, f.mri))
+	require.True(t, f.onForgeMain(t, fact.FleetMasterPath), "setup: the marker is on the forge's main")
 	require.NoError(t, os.Rename(f.bare, f.bare+".away"))
 	err := f.master.StandDown(ctx)
 	status, code := fleetCode(t, err)
@@ -309,10 +312,5 @@ func TestFleetStandDown_ForgeMasterPublishesItsMark(t *testing.T) {
 	require.NoError(t, os.Rename(f.bare+".away", f.bare))
 
 	require.NoError(t, f.master.StandDown(ctx))
-	out, gerr := exec.Command("git", "-C", f.bare, "show", "main:"+fact.FleetHostPath).Output()
-	require.NoError(t, gerr)
-	rec, perr := fact.ParseFleetHostRecord(out)
-	require.NoError(t, perr)
-	require.Equal(t, f.master.AgentID(), rec.StoodDown, "the forge's main carries the mark")
-	require.Equal(t, []string{good}, rec.URLs)
+	require.False(t, f.onForgeMain(t, fact.FleetMasterPath), "the forge's main has no acting master")
 }

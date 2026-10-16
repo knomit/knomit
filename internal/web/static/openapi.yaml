@@ -2639,15 +2639,15 @@ paths:
 
         The first step of a master switch, and it needs nothing first. While
         this instance does master work, its last act as master is one
-        commit on main: the host record (`artifacts/fleet/host`) with its
-        URLs unchanged and a `stood-down: <agent id>` line (GET /fleet's
-        `host_stood_down`). Then `<home>/fleet`, the root key with it, is
-        deleted, and the membership stays: from here this instance merges,
-        enrolls and revokes nothing, and as the hub it refuses members'
-        pushes (they record `last_error_stood_down`). The new master's
-        `POST /fleet/host` checks its own main for that commit. A master
-        whose copy follows another instance of the fleet writes no commit
-        (it is not the host). Refusals: `no_root` (404),
+        commit on main: the master marker (`artifacts/fleet/master`, the
+        acting master's agent id) deleted, so main shows a fleet with no
+        acting master (GET /fleet `acting_master` absent). Then
+        `<home>/fleet`, the root key with it, is deleted, and the membership
+        stays: from here this instance merges, enrolls and revokes nothing,
+        and as the hub it refuses members' pushes (they record
+        `last_error_stood_down`). The new master's `POST /fleet/host`
+        checks its own main for the marker. A master whose copy follows
+        another instance of the fleet commits nothing (it is not the host). Refusals: `no_root` (404),
         `stand_down_unpublished` (409: the commit did not reach the fleet's
         main, e.g. the forge refused it; the root stays, try again).
       operationId: standDownFleetRoot
@@ -2673,15 +2673,15 @@ paths:
         answered as done): the hub's local reconcile re-asserts the record
         every round.
 
-        When this copy follows another instance of the fleet (the old host),
-        the one check is this copy's own main, as its ordinary sync left it:
-        the host record there must say the old master stood down (GET
-        /fleet `host_stood_down`). Otherwise the old master did not stand
-        down (it may be gone) or this copy has not synced since, and the
-        answer is `old_master_active` (409) unless the body says
+        The one check is this copy's own main, as its ordinary sync left it:
+        the master marker there (`artifacts/fleet/master`, GET /fleet
+        `acting_master`) must be absent (the old master stood down) or name
+        this instance. While it names another instance, that master did not
+        stand down (it may be gone) or this copy has not synced since, and
+        the answer is `old_master_active` (409) unless the body says
         `confirm_loss: true`: hosting then leaves out every change made on
         the old host after this copy's last sync. Nothing is asked of the
-        old host. A forge origin is not checked.
+        old host. Hosting writes the marker naming this instance.
 
         Refusals, nothing changed: `member_keeps_origin` (409: only the
         master hosts the fleet), `hub` (409: this copy already has no
@@ -2698,7 +2698,7 @@ paths:
               properties:
                 confirm_loss:
                   type: boolean
-                  description: "Host although this copy's main does not show the old master's stand-down: changes made on the old host after this copy's last sync are not included."
+                  description: "Host although this copy's main still names another instance as the acting master: changes made on the old host after this copy's last sync are not included."
       responses:
         "200":
           description: Hosted here; the new state
@@ -4335,9 +4335,9 @@ components:
           type: string
           enum: [not_hosting]
           description: "On the master (master true): why it does no master work now (no merges, enroll, revoke, host-record write). not_hosting: its copy follows another instance of the fleet, which hosts it. Absent otherwise."
-        host_stood_down:
+        acting_master:
           type: string
-          description: "The agent id the host record on main names as the master that stood down (its last commit as master, DELETE /fleet/root); absent while that master is the master. The new master's Host here needs it on its own main, or confirm_loss."
+          description: "The fleet's acting master: the agent id the master marker on main (artifacts/fleet/master) names. Written at create and by Host here, deleted by the master's stand-down; absent when the fleet has no acting master (or its master has not written the marker yet: a fleet created before it gets it from the root holder's next round). A marker for readers: who holds the root key decides master work (master)."
         last_error_fleet_moved:
           type: boolean
           description: "true when this copy follows an old host (follows_host false) and last_error is that host refusing its push because the host's copy has an origin now: the fleet moved, and a retry does not help until this copy points at the new host. Read from the recorded error; absent otherwise."

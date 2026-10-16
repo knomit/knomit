@@ -82,7 +82,7 @@ describe('FleetSettings', () => {
     const { unmount } = render(<FleetSettings fleet={hub} onChanged={vi.fn()} />);
     expect(screen.getByTestId('fleet-point-at-hint')).toHaveTextContent('After this instance stood down and another instance hosts the fleet');
     unmount();
-    const onChanged = mount({ ...hub, master: false, host_stood_down: hub.agent_id });
+    const onChanged = mount({ ...hub, master: false });
     fireEvent.click(screen.getByTestId('fleet-point-at'));
     expect(screen.getByTestId('fleet-follow-flow')).toHaveTextContent('Fleet URL (from the new master\'s Settings → Hosting)');
     expect(screen.getByTestId('fleet-follow-flow')).not.toHaveTextContent('Auth method');
@@ -99,19 +99,20 @@ describe('FleetSettings', () => {
   // this copy's main the confirm says what is left out, and the click sends
   // confirm_loss; with it, nothing is asked.
   // SABOTAGE: drop the oldHost prop -> no loss card, body {} -> red.
-  it('Host here without the old master\'s stand-down on main asks the loss confirm', async () => {
+  it('Host here while main names another acting master asks the loss confirm', async () => {
     const { calls } = stubFleetFetch({
       'GET /api/v1/repos/fleet/origin': ORIGIN_CERT,
       'POST /api/v1/fleet/host': { body: { ...hub } },
     });
     const newMaster: FleetStatus = { ...member, master: true, host: { listener_on: true, listening: true, external_addresses: ['https://ci.example:7443'], would_serve: ['https://served.example:7443/git/fleet'] } };
-    const first = render(<FleetSettings fleet={{ ...newMaster, host_stood_down: 'a3f9c0d12e7b' }} onChanged={vi.fn()} />);
+    const first = render(<FleetSettings fleet={newMaster} onChanged={vi.fn()} />);
     fireEvent.click(await screen.findByTestId('fleet-host-here'));
     expect(screen.queryByTestId('fleet-host-loss')).toBeNull();
     expect(screen.getByTestId('fleet-host-submit')).toHaveTextContent('Host the fleet here');
     first.unmount();
-    const onChanged = mount(newMaster);
+    const onChanged = mount({ ...newMaster, acting_master: 'a3f9c0d12e7b' });
     fireEvent.click(await screen.findByTestId('fleet-host-here'));
+    expect(screen.getByTestId('fleet-host-loss')).toHaveTextContent('Main still names a3f9c0d12e7b as the acting master');
     expect(screen.getByTestId('fleet-host-loss')).toHaveTextContent('Hosting now leaves out every change made on kb-01.acme.example:7443 after this copy\'s last sync');
     fireEvent.click(screen.getByTestId('fleet-host-submit'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
@@ -126,6 +127,16 @@ describe('FleetSettings', () => {
     mount({ ...member, last_error: "Push: knomit: this copy of the fleet repository \"fleet\": its master stood down, and it takes no push", last_error_stood_down: true });
     expect(screen.getByTestId('fleet-last-error-stood-down')).toHaveTextContent('Once the new master hosts the fleet, point this copy at it');
     expect(screen.queryByTestId('fleet-last-error')).toBeNull();
+  });
+
+  // GET /fleet acting_master: the master marker on main, or "no master".
+  // SABOTAGE: drop the Acting master row -> red.
+  it('Settings shows the acting master, or no master', () => {
+    const { unmount } = render(<FleetSettings fleet={{ ...hub, acting_master: hub.agent_id }} onChanged={vi.fn()} />);
+    expect(screen.getByTestId('fleet-acting-master')).toHaveTextContent('a3f9c0d12e7b (this instance)');
+    unmount();
+    mount({ ...hub, master: false });
+    expect(screen.getByTestId('fleet-acting-master')).toHaveTextContent('no master');
   });
 
   // SABOTAGE: drop the master_paused card -> red.

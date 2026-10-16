@@ -45,6 +45,15 @@ const ArtifactsRoot = "artifacts"
 // changes it, in any case spelling), and readers read it at the fleet's main.
 const FleetHostPath = ArtifactsRoot + "/fleet/host"
 
+// FleetMasterPath is the fleet repository's master marker: the agent id of
+// the fleet's acting master (RenderFleetMaster). The master writes it when it
+// creates the fleet and when it becomes the master (Host here), and deletes it
+// when it stands down: a main without it is a fleet with no acting master. It
+// is a marker for readers, not a credential: who IS the master is still
+// decided by the root key (isFleetMaster). The judge's host-record rule
+// refuses a member's branch that changes it, as it does the host record.
+const FleetMasterPath = ArtifactsRoot + "/fleet/master"
+
 // IsArtifactPath reports whether path is a writable artifact path:
 // ArtifactsRoot/<area>/<name…>, at least one subdirectory deep, with no
 // segment that is empty, ".", or begins with "." — at ANY depth — and no ".."

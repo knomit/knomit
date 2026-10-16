@@ -503,7 +503,7 @@ func requireFleetActivity(t *testing.T, hub *fleetNode, charlieSerial string) {
 // The master switch on a knomit-hosted fleet (R3.2), over the real routes:
 // alpha is the hub and master, bravo and charlie members. The root files go
 // from alpha (GET /fleet/root) to bravo (PUT); alpha stands down first (its
-// last commit as master marks main); bravo syncs and detaches its origin (it
+// last commit as master deletes the master marker); bravo syncs and detaches its origin (it
 // hosts the fleet now); alpha re-points at bravo; charlie re-points; charlie's and
 // alpha's next pushes reach bravo, which judges and merges them. A member's
 // detach, a member's upstream PATCH and the old hub's manual merge of a dead
@@ -563,12 +563,15 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 		t.Fatalf("bravo after the detach: %+v", bst)
 	}
 	// The new host records where the fleet is hosted on its main; the old
-	// hub's main still says the old host, marked stood down.
+	// hub's main still says the old host, with no acting master.
 	if got, want := readAt(t, bravo.fleet(t), "main", fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
 		t.Fatalf("bravo's host record after the detach: %q, want it to end %q", got, want)
 	}
-	if got, want := readAt(t, alpha.fleet(t), "main", fact.FleetHostPath), "url: "+alpha.fleetURL()+"\nstood-down: alpha\n"; !strings.HasSuffix(got, want) {
-		t.Fatalf("alpha's host record (its stand-down mark): %q, want it to end %q", got, want)
+	if got, want := readAt(t, alpha.fleet(t), "main", fact.FleetHostPath), "url: "+alpha.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("alpha's host record (written at create): %q, want it to end %q", got, want)
+	}
+	if got := readAt(t, bravo.fleet(t), "main", fact.FleetMasterPath); got != "bravo\n" {
+		t.Fatalf("bravo's master marker after hosting: %q, want bravo", got)
 	}
 
 	alpha.asClient(t)

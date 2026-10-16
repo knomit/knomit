@@ -95,6 +95,16 @@ type fleetPeers struct {
 	// that cleared since (refusals keeps only each branch's current one). In
 	// memory only, like refusals.
 	ring []PeerRefusal
+	// claim is the master's once-only write of the master marker in its
+	// origin round (RepoInstance.fleetMasterClaimRound); nil-safe.
+	claim func(context.Context, *store.Service)
+}
+
+// claimMaster runs the master marker claim of this round; no-op on nil.
+func (p *fleetPeers) claimMaster(ctx context.Context, svc *store.Service) {
+	if p != nil && p.claim != nil {
+		p.claim(ctx, svc)
+	}
 }
 
 // refusalRing is how many refusals fleetPeers.ring keeps.
@@ -301,6 +311,26 @@ func (m *Manager) refuseMasterPaused(ri *RepoInstance) error {
 		return fleetErr(http.StatusConflict, "master_paused", "this instance holds the fleet's root key but its copy follows another instance of the fleet, which hosts it: it enrolls, revokes and merges nothing here. Act on the instance that hosts the fleet, or host the fleet here")
 	}
 	return nil
+}
+
+// fleetMasterClaimRound is the forge-hosted master's once-only write of the
+// master marker, in its origin round before the push that publishes main
+// (the hub's is in fleetHostRound): a fleet created before the marker, or a
+// forge fleet whose new master imported the root, has none on main. A marker
+// naming anyone is left alone. fleetOpMu is TryLocked like the hub's round.
+func (ri *RepoInstance) fleetMasterClaimRound(ctx context.Context, svc *store.Service) {
+	if ri == nil || !ri.fleetDoor || !ri.IsFleet() || svc == nil {
+		return
+	}
+	m := ri.env.m
+	if !m.fleetOpMu.TryLock() {
+		return
+	}
+	defer m.fleetOpMu.Unlock()
+	if !ri.actsAsFleetMaster(svc) {
+		return
+	}
+	m.claimFleetMasterOnce(ctx, ri)
 }
 
 // isFleetMaster: ri is the fleet repository, mounted through the fleet door,

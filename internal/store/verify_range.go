@@ -336,7 +336,8 @@ func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 // member's branch entering it only (j.entry: receive-pack and the master's
 // peer judge, never CheckRange). Like the record-owner rule it is baked, not
 // declared: no commit of a member's branch may change artifacts/fleet/host
-// (fact.FleetHostPath, in any case spelling: the artifact patterns match
+// (fact.FleetHostPath) or artifacts/fleet/master (fact.FleetMasterPath, the
+// acting master's marker), in any case spelling (the artifact patterns match
 // case-insensitively), against ANY parent. The host record says where the
 // fleet is hosted, and only the fleet's master writes it, at create and when
 // it becomes the host; the master's own commits never enter through a member
@@ -373,6 +374,9 @@ func (j judge) hostRecord(c *object.Commit, id string) (Refusal, bool) {
 			for _, name := range []string{ch.From.Name, ch.To.Name} {
 				if strings.EqualFold(name, fact.FleetHostPath) {
 					return refuse(fmt.Sprintf("agent %q changes %s: only the fleet's master writes where the fleet is hosted", id, name))
+				}
+				if strings.EqualFold(name, fact.FleetMasterPath) {
+					return refuse(fmt.Sprintf("agent %q changes %s: only the fleet's master writes who its acting master is", id, name))
 				}
 			}
 		}

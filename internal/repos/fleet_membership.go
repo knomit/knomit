@@ -1010,16 +1010,17 @@ func (m *Manager) InstallFleetRoot(files map[string]string) (FleetRoot, error) {
 // ruling 2026-10-16): this instance stops being the fleet's master, and it
 // needs nothing else first. While it still does master work
 // (actsAsFleetMaster) its last act as master is one commit on main
-// (writeStoodDown: the host record, marked stood down); then <home>/fleet,
+// (deleteFleetMaster: the master marker, fact.FleetMasterPath, deleted, so
+// main shows a fleet with no acting master); then <home>/fleet,
 // the root key with it, is deleted, so from here it merges, enrolls, revokes
 // and writes no host record, and as the hub it takes no member push
 // (FleetPushRefusal). The membership stays. A merge pass in flight finishes
 // first, and none starts between the commit and the deletion.
 //
 // The new master then hosts the fleet (Host here), and checks only its own
-// main for that commit. A master that does no master work (its copy follows
+// main for the marker. A master that does no master work (its copy follows
 // another instance) writes nothing: it is not the host, and the host's judge
-// refuses a member's host-record change.
+// refuses a member's change to the marker (the host-record rule).
 //
 // A failed publish of that commit refuses the stand-down
 // (stand_down_unpublished) and keeps the root: a stand-down main never shows
@@ -1042,7 +1043,7 @@ func (m *Manager) StandDown(ctx context.Context) error {
 			return err
 		}
 		if acts {
-			if err := m.writeStoodDown(ctx, ri); err != nil {
+			if err := m.deleteFleetMaster(ctx, ri); err != nil {
 				return fleetErr(http.StatusConflict, "stand_down_unpublished", "the commit that records the stand-down did not reach the fleet's main ("+credentialFreeErr(err).Error()+"): this instance is still the master. Try again")
 			}
 		}
@@ -1054,20 +1055,22 @@ func (m *Manager) StandDown(ctx context.Context) error {
 	return nil
 }
 
-// refuseOldMasterActive is Host here's one check when this copy follows
-// another instance o (old_master_active): the host record on this copy's main
-// must say the master that wrote it stood down.
+// refuseOldMasterActive is Host here's one check (old_master_active): the
+// master marker on this copy's main, as its ordinary sync left it, must name
+// no master (the old master stood down) or this instance. A marker naming
+// another instance means that master did not stand down, or this copy has not
+// synced since it did.
 func (m *Manager) refuseOldMasterActive(ri *RepoInstance, o *Origin) error {
-	rec, err := m.fleetHostRecordAtMain(ri)
+	named, err := m.fleetMasterAtMain(ri)
 	if err != nil {
 		return err
 	}
-	if rec != nil && rec.StoodDown != "" {
+	if named == "" || named == m.AgentID() {
 		return nil
 	}
 	host := originHost(o.URL)
 	return fleetErr(http.StatusConflict, "old_master_active",
-		"this copy's main does not show that the fleet's master on "+host+" stood down: it has not (stand down there first), or this copy has not synced since (last sync "+m.lastFleetSync(ri)+"). Hosting the fleet here now leaves out every change made on "+host+" after this copy's last sync. Confirm to host it here anyway")
+		"this copy's main still names "+named+" as the fleet's acting master: it has not stood down (stand down there first), or this copy has not synced since (last sync "+m.lastFleetSync(ri)+"). Hosting the fleet here now leaves out every change made on "+host+" after this copy's last sync. Confirm to host it here anyway")
 }
 
 // lastFleetSync is when this copy last fetched from its origin ("unknown"
@@ -1127,13 +1130,12 @@ func (m *Manager) RebuildFleetIndex(ctx context.Context) (FleetIndexRebuild, err
 // hub's local reconcile re-asserts the record every round
 // (RepoInstance.fleetHostRound), so the next round writes it.
 //
-// When this copy follows another instance of the fleet (a cert origin: the
-// old host), it hosts only when its own main, from its ordinary sync, holds
-// the old master's stand-down commit (refuseOldMasterActive), or with
-// spec.ConfirmLoss: the old master is gone, or this copy has not synced since
-// it stood down, and what it changed after this copy's last sync is left out
-// (the dead-master fallback). Nothing asks the old host anything. A forge
-// origin is not checked.
+// It hosts only when the master marker on its own main, from its ordinary
+// sync, names no master (the old master stood down) or this instance
+// (refuseOldMasterActive), or with spec.ConfirmLoss: the old master is gone,
+// or this copy has not synced since it stood down, and what it changed after
+// this copy's last sync is left out (the dead-master fallback). Nothing asks
+// the old host anything. Hosting writes the marker naming this instance.
 func (m *Manager) HostFleetHere(ctx context.Context, spec FleetHostSpec) (FleetStatus, error) {
 	if err := m.hostFleetHere(ctx, spec); err != nil {
 		return FleetStatus{}, err
@@ -1143,7 +1145,7 @@ func (m *Manager) HostFleetHere(ctx context.Context, spec FleetHostSpec) (FleetS
 
 // FleetHostSpec is what POST /fleet/host takes. ConfirmLoss is the user's
 // confirm that changes made on the old host after this copy's last sync are
-// not included (read only when main does not say the old master stood down).
+// not included (read only when main's master marker names another instance).
 type FleetHostSpec struct {
 	ConfirmLoss bool
 }
@@ -1164,7 +1166,7 @@ func (m *Manager) hostFleetHere(ctx context.Context, spec FleetHostSpec) error {
 	}
 	if o, err := m.originOf(ri); err != nil {
 		return err
-	} else if o != nil && o.AuthMethod == "cert" && !spec.ConfirmLoss {
+	} else if o != nil && !spec.ConfirmLoss {
 		if err := m.refuseOldMasterActive(ri, o); err != nil {
 			return err
 		}
@@ -1172,8 +1174,14 @@ func (m *Manager) hostFleetHere(ctx context.Context, spec FleetHostSpec) error {
 	if _, err := m.Send(ctx, ri, DetachOrigin()); err != nil {
 		return err
 	}
-	// A push this copy made to the old host (refused while it hands over)
-	// is no sync error of the host: it pushes nowhere now.
+	// This instance is the acting master now (fact.FleetMasterPath), the
+	// marker a confirmed takeover overwrites; published with the host record
+	// below.
+	if err := m.writeFleetMaster(ctx, ri); err != nil {
+		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: this instance hosts the fleet now, but the master marker was not written")
+	}
+	// A push this copy made to the old host (refused once its master stood
+	// down) is no sync error of the host: it pushes nowhere now.
 	if db := m.ControlDB(); db != nil {
 		if err := recordFleetAttempt(db, nil, time.Now()); err != nil {
 			log.Warn().Err(err).Msg("fleet: clearing the last sync error after hosting failed")

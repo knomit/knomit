@@ -95,15 +95,13 @@ func (ri *RepoInstance) fleetHostRound(ctx context.Context, svc *store.Service) 
 		return
 	}
 	defer m.fleetOpMu.Unlock()
-	// A master whose copy follows another instance writes no record
-	// (actsAsFleetMaster): only a hub runs this round, so that is never this
-	// copy, but the predicate is the one every master duty asks.
 	if !ri.actsAsFleetMaster(svc) {
 		return
 	}
 	if err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil && ctx.Err() == nil {
 		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: the host record could not be re-asserted; the next round retries")
 	}
+	m.claimFleetMasterOnce(ctx, ri)
 }
 
 // credentialFreeAll is credentialFree of each of urls, in order.
@@ -247,16 +245,6 @@ func (m *Manager) fleetHostAt(ri *RepoInstance, branch string) (string, bool, er
 // holds: nil when main holds none, or one that cannot be read (logged by the
 // caller's error).
 func (m *Manager) fleetHostAtMain(ri *RepoInstance) ([]string, error) {
-	r, err := m.fleetHostRecordAtMain(ri)
-	if err != nil || r == nil {
-		return nil, err
-	}
-	return r.URLs, nil
-}
-
-// fleetHostRecordAtMain is the host record at the fleet repository's main,
-// nil when main holds none.
-func (m *Manager) fleetHostRecordAtMain(ri *RepoInstance) (*fact.FleetHostRecord, error) {
 	var upstream string
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc != nil {
@@ -272,45 +260,114 @@ func (m *Manager) fleetHostRecordAtMain(ri *RepoInstance) (*fact.FleetHostRecord
 	if err != nil || !ok {
 		return nil, err
 	}
-	r, err := fact.ParseFleetHostRecord([]byte(raw))
-	if err != nil {
-		return nil, err
-	}
-	return &r, nil
+	return fact.ParseFleetHost([]byte(raw))
 }
 
-// writeStoodDown is the master's last commit as master (StandDown): the host
-// record as it stands, its URLs unchanged (main is still served there until a
-// new master hosts the fleet), plus this instance's agent id as the master
-// that stood down; then main is published. The new master's Host here reads
-// it on its own main (fleetHostRecordAtMain): with it, its main holds every
-// write the old master made as master. A record the branch does not hold
-// (a fleet older than the record) is written with the URLs a host here
-// would write: the hub's, or the origin's.
-func (m *Manager) writeStoodDown(ctx context.Context, ri *RepoInstance) error {
-	var urls []string
-	if raw, ok, err := m.fleetHostAt(ri, ri.AgentBranch()); err != nil {
-		return err
-	} else if ok {
-		if r, perr := fact.ParseFleetHostRecord([]byte(raw)); perr == nil {
-			urls = r.URLs
+// maxFleetMasterSize is what a reader reads of the master marker: the fleet
+// ontology's max_size for it.
+const maxFleetMasterSize = 1 << 10
+
+// fleetMasterAt is the agent id the master marker (fact.FleetMasterPath) at
+// branch of ri names; "" when there is none (a fleet with no acting master).
+// A marker that cannot be read is an error.
+func (m *Manager) fleetMasterAt(ri *RepoInstance, branch string) (string, error) {
+	var raw []byte
+	var ok bool
+	var rerr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			rerr = errors.New("fleet repository is not open")
+			return
 		}
+		if branch == "" {
+			branch = svc.UpstreamBranch()
+		}
+		raw, ok, rerr = svc.FileAt(branch, fact.FleetMasterPath, maxFleetMasterSize)
+	}); err != nil {
+		return "", err
 	}
-	if len(urls) == 0 {
-		o, err := m.originOf(ri)
-		if err != nil {
+	if rerr != nil || !ok {
+		return "", rerr
+	}
+	return fact.ParseFleetMaster(raw)
+}
+
+// fleetMasterAtMain is fleetMasterAt the fleet repository's main.
+func (m *Manager) fleetMasterAtMain(ri *RepoInstance) (string, error) {
+	return m.fleetMasterAt(ri, "")
+}
+
+// writeFleetMaster commits the master marker naming this instance on ri's
+// agent branch, unless the branch already holds exactly that marker. The
+// caller is the master (create, Host here, the once-only claim) and
+// publishes main.
+func (m *Manager) writeFleetMaster(ctx context.Context, ri *RepoInstance) error {
+	id := m.AgentID()
+	if cur, err := m.fleetMasterAt(ri, ri.AgentBranch()); err == nil && cur == id {
+		return nil
+	}
+	return m.writeFleetArtifacts(ctx, ri, map[string]string{fact.FleetMasterPath: fact.RenderFleetMaster(id)},
+		"fleet: "+id+" is the fleet's acting master")
+}
+
+// deleteFleetMaster is the stand-down's commit: the master marker deleted on
+// ri's agent branch when it names this instance (a marker naming another
+// instance, or none, is left as it is), then main is published while main
+// still names this instance (a retry after a failed publish publishes the
+// deletion it already committed).
+func (m *Manager) deleteFleetMaster(ctx context.Context, ri *RepoInstance) error {
+	id := m.AgentID()
+	cur, err := m.fleetMasterAt(ri, ri.AgentBranch())
+	if err != nil {
+		return err
+	}
+	if cur == id {
+		if err := m.commitFleetMasterDeletion(ctx, ri, id); err != nil {
 			return err
 		}
-		if o == nil {
-			urls = m.hubFleetURLs(ri)
-		} else {
-			urls = []string{o.URL}
-		}
 	}
-	id := m.AgentID()
-	rec := fact.RenderFleetHostRecord(fact.FleetHostRecord{URLs: credentialFreeAll(urls), StoodDown: id})
-	if err := m.writeFleetArtifacts(ctx, ri, map[string]string{fact.FleetHostPath: rec}, "fleet: "+id+" stood down as the fleet's master"); err != nil {
+	onMain, err := m.fleetMasterAtMain(ri)
+	if err != nil {
 		return err
 	}
+	if cur != id && onMain != id {
+		return nil
+	}
 	return m.publishMasterWrite(ctx, ri)
+}
+
+func (m *Manager) commitFleetMasterDeletion(ctx context.Context, ri *RepoInstance, id string) error {
+	var werr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			werr = errors.New("fleet repository is not open")
+			return
+		}
+		_, _, werr = svc.Facts().BatchWriteFacts(ctx, ri.AgentBranch(), nil, []string{fact.FleetMasterPath},
+			"fleet: "+id+" stood down as the fleet's master", "deleted")
+	}); err != nil {
+		return err
+	}
+	return werr
+}
+
+// claimFleetMasterOnce writes the master marker for a fleet that has none on
+// this copy's main and agent branch: fleets created before the marker existed,
+// and a forge-hosted fleet whose new master imported the root (there is no
+// Host here on a forge). The caller is a round of a master that does master
+// work (actsAsFleetMaster) and holds fleetOpMu. A marker naming anyone is
+// never overwritten here. Nothing is published: the round that called it
+// publishes main.
+func (m *Manager) claimFleetMasterOnce(ctx context.Context, ri *RepoInstance) {
+	onMain, err := m.fleetMasterAtMain(ri)
+	if err != nil || onMain != "" {
+		return
+	}
+	onBranch, err := m.fleetMasterAt(ri, ri.AgentBranch())
+	if err != nil || onBranch != "" {
+		return
+	}
+	if err := m.writeFleetMaster(ctx, ri); err != nil && ctx.Err() == nil {
+		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: the master marker could not be written; the next round retries")
+	}
 }

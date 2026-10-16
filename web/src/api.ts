@@ -2101,10 +2101,11 @@ export interface FleetStatus {
   last_error_stood_down?: boolean;
   // master_paused (on the master): not_hosting while its copy follows
   // another instance of the fleet: it does no master work here.
-  // host_stood_down: the agent id the host record on main names as the
-  // master that stood down; Host here needs it, or the loss confirm.
+  // acting_master: the agent id the master marker on main names (absent:
+  // the fleet has no acting master, e.g. its master stood down). Host here
+  // asks the loss confirm while it names another instance.
   master_paused?: 'not_hosting';
-  host_stood_down?: string;
+  acting_master?: string;
   sync_interval_seconds?: number;
   // F10: what this instance offers to host a fleet (listener: its mTLS
   // listener's bind, '' when off, sent to a local caller only; listener_on:

@@ -98,13 +98,14 @@ type FleetStatus struct {
 	Master bool `json:"master"`
 	// MasterPaused, on the master, is why it does no master work now (no
 	// merges, enroll, revoke, decommission, host-record write):
-	// FleetPausedNotHosting; empty otherwise. HostStoodDown: the host record
-	// on main says the master that wrote it stood down
-	// (fact.FleetHostRecord.StoodDown), the agent id; empty otherwise.
-	MasterPaused  string `json:"master_paused,omitempty"`
-	HostStoodDown string `json:"host_stood_down,omitempty"`
-	Hosting       string `json:"hosting,omitempty"`
-	RootDir       string `json:"root_dir"`
+	// FleetPausedNotHosting; empty otherwise. ActingMaster is the agent id
+	// the master marker on main names (fact.FleetMasterPath); empty when main
+	// has none: a fleet with no acting master (its master stood down), or one
+	// whose master has not written it yet.
+	MasterPaused string `json:"master_paused,omitempty"`
+	ActingMaster string `json:"acting_master,omitempty"`
+	Hosting      string `json:"hosting,omitempty"`
+	RootDir      string `json:"root_dir"`
 
 	// FleetURLs is the fleet repository URL(s) members use: on the hub, one
 	// https://<address>/git/<repo> per https external address; on any other
@@ -298,8 +299,10 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	if st.Master {
 		st.MasterPaused = m.fleetMasterPause(ri)
 	}
-	if rec, rerr := m.fleetHostRecordAtMain(ri); rerr == nil && rec != nil {
-		st.HostStoodDown = rec.StoodDown
+	if named, merr := m.fleetMasterAtMain(ri); merr == nil {
+		st.ActingMaster = named
+	} else {
+		log.Warn().Err(merr).Str("fleet", ri.Name()).Msg("fleet: the master marker on main cannot be read")
 	}
 	if o, oerr := m.originOf(ri); oerr == nil {
 		st.Hosting = "none"

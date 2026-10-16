@@ -77,6 +77,16 @@ func TestNoHardcodedBranchLiterals(t *testing.T) {
 							allowed[bl] = true
 						}
 					}
+					// The fleet's master marker path (artifacts/fleet/master)
+					// names the master role too, not a branch.
+					if id.Name == "FleetMasterPath" && i < len(vs.Values) {
+						ast.Inspect(vs.Values[i], func(n ast.Node) bool {
+							if bl, ok := n.(*ast.BasicLit); ok {
+								allowed[bl] = true
+							}
+							return true
+						})
+					}
 				}
 				return true
 			})

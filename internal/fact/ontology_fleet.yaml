@@ -31,6 +31,10 @@ artifacts:
   # the fleet's master writes it, at create and when it becomes the host; the
   # judge refuses a member's branch that changes it (host-record).
   fleet/host: { max_size: 4KiB }
+  # Who the fleet's acting master is (one agent id). The master writes it at
+  # create and when it becomes the master, and deletes it when it stands down;
+  # the judge refuses a member's branch that changes it (host-record).
+  fleet/master: { max_size: 1KiB }
 topics:
   members:
     description: >-

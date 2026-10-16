@@ -15,14 +15,15 @@ import (
 // master stands down FIRST, the new master syncs and hosts, and nobody asks
 // the other side anything. In the order a user meets it: bravo (the new
 // master) last synced BEFORE alpha merged charlie's pushed branch and revoked
-// dave. alpha stands down: its last commit as master marks main, its root key
-// goes, and its hub refuses charlie's next push. bravo's Host here is refused
-// until its own sync brings the mark; then it hosts with all of alpha's
+// dave. alpha stands down: its last commit as master deletes the master marker
+// (artifacts/fleet/master), its root key goes, and its hub refuses charlie's
+// next push. bravo's Host here is refused while its own main still names
+// alpha; after its sync it hosts (writing the marker) with all of alpha's
 // writes. alpha and charlie point at bravo: alpha's sync replays nothing and
 // is refused nothing; charlie's refused change reaches bravo; bravo's main
 // holds the merged change and the revoke. Then the same protocol back to
 // alpha (A -> C -> A): a master that stood down can be the master again.
-// SABOTAGE: StandDown skips writeStoodDown -> bravo's host is refused
+// SABOTAGE: StandDown skips deleteFleetMaster -> bravo's host is refused
 // old_master_active after its sync -> red; FleetPushRefusal admits a push to
 // a hub whose master stood down -> charlie's push is admitted at alpha -> red.
 func TestFleetMasterSwitch_StandDownFirst(t *testing.T) {
@@ -63,8 +64,8 @@ func TestFleetMasterSwitch_StandDownFirst(t *testing.T) {
 		t.Fatalf("the hub stands down first: %v", err)
 	}
 	ast, err := alpha.mgr.FleetStatus(ctx)
-	if err != nil || ast.Master || ast.HostStoodDown != "alpha" {
-		t.Fatalf("alpha after its stand-down: master %v host_stood_down %q (%v)", ast.Master, ast.HostStoodDown, err)
+	if err != nil || ast.Master || ast.ActingMaster != "" {
+		t.Fatalf("alpha after its stand-down: master %v acting_master %q (%v)", ast.Master, ast.ActingMaster, err)
 	}
 	// Its hub takes no push now: charlie's next change waits.
 	editOwnRecord(t, charlie, "https://charlie.one.example", "https://charlie.two.example")
@@ -76,7 +77,7 @@ func TestFleetMasterSwitch_StandDownFirst(t *testing.T) {
 		t.Fatal("the stood-down hub merged charlie's change")
 	}
 
-	// bravo has not synced since: its main lacks the mark.
+	// bravo has not synced since: its main still names alpha.
 	bravo.serve(t)
 	if rec := bravo.localAPI(http.MethodPost, "/fleet/host", "{}"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "old_master_active") {
 		t.Fatalf("bravo hosts before its sync brought the stand-down: %d %s", rec.Code, rec.Body.String())
@@ -86,7 +87,7 @@ func TestFleetMasterSwitch_StandDownFirst(t *testing.T) {
 		t.Fatalf("bravo hosts once its main shows the stand-down: %d %s", rec.Code, rec.Body.String())
 	}
 	bst, err := bravo.mgr.FleetStatus(ctx)
-	if err != nil || !bst.Master || bst.Hosting != "none" || bst.MasterPaused != "" || bst.LastError != "" {
+	if err != nil || !bst.Master || bst.Hosting != "none" || bst.MasterPaused != "" || bst.LastError != "" || bst.ActingMaster != "bravo" {
 		t.Fatalf("bravo after hosting: %+v (%v)", bst, err)
 	}
 	if !strings.Contains(readAt(t, bravo.fleet(t), "main", recordPath("charlie")), "charlie.one.example") {
@@ -172,12 +173,12 @@ func TestFleetMasterSwitch_StandDownFirst(t *testing.T) {
 }
 
 // The dead-master fallback: alpha never stood down (it is gone), so bravo's
-// main has no mark and Host here asks for the confirm that alpha's changes
+// main still names alpha as the acting master and Host here asks for the confirm that alpha's changes
 // after bravo's last sync are not included; with it, bravo hosts. alpha comes
 // back and points at bravo FIRST: its copy follows another instance now, so
 // it does no master work although it still holds the root key (enroll is
-// master_paused), its sync is refused nothing, and its stand-down writes no
-// mark (it is not the host).
+// master_paused), its sync is refused nothing, and its stand-down commits
+// nothing (it is not the host).
 // SABOTAGE: hostFleetHere skips refuseOldMasterActive -> the first host is
 // 200 -> red; fleetMasterPause ignores a cert origin -> alpha's enroll
 // succeeds -> red.
@@ -221,7 +222,8 @@ func TestFleetMasterSwitch_DeadMasterFallback(t *testing.T) {
 // The fallback's residue (PR #531 review S1/S4), driven through a real judge
 // refusal: alpha comes back after bravo hosted with the confirm and stands
 // down BEFORE pointing at bravo. As the hub it still acts as the master, so
-// its stand-down writes the mark: a host-record change bravo's main lacks.
+// its stand-down deletes the master marker: a change to a path the
+// host-record rule guards, which bravo's main lacks.
 // Pointed at bravo, alpha's sync replays it and bravo's judge refuses it
 // (host-record). The rule reads the commit against its own parents, so the
 // refusal is permanent: GET /fleet says last_error_commit_refused.
@@ -244,7 +246,7 @@ func TestFleetMasterSwitch_FallbackThenStandDownIsRefusedForGood(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		ast, err := alpha.mgr.FleetStatus(ctx)
 		if err != nil || !ast.LastErrorCommitRefused || !strings.Contains(ast.LastError, "host-record") {
-			t.Fatalf("round %d: alpha's mark at bravo: commit_refused %v last_error %q (%v)", i+1, ast.LastErrorCommitRefused, ast.LastError, err)
+			t.Fatalf("round %d: alpha's marker deletion at bravo: commit_refused %v last_error %q (%v)", i+1, ast.LastErrorCommitRefused, ast.LastError, err)
 		}
 		alpha.round(t)
 	}

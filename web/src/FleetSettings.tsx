@@ -185,6 +185,8 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
       <div style={col}>
         <Kv testid="fleet-settings-hosting" rows={[
           ['Hosted by', <span key="h" data-testid="fleet-hosted-by">{hostedBy}</span>],
+          ['Acting master', <span key="am" data-testid="fleet-acting-master" style={fleet.acting_master ? mono : dim}>
+            {fleet.acting_master ? `${fleet.acting_master}${fleet.acting_master === fleet.agent_id ? ' (this instance)' : ''}` : 'no master'}</span>],
           [urls.length > 1 ? 'Fleet URLs' : 'Fleet URL', urls.length
             ? <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{urls.map(u => <CopyValue key={u} text={u} label="Copy fleet URL" />)}</span>
             : <span style={dim}>none</span>],
@@ -266,7 +268,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
               The fleet is hosted {forge ? 'on the forge' : `at ${hostPortOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'}`}. Hosting it here removes this copy's origin; members then point at {wouldServe.length ? wouldServe.join(', ') : 'this instance'}.
             </div>
             {confirm === 'host' && <HostConfirm fleet={fleet} interrupted={master ? fleet.interrupted_move : undefined}
-              oldHost={peerOrigin === true && !fleet.host_stood_down ? (hostPortOf(fleet.hosting ?? '') || 'the old host') : undefined}
+              oldMaster={fleet.acting_master && fleet.acting_master !== fleet.agent_id ? fleet.acting_master : undefined}
               onCancel={() => setConfirm(null)} onDone={done} />}
           </div>
         )}
@@ -527,16 +529,16 @@ function StandDownConfirm({ master, hub, onCancel, onDone }: { master: boolean; 
   );
 }
 
-function HostConfirm({ fleet, interrupted, oldHost, onCancel, onDone }: {
+function HostConfirm({ fleet, interrupted, oldMaster, onCancel, onDone }: {
   fleet: FleetStatus; interrupted?: FleetStatus['interrupted_move'];
-  // oldHost: this copy follows another instance and its main does not show
-  // that instance's stand-down (host_stood_down): hosting asks the loss
-  // confirm (old_master_active).
-  oldHost?: string; onCancel: () => void; onDone: () => void;
+  // oldMaster: the master marker on this copy's main names another instance
+  // (acting_master): hosting asks the loss confirm (old_master_active).
+  oldMaster?: string; onCancel: () => void; onDone: () => void;
 }) {
   const { busy, err, run } = useAction();
   const code = (err as { code?: string } | null)?.code;
-  const lossFrom = oldHost ?? (code === 'old_master_active' ? (hostPortOf(fleet.hosting ?? '') || 'the old host') : undefined);
+  const lossFrom = oldMaster ?? (code === 'old_master_active' ? 'the old master' : undefined);
+  const oldHost = hostPortOf(fleet.hosting ?? '') || 'the old host';
   const serve = fleet.host.would_serve ?? [];
   const listenerOff = !fleet.host.listener_on || fleet.host.external_addresses.length === 0;
   const notUp = !listenerOff && fleet.host.listening !== true;
@@ -565,8 +567,8 @@ function HostConfirm({ fleet, interrupted, oldHost, onCancel, onDone }: {
           body={listenerNotRunning(true, fleet.host.listener_reason)} />
       )}
       {lossFrom && (
-        <OutcomeCard tone="bad" testid="fleet-host-loss" headline={`This copy has not seen ${lossFrom} stand down`}
-          body={`Its copy of main does not show that the master on ${lossFrom} stood down: it has not, or this copy has not synced since. Stand down there first and wait for this copy's next sync. Hosting now leaves out every change made on ${lossFrom} after this copy's last sync.`} />
+        <OutcomeCard tone="bad" testid="fleet-host-loss" headline={`Main still names ${lossFrom} as the acting master`}
+          body={`This copy's main says ${lossFrom} is the fleet's acting master: it has not stood down, or this copy has not synced since it did. Stand down there first and wait for this copy's next sync. Hosting now leaves out every change made on ${oldHost} after this copy's last sync.`} />
       )}
       {code !== 'old_master_active' && <Refusal err={err} note="Nothing changed." testid="fleet-host-error" />}
       <Buttons testid="fleet-host-submit" busy={busy} label={lossFrom ? 'Host here without those changes' : 'Host the fleet here'} busyLabel="Hosting…"
