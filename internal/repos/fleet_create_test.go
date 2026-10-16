@@ -188,6 +188,42 @@ func requireNoForgeBranch(t *testing.T, bare string) {
 	require.Empty(t, strings.TrimSpace(string(out)), "the forge keeps no agent branch")
 }
 
+// Review B1 (PR #528): GET /fleet's host.listening is the mTLS listener's
+// LIVE state, apart from listener_on (configured). With nobody reporting it
+// is false; configured but not started it is false with the reason; bound it
+// is true with no reason; and the reason is never shown for a listener that
+// is not configured at all.
+// SABOTAGE: Listening = ListenerOn -> the no_certificate row reads true ->
+// red; ignore the reported reason -> red.
+func TestFleetStatus_ListeningIsTheLiveListener(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.True(t, st.Host.ListenerOn, "fixture: [tls].addr is set")
+	require.False(t, st.Host.Listening, "nobody reported a bound listener")
+
+	m.SetTLSListener(func() (string, string) { return "", "no_certificate" })
+	st, err = m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.False(t, st.Host.Listening)
+	require.Equal(t, "no_certificate", st.Host.ListenerReason)
+
+	m.SetTLSListener(func() (string, string) { return "127.0.0.1:18931", "" })
+	st, err = m.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.True(t, st.Host.Listening)
+	require.Empty(t, st.Host.ListenerReason)
+
+	off := newFleetHost(t, t.TempDir(), func(d *Deps) { d.Cfg.TLS.Addr = "" })
+	off.SetTLSListener(func() (string, string) { return "", "off" })
+	st, err = off.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.False(t, st.Host.ListenerOn)
+	require.False(t, st.Host.Listening)
+	require.Empty(t, st.Host.ListenerReason, "no reason for a listener that is not configured")
+}
+
 // A fleet hosted here (no origin): a fresh root is minted into <home>/fleet
 // (root.key a plain owner-only file), the repository holds root, leaf and
 // record on main at once, the bundle is installed, and this instance is the

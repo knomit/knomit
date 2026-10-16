@@ -50,6 +50,11 @@ type FleetStatus struct {
 	RegisteredAt *time.Time `json:"registered_at,omitempty"`
 	LastAttempt  *time.Time `json:"last_attempt,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`
+	// SyncIntervalSeconds is how often this copy's origin round runs (the
+	// origin record's interval, push_interval when shorter, 300 s when
+	// unset): a member sees what the master's round merged into main only
+	// after its own next round. Absent on a copy with no origin (the hub).
+	SyncIntervalSeconds int `json:"sync_interval_seconds,omitempty"`
 
 	// F10. Host is what this instance offers to host a fleet: its mTLS
 	// listener and its external addresses. Record is this instance's own
@@ -104,8 +109,20 @@ type FleetStatus struct {
 // standalone instance, the URLs of a fleet created here (the New fleet
 // wizard's Hosting step).
 type FleetHostOffer struct {
-	Listener          string   `json:"listener"`
-	ListenerOn        bool     `json:"listener_on"`
+	Listener string `json:"listener"`
+	// ListenerOn: the mTLS listener is CONFIGURED ([tls].addr is set). It
+	// says nothing about whether it is up: see Listening.
+	ListenerOn bool `json:"listener_on"`
+	// Listening: the mTLS listener is bound and serving NOW, as the process
+	// that bound the listeners reports it (SetTLSListener). false when it is
+	// off, when it is configured but did not start (ListenerReason), and
+	// before anyone reported. Only Listening means members can reach it.
+	Listening bool `json:"listening"`
+	// ListenerReason is why a configured listener is not listening:
+	// no_certificate (nothing installed in [tls].dir when it last started:
+	// a create or join installs one, and a restart or `knomit reload` starts
+	// it), addr_in_use, or "" when it is listening, off, or unknown.
+	ListenerReason    string   `json:"listener_reason,omitempty"`
 	ExternalAddresses []string `json:"external_addresses"`
 	WouldServe        []string `json:"would_serve,omitempty"`
 }
@@ -185,6 +202,13 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		RootDir:   m.fleetRootDir(),
 		FleetURLs: []string{},
 	}
+	if f := m.tlsListener.Load(); f != nil {
+		listening, reason := (*f)()
+		st.Host.Listening = listening != ""
+		if st.Host.ListenerOn && !st.Host.Listening {
+			st.Host.ListenerReason = reason
+		}
+	}
 	if m.deps.Signer != nil {
 		st.PublicKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(m.deps.Signer.PublicKey())))
 	}
@@ -235,6 +259,13 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		}
 		if o != nil && st.Master {
 			st.Host.WouldServe = credentialFreeAll(m.hubFleetURLs(ri))
+		}
+		if o != nil {
+			_ = ri.WithRead(func(svc *store.Service) {
+				if r, rerr := svc.Remote().GetRemote("origin"); rerr == nil && r != nil {
+					st.SyncIntervalSeconds = int(loopInterval(r) / time.Second)
+				}
+			})
 		}
 	}
 	st.RecordState = "pending"

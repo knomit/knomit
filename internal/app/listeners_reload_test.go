@@ -375,6 +375,10 @@ func TestApply_TLSAddrWithoutACertificateIsReported(t *testing.T) {
 	if got := r.lockInfo(t).Listeners["tls"]; got.Reason != ListenerReasonNoCertificate || got.Configured != tlsAddr || got.Listening != "" {
 		t.Fatalf("listeners.tls = %+v", got)
 	}
+	// What GET /fleet's host.listening reads (PR #528 B1).
+	if l, why := r.ls.TLSListening(); l != "" || why != ListenerReasonNoCertificate {
+		t.Fatalf("TLSListening = %q, %q; want not listening, no_certificate", l, why)
+	}
 }
 
 func TestApply_TLSRebindMovesTheListenerAndKeepsTheOldOnFailure(t *testing.T) {
@@ -404,6 +408,9 @@ func TestApply_TLSRebindMovesTheListenerAndKeepsTheOldOnFailure(t *testing.T) {
 	}
 	requireFree(t, oldAddr)
 	requireBound(t, newAddr)
+	if l, why := r.ls.TLSListening(); l != newAddr || why != "" {
+		t.Fatalf("TLSListening = %q, %q; want %s", l, why, newAddr)
+	}
 	r.requireNoServeFailure(t)
 }
 

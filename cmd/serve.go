@@ -257,6 +257,9 @@ func serveCmd() *cobra.Command {
 			// The address this server's own children (recipe `exec`) get as
 			// KNOMIT_SERVER: the local listener only if it bound.
 			a.Manager().SetServerAddress(ls.Address)
+			// GET /fleet's host.listening: whether the mTLS listener is UP,
+			// not only configured (a reload can start it later).
+			a.Manager().SetTLSListener(ls.TLSListening)
 			// The one line to copy into KNOMIT_SERVER to reach THIS instance.
 			log.Info().Str("knomit_server", ls.Address).Msg("this server's address (KNOMIT_SERVER for kb)")
 

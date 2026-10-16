@@ -4119,13 +4119,28 @@ components:
         registered_at: { type: string, format: date-time }
         last_attempt: { type: string, format: date-time }
         last_error: { type: string, description: "The latest push or fetch failure; empty after a success" }
+        sync_interval_seconds:
+          type: integer
+          description: "How often this copy's origin round runs (the origin's interval, push_interval when shorter, 300 when unset): a member sees what the master merged into main only after its next round. Absent on the hub (no origin)."
         host:
           type: object
           required: [listener_on, external_addresses]
           description: "What this instance offers to host a fleet, so a page can say before a create or a host-here that it would be refused (listener_required, addresses_required)"
           properties:
             listener: { type: string, description: "[tls].addr, the mTLS listener's bind; empty when it is off. Sent only when `local` is true: any other caller gets listener_on, not where it is bound." }
-            listener_on: { type: boolean, description: "This instance has the mTLS listener members push to ([tls].addr is set)" }
+            listener_on: { type: boolean, description: "The mTLS listener is CONFIGURED ([tls].addr is set). It says nothing about whether it is up: see listening." }
+            listening:
+              type: boolean
+              description: |
+                The mTLS listener is bound and serving NOW (what server.json's
+                listeners.tls.listening says). Only this means members can reach
+                this instance. A listener configured before any certificate was
+                installed (a fresh instance that then creates, joins or hosts a
+                fleet) stays off until knomit restarts or `knomit reload` runs.
+            listener_reason:
+              type: string
+              enum: [no_certificate, addr_in_use]
+              description: "Why a configured listener is not listening; absent when it is listening or not configured"
             external_addresses:
               type: array
               items: { type: string }

@@ -306,6 +306,20 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
 
+	// PR #528 S5: GET /fleet names the member's own sync interval (the
+	// origin record's, 300 s by default), which is when it next sees main.
+	// SABOTAGE: drop SyncIntervalSeconds from FleetStatus -> 0 -> red.
+	ast, err := alpha.FleetStatus(ctx)
+	require.NoError(t, err)
+	var want int
+	require.NoError(t, alpha.fleetRepo().WithRead(func(svc *store.Service) {
+		r, rerr := svc.Remote().GetRemote("origin")
+		require.NoError(t, rerr)
+		want = int(loopInterval(r) / time.Second)
+	}))
+	require.Positive(t, want)
+	require.Equal(t, want, ast.SyncIntervalSeconds)
+
 	err = hostHere(ctx, alpha)
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
@@ -324,6 +338,9 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	origin, err = f.master.hasOrigin(f.mri)
 	require.NoError(t, err)
 	require.False(t, origin, "the master's copy is the hub now")
+	mst, err := f.master.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.Zero(t, mst.SyncIntervalSeconds, "the hub has no origin round")
 }
 
 // localRound runs ONE round of ri's origin-less local reconcile, as the Sync

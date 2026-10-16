@@ -133,7 +133,7 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 	s := &Server{Manager: m, Grants: localWriteGrants()}
 
 	out := getFleetJSON(t, s)
-	require.Equal(t, map[string]any{"listener_on": false, "external_addresses": []any{}}, out["host"], "unset is an empty array, never null")
+	require.Equal(t, map[string]any{"listener_on": false, "listening": false, "external_addresses": []any{}}, out["host"], "unset is an empty array, never null")
 	require.Contains(t, out["notice"], "external_addresses")
 	require.NotContains(t, out, "record")
 	require.NotContains(t, out, "fleet_url", "fleet_url is gone: fleet_urls")

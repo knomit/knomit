@@ -89,6 +89,9 @@ type Manager struct {
 	// the `kb` it starts reaches THIS server. Nil until set.
 	serverAddr atomic.Pointer[string]
 
+	// tlsListener reports the mTLS listener's live state (SetTLSListener).
+	tlsListener atomic.Pointer[func() (string, string)]
+
 	// repoEventHub fans every repo's REPO-LEVEL events into one server-wide
 	// stream. Per-repo TaskHubs cannot serve the fleet-wide index chip: the web
 	// app holds one events stream, for the ACTIVE repo, while rendering a chip
@@ -586,6 +589,14 @@ func (m *Manager) ControlDB() *sql.DB {
 	}
 	return m.reg.DB()
 }
+
+// SetTLSListener hands the Manager the mTLS listener's live state: f
+// returns the address it is bound to ("" when not listening) and why a
+// configured one is not (app.ListenerReason*). GET /fleet reports it as
+// host.listening, so no page claims members can reach a listener that is
+// only configured. cmd/serve.go sets it once the listeners are bound; a
+// reload changes what f returns. Unset, nothing is listening.
+func (m *Manager) SetTLSListener(f func() (listening, reason string)) { m.tlsListener.Store(&f) }
 
 // SetServerAddress records this server's own address (serveraddr.ForLocal of
 // the local listener it BOUND, else serveraddr.ForTCP of its TCP listener) for

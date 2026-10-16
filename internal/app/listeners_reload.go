@@ -107,6 +107,15 @@ func (l *Listeners) Snapshot() Snapshot {
 	return s
 }
 
+// TLSListening is the mTLS listener's live state, for
+// repos.Manager.SetTLSListener: the address it is bound to ("" when it is
+// not listening) and why a configured one is not (ListenerReason*). It reads
+// the state under the lock, so a reload's change shows at once.
+func (l *Listeners) TLSListening() (listening, reason string) {
+	s := l.Snapshot()
+	return s.TLS.Listening, s.TLS.Reason
+}
+
 // SetReloadable records, before Advertise, whether the caller installed a
 // reload trigger; server.json says so ("reload": true), and `knomit reload`
 // signals only a server that does.
