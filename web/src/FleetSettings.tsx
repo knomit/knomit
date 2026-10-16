@@ -34,7 +34,11 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   const hub = fleet.hosting === 'none';
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [flow, setFlow] = useState<FleetFollowMode | null>(null);
+  // The URL a Move starts from: '' (the operator names the forge), or the
+  // forge an interrupted move goes back to (interrupted_move.move_back_to).
+  const [moveUrl, setMoveUrl] = useState('');
   const setConnecting = (on: boolean) => setFlow(on ? 'follow' : null);
+  const startMove = (to = '') => { setMoveUrl(to); setFlow('move'); };
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [rebuildErr, setRebuildErr] = useState<Error | null>(null);
@@ -56,14 +60,18 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   const forge = !hub && peerOrigin === false;
   const storedMethod = forge ? peerRead.method : '';
   const stale = fleet.follows_host === false;
+  // The server's verdict that a move onto a forge stopped before the host
+  // record (#529 S4): the repair is the master's, never Point at.
+  const interrupted = master ? fleet.interrupted_move : undefined;
 
   if (flow && fleet.fleet_repo) {
     const back = () => setFlow(null);
     return (
       <div data-testid="fleet-connect-flow" style={connectFlow}>
         <FleetFollowFlow fleetRepo={fleet.fleet_repo} mode={flow} onCancel={back}
-          initialUrl={flow === 'access' ? fleet.hosting ?? '' : flow === 'follow' && stale ? (fleet.host_record ?? [])[0] ?? '' : ''}
+          initialUrl={flow === 'access' ? fleet.hosting ?? '' : flow === 'move' ? moveUrl : flow === 'follow' && stale ? (fleet.host_record ?? [])[0] ?? '' : ''}
           initialMethod={flow === 'access' && ['none', 'token', 'basic', 'ssh'].includes(storedMethod) ? storedMethod as FleetAuthMethod : ''}
+          fromForge={flow === 'move' && forge ? fleet.hosting : undefined}
           hostRecord={stale ? fleet.host_record : undefined}
           onDone={() => { back(); onChanged(); }} onBusyChange={onBusyChange} />
       </div>
@@ -121,7 +129,14 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         {fleet.record_state === 'revoked' && (
           <div data-testid="fleet-revoked-notice" style={{ fontSize: 12, color: '#e8a0a0' }}>This instance's certificate is revoked: the fleet refuses its pushes.</div>
         )}
-        {fleet.last_error && (
+        {fleet.last_error && fleet.last_error_fleet_moved && (
+          // The old host refused this copy's push because the fleet moved
+          // (#529 S5): the plain sentence, never the raw refusal with a retry.
+          <div data-testid="fleet-last-error-moved" role="alert" style={{ ...errBox, marginTop: 0 }}>
+            The fleet has moved: the old host no longer takes this copy's pushes. Use Point at the new host (Hosting, below); nothing this copy wrote is lost.
+          </div>
+        )}
+        {fleet.last_error && !fleet.last_error_fleet_moved && (
           <div data-testid="fleet-last-error" role="alert" style={{ ...errBox, marginTop: 0 }}>
             Last sync failed: <span style={mono}>{fleet.last_error}</span>
             {fleet.last_error_refused
@@ -137,11 +152,14 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   const urls = fleet.fleet_urls ?? [];
   const listening = fleet.host.listening === true;
   const hostedBy = hub ? (listening ? 'this instance — members push to it' : 'this instance — its fleet listener is not running, so members cannot push to it yet')
-    : forge ? "a forge — the master fetches every member's branch, merges, and pushes main"
-      // A master with an origin may be the new master still following the
-      // old host, or the old master already following the new one: the page
-      // cannot tell, so it names the host only (4b9101b3).
-      : `${hostPortOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'} — ${master ? "the fleet's host" : "the fleet's master"}`;
+    // A stale copy: where main says the fleet is now, which may be a forge
+    // or an instance; this page does not know which (#529 N-e).
+    : stale ? `${hostPortOf(urls[0] ?? '') || urls[0] || 'elsewhere'} — where the fleet's main says it is hosted now`
+      : forge ? "a forge — the master fetches every member's branch, merges, and pushes main"
+        // A master with an origin may be the new master still following the
+        // old host, or the old master already following the new one: the page
+        // cannot tell, so it names the host only (4b9101b3).
+        : `${hostPortOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'} — ${master ? "the fleet's host" : "the fleet's master"}`;
   const wouldServe = fleet.host.would_serve ?? [];
   sections.push({
     id: 'hosting', title: 'Hosting', hint: 'where the fleet repository lives', problem: stale,
@@ -168,7 +186,24 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
             {urls.length > 1 ? 'One of these goes into each bundle you issue (Enroll asks which); a joiner never types it.' : 'The URL is in every bundle you issue; a joiner never types it.'}
           </div>
         )}
-        {stale && (
+        {stale && interrupted && (
+          // The server's interrupted_move: this master's copy syncs from a
+          // forge the host record does not name. The record is what members
+          // follow, so the repair goes back to it (#529 S4).
+          <OutcomeCard tone="bad" testid="fleet-move-interrupted" headline="The move to the forge did not finish" url={fleet.hosting}
+            body={interrupted.record_is_here
+              ? `This copy already syncs from ${fleet.hosting}, but the fleet's main still says this instance hosts the fleet, and members follow main. Host the fleet here (below) to put things back as they were; then move the fleet again.`
+              : `This copy already syncs from ${fleet.hosting}, but the fleet's main still says the fleet is hosted at ${interrupted.move_back_to ?? (fleet.host_record ?? []).join(', ')}, and members follow main. Move the fleet back there to put things back as they were, or host the fleet here (below).`}>
+            {local && interrupted.move_back_to && (
+              <div style={{ ...btns, marginTop: 10 }}>
+                <button type="button" data-testid="fleet-move-back" style={btn(false, 'primary')} onClick={() => startMove(interrupted.move_back_to)}>
+                  Move the fleet back to {hostPortOf(interrupted.move_back_to) || 'that forge'}…
+                </button>
+              </div>
+            )}
+          </OutcomeCard>
+        )}
+        {stale && !interrupted && (
           // follows_host false: the server compared this copy's origin with
           // the host record on main, and they differ.
           <OutcomeCard tone="bad" testid="fleet-follows-old-host" headline="This copy follows the old host" url={fleet.hosting}
@@ -177,20 +212,30 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         {local && master && hub && (
           <div>
             <div style={btns}>
-              <button type="button" data-testid="fleet-move-forge" style={btn(false)} onClick={() => setFlow('move')}>Move the fleet to a forge…</button>
+              <button type="button" data-testid="fleet-move-forge" style={btn(false)} onClick={() => startMove()}>Move the fleet to a forge…</button>
             </div>
             <div data-testid="fleet-move-forge-hint" style={fieldHint}>
               This instance stays the master and keeps the root key; the fleet repository moves to a forge repository you name, and members follow it there with their own credentials.
             </div>
           </div>
         )}
-        {local && forge && (
+        {local && master && forge && !interrupted && (
+          <div>
+            <div style={btns}>
+              <button type="button" data-testid="fleet-move-forge" style={btn(false)} onClick={() => startMove()}>Move the fleet to another forge…</button>
+            </div>
+            <div data-testid="fleet-move-forge-hint" style={fieldHint}>
+              Changing the forge URL is a move: the new forge repository becomes where the fleet is hosted, and every member points at it with its own credential. The review lists what members must do.
+            </div>
+          </div>
+        )}
+        {local && forge && !interrupted && (
           <div>
             <div style={btns}>
               <button type="button" data-testid="fleet-update-access" style={btn(false)} onClick={() => setFlow('access')}>Update access…</button>
             </div>
-            <div style={fieldHint}>
-              Rotate this instance's token for the forge, change how it signs in, or point this copy at the forge repository's new URL.
+            <div data-testid="fleet-update-access-hint" style={fieldHint}>
+              Rotate this instance's token for the forge, or change how it signs in. The forge URL stays as it is{master ? ': to change it, move the fleet to another forge.' : ': if the fleet moved, point this copy at the new host.'}
             </div>
           </div>
         )}
@@ -205,7 +250,10 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
             {confirm === 'host' && <HostConfirm fleet={fleet} onCancel={() => setConfirm(null)} onDone={done} />}
           </div>
         )}
-        {local && (hub ? master : peerOrigin !== null && (!forge || stale)) && (
+        {/* Point at: the hub master after a switch, any copy following a
+            peer, and a MEMBER on a forge (its URL change). Never the master
+            on a forge: its URL change is a move (#529 S3, S4). */}
+        {local && (hub ? master : peerOrigin !== null && (!forge || !master)) && (
           <div>
             <div style={btns}>
               <button type="button" data-testid="fleet-point-at" style={btn(false)} onClick={() => setConnecting(true)}>Point at the new host…</button>
@@ -215,7 +263,9 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
                 ? 'The step after another instance hosts the fleet (it imported the root key and chose Host the fleet here): point this copy at its fleet URL, then stand down. Stand down waits until main says the fleet is hosted where this copy points.'
                 : stale
                   ? "The fleet moved: this copy follows it from where main says it is hosted now. On a forge it asks for this instance's own credential."
-                  : 'After a master switch: this copy follows the fleet from the URL the new master gives you.'}
+                  : forge
+                    ? "When the master moves the fleet to another forge repository or host: this copy follows it there. On a forge it asks for this instance's own credential."
+                    : 'After a master switch: this copy follows the fleet from the URL the new master gives you.'}
             </div>
           </div>
         )}

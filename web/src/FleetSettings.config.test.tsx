@@ -22,6 +22,7 @@ const forgeMember: FleetStatus = {
   ...hub, agent_id: '5be2d8f4a901', master: false, hosting: FORGE, fleet_urls: [FORGE], host_record: [FORGE],
   host: { listener_on: false, external_addresses: [] },
 };
+const forgeMaster: FleetStatus = { ...forgeMember, agent_id: 'a3f9c0d12e7b', master: true, follows_host: true };
 const PROBE_FORGE_ASKS = { body: { reachable: true, empty: false, auth_required: true, upstream_branch: 'main', branches: [] } };
 const PROBE_FORGE_OK = { body: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'] } };
 const PROBE_PEER = { body: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'], fleet_peer: true } };
@@ -92,11 +93,15 @@ describe('FleetSettings: the fleet repository configuration (PR7c)', () => {
     expect(calls.map(c => c.route)).not.toContain('POST /api/v1/fleet/follow');
   });
 
-  // A forge copy: its stored method shown, Update access prefilled with the
-  // stored URL and method; "none" resets it to anonymous. A refusal shows the
-  // server's words and code.
-  // SABOTAGE: prefill nothing -> the URL field is empty -> red.
-  it('a forge member updates its access: prefilled, the stored method named, POST /fleet/follow with the new method', async () => {
+  // A forge copy: its stored method shown. Update access changes the
+  // credential ONLY (#529 S3): it opens on Access with no URL field, the
+  // stored method prefilled; unchanged it sends nothing (N-b); "none" resets
+  // it to anonymous, sent with NO url (the server keeps the stored one). A
+  // refusal shows the server's words and code. A member's URL change is
+  // Point at the new host.
+  // SABOTAGE: send the url with the credential -> red; drop the unchanged
+  // guard -> Next is enabled with nothing changed -> red.
+  it('a forge member updates its access: the credential only, no URL field, nothing sent while unchanged', async () => {
     const { calls, set } = stubFleetFetch({
       'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'token' } },
       'POST /api/v1/repos:probe-origin': PROBE_FORGE_OK,
@@ -104,24 +109,122 @@ describe('FleetSettings: the fleet repository configuration (PR7c)', () => {
     });
     const onChanged = mount(forgeMember);
     expect(await screen.findByTestId('fleet-origin-access')).toHaveTextContent('token');
-    expect(screen.queryByTestId('fleet-point-at')).toBeNull();
+    expect(screen.getByTestId('fleet-point-at')).toBeInTheDocument();
+    expect(screen.getByTestId('fleet-point-at-hint')).toHaveTextContent('When the master moves the fleet');
     expect(screen.queryByTestId('fleet-move-forge')).toBeNull();
+    expect(screen.getByTestId('fleet-update-access-hint')).toHaveTextContent('The forge URL stays as it is');
     fireEvent.click(screen.getByTestId('fleet-update-access'));
     expect(screen.getByTestId('fleet-follow-flow')).toHaveAttribute('data-mode', 'access');
-    expect(screen.getByTestId('fleet-follow-url')).toHaveValue(FORGE);
-    fireEvent.click(screen.getByTestId('fleet-follow-test'));
-    expect(await screen.findByTestId('fleet-follow-access')).toHaveTextContent('Stored now: token');
+    expect(screen.queryByTestId('fleet-follow-url')).toBeNull();
+    expect(screen.queryByTestId('fleet-follow-step-origin')).toBeNull();
+    expect(screen.getByTestId('fleet-follow-access')).toHaveTextContent('Stored now: token');
+    expect(screen.getByTestId('fleet-follow-access-stored')).toHaveTextContent('This copy follows github.com');
     expect(screen.getByTestId('fleet-follow-auth-method')).toHaveValue('token');
+    expect(screen.getByTestId('fleet-follow-unchanged')).toBeInTheDocument();
+    expect(screen.getByTestId('fleet-follow-next')).toBeDisabled();
     fireEvent.change(screen.getByTestId('fleet-follow-auth-method'), { target: { value: 'none' } });
+    expect(screen.queryByTestId('fleet-follow-unchanged')).toBeNull();
     expect(screen.queryByTestId('fleet-follow-auth-token')).toBeNull();
     fireEvent.click(screen.getByTestId('fleet-follow-next'));
+    expect(screen.getByTestId('fleet-follow-will')).toHaveTextContent('Nothing is pushed, and main, the host record and every member stay as they are');
     fireEvent.click(screen.getByTestId('fleet-follow-submit'));
     expect(await screen.findByTestId('fleet-follow-error-code')).toHaveTextContent('unreachable');
-    expect(calls.find(c => c.route === 'POST /api/v1/fleet/follow')?.body).toEqual({ url: FORGE, auth_method: 'none' });
+    expect(calls.find(c => c.route === 'POST /api/v1/fleet/follow')?.body).toEqual({ auth_method: 'none' });
     expect(onChanged).not.toHaveBeenCalled();
-    set('POST /api/v1/fleet/follow', { body: forgeMember });
+    set('POST /api/v1/fleet/follow', { body: { ...forgeMember, change: 'credential' } });
     fireEvent.click(screen.getByTestId('fleet-follow-submit'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(calls.map(c => c.route).filter(r => r.includes('/repos/fleet') && !r.startsWith('GET'))).toEqual([]);
+  });
+
+  // The master on a forge (#529 S3): a URL change is a MOVE, through "Move
+  // the fleet to another forge…", whose Review says members keep pushing to
+  // the old forge until they follow. No Point at. Update access is the
+  // credential only. A "move" to the forge it is already on is answered as
+  // no move.
+  // SABOTAGE: show Point at to the master on a forge -> red; use the hub's
+  // member item for a forge move -> red.
+  it('the master on a forge changes the URL only by moving the fleet to another forge', async () => {
+    const OTHER = 'https://gitlab.example/acme/fleet';
+    const { calls, set } = stubFleetFetch({
+      'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'token' } },
+      'POST /api/v1/repos:probe-origin': PROBE_FORGE_OK,
+      'POST /api/v1/fleet/follow': { body: { ...forgeMaster, hosting: OTHER, change: 'moved' } },
+    });
+    const onChanged = mount(forgeMaster);
+    expect(await screen.findByTestId('fleet-origin-access')).toHaveTextContent('token');
+    expect(screen.queryByTestId('fleet-point-at')).toBeNull();
+    expect(screen.getByTestId('fleet-move-forge')).toHaveTextContent('Move the fleet to another forge…');
+    expect(screen.getByTestId('fleet-update-access-hint')).toHaveTextContent('to change it, move the fleet to another forge');
+    fireEvent.click(screen.getByTestId('fleet-move-forge'));
+    expect(screen.getByTestId('fleet-follow-flow')).toHaveAttribute('data-mode', 'move');
+    expect(screen.getByTestId('fleet-follow-url')).toHaveValue('');
+    fireEvent.change(screen.getByTestId('fleet-follow-url'), { target: { value: OTHER } });
+    fireEvent.click(screen.getByTestId('fleet-follow-test'));
+    fireEvent.change(await screen.findByTestId('fleet-follow-auth-method'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByTestId('fleet-follow-next'));
+    expect(screen.getByTestId('fleet-move-members')).toHaveTextContent(`Every member's copy keeps following ${FORGE} until it points at ${OTHER}`);
+    expect(screen.getByTestId('fleet-move-members')).toHaveTextContent('its pushes go to the old forge, where nothing merges them');
+    fireEvent.click(screen.getByTestId('fleet-follow-submit'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(calls.find(c => c.route === 'POST /api/v1/fleet/follow')?.body).toEqual({ url: OTHER, auth_method: 'none' });
+
+    // The same forge it is on: the server ran no move, and the page says so.
+    set('POST /api/v1/fleet/follow', { body: { ...forgeMaster, change: 'unchanged' } });
+    onChanged.mockClear();
+    fireEvent.click(screen.getByTestId('fleet-move-forge'));
+    fireEvent.change(screen.getByTestId('fleet-follow-url'), { target: { value: FORGE } });
+    fireEvent.click(screen.getByTestId('fleet-follow-test'));
+    fireEvent.click(await screen.findByTestId('fleet-follow-next'));
+    fireEvent.click(screen.getByTestId('fleet-follow-submit'));
+    expect(await screen.findByTestId('fleet-follow-not-moved')).toHaveTextContent('Nothing moved and nothing changed');
+    expect(onChanged).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('fleet-follow-done'));
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  // An interrupted move (#529 S4), from the server's interrupted_move: the
+  // card offers the real repairs and never Point at, and never prefills
+  // this instance's own hub URL.
+  // SABOTAGE: show the follows-old-host card (Point at, prefilled from
+  // host_record) for the master -> red.
+  it('an interrupted move offers Host the fleet here, or moving back to the forge main names', async () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'token' } } });
+    const hubURL = 'https://kb-01.acme.example:7443/git/fleet';
+    const { unmount } = render(<FleetSettings fleet={{ ...forgeMaster, follows_host: false, host_record: [hubURL], fleet_urls: [hubURL], interrupted_move: { record_is_here: true } }} onChanged={vi.fn()} />);
+    const card = await screen.findByTestId('fleet-move-interrupted');
+    expect(card).toHaveTextContent('main still says this instance hosts the fleet');
+    expect(card).toHaveTextContent('Host the fleet here (below)');
+    expect(screen.queryByTestId('fleet-move-back')).toBeNull();
+    expect(screen.queryByTestId('fleet-follows-old-host')).toBeNull();
+    expect(screen.queryByTestId('fleet-point-at')).toBeNull();
+    expect(screen.getByTestId('fleet-host-here')).toBeInTheDocument();
+    unmount();
+
+    const OLD = 'https://gitlab.example/acme/fleet';
+    render(<FleetSettings fleet={{ ...forgeMaster, follows_host: false, host_record: [OLD], fleet_urls: [OLD], interrupted_move: { record_is_here: false, move_back_to: OLD } }} onChanged={vi.fn()} />);
+    expect(await screen.findByTestId('fleet-move-interrupted')).toHaveTextContent(`still says the fleet is hosted at ${OLD}`);
+    expect(screen.queryByTestId('fleet-point-at')).toBeNull();
+    fireEvent.click(screen.getByTestId('fleet-move-back'));
+    expect(screen.getByTestId('fleet-follow-flow')).toHaveAttribute('data-mode', 'move');
+    expect(screen.getByTestId('fleet-follow-url')).toHaveValue(OLD);
+  });
+
+  // The old host refused this copy's push because the fleet moved (#529 S5):
+  // one plain sentence, never the raw refusal with "Retrying".
+  // SABOTAGE: ignore last_error_fleet_moved -> the raw text and the retry
+  // line render -> red.
+  it('a member refused by the old host is told the fleet moved, not the raw push error', async () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: 'https://kb-01.acme.example:7443/git/fleet', branch: 'main', auth_method: 'cert' } } });
+    const raw = 'Push: knomit: this copy of the fleet repository "fleet" has an origin; push your agent branch to the fleet\'s origin, not to this instance';
+    mount({ ...forgeMember, hosting: 'https://kb-01.acme.example:7443/git/fleet', follows_host: false, last_error: raw, last_error_fleet_moved: true });
+    expect(await screen.findByTestId('fleet-last-error-moved')).toHaveTextContent('The fleet has moved');
+    expect(screen.getByTestId('fleet-last-error-moved')).toHaveTextContent('Point at the new host');
+    expect(screen.queryByTestId('fleet-last-error')).toBeNull();
+    expect(screen.queryByText(/Retrying on the next sync/)).toBeNull();
+    expect(screen.queryByText(/push your agent branch/)).toBeNull();
+    // #529 N-e: a stale copy names where main says the fleet is, not "the master".
+    expect(screen.getByTestId('fleet-hosted-by')).toHaveTextContent("github.com — where the fleet's main says it is hosted now");
   });
 
   // After the hub moved to a forge: a member still on the old hub (a cert
