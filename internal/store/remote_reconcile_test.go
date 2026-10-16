@@ -1217,3 +1217,29 @@ func TestReplayOntoUpstream_OnlyMergesBeyondUpstreamMovesOntoIt(t *testing.T) {
 	require.Equal(t, 0, res.NumReplayed)
 	require.Equal(t, u, mustHeadHash(t, svc, "agent/test"), "the branch moves onto the new main")
 }
+
+// The empty walk on DISJOINT histories (an origin with a root of its own,
+// nothing of the agent's beyond the watermark) keeps the branch where it is:
+// its root commit is the repo's identity (RepoInstance.ID), and moving onto
+// the origin's main would change it. Only shared history moves.
+// SABOTAGE: drop the MergeBase check (keep = false on disjoint) -> the
+// branch moves onto the disjoint root -> red (and repos
+// TestSwap_CopyFailureRestoresStoreAndOrigin, web
+// TestHandleCommit_Disjoint_FailedSwapRestartsThePreviousSyncMode).
+func TestReplayOntoUpstream_EmptyWalkOnDisjointHistoryKeepsTheBranch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+	seed, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	before := mustHeadHash(t, svc, "agent/test")
+	require.Equal(t, seed, before, "setup: nothing beyond the watermark")
+
+	disjoint := makeDisjointRoot(t, svc, "kb/theirs.md", "their own root")
+	res, err := svc.rh.replayOntoUpstream(context.Background(), "agent/test", disjoint, seed, StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, ModeNoop, res.Mode)
+	require.Equal(t, before, mustHeadHash(t, svc, "agent/test"), "the branch keeps its own root")
+}

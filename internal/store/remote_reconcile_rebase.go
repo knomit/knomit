@@ -357,8 +357,11 @@ func (rh *repoHandler) replayOntoUpstream(
 	//   2. upstream is an ancestor of local → local is a strict linear
 	//      extension; the caller's force-push will fast-forward origin.
 	//      Do NOT rewind local — that would orphan its branch_commits rows.
-	//   3. neither: the two diverged and everything local beyond upstream is
-	//      merges (nothing of this branch's own to carry). It falls through
+	//      The same when the two histories are DISJOINT (no common
+	//      ancestor): the branch keeps its own root, the repo's identity.
+	//   3. neither, on SHARED history: the two diverged and everything local
+	//      beyond upstream is merges (nothing of this branch's own to
+	//      carry). It falls through
 	//      to the replay below with no commits, which moves local onto
 	//      upstream. Pushing local as it stands would re-submit those merges,
 	//      and what they brought in, as this copy's own work.
@@ -378,13 +381,23 @@ func (rh *repoHandler) replayOntoUpstream(
 		if err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: IsAncestor: %w", err)
 		}
-		isUpstreamAncestor := false
+		keep := false
 		if !isLocalAncestor {
-			if isUpstreamAncestor, err = upstreamCommit.IsAncestor(localCommit); err != nil {
+			// Shape 2, or two DISJOINT histories (an origin with a root of
+			// its own): the branch keeps its own history, as it always has
+			// — its root commit is the repo's identity.
+			if keep, err = upstreamCommit.IsAncestor(localCommit); err != nil {
 				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: IsAncestor: %w", err)
 			}
+			if !keep {
+				bases, err := localCommit.MergeBase(upstreamCommit)
+				if err != nil {
+					return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: MergeBase: %w", err)
+				}
+				keep = len(bases) == 0
+			}
 		}
-		if isUpstreamAncestor {
+		if keep {
 			// Local is strictly ahead of upstream — no replay, no fast-forward.
 			// Caller's force-push will advance origin to local.
 			return AgentReconcileResult{Mode: ModeNoop, NewTip: localTip.String()}, nil
