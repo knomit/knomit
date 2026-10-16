@@ -124,8 +124,20 @@ func TestFleetLeave_KnomitHostedLeaveRevokesAndTheRejoinIsAccepted(t *testing.T)
 		t.Fatalf("a second round moved main (%s -> %s): the revoke is not once", tip, got)
 	}
 
-	if st := joinAnswer(t, bravo, alpha, ""); st.RecordState != repos.RecordPending {
-		t.Fatalf("the rejoin answers record_state %q, want pending (main still says left)", st.RecordState)
+	// The re-enroll needs no manual revoke. A hub round between it and the
+	// rejoin sees main with the left record AND the fresh leaf, and must not
+	// revoke the fresh leaf: it landed after the left record.
+	enr, err := alpha.mgr.EnrollFleetMember(ctx, "bravo", bravo.keyLine(), "")
+	if err != nil || !enr.Published {
+		t.Fatalf("re-enroll bravo after its leave: %v (%+v)", err, enr)
+	}
+	hubRound(t, alpha)
+	if s := memberStates(t, alpha)["bravo"]; s != fact.MemberLeft {
+		t.Fatalf("bravo between the re-enroll and the rejoin: %q, want left (the fresh leaf is not revoked)", s)
+	}
+	bravo.asClient(t)
+	if st, err := bravo.mgr.JoinFleet(ctx, repos.FleetJoinSpec{Bundle: []byte(enr.Bundle)}); err != nil || st.RecordState != repos.RecordPending {
+		t.Fatalf("the rejoin: %v, record_state %q, want pending (main still says left)", err, st.RecordState)
 	}
 	hubPublishes(t, alpha, recordPath("bravo"), "state: active")
 	hubRound(t, alpha)

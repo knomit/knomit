@@ -154,13 +154,15 @@ func TestFleetLeave_ForgeMasterRevokesTheLeaverAndTheRejoinIsAccepted(t *testing
 // one before, so the final CRL lists all of them and the earlier revocation.
 // SABOTAGE: drop the unpublished check -> the pass builds from main's CRL and
 // drops gamma's serial -> red; build every revocation from main's CRL (no
-// chaining) -> alpha's serial is missing from the final CRL -> red.
+// chaining) -> alpha's serial is missing from the final CRL -> red; drop the
+// "already on main's CRL" skip -> the revoked alpha fails the next pass
+// before delta, who left later, is revoked -> red.
 func TestFleetLeave_TheDutyWaitsForAnUnpublishedCRLAndChainsEachRevocation(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
 	installMasterLeaf(t, f)
 	members := map[string]*Manager{}
-	for _, id := range []string{"alpha", "beta"} {
+	for _, id := range []string{"alpha", "beta", "delta"} {
 		members[id] = f.namedMember(t, id)
 		require.Equal(t, RecordPending, f.enrollAndJoin(t, members[id], id).RecordState)
 	}
@@ -215,6 +217,19 @@ func TestFleetLeave_TheDutyWaitsForAnUnpublishedCRLAndChainsEachRevocation(t *te
 		require.True(t, fl.PKI.Revoked(id), "%s is on main's CRL", id)
 	}
 	require.NotEmpty(t, enr.Serial)
+
+	// delta leaves later: the next pass skips the leavers main's CRL already
+	// lists and revokes delta alone.
+	_, err = members["delta"].LeaveFleet(ctx)
+	require.NoError(t, err)
+	f.mri.peers.duty = nil
+	f.masterRounds(t)
+	f.mri.peers.duty = duty
+	unlock = f.master.lockFleetOp()
+	revoked, err = f.master.revokeLeftMembers(ctx, f.mri)
+	unlock()
+	require.NoError(t, err)
+	require.Equal(t, []string{"delta"}, revoked, "only the new leaver")
 }
 
 // recordStateOf is the one rule: the candidate on the branch only, or in
