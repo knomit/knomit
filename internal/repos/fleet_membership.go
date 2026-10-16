@@ -738,14 +738,7 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 		if holds {
 			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance holds the fleet's root key: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
 		}
-		rec := m.advertised()
-		rec.State = fact.MemberLeft
-		// The leaf this instance leaves with: the only one the master's leave
-		// duty revokes for this record (a stale left record never names a
-		// later re-enroll's leaf). None installed: the record names none and
-		// the master's operator revokes by hand.
-		rec.LeafSerial = m.installedLeafSerial()
-		if err := m.writeRecord(ctx, ri, rec, "fleet: "+rec.Agent+" is "+rec.State, ""); err != nil {
+		if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
 			out.PushError = "the left record was not written: " + err.Error()
 		} else if err := m.pushAgentBranch(ctx, ri); err != nil {
 			out.PushError = err.Error()

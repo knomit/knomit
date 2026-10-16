@@ -686,6 +686,13 @@ func (m *Manager) guardFleetRemoval(name string) error {
 func (m *Manager) writeOwnRecord(ctx context.Context, ri *RepoInstance, state string) error {
 	rec := m.advertised()
 	rec.State = state
+	if state == fact.MemberLeft {
+		// The leaf this instance leaves with: the only one the master's leave
+		// duty revokes for this record (a stale left record never names a
+		// later re-enroll's leaf). None installed: the record names none and
+		// the master's operator revokes by hand.
+		rec.LeafSerial = m.installedLeafSerial()
+	}
 	return m.writeRecord(ctx, ri, rec, "fleet: "+rec.Agent+" is "+state, "")
 }
 
