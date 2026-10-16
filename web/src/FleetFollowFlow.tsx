@@ -44,7 +44,7 @@ const SUBTITLE: Record<FleetFollowMode, string> = {
  * step's credential fields (CredentialFields, the repo step's). The change is
  * POST /fleet/follow, which refuses a URL that is not this fleet's.
  */
-export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', initialMethod = '', fromForge, hostRecord, onCancel, onDone, onBusyChange }: {
+export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', initialMethod = '', fromForge, membersUnaffected, hostRecord, onCancel, onDone, onBusyChange }: {
   fleetRepo: string;
   mode?: FleetFollowMode;
   /** Prefilled: the stored forge URL (access: shown, never edited), where
@@ -55,6 +55,9 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
   /** move only: the forge the fleet is on now (the master moves it from a
    *  forge to another): members keep pushing there until they follow. */
   fromForge?: string;
+  /** move only: this is the repair of an interrupted move. The host record
+   *  never changed and members follow it, so they have nothing to do. */
+  membersUnaffected?: boolean;
   /** The host record's URLs, for the Origin step's hint. */
   hostRecord?: string[];
   onCancel: () => void;
@@ -242,7 +245,9 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
                     <>
                       <li>knomit pushes this copy's main and its own branch to {trimmed} (the forge must be empty, with no branch and no tag, or hold this fleet with a main behind this copy's), then this copy syncs from there.</li>
                       <li>main records {trimmed} as where the fleet is hosted, and every bundle you issue from now on names it.</li>
-                      {fromForge ? (
+                      {membersUnaffected ? (
+                        <li data-testid="fleet-move-members">Members have nothing to do: they follow the host record on main, and the interrupted move never changed it. Their copies keep working throughout.</li>
+                      ) : fromForge ? (
                         <li data-testid="fleet-move-members">Every member's copy keeps following {fromForge} until it points at {trimmed} with its own credential for the forge (its Fleet → Settings → Point at the new host…): until then its pushes go to the old forge, where nothing merges them. Its unmerged work is not lost: it pushes its own branch again on its first sync at {trimmed}.</li>
                       ) : (
                         <li data-testid="fleet-move-members">Every member's pushes to this instance are refused from then on, until it points at {trimmed} with its own credential for the forge (its Fleet → Settings → Point at the new host…). Its unmerged work is not lost: it pushes its own branch again on its first sync there.</li>
@@ -295,7 +300,7 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
             );
           })}
           <p style={railNote}>{mode === 'move'
-            ? (fromForge ? 'The fleet stays on its current forge until the last step runs.' : 'The fleet stays hosted here until the last step runs.')
+            ? (membersUnaffected ? 'Members are not affected: they keep following the host record.' : fromForge ? 'The fleet stays on its current forge until the last step runs.' : 'The fleet stays hosted here until the last step runs.')
             : access ? 'The stored credential stays until the last step runs.' : 'This copy keeps its current origin until the last step runs.'}</p>
         </nav>
       </div>

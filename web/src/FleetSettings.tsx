@@ -76,7 +76,8 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         <FleetFollowFlow fleetRepo={fleet.fleet_repo} mode={flow} onCancel={back}
           initialUrl={flow === 'access' ? fleet.hosting ?? '' : flow === 'move' ? moveUrl : flow === 'follow' && stale ? (fleet.host_record ?? [])[0] ?? '' : ''}
           initialMethod={flow === 'access' && ['none', 'token', 'basic', 'ssh'].includes(storedMethod) ? storedMethod as FleetAuthMethod : ''}
-          fromForge={flow === 'move' && forge ? fleet.hosting : undefined}
+          fromForge={flow === 'move' && forge && !interrupted ? fleet.hosting : undefined}
+          membersUnaffected={flow === 'move' && !!interrupted}
           hostRecord={stale ? fleet.host_record : undefined}
           onDone={() => { back(); setOriginRev(r => r + 1); onChanged(); }} onBusyChange={onBusyChange} />
       </div>
@@ -252,7 +253,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
             <div style={fieldHint}>
               The fleet is hosted {forge ? 'on the forge' : `at ${hostPortOf(urls[0] ?? fleet.hosting ?? '') || 'another instance'}`}. Hosting it here removes this copy's origin; members then point at {wouldServe.length ? wouldServe.join(', ') : 'this instance'}.
             </div>
-            {confirm === 'host' && <HostConfirm fleet={fleet} onCancel={() => setConfirm(null)} onDone={done} />}
+            {confirm === 'host' && <HostConfirm fleet={fleet} interrupted={master ? fleet.interrupted_move : undefined} onCancel={() => setConfirm(null)} onDone={done} />}
           </div>
         )}
         {/* Point at: the hub master after a switch, any copy following a
@@ -509,7 +510,7 @@ function StandDownConfirm({ master, hub, onCancel, onDone, onPointAt }: { master
   );
 }
 
-function HostConfirm({ fleet, onCancel, onDone }: { fleet: FleetStatus; onCancel: () => void; onDone: () => void }) {
+function HostConfirm({ fleet, interrupted, onCancel, onDone }: { fleet: FleetStatus; interrupted?: FleetStatus['interrupted_move']; onCancel: () => void; onDone: () => void }) {
   const { busy, err, run } = useAction();
   const serve = fleet.host.would_serve ?? [];
   const listenerOff = !fleet.host.listener_on || fleet.host.external_addresses.length === 0;
@@ -519,8 +520,16 @@ function HostConfirm({ fleet, onCancel, onDone }: { fleet: FleetStatus; onCancel
       <div style={lead}>Host the fleet on this instance?</div>
       <ol style={steps}>
         <li>This copy's origin is removed; members push to {serve.length ? serve.join(', ') : 'this instance'}{notUp ? ' once its fleet listener runs' : ' from now on'}.</li>
-        <li>Tell every member the new URL: each points its copy at it (Settings → Hosting → Point at the new host).</li>
-        <li>The old master points its copy here too, then stands down.</li>
+        {interrupted?.record_is_here ? (
+          <li data-testid="fleet-host-members">Members have nothing to do: the host record on main already names this instance, and the interrupted move never changed it.</li>
+        ) : interrupted ? (
+          <li data-testid="fleet-host-members">Main still names the old host, so tell every member the new URL: each points its copy at it (Settings → Hosting → Point at the new host). There is no old master to stand down.</li>
+        ) : (
+          <>
+            <li>Tell every member the new URL: each points its copy at it (Settings → Hosting → Point at the new host).</li>
+            <li>The old master points its copy here too, then stands down.</li>
+          </>
+        )}
       </ol>
       {listenerOff && (
         <OutcomeCard tone="ask" testid="fleet-host-listener-off" headline="The fleet listener is off on this instance"

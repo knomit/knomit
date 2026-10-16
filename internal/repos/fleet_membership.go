@@ -1254,22 +1254,6 @@ func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o
 	return FleetFollowCredential, nil
 }
 
-// refuseMethodForURL is validateURLAuth's scheme check for a follow whose
-// URL is the stored one (no url in the body, so the REST edge had nothing to
-// check the method against, #529 N-d): an ssh method on an http(s) URL, or
-// a token or basic credential on an ssh URL, is 422 auth_invalid.
-func refuseMethodForURL(u, method string) error {
-	isSSH := strings.HasPrefix(u, "git@") || strings.HasPrefix(u, "ssh://")
-	isHTTP := strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
-	switch {
-	case isHTTP && method == "ssh":
-		return fleetErr(http.StatusUnprocessableEntity, "auth_invalid", "SSH auth cannot be used with an https forge URL: use a token or basic auth instead")
-	case isSSH && (method == "token" || method == "basic"):
-		return fleetErr(http.StatusUnprocessableEntity, "auth_invalid", "token or basic auth cannot be used with an SSH forge URL: use SSH auth instead")
-	}
-	return nil
-}
-
 // guardFleetDetach is the fleet repository's detach check (R3.3): a member's
 // copy keeps its origin (without one it has no main and nothing to push to);
 // the master's detach makes its copy the hub, which needs the mTLS listener

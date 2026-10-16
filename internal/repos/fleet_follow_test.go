@@ -140,6 +140,12 @@ func TestFleetFollow_TheMasterChangesOnlyItsCredential(t *testing.T) {
 	// nothing is stored.
 	_, err = f.master.FollowFleetHost(ctx, OriginSpec{AuthMethod: "none"})
 	require.ErrorIs(t, err, ErrOriginUnreachable)
+	// #529 N-3: the origin stays attached on a credential change, so the
+	// refusal must not say "origin was not attached".
+	// SABOTAGE: probeFleetForge wraps ErrOriginUnreachable with %w again ->
+	// the text carries it -> red.
+	require.NotContains(t, err.Error(), "origin was not attached")
+	require.Contains(t, err.Error(), "the forge could not be reached")
 	o, err = f.master.originOf(f.mri)
 	require.NoError(t, err)
 	require.Equal(t, "basic", o.AuthMethod, "a refused change stores nothing")
@@ -338,8 +344,8 @@ func TestCredentialFreeText(t *testing.T) {
 		`Get "https://LEAKTOK@h:1/x.git/info/refs?service=git-upload-pack": EOF`: `Get "https://h:1/x.git/info/refs?service=git-upload-pack": EOF`,
 		`a https://u:pw@h/x and https://t@k/y`:                                   `a https://h/x and https://k/y`,
 		`bad https://LEAKTOK@h:port/x`:                                           `bad https://h:port/x`,
-		`ssh://git:pw@h/x and git@h:x`:                                          `ssh://git@h/x and git@h:x`,
-		`no url here`:                                                           `no url here`,
+		`ssh://git:pw@h/x and git@h:x`:                                           `ssh://git@h/x and git@h:x`,
+		`no url here`:                                                            `no url here`,
 	} {
 		require.Equal(t, want, credentialFreeText(in), in)
 	}

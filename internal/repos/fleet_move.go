@@ -214,12 +214,21 @@ func (m *Manager) probeFleetForge(ctx context.Context, decided OriginSpec) error
 	}
 	switch {
 	case !res.Reachable:
-		return fmt.Errorf("%w: the remote is unreachable: %s", ErrOriginUnreachable, res.Detail)
+		return &forgeProbeError{"the forge could not be reached: " + res.Detail}
 	case res.AuthRequired:
-		return fmt.Errorf("%w: the remote refused the credential: %s", ErrOriginUnreachable, res.Detail)
+		return &forgeProbeError{"the forge refused the credential: " + res.Detail}
 	}
 	return nil
 }
+
+// forgeProbeError is probeFleetForge's refusal. It is ErrOriginUnreachable to
+// errors.Is (502 unreachable) but does not carry its text, "origin was not
+// attached": a follow's probe runs before anything is attached, and on the
+// credential change the origin stays attached all along (#529 N-3).
+type forgeProbeError struct{ msg string }
+
+func (e *forgeProbeError) Error() string        { return e.msg }
+func (e *forgeProbeError) Is(target error) bool { return target == ErrOriginUnreachable }
 
 // moveFleetToForge is the master's move of the fleet onto the forge decided
 // names (from the hub, which has no origin, or from another forge). In order:

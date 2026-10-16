@@ -248,6 +248,35 @@ describe('FleetSettings: the fleet repository configuration (PR7c)', () => {
     expect(screen.getByTestId('fleet-follow-url')).toHaveValue(OLD);
   });
 
+  // After an interrupted move the host record never changed and members follow
+  // it, so neither repair screen may tell the operator to re-point members.
+  // SABOTAGE: pass fromForge=fleet.hosting while interrupted (or drop the
+  // interrupted variant of HostConfirm) -> the false member copy renders -> red.
+  it('the repairs of an interrupted move tell the operator members have nothing to do', async () => {
+    const OLD = 'https://gitlab.example/acme/fleet';
+    stubFleetFetch({
+      'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'token' } },
+      'POST /api/v1/repos:probe-origin': PROBE_FORGE_OK,
+    });
+    const { unmount } = render(<FleetSettings fleet={{ ...forgeMaster, follows_host: false, host_record: [OLD], fleet_urls: [OLD], interrupted_move: { record_is_here: false, move_back_to: OLD } }} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId('fleet-move-back'));
+    fireEvent.click(screen.getByTestId('fleet-follow-test'));
+    fireEvent.change(await screen.findByTestId('fleet-follow-auth-method'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByTestId('fleet-follow-next'));
+    const members = screen.getByTestId('fleet-move-members');
+    expect(members).toHaveTextContent('Members have nothing to do');
+    expect(members).not.toHaveTextContent('keeps following');
+    expect(members).not.toHaveTextContent('until it points at');
+    unmount();
+
+    render(<FleetSettings fleet={{ ...forgeMaster, follows_host: false, host_record: ['https://kb-01.acme.example:7443/fleet'], interrupted_move: { record_is_here: true } }} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId('fleet-host-here'));
+    const confirm = await screen.findByTestId('fleet-host-confirm');
+    expect(screen.getByTestId('fleet-host-members')).toHaveTextContent('Members have nothing to do');
+    expect(confirm).not.toHaveTextContent('Tell every member the new URL');
+    expect(confirm).not.toHaveTextContent('old master');
+  });
+
   // The old host refused this copy's push because the fleet moved (#529 S5):
   // one plain sentence, never the raw refusal with "Retrying".
   // SABOTAGE: ignore last_error_fleet_moved -> the raw text and the retry
