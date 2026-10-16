@@ -20,7 +20,8 @@ import (
 // until its own sync brings the mark; then it hosts with all of alpha's
 // writes. alpha and charlie point at bravo: alpha's sync replays nothing and
 // is refused nothing; charlie's refused change reaches bravo; bravo's main
-// holds the merged change and the revoke.
+// holds the merged change and the revoke. Then the same protocol back to
+// alpha (A -> C -> A): a master that stood down can be the master again.
 // SABOTAGE: StandDown skips writeStoodDown -> bravo's host is refused
 // old_master_active after its sync -> red; FleetPushRefusal admits a push to
 // a hub whose master stood down -> charlie's push is admitted at alpha -> red.
@@ -119,6 +120,54 @@ func TestFleetMasterSwitch_StandDownFirst(t *testing.T) {
 	alpha.round(t)
 	if ast, _ := alpha.mgr.FleetStatus(ctx); ast.LastError != "" {
 		t.Fatalf("alpha's second sync: %q", ast.LastError)
+	}
+
+	// And back (user clarification 2026-10-16): standing down never bars
+	// alpha from the role. The same protocol the other way: bravo's root to
+	// alpha, bravo stands down first, alpha syncs and hosts, bravo and
+	// charlie point at alpha.
+	files, err = bravo.mgr.FleetRootFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alpha.mgr.InstallFleetRoot(files.Files); err != nil {
+		t.Fatalf("alpha imports the root again: %v", err)
+	}
+	if ast, _ := alpha.mgr.FleetStatus(ctx); !ast.Master || ast.MasterPaused != repos.FleetPausedNotHosting {
+		t.Fatalf("alpha with the root, following bravo: master %v master_paused %q", ast.Master, ast.MasterPaused)
+	}
+	editOwnRecord(t, charlie, "https://charlie.two.example", "https://charlie.three.example")
+	charlie.round(t)
+	hubPublishes(t, bravo, recordPath("charlie"), "https://charlie.three.example")
+	if err := bravo.mgr.StandDown(ctx); err != nil {
+		t.Fatalf("bravo stands down: %v", err)
+	}
+	alpha.round(t)
+	if rec := alpha.localAPI(http.MethodPost, "/fleet/host", "{}"); rec.Code != http.StatusOK {
+		t.Fatalf("alpha hosts again once its main shows bravo's stand-down: %d %s", rec.Code, rec.Body.String())
+	}
+	if ast, _ := alpha.mgr.FleetStatus(ctx); !ast.Master || ast.Hosting != "none" || ast.MasterPaused != "" {
+		t.Fatalf("alpha after hosting again: %+v", ast)
+	}
+	if !strings.Contains(readAt(t, alpha.fleet(t), "main", recordPath("charlie")), "charlie.three.example") {
+		t.Fatal("alpha's main lacks the change bravo merged before it stood down")
+	}
+	back := `{"url":"` + alpha.fleetURL() + `"}`
+	for _, n := range []*fleetNode{bravo, charlie} {
+		n.asClient(t)
+		if rec := n.localAPI(http.MethodPost, "/fleet/follow", back); rec.Code != http.StatusOK {
+			t.Fatalf("%s points back at alpha: %d %s", n.id, rec.Code, rec.Body.String())
+		}
+		n.round(t)
+		if st, _ := n.mgr.FleetStatus(ctx); st.LastError != "" {
+			t.Fatalf("%s's sync at alpha again: %q", n.id, st.LastError)
+		}
+	}
+	editOwnRecord(t, charlie, "https://charlie.three.example", "https://charlie.four.example")
+	charlie.round(t)
+	hubPublishes(t, alpha, recordPath("charlie"), "https://charlie.four.example")
+	if r, ok := alpha.mgr.FleetRefusals()[charlie.fleet(t).AgentBranch()]; ok {
+		t.Fatalf("alpha refused charlie after the round trip: %+v", r)
 	}
 }
 
