@@ -46,7 +46,11 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   // server decided `cert` at attach) or a forge, and the stored method. Only
   // read for a copy with an origin.
   // Keyed by the origin it was read for, so a stale answer is never used.
-  const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting}`;
+  // originRev is bumped when a flow finishes: a credential change leaves
+  // fleet_repo and hosting as they were, and the stored method must be read
+  // again.
+  const [originRev, setOriginRev] = useState(0);
+  const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting} ${originRev}`;
   const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null; method: string }>({ key: '', peer: null, method: '' });
   useEffect(() => {
     if (!originKey || !fleet.fleet_repo) return;
@@ -73,7 +77,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
           initialMethod={flow === 'access' && ['none', 'token', 'basic', 'ssh'].includes(storedMethod) ? storedMethod as FleetAuthMethod : ''}
           fromForge={flow === 'move' && forge ? fleet.hosting : undefined}
           hostRecord={stale ? fleet.host_record : undefined}
-          onDone={() => { back(); onChanged(); }} onBusyChange={onBusyChange} />
+          onDone={() => { back(); setOriginRev(r => r + 1); onChanged(); }} onBusyChange={onBusyChange} />
       </div>
     );
   }

@@ -137,6 +137,28 @@ describe('FleetSettings: the fleet repository configuration (PR7c)', () => {
     expect(calls.map(c => c.route).filter(r => r.includes('/repos/fleet') && !r.startsWith('GET'))).toEqual([]);
   });
 
+  // After Update access the Access row shows the NEW stored method: a
+  // credential change leaves fleet_repo and hosting as they were, so the
+  // origin read must not be keyed on them alone (found in the #529 browser
+  // check: the row kept "none" after a rotation to a token).
+  // SABOTAGE: drop the re-read after a finished flow -> the row keeps "token" -> red.
+  it('the Access row re-reads the stored method after Update access finishes', async () => {
+    const { set } = stubFleetFetch({
+      'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'token' } },
+      'POST /api/v1/repos:probe-origin': PROBE_FORGE_OK,
+      'POST /api/v1/fleet/follow': { body: { ...forgeMember, change: 'credential' } },
+    });
+    const onChanged = mount(forgeMember);
+    expect(await screen.findByTestId('fleet-origin-access')).toHaveTextContent('token');
+    fireEvent.click(screen.getByTestId('fleet-update-access'));
+    fireEvent.change(screen.getByTestId('fleet-follow-auth-method'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByTestId('fleet-follow-next'));
+    set('GET /api/v1/repos/fleet/origin', { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'none' } });
+    fireEvent.click(screen.getByTestId('fleet-follow-submit'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('fleet-origin-access')).toHaveTextContent('none'));
+  });
+
   // The master on a forge (#529 S3): a URL change is a MOVE, through "Move
   // the fleet to another forge…", whose Review says members keep pushing to
   // the old forge until they follow. No Point at. Update access is the
