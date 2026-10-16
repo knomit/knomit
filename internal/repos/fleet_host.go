@@ -434,9 +434,18 @@ func (m *Manager) claimFleetMaster(ctx context.Context, ri *RepoInstance) {
 	if o != nil {
 		body := fact.RenderFleetMaster(id)
 		if err := m.publishMarkerChange(ctx, ri, &body, "fleet: "+id+" is the fleet's acting master"); err != nil {
-			if ctx.Err() == nil {
-				log.Info().Err(credentialFreeErr(err)).Str("fleet", ri.Name()).
-					Msg("fleet: the claim to the master role was not published (another root holder may have published first); the next fetch decides")
+			switch {
+			case ctx.Err() != nil:
+			case errors.Is(err, store.ErrUpstreamMoved):
+				// The race lost: the forge's main moved since this copy's
+				// fetch, so another publish came first. The next fetch shows
+				// who main names.
+				log.Info().Str("fleet", ri.Name()).
+					Msg("fleet: the claim to the master role lost: the forge's main moved since this copy's fetch (another root holder published first); the next fetch shows who main names")
+			default:
+				// Not a lost race: the push failed (auth, network, a refusal).
+				log.Warn().Err(credentialFreeErr(err)).Str("fleet", ri.Name()).
+					Msg("fleet: the claim to the master role could not be pushed; the next round tries again")
 			}
 			return
 		}

@@ -668,6 +668,11 @@ func remoteSays(sideband string) string {
 	return "\n" + strings.Join(lines, "\n")
 }
 
+// ErrUpstreamMoved is PublishUpstreamChange's answer when the origin's
+// upstream is no longer the tip the change was built on (the push is not a
+// fast-forward): someone else published first.
+var ErrUpstreamMoved = errors.New("the origin's upstream moved: the change is not a fast-forward")
+
 // PublishUpstreamChange commits ONE change on top of the local upstream
 // branch's tip (path set to *content, or deleted when content is nil), signed
 // by this store's signer and authored as this instance, and pushes that
@@ -753,6 +758,9 @@ func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, path string, c
 		Auth:       auth,
 		Progress:   &srv,
 	}); err != nil {
+		if strings.Contains(err.Error(), "non-fast-forward") || strings.Contains(srv.String(), "non-fast-forward") {
+			return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w: %v%s", ErrUpstreamMoved, err, remoteSays(srv.String()))
+		}
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w%s", err, remoteSays(srv.String()))
 	}
 	unlock := rh.lockBranch(upstream)

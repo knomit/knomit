@@ -397,6 +397,9 @@ describe('FleetSettings', () => {
     });
     mount(member);
     fireEvent.click(screen.getByTestId('fleet-import'));
+    // Review 3 N1 (ruling 6): installing the key is not becoming the master.
+    expect(screen.getByTestId('fleet-import-confirm')).toHaveTextContent('Holding it does not make this instance the master: the master is the instance the fleet\'s main names.');
+    expect(screen.getByTestId('fleet-import-confirm')).not.toHaveTextContent('master once that root is on the fleet');
     const doc = JSON.stringify({ root_fingerprint: 'SHA256:root', files: { 'root.key': 'K', 'root.crt': 'C' } });
     fireEvent.change(screen.getByTestId('fleet-import-file'), { target: { files: [new File([doc], 'fleet-root-a.json', { type: 'application/json' })] } });
     expect(await screen.findByTestId('fleet-import-root')).toHaveTextContent('Root SHA256:root');

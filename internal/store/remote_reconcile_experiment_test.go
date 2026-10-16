@@ -75,9 +75,15 @@ func TestReconcileAgentRebase_ExperimentMergeSurvivesARewind(t *testing.T) {
 // the branch is rebuilt on the new upstream even when nothing else is left
 // to replay (kept as it stood, it would still carry the dropped commit).
 // The agent's other commit upstream lacks is replayed.
+// "Only" is load-bearing (#531 review 3 S1): a commit that changes the
+// marker AND anything else is replayed whole, so dropping the loser's claim
+// can never drop a member's knowledge; and a repository with no skip paths
+// replays a marker-only commit like any other.
 // SABOTAGE: report no drop from the walk (droppedOut stays false) -> the
 // empty-walk shape keeps the branch with the marker commit -> red; replay a
-// skipped commit -> the marker is on the rebuilt branch -> red.
+// skipped commit -> the marker is on the rebuilt branch -> red; drop any
+// commit that TOUCHES a skipped path (the review's M4) -> the mixed
+// commit's fact is lost -> red.
 func TestReconcileAgentRebase_DropsCommitsThatChangeOnlySkippedPaths(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -113,4 +119,41 @@ func TestReconcileAgentRebase_DropsCommitsThatChangeOnlySkippedPaths(t *testing.
 	require.Equal(t, 1, res.NumReplayed, "only kb/own.md is replayed")
 	require.False(t, hasFileAt(t, svc, "agent/test", "artifacts/fleet/master"))
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/own.md"))
+	t.Run("a mixed commit is replayed whole; no skip paths drop nothing", replaysMixedWholeAndUnsetNothing)
+}
+
+// replaysMixedWholeAndUnsetNothing is the review-3 probe
+// (TestRV531c_ReplaySkipOnlyMarkerOnly), run as part of
+// TestReconcileAgentRebase_DropsCommitsThatChangeOnlySkippedPaths.
+func replaysMixedWholeAndUnsetNothing(t *testing.T) {
+	for _, skip := range []bool{true, false} {
+		ctx := context.Background()
+		dir := t.TempDir()
+		svc, err := Open(filepath.Join(dir, "k.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = svc.Close() })
+		require.NoError(t, svc.InitRepo(ctx, map[string]string{}, "agent/test"))
+		if skip {
+			svc.SetReplaySkipPaths("artifacts/fleet/master")
+		}
+		c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
+		require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
+		if skip {
+			// The marker and a fact in ONE commit: replayed whole.
+			_, _, err = svc.Facts().BatchWriteFacts(ctx, "agent/test", map[string]string{"artifacts/fleet/master": "me\n", "kb/both.md": "---\ntype: observation\n---\n# Both\n\nboth\n"}, nil, "claim+fact", "created")
+		} else {
+			// The marker only, but no skip paths set: replayed.
+			_, _, err = svc.Facts().BatchWriteFacts(ctx, "agent/test", map[string]string{"artifacts/fleet/master": "me\n"}, nil, "claim", "created")
+		}
+		require.NoError(t, err)
+		u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
+		require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+		res, err := svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
+		require.NoError(t, err)
+		require.Equal(t, 1, res.NumReplayed, "skip=%v", skip)
+		require.True(t, hasFileAt(t, svc, "agent/test", "artifacts/fleet/master"), "the commit is replayed (skip=%v)", skip)
+		if skip {
+			require.True(t, hasFileAt(t, svc, "agent/test", "kb/both.md"), "the mixed commit's fact survives")
+		}
+	}
 }

@@ -2616,8 +2616,11 @@ paths:
         and `root.crt` are required (`root_incomplete`, 422), only the five
         root file names are taken (`unknown_file`, 422), and the key must be
         the certificate's (`root_invalid`, 422). The files land in a private
-        directory and are moved into place. This instance is the master once
-        that root is the one on the fleet's main.
+        directory and are moved into place. Holding the root does not make
+        this instance the master: the master is the instance the master
+        marker on the fleet's main names (GET /fleet `acting_master`). A
+        holder becomes it by Host here, or, while main names no master, by
+        its claim at its next sync (the first publish wins).
       operationId: putFleetRoot
       requestBody:
         required: true

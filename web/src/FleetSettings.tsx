@@ -524,7 +524,7 @@ function ImportConfirm({ forge, onCancel, onDone, onRemove }: { forge: boolean; 
       {file && <div data-testid="fleet-import-root" style={fieldHint}>Root <span style={mono}>{file.fp}</span></div>}
       {readErr && <div role="alert" style={{ ...fieldHint, color: '#e2c07a' }}>{readErr}</div>}
       <ol style={steps}>
-        <li>The key is installed; this instance is the master once that root is on the fleet's main.</li>
+        <li>The key is installed. Holding it does not make this instance the master: the master is the instance the fleet's main names.</li>
         <li>{forge
           ? 'The old master stands down first. While the fleet’s main names it, this instance does no master work; once main names no master, this instance takes the role at its next sync.'
           : 'On the old master: Stand down.'}</li>

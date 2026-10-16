@@ -34,7 +34,9 @@ func (f *forgeFleet) forgeMarker(t *testing.T) string {
 // pushed change is neither admitted nor merged by alpha, and alpha's round
 // publishes nothing to the forge's main. The named master still admits it.
 // SABOTAGE: make Manager.isFleetMaster ignore the marker (holdsFleetRoot
-// alone) -> alpha admits beta's branch and publishes main -> red.
+// alone) -> alpha admits beta's branch and publishes main -> red; drop the
+// "main never held the root" clause of publishesFleetMain's #518 arm ->
+// alpha publishes main with its own commit -> red.
 func TestFleetMaster_ARootHolderMainDoesNotNameDoesNoMasterWork(t *testing.T) {
 	alpha, beta := testsigner.Named("alpha"), testsigner.Named("beta")
 	f := newForgeFleet(t, map[string]ssh.Signer{"alpha": alpha, "beta": beta})
@@ -48,6 +50,9 @@ func TestFleetMaster_ARootHolderMainDoesNotNameDoesNoMasterWork(t *testing.T) {
 
 	editOwnRecord(t, bri, "beta", "beta was here")
 	round(t, bri) // beta pushes its change to the forge
+	// alpha has a commit of its own beyond main: a publish of main would
+	// carry it (#531 review 3 N2), so "main unchanged" means something.
+	editOwnRecord(t, ari, "alpha", "alpha's own line")
 	mainBefore := f.rev(t, "main")
 
 	round(t, ari)
@@ -59,6 +64,10 @@ func TestFleetMaster_ARootHolderMainDoesNotNameDoesNoMasterWork(t *testing.T) {
 	require.Empty(t, localTip(t, ari, "agent/beta"), "alpha admits no member branch")
 	require.Zero(t, ari.consensus.snapshot().Merges, "alpha merges nothing")
 	require.Equal(t, mainBefore, f.rev(t, "main"), "alpha's round publishes nothing to main")
+	require.NotEmpty(t, f.rev(t, "agent/alpha"), "alpha still pushes its own branch, as a member does")
+	mainRec, err := runGitOut(f.bare, "show", "main:"+memberRecordPath("kb", "alpha"))
+	require.NoError(t, err)
+	require.NotContains(t, mainRec, "alpha's own line", "alpha's own commit reaches main only through the master's merge")
 	require.Equal(t, "master", f.forgeMarker(t), "alpha claims nothing while main names the master")
 	st, err := am.FleetStatus(context.Background())
 	require.NoError(t, err)
@@ -96,6 +105,10 @@ func TestFleetMaster_TwoRootHoldersRaceTheFirstPublishWins(t *testing.T) {
 	// Both claim from the same main; the master publishes first.
 	ctx := context.Background()
 	f.master.claimFleetMaster(ctx, f.mri)
+	// alpha's claim from the main it fetched is not a fast-forward any more:
+	// a lost race, told apart from other push failures (review 3 N3).
+	body := fact.RenderFleetMaster("alpha")
+	require.ErrorIs(t, am.publishMarkerChange(ctx, ari, &body, "claim"), store.ErrUpstreamMoved)
 	am.claimFleetMaster(ctx, ari)
 	require.Equal(t, "master", f.forgeMarker(t), "the first publish wins")
 
