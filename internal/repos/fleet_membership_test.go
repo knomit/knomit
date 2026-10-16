@@ -799,15 +799,18 @@ func TestJoinReachErr_OnlyARefusalIsBundleRefused(t *testing.T) {
 // master's enroll writes (a hub's https URL, a forge origin's) pass this
 // check (they then fail later here, as there is no fleet at them).
 // SABOTAGE: drop the bundleURLProblem check from joinPreflight -> the
-// knomit+https row is unreachable on join:check and clone_failed or
+// internal-scheme row is unreachable on join:check and clone_failed or
 // unreachable on the join -> red.
 func TestFleetMembership_JoinRefusesABundleURLThatIsNoFleetURL(t *testing.T) {
 	dir := t.TempDir()
 	_, root := seedJoinableFleet(t, filepath.Join(dir, "fleet.git"))
 	m := newFleetManager(t, dir)
 	bundle := root.Bundle(t, root.Enroll(t, "test-fleet@"+pki.AgentEmailDomain, m.deps.KeyPath))
+	// The internal scheme, derived as the transport derives it (only pki spells it).
+	internalForm, err := pki.GitURL("https://hub.example:7443/git/fleet", true)
+	require.NoError(t, err)
 	refused := 0
-	for _, u := range []string{"knomit+https://hub.example:7443/git/fleet", "http://hub.example/git/fleet", "ftp://hub.example/fleet", "https:///git/fleet", "not a url"} {
+	for _, u := range []string{internalForm,"http://hub.example/git/fleet", "ftp://hub.example/fleet", "https:///git/fleet", "not a url"} {
 		withURL := pkitest.WithURL(t, bundle, u)
 		_, err := m.JoinFleet(context.Background(), FleetJoinSpec{Bundle: withURL})
 		status, code := fleetCode(t, err)

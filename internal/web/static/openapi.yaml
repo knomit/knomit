@@ -2351,7 +2351,7 @@ paths:
         shape a master's enroll writes: a hub's plain `https://` URL with a
         host, or a forge origin's (`https://`, `ssh://`, `git@host:path`,
         `file://`); `bundle_invalid` otherwise (no URL, the internal
-        `knomit+https` scheme, `http://`, another scheme, no host), the same
+        fleet transport scheme, `http://`, another scheme, no host), the same
         on `POST /fleet/join:check`. And `auth_method` fits that URL
         (`auth_invalid`, 422: `cert` is never an input). Then the bundle is
         installed (supplying it is the operator's consent to its root), the

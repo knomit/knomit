@@ -475,7 +475,7 @@ func (m *Manager) joinPreflight(db *sql.DB, raw []byte) (pki.Bundle, error) {
 // before anything dials it, and join and join:check refuse a bad one with
 // the same code (bundle_invalid; PR #527 N1). A master's enroll writes one of
 // two shapes: a hub's plain https://<address>/git/<repo> (an https URL with a
-// host, never the internal knomit+https scheme), or a forge-hosted fleet's
+// host, never the internal fleet scheme pki.GitURL derives), or a forge-hosted fleet's
 // origin URL, which the origin routes accept as https, ssh:// or scp-style
 // git@host:path, or file:// under a local origin root. Anything else (another
 // scheme, plain http, a URL with no host) is refused.
