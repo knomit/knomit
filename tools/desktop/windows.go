@@ -46,7 +46,7 @@ func settingsWindowOptions() application.WebviewWindowOptions {
 		// The name is what gates the trust-changing bindings to this window
 		// (callerIsSettings): Wails reports the calling window by name. The
 		// sidebar redesign kept it on purpose; renaming the window would make
-		// Save, Restart, PublicKeyLine and InstallBundle refuse their own UI.
+		// Save, Restart and PublicKeyLine refuse their own UI.
 		Name:  settingsWindowName,
 		Title: "Knomit Settings",
 		URL:   settingsURL,

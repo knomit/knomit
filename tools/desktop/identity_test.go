@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -83,24 +81,6 @@ func bundle(t *testing.T, f *pkitest.Fleet, m pkitest.Member) string {
 	return string(m.CertPEM) + string(rootPEM) + string(crlPEM)
 }
 
-// installConfirmed is a first install as the UI does it: the preview call,
-// then the confirmation carrying the root it showed.
-func installConfirmed(t *testing.T, n *NativeService, raw string) InstallResult {
-	t.Helper()
-	res, err := n.InstallBundle(fromSettings, raw, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Class != classRootUnconfirmed {
-		return res
-	}
-	res, err = n.InstallBundle(fromSettings, raw, "", res.BundleRootFingerprint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return res
-}
-
 func rootFP(t *testing.T, f *pkitest.Fleet) string {
 	t.Helper()
 	fp, err := pki.RootID(f.Root.Cert)
@@ -110,30 +90,12 @@ func rootFP(t *testing.T, f *pkitest.Fleet) string {
 	return fp
 }
 
-// tree is every file under dir with its mode and bytes ("" map when absent).
-func tree(t *testing.T, dir string) map[string]string {
-	t.Helper()
-	out := map[string]string{}
-	filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
-		if err != nil || fi.IsDir() {
-			return nil
-		}
-		b, _ := os.ReadFile(p)
-		rel, _ := filepath.Rel(dir, p)
-		out[rel] = fi.Mode().String() + " " + string(b)
-		return nil
-	})
-	return out
-}
-
 // R1: trust material, and the listener config that opens a network port,
 // change only from the Settings window. The main window shares the Wails
 // origin and can call every binding; a page running there — injected script
 // included — must be refused, and must change nothing.
 func TestFleetIdentity_BindingsRefuseAnyCallerButTheSettingsWindow(t *testing.T) {
-	home, keyPath := fleetHome(t)
-	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
+	home, _ := fleetHome(t)
 	n := fleetService(t, home)
 	pkiDir := filepath.Join(home, "pki")
 	toml := filepath.Join(home, "knomit.toml")
@@ -146,9 +108,6 @@ func TestFleetIdentity_BindingsRefuseAnyCallerButTheSettingsWindow(t *testing.T)
 		{"no window", context.Background()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := n.InstallBundle(c.ctx, bundle(t, f, m), "", ""); !errors.Is(err, errNotSettingsWindow) {
-				t.Fatalf("InstallBundle: %v", err)
-			}
 			if _, err := n.PublicKeyLine(c.ctx); !errors.Is(err, errNotSettingsWindow) {
 				t.Fatalf("PublicKeyLine: %v", err)
 			}
@@ -163,10 +122,7 @@ func TestFleetIdentity_BindingsRefuseAnyCallerButTheSettingsWindow(t *testing.T)
 		})
 	}
 
-	// Positive control: the same three calls from Settings succeed.
-	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
-		t.Fatalf("InstallBundle from Settings: %+v", res)
-	}
+	// Positive control: the same two calls from Settings succeed.
 	if line, err := n.PublicKeyLine(fromSettings); err != nil || !strings.HasPrefix(line, "ssh-ed25519 ") {
 		t.Fatalf("PublicKeyLine from Settings: %q %v", line, err)
 	}
@@ -180,262 +136,6 @@ func TestFleetIdentity_BindingsRefuseAnyCallerButTheSettingsWindow(t *testing.T)
 func TestFleetIdentity_SettingsWindowCarriesTheCheckedName(t *testing.T) {
 	if settingsWindowOptions().Name != settingsWindowName || settingsWindowName == "" {
 		t.Fatalf("settings window name %q, check compares %q", settingsWindowOptions().Name, settingsWindowName)
-	}
-}
-
-// The binding is a front-end for pki.InstallBundle and nothing else: the
-// files it leaves are byte- and mode-identical to the ones pki (and so
-// a join, which calls the same function) leaves for the
-// same bundle.
-func TestFleetIdentity_InstallWritesWhatPKIWrites(t *testing.T) {
-	home, keyPath := fleetHome(t)
-	f := pkitest.New(t)
-	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
-	n := fleetService(t, home)
-
-	res := installConfirmed(t, n, bundle(t, f, m))
-	if !res.Installed || res.Class != "" {
-		t.Fatalf("install: %+v", res)
-	}
-	direct := filepath.Join(t.TempDir(), "pki")
-	if _, err := pki.InstallBundle(direct, keyPath, []byte(bundle(t, f, m)), pki.InstallOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	got, want := tree(t, filepath.Join(home, "pki")), tree(t, direct)
-	if len(got) != 4 || !reflect.DeepEqual(got, want) {
-		t.Fatalf("binding wrote %v, pki writes %v", keysOf(got), keysOf(want))
-	}
-	if res.Identity == nil || !res.Identity.Enrolled || res.Identity.KeyFingerprint != m.Fingerprint() {
-		t.Fatalf("result identity %+v", res.Identity)
-	}
-}
-
-// Every refusal arrives as a CLASS in the result — never parsed from error
-// text, which Wails ships and logs verbatim — and changes nothing.
-func TestFleetIdentity_RefusalsAreClassesAndWriteNothing(t *testing.T) {
-	home, keyPath := fleetHome(t)
-	f, f1 := pkitest.New(t), pkitest.New(t)
-	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
-	n := fleetService(t, home)
-	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
-		t.Fatalf("first install: %+v", res)
-	}
-	// Move this fleet's CRL to #2 and install it, so a #1 bundle is a rollback.
-	oldBundle := bundle(t, f, m)
-	if _, err := pki.IssueCRL(f.Dir, f.Root, nil, big.NewInt(2), time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if res, err := n.InstallBundle(fromSettings, bundle(t, f, m), "", ""); err != nil || !res.Installed {
-		t.Fatalf("CRL #2 install: %+v %v", res, err)
-	}
-	other := f.Enroll(t, "other@agents.knomit.io")
-	foreignLeaf := f1.Enroll(t, "laptop@agents.knomit.io", keyPath)
-	rootPEM, _ := os.ReadFile(filepath.Join(f.Dir, pki.RootCertFile))
-	crlPEM, _ := os.ReadFile(filepath.Join(f.Dir, pki.CRLFile))
-	untrusted := string(foreignLeaf.CertPEM) + string(rootPEM) + string(crlPEM) // f1's leaf, f's root
-
-	for _, tc := range []struct {
-		name, raw, class string
-	}{
-		{"malformed", "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n", classMalformed},
-		{"key mismatch", bundle(t, f, other), classKeyMismatch},
-		{"chain", untrusted, classChain},
-		{"crl rollback", oldBundle, classCRLRollback},
-		{"root differs", bundle(t, f1, foreignLeaf), classRootDiffers},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			before := tree(t, filepath.Join(home, "pki"))
-			res, err := n.InstallBundle(fromSettings, tc.raw, "", "")
-			if err != nil {
-				t.Fatalf("a refusal came back as an error, not a class: %v", err)
-			}
-			if res.Installed || res.Class != tc.class {
-				t.Fatalf("result %+v, want class %s", res, tc.class)
-			}
-			if res.Message != "" {
-				t.Fatalf("a bundle-derived refusal carries text: %q", res.Message)
-			}
-			if !reflect.DeepEqual(before, tree(t, filepath.Join(home, "pki"))) {
-				t.Fatal("a refusal changed <home>/pki")
-			}
-		})
-	}
-}
-
-// R2: replacing the fleet root is bound to the two fingerprints the user
-// was shown. The first call reports them; only a call carrying exactly that
-// pair replaces, and a pair that no longer describes what is installed and
-// what is being installed is refused with the current pair.
-func TestFleetIdentity_ReplaceRootNeedsTheFingerprintsThatWereShown(t *testing.T) {
-	home, keyPath := fleetHome(t)
-	f, f1, f2 := pkitest.New(t), pkitest.New(t), pkitest.New(t)
-	n := fleetService(t, home)
-	pkiDir := filepath.Join(home, "pki")
-	if res := installConfirmed(t, n, bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath))); !res.Installed {
-		t.Fatalf("first install: %+v", res)
-	}
-	foreign := bundle(t, f1, f1.Enroll(t, "laptop@agents.knomit.io", keyPath))
-	oldFP, newFP := rootFP(t, f), rootFP(t, f1)
-
-	// The preview: refused, naming both.
-	res, err := n.InstallBundle(fromSettings, foreign, "", "")
-	if err != nil || res.Class != classRootDiffers || res.InstalledRootFingerprint != oldFP || res.BundleRootFingerprint != newFP {
-		t.Fatalf("preview %+v %v", res, err)
-	}
-
-	for _, tc := range []struct{ name, from, to string }{
-		{"wrong from", newFP, newFP},
-		{"wrong to", oldFP, oldFP},
-		{"only to", "", newFP},
-		{"only from", oldFP, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			before := tree(t, pkiDir)
-			res, err := n.InstallBundle(fromSettings, foreign, tc.from, tc.to)
-			if err != nil || res.Installed || res.Class != classConfirmationStale ||
-				res.InstalledRootFingerprint != oldFP || res.BundleRootFingerprint != newFP {
-				t.Fatalf("%+v %v", res, err)
-			}
-			if !reflect.DeepEqual(before, tree(t, pkiDir)) {
-				t.Fatal("a refused confirmation changed <home>/pki")
-			}
-		})
-	}
-
-	// The installed root changes between the preview and the confirmation
-	// (another fleet installed underneath, e.g. by the CLI): the confirmed
-	// pair no longer describes the move, so it is refused.
-	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop@agents.knomit.io", keyPath))),
-		pki.InstallOptions{ExpectInstalledRoot: oldFP}); err != nil {
-		t.Fatal(err)
-	}
-	res, err = n.InstallBundle(fromSettings, foreign, oldFP, newFP)
-	if err != nil || res.Installed || res.Class != classConfirmationStale || res.InstalledRootFingerprint != rootFP(t, f2) {
-		t.Fatalf("stale preview accepted: %+v %v", res, err)
-	}
-
-	// The right pair replaces.
-	res, err = n.InstallBundle(fromSettings, foreign, rootFP(t, f2), newFP)
-	if err != nil || !res.Installed {
-		t.Fatalf("confirmed replace: %+v %v", res, err)
-	}
-	cur, err := pki.LoadRootCert(filepath.Join(pkiDir, pki.RootCertFile))
-	if err != nil || !cur.Equal(f1.Root.Cert) {
-		t.Fatalf("root after replace: %v", err)
-	}
-}
-
-// knomit#299: a FIRST install is shown and confirmed like a replace. The
-// first call installs nothing and reports the bundle's root and the
-// principal its certificate names; only ("", that root) installs; any other
-// pair — or a root installed underneath in between, e.g. by the CLI — is
-// refused as confirmation_stale and writes nothing.
-func TestFleetIdentity_FirstInstallNeedsTheRootThatWasShown(t *testing.T) {
-	home, keyPath := fleetHome(t)
-	f, f2 := pkitest.New(t), pkitest.New(t)
-	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
-	n := fleetService(t, home)
-	pkiDir := filepath.Join(home, "pki")
-	raw := bundle(t, f, m)
-	fp := rootFP(t, f)
-
-	res, err := n.InstallBundle(fromSettings, raw, "", "")
-	if err != nil || res.Installed || res.Class != classRootUnconfirmed || res.InstalledRootFingerprint != "" ||
-		res.BundleRootFingerprint != fp || res.BundlePrincipal != "instance:"+m.Fingerprint()+"@cert" || res.Message != "" {
-		t.Fatalf("first-install preview %+v %v", res, err)
-	}
-	if _, err := os.Stat(pkiDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the preview wrote %s (%v)", pkiDir, err)
-	}
-
-	for _, tc := range []struct{ name, from, to string }{
-		{"another root", "", rootFP(t, f2)},
-		{"a from where none is installed", fp, fp},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			res, err := n.InstallBundle(fromSettings, raw, tc.from, tc.to)
-			if err != nil || res.Installed || res.Class != classConfirmationStale ||
-				res.InstalledRootFingerprint != "" || res.BundleRootFingerprint != fp {
-				t.Fatalf("%+v %v", res, err)
-			}
-			if _, err := os.Stat(pkiDir); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("a refused confirmation wrote %s (%v)", pkiDir, err)
-			}
-		})
-	}
-
-	// Another process enrols this home under f2 between the preview and the
-	// confirmation: the confirmed "no root installed" is no longer true.
-	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop@agents.knomit.io", keyPath))), pki.InstallOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	before := tree(t, pkiDir)
-	res, err = n.InstallBundle(fromSettings, raw, "", fp)
-	if err != nil || res.Installed || res.Class != classConfirmationStale || res.InstalledRootFingerprint != rootFP(t, f2) {
-		t.Fatalf("stale first-install confirmation accepted: %+v %v", res, err)
-	}
-	if !reflect.DeepEqual(before, tree(t, pkiDir)) {
-		t.Fatal("a stale confirmation changed <home>/pki")
-	}
-
-	// On a fresh home, the shown root installs.
-	home2, keyPath2 := fleetHome(t)
-	n2 := fleetService(t, home2)
-	raw2 := bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath2))
-	if res, err := n2.InstallBundle(fromSettings, raw2, "", fp); err != nil || !res.Installed {
-		t.Fatalf("confirmed first install: %+v %v", res, err)
-	}
-	// A renewal under the installed root needs no confirmation.
-	if res, err := n2.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath2)), "", ""); err != nil || !res.Installed {
-		t.Fatalf("renewal: %+v %v", res, err)
-	}
-}
-
-// An installed root.crt that does not load is refused BEFORE any question
-// (knomit#299 review): read as "no root" it would be shown as a first
-// install that pki then refuses after the user confirmed.
-func TestFleetIdentity_UnreadableRootIsRefusedBeforeAsking(t *testing.T) {
-	home, keyPath := fleetHome(t)
-	f := pkitest.New(t)
-	n := fleetService(t, home)
-	pkiDir := filepath.Join(home, "pki")
-	if res := installConfirmed(t, n, bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath))); !res.Installed {
-		t.Fatalf("install: %+v", res)
-	}
-	if err := os.WriteFile(filepath.Join(pkiDir, pki.RootCertFile), []byte("garbled"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	before := tree(t, pkiDir)
-	res, err := n.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath)), "", "")
-	if err != nil || res.Installed || res.Class != classError || !strings.Contains(res.Message, pki.RootCertFile) ||
-		res.BundleRootFingerprint != "" {
-		t.Fatalf("unreadable root: %+v %v", res, err)
-	}
-	if !reflect.DeepEqual(before, tree(t, pkiDir)) {
-		t.Fatal("the refusal changed <home>/pki")
-	}
-}
-
-// Neither the raw bundle nor any part of it reaches the log, whatever the
-// outcome.
-func TestFleetIdentity_TheBundleIsNeverLogged(t *testing.T) {
-	logs := captureLog(t)
-	home, keyPath := fleetHome(t)
-	f, f1 := pkitest.New(t), pkitest.New(t)
-	n := fleetService(t, home)
-	good := bundle(t, f, f.Enroll(t, "laptop@agents.knomit.io", keyPath))
-	foreign := bundle(t, f1, f1.Enroll(t, "laptop@agents.knomit.io", keyPath))
-	installConfirmed(t, n, good)
-	n.InstallBundle(fromSettings, foreign, "", "")
-	n.InstallBundle(fromSettings, "junk "+good[40:120], "", "")
-	out := logs.String()
-	if !strings.Contains(out, "fleet identity") {
-		t.Fatalf("the installs logged nothing at all (fixture broken?):\n%s", out)
-	}
-	for _, frag := range []string{"BEGIN", good[40:80], foreign[40:80]} {
-		if strings.Contains(out, frag) {
-			t.Fatalf("the log carries bundle text %q:\n%s", frag, out)
-		}
 	}
 }
 
@@ -464,8 +164,8 @@ func TestFleetIdentity_GetIdentityStates(t *testing.T) {
 	}
 	f := pkitest.New(t)
 	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
-	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
-		t.Fatalf("install: %+v", res)
+	if _, err := pki.InstallBundle(filepath.Join(home, "pki"), keyPath, []byte(bundle(t, f, m)), pki.InstallOptions{}); err != nil {
+		t.Fatalf("install: %v", err)
 	}
 	// The running server's own account of its TLS listener, as `knomit serve`
 	// writes it into this home's server.json.
@@ -515,9 +215,8 @@ func TestFleetIdentity_WireKeysMatchTheUIFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, v := range map[string]any{
-		"identity":      FleetIdentity{},
-		"tls":           FleetTLS{},
-		"installResult": InstallResult{},
+		"identity": FleetIdentity{},
+		"tls":      FleetTLS{},
 	} {
 		b, _ := json.Marshal(v)
 		var m map[string]any
@@ -539,7 +238,7 @@ func TestFleetIdentity_WireKeysMatchTheUIFixture(t *testing.T) {
 // the UI's Call.ByName strings have a Go-side list to match.
 func TestFleetIdentity_NativeServiceMethodSetIsPinned(t *testing.T) {
 	want := []string{
-		"GetIdentity", "GetSettings", "InstallBundle", "PublicKeyLine",
+		"GetIdentity", "GetSettings", "PublicKeyLine",
 		"RestartServer", "RevealLogFile", "SaveSettings", "WriteFile",
 	}
 	var got []string
@@ -551,15 +250,6 @@ func TestFleetIdentity_NativeServiceMethodSetIsPinned(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("NativeService bindings %v, pinned %v — a new exported method is a new IPC entry point any window can call", got, want)
 	}
-}
-
-func keysOf(m map[string]string) []string {
-	var out []string
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func keysOfAny(m map[string]any) []string {
