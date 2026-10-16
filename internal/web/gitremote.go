@@ -126,6 +126,7 @@ func pushPolicy(r *http.Request, rm *repos.Manager, ri *repos.RepoInstance) stor
 	pol := store.PushPolicy{
 		OwnBranch: ri.AgentBranch(),
 		Fleet:     rm.FleetAtMain,
+		Judged:    rm.FleetPushJudged(ri),
 	}
 	fleetRefusal := rm.FleetPushRefusal(ri)
 	switch {

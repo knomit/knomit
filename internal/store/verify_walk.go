@@ -153,6 +153,18 @@ func (s *Service) CommitExists(h plumbing.Hash) bool {
 	return err == nil
 }
 
+// CommitAgent is the agent id in the author address of commit h (the lookup
+// the commit judge makes, agentIDOfAuthor): "" when this repository does not
+// hold h or its author is not an agent address. Nothing is derived from a
+// branch name.
+func (s *Service) CommitAgent(h plumbing.Hash) string {
+	c, err := object.GetCommit(s.rh.gits, h)
+	if err != nil {
+		return ""
+	}
+	return agentIDOfAuthor(c.Author.Email)
+}
+
 // SetAcceptList installs the accept list, bound to this repository. Like
 // SetSigner it must be re-applied on every store reopen.
 func (s *Service) SetAcceptList(a AcceptList) { s.rh.acceptList = a }

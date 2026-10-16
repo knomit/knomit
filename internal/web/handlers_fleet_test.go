@@ -210,27 +210,36 @@ func TestFleetMemberRow(t *testing.T) {
 
 // GET /fleet/members carries the master's last refusal of a member's branch
 // on THAT member's row (matched by the record's branch) and nowhere else; a
-// record with no branch never matches.
-// SABOTAGE: drop the last_refusal assignment in fleetMemberRows -> red.
+// record with no branch never matches. An ENROLLED id (a leaf, no record, so
+// no branch) carries the newest refusal whose tip its agent authored: a first
+// join refused in flight (PR #527 SF3); a record without a branch does not.
+// SABOTAGE: drop the last_refusal assignment in fleetMemberRows -> red; drop
+// the enrolled arm -> d's row has none -> red; keep the oldest refusal by
+// agent -> d's is "old" -> red.
 func TestFleetMemberRows_LastRefusal(t *testing.T) {
 	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	refused := map[string]repos.PeerRefusal{
-		"agent/b": {Branch: "agent/b", Tip: "abc", Reason: "knomit: commit abc refused", At: at},
-		"":        {Branch: "", Tip: "zzz", Reason: "never shown"},
+		"agent/b":  {Branch: "agent/b", Tip: "abc", Reason: "knomit: commit abc refused", At: at},
+		"":         {Branch: "", Tip: "zzz", Reason: "never shown"},
+		"agent/d":  {Branch: "agent/d", Tip: "def", Agent: "d", Reason: "no-cert", At: at.Add(time.Minute)},
+		"agent/d2": {Branch: "agent/d2", Tip: "old", Agent: "d", Reason: "old", At: at},
+		"agent/c":  {Branch: "agent/c", Tip: "ccc", Agent: "c", Reason: "c has a record", At: at},
 	}
 	rows := fleetMemberRows([]repos.FleetMemberRow{
 		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "a", State: fact.MemberActive, Branch: "agent/a"}}},
 		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "b", State: fact.MemberActive, Branch: "agent/b"}}},
 		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "c", State: fact.MemberActive}}},
+		{FleetMember: store.FleetMember{Member: fact.Member{Agent: "d", State: repos.MemberEnrolled}}},
 	}, refused)
 	raw, err := json.Marshal(rows)
 	require.NoError(t, err)
 	var got []map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
-	require.Len(t, got, 3)
+	require.Len(t, got, 4)
 	require.NotContains(t, got[0], "last_refusal")
 	require.Equal(t, map[string]any{"branch": "agent/b", "tip": "abc", "reason": "knomit: commit abc refused", "at": "2026-10-15T12:00:00Z"}, got[1]["last_refusal"])
-	require.NotContains(t, got[2], "last_refusal")
+	require.NotContains(t, got[2], "last_refusal", "a record without a branch is never matched by agent")
+	require.Equal(t, map[string]any{"branch": "agent/d", "tip": "def", "agent": "d", "reason": "no-cert", "at": "2026-10-15T12:01:00Z"}, got[3]["last_refusal"])
 }
 
 // The fleet repository is read-only for the fact REST routes: a create on its

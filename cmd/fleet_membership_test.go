@@ -308,9 +308,18 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 	if _, ok := memberStates(t, alpha)["bravo"]; ok {
 		t.Fatal("a refused join left a member record on main")
 	}
+	// The hub's receive-pack is the master's judge (PR #527 SF2): its refusal
+	// is the master's, with the refused tip's author (SF3).
+	refused := alpha.mgr.FleetRefusals()["agent/bravo"]
+	if refused.Agent != "bravo" || refused.Tip == "" || !strings.Contains(refused.Reason, "no artifacts/fleet/certs/bravo.pem") {
+		t.Fatalf("the hub's push refusal is not the master's: %+v", refused)
+	}
 
 	before := alpha.receives.Load()
 	bravo.join(t, alpha)
+	if _, ok := alpha.mgr.FleetRefusals()["agent/bravo"]; ok {
+		t.Error("the admitted push did not clear bravo's refusal")
+	}
 	if got := alpha.receives.Load() - before; got != 2 {
 		t.Errorf("the join reached the hub with %d pushes, want 2 (the mount's round, the record)", got)
 	}
@@ -442,14 +451,15 @@ func requireFleetActivity(t *testing.T, hub *fleetNode, charlieSerial string) {
 		"created alpha": 1, "host-changed alpha": 1, "joined alpha": 1,
 		"enrolled alpha": 1, "enrolled bravo": 2, "enrolled charlie": 1,
 		"joined bravo": 1, "admitted bravo": 2, "left bravo": 1, "revoked bravo": 1,
+		"refused bravo": 1, // the first join, refused by the hub's receive-pack
 	}
 	for k, n := range want {
 		if got[k] != n {
 			t.Errorf("activity has %d %q, want %d (all: %v)", got[k], k, n, got)
 		}
 	}
-	if len(out.Events) != 12 {
-		t.Errorf("%d events, want 12: %v", len(out.Events), got)
+	if len(out.Events) != 13 {
+		t.Errorf("%d events, want 13: %v", len(out.Events), got)
 	}
 	found := false
 	for _, e := range out.Events {

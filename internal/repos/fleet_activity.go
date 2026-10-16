@@ -26,7 +26,9 @@ import (
 //   - revoked: the CRL on main, with the revoked leaf's agent from
 //     issued/<serial>.pem and the reason from revocations/<serial>.txt;
 //   - refused: the master's judge, the last refusalRing refusals it recorded
-//     (fleetPeers.ring, in memory: a restart starts it empty).
+//     (fleetPeers.ring, in memory: a restart starts it empty): the hub's
+//     receive-pack (FleetPushJudged), the forge fetch judge and the merger's
+//     re-judge; the agent is the refused tip's author.
 //
 // The local acts that leave no record (a root key imported, a stand-down, a
 // decommission) are not events: there is nothing to read them from.
@@ -103,7 +105,13 @@ func (m *Manager) FleetActivity(ctx context.Context, limit int) ([]FleetEvent, e
 	events = append(events, m.enrolledEvents()...)
 	events = append(events, m.revokedEvents(ri, f)...)
 	for _, r := range ri.peers.RefusalLog() {
-		events = append(events, FleetEvent{At: r.At, Kind: FleetEventRefused, Agent: agentOf[r.Branch],
+		// The refused tip's author; a tip whose author is not an agent
+		// address falls back to the record that names the branch.
+		agent := r.Agent
+		if agent == "" {
+			agent = agentOf[r.Branch]
+		}
+		events = append(events, FleetEvent{At: r.At, Kind: FleetEventRefused, Agent: agent,
 			Branch: r.Branch, Tip: r.Tip, Detail: r.Reason})
 	}
 	sort.SliceStable(events, func(i, j int) bool { return events[i].At.After(events[j].At) })

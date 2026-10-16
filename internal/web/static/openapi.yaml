@@ -2634,7 +2634,8 @@ paths:
         (see FleetEvent.kind): main's first-parent history (created, joined,
         admitted, left, host-changed), the master's issuance log (enrolled),
         the CRL on main (revoked) and the master's judge (refused, the last
-        200). Read-only, open to any principal the edge admits; polled like
+        200: the hub's receive-pack, the forge fetch judge, the merger's
+        re-judge). Read-only, open to any principal the edge admits; polled like
         /fleet/members, not a stream. The walk of main reads at most 2000
         first-parent commits and stops once it has `limit` entries, so an
         event older than that is not shown.
@@ -2699,13 +2700,17 @@ paths:
                             On the fleet's master only: the last tip of this member's branch
                             (the record's `branch`) that the master refused, left behind and
                             not judged again until the branch or main moves. Refused when
-                            fetched from a forge origin, or when re-judged against a main
-                            that moved (both hostings; a local branch admitted earlier is
-                            then removed). Absent when the last tip was admitted. Held in
-                            memory.
+                            pushed to the hub (a knomit-hosted fleet: its receive-pack is the
+                            master's judge), when fetched from a forge origin, or when
+                            re-judged against a main that moved (both hostings; a local
+                            branch admitted earlier is then removed). On an `enrolled` row,
+                            which has no record and so no branch: the newest refusal whose
+                            refused tip that agent authored, a first join refused in flight.
+                            Absent when the last tip was admitted. Held in memory.
                           properties:
                             branch: { type: string }
                             tip: { type: string }
+                            agent: { type: string, description: "The refused tip's author's agent id; absent when the author is not an agent address" }
                             reason: { type: string }
                             at: { type: string, format: date-time }
         "409": { description: not_registered }
@@ -4062,9 +4067,13 @@ components:
             (the CRL on main, the agent from the issued leaf on main, the
             reason from the revocation statement); refused (the master's last
             200 judge refusals, in memory: kept after the branch moves on,
-            empty after a restart). A root key import, a stand-down and a
-            decommission leave no record and are no events.
-        agent: { type: string, description: "The agent id the event is about; empty when no record names it (a refused first join)" }
+            empty after a restart; on a knomit-hosted fleet the hub's
+            receive-pack refusals of a push, which the pusher is also told;
+            on a forge-hosted fleet the fetch judge's; on both the merger's
+            re-judge. The same branch refused again at the same tip for the
+            same reason is one event, at its first time). A root key import,
+            a stand-down and a decommission leave no record and are no events.
+        agent: { type: string, description: "The agent id the event is about; for refused, the refused tip's author (the commit's author address, as the judge reads it), so a refused first join names its agent too; empty when nothing names one" }
         serial: { type: string, description: "enrolled, revoked: the certificate serial (lowercase hex)" }
         branch: { type: string, description: "joined, left, admitted, refused: the member's agent branch" }
         tip: { type: string, description: "admitted: the merged tip; refused: the refused tip" }

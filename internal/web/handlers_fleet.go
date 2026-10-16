@@ -127,12 +127,23 @@ func fleetMemberRow(mem repos.FleetMemberRow) map[string]any {
 
 // fleetMemberRows is one row per record or enrolled id; a member whose branch
 // (the record's `branch`) the fleet's master last refused carries it as
-// last_refusal.
+// last_refusal. An enrolled id has no record and so no branch: it carries the
+// newest refusal whose refused tip its agent authored (PeerRefusal.Agent, the
+// commit's author address, as the judge reads it; nothing is parsed out of a
+// branch name), which is a first join refused in flight.
 func fleetMemberRows(ms []repos.FleetMemberRow, refused map[string]repos.PeerRefusal) []map[string]any {
+	byAgent := map[string]repos.PeerRefusal{}
+	for _, r := range refused {
+		if cur, ok := byAgent[r.Agent]; r.Agent != "" && (!ok || r.At.After(cur.At)) {
+			byAgent[r.Agent] = r
+		}
+	}
 	rows := make([]map[string]any, 0, len(ms))
 	for _, mem := range ms {
 		row := fleetMemberRow(mem)
 		if r, ok := refused[mem.Branch]; ok && mem.Branch != "" {
+			row["last_refusal"] = r
+		} else if r, ok := byAgent[mem.Agent]; ok && mem.Branch == "" && mem.State == repos.MemberEnrolled {
 			row["last_refusal"] = r
 		}
 		rows = append(rows, row)
