@@ -55,6 +55,7 @@ func TestRefClassification_HasNoSecondImplementation(t *testing.T) {
 		filepath.Join("internal", "store", "fact_read.go"):           "fact file naming",
 		filepath.Join("internal", "store", "git", "commitlog.go"):    "selects fact files when indexing a commit",
 		filepath.Join("internal", "web", "helpers.go"):               "validates a git REMOTE url, not a ref",
+		filepath.Join("internal", "repos", "fleet_membership.go"):    "validates a fleet forge's git REMOTE url scheme against the auth method (refuseMethodForURL), not a ref",
 		filepath.Join("internal", "mcp", "lens_endtoend_test.go"):    "asserts the kb:// WIRE PATH form of a result row",
 		filepath.Join("internal", "mcp", "query_federation_test.go"): "asserts the kb:// WIRE PATH form of a result row",
 	}
