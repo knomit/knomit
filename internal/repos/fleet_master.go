@@ -33,6 +33,9 @@ import (
 //     remembered (PeerRefusal, shown as last_refusal on GET /fleet/members)
 //     until the tip or main moves, and a local agent/<x> admitted earlier is
 //     demoted (removed) so the merger cannot merge it;
+//  2b. the master's duties (fleetPeers.duty): the leave duty revokes every
+//     member whose `left` record is on main (fleet_leave.go), committed on
+//     the agent branch so step 3 publishes it;
 //  3. after pushing its own agent branch, it publishes main (publishFleetMainOn:
 //     PublishUpstream WITHOUT force, then local main fast-forwarded to the
 //     agent branch). A non-fast-forward refusal is an ordinary push error;
@@ -79,6 +82,11 @@ type fleetPeers struct {
 	// on the master, and on the holder of the fleet root whose main does not
 	// hold it yet (a forge create whose publish of main failed).
 	publishes func(*store.Service) bool
+	// duty is the master's duties in its origin round (a forge), after the
+	// fetch judge and before the push and the publish of main, so what it
+	// commits goes out in the same round (RepoInstance.fleetMasterDuty: the
+	// leave duty). nil: none.
+	duty func(context.Context, *store.Service)
 
 	mu sync.Mutex
 	// judged is the memo, per branch: the verdict (true = refused) at each
@@ -122,6 +130,13 @@ func (p *fleetPeers) isMaster(svc *store.Service) bool {
 // publishesMain reports whether this push round publishes main; false on nil.
 func (p *fleetPeers) publishesMain(svc *store.Service) bool {
 	return p != nil && p.publishes != nil && p.publishes(svc)
+}
+
+// runDuty runs the master's round duties (duty); nil-safe.
+func (p *fleetPeers) runDuty(ctx context.Context, svc *store.Service) {
+	if p != nil && p.duty != nil {
+		p.duty(ctx, svc)
+	}
 }
 
 // verdictAt is the memoised verdict of branch at key, if it was judged there.

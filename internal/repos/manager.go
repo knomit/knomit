@@ -852,6 +852,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 		ri.consensus = newConsensusMerger(ri, name, agentBranch)
 		ri.peers = newFleetPeers(ri.actsAsFleetMaster, ri.publishesFleetMain)
 		ri.peers.claim = ri.fleetMasterClaimRound
+		ri.peers.duty = ri.fleetMasterDuty
 	}
 	// No sweeper for a subscription (no experiment can be forked from one)
 	// or when experiments.expiry_days is 0 (never expire: the loop must not

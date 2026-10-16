@@ -41,8 +41,9 @@ import (
 //     Any refusal, the push's included, undoes all of it: no repository, no
 //     installed material, no record, state standalone.
 //   - LEAVE (member): write `left`, push once, then remove the fleet here
-//     whatever the push did (works offline); the master's revoke is the
-//     authoritative half.
+//     whatever the push did (works offline). Leave means revoke: once the
+//     left record is on main, the master's round revokes the leaf
+//     (revokeLeftMembers, fleet_leave.go).
 //   - REVOKE (master): a new CRL from the CURRENT one on main plus the leaf's
 //     serial, its revocation statement, committed and published; the CRL is
 //     installed here at once.
@@ -381,8 +382,10 @@ func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) 
 }
 
 // JoinFleet joins the fleet at the bundle's URL with the bundle the master's
-// enroll returned (see the file comment). It answers registered: the record is on
-// the fleet's origin, and counts once the master admits it into main. The
+// enroll returned (see the file comment). It answers state registered (this
+// instance has the fleet repository) with record_state pending: the record is
+// on this instance's own agent branch, judged by nothing yet on a forge, and
+// is accepted only once the master merges it into main (recordStateOf). The
 // answer's root_fingerprint is the root the bundle installed (§1.5 Join step
 // 2: supplying the bundle is the operator's consent to that root).
 func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatus, error) {
@@ -446,7 +449,7 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 	if err := setFleetState(db, FleetRegistered, time.Now()); err != nil {
 		return FleetStatus{}, err
 	}
-	log.Info().Str("fleet", ri.Name()).Msg("fleet: joined; the record counts once the master admits it into main")
+	log.Info().Str("fleet", ri.Name()).Msg("fleet: joined, record pending; it is accepted once the master merges it into main")
 	return m.FleetStatus(ctx)
 }
 
@@ -752,7 +755,7 @@ func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
 	if err := setFleetState(m.ControlDB(), FleetStandalone, time.Now()); err != nil {
 		return FleetLeft{}, err
 	}
-	log.Info().Bool("pushed", out.Pushed).Msg("fleet: left; the master revokes the leaf (a left record on main, or by hand)")
+	log.Info().Bool("pushed", out.Pushed).Msg("fleet: left; the master revokes the leaf once the left record is on main (by hand when it was not pushed)")
 	out.FleetStatus, err = m.FleetStatus(ctx)
 	return out, err
 }
@@ -832,26 +835,50 @@ func (m *Manager) RevokeFleetMember(ctx context.Context, agentID, reason string)
 	if err != nil {
 		return FleetRevocation{}, err
 	}
+	out, _, err := m.revokeLeaf(ctx, ri, root, f.PKI.CRL, agentID, leaf, reason)
+	if err != nil {
+		return FleetRevocation{}, err
+	}
+	if perr := m.publishMasterWrite(ctx, ri); perr != nil {
+		out.Published, out.PublishError = false, perr.Error()
+	}
+	return out, nil
+}
+
+// revokeLeaf is the one revocation both Revoke and the master's leave duty
+// (revokeLeftMembers) make: a new CRL from base (main's current CRL, or the
+// one a revocation earlier in the same pass made) plus leaf's serial, and its
+// signed revocation statement, committed on the master's agent branch; then
+// the master's own copies (the local audit log and CRL, what GET /fleet/root
+// hands a new master) and its installed CRL. It does NOT publish: the caller
+// does (Revoke at once, the duty through its own round). The answer's
+// Published is true; the new CRL is returned for the next revocation of a
+// pass. The caller holds fleetOpMu.
+func (m *Manager) revokeLeaf(ctx context.Context, ri *RepoInstance, root pki.Root, base *x509.RevocationList, agentID string, leaf *x509.Certificate, reason string) (FleetRevocation, *x509.RevocationList, error) {
 	now := time.Now()
-	rv, err := pki.RevokeSerial(root, f.PKI.CRL, pki.Revoked{Serial: leaf.SerialNumber, At: now, Reason: reason}, now, now.Add(fleetCRLValidity))
+	rv, err := pki.RevokeSerial(root, base, pki.Revoked{Serial: leaf.SerialNumber, At: now, Reason: reason}, now, now.Add(fleetCRLValidity))
 	switch {
 	case errors.Is(err, pki.ErrAlreadyRevoked):
-		return FleetRevocation{}, fleetErr(http.StatusConflict, "already_revoked", "agent "+agentID+"'s certificate is already on the CRL")
+		return FleetRevocation{}, nil, fleetErr(http.StatusConflict, "already_revoked", "agent "+agentID+"'s certificate is already on the CRL")
 	case err != nil:
-		return FleetRevocation{}, fleetErr(http.StatusUnprocessableEntity, "revoke_failed", err.Error())
+		return FleetRevocation{}, nil, fleetErr(http.StatusUnprocessableEntity, "revoke_failed", err.Error())
+	}
+	next, err := parseCRLPEM(rv.CRLPEM)
+	if err != nil {
+		return FleetRevocation{}, nil, fleetErr(http.StatusUnprocessableEntity, "revoke_failed", err.Error())
 	}
 	ont := ri.Ontology()
 	layout, _ := ont.PKILayout()
 	statements, err := artifactPattern(ont, fact.PKIRevocation)
 	if err != nil {
-		return FleetRevocation{}, err
+		return FleetRevocation{}, nil, err
 	}
 	serial := leaf.SerialNumber.Text(16)
 	if err := m.writeFleetArtifacts(ctx, ri, map[string]string{
 		layout.CRL: string(rv.CRLPEM),
 		strings.Replace(statements, "*", serial, 1): string(rv.Statement),
 	}, "fleet: revoke "+agentID+" (serial "+serial+")"); err != nil {
-		return FleetRevocation{}, err
+		return FleetRevocation{}, nil, err
 	}
 	out := FleetRevocation{AgentID: agentID, Serial: serial, CRLNumber: rv.Number.String(), Published: true}
 	// The master's own copies: its local audit log and CRL (what GET
@@ -862,11 +889,17 @@ func (m *Manager) RevokeFleetMember(ctx context.Context, agentID, reason string)
 	if _, err := pki.InstallCRL(m.deps.Cfg.TLS.Dir, root.Cert, rv.CRLPEM); err != nil {
 		out.InstallError = err.Error()
 	}
-	if perr := m.publishMasterWrite(ctx, ri); perr != nil {
-		out.Published, out.PublishError = false, perr.Error()
+	log.Info().Str("agent", agentID).Str("serial", serial).Str("reason", reason).Msg("fleet: member revoked")
+	return out, next, nil
+}
+
+// parseCRLPEM parses one X509 CRL PEM block.
+func parseCRLPEM(raw []byte) (*x509.RevocationList, error) {
+	blk, _ := pem.Decode(raw)
+	if blk == nil || blk.Type != "X509 CRL" {
+		return nil, errors.New("no X509 CRL PEM block")
 	}
-	log.Info().Str("agent", agentID).Str("serial", serial).Msg("fleet: member revoked")
-	return out, nil
+	return x509.ParseRevocationList(blk.Bytes)
 }
 
 // DecommissionFleet ends the fleet (master only): the fleet repository here
