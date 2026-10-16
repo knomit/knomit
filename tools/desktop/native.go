@@ -77,7 +77,8 @@ func writeFile(name, contents string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return "", fmt.Errorf("create exports dir: %w", err)
 	}
-	if err := os.WriteFile(target, []byte(contents), 0o644); err != nil {
+	// Owner-only: the Fleet page saves the fleet ROOT KEY through here.
+	if err := os.WriteFile(target, []byte(contents), 0o600); err != nil {
 		return "", err
 	}
 	return target, nil
