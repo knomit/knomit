@@ -450,6 +450,9 @@ func (m *Manager) joinPreflight(db *sql.DB, raw []byte) (pki.Bundle, error) {
 	if b.FleetURL == "" {
 		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", "the bundle names no fleet repository URL: enroll this instance again on the master")
 	}
+	if why := bundleURLProblem(b.FleetURL); why != "" {
+		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "bundle_invalid", "the bundle's fleet repository URL "+credentialFree(b.FleetURL)+" "+why+": enroll this instance again on the master")
+	}
 	if _, err := pki.PreviewBundle(m.deps.KeyPath, raw); err != nil {
 		if errors.Is(err, pki.ErrKeyMismatch) {
 			return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "key_mismatch", err.Error())
@@ -464,6 +467,42 @@ func (m *Manager) joinPreflight(db *sql.DB, raw []byte) (pki.Bundle, error) {
 		return pki.Bundle{}, fleetErr(http.StatusUnprocessableEntity, "agent_mismatch", fmt.Sprintf("the bundle's certificate is for agent %q, not this instance's %q", leafID, m.AgentID()))
 	}
 	return b, nil
+}
+
+// bundleURLProblem is why a bundle's url: line is not a fleet repository URL
+// a join can clone, or "": the line is unauthenticated (SplitBundle checks
+// only the agent, the root and the serial), so the join checks its shape
+// before anything dials it, and join and join:check refuse a bad one with
+// the same code (bundle_invalid; PR #527 N1). A master's enroll writes one of
+// two shapes: a hub's plain https://<address>/git/<repo> (an https URL with a
+// host, never the internal knomit+https scheme), or a forge-hosted fleet's
+// origin URL, which the origin routes accept as https, ssh:// or scp-style
+// git@host:path, or file:// under a local origin root. Anything else (another
+// scheme, plain http, a URL with no host) is refused.
+func bundleURLProblem(u string) string {
+	if !strings.Contains(u, "://") {
+		if at, colon := strings.Index(u, "@"), strings.Index(u, ":"); at > 0 && colon > at+1 && colon < len(u)-1 {
+			return "" // scp-style git@host:path, a forge's ssh origin
+		}
+		return "is not a URL"
+	}
+	p, err := url.Parse(u)
+	if err != nil {
+		return "is not a URL"
+	}
+	switch p.Scheme {
+	case "https", "ssh":
+		if p.Hostname() == "" {
+			return "names no host"
+		}
+		return ""
+	case "file":
+		if p.Path == "" {
+			return "names no path"
+		}
+		return ""
+	}
+	return "is not https:// (a hub's) or a forge origin's (https://, ssh://, git@host:path, file://)"
 }
 
 // The two FleetJoinCheck.Hosting values.
@@ -568,11 +607,38 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 // connection, a timeout or a reset after the handshake, this instance's own
 // trust material unusable. Those are no verdict on the bundle, and "ask for a
 // new bundle" would send the operator the wrong way.
+//
+// The text is the classification's own: the join's ResolveOrigin wrap
+// (ErrOriginUnreachable, "origin was not attached") is dropped (reachCause),
+// so both routes say the same words for the same cause.
 func joinReachErr(host string, err error) *FleetError {
+	cause := reachCause(err).Error()
 	if errors.Is(err, pki.ErrRefusedByPeer) || errors.Is(err, pki.ErrOriginCertRefused) {
-		return fleetErr(http.StatusUnprocessableEntity, "bundle_refused", "the fleet at "+host+" refused this bundle ("+err.Error()+"): ask the fleet's master for a new bundle")
+		return fleetErr(http.StatusUnprocessableEntity, "bundle_refused", "the fleet at "+host+" refused this bundle ("+cause+"): ask the fleet's master for a new bundle")
 	}
-	return fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+host+": "+err.Error())
+	return fleetErr(http.StatusBadGateway, "unreachable", "couldn't reach "+host+": "+cause)
+}
+
+// reachCause is err without ResolveOrigin's wrap (fmt.Errorf("%w: %w",
+// ErrOriginUnreachable, cause)): the cause. Any other error is itself.
+func reachCause(err error) error {
+	m, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return err
+	}
+	var rest []error
+	wrapped := false
+	for _, e := range m.Unwrap() {
+		if e == ErrOriginUnreachable {
+			wrapped = true
+			continue
+		}
+		rest = append(rest, e)
+	}
+	if !wrapped || len(rest) != 1 {
+		return err
+	}
+	return rest[0]
 }
 
 // originHost is the host an origin URL names: host[:port] of a URL, the

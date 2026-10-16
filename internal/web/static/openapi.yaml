@@ -2347,8 +2347,12 @@ paths:
         fleet (`fleet_present`, 409), no trust material is installed
         (`trust_installed`, 409), the bundle is a bundle (`bundle_invalid`,
         422) for THIS instance's key (`key_mismatch`, 422) and agent id
-        (`agent_mismatch`, 422) that names the fleet repository URL
-        (`bundle_invalid` otherwise), and `auth_method` fits that URL
+        (`agent_mismatch`, 422) that names the fleet repository URL in a
+        shape a master's enroll writes: a hub's plain `https://` URL with a
+        host, or a forge origin's (`https://`, `ssh://`, `git@host:path`,
+        `file://`); `bundle_invalid` otherwise (no URL, the internal
+        `knomit+https` scheme, `http://`, another scheme, no host), the same
+        on `POST /fleet/join:check`. And `auth_method` fits that URL
         (`auth_invalid`, 422: `cert` is never an input). Then the bundle is
         installed (supplying it is the operator's consent to its root), the
         fleet repository is cloned from the bundle's URL through the fleet
@@ -2377,6 +2381,7 @@ paths:
         - `unreachable` (502), for every other failure to reach a verdict:
           no TCP connection, a handshake that stalls, a timeout or a reset
           after the handshake, this instance's own trust material unusable.
+        Both say the classification's own words, on both routes.
       operationId: joinFleet
       requestBody:
         required: true

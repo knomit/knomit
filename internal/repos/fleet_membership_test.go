@@ -746,6 +746,7 @@ func TestJoinReachErr_OnlyARefusalIsBundleRefused(t *testing.T) {
 		{"a handshake that failed after our verifier accepted", errors.New("pki: the origin h:1 presents a certificate of this fleet, but the handshake failed: read: connection reset by peer"), "unreachable", 502},
 		{"this instance's trust files unusable", errors.New("pki: this instance's fleet trust files are unusable, so the origin h:1 cannot be judged: no CRL"), "unreachable", 502},
 	} {
+		var texts []string
 		for _, wrapped := range []struct {
 			route string
 			err   error
@@ -754,7 +755,48 @@ func TestJoinReachErr_OnlyARefusalIsBundleRefused(t *testing.T) {
 			if fe.Code != tc.code || fe.Status != tc.status {
 				t.Errorf("%s, %s: %d %s, want %d %s", tc.cause, wrapped.route, fe.Status, fe.Code, tc.status, tc.code)
 			}
+			if strings.Contains(fe.Msg, ErrOriginUnreachable.Error()) {
+				t.Errorf("%s, %s: the wrap's prefix leaks into the text: %s", tc.cause, wrapped.route, fe.Msg)
+			}
+			texts = append(texts, fe.Msg)
 		}
+		if texts[0] != texts[1] {
+			t.Errorf("%s: join and join:check say different words: %q vs %q", tc.cause, texts[0], texts[1])
+		}
+	}
+}
+
+// The bundle's url: line is unauthenticated, so the join checks its shape
+// before anything dials it, on join and join:check alike (PR #527 N1): the
+// internal scheme, plain http, another scheme and a URL with no host are
+// bundle_invalid (422) on both routes, and nothing is installed. The shapes a
+// master's enroll writes (a hub's https URL, a forge origin's) pass this
+// check (they then fail later here, as there is no fleet at them).
+// SABOTAGE: drop the bundleURLProblem check from joinPreflight -> the
+// knomit+https row is unreachable on join:check and clone_failed or
+// unreachable on the join -> red.
+func TestFleetMembership_JoinRefusesABundleURLThatIsNoFleetURL(t *testing.T) {
+	dir := t.TempDir()
+	_, root := seedJoinableFleet(t, filepath.Join(dir, "fleet.git"))
+	m := newFleetManager(t, dir)
+	bundle := root.Bundle(t, root.Enroll(t, "test-fleet@"+pki.AgentEmailDomain, m.deps.KeyPath))
+	refused := 0
+	for _, u := range []string{"knomit+https://hub.example:7443/git/fleet", "http://hub.example/git/fleet", "ftp://hub.example/fleet", "https:///git/fleet", "not a url"} {
+		withURL := pkitest.WithURL(t, bundle, u)
+		_, err := m.JoinFleet(context.Background(), FleetJoinSpec{Bundle: withURL})
+		status, code := fleetCode(t, err)
+		require.Equal(t, "bundle_invalid", code, "join %s: %v", u, err)
+		require.Equal(t, http.StatusUnprocessableEntity, status)
+		_, err = m.CheckFleetJoin(context.Background(), FleetJoinSpec{Bundle: withURL})
+		_, code = fleetCode(t, err)
+		require.Equal(t, "bundle_invalid", code, "join:check %s: %v", u, err)
+		_, err = os.Stat(filepath.Join(m.deps.Cfg.TLS.Dir, pki.InstanceCertFile))
+		require.ErrorIs(t, err, os.ErrNotExist, "nothing was installed")
+		refused++
+	}
+	require.Equal(t, 5, refused)
+	for _, u := range []string{"https://hub.example:7443/git/fleet", "ssh://git@forge.example/org/fleet.git", "git@forge.example:org/fleet.git", "file:///srv/fleet.git"} {
+		require.Empty(t, bundleURLProblem(u), u)
 	}
 }
 
