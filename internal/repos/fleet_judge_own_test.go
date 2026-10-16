@@ -51,7 +51,7 @@ func TestFleetJudgeOwn_TheHubRefusesItsOwnInvalidRecordBeforeMainMoves(t *testin
 	require.NoError(t, err)
 	require.Contains(t, st.LastError, store.OwnCommitRefusedText)
 	require.Contains(t, st.LastError, `"members-are-policy"`)
-	require.True(t, st.LastErrorCommitRefused, "a refused commit, not a failure a retry cures")
+	require.False(t, st.LastErrorCommitRefused, "not a host refusing this copy's push: the member's leave/revoke advice does not apply")
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		_, ok, err := svc.FileAt("main", bad, 1<<20)
 		require.NoError(t, err)
