@@ -183,7 +183,7 @@ func (m *Manager) followForge(ctx context.Context, ri *RepoInstance, decided Ori
 			credentialFree(decided.URL)+" holds another fleet or another repository: its "+upstream+" does not carry this fleet's root ("+rootPath+"). Use the URL of the forge repository this fleet lives on")
 	case remoteNoMain:
 		return "", fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
-			credentialFree(decided.URL)+" holds another repository: it has no "+upstream+", but other branches or tags. The fleet moves only to an EMPTY forge repository (no branch, no tag) or to the one this fleet lives on. Nothing changed")
+			credentialFree(decided.URL)+" holds another repository: it has no "+upstream+", but other branches or tags. The fleet moves only to an EMPTY forge repository (no branch, no tag) or to the one this fleet lives on")
 	case remoteEmpty:
 		if !master {
 			return "", fleetErr(http.StatusUnprocessableEntity, "not_this_fleet",
