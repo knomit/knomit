@@ -44,7 +44,7 @@ const SUBTITLE: Record<FleetFollowMode, string> = {
  * step's credential fields (CredentialFields, the repo step's). The change is
  * POST /fleet/follow, which refuses a URL that is not this fleet's.
  */
-export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', initialMethod = '', fromForge, membersUnaffected, hostRecord, onUpdateAccess, onCancel, onDone, onBusyChange }: {
+export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', initialMethod = '', fromForge, membersUnaffected, hostRecord, onUpdateAccess, focusFirstField, onCancel, onDone, onBusyChange }: {
   fleetRepo: string;
   mode?: FleetFollowMode;
   /** Prefilled: the stored forge URL (access: shown, never edited), where
@@ -62,6 +62,8 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
   hostRecord?: string[];
   /** move only: switch to Update access (the page's own item), offered when the typed URL is the forge the fleet is on. */
   onUpdateAccess?: () => void;
+  /** Focus the first credential field on mount (the flow was reached by a button that has just unmounted). */
+  focusFirstField?: boolean;
   onCancel: () => void;
   onDone: () => void;
   onBusyChange?: (busy: boolean) => void;
@@ -84,6 +86,10 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
     onBusyChange?.(busy);
     return () => { onBusyChange?.(false); };
   }, [busy, onBusyChange]);
+
+  useEffect(() => {
+    if (focusFirstField) document.getElementById('fleet-follow-auth-method')?.focus();
+  }, [focusFirstField]);
 
   const trimmed = url.trim();
   const host = hostPortOf(trimmed);
