@@ -106,7 +106,8 @@ func TestHostRecord_AMemberBranchNeverWritesIt(t *testing.T) {
 // host record is host-record.
 //
 // SABOTAGE: run hostRecord before the M3 shortcut -> the clean merge is
-// host-record -> red.
+// host-record -> red; diff against the first parent only (parents[:1]) ->
+// the reverting merge is admitted -> red.
 func TestHostRecord_AMemberMergesTheMastersChange(t *testing.T) {
 	f, main, base, boss, x := ownerFixture(t)
 	const own = "kb/members/agent-x/1.md"
@@ -123,6 +124,16 @@ func TestHostRecord_AMemberMergesTheMastersChange(t *testing.T) {
 	r, ok = f.judgeEntry(dirty)
 	require.False(t, ok)
 	require.Equal(t, RuleHostRecord, r.Rule)
+
+	// A merge of main that REVERTS the master's change: it keeps its own
+	// side's tree (no host record) plus one more edit of the member's own
+	// record, so it is not a clean merge, and against its first parent (side)
+	// the host record does not change at all. Only the diff against the
+	// second parent (main2, which added it) shows the delete.
+	reverted := f.commit(f.fleet, with(base, own, base[own]+"\nv2\nv3\n"), "agent-x", x, side, main2)
+	r, ok = f.judgeEntry(reverted)
+	require.False(t, ok, "a merge that reverts the master's host record is admitted")
+	require.Equal(t, RuleHostRecord, r.Rule, r.Reason)
 }
 
 // On a knomit host the push of a member's branch that writes the host record
