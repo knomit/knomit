@@ -400,6 +400,9 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 		}
 	}
 	gate := newJudge(fleet, selfRoot, ont, rh.factRoot)
+	// A member's branch, never this instance's own: the host-record rule
+	// applies (hostRecord).
+	gate.entry = true
 	for _, c := range commits {
 		ref, ok := gate.judgeCommit(c)
 		if ok && signer != nil {

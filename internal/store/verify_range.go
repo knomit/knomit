@@ -186,6 +186,12 @@ type judge struct {
 	// shapeOK memoises the trees checkTreeShape found well formed, across
 	// the commits this judge judges (they share most subtrees).
 	shapeOK map[plumbing.Hash]bool
+	// entry says the commits are a MEMBER's branch entering this repository
+	// (judgeIncoming: a push to a knomit host, the fleet master's judge of a
+	// fetched or local agent/* branch), never this instance's own: the
+	// host-record rule (hostRecord) runs only there. CheckRange judges any
+	// range, the master's own commits included, so it is false there.
+	entry bool
 }
 
 // newJudge builds the judge for one fleet revision. selfRoot is the judged
@@ -247,6 +253,10 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 //   - rule B (only when the fleet revision holds root.crt): the leaf artifact
 //     for the id must name that key, chain to the root and not be on the CRL
 //     (certified: RuleNoCert, RuleKeyMismatch, RuleRevoked);
+//   - the host-record rule (fleet repository, a member's branch entering it
+//     only: hostRecord), before the record rules: a signed commit that
+//     changes artifacts/fleet/host is refused, since only the master writes
+//     it and its commits never enter through a member's branch;
 //   - the record-owner rule (fleet repository only, recordOwner): every path
 //     the commit changes outside artifacts/, against every parent, is under
 //     members/<author id>/, and none of them is a delete;
@@ -306,6 +316,9 @@ func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 	if id == "" {
 		return Refusal{Commit: h, Rule: RuleNoRecord, SignerFP: fp, Reason: fmt.Sprintf("author %q is not an agent address", c.Author.Email)}, false
 	}
+	if r, ok := j.hostRecord(c, id); !ok {
+		return r, false
+	}
 	r, ok := j.judgeRecord(h, id, s)
 	switch {
 	case ok:
@@ -317,6 +330,54 @@ func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 		return j.selfRegistration(c, id, s, r)
 	}
 	return r, false
+}
+
+// hostRecord is the host-record rule, on the fleet repository and for a
+// member's branch entering it only (j.entry: receive-pack and the master's
+// peer judge, never CheckRange). Like the record-owner rule it is baked, not
+// declared: no commit of a member's branch may change artifacts/fleet/host
+// (fact.FleetHostPath, in any case spelling: the artifact patterns match
+// case-insensitively), against ANY parent. The host record says where the
+// fleet is hosted, and only the fleet's master writes it, at create and when
+// it becomes the host; the master's own commits never enter through a member
+// branch (the hub moves main onto its own agent branch, a forge-hosted master
+// publishes it), so a member that changed it could only be redirecting every
+// member's fleet URL. The path is a DECLARED artifact, which the record-owner
+// rule exempts, so this rule, not that one, is what refuses it. It runs
+// before the record rules and rule A, for every signed commit that is not a
+// clean merge: a member's merge of main that brings in the master's change
+// (M3) adds nothing and is admitted before it.
+// MISREADING: CheckRange (`knomit verify ci`) does not run it, so the
+// master's create commits, the host record included, pass that gate.
+func (j judge) hostRecord(c *object.Commit, id string) (Refusal, bool) {
+	if j.membersDir == "" || !j.entry {
+		return Refusal{}, true
+	}
+	refuse := func(reason string) (Refusal, bool) {
+		return Refusal{Commit: c.Hash.String(), Rule: RuleHostRecord, Reason: reason}, false
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		return refuse(fmt.Sprintf("the commit's tree cannot be read: %v", err))
+	}
+	parents, err := parentTrees(c)
+	if err != nil {
+		return refuse(fmt.Sprintf("a parent's tree cannot be read: %v", err))
+	}
+	for _, pt := range parents {
+		changes, err := object.DiffTree(pt, tree)
+		if err != nil {
+			return refuse(fmt.Sprintf("diff: %v", err))
+		}
+		for _, ch := range changes {
+			for _, name := range []string{ch.From.Name, ch.To.Name} {
+				if strings.EqualFold(name, fact.FleetHostPath) {
+					return refuse(fmt.Sprintf("agent %q changes %s: only the fleet's master writes where the fleet is hosted", id, name))
+				}
+			}
+		}
+	}
+	return Refusal{}, true
 }
 
 // judgeRecord is the record rules: exactly one record at id, whose current key

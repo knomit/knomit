@@ -39,6 +39,12 @@ import "strings"
 // routes, never through the fact tools.
 const ArtifactsRoot = "artifacts"
 
+// FleetHostPath is the fleet repository's host record: the fleet repository
+// URL(s) members use. The fleet ontology declares it; only the fleet's master
+// writes it (the judge's host-record rule refuses a member's branch that
+// changes it, in any case spelling), and readers read it at the fleet's main.
+const FleetHostPath = ArtifactsRoot + "/fleet/host"
+
 // IsArtifactPath reports whether path is a writable artifact path:
 // ArtifactsRoot/<area>/<name…>, at least one subdirectory deep, with no
 // segment that is empty, ".", or begins with "." — at ANY depth — and no ".."

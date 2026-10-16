@@ -27,6 +27,10 @@ artifacts:
   fleet/certs/*.pem: { pki: leaf, change: replace, replace_when: leaf-renewal, max_size: 16KiB }
   fleet/issued/*.pem: { pki: issuance, change: write-once, max_size: 16KiB }
   fleet/revocations/*.txt: { pki: revocation, change: write-once, max_size: 4KiB }
+  # Where the fleet is hosted: the fleet repository URL(s) members use. Only
+  # the fleet's master writes it, at create and when it becomes the host; the
+  # judge refuses a member's branch that changes it (host-record).
+  fleet/host: { max_size: 4KiB }
 topics:
   members:
     description: >-

@@ -456,6 +456,14 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	if bst, _ := bravo.mgr.FleetStatus(ctx); !bst.Master || bst.Hosting != "none" {
 		t.Fatalf("bravo after the detach: %+v", bst)
 	}
+	// The new host records where the fleet is hosted on its main; the old
+	// hub's main still says the old host.
+	if got, want := readAt(t, bravo.fleet(t), "main", fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("bravo's host record after the detach: %q, want it to end %q", got, want)
+	}
+	if got, want := readAt(t, alpha.fleet(t), "main", fact.FleetHostPath), "url: "+alpha.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("alpha's host record (written at create): %q, want it to end %q", got, want)
+	}
 
 	alpha.asClient(t)
 	body := `{"url":"` + bravo.fleetURL() + `"}`
@@ -496,5 +504,13 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	hubPublishes(t, bravo, recordPath("alpha"), "https://alpha.moved.example")
 	if s := memberStates(t, bravo); s["alpha"] != fact.MemberActive || s["charlie"] != fact.MemberActive {
 		t.Fatalf("the new hub's main: %v", s)
+	}
+	// Charlie's and alpha's PUT origin wrote no host record: their pushes
+	// were admitted, and the hub refuses a member branch that changes it.
+	// Both copies follow the new host's record through main.
+	for _, n := range []*fleetNode{alpha, charlie} {
+		if got, want := readAt(t, n.fleet(t), "main", fact.FleetHostPath), "url: "+bravo.fleetURL()+"\n"; !strings.HasSuffix(got, want) {
+			t.Fatalf("%s's main after its round: host record %q, want it to end %q", n.id, got, want)
+		}
 	}
 }

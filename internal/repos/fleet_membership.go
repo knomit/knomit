@@ -951,15 +951,31 @@ func (m *Manager) StandDown(ctx context.Context) error {
 // stand-down (DELETE /fleet/root, which passes while the copy has an origin)
 // cannot remove the key between the master check and the detach and leave a
 // hub with no master.
+//
+// On the fleet repository a detach that succeeded makes this master the host,
+// so it records that on main: the host record (fleet_host.go) with the hub's
+// URLs, committed on the agent branch and published (main fast-forwards here:
+// there is no origin any more; a fast-forward that fails now is the local
+// reconcile's to retry). The detach is not undone if the write fails; the
+// error says the record is missing.
 func (m *Manager) DetachRepoOrigin(ctx context.Context, ri *RepoInstance) error {
-	if ri != nil && ri.IsFleet() {
+	fleet := ri != nil && ri.IsFleet()
+	if fleet {
 		defer m.lockFleetOp()()
 		if err := m.guardFleetDetach(ri); err != nil {
 			return err
 		}
 	}
-	_, err := m.Send(ctx, ri, DetachOrigin())
-	return err
+	if _, err := m.Send(ctx, ri, DetachOrigin()); err != nil || !fleet {
+		return err
+	}
+	if _, err := m.writeFleetHost(ctx, ri, m.hubFleetURLs(ri)); err != nil {
+		return fmt.Errorf("this instance hosts the fleet now, but recording that on main failed: %w", err)
+	}
+	if err := m.publishFleetMainNow(ctx, ri); err != nil {
+		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: main did not follow the host record yet; the local reconcile retries")
+	}
+	return nil
 }
 
 // guardFleetDetach is the fleet repository's detach check (R3.3): a member's

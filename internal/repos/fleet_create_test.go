@@ -228,6 +228,9 @@ func TestCreateFleet_HostedHere(t *testing.T) {
 	uid, err := recordedFleetRepo(m.ControlDB())
 	require.NoError(t, err)
 	require.Equal(t, ri.UID(), uid, "recorded as this instance's fleet repository")
+	hosted, err := m.fleetHostAtMain(ri)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, hosted, "main records where the fleet is hosted: here")
 }
 
 // The created fleet mounts again after a restart: CreateFleet records it in
@@ -275,7 +278,7 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	agent := "refs/heads/agent/test-fleet"
 	require.Equal(t, gitRev(t, bare, agent), gitRev(t, bare, "refs/heads/main"), "the forge's main is the agent tip")
 	hs := historyOf(t, bare, "refs/heads/main")
-	require.Len(t, hs, 5, "the forge's README commit, then the create's four: %+v", hs)
+	require.Len(t, hs, 6, "the forge's README commit, then the create's five: %+v", hs)
 	require.Equal(t, []string{"README.md"}, hs[0].paths)
 	require.Equal(t, []string{OntologyPath}, hs[1].paths, "the ontology commit")
 	require.ElementsMatch(t, []string{"artifacts/fleet/crl.pem", "artifacts/fleet/root.crt"}, hs[2].paths,
@@ -283,7 +286,11 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	serial := issuedSerials(t, m.deps.Cfg.Home)[0]
 	require.ElementsMatch(t, []string{"artifacts/fleet/certs/test-fleet.pem", "artifacts/fleet/issued/" + serial + ".pem"}, hs[3].paths,
 		"then the creator's leaf and its one issuance record")
-	require.Equal(t, []string{memberRecordPath("kb", "test-fleet")}, hs[4].paths, "then the record, last")
+	require.Equal(t, []string{memberRecordPath("kb", "test-fleet")}, hs[4].paths, "then the record")
+	require.Equal(t, []string{fact.FleetHostPath}, hs[5].paths, "then where the fleet is hosted, last")
+	hosted, err := m.fleetHostAtMain(m.fleetRepo())
+	require.NoError(t, err)
+	require.Equal(t, []string{fileuri.New(bare)}, hosted, "the forge hosts it")
 
 	v, err := store.CheckRange(store.RangeInput{
 		KBDir: bare, Main: hs[1].hash, Candidate: "refs/heads/main",
@@ -291,7 +298,7 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, store.VerifyEnforce, v.Mode, "the fleet ontology declares enforce")
-	require.Equal(t, 3, v.Checked, "root, leaf and record commits")
+	require.Equal(t, 4, v.Checked, "root, leaf, record and host commits")
 	require.Empty(t, v.Refused)
 }
 

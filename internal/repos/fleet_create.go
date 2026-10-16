@@ -46,7 +46,8 @@ import (
 //     (recordFleetRepo, so it mounts again after a restart);
 //  3. on the agent branch, as separate commits: ROOT FIRST root.crt and
 //     crl.pem (kb/conventions/fleet/setup/root-first); this instance's leaf
-//     and its one issued/<serial>.pem; its member record, state active;
+//     and its one issued/<serial>.pem; its member record, state active; the
+//     host record (fleet_host.go: the hub's URLs, or the forge's);
 //  4. install the bundle (leaf, root, CRL) as this instance's TLS identity;
 //  5. move the staging directory to <home>/fleet;
 //  6. set the fleet state and delete the marker, in one transaction
@@ -413,6 +414,13 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 		return nil, err
 	}
 	if err := m.writeOwnRecord(ctx, ri, fact.MemberActive); err != nil {
+		return nil, err
+	}
+	hosted := m.hubFleetURLs(ri)
+	if cs.Origin != nil {
+		hosted = []string{cs.Origin.URL}
+	}
+	if _, err := m.writeFleetHost(ctx, ri, hosted); err != nil {
 		return nil, err
 	}
 	if err := fleetCreateStep("committed"); err != nil {

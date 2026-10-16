@@ -208,6 +208,25 @@ func (s *Service) FleetAt(branch string) (Fleet, error) {
 	return loadFleetAt("mounted", c, s.rh.factRoot)
 }
 
+// FileAt reads the regular file p (a repo-root path) at branch's tip in THIS
+// store: ok is false when there is none (a symlink counts as none). A blob
+// larger than limit is an error and is not read.
+func (s *Service) FileAt(branch, p string, limit int64) ([]byte, bool, error) {
+	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return nil, false, fmt.Errorf("%s: %w", branch, err)
+	}
+	c, err := object.GetCommit(s.rh.gits, ref.Hash())
+	if err != nil {
+		return nil, false, err
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		return nil, false, err
+	}
+	return treeBytesCapped(tree, p, limit)
+}
+
 // Fleet is the judge's input from a fleet repository at ONE revision.
 type Fleet struct {
 	Members []FleetMember
