@@ -134,6 +134,10 @@ var fleetKindOrder = map[string]int{
 // they have, sub-second included), then, at the same instant, by a stable
 // key: the kind (fleetKindOrder), the agent, the serial, the branch, the tip,
 // the detail. Never by the order the sources were read in (PR #527 N4).
+// No precision is invented: a commit's whole second is compared as it is, so
+// within one second two sources of different precision can read in the wrong
+// order (a commit at :00.9 is :00.0, below a CRL entry at :00.3); openapi
+// documents that granularity (#527 F4).
 func sortFleetEvents(events []FleetEvent) {
 	sort.Slice(events, func(i, j int) bool {
 		a, b := events[i], events[j]

@@ -2659,7 +2659,12 @@ paths:
         time when they have it); events at the same instant are ordered by a
         stable key, the kind (left, revoked, refused, host-changed, admitted,
         joined, enrolled, created), then agent, serial, branch, tip and
-        detail, never by the order the sources were read. Read-only, open to any principal the edge admits; polled like
+        detail, never by the order the sources were read. Nothing adds
+        precision a source lacks, so within one second the order across
+        sources is not the order things happened: a commit's time is
+        truncated to the second, and a joined that landed at :00.9 is
+        stored as :00.0, below a revoked at :00.3 (seconds apart, the order
+        is exact). Read-only, open to any principal the edge admits; polled like
         /fleet/members, not a stream. The walk of main reads at most 2000
         first-parent commits and stops once it has `limit` entries, so an
         event older than that is not shown.
