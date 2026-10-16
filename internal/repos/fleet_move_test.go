@@ -70,10 +70,11 @@ func hubOf(t *testing.T, f *forgeFleet) *RepoInstance {
 // record on main is the forge URL, and main is published there. The master
 // is then the fetching master (its copy has an origin), and new bundles
 // carry the forge URL.
-// SABOTAGE: drop the PublishTo seed -> the origin round's first fetch finds
-// no main and nothing publishes the host record before it -> the forge's
-// main is not this copy's main -> red; write the hub URLs instead of the
-// forge's in moveFleetToForge -> red.
+// SABOTAGE: attach as a member does in followForge (skip moveFleetToForge)
+// -> no host record names the forge -> red; write the hub URLs instead of the
+// forge's in moveFleetToForge -> red. (The seed's own test is
+// TestFleetMove_BackOntoAForgeWhoseMainIsBehind: onto an EMPTY forge the
+// first origin round publishes main anyway.)
 func TestFleetMove_TheHubMovesOntoAnEmptyForge(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
@@ -106,6 +107,34 @@ func TestFleetMove_TheHubMovesOntoAnEmptyForge(t *testing.T) {
 	require.Equal(t, url, enr.FleetURL, "a new bundle carries the forge URL")
 	require.True(t, enr.Published)
 	require.NotEmpty(t, bareFile(t, bare, "main", "artifacts/fleet/certs/gamma.pem"), "the enroll's leaf is published on the forge")
+}
+
+// The hub moves back onto a forge this fleet lived on before, whose main is
+// now BEHIND the hub's (the hub enrolled a member meanwhile). The forge's
+// main is trusted as fetched, rewinds included (trust-the-forge-main), so
+// the move seeds the forge with the hub's main BEFORE attaching it: the
+// first origin round then fetches a main equal to the hub's and rewinds
+// nothing. Every commit main had before the move is still on main after it.
+// SABOTAGE: drop the PublishTo seed in moveFleetToForge -> the first round
+// adopts the forge's older main and replays onto it -> the hub's main before
+// the move is no longer an ancestor of main -> red.
+func TestFleetMove_BackOntoAForgeWhoseMainIsBehind(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	ri := hubOf(t, f)
+	_, err := f.master.EnrollFleetMember(ctx, "gamma", keyLine("gamma"), "")
+	require.NoError(t, err)
+	mainBefore := localTip(t, ri, "main")
+	forgeBefore := bareRev(t, f.bare, "main")
+	require.NotEqual(t, forgeBefore, mainBefore, "fixture: the forge's main is behind the hub's")
+
+	_, err = f.master.FollowFleetHost(ctx, OriginSpec{URL: f.url})
+	require.NoError(t, err)
+	mainAfter := localTip(t, ri, "main")
+	require.Equal(t, mainAfter, bareRev(t, f.bare, "main"), "the forge's main is this copy's main")
+	out, gerr := exec.Command("git", "-C", f.bare, "merge-base", "--is-ancestor", mainBefore, mainAfter).CombinedOutput()
+	require.NoError(t, gerr, "the hub's main before the move is still on main after it (nothing rewound): %s", out)
+	require.Contains(t, bareFile(t, f.bare, "main", "artifacts/fleet/certs/gamma.pem"), "CERTIFICATE", "the hub-era enroll is on the forge's main")
 }
 
 // A move whose host-record write fails leaves the copy exactly as it was:
