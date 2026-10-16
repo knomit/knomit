@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
@@ -295,7 +294,7 @@ func TestFleetMembership_TheHubCannotStandDown(t *testing.T) {
 	require.Equal(t, "none", st.Hosting)
 }
 
-// DELETE /repos/{fleet}/origin's guard (R3.3): a member keeps its origin;
+// POST /fleet/host's guard (R3.3): a member keeps its origin;
 // the master may detach once [tls].addr and external_addresses are set.
 // SABOTAGE: guardFleetDetach returns nil for a member -> red.
 func TestFleetMembership_DetachGuard(t *testing.T) {
@@ -307,7 +306,7 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
 	require.NoError(t, err)
 
-	err = alpha.DetachRepoOrigin(ctx, alpha.fleetRepo())
+	err = hostHere(ctx, alpha)
 	status, code := fleetCode(t, err)
 	require.Equal(t, http.StatusConflict, status)
 	require.Equal(t, "member_keeps_origin", code)
@@ -315,13 +314,13 @@ func TestFleetMembership_DetachGuard(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, origin, "the refused detach left the member's origin")
 
-	_, code = fleetCode(t, f.master.DetachRepoOrigin(ctx, f.mri))
+	_, code = fleetCode(t, hostHere(ctx, f.master))
 	require.Equal(t, "listener_required", code)
 	f.master.deps.Cfg.TLS.Addr = "127.0.0.1:0"
-	_, code = fleetCode(t, f.master.DetachRepoOrigin(ctx, f.mri))
+	_, code = fleetCode(t, hostHere(ctx, f.master))
 	require.Equal(t, "addresses_required", code)
 	f.master.deps.Cfg.ExternalAddresses = []string{"https://master.example"}
-	require.NoError(t, f.master.DetachRepoOrigin(ctx, f.mri), "the master hosts the fleet here")
+	require.NoError(t, hostHere(ctx, f.master), "the master hosts the fleet here")
 	origin, err = f.master.hasOrigin(f.mri)
 	require.NoError(t, err)
 	require.False(t, origin, "the master's copy is the hub now")
@@ -346,7 +345,7 @@ func localRound(t *testing.T, ri *RepoInstance) {
 // address's credentials (SF4).
 // SABOTAGE: make fleetHostRound return at once -> main never holds the
 // record -> red; pass nil for it in the Sync stage -> the rebuild's round
-// does not write it -> red; DetachRepoOrigin returns the write's error again
+// does not write it -> red; HostFleetHere returns the write's error again
 // -> red.
 func TestFleetHost_TheHubReassertsItsRecordEachRound(t *testing.T) {
 	ctx := context.Background()
@@ -361,7 +360,7 @@ func TestFleetHost_TheHubReassertsItsRecordEachRound(t *testing.T) {
 		}
 		return nil
 	}})
-	require.NoError(t, f.master.DetachRepoOrigin(ctx, f.mri), "the detach stood: it is answered as done")
+	require.NoError(t, hostHere(ctx, f.master), "the detach stood: it is answered as done")
 	require.Zero(t, fails, "fixture: the record write failed once")
 	ri := f.master.Get("fleet")
 	origin, err := f.master.hasOrigin(ri)
@@ -475,18 +474,17 @@ func TestSortFleetEvents_SameSecondIsNotSourceOrder(t *testing.T) {
 // Review N5: the fleet repository's detach (check and detach) takes the
 // fleet lock, so a stand-down cannot run between the master check and the
 // detach.
-// SABOTAGE: DetachRepoOrigin without lockFleetOp -> it returns at once -> red.
+// SABOTAGE: HostFleetHere without lockFleetOp -> it returns at once -> red.
 func TestFleetMembership_DetachTakesTheFleetLock(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
 	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
 	require.NoError(t, err)
-	ri := m.fleetRepo()
 	waiting := make(chan struct{}, 1)
 	setFleetHooks(t, fleetCreateHooks{contended: func() { waiting <- struct{}{} }})
 	m.fleetOpMu.Lock()
 	done := make(chan struct{})
-	go func() { _ = m.DetachRepoOrigin(ctx, ri); close(done) }()
+	go func() { _ = hostHere(ctx, m); close(done) }()
 	select {
 	case <-waiting:
 	case <-done:
@@ -519,7 +517,7 @@ func TestFleetMembership_DetachChecksAndDetachesAsOneStep(t *testing.T) {
 	}})
 	f.master.fleetOpMu.Lock()
 	errc := make(chan error, 1)
-	go func() { errc <- f.master.DetachRepoOrigin(ctx, f.mri) }()
+	go func() { errc <- hostHere(ctx, f.master) }()
 	select {
 	case <-standDown:
 	case err := <-errc:
@@ -534,62 +532,6 @@ func TestFleetMembership_DetachChecksAndDetachesAsOneStep(t *testing.T) {
 	origin, err := f.master.hasOrigin(f.mri)
 	require.NoError(t, err)
 	require.True(t, origin, "the refused detach left the origin")
-}
-
-// The operator's merge of a pushed branch on the fleet repository (R3.3,
-// PR #524 residue): only the master merges, and it re-judges the branch
-// (tip minus main) first. A local agent/x whose one commit edits another
-// member's folder is refused not-owner; one that edits only its author's own
-// folder is admitted.
-// SABOTAGE: drop the JudgePeerBranch call -> the not-owner branch is
-// admitted -> red; drop the isFleetMaster check -> the member row passes the
-// master check and is judged instead -> red.
-func TestFleetMembership_ManualMergeIsMasterOnlyAndReJudged(t *testing.T) {
-	ctx := context.Background()
-	// The persisted agent id, as production sets it: every commit here is
-	// authored by the master, whatever branch it lands on.
-	m := newFleetHost(t, t.TempDir(), func(d *Deps) { d.AgentID = "test-fleet" })
-	_, err := m.CreateFleet(ctx, FleetCreateSpec{})
-	require.NoError(t, err)
-	ri := m.fleetRepo()
-	own := m.AgentID()
-	plant := func(branch, path string) plumbing.Hash {
-		var tip string
-		require.NoError(t, ri.WithRead(func(svc *store.Service) {
-			require.NoError(t, svc.Branches().CreateBranch(ctx, branch, svc.UpstreamBranch()))
-			_, err := svc.Facts().WriteFact(ctx, branch, path, "---\nkind: pragmatic\ntype: policy\n---\n# x\n\nx\n", "plant", "")
-			require.NoError(t, err)
-			tip, err = svc.Branches().HeadCommit(ctx, branch)
-			require.NoError(t, err)
-		}))
-		return plumbing.NewHash(tip)
-	}
-	bad := plant("agent/x", "kb/members/somebody/evil.md")
-	good := plant("agent/y", "kb/members/"+own+"/note.md")
-
-	var badErr, goodErr error
-	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		badErr = ri.FleetMergeRefusal(ctx, svc, "agent/x", bad)
-		goodErr = ri.FleetMergeRefusal(ctx, svc, "agent/y", good)
-	}))
-	status, code := fleetCode(t, badErr)
-	require.Equal(t, http.StatusConflict, status)
-	require.Equal(t, "judge_refused", code)
-	require.ErrorContains(t, badErr, "not-owner")
-	require.NoError(t, goodErr, "control: an own-folder edit is admitted")
-
-	// A member (no root here) is refused before any judging.
-	f := newForgeFleet(t, nil)
-	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
-	require.NoError(t, err)
-	alpha := f.namedMember(t, "alpha")
-	_, err = alpha.JoinFleet(ctx, FleetJoinSpec{Bundle: []byte(enr.Bundle)})
-	require.NoError(t, err)
-	ari := alpha.fleetRepo()
-	require.NoError(t, ari.WithRead(func(svc *store.Service) {
-		_, code := fleetCode(t, ari.FleetMergeRefusal(ctx, svc, "agent/x", bad))
-		require.Equal(t, "not_master", code)
-	}))
 }
 
 // #518 R4: the generic create's "creating this repository again will adopt
@@ -918,4 +860,10 @@ func TestFleetActivity_HostChangedDetailCarriesNoUserinfo(t *testing.T) {
 	require.Len(t, evs, 1)
 	require.Equal(t, FleetEventHostChanged, evs[0].Kind)
 	require.Equal(t, "hosted at https://hub.example/git/fleet, https://hub2.example/git/fleet", evs[0].Detail)
+}
+
+// hostHere is POST /fleet/host's call, its error only.
+func hostHere(ctx context.Context, m *Manager) error {
+	_, err := m.HostFleetHere(ctx)
+	return err
 }

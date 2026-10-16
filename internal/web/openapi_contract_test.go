@@ -180,6 +180,8 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 		"/fleet/revoke":       {"not_enrolled", "already_revoked", "own_id", "not_master"},
 		"/fleet/decommission": {"not_master"},
 		"/fleet/root":         {"no_root", "root_present", "root_incomplete", "unknown_file", "root_invalid", "hub"},
+		"/fleet/host":         {"member_keeps_origin", "hub", "not_registered", "listener_required", "addresses_required"},
+		"/fleet/follow":       {"url_required", "origin_invalid", "not_this_fleet", "auth_invalid", "unreachable", "not_registered"},
 	}
 	for path, want := range codes {
 		op, ok := paths[path].(map[string]any)

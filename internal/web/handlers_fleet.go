@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"knomit/internal/auth"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
@@ -211,38 +210,39 @@ func handleFleetMembers(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// fleetRepoLocalOnly gates every MUTATION of the fleet repository through
-// the generic /repos/{repo} routes to the local authenticated listener, as
-// RequireLocalVia does for the /fleet routes. The fleet repository changes
-// git config, control.db or the fleet's own state through these doors
-// (rename, archive, PUT and DELETE origin, the upstream, origin sessions,
-// the pushed-branch merge, index jobs, …), and a browser page on loopback
-// TCP holds the anonymous principal's write and admin: without this, any page
-// reaching the TCP port could rename the fleet repository (every bundle
-// already issued would name a dead URL) or detach its origin (Host the fleet
-// here). A peer over mTLS is refused the same way.
+// fleetRepoRefused refuses every MUTATION of the fleet repository through
+// the generic /repos/{repo} routes, for every caller, the desktop app on the
+// local socket included (user ruling 2026-10-16): the fleet repository is
+// created, changed and removed only through the /fleet API, whose actions the
+// Fleet page offers. Rename, archive, the repo PATCH, PUT and DELETE origin,
+// the upstream, origin sessions, the pushed-branch merge, branch and fact
+// writes, experiments, index and synthesis jobs: every one answers 409
+// fleet_repository, and its handler does not run. That one check replaces
+// the per-handler fleet arms those routes used to carry (R3.3's member-only
+// refusals, the master's DELETE-origin path, the manual merge's re-judge).
 //
-// It is ONE gate over the whole subtree, by method, rather than one check per
-// handler, so a mutating route added later is covered without anyone
-// remembering to. Reads (GET, HEAD, OPTIONS) pass, and so does the MCP mount:
-// MCP is a POST for reads too, and every MCP write on the fleet repository is
-// already refused by RepoInstance.WritableBranch. Any other repository, and a
-// name that resolves to none (the handler's own 404 then answers), pass
-// unchanged.
-func fleetRepoLocalOnly(m *repos.Manager) func(http.Handler) http.Handler {
+// It is ONE gate over the whole subtree, by method, so a mutating route
+// added later is covered without anyone remembering to. Reads (GET, HEAD,
+// OPTIONS) pass, and so does the MCP mount: MCP is a POST for reads too, and
+// every MCP write on the fleet repository is refused by
+// RepoInstance.WritableBranch. Any other repository, and a name that
+// resolves to none (the handler's own 404 then answers), pass unchanged.
+func fleetRepoRefused(m *repos.Manager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if fleetRepoMutation(m, r) && !isLocalVia(r) {
-				p, _ := auth.FromContext(r.Context())
-				hal.WriteProblemWithExtra(w, http.StatusForbidden, "Permission denied",
-					"the fleet repository changes only from the desktop app on this machine (the local authenticated listener: the unix socket, or the named pipe on Windows); principal "+p.String()+" did not arrive over it",
-					r.URL.Path, map[string]any{"code": "fleet_local_only"})
+			if fleetRepoMutation(m, r) {
+				hal.WriteProblemWithExtra(w, http.StatusConflict, "Fleet repository", FleetRepositoryRefusal,
+					r.URL.Path, map[string]any{"code": "fleet_repository"})
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
 }
+
+// FleetRepositoryRefusal is fleetRepoRefused's text: what to do instead, in
+// the Fleet page's words.
+const FleetRepositoryRefusal = "this is the fleet repository: it changes only through the Fleet page (Fleet → Settings: Host the fleet here, Point at the new host, Leave, Decommission), never through a repository's own actions"
 
 // fleetRepoMutation: r is a mutating request on this instance's fleet
 // repository (not its MCP mount).

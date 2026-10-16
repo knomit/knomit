@@ -45,51 +45,53 @@ func fleetRepoMutatingRoutes(t *testing.T, s *Server, repo, branch string) [][2]
 	return out
 }
 
-// Review B3 (PR #528): every mutation of the FLEET repository through a
-// generic repo route is served to the local listener only. Over loopback TCP
-// (a browser page: the anonymous principal holds write and admin) and over
-// mTLS (an enrolled peer granted write and operator) each mutating route of
-// /repos/{repo} — rename, archive, PUT and DELETE origin, the upstream,
-// origin sessions, the pushed-branch merge, index jobs and the rest of the
-// route table — answers 403 fleet_local_only, and its handler does not run:
-// the fleet repository keeps its name, GET /fleet still names it, the hub
-// still has no origin and its agent branch did not move. Over the socket the
-// same routes reach their handlers (no gate answer), and a rename there
-// works as it does today (renamed, then renamed back). A non-fleet repository
-// is unchanged over TCP (control: renamed over loopback TCP).
-// SABOTAGE: drop r.Use(fleetRepoLocalOnly) from the /repos/{repo} route ->
-// rename over TCP answers 200 -> red; make fleetRepoMutation return false for
-// DELETE -> archive and DELETE origin rows are not 403 -> red.
-func TestFleetRepo_EveryMutationIsLocalOnly(t *testing.T) {
+// User ruling 2026-10-16 (PR #528 B3): no generic repo route creates,
+// changes or deletes the FLEET repository, for any caller: over the local
+// socket (the desktop app, holding read, write, operator and admin), over
+// loopback TCP (a browser page) and over mTLS (an enrolled peer granted write
+// and operator), each mutating route of /repos/{repo} in the real route table
+// (rename, archive, the repo PATCH, PUT and DELETE origin, the upstream,
+// origin sessions, the pushed-branch merge, fact and experiment writes, index
+// and synthesis jobs, …) answers 409 fleet_repository, one subtest per
+// route, and its handler does not run: on this MEMBER's copy the fleet
+// repository keeps its name, its origin is still the fleet's URL, and its
+// agent branch did not move. Reads pass (GET of the repo and its origin). A
+// non-fleet repository is unchanged (control: renamed over the socket).
+// SABOTAGE: drop r.Use(fleetRepoRefused) from the /repos/{repo} route ->
+// rename answers 200 -> red; make fleetRepoMutation return false for DELETE
+// -> the archive and DELETE origin rows are not 409 -> red.
+func TestFleetRepo_EveryGenericMutationIsRefused(t *testing.T) {
 	ctx := context.Background()
-	s, _ := fleetCreateServer(t, "127.0.0.1:0")
-	require.Equal(t, http.StatusCreated, postFleetCreate(s, `{}`, true).Code)
-	_, err := s.Manager.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
+	dir := t.TempDir()
+	fleetURL, root := seedFleetBare(t, dir)
+	m, key := restFleetManager(t, dir)
+	join := joinOverSocket(t, &Server{Manager: m, Grants: localWriteGrants()}, key, fleetURL, root)
+	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
+	_, err := m.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
 	require.NoError(t, err)
-	st, err := s.Manager.FleetStatus(ctx)
+	st, err := m.FleetStatus(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "fleet", st.FleetRepo)
-	ri := s.Manager.Get(st.FleetRepo)
+	ri := m.Get(st.FleetRepo)
+	require.NotNil(t, ri)
 	f := pkitest.New(t)
 	peer := f.Enroll(t, "peer@agents.knomit.io")
-	g := s.Grants.(auth.StaticGrants)
+	g := localOperatorGrants()
 	g[auth.InstancePrincipal(peer.Fingerprint()).String()] = auth.Set{auth.Read: {}, auth.Write: {}, auth.Operator: {}}
-	local := auth.Principal{Kind: auth.KindBridge, ID: "uid:501", Via: auth.LocalVia}
-	g[local.String()] = auth.Set{auth.Read: {}, auth.Write: {}, auth.Operator: {}, auth.Admin: {}}
-	s.AgentBranch, s.OntologyRoot = "agent/rest-fleet", "kb"
+	s := &Server{Manager: m, Grants: g, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}
 
 	routes := fleetRepoMutatingRoutes(t, s, st.FleetRepo, ri.AgentBranch())
-	t.Logf("%d mutating routes under /repos/{repo}", len(routes))
 	have := map[string]bool{}
 	for _, rt := range routes {
 		have[rt[0]+" "+rt[1]] = true
 	}
 	base := "/repos/" + st.FleetRepo
+	agent := "/branches/" + urlBranch(ri.AgentBranch())
 	for _, want := range []string{
-		"POST " + base + "/rename", "DELETE " + base + "/", "PUT " + base + "/origin", "DELETE " + base + "/origin",
-		"PATCH " + base + "/origin/upstream", "PATCH " + base + "/", "POST " + base + "/origin-sessions/",
-		"POST " + base + "/origin-sessions/s1/commit", "POST " + base + "/branches/" + urlBranch(ri.AgentBranch()) + "/merge",
-		"POST " + base + "/index:cancel",
+		"POST " + base + "/rename", "DELETE " + base + "/", "PATCH " + base + "/", "PUT " + base + "/origin",
+		"DELETE " + base + "/origin", "PATCH " + base + "/origin/upstream", "POST " + base + "/origin-sessions/",
+		"POST " + base + "/origin-sessions/s1/commit", "POST " + base + agent + "/merge", "POST " + base + agent + "/facts",
+		"PUT " + base + agent + "/facts/kb/x.md", "DELETE " + base + agent + "/facts/kb/x.md", "POST " + base + "/experiments",
+		"POST " + base + "/index:cancel", "POST " + base + agent + "/index-rebuilds", "POST " + base + agent + "/synthesis-runs",
 	} {
 		require.True(t, have[want], "the walk found %s (it found %v)", want, routes)
 	}
@@ -101,6 +103,16 @@ func TestFleetRepo_EveryMutationIsLocalOnly(t *testing.T) {
 			require.NoError(t, err)
 		}))
 		return tip
+	}
+	originURL := func() string {
+		var u string
+		require.NoError(t, ri.WithRead(func(svc *store.Service) {
+			o, err := svc.Remote().GetRemote("origin")
+			require.NoError(t, err)
+			require.NotNil(t, o, "the member's copy keeps its origin")
+			u = o.URL
+		}))
+		return u
 	}
 	before := agentTip()
 	send := func(method, path, body, via string) *httptest.ResponseRecorder {
@@ -126,42 +138,34 @@ func TestFleetRepo_EveryMutationIsLocalOnly(t *testing.T) {
 			return `{"name":"fleet2"}`
 		case method == http.MethodPut && strings.HasSuffix(path, "/origin"):
 			return `{"url":"https://elsewhere.example/fleet.git"}`
+		case strings.HasSuffix(path, "/facts"):
+			return `{"title":"T","body":"b","domain":["x"]}`
 		}
 		return `{}`
 	}
 	for _, rt := range routes {
-		for _, via := range []string{"tcp", "mtls"} {
-			rec := send(rt[0], rt[1], body(rt[0], rt[1]), via)
-			require.Equal(t, http.StatusForbidden, rec.Code, "%s %s over %s: %s", rt[0], rt[1], via, rec.Body.String())
-			require.Contains(t, rec.Body.String(), `"code":"fleet_local_only"`, "%s %s over %s", rt[0], rt[1], via)
-		}
+		t.Run(rt[0]+" "+rt[1], func(t *testing.T) {
+			for _, via := range []string{"socket", "tcp", "mtls"} {
+				rec := send(rt[0], rt[1], body(rt[0], rt[1]), via)
+				require.Equal(t, http.StatusConflict, rec.Code, "over %s: %s", via, rec.Body.String())
+				require.Contains(t, rec.Body.String(), `"code":"fleet_repository"`, "over %s", via)
+				require.Contains(t, rec.Body.String(), "Fleet page", "over %s: the text names the Fleet page", via)
+				require.NotContains(t, rec.Body.String(), "/api/v1/", "over %s: the text names no REST route", via)
+			}
+			require.Equal(t, []string{"fleet", "kb"}, m.Names(), "the fleet repository kept its name")
+			require.Equal(t, fleetURL, originURL(), "the origin is unchanged")
+			require.Equal(t, before, agentTip(), "nothing was committed on the fleet repository")
+		})
 	}
-	require.Equal(t, []string{"fleet", "kb"}, s.Manager.Names(), "the fleet repository kept its name")
-	st, err = s.Manager.FleetStatus(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "fleet", st.FleetRepo)
-	require.Equal(t, "none", st.Hosting, "the hub still has no origin")
-	require.Equal(t, before, agentTip(), "nothing was committed on the fleet repository")
 
-	// Over the socket every route reaches its handler. Renames go last-but-
-	// one, so the walk runs against the name it was built for.
-	for _, rt := range routes {
-		if strings.HasSuffix(rt[1], "/rename") || rt[0] == http.MethodDelete && strings.HasSuffix(rt[1], base+"/") {
-			continue
-		}
-		rec := send(rt[0], rt[1], body(rt[0], rt[1]), "local")
-		require.NotContains(t, rec.Body.String(), "fleet_local_only", "%s %s over the socket reaches its handler", rt[0], rt[1])
+	// Reads pass.
+	for _, p := range []string{base, base + "/origin", base + agent} {
+		rec := send(http.MethodGet, p, ``, "tcp")
+		require.Equal(t, http.StatusOK, rec.Code, "GET %s: %s", p, rec.Body.String())
 	}
-	rec := send(http.MethodPost, base+"/rename", `{"name":"fleet2"}`, "local")
-	require.Equal(t, http.StatusOK, rec.Code, "over the socket the rename works as it does today: %s", rec.Body.String())
-	rec = send(http.MethodPost, "/repos/fleet2/rename", `{"name":"fleet"}`, "local")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	rec = send(http.MethodDelete, base+"/", ``, "local")
-	require.NotContains(t, rec.Body.String(), "fleet_local_only", "archive over the socket reaches its own guard: %s", rec.Body.String())
-
 	// Control: another repository is not gated.
-	rec = send(http.MethodPost, "/repos/kb/rename", `{"name":"kb2"}`, "tcp")
-	require.Equal(t, http.StatusOK, rec.Code, "control: a non-fleet repository renames over TCP: %s", rec.Body.String())
+	rec := send(http.MethodPost, "/repos/kb/rename", `{"name":"kb2"}`, "socket")
+	require.Equal(t, http.StatusOK, rec.Code, "control: a non-fleet repository renames: %s", rec.Body.String())
 }
 
 // The gate's MCP exemption matches the mount's whole shape: a fact path that

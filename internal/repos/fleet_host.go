@@ -17,7 +17,7 @@ import (
 // The host record (artifacts/fleet/host, fact.FleetHostPath) is where the
 // fleet is hosted, on the fleet repository's main: the fleet repository
 // URL(s) members use. The fleet's master writes it when it founds the fleet
-// (CreateFleet) and when it becomes the host (DetachRepoOrigin on the master),
+// (CreateFleet) and when it becomes the host (HostFleetHere, POST /fleet/host),
 // and the hub re-asserts it in every round of its local reconcile
 // (fleetHostRound), so a failed write is repaired and a change of
 // external_addresses followed; nothing else writes it, it never carries a
@@ -81,7 +81,7 @@ func (m *Manager) writeFleetHost(ctx context.Context, ri *RepoInstance, urls []s
 // with NO origin runs it, so only the hub): re-assert the host record with
 // the hub's URLs as the current config gives them (hubFleetURLs). It writes
 // nothing when the record is current, so a round costs one read; it repairs
-// a detach whose record write failed (DetachRepoOrigin answers the detach as
+// a detach whose record write failed (HostFleetHere answers the detach as
 // done), and it follows a change of external_addresses. Only the fleet's
 // master writes it, as everywhere. A fleet operation in flight holds
 // fleetOpMu: the round skips (TryLock, never waits: a create or a detach runs

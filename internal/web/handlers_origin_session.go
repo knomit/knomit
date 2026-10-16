@@ -1091,8 +1091,7 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 // isCommitRefusal reports whether err is a refusal that changed nothing: the
 // machine's own checks, or an event guard's verdict.
 func isCommitRefusal(err error) bool {
-	var fe *repos.FleetError
-	return isLifecycleRefusal(err) || errors.As(err, &fe) ||
+	return isLifecycleRefusal(err) ||
 		errors.Is(err, repos.ErrOriginOntologyConflict) ||
 		errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal) ||
 		errors.Is(err, repos.ErrFleetOntologyReserved) ||
@@ -1103,11 +1102,7 @@ func isCommitRefusal(err error) bool {
 
 // writeCommitProblem maps a commit refused before anything changed.
 func writeCommitProblem(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, repo string, err error) {
-	var fe *repos.FleetError
 	switch {
-	case errors.As(err, &fe):
-		// The fleet repository's attach guard (#527 F1), with its code.
-		writeFleetError(w, r, err)
 	case isLifecycleRefusal(err):
 		writeLifecycleProblem(w, r, b, repo, err)
 	case errors.Is(err, repos.ErrOriginOntologyConflict):

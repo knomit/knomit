@@ -18,15 +18,18 @@ tags:
   - name: discovery
   - name: repos
     description: |
-      The FLEET repository (the one whose ontology id is `fleet`) changes
-      only from the desktop app on this machine: every mutating request
-      (any method but GET, HEAD and OPTIONS) under `/repos/{repo}` that names
-      it — rename, archive, PUT and DELETE origin, the upstream, origin
-      sessions, the pushed-branch merge, index jobs, and every other route
-      there, the MCP mount aside — is served to the local authenticated
-      listener only (the unix socket, or the named pipe on Windows). Over
-      loopback TCP or mTLS it answers 403 with `code: fleet_local_only`, and
-      the operation does not run. Any other repository is unaffected.
+      The FLEET repository (the one whose ontology id is `fleet`) is never
+      created, changed or removed through these routes, by any caller, the
+      local socket included: every mutating request (any method but GET,
+      HEAD and OPTIONS) under `/repos/{repo}` that names it — rename, archive,
+      the repo PATCH, PUT and DELETE origin, the upstream, origin sessions,
+      the pushed-branch merge, fact, branch and experiment writes, index and
+      synthesis jobs, and every other route there, the MCP mount aside —
+      answers 409 with `code: fleet_repository`, and the operation does not
+      run. It changes only through `/fleet` (POST /fleet/host,
+      POST /fleet/follow, /fleet/leave, /fleet/decommission, …). Reads stay
+      open, and so does MCP (its writes are refused on the fleet repository
+      by the write gate). Any other repository is unaffected.
   - name: ontologies
     description: |
       Repo-independent ontology helpers the create wizard calls before any
@@ -785,10 +788,8 @@ paths:
             conflicting_paths, paths_without_base, base_commit, host_commit and
             peer_commit. "Branch moved" carries expected_tip and actual_tip.
             Also "Unrelated histories", "Cannot sign", "Repository has no agent
-            branch". On the fleet repository (code set): `not_master` (only
-            the fleet's master merges) and `judge_refused` (the master
-            re-judges the branch, tip minus main, against main now, as its
-            merger does, and refuses what the judge refuses).
+            branch". On the fleet repository: `fleet_repository` (no manual
+            merge; the master's merger merges, re-judging every branch).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1898,11 +1899,8 @@ paths:
         nothing changes. Refused with 409 "Repo is indexing" while the index
         job runs; that problem links to the cancel-index action.
 
-        On the fleet repository the URL must be one a member's join can
-        clone: `https://` or `ssh://` with a host, `git@host:path`, or
-        `file://` with a path. Anything else (plain `http://`, another
-        scheme, no host) is 422 `origin_invalid` before anything dials, the
-        same check as a forge `POST /fleet/create`.
+        On the fleet repository: 409 `fleet_repository` (POST /fleet/follow
+        points it at a new host).
       requestBody:
         required: true
         content:
@@ -1914,7 +1912,6 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/OriginSetResponse" }
-        "422": { description: "origin_invalid: on the fleet repository, an origin no member's join could clone" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409":
@@ -1940,17 +1937,13 @@ paths:
       responses:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Problem" }
-        "422": { description: "The fleet's master hosting it here needs [tls].addr (listener_required) and external_addresses (addresses_required)" }
         "409":
           description: >
             Subscription requires its origin — a repo that follows its origin
             read-only has no content of its own; archive it instead. Or "Repo
             is indexing", carrying `_links.cancel-index` {href, method: POST}.
-            On the fleet repository, a member's copy keeps its origin
-            (`member_keeps_origin`): only the master hosts the fleet, and on
-            the master the detach makes its copy the hub and records it on
-            main (the host record artifacts/fleet/host, the hub's URLs; see
-            GET /fleet's host_record). A PUT of the origin never writes it.
+            On the fleet repository: `fleet_repository` (POST /fleet/host
+            hosts the fleet here).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1982,7 +1975,7 @@ paths:
               schema: { $ref: "#/components/schemas/UpstreamSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { description: "fleet_upstream_fixed: the fleet repository's consensus branch is fixed at create" }
+        "409": { description: "fleet_repository: the fleet repository's consensus branch is fixed at create" }
         "500": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin-sessions:
@@ -2656,6 +2649,79 @@ paths:
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
         "409": { description: hub }
+  /fleet/host:
+    post:
+      tags: [fleet]
+      summary: Host the fleet here
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing. Takes the fleet lock.
+
+        The Fleet page's "Host the fleet here" after a master switch: this
+        instance's copy of the fleet repository drops its origin and becomes
+        the hub, members push to it, and it records that on main (the host
+        record `artifacts/fleet/host`, the hub's URLs; see GET /fleet's
+        `host_record`). The master check and the detach are one step under
+        the lock. A record write that fails does not undo the detach (it is
+        answered as done): the hub's local reconcile re-asserts the record
+        every round. Refusals, nothing changed: `member_keeps_origin` (409:
+        only the master hosts the fleet), `hub` (409: this copy already has
+        no origin), `not_registered` (409), `listener_required` and
+        `addresses_required` (422: hosting needs [tls].addr and
+        external_addresses).
+      operationId: hostFleet
+      responses:
+        "200":
+          description: Hosted here; the new state
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FleetStatus" }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "member_keeps_origin, hub or not_registered" }
+        "422": { description: "listener_required or addresses_required" }
+  /fleet/follow:
+    post:
+      tags: [fleet]
+      summary: Point this copy at the fleet's new host
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing. Takes the fleet lock.
+
+        The Fleet page's "Point at the new host" after a master switch: this
+        instance's copy of the fleet repository follows the fleet from `url`
+        (the new master's fleet URL, its Fleet → Settings → Hosting). The
+        one way an origin is attached to the fleet repository. Refusals,
+        nothing changed: `url_required` (400); `origin_invalid` (422: a URL
+        no member's join could clone, plain `http://`, another scheme, no
+        host, or one that does not parse; the text never carries the URL's
+        userinfo); `not_this_fleet` (422: the URL is not an instance of this
+        fleet, its certificate does not chain to this fleet's root; 409 when
+        the remote's ontology is not the fleet's); `auth_invalid` (422: a
+        credential for a peer, whose certificate is its credential);
+        `unreachable` (502); `not_registered` (409).
+      operationId: followFleet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, description: "The new host's fleet URL" }
+                auth_method: { type: string, description: "Never needed for an instance of this fleet; a credential is refused (auth_invalid)" }
+                auth_token: { type: string }
+      responses:
+        "200":
+          description: This copy follows the new host; the new state
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FleetStatus" }
+        "400": { description: url_required }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "not_registered, or not_this_fleet (a different knowledge base)" }
+        "422": { description: "origin_invalid, not_this_fleet or auth_invalid" }
+        "502": { description: unreachable }
   /fleet/activity:
     get:
       tags: [fleet]

@@ -132,8 +132,6 @@ func refuseUnwritableBranch(w http.ResponseWriter, r *http.Request, ri *repos.Re
 	// for exactly that reason.
 	detail := fmt.Sprintf("facts cannot be written to branch %q of repo %q; only the repo's own agent branch accepts writes", branch, ri.Name())
 	switch {
-	case ri.IsFleet():
-		detail = fmt.Sprintf("repo %q: %v; it accepts no fact writes on any branch, including %q", ri.Name(), repos.ErrFleetReadOnly, branch)
 	case ri.Subscribed():
 		detail = fmt.Sprintf("repo %q is a subscription: it follows a remote branch read-only and accepts no fact writes on any branch, including %q", ri.Name(), branch)
 	}
