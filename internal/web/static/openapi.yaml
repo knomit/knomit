@@ -1931,7 +1931,9 @@ paths:
             is indexing", carrying `_links.cancel-index` {href, method: POST}.
             On the fleet repository, a member's copy keeps its origin
             (`member_keeps_origin`): only the master hosts the fleet, and on
-            the master the detach makes its copy the hub.
+            the master the detach makes its copy the hub and records it on
+            main (the host record artifacts/fleet/host, the hub's URLs; see
+            GET /fleet's host_record). A PUT of the origin never writes it.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2158,7 +2160,12 @@ paths:
         and its `root.crt` is the root on the fleet's main), `hosting` where
         its copy of the fleet repository syncs (`none`: no origin, this
         instance is the hub; otherwise the origin URL), `root_dir` where the
-        root key lives on a master. The fleet repository is the one mounted
+        root key lives on a master. `fleet_urls` are the fleet repository
+        URL(s) members use and `host_record` where the fleet's main says it
+        is hosted (see the schema); `host` is what this instance offers to
+        host one; `public_key` and `root_fingerprint` are this instance's key
+        and installed root; `local` says the request came in over the local
+        listener, where the fleet routes below are served. The fleet repository is the one mounted
         repository whose ontology id is `fleet` (an ontology built into
         knomit). It is read-only for MCP and the fact routes, may be a
         lens's read mount but not its write repo, and is never archived,
@@ -2209,8 +2216,11 @@ paths:
         recorded as this instance's fleet repository (it mounts again after a
         restart); on its agent branch, as separate commits,
         `artifacts/fleet/root.crt` and `crl.pem` (ROOT FIRST), this
-        instance's `certs/<agent id>.pem` and one `issued/<serial>.pem`, and
-        its member record (state `active`); the bundle is installed as this
+        instance's `certs/<agent id>.pem` and one `issued/<serial>.pem`, its
+        member record (state `active`), and the host record
+        `artifacts/fleet/host` (the hub's URLs, or the forge's; only the
+        master writes it, and a member's branch that changes it is refused
+        `host-record`); the bundle is installed as this
         instance's TLS identity; the root moves to `<home>/fleet`. A failure
         in any of these, or a process that dies during them, removes all of
         it again: on a forge the agent branch the create pushed (deleted only
@@ -2349,15 +2359,24 @@ paths:
         bundle's root (`root_differs`, 422), it is recorded (it mounts again
         after a restart), and this instance's record (state `active`) is
         written and pushed ONCE. A push the fleet refuses (`join_refused`,
-        409: on a knomit host, a leaf not on `main` yet), a host of the
-        fleet reached that refuses the bundle's certificate, or whose
-        certificate the bundle refuses (`bundle_refused`, 422: ask the
-        fleet's master for a new bundle), or any other refusal
-        (`clone_failed`, 502) undoes all of it: no repository, no recorded
-        uid, no installed material, no agent branch left on the origin,
-        state standalone. 200 with state `registered` and the installed
-        root's `root_fingerprint`; the record counts once the master admits
-        it into `main`.
+        409: on a knomit host, a leaf not on `main` yet), a failed
+        classification of the bundle's URL (the codes below), a clone that
+        fails after it (`clone_failed`, 502), or any other refusal undoes
+        all of it: no repository, no recorded uid, no installed material, no
+        agent branch left on the origin, state standalone. 200 with state
+        `registered` and the installed root's `root_fingerprint`; the record
+        counts once the master admits it into `main`.
+
+        The classification of the bundle's URL answers the SAME code on the
+        join and on `POST /fleet/join:check`, for the same cause:
+        - `bundle_refused` (422), only for a genuine refusal: the host
+          refused the bundle's certificate (typically a bundle revoked since
+          it was issued), or the host presents a certificate of this fleet
+          that the bundle's root and CRL refuse. Ask the fleet's master for a
+          new bundle.
+        - `unreachable` (502), for every other failure to reach a verdict:
+          no TCP connection, a handshake that stalls, a timeout or a reset
+          after the handshake, this instance's own trust material unusable.
       operationId: joinFleet
       requestBody:
         required: true
@@ -2372,21 +2391,15 @@ paths:
                 auth_token: { type: string }
       responses:
         "200":
-          description: Joined
+          description: Joined; root_fingerprint is the root the bundle installed
           content:
             application/hal+json:
-              schema:
-                allOf:
-                  - { $ref: "#/components/schemas/FleetStatus" }
-                  - type: object
-                    required: [root_fingerprint]
-                    properties:
-                      root_fingerprint: { type: string, description: "the fingerprint of the root the bundle installed" }
+              schema: { $ref: "#/components/schemas/FleetStatus" }
         "400": { description: bundle_required }
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present, trust_installed, join_refused or create_unfinished" }
         "422": { description: "bundle_invalid, key_mismatch, agent_mismatch, auth_invalid, bundle_refused, not_a_fleet or root_differs" }
-        "502": { description: clone_failed }
+        "502": { description: "unreachable (the classification, as join:check says) or clone_failed (the clone after it)" }
   /fleet/join:check:
     post:
       tags: [fleet]
@@ -2404,12 +2417,14 @@ paths:
         A server of that fleet is `hosting: master` (a credential for it is
         `auth_invalid`); anything else is `hosting: forge`, probed with the
         joiner's own `auth_method`/`auth_token` (`auth_required` when it
-        refuses them, with `detail`). A host that cannot be reached is
-        `unreachable` (502). A host that is reached but refuses the bundle's
-        certificate (typically a bundle revoked since it was issued), or whose
-        certificate the bundle refuses, is `bundle_refused` (422): ask the
-        fleet's master for a new bundle. The operator compares `root_fingerprint` with the one the
-        master gave by another channel BEFORE joining (#299).
+        refuses them, with `detail`). The classification's codes are the
+        join's, for the same cause (see `POST /fleet/join`): `bundle_refused`
+        (422) only when the host refused the bundle's certificate or
+        presents one of this fleet that the bundle refuses; `unreachable`
+        (502) for every other failure (no connection, a stall, a timeout or
+        reset after the handshake), and for a forge that cannot be reached.
+        The operator compares `root_fingerprint` with the one the master
+        gave by another channel BEFORE joining (#299).
       operationId: checkFleetJoin
       requestBody:
         required: true
@@ -2610,10 +2625,51 @@ paths:
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
         "409": { description: hub }
+  /fleet/activity:
+    get:
+      tags: [fleet]
+      summary: The fleet's events, newest first
+      description: |
+        What happened in the fleet, each event read from the record it leaves
+        (see FleetEvent.kind): main's first-parent history (created, joined,
+        admitted, left, host-changed), the master's issuance log (enrolled),
+        the CRL on main (revoked) and the master's judge (refused, the last
+        200). Read-only, open to any principal the edge admits; polled like
+        /fleet/members, not a stream. The walk of main reads at most 2000
+        first-parent commits and stops once it has `limit` entries, so an
+        event older than that is not shown.
+      operationId: listFleetActivity
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 200 }
+          description: The most events to return; above 200 is 200
+      responses:
+        "200":
+          description: The events
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events: { type: array, items: { $ref: "#/components/schemas/FleetEvent" } }
+        "400": { description: limit is not a positive integer }
+        "409": { description: not_registered (no fleet repository is mounted) }
   /fleet/members:
     get:
       tags: [fleet]
-      summary: Member records at the fleet repository's main
+      summary: Member records and enrolled ids at the fleet repository's main
+      description: |
+        One row per member record at the fleet's main, then one per enrolled
+        id: an agent id whose leaf (`artifacts/fleet/certs/<id>.pem`) is on
+        main with no record, state `enrolled` (`revoked` once the CRL lists
+        the leaf), `path` the leaf's. A record's `revoked` is derived from the
+        CRL at the same main, never written. `since` is when the row's
+        current version (the record, else the leaf) landed on main: the
+        committer time of the first-parent commit of main that brought it,
+        absent when that is older than the 2000 commits walked.
       operationId: listFleetMembers
       responses:
         "200":
@@ -2629,10 +2685,11 @@ paths:
                       type: object
                       properties:
                         agent: { type: string }
-                        state: { type: string, enum: [active, left, revoked] }
+                        state: { type: string, enum: [active, left, revoked, enrolled] }
                         host: { type: string }
                         branch: { type: string }
-                        path: { type: string }
+                        path: { type: string, description: "The record's path, or an enrolled id's leaf" }
+                        since: { type: string, format: date-time, description: "When the current version landed on main; absent beyond the walk" }
                         addresses: { type: array, items: { type: string }, description: "As the record has it; never validated or used" }
                         git: { type: string, description: "Path suffix a peer appends to an address (/git), absent when not served" }
                         capabilities: { type: object, additionalProperties: { type: string }, description: "os, arch, version, read_only, as the record has them" }
@@ -3924,21 +3981,35 @@ components:
   schemas:
     FleetStatus:
       type: object
-      required: [state, agent_id]
+      required: [state, agent_id, public_key, local, host, fleet_urls]
       properties:
         state: { type: string, enum: [standalone, registering, registered] }
         fleet_repo: { type: string }
-        fleet_url: { type: string }
         agent_id: { type: string, description: "This instance's persisted, opaque agent id" }
+        public_key: { type: string, description: "This instance's ssh-ed25519 public key line: what a master enrolls with the agent id" }
+        local:
+          type: boolean
+          description: |
+            The request came in over the local authenticated listener (the unix
+            socket, or the named pipe on Windows): the same test the fleet's
+            mutations make, so true means they are served to this caller and
+            false means every one of them is 403. Decided by the listener the
+            request arrived on; nothing the client sends sets it.
         record_state: { type: string, enum: [pending, active, left, revoked] }
         since: { type: string, format: date-time }
         registered_at: { type: string, format: date-time }
         last_attempt: { type: string, format: date-time }
         last_error: { type: string, description: "The latest push or fetch failure; empty after a success" }
-        external_addresses:
-          type: array
-          items: { type: string }
-          description: "knomit.toml external_addresses: the URLs PEERS use to reach this instance ([] when unset). Never derived, never probed."
+        host:
+          type: object
+          required: [listener, external_addresses]
+          description: "What this instance offers to host a fleet, so a page can say before a create or a host-here that it would be refused (listener_required, addresses_required)"
+          properties:
+            listener: { type: string, description: "[tls].addr, the mTLS listener members push to; empty when it is off" }
+            external_addresses:
+              type: array
+              items: { type: string }
+              description: "knomit.toml external_addresses: the URLs PEERS use to reach this instance ([] when unset). Never derived, never probed."
         record:
           type: object
           description: "This instance's own member record on its agent branch head (absent when there is none)"
@@ -3953,6 +4024,51 @@ components:
         master: { type: boolean, description: "This instance is the fleet's master: its <home>/fleet/root.key is here and its root.crt is the root on the fleet's main" }
         hosting: { type: string, description: "Where this copy of the fleet repository syncs: none (no origin: this instance is the hub) or the origin URL; absent with no fleet repository" }
         root_dir: { type: string, description: "<home>/fleet, where a master's root key lives" }
+        fleet_urls:
+          type: array
+          items: { type: string }
+          description: |
+            The fleet repository URL(s) members use. On the hub (hosting
+            none): one https://<address>/git/<repo> per https external
+            address. On any other copy: the host record on the fleet's main
+            (host_record), else the origin URL. [] with no fleet repository.
+            Built by the server; a page shows them as they are.
+        host_record:
+          type: array
+          items: { type: string }
+          description: |
+            The host record artifacts/fleet/host as the fleet's main holds it:
+            the URL(s) the master recorded where the fleet is hosted, at
+            create and when it became the host. Absent when main holds none
+            (or one that cannot be read). A copy whose `hosting` is not one of
+            these URLs follows an old host (after a master switch).
+        root_fingerprint: { type: string, description: "The fleet root installed in [tls].dir (absent when none is): the root a member compares out of band; after a join, the root the bundle installed" }
+    FleetEvent:
+      type: object
+      required: [at, kind, agent, detail]
+      properties:
+        at: { type: string, format: date-time }
+        kind:
+          type: string
+          enum: [created, enrolled, joined, admitted, refused, revoked, left, host-changed]
+          description: |
+            Each from its record, nothing kept for the purpose:
+            created (the commit of main adding the fleet root certificate),
+            joined (a member record on main turns active), admitted (a merge
+            of a member's tip into main; tip is that tip), left (a record on
+            main turns left), host-changed (a commit of main changing the host
+            record), all from main's first-parent history; enrolled (the
+            master's issuance log, issued.jsonl; none on a member); revoked
+            (the CRL on main, the agent from the issued leaf on main, the
+            reason from the revocation statement); refused (the master's last
+            200 judge refusals, in memory: kept after the branch moves on,
+            empty after a restart). A root key import, a stand-down and a
+            decommission leave no record and are no events.
+        agent: { type: string, description: "The agent id the event is about; empty when no record names it (a refused first join)" }
+        serial: { type: string, description: "enrolled, revoked: the certificate serial (lowercase hex)" }
+        branch: { type: string, description: "joined, left, admitted, refused: the member's agent branch" }
+        tip: { type: string, description: "admitted: the merged tip; refused: the refused tip" }
+        detail: { type: string, description: "One line: the host URLs, the refusal's reason, the revocation's reason" }
     FleetRoot:
       type: object
       required: [dir, files]

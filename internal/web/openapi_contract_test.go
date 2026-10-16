@@ -197,7 +197,27 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 	schema := doc["components"].(map[string]any)["schemas"].(map[string]any)["FleetStatus"].(map[string]any)
 	props := schema["properties"].(map[string]any)
 	require.ElementsMatch(t, []any{"standalone", "registering", "registered"}, props["state"].(map[string]any)["enum"])
-	for _, f := range []string{"master", "hosting", "root_dir"} {
+	for _, f := range []string{"master", "hosting", "root_dir", "local", "public_key", "host", "fleet_urls", "host_record", "root_fingerprint"} {
 		require.Contains(t, props, f)
+	}
+	require.NotContains(t, props, "fleet_url", "fleet_url is gone: fleet_urls")
+	require.NotContains(t, props, "external_addresses", "it moved under host")
+
+	// PR 7: the members' derived states and since, the activity route and
+	// its kinds, and one classification code set for join and join:check.
+	members := fmt.Sprint(paths["/fleet/members"])
+	for _, s := range []string{"enrolled", "since"} {
+		require.Contains(t, members, s)
+	}
+	activity, ok := paths["/fleet/activity"].(map[string]any)
+	require.True(t, ok, "/fleet/activity must be declared")
+	require.Contains(t, activity, "get")
+	require.NotContains(t, fmt.Sprint(activity), "LOCAL LISTENER ONLY", "a read, open to any principal")
+	ev := doc["components"].(map[string]any)["schemas"].(map[string]any)["FleetEvent"].(map[string]any)["properties"].(map[string]any)
+	require.ElementsMatch(t, []any{"created", "enrolled", "joined", "admitted", "refused", "revoked", "left", "host-changed"}, ev["kind"].(map[string]any)["enum"])
+	for _, p := range []string{"/fleet/join", "/fleet/join:check"} {
+		text := fmt.Sprint(paths[p])
+		require.Contains(t, text, "bundle_refused", p)
+		require.Contains(t, text, "unreachable", p)
 	}
 }
