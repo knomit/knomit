@@ -4205,6 +4205,9 @@ components:
         last_error_refused:
           type: boolean
           description: "true when last_error is the fleet refusing this instance's certificate at the TLS handshake (revoked, or the fleet moved to another root): a retry does not help. Read from the recorded error; absent otherwise."
+        last_error_commit_refused:
+          type: boolean
+          description: "true when last_error is the fleet's host refusing a commit of this copy's push with its commit judge (the text names the commit, the rule and the reason): every sync sends the same commit, so a retry is refused the same way until the fleet's main changes. Read from the recorded error; absent otherwise."
         sync_interval_seconds:
           type: integer
           description: "How often this copy's origin round runs (the origin's interval, push_interval when shorter, 300 when unset): a member sees what the master merged into main only after its next round. Absent on the hub (no origin)."

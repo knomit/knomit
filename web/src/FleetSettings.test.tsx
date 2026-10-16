@@ -334,6 +334,22 @@ describe('FleetSettings', () => {
     expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
   });
 
+  // #528 N1: a push whose commit the host's judge refuses
+  // (last_error_commit_refused) is sent again by every sync and refused
+  // again, so the page never promises a retry; the raw text stays, since it
+  // names the commit, the rule and the reason.
+  // SABOTAGE: ignore last_error_commit_refused -> "Retrying on the next
+  // sync." -> red.
+  it('a commit the host refuses is not "Retrying"', () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    const raw = "Push: knomit: commit 5a6d21e8 refused by verify_signatures=enforce: host-record: only the fleet's master writes where the fleet is hosted";
+    mount({ ...member, last_error: raw, last_error_commit_refused: true });
+    expect(screen.getByTestId('fleet-last-error')).toHaveTextContent('Last sync failed: ' + raw);
+    expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("The fleet's host refuses a commit on this instance's branch");
+    expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
+    expect(screen.queryByTestId('fleet-refused-notice')).toBeNull();
+  });
+
   // Review S5 and the user's chip ruling: a pending record says when this
   // page will show the master's merge, from the server's interval (never a
   // fixed 300 s), and its chip is informational blue, not amber.

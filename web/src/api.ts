@@ -2089,6 +2089,11 @@ export interface FleetStatus {
   // does not help. sync_interval_seconds: how often this copy's origin round
   // runs (absent on the hub), which is when it next sees main.
   last_error_refused?: boolean;
+  // last_error_commit_refused: last_error is the fleet's host refusing a
+  // commit of this copy's push with its judge (commit, rule, reason in the
+  // text): every sync sends the same commit, so a retry does not help until
+  // the fleet's main changes (#528 N1).
+  last_error_commit_refused?: boolean;
   sync_interval_seconds?: number;
   // F10: what this instance offers to host a fleet (listener: its mTLS
   // listener's bind, '' when off, sent to a local caller only; listener_on:

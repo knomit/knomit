@@ -1127,3 +1127,93 @@ func TestReconcileNow_NoAgentBranchReconcilesMainOnly(t *testing.T) {
 	require.Equal(t, AgentReconcileResult{}, res.Agent, "no agent reconcile must run without an agent branch")
 	require.Equal(t, plumbing.NewHash(ahead), mustHeadHash(t, svc, "main"))
 }
+
+// upstreamCommit writes path=content on top of parent straight into the
+// object store, as a commit fetched from origin arrives: no branch moves.
+func upstreamCommit(t *testing.T, svc *Service, parent plumbing.Hash, path, content string) plumbing.Hash {
+	t.Helper()
+	sig := object.Signature{Name: "upstream", Email: "u@u"}
+	h, _, err := writeFileToStore(svc.rh.gits, nil, parent, path, content, "upstream: "+path, sig, sig)
+	require.NoError(t, err)
+	return h
+}
+
+// A rewind whose watermark lies far behind (a copy that had no origin never
+// advances it: here the InitRepo seed) replays only what the new main lacks.
+// c1 is the agent's early write and is ALREADY upstream; upstream then
+// changed the same path. Replaying c1 again would revert that change with
+// the agent's side winning — the old fleet master re-submitting its
+// create-time host record and a member's first leaf after a master switch,
+// refused on every push (#528 N1). Only c2, the agent's write upstream
+// lacks, is replayed.
+// SABOTAGE: drop `|| onUpstream[cur.Hash]` in unpushedCommits -> c1 is
+// replayed (2, not 1) and kb/a.md is back at v1 -> red.
+func TestReconcileAgentRebase_NeverReplaysWhatUpstreamHolds(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+	seed, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+
+	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
+	newer := "---\ntype: observation\n---\n# A\n\nv2 upstream\n"
+	u := upstreamCommit(t, svc, c1, "kb/a.md", newer)
+	c2 := writeMergeFact(t, svc, "agent/test", "kb/own.md", "Own", "mine")
+	wm, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, seed, wm, "setup: the watermark is still the InitRepo seed")
+
+	// reconcileMain's force-update, as on the old hub's first rewind.
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", "main", StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, ModeRebase, res.Mode)
+	require.Equal(t, 1, res.NumReplayed, "only c2 (%s) is replayed: c1 is upstream", c2[:8])
+
+	tip, err := svc.rh.repo.CommitObject(mustHeadHash(t, svc, "agent/test"))
+	require.NoError(t, err)
+	require.Equal(t, []plumbing.Hash{u}, tip.ParentHashes, "the one replayed commit sits on the new main")
+	tree, err := tip.Tree()
+	require.NoError(t, err)
+	f, err := tree.File("kb/a.md")
+	require.NoError(t, err)
+	got, err := f.Contents()
+	require.NoError(t, err)
+	require.Equal(t, newer, got, "upstream's later change to a path c1 wrote is kept")
+	_, err = tree.File("kb/own.md")
+	require.NoError(t, err, "the agent's own write upstream lacks is carried")
+}
+
+// The same rewind with nothing of the agent's own beyond the new main:
+// everything there is a merge (the old hub's merges of members' branches).
+// The branch moves onto the new main. Before, an empty walk was taken for
+// "local strictly ahead" and the branch was pushed as it stood, its merges
+// and what they brought in re-submitted as this copy's own.
+// SABOTAGE: return Noop when the walk is empty and local is not an ancestor
+// of upstream (the old rule) -> the tip stays the merge -> red.
+func TestReplayOntoUpstream_OnlyMergesBeyondUpstreamMovesOntoIt(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+	seed, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+
+	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
+	// A member's branch, merged into the agent branch with a merge commit.
+	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/member", "agent/test"))
+	memberTip := plumbing.NewHash(writeMergeFact(t, svc, "agent/member", "kb/member.md", "M", "theirs"))
+	merged, err := svc.MergeConsensus(context.Background(), "agent/member", "agent/test", memberTip)
+	require.NoError(t, err)
+	require.Equal(t, ModeMerge, merged.Mode, "setup needs a merge commit")
+
+	// The new main holds c1, and a change of its own, but not the merge.
+	u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
+	res, err := svc.rh.replayOntoUpstream(context.Background(), "agent/test", u, seed, StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, 0, res.NumReplayed)
+	require.Equal(t, u, mustHeadHash(t, svc, "agent/test"), "the branch moves onto the new main")
+}

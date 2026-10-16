@@ -56,6 +56,12 @@ type FleetStatus struct {
 	// A retry does not help, and the member cannot read the CRL to tell
 	// which. Read from the recorded error only; nothing new is kept.
 	LastErrorRefused bool `json:"last_error_refused,omitempty"`
+	// LastErrorCommitRefused: LastError is the fleet's host refusing a
+	// commit of this copy's push with its judge (store.CommitRefusedByJudge;
+	// the text names the commit, the rule and the reason). Every sync sends
+	// the same commit, so a retry is refused the same way until the fleet's
+	// main changes. Read from the recorded error only, as LastErrorRefused is.
+	LastErrorCommitRefused bool `json:"last_error_commit_refused,omitempty"`
 	// SyncIntervalSeconds is how often this copy's origin round runs (the
 	// origin record's interval, push_interval when shorter, 300 s when
 	// unset): a member sees what the master's round merged into main only
@@ -227,7 +233,8 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st := FleetStatus{
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
-		LastErrorRefused: strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
+		LastErrorRefused:       strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
+		LastErrorCommitRefused: strings.Contains(row.LastError, store.CommitRefusedByJudge),
 		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
 			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
 		RootDir:   m.fleetRootDir(),

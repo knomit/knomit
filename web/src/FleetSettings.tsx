@@ -147,7 +147,12 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
             Last sync failed: <span style={mono}>{fleet.last_error}</span>
             {fleet.last_error_refused
               ? <div data-testid="fleet-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet refuses this instance's certificate: it may have been revoked, or the fleet moved to another root. Retrying will not help; ask the fleet's master.</div>
-              : <div style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>Retrying on the next sync.</div>}
+              : fleet.last_error_commit_refused
+                // The host's judge refused a commit of this copy's branch
+                // (#528 N1): every sync sends the same commit, so "Retrying"
+                // would never be true.
+                ? <div data-testid="fleet-commit-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet's host refuses a commit on this instance's branch (the rule is named above). Every sync sends the same commit, so it is refused again until the fleet's main changes; ask the fleet's master.</div>
+                : <div style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>Retrying on the next sync.</div>}
           </div>
         )}
       </div>

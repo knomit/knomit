@@ -383,6 +383,13 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 	}, commits, lg)
 }
 
+// CommitRefusedByJudge is the part of judgeIncoming's refusal text that says
+// the judge refused a commit ("knomit: commit <hash> refused by
+// verify_signatures=enforce: <rule>: <reason>"). A pusher's recorded push
+// error carries it, which is how a member's status tells the host refusing
+// a commit of its branch from a failure a retry can cure.
+const CommitRefusedByJudge = "refused by verify_signatures=enforce"
+
 // judgeIncoming is the judge where a branch ENTERS this repository, shared by
 // the two entries: receive-pack (a push to a knomit host, verify) and the
 // fleet master's fetch (AdmitPeerBranch, a forge). It reads verify_signatures
@@ -433,7 +440,7 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 			continue
 		}
 		if mode == VerifyEnforce {
-			return fmt.Sprintf("knomit: commit %s refused by verify_signatures=enforce: %s: %s", c.Hash, ref.Rule, ref.Reason)
+			return fmt.Sprintf("knomit: commit %s %s: %s: %s", c.Hash, CommitRefusedByJudge, ref.Rule, ref.Reason)
 		}
 		lg.Warn().Str("commit", c.Hash.String()).Str("rule", ref.Rule).Str("reason", ref.Reason).
 			Msg("receive-pack: commit would be refused (verify_signatures=log)")

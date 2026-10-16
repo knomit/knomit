@@ -254,6 +254,34 @@ func TestFleetStatus_LastErrorRefusedIsTheHandshakeRefusal(t *testing.T) {
 	}
 }
 
+// #528 N1: last_error_commit_refused is the host's judge refusing a commit
+// of this copy's push (the receive-pack text, as the push error carries it):
+// the page then never says "Retrying". The handshake refusal, a dial
+// failure and a success do not set it.
+// SABOTAGE: LastErrorCommitRefused = false -> the judged row reads false ->
+// red.
+func TestFleetStatus_LastErrorCommitRefusedIsTheJudgesRefusal(t *testing.T) {
+	ctx := context.Background()
+	m := newFleetHost(t, t.TempDir(), nil)
+	db := m.ControlDB()
+	judged := errors.New("Push: knomit: commit 5a6d21e8 " + store.CommitRefusedByJudge +
+		": host-record: agent \"alpha\" changes artifacts/fleet/host: only the fleet's master writes where the fleet is hosted")
+	for _, row := range []struct {
+		err     error
+		refused bool
+	}{
+		{judged, true},
+		{fmt.Errorf("push agent branch: %w: remote error: tls: bad certificate", pki.ErrRefusedByPeer), false},
+		{errors.New("dial tcp 127.0.0.1:18931: connect: connection refused"), false},
+		{nil, false},
+	} {
+		require.NoError(t, recordFleetAttempt(db, row.err, time.Now()))
+		st, err := m.FleetStatus(ctx)
+		require.NoError(t, err)
+		require.Equal(t, row.refused, st.LastErrorCommitRefused, "%v", row.err)
+	}
+}
+
 // PR #528 nit 11: with a repository already called fleet, a standalone
 // GET /fleet's would_serve and the create agree on a free name (fleet-2):
 // the URL the Hosting step shows is where members join, and the create is
