@@ -182,6 +182,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 		r.Delete("/fleet/root", handleDeleteFleetRoot(s.Manager))
 		r.Post("/fleet/host", handleHostFleet(b, s.Manager))
 		r.Post("/fleet/follow", handleFollowFleet(b, s.Manager))
+		r.Post("/fleet/index-rebuild", handleFleetIndexRebuild(b, s.Manager))
 	})
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Get("/archived/{id}", handleHALArchivedItem(b, s.Manager))
@@ -407,15 +408,15 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 
 				r.Post("/synthesis-runs", handleStartSynthesis(s.LLMAdapter))
 				r.Get("/synthesis-runs", handleListJobs(s.JobRegistry, "synthesis-run"))
-				r.Get("/synthesis-runs/{id}", handleGetJob(s.JobRegistry))
+				r.Get("/synthesis-runs/{id}", handleGetJob(s.JobRegistry, "synthesis-run"))
 				r.Delete("/synthesis-runs/{id}", handleDeleteJob(s.JobRegistry))
-				r.Get("/synthesis-runs/{id}/events", handleJobEvents(s.JobRegistry))
+				r.Get("/synthesis-runs/{id}/events", handleJobEvents(s.JobRegistry, "synthesis-run"))
 
 				r.Post("/index-rebuilds", handleStartRebuild(b, s.Manager))
 				r.Get("/index-rebuilds", handleListJobs(s.JobRegistry, "index-rebuild"))
-				r.Get("/index-rebuilds/{id}", handleGetJob(s.JobRegistry))
+				r.Get("/index-rebuilds/{id}", handleGetJob(s.JobRegistry, "index-rebuild"))
 				r.Delete("/index-rebuilds/{id}", handleDeleteJob(s.JobRegistry))
-				r.Get("/index-rebuilds/{id}/events", handleJobEvents(s.JobRegistry))
+				r.Get("/index-rebuilds/{id}/events", handleJobEvents(s.JobRegistry, "index-rebuild"))
 
 				// ONLY the MCP mount gets the session's experiment applied.
 				// The REST routes above name their branch in the URL and must

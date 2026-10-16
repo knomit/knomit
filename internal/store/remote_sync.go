@@ -477,6 +477,58 @@ func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth tr
 	return PushResult{Pushed: true}, nil
 }
 
+// PublishTo pushes the tip of the local branch from to gitURL as BOTH
+// refs/heads/<upstream> (without force, so a main there that the tip does not
+// descend from is refused by the remote) and refs/heads/<from> (with force:
+// the branch is this instance's own), in one push. gitURL need not be the
+// origin, and nothing is configured or recorded: the push goes through a
+// remote that exists for this call only, so the git config, the
+// remote-tracking refs and the remotes table are untouched.
+//
+// It is the fleet master's seeding of a forge BEFORE the forge becomes the
+// origin (repos.Manager.moveFleetToForge): the origin round that the attach
+// starts then fetches a main equal to the tip, and never rewinds local main
+// to an older forge main (kb/decisions/fleet/trust-the-forge-main).
+func (ri *remoteIndex) PublishTo(ctx context.Context, gitURL, from, upstream string, auth transport.AuthMethod) error {
+	if from == "" || upstream == "" || from == upstream {
+		return fmt.Errorf("PublishTo: %q is not a branch to publish to %q", from, upstream)
+	}
+	defer ri.rh.lockPush(upstream)()
+	defer ri.rh.lockPush(from)()
+	tip, err := func() (plumbing.Hash, error) {
+		defer ri.rh.lockBranch(from)()
+		ref, err := ri.rh.gits.Reference(plumbing.NewBranchReferenceName(from))
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		return ref.Hash(), nil
+	}()
+	if err != nil {
+		return fmt.Errorf("PublishTo: local ref %s: %w", from, err)
+	}
+	if _, err := ri.rh.repo.CommitObject(tip); err != nil {
+		return fmt.Errorf("PublishTo: tip %s is unreadable: %w", tip, err)
+	}
+	rem := gogit.NewRemote(ri.rh.repo.Storer, &gogitconfig.RemoteConfig{Name: "publish-to", URLs: []string{gitURL}})
+	pushCtx, cancel := ri.rh.netCtx(ctx)
+	defer cancel()
+	var srv bytes.Buffer
+	err = rem.PushContext(pushCtx, &gogit.PushOptions{
+		RemoteName: "publish-to",
+		RefSpecs: []gogitconfig.RefSpec{
+			gogitconfig.RefSpec(fmt.Sprintf("%s:refs/heads/%s", tip, upstream)),
+			gogitconfig.RefSpec(fmt.Sprintf("+%s:refs/heads/%s", tip, from)),
+		},
+		Auth:     auth,
+		Progress: &srv,
+	})
+	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return fmt.Errorf("PublishTo: %w%s", err, remoteSays(srv.String()))
+	}
+	log.Info().Str("upstream", upstream).Str("from", from).Str("commit", tip.String()).Msg("PublishTo: pushed")
+	return nil
+}
+
 // RetractPushedBranch takes back what this instance pushed of branch, for a
 // repository that is about to be deleted (a fleet create that is being rolled
 // back). It deletes refs/heads/<branch> on the origin WITH A LEASE on the

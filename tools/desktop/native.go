@@ -78,6 +78,12 @@ func writeFile(name, contents string) (string, error) {
 		return "", fmt.Errorf("create exports dir: %w", err)
 	}
 	// Owner-only: the Fleet page saves the fleet ROOT KEY through here.
+	// os.WriteFile applies the mode only to a file it creates, so a file that
+	// is already there (another tool made it 0644) is tightened FIRST, before
+	// the secret is written into it (#528 N7).
+	if err := os.Chmod(target, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("make %s owner-only: %w", target, err)
+	}
 	if err := os.WriteFile(target, []byte(contents), 0o600); err != nil {
 		return "", err
 	}

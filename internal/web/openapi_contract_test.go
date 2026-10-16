@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -173,15 +174,16 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 	require.NotContains(t, fleet, "delete", "DELETE /fleet is gone: POST /fleet/leave")
 	require.Contains(t, paths, "/fleet/members")
 	codes := map[string][]string{
-		"/fleet/create":       {"fleet_present", "trust_installed", "root_present", "create_unfinished"},
-		"/fleet/enroll":       {"not_master", "own_id", "invalid_key", "invalid_agent_id"},
-		"/fleet/join":         {"fleet_present", "trust_installed", "key_mismatch", "agent_mismatch", "not_a_fleet", "root_differs", "join_refused", "clone_failed"},
-		"/fleet/leave":        {"not_registered", "is_master"},
-		"/fleet/revoke":       {"not_enrolled", "already_revoked", "own_id", "not_master"},
-		"/fleet/decommission": {"not_master"},
-		"/fleet/root":         {"no_root", "root_present", "root_incomplete", "unknown_file", "root_invalid", "hub"},
-		"/fleet/host":         {"member_keeps_origin", "hub", "not_registered", "listener_required", "addresses_required"},
-		"/fleet/follow":       {"url_required", "origin_invalid", "not_this_fleet", "auth_invalid", "unreachable", "not_registered"},
+		"/fleet/create":        {"fleet_present", "trust_installed", "root_present", "create_unfinished"},
+		"/fleet/enroll":        {"not_master", "own_id", "invalid_key", "invalid_agent_id"},
+		"/fleet/join":          {"fleet_present", "trust_installed", "key_mismatch", "agent_mismatch", "not_a_fleet", "root_differs", "join_refused", "clone_failed"},
+		"/fleet/leave":         {"not_registered", "is_master"},
+		"/fleet/revoke":        {"not_enrolled", "already_revoked", "own_id", "not_master"},
+		"/fleet/decommission":  {"not_master"},
+		"/fleet/root":          {"no_root", "root_present", "root_incomplete", "unknown_file", "root_invalid", "hub", "not_following_host"},
+		"/fleet/host":          {"member_keeps_origin", "hub", "not_registered", "listener_required", "addresses_required"},
+		"/fleet/follow":        {"url_required", "origin_invalid", "not_this_fleet", "auth_invalid", "unreachable", "not_registered", "publish_refused", "indexing"},
+		"/fleet/index-rebuild": {"not_registered"},
 	}
 	for path, want := range codes {
 		op, ok := paths[path].(map[string]any)
@@ -196,10 +198,23 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 	for _, m := range []string{"get", "put", "delete"} {
 		require.Contains(t, root, m)
 	}
+	// The fleet's configuration is served under /fleet only (user ruling
+	// 2026-10-16): no fleet text sends the reader to a generic repo route,
+	// which is refused for the fleet repository (#528 N3).
+	for path, op := range paths {
+		if strings.HasPrefix(path, "/fleet") {
+			require.NotContains(t, fmt.Sprint(op), "/repos/{fleet}", "%s names a refused generic route", path)
+		}
+	}
+	// The follow's forge mode takes a credential as PUT origin does.
+	follow := fmt.Sprint(paths["/fleet/follow"])
+	for _, f := range []string{"user", "password", "auth_method", "auth_token", "change", "unchanged", "credential", "moved"} {
+		require.Contains(t, follow, f)
+	}
 	schema := doc["components"].(map[string]any)["schemas"].(map[string]any)["FleetStatus"].(map[string]any)
 	props := schema["properties"].(map[string]any)
 	require.ElementsMatch(t, []any{"standalone", "registering", "registered"}, props["state"].(map[string]any)["enum"])
-	for _, f := range []string{"master", "hosting", "root_dir", "local", "public_key", "host", "fleet_urls", "host_record", "root_fingerprint"} {
+	for _, f := range []string{"master", "hosting", "root_dir", "local", "public_key", "host", "fleet_urls", "host_record", "root_fingerprint", "interrupted_move", "last_error_fleet_moved"} {
 		require.Contains(t, props, f)
 	}
 	require.NotContains(t, props, "fleet_url", "fleet_url is gone: fleet_urls")

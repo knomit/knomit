@@ -57,6 +57,12 @@ type ProbeResult struct {
 	// advertisement oddly, and a reader may be about to add the deploy key.
 	WriteAccess string `json:"write_access,omitempty"`
 	WriteDetail string `json:"write_detail,omitempty"`
+
+	// FleetPeer: the URL is an instance of the fleet this instance is in (its
+	// certificate chains to the installed fleet root, so the attach would
+	// store auth method cert). The Fleet page's follow flow asks for a
+	// credential only when this is false (a forge).
+	FleetPeer bool `json:"fleet_peer,omitempty"`
 }
 
 // ProbeOrigin inspects a remote without cloning it, so the create wizard can
@@ -111,9 +117,12 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 	o, err := m.ResolveOrigin(ctx, o)
 	switch {
 	case errors.Is(err, ErrPeerCredential):
-		return ProbeResult{Reachable: true, AuthRequired: true, Branches: []string{}, Detail: err.Error()}, nil
+		return ProbeResult{Reachable: true, AuthRequired: true, FleetPeer: true, Branches: []string{}, Detail: err.Error()}, nil
 	case err != nil:
-		return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
+		// The cause alone: a probe attaches nothing, so ResolveOrigin's
+		// "origin was not attached" wrap would describe an act that did not
+		// happen (#528 N5).
+		return ProbeResult{Branches: []string{}, Detail: reachCause(err).Error()}, nil
 	}
 	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
 	if err != nil {
@@ -195,6 +204,7 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 		}
 	}
 	res.Empty = len(res.Branches) == 0
+	res.FleetPeer = o.AuthMethod == "cert"
 	res.UpstreamBranch = resolveUpstream(o.Branch, head, res.Branches)
 	return res, nil
 }

@@ -146,3 +146,21 @@ export function listenerNotRunning(configured: boolean, reason?: string): string
   if (reason === 'addr_in_use') return 'Members reach this instance over the fleet listener, and its port is held by another program. Free the port or choose another Fleet port in Settings → Network.';
   return 'Members reach this instance over the fleet listener, and it starts only when knomit starts with this instance\'s certificate installed. Restart knomit (or run `knomit reload` for a server you started yourself) to start it; until then no member can join or push.';
 }
+
+/** hostPortOf is hostOf with a non-default port kept (#528 N6): two fleet
+ *  instances on one machine differ only by it, so "Hosted by 127.0.0.1"
+ *  could not tell them apart. :443 on https and :80 on http are dropped, as
+ *  the server's sameFleetURL does; an scp-style git@host:path has no port. */
+export function hostPortOf(url: string): string {
+  const u = url.trim();
+  if (!u.includes('://')) {
+    const scp = /^[^@/]+@([^:]+):/.exec(u);
+    return scp ? scp[1] : '';
+  }
+  const m = /^([a-z][a-z0-9+.-]*):\/\/(?:[^@/]+@)?(\[[^\]]+\]|[^/:]+)(?::(\d+))?/i.exec(u);
+  if (!m) return '';
+  const [, scheme, host, port] = m;
+  const s = scheme.toLowerCase();
+  if (!port || (s === 'https' && port === '443') || (s === 'http' && port === '80')) return host;
+  return `${host}:${port}`;
+}

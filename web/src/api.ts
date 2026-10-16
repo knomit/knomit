@@ -1361,6 +1361,10 @@ export interface ProbeResult {
    */
   write_access?: '' | 'ok' | 'denied';
   write_detail?: string;
+  /** The URL is an instance of the fleet this instance is in: its
+   *  certificate is the credential. The Fleet page's follow flow asks for a
+   *  forge credential only when this is absent. */
+  fleet_peer?: boolean;
 }
 
 // OntologyDiagnostic is one parse/validation error from POST
@@ -2117,8 +2121,21 @@ export interface FleetStatus {
   fleet_urls?: string[];
   host_record?: string[];
   follows_host?: boolean;
+  // interrupted_move: on the master whose forge copy does not follow the
+  // host record, a move that stopped before the record (#529 S4): the
+  // record names this instance (record_is_here: Host the fleet here is the
+  // repair) or a forge (move_back_to: Move the fleet there is the repair).
+  // last_error_fleet_moved: this copy follows an old host and last_error is
+  // that host refusing its push because the fleet moved (#529 S5).
+  interrupted_move?: { record_is_here: boolean; move_back_to?: string };
+  last_error_fleet_moved?: boolean;
   root_fingerprint?: string;
 }
+
+/** What POST /fleet/follow ran: followed (this copy follows the URL), moved
+ *  (the master moved the fleet there), credential (the same forge with a new
+ *  credential, nothing else changed), unchanged (nothing ran). */
+export type FleetFollowChange = 'followed' | 'moved' | 'credential' | 'unchanged';
 
 // FleetRecordFields are a member record's advertised fields, as written.
 export interface FleetRecordFields {
@@ -2278,9 +2295,16 @@ const standDownFleetRoot = () => fleetCall<void>('DELETE', '/root');
 /** Host the fleet here (POST /fleet/host): this copy drops its origin and
  *  becomes the hub. */
 const hostFleetHere = () => fleetCall<FleetStatus>('POST', '/host', {});
-/** Point at the new host (POST /fleet/follow): this copy follows the fleet
- *  from url, an instance of this fleet. */
-const followFleetHost = (url: string) => fleetCall<FleetStatus>('POST', '/follow', { url });
+/** POST /fleet/follow: this copy follows the fleet from url (an instance of
+ *  this fleet, or a forge holding this fleet's root, with this instance's own
+ *  credential). url '' on a forge copy keeps the stored URL and changes the
+ *  credential only. On the master another forge URL moves the fleet there.
+ *  change says which ran. */
+const followFleetHost = (url: string, cred: { auth_method?: string; auth_token?: string } = {}) =>
+  fleetCall<FleetStatus & { change?: FleetFollowChange }>('POST', '/follow', { ...(url ? { url } : {}), ...cred });
+/** POST /fleet/index-rebuild: the fleet repository's Rebuild. */
+const rebuildFleetIndex = () =>
+  fleetCall<{ id: string; kind: 'index-rebuild'; state: string; repo: string; branch: string }>('POST', '/index-rebuild', {});
 
 async function getFleet(): Promise<FleetStatus> {
   const r = await fetch(apiUrl('/api/v1/fleet'), { headers: oauthHeaders(false) });
@@ -2312,6 +2336,7 @@ export const api = {
   standDownFleetRoot,
   hostFleetHere,
   followFleetHost,
+  rebuildFleetIndex,
   approveOAuthPending,
   denyOAuthPending,
   listClientSessions,

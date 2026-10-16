@@ -175,6 +175,53 @@ func credentialFree(u string) string {
 // part up to its last @ is the userinfo, whatever it contains.
 var userinfoShape = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*@`)
 
+// urlInText is a URL quoted inside free text (an error, a log line): a
+// scheme, then everything up to whitespace or a quote.
+var urlInText = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>` + "`" + `]+`)
+
+// credentialFreeText is text with every URL in it credentialFree, the S6
+// fallback for one that does not parse included. It is for the texts that
+// quote a URL someone else built: Go's HTTP client quotes the request URL
+// and redacts only a password, never a token in the user slot
+// (https://<token>@github.com/…), and go-git's transport errors quote it
+// whole. Every refusal and log line of POST /fleet/follow goes through it.
+func credentialFreeText(s string) string {
+	if !strings.Contains(s, "://") {
+		return s
+	}
+	return urlInText.ReplaceAllStringFunc(s, credentialFree)
+}
+
+// credentialFreeErr is err with its text credentialFreeText, its causes kept
+// for errors.Is and errors.As. A *FleetError anywhere in the chain is
+// served by errors.As as a copy whose Msg is credential-free too, since the
+// REST layer writes that Msg, not Error().
+func credentialFreeErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &credentialFreeError{err: err}
+}
+
+type credentialFreeError struct{ err error }
+
+func (e *credentialFreeError) Error() string { return credentialFreeText(e.err.Error()) }
+func (e *credentialFreeError) Unwrap() error { return e.err }
+func (e *credentialFreeError) As(target any) bool {
+	t, ok := target.(**FleetError)
+	if !ok {
+		return false
+	}
+	var fe *FleetError
+	if !errors.As(e.err, &fe) {
+		return false
+	}
+	cp := *fe
+	cp.Msg = credentialFreeText(fe.Msg)
+	*t = &cp
+	return true
+}
+
 // fleetHostAt is the host record at branch of ri, as written; ok is false
 // when there is none.
 func (m *Manager) fleetHostAt(ri *RepoInstance, branch string) (string, bool, error) {

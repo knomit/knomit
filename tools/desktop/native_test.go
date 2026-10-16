@@ -49,6 +49,48 @@ func TestWriteFile_WritesIntoExportsDir(t *testing.T) {
 	}
 }
 
+// A file that is already there at 0644 (another tool made it) is owner-only
+// after WriteFile saves over it, and holds the new contents (#528 N7:
+// os.WriteFile applies its mode only to a file it creates).
+// SABOTAGE: drop the Chmod before the write -> 0644 stays -> red.
+func TestWriteFile_TightensAnExistingFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes")
+	}
+	sandboxHome(t)
+	base, err := exportsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pre := filepath.Join(base, "fleet-root-x.json")
+	if err := os.WriteFile(pre, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(pre, 0o644); err != nil { // past the umask
+		t.Fatal(err)
+	}
+	got, err := writeFile("fleet-root-x.json", "secret")
+	if err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if got != pre {
+		t.Fatalf("wrote %q, want the existing %q", got, pre)
+	}
+	fi, err := os.Stat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, want 0600", fi.Mode().Perm())
+	}
+	if data, _ := os.ReadFile(got); string(data) != "secret" {
+		t.Errorf("contents %q", data)
+	}
+}
+
 // Every spelling of "not relative to the exports dir" must be refused, not
 // quietly rewritten into something inside the sandbox.
 //

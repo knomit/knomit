@@ -1,7 +1,6 @@
 package web
 
 import (
-	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -73,13 +72,8 @@ func validateURLAuth(u, authMethod string) error {
 	if authMethod == "cert" {
 		return repos.ErrCertNotAnInput
 	}
-	isSSH := strings.HasPrefix(u, "git@") || strings.HasPrefix(u, "ssh://")
-	isHTTP := strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
-	if isHTTP && authMethod == "ssh" {
-		return fmt.Errorf("SSH auth cannot be used with HTTP/HTTPS URLs — use a token or basic auth instead")
-	}
-	if isSSH && (authMethod == "token" || authMethod == "basic") {
-		return fmt.Errorf("token/basic auth cannot be used with SSH URLs — use SSH auth instead")
+	if err := repos.MethodMismatch(u, authMethod); err != nil {
+		return err
 	}
 	// Note: SSH URL + "none" is intentionally NOT rejected. "none" is a
 	// deliberate force-anonymous override; blocking it here would defeat its

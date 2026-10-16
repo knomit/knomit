@@ -110,14 +110,16 @@ func TestFleetREST_MasterAndHosting(t *testing.T) {
 //     the fleet repository outright);
 //   - an unparseable URL with a token, origin_invalid with no userinfo in the
 //     text (S6);
-//   - a URL that is not an instance of this fleet (the file:// bare the fleet
-//     lives on is not a peer), not_this_fleet.
+//   - another fleet's forge (its main does not carry this fleet's root),
+//     not_this_fleet.
 //
+// And it accepts this copy's own forge with no url and a new credential (the
+// forge copy's credential change, PR7c), stored as PUT origin assembles it.
 // Over loopback TCP both routes are 403 (RequireLocalVia).
 // SABOTAGE: drop refuseFleetOrigin from followFleetHost -> the http URL is
-// probed and refused as not_this_fleet or unreachable instead -> red; drop
-// the cert check -> the file:// URL is attached -> red; drop guardFleetDetach
-// from hostFleetHere -> the member detaches -> red.
+// probed and refused as not_this_fleet or unreachable instead -> red; treat
+// another root as a match in followForge -> the other forge is attached ->
+// red; drop guardFleetDetach from hostFleetHere -> the member detaches -> red.
 func TestFleetREST_HostAndFollowOnAMember(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -168,14 +170,25 @@ func TestFleetREST_HostAndFollowOnAMember(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "tok@")
 	require.Equal(t, url, origin())
 
-	rec = send("/fleet/follow", `{"url":"`+url+`"}`, true)
+	// Another fleet's forge: its main does not carry this fleet's root.
+	otherDir := filepath.Join(dir, "other")
+	require.NoError(t, os.MkdirAll(otherDir, 0o755))
+	otherURL, _ := seedFleetBare(t, otherDir)
+	rec = send("/fleet/follow", `{"url":"`+otherURL+`"}`, true)
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"code":"not_this_fleet"`)
 	require.Equal(t, url, origin())
 
-	rec = send("/fleet/follow", `{}`, true)
-	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), `"code":"url_required"`)
+	// The fleet's own forge, the stored URL kept (no url) and a new
+	// credential: the forge copy's credential change (PR7c), accepted.
+	rec = send("/fleet/follow", `{"auth_method":"basic","user":"rest","password":"pw2"}`, true)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, url, origin())
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Equal(t, "basic", o.AuthMethod)
+	require.Equal(t, "rest:pw2", o.AuthToken, "user and password assembled as PUT origin does")
+	require.NotContains(t, rec.Body.String(), "pw2", "the answer carries no credential")
 
 	for _, p := range []string{"/fleet/host", "/fleet/follow"} {
 		rec = send(p, `{"url":"https://x.example/git/fleet"}`, false)

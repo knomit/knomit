@@ -51,6 +51,19 @@ func writeFleetError(w http.ResponseWriter, r *http.Request, err error) {
 		hal.WriteProblemWithExtra(w, fe.Status, http.StatusText(fe.Status), fe.Msg, r.URL.Path, extra)
 		return
 	}
+	// The fleet repository's lifecycle refused (an origin change while its
+	// index job runs). No cancel-index link: that is a generic repo route,
+	// refused for the fleet repository; the job ends on its own.
+	if errors.Is(err, repos.ErrIndexing) {
+		hal.WriteProblemWithExtra(w, http.StatusConflict, "Fleet repository is indexing",
+			"the fleet repository is indexing: wait for it to finish, then try again from Fleet → Settings", r.URL.Path,
+			map[string]any{"code": "indexing"})
+		return
+	}
+	if isLifecycleRefusal(err) {
+		writeLifecycleProblem(w, r, hal.URLBuilder{}, "", err)
+		return
+	}
 	hal.WriteProblem(w, http.StatusInternalServerError, "Fleet operation failed", err.Error(), r.URL.Path)
 }
 
@@ -231,7 +244,11 @@ func fleetRepoRefused(m *repos.Manager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if fleetRepoMutation(m, r) {
-				hal.WriteProblemWithExtra(w, http.StatusConflict, "Fleet repository", FleetRepositoryRefusal,
+				text := FleetRepositoryRefusal
+				if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/index-rebuilds") {
+					text = FleetRebuildRefusal
+				}
+				hal.WriteProblemWithExtra(w, http.StatusConflict, "Fleet repository", text,
 					r.URL.Path, map[string]any{"code": "fleet_repository"})
 				return
 			}
@@ -242,7 +259,11 @@ func fleetRepoRefused(m *repos.Manager) func(http.Handler) http.Handler {
 
 // FleetRepositoryRefusal is fleetRepoRefused's text: what to do instead, in
 // the Fleet page's words.
-const FleetRepositoryRefusal = "this is the fleet repository: it changes only through the Fleet page (Fleet → Settings: Host the fleet here, Point at the new host, Leave, Decommission), never through a repository's own actions"
+const FleetRepositoryRefusal = "this is the fleet repository: it changes only through the Fleet page (Fleet → Settings: Move the fleet to a forge, Update access, Point at the new host, Host the fleet here, Index → Rebuild, Leave, Decommission), never through a repository's own actions"
+
+// FleetRebuildRefusal is fleetRepoRefused's text for the generic Rebuild
+// (POST …/index-rebuilds) on the fleet repository: the Fleet page has its own.
+const FleetRebuildRefusal = "this is the fleet repository: rebuild its index from the Fleet page (Fleet → Settings → Index → Rebuild), never through a repository's own actions"
 
 // fleetRepoMutation: r is a mutating request on this instance's fleet
 // repository (not its MCP mount).

@@ -386,10 +386,15 @@ func (m *Manager) FleetPushRefusal(ri *RepoInstance) string {
 	case o != nil:
 		// The URL is not echoed: the pusher is a peer, and an operator's
 		// origin URL may carry credentials.
-		return fmt.Sprintf("knomit: this copy of the fleet repository %q has an origin; push your agent branch to the fleet's origin, not to this instance", ri.Name())
+		return fmt.Sprintf("knomit: this copy of the fleet repository %q %s, not to this instance", ri.Name(), FleetPushRefusalHasOrigin)
 	}
 	return ""
 }
+
+// FleetPushRefusalHasOrigin is the part of FleetPushRefusal's text for a
+// copy with an origin that every refused pusher records as its sync error:
+// GET /fleet's last_error_fleet_moved reads it there.
+const FleetPushRefusalHasOrigin = "has an origin; push your agent branch to the fleet's origin"
 
 // FleetPushJudged is the receive-pack verdict callback for ri
 // (store.PushPolicy.Judged): on the fleet repository, the copy that takes

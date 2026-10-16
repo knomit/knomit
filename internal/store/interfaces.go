@@ -208,6 +208,12 @@ type RemoteIndex interface {
 	// repository's main. A main on the origin that is not an ancestor of the
 	// tip is refused by the origin, as an ordinary push error.
 	PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error)
+	// PublishTo pushes from's tip to gitURL, which need not be the origin:
+	// refs/heads/<upstream> WITHOUT force and refs/heads/<from> with force,
+	// in one push, through a remote that exists for this call only (the git
+	// config is not touched). The fleet master's move onto a forge uses it
+	// to seed the forge before the origin is attached.
+	PublishTo(ctx context.Context, gitURL, from, upstream string, auth transport.AuthMethod) error
 	// PeerTips lists the fetched agent/* branches (refs/remotes/origin/agent/*)
 	// other than own, by branch name.
 	PeerTips(own string) (map[string]plumbing.Hash, error)

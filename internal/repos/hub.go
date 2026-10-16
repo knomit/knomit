@@ -279,6 +279,27 @@ func (h *TaskHub) broadcastPushError(remote, errMsg string) {
 	})
 }
 
+// Task is the latest event of task id as the hub holds it: its op's running
+// task, or its op's last terminal event. ok is false when the hub holds
+// neither (an older task of the op, or one it never saw). It is what the job
+// routes read for a task the web job registry never registered: the
+// lifecycle machine's rebuild, whose id POST /fleet/index-rebuild links.
+func (h *TaskHub) Task(id string) (TaskEvent, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, ev := range h.active {
+		if ev.ID == id {
+			return ev, true
+		}
+	}
+	for _, ev := range h.lastDone {
+		if ev.ID == id {
+			return ev, true
+		}
+	}
+	return TaskEvent{}, false
+}
+
 // publishTask records and broadcasts a task event for work the hub did not
 // start itself — the lifecycle machine's manual index rebuild — so the jobs
 // UI sees it exactly as it sees a Start task: running while it runs, then
