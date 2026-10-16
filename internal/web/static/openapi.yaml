@@ -17,6 +17,16 @@ servers:
 tags:
   - name: discovery
   - name: repos
+    description: |
+      The FLEET repository (the one whose ontology id is `fleet`) changes
+      only from the desktop app on this machine: every mutating request
+      (any method but GET, HEAD and OPTIONS) under `/repos/{repo}` that names
+      it — rename, archive, PUT and DELETE origin, the upstream, origin
+      sessions, the pushed-branch merge, index jobs, and every other route
+      there, the MCP mount aside — is served to the local authenticated
+      listener only (the unix socket, or the named pipe on Windows). Over
+      loopback TCP or mTLS it answers 403 with `code: fleet_local_only`, and
+      the operation does not run. Any other repository is unaffected.
   - name: ontologies
     description: |
       Repo-independent ontology helpers the create wizard calls before any
@@ -4240,6 +4250,14 @@ components:
             an ontology, while it has not been identified yet (a repo being
             created), and on a non-active row. A symlinked ontology is not
             reported here: it refuses the repo, which is then `unopenable`.
+        fleet:
+          type: boolean
+          description: |
+            true on this instance's fleet repository (its ontology id is
+            `fleet`); absent on every other row. The web app's fleet target
+            is that repository's only page: it is never a browse context, and
+            its mutations are served to the local listener only (see the
+            `repos` tag).
         remote:
           type: object
           required: [sync, push]

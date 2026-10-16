@@ -287,6 +287,9 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	r.Get("/templates", handleTemplates(s.Manager))
 
 	r.Route("/repos/{repo}", func(r chi.Router) {
+		// Every mutation of the FLEET repository is served to the local
+		// listener only (fleetRepoLocalOnly), Archive included.
+		r.Use(fleetRepoLocalOnly(s.Manager))
 		// Archive deliberately sits OUTSIDE the middleware group: it resolves
 		// through m.Archive, not m.Get, and archiveErrStatus attributes its
 		// own not-found/conflict errors. Wrapping it would replace that

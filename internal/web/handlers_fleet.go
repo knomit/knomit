@@ -4,8 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
+	"github.com/go-chi/chi/v5"
+
+	"knomit/internal/auth"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
@@ -204,4 +209,65 @@ func handleFleetMembers(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			"_links":  hal.LinkMap{"self": {Href: b.APIRoot() + "/fleet/members"}},
 		})
 	}
+}
+
+// fleetRepoLocalOnly gates every MUTATION of the fleet repository through
+// the generic /repos/{repo} routes to the local authenticated listener, as
+// RequireLocalVia does for the /fleet routes. The fleet repository changes
+// git config, control.db or the fleet's own state through these doors
+// (rename, archive, PUT and DELETE origin, the upstream, origin sessions,
+// the pushed-branch merge, index jobs, …), and a browser page on loopback
+// TCP holds the anonymous principal's write and admin: without this, any page
+// reaching the TCP port could rename the fleet repository (every bundle
+// already issued would name a dead URL) or detach its origin (Host the fleet
+// here). A peer over mTLS is refused the same way.
+//
+// It is ONE gate over the whole subtree, by method, rather than one check per
+// handler, so a mutating route added later is covered without anyone
+// remembering to. Reads (GET, HEAD, OPTIONS) pass, and so does the MCP mount:
+// MCP is a POST for reads too, and every MCP write on the fleet repository is
+// already refused by RepoInstance.WritableBranch. Any other repository, and a
+// name that resolves to none (the handler's own 404 then answers), pass
+// unchanged.
+func fleetRepoLocalOnly(m *repos.Manager) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if fleetRepoMutation(m, r) && !isLocalVia(r) {
+				p, _ := auth.FromContext(r.Context())
+				hal.WriteProblemWithExtra(w, http.StatusForbidden, "Permission denied",
+					"the fleet repository changes only from the desktop app on this machine (the local authenticated listener: the unix socket, or the named pipe on Windows); principal "+p.String()+" did not arrive over it",
+					r.URL.Path, map[string]any{"code": "fleet_local_only"})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// fleetRepoMutation: r is a mutating request on this instance's fleet
+// repository (not its MCP mount).
+func fleetRepoMutation(m *repos.Manager, r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	name := chi.URLParam(r, "repo")
+	ri := m.Get(name)
+	if ri == nil || !ri.IsFleet() {
+		return false
+	}
+	return !isRepoMCPMount(r.URL.EscapedPath(), name)
+}
+
+// isRepoMCPMount: the escaped path is exactly …/repos/{name}/branches/{branch}/mcp
+// (a branch is one escaped segment). Matched on the whole shape, so a fact
+// path that ends in "mcp" is not mistaken for the mount.
+func isRepoMCPMount(escaped, name string) bool {
+	marker := "/repos/" + url.PathEscape(name) + "/branches/"
+	i := strings.Index(escaped, marker)
+	if i < 0 {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(escaped[i+len(marker):], "/"), "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] == "mcp"
 }

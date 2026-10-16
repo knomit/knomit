@@ -128,10 +128,10 @@ func TestFleetREST_MemberOriginAndMergeGuards(t *testing.T) {
 		tip, err = svc.Branches().HeadCommit(ctx, "agent/x")
 		require.NoError(t, err)
 	}))
-	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
+	r := (&Server{Manager: m, Grants: localOperatorGrants(), AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
 	send := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(method, path, strings.NewReader(body)))
+		req := localPeer(httptest.NewRequest(method, path, strings.NewReader(body)))
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -213,10 +213,10 @@ func TestFleetREST_MasterMergeIsReJudged(t *testing.T) {
 		}))
 		return tip
 	}
-	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
+	r := (&Server{Manager: m, Grants: localOperatorGrants(), AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
 	merge := func(branch, tip string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch(branch)+"/merge", strings.NewReader(`{"expected_tip":"`+tip+`"}`)))
+		req := localPeer(httptest.NewRequest(http.MethodPost, "/repos/"+st.FleetRepo+"/branches/"+urlBranch(branch)+"/merge", strings.NewReader(`{"expected_tip":"`+tip+`"}`)))
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(rec, req)
 		return rec

@@ -91,6 +91,14 @@ func localWriteGrants() auth.StaticGrants {
 	return auth.StaticGrants{local.String(): {auth.Read: {}, auth.Write: {}}}
 }
 
+// localOperatorGrants is the desktop app's principal on the local listener
+// with what the operator holds there: read, write, operator and admin. The
+// fleet repository's mutations are served to it only (fleetRepoLocalOnly).
+func localOperatorGrants() auth.StaticGrants {
+	local := auth.Principal{Kind: auth.KindBridge, ID: "uid:501", Via: auth.LocalVia}
+	return auth.StaticGrants{local.String(): {auth.Read: {}, auth.Write: {}, auth.Operator: {}, auth.Admin: {}}}
+}
+
 // joinOverSocket is POST /fleet/join over the local listener with a bundle
 // root issues for the manager's key and agent id.
 func joinOverSocket(t *testing.T, s *Server, key, url string, root *pkitest.Fleet) *httptest.ResponseRecorder {
@@ -290,11 +298,11 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	require.NoError(t, err)
 	st, err := m.FleetStatus(context.Background())
 	require.NoError(t, err)
-	r := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
+	r := (&Server{Manager: m, Grants: localOperatorGrants(), AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}).NewAPIRouter()
 
 	post := func(path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+		req := localPeer(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(rec, req)
 		return rec
@@ -318,10 +326,10 @@ func TestFleetREST_FactWritesRefused(t *testing.T) {
 	// SABOTAGE: drop the refuseUnwritableBranch call from
 	// handleStartSynthesis -> 201 -> red; from handleHALRepoPatch -> 200 and a
 	// README commit -> red.
-	rs := (&Server{Manager: m, AgentBranch: "agent/rest-fleet", OntologyRoot: "kb", LLMAdapter: &stubLLMAdapter{}}).NewAPIRouter()
+	rs := (&Server{Manager: m, Grants: localOperatorGrants(), AgentBranch: "agent/rest-fleet", OntologyRoot: "kb", LLMAdapter: &stubLLMAdapter{}}).NewAPIRouter()
 	send := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(method, path, strings.NewReader(body)))
+		req := localPeer(httptest.NewRequest(method, path, strings.NewReader(body)))
 		req.Header.Set("Content-Type", "application/json")
 		rs.ServeHTTP(rec, req)
 		return rec
