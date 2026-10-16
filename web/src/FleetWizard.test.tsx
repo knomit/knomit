@@ -131,6 +131,8 @@ describe('FleetWizard: join', () => {
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     pasteBundle(BUNDLE);
     expect(await screen.findByTestId('fleet-bundle-loaded')).toHaveTextContent('Loaded from the clipboard. The bundle is sent with the join and never shown.');
+    // Loaded and on screen: still not displayed (SABOTAGE: render s.bundle -> red).
+    expect(document.body.textContent).not.toContain('SECRETPEMBODY');
     fireEvent.click(screen.getByTestId('fleet-bundle-check'));
     await screen.findByTestId('fleet-step-review');
     expect(calls.find(c => c.route === 'POST /api/v1/fleet/join:check')?.body).toEqual({ bundle: BUNDLE });
