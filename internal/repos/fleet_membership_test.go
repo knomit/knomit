@@ -867,3 +867,47 @@ func TestFleetMembers_EnrolledRowsAndSince(t *testing.T) {
 	require.Len(t, rows, 2)
 	require.Equal(t, fact.MemberRevoked, rows[1].State, "an enrolled id whose leaf is on the CRL is revoked")
 }
+
+// F3 (#527 follow-up): an origin URL that embeds a credential (a forge token
+// in its userinfo) never leaves the master in a bundle, in the enroll's
+// fleet_url, or in the address_not_applicable text: a joiner supplies its own
+// auth, so the master's token would reach every joiner otherwise.
+// SABOTAGE: fleetURLForBundle returns o.URL as stored -> the token is in the
+// bundle -> red; the address_not_applicable text with o.URL -> red.
+func TestFleetMembership_NoBundleCarriesUserinfo(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	const secret = "ghp_s3cr3tT0k3n"
+	tokenURL := "https://x-access-token:" + secret + "@127.0.0.1:1/org/fleet.git"
+	org, err := f.master.originOf(f.mri)
+	require.NoError(t, err)
+	require.NotNil(t, org, "fixture: the forge fleet's copy has an origin")
+	org.URL = tokenURL
+	require.NoError(t, f.master.Origins().Set(f.mri.UID(), *org))
+
+	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
+	require.NoError(t, err)
+	require.Equal(t, "https://127.0.0.1:1/org/fleet.git", enr.FleetURL)
+	require.NotContains(t, enr.Bundle, secret)
+	require.NotContains(t, enr.Bundle, "x-access-token")
+	b, err := pki.SplitBundle([]byte(enr.Bundle))
+	require.NoError(t, err)
+	require.Equal(t, "https://127.0.0.1:1/org/fleet.git", b.FleetURL)
+
+	_, err = f.master.EnrollFleetMember(ctx, "bravo", keyLine("bravo"), "https://hub.example")
+	_, code := fleetCode(t, err)
+	require.Equal(t, "address_not_applicable", code)
+	require.NotContains(t, err.Error(), secret)
+	require.Contains(t, err.Error(), "https://127.0.0.1:1/org/fleet.git")
+}
+
+// F3: Activity's host-changed detail is read without userinfo, whatever the
+// record on main holds (every writer strips it today; the read does too).
+// SABOTAGE: mainEvents joins c.Host as read -> red.
+func TestFleetActivity_HostChangedDetailCarriesNoUserinfo(t *testing.T) {
+	evs := mainEvents(store.FleetMainCommit{At: time.Now(), Author: "master", HostChanged: true,
+		Host: []string{"https://u:ghp_tok@hub.example/git/fleet", "https://hub2.example/git/fleet"}}, nil)
+	require.Len(t, evs, 1)
+	require.Equal(t, FleetEventHostChanged, evs[0].Kind)
+	require.Equal(t, "hosted at https://hub.example/git/fleet, https://hub2.example/git/fleet", evs[0].Detail)
+}

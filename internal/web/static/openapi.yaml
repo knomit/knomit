@@ -2282,7 +2282,10 @@ paths:
         join needs nothing more.
 
         The fleet URL: when the fleet repository here syncs with an origin (a
-        forge, or the hub when this master is not it), that origin's URL, and
+        forge, or the hub when this master is not it), that origin's URL
+        without its userinfo (a token in the origin URL is the master's own
+        credential; a joiner supplies its own, so neither the bundle, nor
+        `fleet_url`, nor a refusal's text carries it), and
         `address` is refused (`address_not_applicable`, 422). When this
         instance is the hub, `https://<address>/git/<repo>` at one of this
         instance's `external_addresses`: with none configured, the enroll is
@@ -2320,7 +2323,7 @@ paths:
                   agent_id: { type: string }
                   serial: { type: string }
                   bundle: { type: string, description: "The bundle document: a `# knomit fleet bundle v1` header with url, agent, root (fingerprint) and serial lines, then the leaf, root and CRL PEM blocks" }
-                  fleet_url: { type: string, description: "The fleet repository URL the bundle carries" }
+                  fleet_url: { type: string, description: "The fleet repository URL the bundle carries, never with userinfo" }
                   root_fingerprint: { type: string }
                   published: { type: boolean }
                   publish_error: { type: string }

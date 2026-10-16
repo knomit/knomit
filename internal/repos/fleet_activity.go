@@ -160,7 +160,8 @@ func mainEvents(c store.FleetMainCommit, branchOf map[string]string) []FleetEven
 	if c.HostChanged {
 		d := "the host record is removed"
 		if len(c.Host) > 0 {
-			d = "hosted at " + strings.Join(c.Host, ", ")
+			// Read without userinfo, as GET /fleet reads the record (#527 F3).
+			d = "hosted at " + strings.Join(credentialFreeAll(c.Host), ", ")
 		}
 		out = append(out, FleetEvent{At: c.At, Kind: FleetEventHostChanged, Agent: c.Author, Detail: d})
 	}

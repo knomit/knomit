@@ -308,10 +308,13 @@ func (m *Manager) fleetURLForBundle(ri *RepoInstance, address string) (string, e
 		return "", err
 	}
 	if o != nil {
+		// Without its userinfo: a joiner supplies its own credential, and a
+		// token in the origin URL is the master's own (#527 F3).
+		u := credentialFree(o.URL)
 		if address != "" {
-			return "", fleetErr(http.StatusUnprocessableEntity, "address_not_applicable", "this fleet's repository syncs with "+o.URL+", the URL members use: enroll without an address")
+			return "", fleetErr(http.StatusUnprocessableEntity, "address_not_applicable", "this fleet's repository syncs with "+u+", the URL members use: enroll without an address")
 		}
-		return o.URL, nil
+		return u, nil
 	}
 	addrs := m.deps.Cfg.ExternalAddresses
 	switch {
