@@ -228,7 +228,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           <>
             <span data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
             <span data-testid="target-label" style={{
-              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
+              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden',
               fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
               color: label.color,
             }}>

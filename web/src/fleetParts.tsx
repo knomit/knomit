@@ -44,10 +44,10 @@ export function Kv({ rows, testid }: { rows: [string, ReactNode | null][]; testi
   return (
     <div data-testid={testid} style={kvGrid}>
       {rows.filter(([, v]) => v !== null).map(([k, v]) => (
-        <span key={k} style={{ display: 'contents' }}>
+        <div key={k} style={kvRow}>
           <span style={kvKey}>{k}</span>
           <span style={kvVal}>{v}</span>
-        </span>
+        </div>
       ))}
     </div>
   );
@@ -77,10 +77,8 @@ const chipBase: CSSProperties = {
 };
 const copyBtn: CSSProperties = { background: 'none', border: 'none', padding: 2, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', flexShrink: 0 };
 const copyRow: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%', minWidth: 0 };
-const kvGrid: CSSProperties = {
-  display: 'grid', gridTemplateColumns: 'minmax(120px, max-content) minmax(0, 1fr)', columnGap: 18, rowGap: 6,
-  fontSize: 12, alignItems: 'baseline',
-};
-const kvKey: CSSProperties = { color: '#888', fontSize: 12 };
-const kvVal: CSSProperties = { color: '#ddd', minWidth: 0, overflowWrap: 'anywhere' };
+const kvGrid: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12 };
+const kvRow: CSSProperties = { display: 'flex', flexWrap: 'wrap', columnGap: 18, rowGap: 2, alignItems: 'baseline' };
+const kvKey: CSSProperties = { color: '#888', fontSize: 12, flex: '0 0 120px' };
+const kvVal: CSSProperties = { color: '#ddd', minWidth: 0, flex: '1 1 220px', overflowWrap: 'anywhere' };
 const codeLine: CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#a08750', marginTop: 3 };

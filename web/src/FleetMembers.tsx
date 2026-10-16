@@ -243,7 +243,7 @@ function EnrollPanel({ fleet, onClose, onEnrolled, onRevoke }: {
       <div style={cardLabel}>Enroll a member</div>
       <div style={{ color: '#888', fontSize: 12 }}>Both come from the joiner's New fleet step on their machine (Join a fleet → Start).</div>
       <label style={fieldLabel} htmlFor="fleet-enroll-agent">Agent id</label>
-      <input id="fleet-enroll-agent" data-testid="fleet-enroll-agent" style={fieldInput} value={agent} placeholder="12 hex characters, e.g. 5be2d8f4a901"
+      <input id="fleet-enroll-agent" data-testid="fleet-enroll-agent" style={fieldInput} value={agent} placeholder="as the joiner's Start step shows it"
         autoCapitalize="off" autoCorrect="off" spellCheck={false} onChange={e => setAgent(e.target.value)} />
       <label style={fieldLabel} htmlFor="fleet-enroll-key">Public key</label>
       <input id="fleet-enroll-key" data-testid="fleet-enroll-key" style={{ ...fieldInput, fontFamily: 'var(--k-font-mono)' }} value={key} placeholder="ssh-ed25519 AAAA…"

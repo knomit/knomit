@@ -208,8 +208,9 @@ function StepHosting({ s, fleet, checking, err, onHosting, onUrl, onConnect }: {
             <div style={{ marginTop: 12 }}>
               {listenerOn && serve.length > 0 ? (
                 <OutcomeCard tone="good" testid="fleet-hosting-urls" headline={serve.length > 1 ? 'Members will join at one of' : 'Members will join at'}
-                  url={serve.join('\n')}
-                  body={serve.length > 1 ? 'Each bundle you issue names one of them; Enroll asks which. A joiner never types it.' : 'The URL goes into every bundle you issue; a joiner never types it.'} />
+                  body={serve.length > 1 ? 'Each bundle you issue names one of them; Enroll asks which. A joiner never types it.' : 'The URL goes into every bundle you issue; a joiner never types it.'}>
+                  <div style={urlList}>{serve.map(u => <div key={u}>{u}</div>)}</div>
+                </OutcomeCard>
               ) : (
                 <OutcomeCard tone="ask" testid="fleet-hosting-listener-off"
                   headline={listenerOn ? 'This instance has no external address' : 'The fleet listener is off on this instance'}
@@ -421,6 +422,7 @@ function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: E
 }
 
 const btnRow: CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' };
+const urlList: CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: '#6f9a7d', overflowWrap: 'anywhere' };
 const will: CSSProperties = { margin: '8px 0 0', paddingLeft: 20, fontSize: 13, color: '#ccc', lineHeight: 1.7 };
 const mono: CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 12, overflowWrap: 'anywhere' };
 const codeLine: CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#a08750', marginTop: 6 };
