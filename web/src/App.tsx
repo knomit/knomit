@@ -15,7 +15,7 @@ import { openEventStream, streamErrorSuffix } from './eventStream';
 import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
-import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, railShown } from './facets';
+import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
 import { TargetRail } from './TargetRail';
@@ -28,6 +28,12 @@ import { useOAuthAvailability } from './useOAuthAvailability';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { CreateLensForm } from './CreateLensForm';
 import { CreateBlocked } from './CreateBlocked';
+import { useFleet } from './useFleet';
+import { FleetMembers, type FleetLanding } from './FleetMembers';
+import { FleetActivity } from './FleetActivity';
+import { FleetSettings } from './FleetSettings';
+import { FleetWizard } from './FleetWizard';
+import type { FleetStatus } from './api';
 import { ErrorBoundary } from './ErrorBoundary';
 import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
@@ -989,9 +995,15 @@ export default function App() {
   // so it comes back with the next target that has it. A draft has no tabs and
   // no facet.
   const facets = useMemo(() => facetsFor(displayed, repos, lenses, creates), [displayed, repos, lenses, creates]);
+  // The fleet: GET /fleet, polled app-wide (the rail's Fleet section, the
+  // crumb's chip, the fleet target's pages).
+  // Not while booting: nothing leaves the page until the boot is over.
+  const { fleet, reload: reloadFleet } = useFleet(boot.phase === 'done' || noRepos);
+  // The card the fleet's Members shows once after a create or a join.
+  const [fleetLanding, setFleetLanding] = useState<FleetLanding | null>(null);
   const shownFacet: Facet | null = displayed.kind === 'draft' ? null : facets.includes(view.facet) ? view.facet : 'settings';
   const browseShown = view.server === null && onContext && shownFacet === 'browse';
-  const targetLabel = useMemo(() => targetLabelFor(displayed, repos, archived, creates), [displayed, repos, archived, creates]);
+  const targetLabel = useMemo(() => targetLabelFor(displayed, repos, archived, creates, fleet), [displayed, repos, archived, creates, fleet]);
   // The Settings tab's dot: the current repo's remote is failing, by the
   // banner's source OR by the listing. Only for a repo context — a lens's
   // Settings has no Remote block, and a dot pointing at nothing is a dead
@@ -1009,12 +1021,14 @@ export default function App() {
 
   // The rows the rail draws for drafts. The repository draft is also there
   // whenever there are no repositories, because then it is the target.
-  const drafts = useMemo(() => ({ repo: view.draft === 'repo' || noRepos, lens: view.draft === 'lens' }), [view.draft, noRepos]);
+  const drafts = useMemo(() => ({ repo: view.draft === 'repo' || noRepos, lens: view.draft === 'lens', fleet: view.draft === 'fleet' }), [view.draft, noRepos]);
   // With no repositories the draft is the target: make it a real draft, so
   // its registration lands like any other (DRAFT_REGISTERED) and picking a
   // pinned row and back again behaves as it does with repositories.
   useEffect(() => {
-    if (noRepos && view.draft !== 'repo') dispatchView({ type: 'OPEN_DRAFT', kind: 'repo', from: stateRef.current.context });
+    // A fleet draft is left alone: a fresh instance may create or join a
+    // fleet before it has a repository.
+    if (noRepos && view.draft !== 'repo' && view.draft !== 'fleet') dispatchView({ type: 'OPEN_DRAFT', kind: 'repo', from: stateRef.current.context });
   }, [noRepos, view.draft, dispatchView]);
   // The zero-repo shell IS the end of boot: there is nothing to open, so the
   // boot screen must not come back while the first repository is created.
@@ -1044,11 +1058,14 @@ export default function App() {
         return;
       }
     }
-    const gone = (p.kind === 'archived' && archivedLoaded && !archived.some(a => a.id === p.id))
+    // The fleet target is gone once GET /fleet names no fleet repository
+    // (a leave, a decommission).
+    const gone = (p.kind === 'fleet' && fleet !== null && !fleet.fleet_repo)
+      || (p.kind === 'archived' && archivedLoaded && !archived.some(a => a.id === p.id))
       || (p.kind === 'unavailable' && reposLoaded && !repos.some(r => r.name === p.repo && !repoAvailable(r)))
       || (p.kind === 'brokenLens' && reposLoaded && !lenses.some(l => l.name === p.name));
     if (gone) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(state.context, repos, lenses, creates), keepServer: true });
-  }, [view.pinned, archived, archivedLoaded, repos, reposLoaded, lenses, creates, state.context, dispatch, dispatchView]);
+  }, [view.pinned, archived, archivedLoaded, repos, reposLoaded, lenses, creates, state.context, dispatch, dispatchView, fleet]);
 
   // The server pages, behind the gear. They show OVER the displayed target,
   // which stays exactly as it was, so the gear again (or any rail pick) is the
@@ -1059,7 +1076,7 @@ export default function App() {
   const serverOpen = view.server !== null;
   const oauth = useOAuthAvailability({ enabled: serverOpen && !state.serverReadOnly, pageOpen: view.server === 'auth' });
   const serverPages = useMemo(() => serverPagesFor(state.serverReadOnly, oauth.available), [state.serverReadOnly, oauth.available]);
-  const serverPage: ServerPage | null = view.server === null ? null : serverPages.includes(view.server) ? view.server : 'fleet';
+  const serverPage: ServerPage | null = view.server === null ? null : serverPages.includes(view.server) ? view.server : (serverPages[0] ?? null);
   const onServerPage = useCallback((p: ServerPage) => dispatchView({ type: 'SET_SERVER_PAGE', page: p }), [dispatchView]);
   // The gear refuses while a connect commit runs in the Settings facet:
   // opening the server pages over it would unmount the wizard.
@@ -1282,6 +1299,33 @@ export default function App() {
     if (viewRef.current.locked) return;
     dispatchView({ type: 'SELECT_PINNED', target: t });
   }, [dispatchView]);
+  // The fleet row: the fleet target, pinned over the context with its own
+  // tabs (Members, Activity, Settings).
+  const onPickFleet = useCallback(() => {
+    if (viewRef.current.locked) return;
+    dispatchView({ type: 'SELECT_PINNED', target: { kind: 'fleet' }, available: FLEET_FACETS });
+  }, [dispatchView]);
+  // New fleet created or joined: the draft gives way to the fleet row and,
+  // if the draft was on screen, the reader lands on the fleet's Members with
+  // the landing card. GET /fleet is read first, so the rail has the row.
+  const onFleetDraftDone = useCallback((landing: FleetLanding) => {
+    void Promise.all([reloadFleet(), refreshLists()]).then(() => {
+      const v = viewRef.current;
+      if (v.draft !== 'fleet') return;
+      const shown = v.draftShown;
+      dispatchView({ type: 'DRAFT_REGISTERED', kind: 'fleet', facet: 'members' });
+      if (shown) {
+        setFleetLanding(landing);
+        dispatchView({ type: 'SELECT_PINNED', target: { kind: 'fleet' }, available: FLEET_FACETS });
+      }
+    });
+  }, [dispatchView, reloadFleet, refreshLists]);
+  // A fleet action changed the fleet (a revoke, a leave, an import): read it
+  // again now rather than at the next poll.
+  const onFleetChanged = useCallback(() => {
+    void reloadFleet();
+    void refreshLists();
+  }, [reloadFleet, refreshLists]);
 
   // A section's `+`, and a draft row. The draft remembers what was on screen,
   // for Cancel.
@@ -1463,7 +1507,7 @@ export default function App() {
         <TopBar state={state} repos={repos} label={targetLabel}
           railOpen={showRail} onToggleRail={toggleRail}
           facets={facets} facet={shownFacet ?? undefined} onFacet={onFacet} settingsDot={settingsDot} locked={view.locked}
-          onGear={onGear} server={serverBar} />
+          onGear={onGear} server={serverBar} gear={serverPages.length > 0} />
       </ErrorBoundary>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         {showRail && (
@@ -1483,6 +1527,8 @@ export default function App() {
               draftShown={draftShownKind}
               onNewDraft={onNewDraft}
               onPickDraft={onPickDraft}
+              fleet={fleet}
+              onPickFleet={onPickFleet}
               focusRequest={railFocusRequest}
               onFocusHandled={clearRailFocusRequest}
               locked={view.locked}
@@ -1567,7 +1613,28 @@ export default function App() {
                 </ErrorBoundary>
               </div>
             )}
-            {!serverOpen && pinnedOrContext && shownFacet === 'browse' && (
+            {drafts.fleet && (
+              <div data-testid="draft-fleet" style={draftBody(!serverOpen && draftShownKind === 'fleet')}>
+                <ErrorBoundary variant="inline" label="New fleet hit an error">
+                  {/* The fleet `+` is off on a read-only server, so no fleet
+                      draft opens there. */}
+                  <FleetWizard fleet={fleet} onDone={onFleetDraftDone} onCancel={onCancelDraft} />
+                </ErrorBoundary>
+              </div>
+            )}
+            {/* The fleet target's pages. */}
+            {!serverOpen && displayed.kind === 'fleet' && fleet?.fleet_repo && (
+              <ErrorBoundary variant="inline" label="The fleet hit an error">
+                {shownFacet === 'members' && (
+                  <FleetMembers fleet={fleet} landing={fleetLanding} onDismissLanding={() => setFleetLanding(null)} onChanged={onFleetChanged} />
+                )}
+                {shownFacet === 'activity' && <FleetActivity fleet={fleet} />}
+                {shownFacet === 'settings' && (
+                  <FleetSettings fleet={fleet as FleetStatus} onChanged={onFleetChanged} onBusyChange={setLocked} />
+                )}
+              </ErrorBoundary>
+            )}
+            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && shownFacet === 'browse' && (
               <BrowseFacet
                 state={state}
                 dispatch={dispatch}
@@ -1582,7 +1649,7 @@ export default function App() {
                 onEnterBranch={enterBranch}
               />
             )}
-            {!serverOpen && pinnedOrContext && shownFacet === 'activity' && (
+            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && shownFacet === 'activity' && (
               <ErrorBoundary variant="inline" label="Activity hit an error">
                 <ActivityFacet
                   // Keyed on the target so a switch starts a fresh read
@@ -1594,7 +1661,7 @@ export default function App() {
                 />
               </ErrorBoundary>
             )}
-            {!serverOpen && pinnedOrContext && shownFacet === 'settings' && (
+            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && shownFacet === 'settings' && (
               <ErrorBoundary variant="inline" label="Settings hit an error">
                 <SettingsFacet
                   target={pinnedOrContext}

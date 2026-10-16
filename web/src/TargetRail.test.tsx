@@ -436,3 +436,55 @@ describe('TargetRail — row badges', () => {
     expect(within(screen.getByTestId('rail-repo-core')).queryByTestId('repo-ontology-error-core')).toBeNull();
   });
 });
+
+// The Fleet section (PR 7): one row once in a fleet (the fleet repository
+// moves there from Repositories), else the `+` that opens New fleet, which
+// GET /fleet's `local` alone enables.
+describe('TargetRail: the Fleet section', () => {
+  const standalone = { state: 'standalone' as const, agent_id: 'a', local: true, host: { listener_on: false, external_addresses: [] }, fleet_urls: [] };
+  const inFleet = { ...standalone, state: 'registered' as const, fleet_repo: 'fleet', master: true };
+
+  it('standalone on the desktop: "Not in a fleet" and a working + that opens the fleet draft', () => {
+    const onNewDraft = vi.fn();
+    renderRail({ fleet: standalone, onNewDraft });
+    expect(screen.getByTestId('rail-fleet-none')).toHaveTextContent(/^Not in a fleet$/);
+    const plus = screen.getByTestId('rail-new-fleet');
+    expect(plus).toHaveAttribute('title', 'Create or join a fleet');
+    expect(plus).toBeEnabled();
+    fireEvent.click(plus);
+    expect(onNewDraft).toHaveBeenCalledWith('fleet');
+  });
+
+  // SABOTAGE: enable the + regardless of `local` -> red.
+  it('in a browser over TCP (local false): the + is off and the line says where to go', () => {
+    renderRail({ fleet: { ...standalone, local: false } });
+    expect(screen.getByTestId('rail-new-fleet')).toBeDisabled();
+    expect(screen.getByTestId('rail-fleet-none')).toHaveTextContent('Not in a fleet — create or join from the desktop app');
+  });
+
+  it('the draft row reads New fleet', () => {
+    renderRail({ fleet: standalone, drafts: { repo: false, lens: false, fleet: true }, draftShown: 'fleet' });
+    expect(screen.getByTestId('rail-draft-fleet')).toHaveTextContent('New fleet');
+    expect(screen.getByTestId('rail-draft-fleet')).toHaveAttribute('aria-current', 'true');
+    expect(screen.queryByTestId('rail-fleet-none')).toBeNull();
+  });
+
+  it('in a fleet: the fleet repository is the fleet row with its role, not a repository', () => {
+    const onPickFleet = vi.fn();
+    renderRail({ repos: [...repos, { name: 'fleet', uid: 'u-fleet' }], fleet: inFleet, onPickFleet, pinned: { kind: 'fleet' } });
+    expect(repoNames()).not.toContain('fleet');
+    const row = screen.getByTestId('rail-fleet-row');
+    expect(row).toHaveTextContent('fleet');
+    expect(screen.getByTestId('rail-fleet-role')).toHaveTextContent('master');
+    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(screen.queryByTestId('rail-new-fleet')).toBeNull();
+    fireEvent.click(row);
+    expect(onPickFleet).toHaveBeenCalled();
+  });
+
+  it('a member whose sync failed carries the red dot', () => {
+    renderRail({ fleet: { ...inFleet, master: false, last_error: 'fetch: connection refused' } });
+    expect(screen.getByTestId('rail-fleet-role')).toHaveTextContent('member');
+    expect(screen.getByTestId('rail-fleet-health')).toHaveAttribute('title', 'fetch: connection refused');
+  });
+});

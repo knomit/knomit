@@ -2,16 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { BrowseContext } from './state';
 import { repoAvailable, brokenLensMember } from './api';
-import type { RepoInfo, Lens, ArchivedRepo, RepoCreateStatus } from './api';
+import type { RepoInfo, Lens, ArchivedRepo, RepoCreateStatus, FleetStatus } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { RepoOntologyChip } from './RepoOntologyChip';
 import { RepoDot } from './settingsParts';
 import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, activeCreateByRepo, createFlag, pendingCreates } from './useRepoCreates';
-import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon } from './icons';
+import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon, FleetIcon } from './icons';
 import { LENS, noMouseFocus } from './utils';
-import { remoteFailing } from './facets';
+import { remoteFailing, DRAFT_NAME } from './facets';
 import type { PinnedTarget, DraftKind } from './facets';
 
 interface Props {
@@ -38,7 +38,14 @@ interface Props {
    *  not yet registered, an archived repo. */
   onPin?: (t: PinnedTarget) => void;
   /** Which draft rows exist. A draft row sits at the top of its section. */
-  drafts?: { repo: boolean; lens: boolean };
+  drafts?: { repo: boolean; lens: boolean; fleet?: boolean };
+  /** GET /fleet, or null before it answered. The Fleet section draws its one
+   *  row from it (fleet_repo), and the fleet repository is not listed under
+   *  Repositories: it is the fleet target. `local` decides whether the `+`
+   *  can do anything (the fleet routes are served to the desktop app only). */
+  fleet?: FleetStatus | null;
+  /** The fleet target was picked. */
+  onPickFleet?: () => void;
   /** The draft on screen, if any; its row is the selected one. */
   draftShown?: DraftKind | null;
   /** A section's `+`. */
@@ -78,7 +85,7 @@ interface Props {
 export function TargetRail({
   repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect,
   archived = [], pinned = null, onPin, drafts = { repo: false, lens: false }, draftShown = null,
-  onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false,
+  onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false, fleet = null, onPickFleet,
 }: Props) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -120,8 +127,10 @@ export function TargetRail({
   // name goes, whatever state the thing behind it is in — a create not yet
   // registered included.
   type RepoItem = { kind: 'repo'; name: string; repo: RepoInfo } | { kind: 'pending'; name: string; job: RepoCreateStatus };
+  // The fleet repository is the fleet target, drawn in the Fleet section.
+  const fleetRepo = fleet?.fleet_repo ?? '';
   const repoItems: RepoItem[] = [
-    ...repos.map(r => ({ kind: 'repo' as const, name: r.name, repo: r })),
+    ...repos.filter(r => r.name !== fleetRepo).map(r => ({ kind: 'repo' as const, name: r.name, repo: r })),
     ...pending.map(j => ({ kind: 'pending' as const, name: j.name, job: j })),
   ].sort(byName).filter(it => match(it.name));
   const shownLenses = [...lenses].sort(byName).filter(l => match(l.name));
@@ -135,7 +144,7 @@ export function TargetRail({
   const onContext = draftShown === null && pinned === null;
 
   return (
-    <nav data-testid="target-rail" aria-label="Repositories and lenses" style={rail}>
+    <nav data-testid="target-rail" aria-label="Repositories, lenses and fleet" style={rail}>
       <label style={searchBox}>
         <SearchGlyph />
         <input
@@ -325,6 +334,50 @@ export function TargetRail({
             );
           })}
         </div>
+
+        {/* The fleet: one row once this instance is in one, with its role;
+            otherwise the `+` that opens New fleet (create or join), which
+            only the desktop app can act on (GET /fleet's `local`). */}
+        <div data-testid="rail-fleet">
+          <div style={sectionHeader}>
+            <FleetIcon color={FLEET_ACCENT} size={13} />
+            <span style={sectionTitle}>Fleet</span>
+            {!fleetRepo && (
+              <PlusButton testId="rail-new-fleet" label="Create or join a fleet"
+                disabled={serverReadOnly || locked || fleet?.local !== true}
+                active={draftShown === 'fleet'} onClick={() => { release(); onNewDraft?.('fleet'); }} />
+            )}
+          </div>
+          {drafts.fleet && !fleetRepo && (
+            <DraftRow kind="fleet" selected={draftShown === 'fleet'} disabled={locked}
+              onClick={() => { release(); onPickDraft?.('fleet'); }} />
+          )}
+          {fleetRepo ? (
+            <button
+              type="button"
+              data-testid="rail-fleet-row"
+              aria-current={pinned?.kind === 'fleet' && draftShown === null ? true : undefined}
+              disabled={locked}
+              onMouseDown={noMouseFocus}
+              onClick={locked ? undefined : () => { release(); onPickFleet?.(); }}
+              style={row(pinned?.kind === 'fleet' && draftShown === null ? 'fleet' : null, false)}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: FLEET_ACCENT, flexShrink: 0 }} />
+              <span style={rowName}>{fleetRepo}</span>
+              <span style={badges}>
+                <span data-testid="rail-fleet-role" style={fleet?.master ? masterChip : memberChip}>{fleet?.master ? 'master' : 'member'}</span>
+                {(fleet?.last_error || fleet?.record_state === 'revoked') && (
+                  <span data-testid="rail-fleet-health" role="img" aria-label="fleet failing"
+                    title={fleet?.last_error || 'certificate revoked'} style={healthDot} />
+                )}
+              </span>
+            </button>
+          ) : !drafts.fleet && fleet && (
+            <div data-testid="rail-fleet-none" style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>
+              {fleet.local ? 'Not in a fleet' : 'Not in a fleet — create or join from the desktop app'}
+            </div>
+          )}
+        </div>
       </div>
     </nav>
   );
@@ -353,7 +406,7 @@ function DraftRow({ kind, selected, disabled, onClick }: {
     <button type="button" data-testid={`rail-draft-${kind}`} aria-current={selected || undefined}
       disabled={disabled} onMouseDown={noMouseFocus} onClick={disabled ? undefined : onClick}
       style={draftRow(kind, selected)}>
-      <span style={rowName}>{kind === 'repo' ? 'New repository' : 'New lens'}</span>
+      <span style={rowName}>{DRAFT_NAME[kind]}</span>
     </button>
   );
 }
@@ -372,6 +425,8 @@ const SearchGlyph = () => (
 const LENS_ACCENT = '#b9a6f0';
 // The draft's blue: the creating tone (#8ab6d6 on #131d26) and its selected row.
 const DRAFT_BLUE = '#8ab6d6';
+// The fleet's teal (Q5): its section glyph, its row and the master chip.
+const FLEET_ACCENT = '#8ad6c8';
 
 const rail: CSSProperties = {
   width: 236, flexShrink: 0, minHeight: 0,
@@ -401,7 +456,7 @@ const sectionTitle: CSSProperties = { flex: 1, fontSize: 11, fontWeight: 600, le
 // A row is the manage rail's listItem in geometry. The selected treatment is
 // the spec's: the green-tinted row with an inset left bar for a repo, the lens
 // tint and bar for a lens.
-const row = (selected: 'repo' | 'lens' | null, disabled: boolean): CSSProperties => ({
+const row = (selected: 'repo' | 'lens' | 'fleet' | null, disabled: boolean): CSSProperties => ({
   width: '100%', display: 'flex', alignItems: 'center', gap: 8,
   border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 13, textAlign: 'left',
   fontFamily: 'inherit',
@@ -410,12 +465,14 @@ const row = (selected: 'repo' | 'lens' | null, disabled: boolean): CSSProperties
     ? { background: '#1a231d', color: '#dfe9e2', boxShadow: 'inset 2px 0 0 -0.5px #7c9' }
     : selected === 'lens'
       ? { background: '#1d1a2c', color: '#e6defc', boxShadow: `inset 2px 0 0 -0.5px ${LENS_ACCENT}` }
-      : { background: 'transparent', color: disabled ? '#6a6a6a' : '#bbb' }),
+      : selected === 'fleet'
+        ? { background: '#121f1d', color: '#dcefeb', boxShadow: `inset 2px 0 0 -0.5px ${FLEET_ACCENT}` }
+        : { background: 'transparent', color: disabled ? '#6a6a6a' : '#bbb' }),
 });
 const draftRow = (kind: DraftKind, selected: boolean): CSSProperties => ({
   ...row(null, false),
   fontStyle: 'italic',
-  ...(kind === 'repo'
+  ...(kind !== 'lens'
     ? selected
       ? { background: '#14191f', color: '#cfe0f2', boxShadow: `inset 2px 0 0 -0.5px ${DRAFT_BLUE}` }
       : { color: DRAFT_BLUE }
@@ -455,6 +512,14 @@ const badges: CSSProperties = {
 const healthDot: CSSProperties = {
   width: 6, height: 6, borderRadius: '50%', background: '#f44336', flexShrink: 0,
 };
+// The fleet row's role chip: the master in the fleet's teal, a member neutral.
+const roleChip: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center',
+  fontSize: 9.5, lineHeight: 1.7, padding: '0 5px', borderRadius: 3,
+  fontFamily: 'var(--k-font-mono)', whiteSpace: 'nowrap', flexShrink: 0,
+};
+const masterChip: CSSProperties = { ...roleChip, color: FLEET_ACCENT, background: '#121f1d', border: '1px solid #24453f' };
+const memberChip: CSSProperties = { ...roleChip, color: '#999', background: '#1a1a1a', border: '1px solid #2a2a2a' };
 // Same chip as the pending row's: one fact, one rendering.
 const createChip: CSSProperties = {
   display: 'inline-flex', alignItems: 'center',

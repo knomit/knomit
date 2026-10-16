@@ -15,7 +15,7 @@ import { useEffect, useReducer } from 'react';
 import type { Dispatch } from 'react';
 import { loadRailOpen, saveRailOpen, loadLastFacet, saveLastFacet } from './repoSelection';
 import { repoAvailable, brokenLensMember } from './api';
-import type { RepoInfo, Lens, RepoCreateStatus, ArchivedRepo } from './api';
+import type { RepoInfo, Lens, RepoCreateStatus, ArchivedRepo, FleetStatus } from './api';
 import type { BrowseContext } from './state';
 import { activeCreateByRepo, createFlag } from './useRepoCreates';
 
@@ -32,8 +32,9 @@ export function otherRepoFailing(repos: RepoInfo[], current: string): boolean {
   return repos.some(r => r.name !== current && remoteFailing(r));
 }
 
-/** A page of a target. Code joins this only if the terminal ships. */
-export type Facet = 'browse' | 'activity' | 'settings';
+/** A page of a target. Code joins this only if the terminal ships. The
+ *  fleet target's first page is Members (its Browse); no other target has it. */
+export type Facet = 'browse' | 'activity' | 'settings' | 'members';
 
 /**
  * A target that can NOT be the browse context, because it has no store to read:
@@ -51,13 +52,17 @@ export type PinnedTarget =
   | { kind: 'archived'; id: string }
   | { kind: 'pending'; createId: string }
   | { kind: 'unavailable'; repo: string }
-  | { kind: 'brokenLens'; name: string };
+  | { kind: 'brokenLens'; name: string }
+  /** The fleet this instance is in: a target of its own (Members, Activity,
+   *  Settings), shown over the context like every other pinned target,
+   *  because it reads the fleet routes, never the browse context's store. */
+  | { kind: 'fleet' };
 
-export type DraftKind = 'repo' | 'lens';
+export type DraftKind = 'repo' | 'lens' | 'fleet';
 
 /** A server page behind the gear. Not a target: nothing on it belongs to a
- *  repository or a lens. */
-export type ServerPage = 'fleet' | 'logs' | 'auth';
+ *  repository, a lens or the fleet. */
+export type ServerPage = 'logs' | 'auth';
 
 /** Anything the rail can select: a normal target (the browse context), a
  *  pinned one, or a draft. */
@@ -68,6 +73,8 @@ export interface ReturnTo { context: BrowseContext; pinned: PinnedTarget | null;
 
 /** The order the tabs are drawn in, which is also the order facetsFor returns. */
 const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
+/** The fleet target's tabs, in order: Members is its Browse. */
+export const FLEET_FACETS: Facet[] = ['members', 'activity', 'settings'];
 
 /**
  * facetsFor is the SINGLE authority on which facets (tabs) a target has. The
@@ -96,6 +103,7 @@ const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
  */
 export function facetsFor(target: Target, repos: RepoInfo[], lenses: Lens[], creates: RepoCreateStatus[]): Facet[] {
   if (target.kind === 'draft') return [];
+  if (target.kind === 'fleet') return FLEET_FACETS;
   if (target.kind === 'archived' || target.kind === 'pending' || target.kind === 'unavailable'
     || target.kind === 'brokenLens') return ['settings'];
   if (target.kind === 'repo') {
@@ -156,8 +164,9 @@ export type ViewAction =
   | { type: 'SET_FOCUS'; focus: string }
   | { type: 'CLEAR_FOCUS' }
   | { type: 'SET_LOCKED'; locked: boolean }
-  /** A settings-only target was picked. Its only facet is Settings. */
-  | { type: 'SELECT_PINNED'; target: PinnedTarget }
+  /** A pinned target was picked. Its facets are `available` (facetsFor);
+   *  absent, Settings only, which is every pinned target but the fleet. */
+  | { type: 'SELECT_PINNED'; target: PinnedTarget; available?: Facet[] }
   /** A rail `+`: insert the draft (or show the one already there). `from` is
    *  the browse context, recorded for Cancel. */
   | { type: 'OPEN_DRAFT'; kind: DraftKind; from: BrowseContext }
@@ -195,7 +204,18 @@ function applyFacetRule(s: ViewState, available: Facet[]): ViewState {
     return { ...s, facet: s.lastFacet, lastFacet: null, focus: null };
   }
   if (available.includes(s.facet)) return s.focus === null ? s : { ...s, focus: null };
-  return { ...s, lastFacet: s.lastFacet ?? s.facet, facet: 'settings', focus: null };
+  return { ...s, lastFacet: s.lastFacet ?? s.facet, facet: landingFacet(s.facet, available), focus: null };
+}
+
+/** Where a target lands when it lacks the current facet: Settings, which
+ *  every target with facets has, except on two journeys that would make it a
+ *  surprise. Into the fleet, its first tab (Members), as the prototype lands;
+ *  out of the fleet's Members (a page no other target has), the target's own
+ *  first tab, Browse when it has one. */
+function landingFacet(current: Facet, available: Facet[]): Facet {
+  if (available[0] === 'members') return 'members';
+  if (current === 'members' && available.includes('browse')) return 'browse';
+  return 'settings';
 }
 
 /** What Cancel on the draft returns to: the target on screen before it. Left
@@ -240,7 +260,7 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       return applyFacetRule(base, a.available);
     }
     case 'SELECT_PINNED':
-      return applyFacetRule({ ...s, pinned: a.target, draftShown: false, server: null }, ['settings']);
+      return applyFacetRule({ ...s, pinned: a.target, draftShown: false, server: null }, a.available ?? ['settings']);
     case 'OPEN_DRAFT':
       if (s.draft === a.kind && s.draftShown) return s.server === null ? s : { ...s, server: null };
       return { ...s, draft: a.kind, draftShown: true, returnTo: returnToFrom(s, a.from), server: null };
@@ -274,9 +294,10 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       return { ...landed, facet: 'settings', lastFacet: s.lastFacet ?? s.facet };
     }
     case 'TOGGLE_SERVER':
-      // Opening lands on Fleet, the page every server has. Closing changes
-      // nothing else: the target and its facet were never left.
-      return { ...s, server: s.server === null ? 'fleet' : null };
+      // Opening lands on Logs, the first page. Closing changes nothing else:
+      // the target and its facet were never left. (App offers no gear when
+      // serverPagesFor gives no page.)
+      return { ...s, server: s.server === null ? 'logs' : null };
     case 'SET_SERVER_PAGE':
       return s.server === a.page ? s : { ...s, server: a.page };
     case 'SET_FOCUS':
@@ -291,21 +312,22 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
 }
 
 /**
- * serverPagesFor: the server tabs, in order. Fleet always. Logs and
- * Authorizations are OMITTED on a read-only server, whose endpoints answer
- * 403 for both, so a tab would be a control that cannot work; Authorizations
- * also needs an OAuth issuer (useOAuthAvailability).
+ * serverPagesFor: the server tabs, in order: Logs, then Authorizations when
+ * there is an OAuth issuer (useOAuthAvailability). The fleet is not here: it
+ * is a target in the rail. Both are OMITTED on a read-only server, whose
+ * endpoints answer 403 for both, so a tab would be a control that cannot
+ * work; with no page at all there is no gear.
  */
 export function serverPagesFor(serverReadOnly: boolean, oauthAvailable: boolean): ServerPage[] {
-  if (serverReadOnly) return ['fleet'];
-  return oauthAvailable ? ['fleet', 'logs', 'auth'] : ['fleet', 'logs'];
+  if (serverReadOnly) return [];
+  return oauthAvailable ? ['logs', 'auth'] : ['logs'];
 }
 
 /** draftCancellable: whether the draft offers Cancel. A repository draft with
  *  no repositories is the only thing there is to show, so Cancel would be a
  *  button that visibly does nothing (the `repos.length === 0` rule). */
 export function draftCancellable(kind: DraftKind, repos: RepoInfo[]): boolean {
-  return kind === 'lens' || repos.length > 0;
+  return kind !== 'repo' || repos.length > 0;
 }
 
 /**
@@ -325,11 +347,24 @@ export function displayedTarget(view: ViewState, context: BrowseContext, noRepos
  *  icon and colour), its name, and for a target with only Settings the state
  *  chip that explains why. A draft is labelled by what it will create. */
 export interface TargetLabel {
-  kind: 'repo' | 'lens';
+  kind: 'repo' | 'lens' | 'fleet';
   name: string;
-  chip?: { text: string; tone: 'archived' | 'bad' | 'creating' };
+  chip?: { text: string; tone: 'archived' | 'bad' | 'creating' | 'fleet' | 'neutral' | 'pending' };
   draft?: boolean;
 }
+
+/** fleetChip is the fleet target's chip, from GET /fleet as the server says
+ *  it: the own record's state on main when it is pending or revoked (the two
+ *  that need saying), else the role. */
+export function fleetChip(fleet: Pick<FleetStatus, 'master' | 'record_state'> | null): TargetLabel['chip'] {
+  if (!fleet) return undefined;
+  if (fleet.record_state === 'pending') return { text: 'record pending', tone: 'pending' };
+  if (fleet.record_state === 'revoked') return { text: 'revoked', tone: 'bad' };
+  return fleet.master ? { text: 'master', tone: 'fleet' } : { text: 'member', tone: 'neutral' };
+}
+
+/** What a draft is called in the rail, the crumb and its index heading. */
+export const DRAFT_NAME: Record<DraftKind, string> = { repo: 'New repository', lens: 'New lens', fleet: 'New fleet' };
 
 /** The chip word for a repo with no store: "store missing" for the common
  *  case, the state's own word otherwise (RepoStateChip's wording). */
@@ -339,10 +374,13 @@ function unavailableWord(state: string | undefined): string {
 
 export function targetLabelFor(
   target: Target, repos: RepoInfo[], archived: ArchivedRepo[], creates: RepoCreateStatus[],
+  fleet: FleetStatus | null = null,
 ): TargetLabel {
   switch (target.kind) {
     case 'draft':
-      return { kind: target.draft, name: target.draft === 'repo' ? 'New repository' : 'New lens', draft: true };
+      return { kind: target.draft, name: DRAFT_NAME[target.draft], draft: true };
+    case 'fleet':
+      return { kind: 'fleet', name: fleet?.fleet_repo || 'fleet', chip: fleetChip(fleet) };
     case 'archived':
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };
     case 'unavailable':
@@ -373,6 +411,8 @@ export function targetLabelFor(
 export function useViewState(): [ViewState, Dispatch<ViewAction>] {
   const [view, dispatch] = useReducer(viewReducer, undefined, initView);
   useEffect(() => { saveRailOpen(view.railOpen); }, [view.railOpen]);
-  useEffect(() => { saveLastFacet(view.facet); }, [view.facet]);
+  // Members is the fleet's, and the fleet is never remembered across a
+  // reload (a pinned target), so it is not stored either.
+  useEffect(() => { if (view.facet !== 'members') saveLastFacet(view.facet); }, [view.facet]);
   return [view, dispatch];
 }

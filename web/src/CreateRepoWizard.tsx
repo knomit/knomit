@@ -11,7 +11,7 @@ import { StepBranch } from './StepBranch';
 import { StepOntology } from './StepOntology';
 import { StepReview } from './StepReview';
 import { CreateProgress } from './CreateProgress';
-import { btn } from './manageStyles';
+import { btn, wizardErr as errText, wizardErrNote as errNote, wizardBody, wizardFooter } from './manageStyles';
 import type { ProbeFailure } from './StepAccess';
 
 // CreateRepoWizard replaces CreateRepoForm's flat preset/custom/clone tabs
@@ -587,15 +587,6 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
 }
 
 // The right column: measured like a settings page's blocks, not stretched.
-const body: React.CSSProperties = { maxWidth: 760, padding: '24px 32px 48px' };
-const footer: React.CSSProperties = { display: 'flex', gap: 8, marginTop: 16 };
-const errText: React.CSSProperties = {
-  marginTop: 12, padding: '10px 12px', borderRadius: 6,
-  background: '#262013', border: '1px solid #4a3f22',
-  color: '#e2c07a', fontSize: 13, lineHeight: 1.55, maxWidth: '74ch',
-  // The server's own words arrive with their line structure intact — hosts
-  // wrap prose and format remedies as lists, and collapsing that would undo
-  // the reason for carrying it back at all.
-  whiteSpace: 'pre-wrap',
-};
-const errNote: React.CSSProperties = { color: '#a08a54', fontSize: 12, marginTop: 6 };
+const body: React.CSSProperties = wizardBody;
+const footer: React.CSSProperties = wizardFooter;
+

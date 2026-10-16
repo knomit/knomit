@@ -5,7 +5,8 @@ import { installFakeEventSource, uninstallFakeEventSource } from './testEventSou
 import { __resetRepoCreatesForTest } from './useRepoCreates';
 import type { OAuthPending } from './api';
 
-// The server pages: Fleet, Logs and Authorizations behind the gear, inside the
+// The server pages: Logs and Authorizations behind the gear (the fleet is a
+// rail target since PR 7, not a server page), inside the
 // same three-level shell as every target. The gear is lit while they show and
 // takes you back to the target and facet you left; a rail pick also leaves
 // them; Logs and Authorizations are omitted where they cannot work; and the
@@ -94,7 +95,7 @@ const gear = () => screen.getByTestId('server-toggle');
 const tabNames = () => screen.getAllByRole('tab').map(t => t.firstChild?.textContent ?? '');
 async function openServer() {
   await act(async () => { fireEvent.click(gear()); });
-  await screen.findByTestId('fleet-page');
+  await screen.findByTestId('logs-facet');
 }
 
 beforeEach(() => {
@@ -114,7 +115,7 @@ afterEach(() => {
 });
 
 describe('the gear opens the server pages', () => {
-  it('reads the bar as knomit │ the server tabs (no target crumb), and has Fleet, Logs and Authorizations when there is an issuer', async () => {
+  it('reads the bar as knomit │ the server tabs (no target crumb), and has Logs and Authorizations when there is an issuer', async () => {
     await primeApi({ oauth: [] });
     await mountApp();
     // Control: on a target the label names it.
@@ -126,24 +127,25 @@ describe('the gear opens the server pages', () => {
     expect(screen.getByTestId('toknomitr-bar')).not.toHaveTextContent('Server');
     expect(screen.getByTestId('bar-brand')).toHaveTextContent(/^knomit$/);
     expect(screen.getByTestId('toknomitr-bar')).not.toHaveTextContent('localhost');
-    await waitFor(() => expect(tabNames()).toEqual(['Fleet', 'Logs', 'Authorizations']));
+    await waitFor(() => expect(tabNames()).toEqual(['Logs', 'Authorizations']));
     expect(screen.getByRole('tablist', { name: 'Server pages' })).toBeInTheDocument();
     expect(screen.queryByTestId('facet-tabs')).toBeNull();
-    expect(screen.getByTestId('server-tab-fleet')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('server-tab-logs')).toHaveAttribute('aria-selected', 'true');
+    // The Fleet server page is gone (Q1): the fleet is a rail target.
+    expect(screen.queryByTestId('server-tab-fleet')).toBeNull();
+    expect(screen.queryByTestId('fleet-page')).toBeNull();
   });
 
-  it('has only Fleet on a read-only server, and never probes for an issuer', async () => {
+  it('has no gear on a read-only server (no page works there), and never probes for an issuer', async () => {
     localStorage.setItem('knomit.rail', '1');
     const m = await primeApi({ readOnly: true, oauth: [] });
     await mountApp();
     // The read-only flag lands after boot; wait until it is observable (the
     // rail's `+` refuses) so the assertions cannot pass by running first.
     await waitFor(() => expect(screen.getByTestId('rail-new-repo')).toBeDisabled());
-    await openServer();
-    await waitFor(() => expect(tabNames()).toEqual(['Fleet']));
+    expect(screen.queryByTestId('server-toggle')).toBeNull();
     // Give a probe every chance to have run.
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
-    expect(tabNames()).toEqual(['Fleet']);
     expect(m.listOAuthPending).not.toHaveBeenCalled();
   });
 
@@ -153,7 +155,7 @@ describe('the gear opens the server pages', () => {
     await openServer();
     await waitFor(() => expect(m.listOAuthPending).toHaveBeenCalled());
     await act(async () => { await Promise.resolve(); });
-    expect(tabNames()).toEqual(['Fleet', 'Logs']);
+    expect(tabNames()).toEqual(['Logs']);
   });
 
   it('badges Authorizations with the waiting count, and shows no badge at zero', async () => {
@@ -171,16 +173,12 @@ describe('the gear opens the server pages', () => {
     expect(screen.queryByTestId('server-tab-auth-badge')).toBeNull();
   });
 
-  it('opens each page in the body: Fleet and Authorizations as indexed pages, Logs with its toolbar', async () => {
+  it('opens each page in the body: Logs with its toolbar, Authorizations as an indexed page', async () => {
     await primeApi({ oauth: [pending('p1', 'alpha')] });
     await mountApp();
     await openServer();
-    expect(within(screen.getByTestId('fleet-page')).getByTestId('settings-index-heading')).toHaveTextContent('Fleet');
-
-    fireEvent.click(await screen.findByTestId('server-tab-logs'));
-    expect(await screen.findByTestId('logs-facet')).toBeInTheDocument();
+    expect(screen.getByTestId('logs-facet')).toBeInTheDocument();
     expect(screen.getByTestId('facet-toolbar')).toBeInTheDocument();
-    expect(screen.queryByTestId('fleet-page')).toBeNull();
 
     fireEvent.click(screen.getByTestId('server-tab-auth'));
     const auth = await screen.findByTestId('auth-page');
@@ -206,7 +204,7 @@ describe('the gear is lit while they show, and takes you back', () => {
     expect(gear()).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByTestId('target-label')).toHaveTextContent('ops-kb');
     expect(screen.getByTestId('facet-tab-activity')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.queryByTestId('fleet-page')).toBeNull();
+    expect(screen.queryByTestId('server-pages')).toBeNull();
   });
 
   it('with the rail open, the pages hide it; the gear returns to the same target and facet with the rail back', async () => {
@@ -217,8 +215,6 @@ describe('the gear is lit while they show, and takes you back', () => {
     await screen.findByTestId('repo-settings');
     await openServer();
     expect(screen.queryByTestId('target-rail')).toBeNull();
-    fireEvent.click(await screen.findByTestId('server-tab-logs'));
-    await screen.findByTestId('logs-facet');
 
     await act(async () => { fireEvent.click(gear()); });
     expect(await screen.findByTestId('repo-settings')).toBeInTheDocument();
@@ -253,7 +249,7 @@ describe('the keyboard on a server page', () => {
 
     act(() => { fireEvent.keyDown(window, { key: 'Escape' }); });
     await act(async () => { await Promise.resolve(); });
-    expect(screen.getByTestId('fleet-page')).toBeInTheDocument();
+    expect(screen.getByTestId('logs-facet')).toBeInTheDocument();
     expect(gear()).toHaveAttribute('aria-pressed', 'true');
 
     await act(async () => { fireEvent.click(gear()); });

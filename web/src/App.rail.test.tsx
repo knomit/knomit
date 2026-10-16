@@ -268,7 +268,7 @@ describe('the target rail in the app', () => {
     await screen.findByTestId('server-pages');
     expect(screen.queryByTestId('target-rail')).toBeNull();
     expect(screen.getByTestId('rail-toggle')).toBeDisabled();
-    expect(screen.getByTestId('rail-toggle')).toHaveAttribute('title', 'Repositories and lenses are hidden over the server pages');
+    expect(screen.getByTestId('rail-toggle')).toHaveAttribute('title', 'Repositories, lenses and fleet are hidden over the server pages');
     pressMod('b');
     fireEvent.click(screen.getByTestId('rail-toggle'));
     pressMod('k');
