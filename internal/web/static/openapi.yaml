@@ -1887,6 +1887,12 @@ paths:
         ref listing within the configured git network timeout, else 502 and
         nothing changes. Refused with 409 "Repo is indexing" while the index
         job runs; that problem links to the cancel-index action.
+
+        On the fleet repository the URL must be one a member's join can
+        clone: `https://` or `ssh://` with a host, `git@host:path`, or
+        `file://` with a path. Anything else (plain `http://`, another
+        scheme, no host) is 422 `origin_invalid` before anything dials, the
+        same check as a forge `POST /fleet/create`.
       requestBody:
         required: true
         content:
@@ -1898,6 +1904,7 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/OriginSetResponse" }
+        "422": { description: "origin_invalid: on the fleet repository, an origin no member's join could clone" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409":
@@ -2204,7 +2211,11 @@ paths:
         fleet always gets a fresh root, and the one there belongs to another
         fleet). Without `origin` this instance hosts the fleet, so
         `[tls].addr` (`listener_required`, 422) and `external_addresses`
-        (`addresses_required`, 422) must be set. With `origin` the repo
+        (`addresses_required`, 422) must be set. With `origin` its URL must be
+        one a member's join can clone (`https://` or `ssh://` with a host,
+        `git@host:path`, `file://` with a path; `origin_invalid`, 422, for
+        plain `http://`, another scheme or no host: the bundle carries this
+        URL and a join refuses those), then the repo
         create's own checks apply (reachable, a branch to cut from, not yet a
         knowledge base). Another knomit instance cannot be the origin: this
         instance holds no fleet trust yet (`trust_installed`), so such a URL
@@ -2261,7 +2272,7 @@ paths:
         "400": { description: Invalid name or request }
         "403": { description: Not the local authenticated listener }
         "409": { description: "fleet_present, trust_installed, root_present, create_unfinished, or a repo create conflict (name, origin in use)" }
-        "422": { description: "listener_required, addresses_required, or a refused origin" }
+        "422": { description: "listener_required, addresses_required, origin_invalid, or a refused origin" }
   /fleet/enroll:
     post:
       tags: [fleet]

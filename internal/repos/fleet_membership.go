@@ -508,6 +508,21 @@ func bundleURLProblem(u string) string {
 	return "is not https:// (a hub's) or a forge origin's (https://, ssh://, git@host:path, file://)"
 }
 
+// refuseFleetOrigin refuses an origin for the fleet repository that no
+// member's join could clone (#527 F1): the bundle carries the master's origin
+// URL, and a join refuses every shape bundleURLProblem refuses (plain http,
+// another scheme, no host). Asked where the choice is made, a forge create
+// and an attach to the fleet repository, so the operator is not sent to
+// re-enroll joiners for a scheme the master's own origin has.
+func refuseFleetOrigin(u string) error {
+	if why := bundleURLProblem(u); why != "" {
+		return fleetErr(http.StatusUnprocessableEntity, "origin_invalid",
+			"the fleet repository's origin "+credentialFree(u)+" "+why+
+				": members join only an https://, ssh://, git@host:path or file:// origin, so a fleet cannot live there")
+	}
+	return nil
+}
+
 // The two FleetJoinCheck.Hosting values.
 const (
 	HostingMaster = "master" // a role, not a branch (consensus_branch_literals_test allows this name)

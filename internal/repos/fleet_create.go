@@ -248,6 +248,9 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 		}
 	} else {
 		o := *spec.Origin
+		if err := refuseFleetOrigin(strings.TrimSpace(o.URL)); err != nil {
+			return CreateSpec{}, err
+		}
 		cs.Mode, cs.Origin = "initialize", &o
 	}
 	// The repo create's own refusals (name, origin in use, reachability, an

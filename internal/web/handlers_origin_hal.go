@@ -333,8 +333,14 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			AuthMethod: authMethod,
 			AuthToken:  authToken,
 		}))
+		var fe *repos.FleetError
 		switch {
 		case err == nil:
+		case errors.As(err, &fe):
+			// The fleet repository's own refusal (an origin no member's join
+			// could clone, #527 F1), with its code.
+			writeFleetError(w, r, err)
+			return
 		case isLifecycleRefusal(err):
 			writeLifecycleProblem(w, r, b, repoName, err)
 			return

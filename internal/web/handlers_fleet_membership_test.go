@@ -157,6 +157,19 @@ func TestFleetREST_MemberOriginAndMergeGuards(t *testing.T) {
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"code":"not_master"`)
 	require.Contains(t, rec.Body.String(), "only the fleet's master merges")
+
+	// #527 F1: an origin no member's join can clone (plain http) is refused
+	// on the fleet repository with its code, and the origin is unchanged.
+	// SABOTAGE: drop the fleet check in guardAttach -> the probe's 502 -> red;
+	// drop the FleetError arm in handleHALSetOrigin -> 500 -> red.
+	rec = send(http.MethodPut, "/repos/"+st.FleetRepo+"/origin", `{"url":"http://gitea.lan/org/fleet.git"}`)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"origin_invalid"`)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		o, err := svc.Remote().GetRemote("origin")
+		require.NoError(t, err)
+		require.Equal(t, url, o.URL, "the origin is unchanged")
+	}))
 }
 
 // Review N6: on the MASTER, the merge route re-judges the pushed branch at

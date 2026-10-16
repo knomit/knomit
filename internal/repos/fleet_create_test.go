@@ -395,6 +395,11 @@ func TestCreateFleet_PreflightRefusals(t *testing.T) {
 		{name: "state not standalone", setup: func(t *testing.T, m *Manager) {
 			require.NoError(t, setFleetState(m.ControlDB(), FleetRegistering, time.Now()))
 		}, status: http.StatusConflict, code: "fleet_present"},
+		// #527 F1: a forge origin no member's join could clone.
+		{name: "http origin", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "http://gitea.lan/org/fleet.git"}},
+			status: http.StatusUnprocessableEntity, code: "origin_invalid"},
+		{name: "ftp origin", spec: FleetCreateSpec{Origin: &OriginSpec{URL: "ftp://forge.example/fleet.git"}},
+			status: http.StatusUnprocessableEntity, code: "origin_invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newFleetHost(t, t.TempDir(), tc.mod)

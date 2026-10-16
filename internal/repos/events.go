@@ -235,6 +235,13 @@ func (e *MachineEvent) guard(ctx context.Context, r *RepoInstance) error {
 // way). With NetworkTimeout 0 neither read is bounded.
 func guardAttach(ctx context.Context, r *RepoInstance, o OriginSpec) error {
 	m := r.env.m
+	// The fleet repository: only an origin a member's join can clone
+	// (#527 F1), refused before anything dials.
+	if r.IsFleet() {
+		if err := refuseFleetOrigin(o.URL); err != nil {
+			return err
+		}
+	}
 	// The local-origin policy, re-asserted where the attach happens.
 	if err := m.ValidateLocalOrigin(o.URL); err != nil {
 		return err
