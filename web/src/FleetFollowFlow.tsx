@@ -157,7 +157,7 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
                   url={trimmed} detail={probeErr || probe?.detail || undefined} />
               )}
               {peerForMove && (
-                <OutcomeCard tone="bad" testid="fleet-follow-peer-not-forge" headline={`${host || trimmed} is an instance of this fleet, not a forge`}
+                <OutcomeCard tone="bad" testid="fleet-follow-peer-not-forge" headline={`${host || 'That URL'} is an instance of this fleet, not a forge`}
                   url={trimmed} body="To make another instance the host, export the root key there and choose Host the fleet here on it. Moving to a forge takes a forge repository's URL." />
               )}
               <div style={actions}>
@@ -174,12 +174,12 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
                 <span style={blockHint}>this instance's own credential for the forge</span>
               </div>
               {checked ? (
-                <OutcomeCard tone="good" testid="fleet-follow-access-ok" headline={`Reached ${host || trimmed} with these credentials`} url={trimmed} />
+                <OutcomeCard tone="good" testid="fleet-follow-access-ok" headline={`Reached ${host || 'the forge'} with these credentials`} url={trimmed} />
               ) : asked ? (
                 <OutcomeCard tone="ask" testid="fleet-follow-access-ask" headline={`${host || 'The forge'} wants credentials`} url={trimmed}
                   body="Reading the fleet repository was refused anonymously. Give this instance's own token for the forge: it pushes its branch there." />
               ) : (
-                <OutcomeCard tone="good" testid="fleet-follow-reached" headline={`Reached ${host || trimmed}`} url={trimmed}
+                <OutcomeCard tone="good" testid="fleet-follow-reached" headline={`Reached ${host || 'the forge'}`} url={trimmed}
                   body="A forge: this instance pushes its own branch there, so it needs a credential with write access unless the forge lets anyone push." />
               )}
               {checkErr && (
@@ -207,7 +207,7 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
                 <h4 style={blockTitle}>Review</h4>
                 <span style={blockHint}>{mode === 'move' ? 'what moving the fleet changes' : 'what this changes'}</span>
               </div>
-              {peer && <OutcomeCard tone="good" testid="fleet-follow-reached" headline={`Reached ${host || trimmed}`} url={trimmed} />}
+              {peer && <OutcomeCard tone="good" testid="fleet-follow-reached" headline={`Reached ${host || 'the host'}`} url={trimmed} />}
               <ol style={stepsList} data-testid="fleet-follow-will">
                 {mode === 'move' ? (
                   <>
@@ -260,5 +260,5 @@ const iconBox: React.CSSProperties = {
   width: 30, height: 30, borderRadius: 7, flexShrink: 0, background: '#121f1d', border: '1px solid #24453f',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
-const stepsList: React.CSSProperties = { margin: '2px 0 0 18px', padding: 0, fontSize: 12.5, color: '#ccc', lineHeight: 1.65 };
-const hintText: React.CSSProperties = { fontSize: 11.5, color: '#888', marginTop: 6, lineHeight: 1.5 };
+const stepsList: React.CSSProperties = { margin: '2px 0 0 18px', padding: 0, fontSize: 12.5, color: '#ccc', lineHeight: 1.65, overflowWrap: 'anywhere' };
+const hintText: React.CSSProperties = { fontSize: 11.5, color: '#888', marginTop: 6, lineHeight: 1.5, overflowWrap: 'anywhere' };
