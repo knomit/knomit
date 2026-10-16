@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"golang.org/x/crypto/ssh"
@@ -66,7 +67,7 @@ func (j judge) artifactRules(c *object.Commit) (Refusal, bool) {
 	if err != nil {
 		return refuse(RuleArtifactRules, fmt.Sprintf("a parent's tree cannot be read: %v", err))
 	}
-	a := &artifactCheck{j: j, tree: tree}
+	a := &artifactCheck{j: j, tree: tree, parents: parents}
 	for _, pt := range parents {
 		changes, err := object.DiffTree(pt, tree)
 		if err != nil {
@@ -112,12 +113,30 @@ func parentTrees(c *object.Commit) ([]*object.Tree, error) {
 type artifactCheck struct {
 	j    judge
 	tree *object.Tree
+	// parents are the commit's parents' trees (nil entries: the empty tree).
+	parents []*object.Tree
 
 	pkiRead bool
 	root    *x509.Certificate
 	rootErr error
 	crl     *x509.RevocationList
 	crlErr  error
+}
+
+// inAnotherParent reports whether some parent tree holds blob at name.
+func (a *artifactCheck) inAnotherParent(name string, blob plumbing.Hash) bool {
+	if len(a.parents) < 2 {
+		return false
+	}
+	for _, pt := range a.parents {
+		if pt == nil {
+			continue
+		}
+		if e, err := pt.FindEntry(name); err == nil && e.Hash == blob {
+			return true
+		}
+	}
+	return false
 }
 
 // changeRule is the refusal rule for breaking a change rule.
@@ -172,6 +191,16 @@ func (a *artifactCheck) change(ch *object.Change) (rule, reason string) {
 	added := ch.From.Name == ""
 	if added {
 		if attrs.PKI == "" {
+			return "", ""
+		}
+		// A merge that brings a pki file ANOTHER parent already holds, the
+		// very same blob at the same path, adds nothing: that file was added,
+		// and judged, in that parent's history. Judging it again against this
+		// merge's CRL would refuse a merge for a revocation made after the
+		// file was issued (the master merging a member's branch that forked
+		// before a leaf it later revoked; a member merging such a main). A
+		// blob no parent holds at that path is judged as before.
+		if a.inAnotherParent(name, ch.To.TreeEntry.Hash) {
 			return "", ""
 		}
 		raw, err := blobBytes(newF)
