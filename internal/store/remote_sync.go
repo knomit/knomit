@@ -213,12 +213,35 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	// lastOrigin is where origin/<upstreamMain> pointed BEFORE this fetch
 	// moves it (zero when there was no such ref): the fallback watermark of a
 	// branch that has none (seedMissingWatermark). It can only be read here.
+	//
+	// When the origin URL is not the one this copy's position was recorded
+	// for (origin_position.go), that position is forgotten FIRST: the
+	// watermarks here, the remote-tracking refs inside the lock below, before
+	// lastOrigin is read. The new URL is recorded only after the fetch
+	// succeeded, so a failed attempt forgets again on the next round.
+	stale, err := ri.rh.originPositionStale(remote.URL)
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("Sync: %w", err)
+	}
+	var forgotWatermarks, forgotTracking int
+	if stale {
+		if forgotWatermarks, err = ri.rh.forgetWatermarks(agentBranch); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: forget the previous origin's watermarks: %w", err)
+		}
+	}
 	var lastOrigin plumbing.Hash
 	fetchErr := func() error {
 		ri.rh.configMu.RLock()
 		defer ri.rh.configMu.RUnlock()
 		if _, err := ri.rh.repo.Remote("origin"); err != nil {
 			return errNoOriginRemote
+		}
+		if stale {
+			n, err := ri.rh.forgetTrackingRefs()
+			if err != nil {
+				return fmt.Errorf("forget the previous origin's remote-tracking refs: %w", err)
+			}
+			forgotTracking = n
 		}
 		if ref, err := ri.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain)); err == nil {
 			lastOrigin = ref.Hash()
@@ -231,6 +254,12 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	}
 	if fetchErr != nil {
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", fetchErr)
+	}
+	if stale {
+		if err := ri.rh.recordOriginPositionURL(remote.URL); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: %w", err)
+		}
+		logForgotOriginPosition(remote.URL, forgotWatermarks, forgotTracking)
 	}
 
 	if agentBranch != "" && agentBranch != upstreamMain {
