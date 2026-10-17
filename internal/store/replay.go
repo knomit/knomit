@@ -212,9 +212,16 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 
 		// Write fact to target store and commit.
 		msg := fmt.Sprintf("replay: %s", f.path)
-		// A copy of what the repository already holds: not judged
-		// (WithCarriedOver), as an untouched fact never is.
-		if _, err := target.fi.WriteFact(WithCarriedOver(ctx), cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
+		// A byte-identical copy of what the repository already holds is not
+		// judged (WithCarriedOver), as an untouched fact never is. A fact
+		// whose refs resolveDeadRefs rewrote or dropped is new content: it
+		// is judged like any write (#533 re-review N2: altered content is
+		// never marked carried over).
+		wctx := ctx
+		if resolvedContent == content {
+			wctx = WithCarriedOver(ctx)
+		}
+		if _, err := target.fi.WriteFact(wctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
 			return nil, fmt.Errorf("Replay: write %s to target: %w", f.path, err)
 		}
 		result.FromLocal++

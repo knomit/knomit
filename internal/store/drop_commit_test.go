@@ -27,7 +27,7 @@ func TestDrop_ReplaysTheOtherCommitsInOrder(t *testing.T) {
 	write("kb/notes/x.md", testFactBody("x v2", 0.8, nil))
 	write("kb/notes/x.md", testFactBody("x v3", 0.7, nil))
 
-	replayed, merges, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, plumbing.NewHash(bad))
+	replayed, merges, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, plumbing.NewHash(bad), false)
 	require.NoError(t, err)
 	require.Equal(t, 3, replayed)
 	require.Zero(t, merges)
@@ -49,7 +49,7 @@ func TestDrop_KeepsALaterEditOfTheDroppedCommitsFile(t *testing.T) {
 	require.NoError(t, err)
 	_, err = h.svc.Facts().WriteFact(ctx, hostBranch, "kb/notes/x.md", testFactBody("x fixed", 0.5, nil), "fix", "updated")
 	require.NoError(t, err)
-	_, _, err = h.svc.DropUnpublishedCommit(ctx, hostBranch, plumbing.NewHash(bad))
+	_, _, err = h.svc.DropUnpublishedCommit(ctx, hostBranch, plumbing.NewHash(bad), false)
 	require.NoError(t, err)
 	require.Contains(t, h.branchFiles(hostBranch)["kb/notes/x.md"], "x fixed")
 }
@@ -86,7 +86,7 @@ func TestDrop_ReplaysMergesAndLeavesOutTheOneThatBroughtTheDroppedCommit(t *test
 	_, err = h.svc.Facts().WriteFact(ctx, hostBranch, "kb/notes/c.md", testFactBody("c", 0.9, nil), "c", "created")
 	require.NoError(t, err)
 
-	_, merges, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, plumbing.NewHash(bad))
+	_, merges, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, plumbing.NewHash(bad), false)
 	require.NoError(t, err)
 	require.Equal(t, 1, merges, "the merge that brought the dropped commit is left out")
 	files := h.branchFiles(hostBranch)

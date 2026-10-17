@@ -62,14 +62,16 @@ func (rh *repoHandler) ontologyCache() *ontCache { return &rh.writeOnt }
 
 type carriedOverKey struct{}
 
-// WithCarriedOver marks ctx's writes as a COPY of content that already
-// exists (#533 review B2): Replay, which rewrites every fact of a repository
-// into the clone of a remote with disjoint history when the repository is
-// connected to it (its ref rewriting is mechanical), and any other bulk
-// re-write of carried-over content. Those writes skip validateWrite, as the
-// rule that an untouched fact is never judged requires: a legacy fact that
-// fails a rule added after it was written must not abort a connect. A write
-// that CHANGES what a fact says is never one of these.
+// WithCarriedOver marks ctx's writes as a BYTE-IDENTICAL copy of content that
+// already exists (#533 review B2): Replay, which rewrites every fact of a
+// repository into the clone of a remote with disjoint history when the
+// repository is connected to it, and any other bulk re-write of carried-over
+// content. Those writes skip validateWrite, as the rule that an untouched
+// fact is never judged requires: a legacy fact that fails a rule added after
+// it was written must not abort a connect. Content a copy ALTERS (Replay's
+// dead-ref rewriting, resolveDeadRefs) is never marked, and is judged like
+// any write (#533 re-review N2); nor is a write that changes what a fact
+// says.
 func WithCarriedOver(ctx context.Context) context.Context {
 	return context.WithValue(ctx, carriedOverKey{}, true)
 }

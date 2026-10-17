@@ -392,17 +392,20 @@ const CommitRefusedByJudge = "refused by verify_signatures=enforce"
 
 // CommitRefusedByValidation is the part of a refusal text that says a branch's
 // net change adds or changes a fact that fails the ontology's validations
-// (RuleValidation): "knomit: commit <tip> refused by the ontology's
-// validations: validation: <reason>". A retry of the same tip cannot cure it;
-// a later commit that fixes the fact does (the net change is judged).
+// (RuleValidation): "knomit: commit <hash> refused by the ontology's
+// validations: validation: <reason>", where <hash> is the commit that WROTE
+// the failing content (introducedBy), not necessarily the tip. A retry of the
+// same tip cannot cure it; a later commit that fixes the fact does (the net
+// change is judged).
 const CommitRefusedByValidation = "refused by the ontology's validations"
 
 // incomingValid is RuleValidation on the NET change of the branch entering
 // this repository (judgeIncoming's first pass): the facts its tip holds that
-// differ from upstream's tip and from the merge base (branchFactsValid), with
-// the ontology at upstream's tip, in every verify_signatures mode and in
-// every repository. tip must be one of commits (a tip the host already holds
-// brings nothing new and is not judged here). Returns the refusal text, or "".
+// differ from upstream's tip and from one or more merge bases
+// (branchFactsValid), with the ontology at upstream's tip, in every
+// verify_signatures mode and in every repository. A tip the host already
+// holds is judged too (it may be the invalid intermediate of a branch admitted
+// fixed). Returns the refusal text, or "".
 //
 // An ontology at upstream that does not parse refuses EVERY push here, in
 // every mode (its rules cannot be known), while the store's own writers
@@ -420,7 +423,15 @@ func (rh *repoHandler) incomingValid(ctx context.Context, upstream string, tip p
 		}
 	}
 	if tipC == nil {
-		return ""
+		// A tip this host already holds: still judged (#533 re-review S3).
+		// Under net-change judging the host holds the invalid intermediates
+		// of branches it admitted fixed, so a ref moved back onto one of
+		// them must be refused here, not only by the merge guard.
+		held, err := object.GetCommit(rh.gits, tip)
+		if err != nil {
+			return ""
+		}
+		tipC = held
 	}
 	h, err := rh.resolveRef(ctx, upstream)
 	if err != nil {

@@ -126,8 +126,9 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	}
 	// RuleValidation first, in EVERY mode and every repository, on the
 	// candidate's NET change (branchFactsValid): a fact it adds or changes
-	// against main and their merge base must keep the ontology's validations,
-	// as the MCP write path requires. The refusal names the candidate's tip.
+	// against main and one or more of their merge bases must keep the ontology's validations,
+	// as the MCP write path requires. The refusal names the commit that wrote the
+	// failing content (introducedBy).
 	kbRoot := in.KBRoot
 	if kbRoot == "" {
 		kbRoot = in.FleetRoot

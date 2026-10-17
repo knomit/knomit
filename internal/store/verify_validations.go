@@ -101,6 +101,12 @@ func firstInvalidFact(ont *fact.Ontology, root string, froms []*object.Tree, to 
 	if err != nil {
 		return "", "", err
 	}
+	return invalidAmong(ont, root, paths, to)
+}
+
+// invalidAmong validates the facts at paths in to (as validateNewFacts does)
+// and answers the first that fails: its path and the reason.
+func invalidAmong(ont *fact.Ontology, root string, paths []string, to *object.Tree) (string, string, error) {
 	for _, p := range paths {
 		file, err := to.File(p)
 		if err != nil {
@@ -126,18 +132,36 @@ func firstInvalidFact(ont *fact.Ontology, root string, froms []*object.Tree, to 
 	return "", "", nil
 }
 
+// blobIn is the blob at p in t (false when t holds none there; t nil is the
+// empty tree).
+func blobIn(t *object.Tree, p string) (plumbing.Hash, bool) {
+	if t == nil {
+		return plumbing.ZeroHash, false
+	}
+	e, err := t.FindEntry(p)
+	if err != nil {
+		return plumbing.ZeroHash, false
+	}
+	return e.Hash, true
+}
+
 // introducedBy is the commit of tip ∖ main that wrote p's content at tip:
-// the latest commit (closest to tip) whose tree holds tip's blob at p while
-// none of its parents does. The tip itself when none is found (a merge that
-// resolved the path to new content is found as that merge). main nil walks
-// tip's whole history.
+// a commit whose tree holds tip's blob at p while none of its parents does.
+// A NON-MERGE such commit is preferred (#533 re-review S2: a merge cannot be
+// dropped, and the content was written by a commit under it); a merge is
+// named only when no non-merge commit wrote it (the merge itself resolved
+// the path to new content). Among several (the same content written twice),
+// the LATEST by topology: one that is not an ancestor of another candidate,
+// the one closest to tip when several are unrelated (committer dates, which
+// the author controls, are not read: re-review N1). The tip itself when none
+// is found. main nil walks tip's whole history.
 func introducedBy(tip, main *object.Commit, p string) plumbing.Hash {
 	tipTree, err := tip.Tree()
 	if err != nil {
 		return tip.Hash
 	}
-	want, err := tipTree.FindEntry(p)
-	if err != nil {
+	want, ok := blobIn(tipTree, p)
+	if !ok {
 		return tip.Hash
 	}
 	blobAt := func(c *object.Commit) (plumbing.Hash, bool) {
@@ -145,65 +169,90 @@ func introducedBy(tip, main *object.Commit, p string) plumbing.Hash {
 		if err != nil {
 			return plumbing.ZeroHash, false
 		}
-		e, err := t.FindEntry(p)
-		if err != nil {
-			return plumbing.ZeroHash, false
-		}
-		return e.Hash, true
+		return blobIn(t, p)
 	}
 	// The commits' own storers (a push's quarantine reads through to the
-	// host), walked by parent links.
-	walk := func(from *object.Commit, stop map[plumbing.Hash]bool, visit func(*object.Commit)) {
-		seen := map[plumbing.Hash]bool{}
-		stack := []*object.Commit{from}
-		for len(stack) > 0 {
-			c := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if seen[c.Hash] || stop[c.Hash] {
+	// host), walked by parent links, breadth first from tip.
+	stop := map[plumbing.Hash]bool{}
+	if main != nil {
+		queue := []*object.Commit{main}
+		for len(queue) > 0 {
+			c := queue[0]
+			queue = queue[1:]
+			if stop[c.Hash] {
 				continue
 			}
-			seen[c.Hash] = true
-			visit(c)
+			stop[c.Hash] = true
 			for i := range c.NumParents() {
 				if pc, err := c.Parent(i); err == nil {
-					stack = append(stack, pc)
+					queue = append(queue, pc)
 				}
 			}
 		}
 	}
-	stop := map[plumbing.Hash]bool{}
-	if main != nil {
-		walk(main, nil, func(c *object.Commit) { stop[c.Hash] = true })
-	}
-	var found *object.Commit
-	walk(tip, stop, func(c *object.Commit) {
-		if h, ok := blobAt(c); !ok || h != want.Hash {
-			return
+	var writers, mergeWriters []*object.Commit
+	seen := map[plumbing.Hash]bool{}
+	queue := []*object.Commit{tip}
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		if seen[c.Hash] || stop[c.Hash] {
+			continue
 		}
+		seen[c.Hash] = true
+		var parents []*object.Commit
 		for i := range c.NumParents() {
-			pc, err := c.Parent(i)
-			if err != nil {
-				return
-			}
-			if h, ok := blobAt(pc); ok && h == want.Hash {
-				return
+			if pc, err := c.Parent(i); err == nil {
+				parents = append(parents, pc)
 			}
 		}
-		// Several can hold it (the same content written twice): the latest.
-		if found == nil || c.Committer.When.After(found.Committer.When) {
-			found = c
+		queue = append(queue, parents...)
+		if h, ok := blobAt(c); !ok || h != want {
+			continue
 		}
-	})
-	if found == nil {
-		return tip.Hash
+		wrote := true
+		for _, pc := range parents {
+			if h, ok := blobAt(pc); ok && h == want {
+				wrote = false
+			}
+		}
+		if !wrote {
+			continue
+		}
+		if c.NumParents() > 1 {
+			mergeWriters = append(mergeWriters, c)
+		} else {
+			writers = append(writers, c)
+		}
 	}
-	return found.Hash
+	if len(writers) == 0 {
+		writers = mergeWriters
+	}
+	// writers are in breadth-first order from tip; the first that is not an
+	// ancestor of another writer is the latest.
+	for _, c := range writers {
+		latest := true
+		for _, o := range writers {
+			if o.Hash == c.Hash {
+				continue
+			}
+			if anc, err := c.IsAncestor(o); err == nil && anc {
+				latest = false
+				break
+			}
+		}
+		if latest {
+			return c.Hash
+		}
+	}
+	return tip.Hash
 }
 
 // branchFactsValid is RuleValidation on a branch's NET change (#533 review
 // B1, decided by the coordinator): every fact whose content at the branch's
-// tip differs from main AND from the branch's merge base with main (so: the
-// branch changed it, and main does not already hold that content) keeps every
+// tip differs from main AND from its content at ONE OR MORE of the branch's
+// merge bases with main (so: the branch changed it against some base, and
+// main does not already hold that content) keeps every
 // validation of ont, the judged repository's ontology read where the judge
 // reads it (main, never the branch's own tree, so a pushed ontology cannot
 // choose its own rules). A fact the branch did not touch is never judged,
@@ -222,26 +271,52 @@ func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string)
 	if err != nil {
 		return refuse(fmt.Sprintf("the branch's tree cannot be read: %v", err))
 	}
-	froms := []*object.Tree{nil}
+	// The facts that differ from main.
+	var mainTree *object.Tree
+	var baseTrees []*object.Tree
 	if main != nil {
-		mt, err := main.Tree()
-		if err != nil {
+		if mainTree, err = main.Tree(); err != nil {
 			return refuse(fmt.Sprintf("main's tree cannot be read: %v", err))
 		}
-		froms = []*object.Tree{mt}
 		bases, err := tip.MergeBase(main)
 		if err != nil {
-			return refuse(fmt.Sprintf("the branch's merge base with main cannot be read: %v", err))
+			return refuse(fmt.Sprintf("the branch's merge bases with main cannot be read: %v", err))
 		}
-		if len(bases) > 0 {
-			bt, err := bases[0].Tree()
+		for _, b := range bases {
+			bt, err := b.Tree()
 			if err != nil {
-				return refuse(fmt.Sprintf("the merge base's tree cannot be read: %v", err))
+				return refuse(fmt.Sprintf("a merge base's tree cannot be read: %v", err))
 			}
-			froms = append(froms, bt)
+			baseTrees = append(baseTrees, bt)
 		}
 	}
-	p, reason, err := firstInvalidFact(ont, root, froms, tree)
+	candidates, err := newFactPaths(root, []*object.Tree{mainTree}, tree)
+	if err != nil {
+		return refuse(fmt.Sprintf("the branch's facts cannot be read: %v", err))
+	}
+	// Skipped only when the content equals its content at EVERY merge base
+	// (#533 re-review B1): with several best common ancestors (a criss-cross)
+	// git's merge builds a virtual base from all of them, and a content equal
+	// to just one base (go-git answers them newest first, a date the pusher
+	// sets) can still be what the merge lands on main.
+	var paths []string
+	for _, p := range candidates {
+		tb, _ := blobIn(tree, p)
+		untouched := len(baseTrees) > 0
+		for _, bt := range baseTrees {
+			if bb, ok := blobIn(bt, p); !ok || bb != tb {
+				untouched = false
+				break
+			}
+		}
+		if !untouched {
+			paths = append(paths, p)
+		}
+	}
+	if root == "" {
+		root = defaultOntologyRoot
+	}
+	p, reason, err := invalidAmong(ont, root, paths, tree)
 	if err != nil {
 		return refuse(fmt.Sprintf("the branch's facts cannot be read: %v", err))
 	}

@@ -2890,12 +2890,18 @@ paths:
         merges of the same parents, so members' merged work stays. The
         dropped commit's own changes are gone, except where a later
         unpublished commit edited the same file (its version is kept). A
-        merge that brought the dropped commit in is left out
-        (`merges_dropped`). Then main is published. `published` false
-        with `publish_error` means main still did not move (another refused
-        commit: drop it too). Refusals: `invalid_commit` (422, not a full
-        40-hex hash), `not_registered`, `not_unpublished` (409: the commit is
-        not on the branch, or main already holds it).
+        merge that brought the dropped commit in is unfolded: its side's own
+        commits are replayed one by one, the dropped one excluded
+        (`merges_dropped` counts such merges). Nothing but the dropped
+        commit's own change is lost. Then main is published. `published`
+        false with `publish_error` means main still did not move (another
+        refused commit: drop it too). Refusals: `invalid_commit` (422, not a
+        full 40-hex hash), `merge_commit` (422: a merge cannot be dropped;
+        drop the commit that wrote the content), `not_registered`,
+        `not_unpublished` (409: the commit is not on the branch, or main
+        already holds it), `foreign_commit` (409: the commit came in with
+        another agent's merged branch, and dropping it would re-sign that
+        agent's other commits, which the fleet refuses).
       operationId: dropFleetCommit
       requestBody:
         required: true
@@ -2920,8 +2926,8 @@ paths:
                   published: { type: boolean }
                   publish_error: { type: string }
         "403": { description: Not the local authenticated listener }
-        "409": { description: not_registered or not_unpublished }
-        "422": { description: invalid_commit }
+        "409": { description: not_registered, not_unpublished or foreign_commit }
+        "422": { description: invalid_commit or merge_commit }
   /fleet/activity:
     get:
       tags: [fleet]

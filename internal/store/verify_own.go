@@ -71,7 +71,8 @@ func (e *OwnCommitRefusedError) Is(target error) bool { return target == ErrOwnC
 //  1. RuleValidation (every mode), on the range's NET change
 //     (branchFactsValid: tip against base and their merge base): each fact
 //     it adds or changes keeps the ontology's validations,
-//     members-are-policy included. A refusal names the tip.
+//     members-are-policy included. A refusal names the commit that wrote the
+//     failing content (introducedBy), the one a Drop must name.
 //  2. judgeCommit. A commit NOT authored by own is a member's, merged in: it
 //     is judged as at its entry, against the fleet at base (at tip while
 //     base holds no root), with entry set so host-record refuses a member's
@@ -360,22 +361,48 @@ func (ri *remoteIndex) branchTip(branch string) plumbing.Hash {
 // not on the branch, or that the consensus branch already holds.
 var ErrNotUnpublished = errors.New("the commit is not an unpublished commit of this branch")
 
+// ErrDropMerge: DropUnpublishedCommit was asked to drop a merge commit. A
+// merge brings in another branch's commits; the commit that wrote the
+// content is the one to drop (introducedBy names a non-merge commit when one
+// wrote it).
+var ErrDropMerge = errors.New("a merge commit cannot be dropped: drop the commit that wrote the content")
+
+// DropForeignError: dropping the commit would replay ANOTHER agent's commit
+// outside the merge that brought it (the merge carries the dropped commit),
+// re-signing it with this instance's key, which the fleet's judge refuses.
+// Returned only when the caller asked to keep signatures intact (ownOnly).
+type DropForeignError struct {
+	Commit, Agent, Merge string
+}
+
+func (e *DropForeignError) Error() string {
+	return fmt.Sprintf("dropping it would re-sign agent %q's commit %s, which came in with merge %s", e.Agent, e.Commit, e.Merge)
+}
+
 // DropUnpublishedCommit is the operator's way out of a refusal by the judge
 // of this instance's own commits (judgeOwnRange): the refused commit stays
 // on the agent branch, so every later move of main is refused too, and
 // knomit never rewinds a branch by itself. It rebuilds branch on the
 // consensus branch's tip, replaying in order every commit of branch ∖ main
 // on the first-parent line (re-signed by this instance, its own content
-// winning a conflict) EXCEPT drop. A merge commit of that line (a member's
-// branch the merger had merged, a committed experiment) is replayed as a
-// merge of the same other parents, so what it brought in stays. drop's own
-// changes are gone from the branch, EXCEPT where a later commit on the line
-// edited the same file: the replay keeps that later commit's version, whole
-// (#533 review S3). drop must be a commit of branch that main does not hold
-// (ErrNotUnpublished); a member's commit merged in is dropped with the merge
-// that brought it (that merge is left out). Returns how many commits were
-// replayed and how many merges were left out.
-func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop plumbing.Hash) (replayed, mergesDropped int, err error) {
+// winning a conflict) EXCEPT drop, so nothing but drop's own change is lost:
+//   - a merge commit is replayed as a merge of the same other parents, so
+//     what it brought in stays (a member's branch the merger had merged, a
+//     committed experiment);
+//   - a merge whose other parents reach drop (it brought drop in, or its
+//     side forked after drop) is unfolded: its side's own non-merge commits
+//     are replayed one by one, drop excluded (counted in mergesDropped). A
+//     conflict resolution the side's own merges made is not kept. With
+//     ownOnly (the fleet, whose judge refuses a commit re-signed for another
+//     agent) a side commit authored by another agent refuses the drop
+//     (*DropForeignError) instead of re-signing it;
+//   - where a later commit edited a file drop wrote, the later version is
+//     kept, whole (#533 review S3).
+//
+// drop must be a non-merge commit of branch that main does not hold
+// (ErrNotUnpublished, ErrDropMerge). Returns how many commits were replayed
+// and how many merges were unfolded.
+func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop plumbing.Hash, ownOnly bool) (replayed, mergesDropped int, err error) {
 	rh := s.rh
 	upstream := s.UpstreamBranch()
 	if upstream == "" || branch == "" || branch == upstream {
@@ -402,23 +429,29 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 	if !unpublished[drop] {
 		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s on %s: %w", drop, branch, ErrNotUnpublished)
 	}
-	var line []*object.Commit
+	dropC, err := object.GetCommit(rh.gits, drop)
+	if err != nil {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	if dropC.NumParents() > 1 {
+		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s: %w", drop, ErrDropMerge)
+	}
+	own, _ := rh.ownAgentID(branch)
+	type step struct {
+		c       *object.Commit
+		asMerge bool
+	}
+	// groups in tip -> base order; each group's steps in replay order.
+	var groups [][]step
 	cur, err := object.GetCommit(rh.gits, localRef.Hash())
 	if err != nil {
 		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
-	// carries reports whether a merge's other parents bring drop in: such a
-	// merge is left out (it is how drop entered the branch). Every other
-	// merge is replayed as a merge of the same parents onto the rebuilt line,
-	// so a member's work merged while main was held stays merged, whatever
-	// the merger would now decide about that member's branch (#533 review
-	// S1: a member revoked meanwhile is demoted, and its merged work would
-	// otherwise be lost).
-	carries := func(m *object.Commit) (bool, error) {
+	reaches := func(from []plumbing.Hash, stop map[plumbing.Hash]bool, target plumbing.Hash) (bool, error) {
 		found := false
-		for _, p := range m.ParentHashes[1:] {
-			if err := walkHistory(rh.gits, p, onUp, func(c *object.Commit) {
-				if c.Hash == drop {
+		for _, p := range from {
+			if err := walkHistory(rh.gits, p, stop, func(c *object.Commit) {
+				if c.Hash == target {
 					found = true
 				}
 			}); err != nil {
@@ -430,17 +463,55 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 	for !onUp[cur.Hash] {
 		switch {
 		case cur.NumParents() > 1:
-			bad, err := carries(cur)
+			// A merge whose other parents reach drop (it brought drop in, or
+			// its side forked after drop) cannot be replayed as a merge: its
+			// history would carry drop again. Its side's OWN commits are
+			// replayed one by one instead, drop excluded (#533 re-review S1),
+			// so nothing but drop's own change is lost. Every other merge is
+			// replayed as a merge of the same parents (#533 review S1).
+			carries, err := reaches(cur.ParentHashes[1:], onUp, drop)
 			if err != nil {
 				return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
 			}
-			if bad {
-				mergesDropped++
-			} else {
-				line = append(line, cur)
+			if !carries {
+				groups = append(groups, []step{{c: cur, asMerge: true}})
+				break
 			}
+			mergesDropped++
+			first := map[plumbing.Hash]bool{}
+			for h := range onUp {
+				first[h] = true
+			}
+			if err := walkHistory(rh.gits, cur.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
+				return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+			}
+			var side []step
+			var werr error
+			for _, p := range cur.ParentHashes[1:] {
+				if err := walkHistory(rh.gits, p, first, func(c *object.Commit) {
+					first[c.Hash] = true // a commit two parents share once
+					if c.Hash == drop || c.NumParents() > 1 {
+						return
+					}
+					// Replayed outside its merge, the commit is re-signed by this
+					// instance. Where signatures are judged (the fleet), another
+					// agent's commit cannot be: refuse instead of losing it.
+					if ownOnly && werr == nil {
+						if id := agentIDOfAuthor(c.Author.Email); id != own {
+							werr = &DropForeignError{Commit: c.Hash.String(), Agent: id, Merge: cur.Hash.String()}
+						}
+					}
+					side = append(side, step{c: c})
+				}); err != nil {
+					return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+				}
+			}
+			if werr != nil {
+				return 0, 0, werr
+			}
+			groups = append(groups, side)
 		case cur.Hash != drop:
-			line = append(line, cur)
+			groups = append(groups, []step{{c: cur}})
 		}
 		if cur.NumParents() == 0 {
 			break
@@ -449,16 +520,20 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 			return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
 		}
 	}
+	var line []step
+	for i := len(groups) - 1; i >= 0; i-- {
+		line = append(line, groups[i]...)
+	}
 	tempRef := plumbing.NewBranchReferenceName(branch + "-dropping")
 	defer func() { _ = rh.gits.RemoveReference(tempRef) }()
 	current := upRef.Hash()
-	for i := len(line) - 1; i >= 0; i-- {
+	for _, st := range line {
 		var others []plumbing.Hash
-		if line[i].NumParents() > 1 {
-			others = line[i].ParentHashes[1:]
+		if st.asMerge {
+			others = st.c.ParentHashes[1:]
 		}
-		if current, err = rh.replayCommit(ctx, line[i], current, StrategyLocalWins, others...); err != nil {
-			return 0, 0, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", line[i].Hash, err)
+		if current, err = rh.replayCommit(ctx, st.c, current, StrategyLocalWins, others...); err != nil {
+			return 0, 0, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", st.c.Hash, err)
 		}
 		if err := rh.gits.SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {
 			return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
@@ -477,7 +552,7 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 	if err := rh.notifyCommit(ctx, branch, current); err != nil {
 		return 0, 0, fmt.Errorf("DropUnpublishedCommit: notify: %w", err)
 	}
-	log.Warn().Str("branch", branch).Str("dropped", drop.String()).Int("replayed", len(line)).Int("merges_dropped", mergesDropped).
+	log.Warn().Str("branch", branch).Str("dropped", drop.String()).Int("replayed", len(line)).Int("merges_unfolded", mergesDropped).
 		Msg("DropUnpublishedCommit: the branch was rebuilt on its upstream without the dropped commit")
 	return len(line), mergesDropped, nil
 }

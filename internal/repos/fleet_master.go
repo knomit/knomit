@@ -519,8 +519,10 @@ type FleetDropResult struct {
 // (store.DropUnpublishedCommit: that commit's own changes are gone, except
 // where a later commit on the branch edited the same file; every other
 // unpublished commit, members' merges included, is replayed), then publishes
-// main. Only a commit main does not hold can be dropped (409
-// not_unpublished).
+// main. Only a non-merge commit main does not hold can be dropped (409
+// not_unpublished, 422 merge_commit); one that would re-sign another agent's
+// commits is refused (409 foreign_commit), so nothing but the named commit's
+// own change is ever lost.
 func (m *Manager) DropFleetCommit(ctx context.Context, commit string) (FleetDropResult, error) {
 	defer m.lockFleetOp()()
 	ri := m.fleetRepo()
@@ -537,12 +539,19 @@ func (m *Manager) DropFleetCommit(ctx context.Context, commit string) (FleetDrop
 			derr = errors.New("fleet repository is not open")
 			return
 		}
-		out.Replayed, out.MergesDropped, derr = svc.DropUnpublishedCommit(ctx, ri.AgentBranch(), plumbing.NewHash(commit))
+		out.Replayed, out.MergesDropped, derr = svc.DropUnpublishedCommit(ctx, ri.AgentBranch(), plumbing.NewHash(commit), true)
 	}); err != nil {
 		return FleetDropResult{}, err
 	}
 	if errors.Is(derr, store.ErrNotUnpublished) {
 		return FleetDropResult{}, fleetErr(http.StatusConflict, "not_unpublished", "commit "+commit+" is not on this instance's fleet branch, or the fleet's main already holds it: there is nothing to drop")
+	}
+	if errors.Is(derr, store.ErrDropMerge) {
+		return FleetDropResult{}, fleetErr(http.StatusUnprocessableEntity, "merge_commit", "commit "+commit+" is a merge: it brings in another branch's commits and cannot be dropped as one. Drop the commit that wrote the refused content (the one GET /fleet names); nothing was changed")
+	}
+	var foreign *store.DropForeignError
+	if errors.As(derr, &foreign) {
+		return FleetDropResult{}, fleetErr(http.StatusConflict, "foreign_commit", "commit "+commit+" came in with a merge of agent "+foreign.Agent+"'s branch, and dropping it would re-sign that agent's other commits, which the fleet refuses; nothing was changed. Ask "+foreign.Agent+" to fix the content on its branch")
 	}
 	if derr != nil {
 		return FleetDropResult{}, derr
