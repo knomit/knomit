@@ -488,3 +488,18 @@ describe('the fleet target', () => {
     expect(screen.getByTestId('server-toggle')).toBeInTheDocument();
   });
 });
+
+// The phone-width rules live in App.css (media queries jsdom cannot evaluate,
+// checked in a real browser at 375px); what jsdom pins is the hooks they
+// select and that the tab strip is the one that does not shrink.
+describe('TopBar at a narrow width', () => {
+  it('carries the classes the phone rules select and never shrinks the tab strip', () => {
+    render(bar({ facets: ['browse', 'activity', 'settings'] as BarProps['facets'] }));
+    expect(screen.getByTestId('crumb-sep').className).toBe('k-bar-sep');
+    expect(screen.getByTestId('bar-divider').className).toBe('k-bar-divider');
+    const tabs = screen.getByTestId('facet-tabs');
+    expect(tabs.className).toBe('k-bar-tabs');
+    expect(tabs.style.flexShrink).toBe('0');
+    expect(screen.getByTestId('target-label').style.flexShrink).toBe('1');
+  });
+});

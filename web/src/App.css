@@ -21,3 +21,16 @@ a { color: inherit; }
   .k-connect-grid { grid-template-columns: minmax(0, 1fr); }
   .k-connect-rail { order: -1; position: static !important; margin-top: 12px !important; }
 }
+
+/* The shell at a phone width. The repositories rail STACKS above the page
+   instead of pushing it sideways (the same move the Connect grid makes), so
+   the page keeps the full width; and the top bar tightens its gaps so the
+   facet tabs, which never shrink, fit beside the word mark and the gear while
+   the target label gives way first. */
+@media (max-width: 640px) {
+  .k-shell-body { flex-direction: column !important; }
+  .k-rail { width: 100% !important; max-height: 40%; border-right: none !important; border-bottom: 1px solid #222; }
+  .k-bar-sep { margin: 0 4px 0 6px !important; }
+  .k-bar-divider { margin: 0 6px !important; }
+  .k-bar-tabs button { padding: 0 8px !important; }
+}

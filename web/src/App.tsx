@@ -1528,7 +1528,7 @@ export default function App() {
           facets={facets} facet={shownFacet ?? undefined} onFacet={onFacet} settingsDot={settingsDot} locked={view.locked}
           onGear={onGear} server={serverBar} gear={serverPages.length > 0} />
       </ErrorBoundary>
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+      <div className="k-shell-body" style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         {showRail && (
           <ErrorBoundary variant="inline" label="The rail hit an error">
             <TargetRail
