@@ -507,6 +507,49 @@ describe('FleetSettings', () => {
     expect(screen.getByTestId('fleet-main-held-done')).toHaveTextContent('✓ Dropped 5a6d21e8. Main moved on.');
   });
 
+  // #533 review 3 SF1: a drop refused with foreign_commit offers the
+  // confirmed fallback, leaving the whole merge out, and lists what it loses
+  // (author and subject) BEFORE anything runs; only the confirm button sends
+  // leave_out_merge, with exactly the listed hashes.
+  // SABOTAGE: send the fallback without left_out (or on the first click) ->
+  // the call bodies differ -> red; drop the list -> red.
+  it('a foreign_commit refusal offers leaving the merge out, listing what is lost, only on confirm', async () => {
+    const commit = '5a6d21e8c0ffee00112233445566778899aabbcc';
+    const merge = 'aaaaaaaa00000000000000000000000000000000';
+    const other = 'bbbbbbbb00000000000000000000000000000000';
+    const leaveOut = [
+      { commit: merge, author: 'master', agent: 'master', subject: 'Merge agent/alpha' },
+      { commit, author: 'alpha', agent: 'alpha', subject: 'alpha work one' },
+      { commit: other, author: 'alpha', agent: 'alpha', subject: 'alpha work two' },
+    ];
+    const fetch = stubFleetFetch({
+      'POST /api/v1/fleet/drop-commit': (body: unknown) => (body as { leave_out_merge?: boolean }).leave_out_merge
+        ? { body: { dropped: commit, replayed: 1, merges_dropped: 0, left_out: leaveOut, published: true } }
+        : problem(409, 'foreign_commit', "commit came in with a merge of agent alpha's branch", { leave_out: leaveOut }),
+    });
+    const onChanged = vi.fn();
+    const raw = `knomit: main was not moved: commit ${commit} refused by verify_signatures=enforce: not-owner: x`;
+    const held: FleetStatus = { ...hub, last_error: raw, last_error_main_held: true, last_error_main_held_commit: commit };
+    const { rerender } = render(<FleetSettings fleet={held} onChanged={onChanged} />);
+    fireEvent.click(screen.getByTestId('fleet-main-held-drop'));
+    const offer = await screen.findByTestId('fleet-main-held-leave-out');
+    expect(screen.getByTestId('fleet-main-held-error-code')).toHaveTextContent('foreign_commit');
+    expect(offer).toHaveTextContent("You can leave the whole merge out instead. These 3 commits are then lost from this instance's branch and never reach main");
+    const rows = screen.getAllByTestId('fleet-main-held-leave-out-commit');
+    expect(rows.map(r => r.textContent)).toEqual(['aaaaaaaa master: Merge agent/alpha', '5a6d21e8 alpha: alpha work one', 'bbbbbbbb alpha: alpha work two']);
+    expect(fetch.calls.filter(c => c.route === 'POST /api/v1/fleet/drop-commit').map(c => c.body)).toEqual([{ commit }]);
+    expect(onChanged).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('fleet-main-held-leave-out-confirm'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(fetch.calls.filter(c => c.route === 'POST /api/v1/fleet/drop-commit').map(c => c.body)).toEqual([
+      { commit },
+      { commit, leave_out_merge: true, left_out: [merge, commit, other] },
+    ]);
+    rerender(<FleetSettings fleet={hub} onChanged={onChanged} />);
+    expect(screen.getByTestId('fleet-main-held-done')).toHaveTextContent('✓ Left the merge out (3 commits). Main moved on.');
+  });
+
   // Review S5 and the user's chip ruling: a pending record says when this
   // page will show the master's merge, from the server's interval (never a
   // fixed 300 s), and its chip is informational blue, not amber.

@@ -2260,11 +2260,15 @@ export class FleetRefusal extends Error {
   code: string;
   status: number;
   choices: string[];
-  constructor(message: string, code: string, status = 0, choices: string[] = []) {
+  // leaveOut: a refused drop's (merge_commit, foreign_commit,
+  // leave_out_changed) list of what the confirmed fallback would lose.
+  leaveOut: FleetLostCommit[];
+  constructor(message: string, code: string, status = 0, choices: string[] = [], leaveOut: FleetLostCommit[] = []) {
     super(message);
     this.code = code;
     this.status = status;
     this.choices = choices;
+    this.leaveOut = leaveOut;
   }
 }
 
@@ -2272,15 +2276,20 @@ async function fleetFailure(r: Response): Promise<Error> {
   let detail = r.statusText;
   let code = '';
   let choices: string[] = [];
+  let leaveOut: FleetLostCommit[] = [];
   try {
     const body = await r.json();
     detail = errorText(body, detail);
     code = typeof body?.code === 'string' ? body.code : '';
     if (Array.isArray(body?.choices)) choices = body.choices.filter((c: unknown) => typeof c === 'string');
+    if (Array.isArray(body?.leave_out)) {
+      leaveOut = body.leave_out.filter((c: unknown): c is FleetLostCommit =>
+        typeof (c as FleetLostCommit)?.commit === 'string');
+    }
   } catch {
     // Non-JSON body; keep the statusText.
   }
-  return new FleetRefusal(detail, code, r.status, choices);
+  return new FleetRefusal(detail, code, r.status, choices, leaveOut);
 }
 
 // fleetCall is one fleet route: JSON in, JSON out, a FleetRefusal on any
@@ -2340,15 +2349,28 @@ const followFleetHost = (url: string, cred: { auth_method?: string; auth_token?:
 /** POST /fleet/drop-commit: rebuild this instance's fleet branch on main
  *  without commit (the one GET /fleet last_error_main_held_commit names),
  *  then publish main. */
+/** One commit the drop's confirmed fallback leaves (or left) out. */
+export interface FleetLostCommit {
+  commit: string;
+  agent?: string;
+  author: string;
+  subject: string;
+}
 export interface FleetDropResult {
   dropped: string;
   replayed: number;
   merges_dropped: number;
+  // left_out: what the confirmed fallback left out; absent for a plain drop.
+  left_out?: FleetLostCommit[];
   published: boolean;
   publish_error?: string;
 }
-const dropFleetCommit = (commit: string) =>
-  fleetCall<FleetDropResult>('POST', '/drop-commit', { commit });
+/** POST /fleet/drop-commit. leftOut: the confirmed fallback, leaving the
+ *  whole merge out; exactly the commit hashes the refusal's leave_out listed
+ *  and the operator confirmed. */
+const dropFleetCommit = (commit: string, leftOut?: string[]) =>
+  fleetCall<FleetDropResult>('POST', '/drop-commit',
+    leftOut ? { commit, leave_out_merge: true, left_out: leftOut } : { commit });
 /** POST /fleet/index-rebuild: the fleet repository's Rebuild. */
 const rebuildFleetIndex = () =>
   fleetCall<{ id: string; kind: 'index-rebuild'; state: string; repo: string; branch: string }>('POST', '/index-rebuild', {});

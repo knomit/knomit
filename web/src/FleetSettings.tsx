@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, type FleetDropResult, type FleetRoot, type FleetStatus } from './api';
+import { api, FleetRefusal, type FleetDropResult, type FleetRoot, type FleetStatus } from './api';
 import { SettingsPage, type Section } from './SettingsPage';
 import { OutcomeCard } from './OutcomeCard';
 import { FleetFollowFlow, type FleetFollowMode } from './FleetFollowFlow';
@@ -185,7 +185,11 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         )}
         {dropped && (
           <div data-testid="fleet-main-held-done" role="status" style={{ fontSize: 12, color: dropped.result.published ? '#8ab68a' : '#a08a54' }}>
-            {dropped.result.published
+            {dropped.result.left_out?.length
+              ? (dropped.result.published
+                ? `✓ Left the merge out (${dropped.result.left_out.length} commits). Main moved on.`
+                : `Left the merge out (${dropped.result.left_out.length} commits), but main still did not move: ${dropped.result.publish_error ?? ''}`)
+              : dropped.result.published
               ? `✓ Dropped ${dropped.short}. Main moved on.`
               : `Dropped ${dropped.short}, but main still did not move: ${dropped.result.publish_error ?? ''}`}
           </div>
@@ -425,6 +429,11 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
 function MainHeldNotice({ commit, local, onDropped }: { commit: string; local: boolean; onDropped: (short: string, result: FleetDropResult) => void }) {
   const { busy, err, run } = useAction();
   const short = commit.slice(0, 8);
+  // A drop refused because nothing but the named commit could be lost
+  // (merge_commit, foreign_commit) offers the confirmed fallback: leave the
+  // whole merge out, listing what that loses (#533 review 3 SF1).
+  const leaveOut = err instanceof FleetRefusal && ['merge_commit', 'foreign_commit', 'leave_out_changed'].includes(err.code)
+    ? err.leaveOut : [];
   return (
     <div data-testid="fleet-main-held-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>
       The fleet's main is held where it is: the fleet's rules refuse commit <span style={mono}>{short}</span> on this
@@ -440,6 +449,23 @@ function MainHeldNotice({ commit, local, onDropped }: { commit: string; local: b
               {busy ? 'Dropping…' : `Drop commit ${short}`}
             </button>
             <Refusal err={err} note="Nothing was dropped." testid="fleet-main-held-error" />
+            {leaveOut.length > 0 && (
+              <div data-testid="fleet-main-held-leave-out" style={{ marginTop: 6 }}>
+                You can leave the whole merge out instead. These {leaveOut.length} commits are then lost from this
+                instance's branch and never reach main; every other commit not yet on main is kept:
+                <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
+                  {leaveOut.map(c => (
+                    <li key={c.commit} data-testid="fleet-main-held-leave-out-commit">
+                      <span style={mono}>{c.commit.slice(0, 8)}</span> {c.agent || c.author}: {c.subject}
+                    </li>
+                  ))}
+                </ul>
+                <button type="button" data-testid="fleet-main-held-leave-out-confirm" style={btn(busy, 'danger')} disabled={busy}
+                  onClick={() => { void run(async () => { onDropped(short, await api.dropFleetCommit(commit, leaveOut.map(c => c.commit))); }); }}>
+                  {busy ? 'Leaving out…' : `Leave out the merge and these ${leaveOut.length} commits`}
+                </button>
+              </div>
+            )}
           </div>
         : <div style={{ marginTop: 6 }}>Only the desktop app on this machine can drop it.</div>}
     </div>
