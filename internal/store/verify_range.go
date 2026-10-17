@@ -67,9 +67,10 @@ func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
 // knowledge base's main (the merge job, via `knomit verify ci`), over plain git
 // checkouts so it needs no knomit instance.
 //
-//  0. Every commit in Candidate ∖ Main is checked against the ontology's
-//     validations at Main's tip (RuleValidation: each fact it adds or
-//     changes), in EVERY mode, the fleet untouched; a refusal blocks.
+//  0. The candidate's NET change is checked against the ontology's
+//     validations at Main's tip (RuleValidation: each fact the candidate's
+//     tip holds that differs from Main and from their merge base), in EVERY
+//     mode, the fleet untouched; a refusal blocks.
 //  1. verify_signatures is read at Main's tip. Off or absent: the verdict is
 //     off and nothing else runs; the fleet is never touched.
 //  2. The fleet's member records and certificate artifacts (the files its
@@ -123,18 +124,17 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	if err := walkHistory(kb.Storer, candC.Hash, onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
-	// RuleValidation first, in EVERY mode and every repository: a fact a
-	// commit adds or changes must keep the ontology's validations, as the MCP
-	// write path requires. A commit refused here is not judged further.
+	// RuleValidation first, in EVERY mode and every repository, on the
+	// candidate's NET change (branchFactsValid): a fact it adds or changes
+	// against main and their merge base must keep the ontology's validations,
+	// as the MCP write path requires. The refusal names the candidate's tip.
 	kbRoot := in.KBRoot
 	if kbRoot == "" {
 		kbRoot = in.FleetRoot
 	}
-	invalid := map[plumbing.Hash]bool{}
-	for _, c := range commits {
-		if r, ok := commitFactsValid(c, ont, kbRoot); !ok {
+	if len(commits) > 0 {
+		if r, ok := branchFactsValid(candC, mainC, ont, kbRoot); !ok {
 			out.Refused = append(out.Refused, r)
-			invalid[c.Hash] = true
 		}
 	}
 	if settings.Mode == VerifyOff {
@@ -164,9 +164,6 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	gate := newJudge(fleet, selfRoot, ont, in.FleetRoot)
 	for _, c := range commits {
 		out.Checked++
-		if invalid[c.Hash] {
-			continue
-		}
 		if r, ok := gate.judgeCommit(c); !ok {
 			out.Refused = append(out.Refused, r)
 		}

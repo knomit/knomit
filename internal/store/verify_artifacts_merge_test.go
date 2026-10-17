@@ -20,9 +20,8 @@ import (
 //
 // SABOTAGE: drop the inAnotherParent skip from artifactCheck.change -> the
 // clean merge of main is artifact-pki (gamma's leaf is revoked in the
-// merge's CRL) -> red; skip on a blob found in ANY tree including the merge's
-// own (compare only to the commit tree) -> the forged-leaf merge is admitted
-// -> red.
+// merge's CRL) -> red; match the path only, ignoring the blob -> the forged
+// leaf skips the add check and is refused artifact-replace instead -> red.
 func TestArtifacts_AMergeBringingALeafAParentHoldsAddsNothing(t *testing.T) {
 	p := newTestFleetPKI(t)
 	boss, x, g := namedSigner(t, "boss"), namedSigner(t, "x"), namedSigner(t, "gamma")
@@ -51,10 +50,15 @@ func TestArtifacts_AMergeBringingALeafAParentHoldsAddsNothing(t *testing.T) {
 	r, ok := f.judgeEntry(f.commit(f.fleet, merged, "agent-x", x, side, main3))
 	require.True(t, ok, "the leaf main holds is not added by the merge: %+v", r)
 
-	// A merge that puts a revoked leaf neither parent holds at gamma's path.
-	other, _ := p.leaf("gamma", g)
+	// A merge that puts at gamma's path a leaf NO parent holds (one another
+	// root signed): main3 holds a leaf at that path, a different blob. The
+	// side parent comes first, so the add check runs before main3's
+	// replace check, and it must be the add check that refuses: the skip
+	// matches the blob, not the path (#533 review N2).
+	foreign := newTestFleetPKI(t)
+	other, _ := foreign.leaf("gamma", g)
 	forged := with(merged, l.LeafPath("gamma"), other)
 	r, ok = f.judgeEntry(f.commit(f.fleet, forged, "agent-x", x, side, main3))
 	require.False(t, ok, "a leaf no parent holds is judged")
-	require.Contains(t, []string{RuleArtifactPKI, RuleArtifactReplace}, r.Rule, r.Reason)
+	require.Equal(t, RuleArtifactPKI, r.Rule, r.Reason)
 }

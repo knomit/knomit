@@ -2886,10 +2886,12 @@ paths:
         fleet branch, so every later move of main is refused too, and knomit
         never rewinds a branch by itself. This rebuilds the branch on main
         without the commit: every other unpublished commit of the branch is
-        replayed in order (re-signed by this instance); what the dropped
-        commit changed is gone, and so are the merge commits of members'
-        branches not yet on main (`merges_dropped`), which the merger merges
-        again, re-judging them. Then main is published. `published` false
+        replayed in order (re-signed by this instance), merge commits as
+        merges of the same parents, so members' merged work stays. The
+        dropped commit's own changes are gone, except where a later
+        unpublished commit edited the same file (its version is kept). A
+        merge that brought the dropped commit in is left out
+        (`merges_dropped`). Then main is published. `published` false
         with `publish_error` means main still did not move (another refused
         commit: drop it too). Refusals: `invalid_commit` (422, not a full
         40-hex hash), `not_registered`, `not_unpublished` (409: the commit is

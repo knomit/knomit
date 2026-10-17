@@ -55,19 +55,21 @@ func pushRefusal(t *testing.T, err error) string {
 }
 
 // RuleValidation at receive-pack, in a knowledge base that is NOT the fleet
-// repository, in every verify_signatures mode (absent, off, log): a fact a
-// pushed commit ADDS OR CHANGES must keep the ontology's validations (read at
-// the host's main); a fact it does not touch is never judged, so an invalid
-// legacy fact on main blocks nothing. Each row is a fresh host whose main
-// holds kb/notes/legacy.md, which fails names-an-entity. The row count is
-// asserted.
+// repository, in every verify_signatures mode (absent, off, log), on the
+// pushed branch's NET change (#533 review B1): a fact its tip holds that
+// differs from the host's main and from their merge base must keep the
+// ontology's validations (read at the host's main); a fact the branch does
+// not touch is never judged, so an invalid legacy fact on main blocks
+// nothing, and a fact an earlier commit broke and a later one fixed is judged
+// as fixed. Each row is a fresh host whose main holds kb/notes/legacy.md,
+// which fails names-an-entity. The row count is asserted.
 //
 // SABOTAGE: drop the incomingValid call from judgeIncoming -> every refused
-// row is admitted -> red; in newFactPaths keep the UNION of the per-parent
-// changes instead of the intersection -> the merge of main (which brings the
-// host's invalid later.md in against its own side) is refused -> red; skip
-// paths whose content an earlier parent held -> nothing changes, the merge
-// row still passes (the intersection is what decides).
+// row is admitted -> red; judge each commit instead of the net change -> the
+// fixed-later and deleted-later rows are refused -> red; leave the merge base
+// out of the net change (judge tip vs main only) -> the merge of main
+// (which brings the host's invalid later.md in) stays admitted, but
+// TestValidation_AStaleBranchIsNotJudgedForWhatMainChanged goes red.
 func TestValidation_ReceivePackJudgesOnlyWhatACommitAddsOrChanges(t *testing.T) {
 	type row struct {
 		name   string
@@ -93,9 +95,17 @@ func TestValidation_ReceivePackJudgesOnlyWhatACommitAddsOrChanges(t *testing.T) 
 		{"the legacy fact deleted", func(p *peer, base *object.Commit) *object.Commit {
 			return p.commit(base, nil, "kb/notes/legacy.md", "")
 		}, ""},
-		{"an invalid fact a later commit fixes (each commit is judged)", func(p *peer, base *object.Commit) *object.Commit {
+		{"an invalid fact a later commit fixes (the net change is judged)", func(p *peer, base *object.Commit) *object.Commit {
 			c := p.commit(base, nil, "kb/notes/new.md", note("new"))
 			return p.commit(c, nil, "kb/notes/new.md", note("new", "e"))
+		}, ""},
+		{"an invalid fact a later commit deletes", func(p *peer, base *object.Commit) *object.Commit {
+			c := p.commit(base, nil, "kb/notes/new.md", note("new"))
+			return p.commit(c, nil, "kb/notes/new.md", "")
+		}, ""},
+		{"a valid fact a later commit breaks", func(p *peer, base *object.Commit) *object.Commit {
+			c := p.commit(base, nil, "kb/notes/new.md", note("new", "e"))
+			return p.commit(c, nil, "kb/notes/new.md", note("new"))
 		}, RuleValidation},
 		{"a file that is not a fact (not .md, outside the fact root)", func(p *peer, base *object.Commit) *object.Commit {
 			c := p.commit(base, nil, "kb/notes/raw.txt", note("raw"))
@@ -225,6 +235,15 @@ func TestValidation_CheckRangeBlocksInEveryMode(t *testing.T) {
 			require.Equal(t, bad.Hash.String(), v.Refused[0].Commit)
 			require.Contains(t, v.Refused[0].Reason, `"names-an-entity"`)
 			require.Equal(t, 1, v.ExitCode(), "a validation refusal blocks in every mode")
+
+			// A later commit fixes it: the candidate's net change is judged.
+			fixed := f.commit(f.kb, with(base, "kb/notes/new.md", note("new", "e")), "agent-x", nil, bad)
+			f.ref(f.kb, "cand", fixed)
+			v, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+			require.NoError(t, err)
+			for _, r := range v.Refused {
+				require.NotEqual(t, RuleValidation, r.Rule, "a fixed candidate: %+v", r)
+			}
 		})
 	}
 }
@@ -275,4 +294,52 @@ func (h *pushHost) rawBranch(branch, from string, kv ...string) plumbing.Hash {
 		require.NoError(h.t, err)
 	}
 	return h.ref(branch)
+}
+
+// #533 review B1, the reviewer's probe made a test: a knowledge base's owner
+// tightens main's ontology after a member wrote a note that was valid then.
+// The member's push is refused; the member commits a FIX and pushes again,
+// and that push is admitted, because the branch's net change is judged, not
+// the commit the fix superseded. Before the fix the second push was refused
+// on the same first commit, and nothing could unstick the branch.
+//
+// SABOTAGE: judge each commit instead of the net change -> the second push
+// is refused on the first commit -> red.
+func TestValidation_AFixedBranchIsAdmittedAfterMainTightensItsOntology(t *testing.T) {
+	plain := "id: x\nname: X\ntopics:\n  notes:\n    description: d\n"
+	h := newPushHostWith(t, map[string]string{fact.OntologyFile: plain}, 0)
+	p := newPeer(t, h.srv.URL)
+	c1 := p.commit(p.head(), nil, "kb/notes/n.md", note("n")) // no entity: valid today
+	_, err := h.svc.Facts().WriteFact(context.Background(), "main", fact.OntologyFile, validatedOntology(""), "tighten", "updated")
+	require.NoError(t, err)
+	p.setBranch("work", c1)
+	err = p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch)
+	require.Equal(t, RuleValidation, pushRefusal(t, err), "the note fails the tightened ontology")
+	c2 := p.commit(c1, nil, "kb/notes/n.md", note("n", "e"))
+	p.setBranch("work", c2)
+	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch), "the fixed branch is admitted")
+	require.Equal(t, c2.Hash, h.ref(peerBranch))
+}
+
+// The net change is measured against the merge base too: a branch that
+// forked before main changed a fact, and never touched it, carries main's
+// OLD version at its tip. That fact differs from main but not from the merge
+// base: the branch did not change it, so it is not judged, even when the old
+// version fails a rule main added since.
+//
+// SABOTAGE: leave the merge base out of branchFactsValid's comparison -> the
+// untouched old version is judged and the push is refused -> red.
+func TestValidation_AStaleBranchIsNotJudgedForWhatMainChanged(t *testing.T) {
+	plain := "id: x\nname: X\ntopics:\n  notes:\n    description: d\n"
+	h := newPushHostWith(t, map[string]string{fact.OntologyFile: plain, "kb/notes/old.md": note("old")}, 0)
+	p := newPeer(t, h.srv.URL)
+	mine := p.commit(p.head(), nil, "kb/notes/mine.md", note("mine", "e"))
+	// main moves on: it fixes old.md and tightens the ontology.
+	_, err := h.svc.Facts().WriteFact(context.Background(), "main", "kb/notes/old.md", note("old", "e"), "fix", "updated")
+	require.NoError(t, err)
+	_, err = h.svc.Facts().WriteFact(context.Background(), "main", fact.OntologyFile, validatedOntology(""), "tighten", "updated")
+	require.NoError(t, err)
+	p.setBranch("work", mine)
+	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch),
+		"old.md at the branch's tip is main's old version, which the branch never touched")
 }

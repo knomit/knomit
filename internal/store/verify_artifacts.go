@@ -123,7 +123,16 @@ type artifactCheck struct {
 	crlErr  error
 }
 
-// inAnotherParent reports whether some parent tree holds blob at name.
+// inAnotherParent reports whether some parent tree holds blob at name: the
+// same content (blob hash), not merely the same path.
+//
+// Why skipping such an add is safe (#533 review N2): every entry path walks
+// EACH commit of the incoming range (receive-pack, the fetch judge, verify
+// ci, the master's own range), so every parent of a merge is either already
+// on main or itself judged in the same range; the blob it holds was judged
+// as an add where it was added. A future path that judges a merge commit
+// ALONE (only its result, not the commits under it) must not rely on this
+// skip: there a parent could hold a blob nobody judged.
 func (a *artifactCheck) inAnotherParent(name string, blob plumbing.Hash) bool {
 	if len(a.parents) < 2 {
 		return false

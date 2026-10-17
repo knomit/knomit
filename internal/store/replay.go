@@ -212,7 +212,9 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 
 		// Write fact to target store and commit.
 		msg := fmt.Sprintf("replay: %s", f.path)
-		if _, err := target.fi.WriteFact(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
+		// A copy of what the repository already holds: not judged
+		// (WithCarriedOver), as an untouched fact never is.
+		if _, err := target.fi.WriteFact(WithCarriedOver(ctx), cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
 			return nil, fmt.Errorf("Replay: write %s to target: %w", f.path, err)
 		}
 		result.FromLocal++

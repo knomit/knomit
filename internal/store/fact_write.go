@@ -154,9 +154,12 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 			return "", "", fmt.Errorf("WriteFile: %q: %w", path, ErrFactChanged)
 		}
 	}
-	// RuleValidation at the source, before any object is written.
-	if err := fi.rh.validateWrite(headHash, map[string]string{path: content}, nil); err != nil {
-		return "", "", fmt.Errorf("WriteFile: %w", err)
+	// RuleValidation at the source, before any object is written (not for a
+	// copy of content that already exists: WithCarriedOver).
+	if !carriedOver(ctx) {
+		if err := fi.rh.validateWrite(headHash, map[string]string{path: content}, nil); err != nil {
+			return "", "", fmt.Errorf("WriteFile: %w", err)
+		}
 	}
 
 	signer, err := fi.rh.commitSigner()
@@ -391,9 +394,12 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 			return plumbing.ZeroHash, nil, &RetractMissingError{Paths: missing}
 		}
 	}
-	// RuleValidation at the source, before any object is written.
-	if err := fi.rh.validateWrite(headHash, files, deletes); err != nil {
-		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
+	// RuleValidation at the source, before any object is written (not for a
+	// copy of content that already exists: WithCarriedOver).
+	if !carriedOver(ctx) {
+		if err := fi.rh.validateWrite(headHash, files, deletes); err != nil {
+			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
+		}
 	}
 
 	parentHash := headHash

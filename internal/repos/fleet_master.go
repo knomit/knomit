@@ -516,10 +516,11 @@ type FleetDropResult struct {
 // (GET /fleet last_error_main_held). The refused commit stays on the agent
 // branch and every later move of main is refused with it; this rebuilds the
 // fleet repository's agent branch on main without that commit
-// (store.DropUnpublishedCommit: what it changed is gone; the merge commits of
-// unpublished members' branches are left out too, and the merger merges
-// those branches again), then publishes main. Only a commit main does not
-// hold can be dropped (409 not_unpublished).
+// (store.DropUnpublishedCommit: that commit's own changes are gone, except
+// where a later commit on the branch edited the same file; every other
+// unpublished commit, members' merges included, is replayed), then publishes
+// main. Only a commit main does not hold can be dropped (409
+// not_unpublished).
 func (m *Manager) DropFleetCommit(ctx context.Context, commit string) (FleetDropResult, error) {
 	defer m.lockFleetOp()()
 	ri := m.fleetRepo()

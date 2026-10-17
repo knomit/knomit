@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { createContext, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useFacetLayout } from './facetLayout';
 
@@ -30,6 +30,12 @@ export function FacetSplitter({ onMouseDown, testId }: { onMouseDown?: (e: React
   );
 }
 
+/** FacetStacked is true inside the index of a STACKED facet (FacetColumns
+ *  below FACET_NARROW_PX): the index then draws itself as one horizontal
+ *  strip, so it takes one row above the content instead of a third of the
+ *  height, which at 375px covered the top of the content (#533 review N4). */
+export const FacetStacked = createContext(false);
+
 /** FacetColumns lays out [left at the Library's width | splitter | right]. The
  *  right column is the scroll container; `scrollRef` hands it to the caller.
  *  Below FACET_NARROW_PX of its own width (a phone, a narrow window, the rail
@@ -60,7 +66,7 @@ export function FacetColumns({ left, children, scrollRef, testId }: {
   if (narrow) {
     return (
       <div ref={box} data-testid={testId} data-layout="stacked" style={{ ...row, flexDirection: 'column' }}>
-        <div data-testid="facet-index-column" style={stackedLeft}>{left}</div>
+        <div data-testid="facet-index-column" style={stackedLeft}><FacetStacked.Provider value={true}>{left}</FacetStacked.Provider></div>
         <div ref={scrollRef} data-testid="settings-scroll" style={rightCol}>{children}</div>
       </div>
     );
@@ -88,11 +94,12 @@ const leftCol: CSSProperties = {
   flexShrink: 0, overflowY: 'auto', background: '#0f0f0f',
   padding: '16px 10px', boxSizing: 'border-box',
 };
-// Stacked: the index across the top, at most a third of the height (it
-// scrolls), ruled off from the content below.
+// Stacked: the index across the top as one strip (the index draws itself
+// horizontally under FacetStacked, scrolling sideways), ruled off from the
+// content below.
 const stackedLeft: CSSProperties = {
-  flexShrink: 0, overflowY: 'auto', background: '#0f0f0f',
-  padding: '10px 10px 8px', boxSizing: 'border-box', width: '100%', maxHeight: '34%',
+  flexShrink: 0, background: '#0f0f0f',
+  padding: '6px 10px', boxSizing: 'border-box', width: '100%',
   borderBottom: '1px solid #222',
 };
 const rightCol: CSSProperties = {

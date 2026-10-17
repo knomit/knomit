@@ -1,4 +1,5 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useContext, type CSSProperties, type ReactNode } from 'react';
+import { FacetStacked } from './FacetColumns';
 import { noMouseFocus } from './utils';
 
 export interface IndexItem {
@@ -26,9 +27,13 @@ export function IndexColumn({ heading, items, active, onPick, tone = 'repo' }: {
   active: string;
   onPick: (id: string) => void;
 }) {
+  // Stacked above the content (a phone, a narrow window): one horizontal
+  // strip, no heading, so the index takes a row instead of covering the top
+  // of the content (#533 review N4).
+  const strip = useContext(FacetStacked);
   return (
-    <nav aria-label={heading} style={nav}>
-      <IndexHeading>{heading}</IndexHeading>
+    <nav aria-label={heading} style={strip ? navStrip : nav} data-layout={strip ? 'strip' : undefined}>
+      {!strip && <IndexHeading>{heading}</IndexHeading>}
       {items.map(it => {
         const on = active === it.id;
         return (
@@ -38,7 +43,7 @@ export function IndexColumn({ heading, items, active, onPick, tone = 'repo' }: {
             data-testid={`toc-${it.id}`}
             onMouseDown={noMouseFocus}
             aria-current={on ? 'true' : undefined}
-            style={item(on, !!it.danger, tone)}
+            style={strip ? { ...item(on, !!it.danger, tone), ...stripItem } : item(on, !!it.danger, tone)}
             onClick={() => onPick(it.id)}
           >
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
@@ -66,6 +71,8 @@ export function IndexHeading({ children }: { children: ReactNode }) {
 // Sticky: the column scrolls only if the index outgrows the window, and the
 // heading stays put while it does.
 const nav: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 1 };
+const navStrip: CSSProperties = { display: 'flex', flexDirection: 'row', gap: 4, overflowX: 'auto', whiteSpace: 'nowrap' };
+const stripItem: CSSProperties = { width: 'auto', flexShrink: 0, boxShadow: 'none' };
 const headingStyle: CSSProperties = {
   fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.08em',
   color: '#777', padding: '0 10px 8px',

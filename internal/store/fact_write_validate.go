@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -58,6 +59,25 @@ func (c *ontCache) parse(raw []byte) (*fact.Ontology, error) {
 }
 
 func (rh *repoHandler) ontologyCache() *ontCache { return &rh.writeOnt }
+
+type carriedOverKey struct{}
+
+// WithCarriedOver marks ctx's writes as a COPY of content that already
+// exists (#533 review B2): Replay, which rewrites every fact of a repository
+// into the clone of a remote with disjoint history when the repository is
+// connected to it (its ref rewriting is mechanical), and any other bulk
+// re-write of carried-over content. Those writes skip validateWrite, as the
+// rule that an untouched fact is never judged requires: a legacy fact that
+// fails a rule added after it was written must not abort a connect. A write
+// that CHANGES what a fact says is never one of these.
+func WithCarriedOver(ctx context.Context) context.Context {
+	return context.WithValue(ctx, carriedOverKey{}, true)
+}
+
+func carriedOver(ctx context.Context) bool {
+	v, _ := ctx.Value(carriedOverKey{}).(bool)
+	return v
+}
 
 // validateWrite is RuleValidation at the source, for EVERY in-process writer
 // (user ruling 2026-10-16: validations are honoured everywhere): REST fact

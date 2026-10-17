@@ -68,8 +68,10 @@ func (e *OwnCommitRefusedError) Is(target error) bool { return target == ErrOwnC
 // ontology's validations bind those writes at the MCP write path, not here).
 //
 // The rules, for every commit of the range:
-//  1. RuleValidation (every mode): each fact it adds or changes keeps the
-//     ontology's validations, members-are-policy included.
+//  1. RuleValidation (every mode), on the range's NET change
+//     (branchFactsValid: tip against base and their merge base): each fact
+//     it adds or changes keeps the ontology's validations,
+//     members-are-policy included. A refusal names the tip.
 //  2. judgeCommit. A commit NOT authored by own is a member's, merged in: it
 //     is judged as at its entry, against the fleet at base (at tip while
 //     base holds no root), with entry set so host-record refuses a member's
@@ -137,11 +139,9 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 		return nil
 	}
 	root := rh.ontologyRoot()
-	for _, c := range commits {
-		if r, ok := commitFactsValid(c, ont, root); !ok {
-			return &OwnCommitRefusedError{Upstream: upstream, Commit: c.Hash.String(), Rule: r.Rule,
-				Text: fmt.Sprintf("commit %s %s: %s: %s", c.Hash, CommitRefusedByValidation, r.Rule, r.Reason)}
-		}
+	if r, ok := branchFactsValid(tipC, baseC, ont, root); !ok {
+		return &OwnCommitRefusedError{Upstream: upstream, Commit: r.Commit, Rule: r.Rule,
+			Text: fmt.Sprintf("commit %s %s: %s: %s", r.Commit, CommitRefusedByValidation, r.Rule, r.Reason)}
 	}
 	vs, err := fact.ReadVerifySettings(raw)
 	if err != nil {
@@ -366,13 +366,15 @@ var ErrNotUnpublished = errors.New("the commit is not an unpublished commit of t
 // knomit never rewinds a branch by itself. It rebuilds branch on the
 // consensus branch's tip, replaying in order every commit of branch ∖ main
 // on the first-parent line (re-signed by this instance, its own content
-// winning a conflict) EXCEPT drop. What drop changed is gone from the
-// branch; so are the merge commits of that line (a member's branch the
-// merger had merged): the merger merges those branches again, re-judging
-// them, on its next run. drop must be a commit of branch that main does not
-// hold (ErrNotUnpublished); a member's commit merged in is dropped with the
-// merge that brought it. Returns how many commits were replayed and how many
-// merges were left out.
+// winning a conflict) EXCEPT drop. A merge commit of that line (a member's
+// branch the merger had merged, a committed experiment) is replayed as a
+// merge of the same other parents, so what it brought in stays. drop's own
+// changes are gone from the branch, EXCEPT where a later commit on the line
+// edited the same file: the replay keeps that later commit's version, whole
+// (#533 review S3). drop must be a commit of branch that main does not hold
+// (ErrNotUnpublished); a member's commit merged in is dropped with the merge
+// that brought it (that merge is left out). Returns how many commits were
+// replayed and how many merges were left out.
 func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop plumbing.Hash) (replayed, mergesDropped int, err error) {
 	rh := s.rh
 	upstream := s.UpstreamBranch()
@@ -405,10 +407,38 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 	if err != nil {
 		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
+	// carries reports whether a merge's other parents bring drop in: such a
+	// merge is left out (it is how drop entered the branch). Every other
+	// merge is replayed as a merge of the same parents onto the rebuilt line,
+	// so a member's work merged while main was held stays merged, whatever
+	// the merger would now decide about that member's branch (#533 review
+	// S1: a member revoked meanwhile is demoted, and its merged work would
+	// otherwise be lost).
+	carries := func(m *object.Commit) (bool, error) {
+		found := false
+		for _, p := range m.ParentHashes[1:] {
+			if err := walkHistory(rh.gits, p, onUp, func(c *object.Commit) {
+				if c.Hash == drop {
+					found = true
+				}
+			}); err != nil {
+				return false, err
+			}
+		}
+		return found, nil
+	}
 	for !onUp[cur.Hash] {
 		switch {
 		case cur.NumParents() > 1:
-			mergesDropped++
+			bad, err := carries(cur)
+			if err != nil {
+				return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+			}
+			if bad {
+				mergesDropped++
+			} else {
+				line = append(line, cur)
+			}
 		case cur.Hash != drop:
 			line = append(line, cur)
 		}
@@ -423,7 +453,11 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 	defer func() { _ = rh.gits.RemoveReference(tempRef) }()
 	current := upRef.Hash()
 	for i := len(line) - 1; i >= 0; i-- {
-		if current, err = rh.replayCommit(ctx, line[i], current, StrategyLocalWins); err != nil {
+		var others []plumbing.Hash
+		if line[i].NumParents() > 1 {
+			others = line[i].ParentHashes[1:]
+		}
+		if current, err = rh.replayCommit(ctx, line[i], current, StrategyLocalWins, others...); err != nil {
 			return 0, 0, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", line[i].Hash, err)
 		}
 		if err := rh.gits.SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {

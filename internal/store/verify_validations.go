@@ -12,8 +12,10 @@ import (
 	"knomit/internal/fact"
 )
 
-// RuleValidation: a fact the commit ADDS OR CHANGES fails one of the judged
-// repository's ontology validations (fact.ValidateFact: the typed context
+// RuleValidation: a fact a branch's NET change ADDS OR CHANGES (branchFactsValid
+// on the entry paths and the master's own publish; the merge result in the
+// pushed-branch merges; the written content in the store's writers) fails one
+// of the judged repository's ontology validations (fact.ValidateFact: the typed context
 // gate, then the root, topic and declared-child rules). It is the same check
 // the MCP write path (knomit_learn, knomit_update, experiment resolutions)
 // makes before it writes, run where a commit ENTERS a branch others consume
@@ -116,25 +118,49 @@ func validateNewFacts(ont *fact.Ontology, root string, froms []*object.Tree, to 
 	return "", nil
 }
 
-// commitFactsValid is RuleValidation for one commit: every fact c adds or
-// changes against all of its parents keeps every validation of ont (the
-// judged repository's ontology, read where the judge reads it: main, never
-// the commit's own tree, so a pushed ontology cannot choose its own rules).
-func commitFactsValid(c *object.Commit, ont *fact.Ontology, root string) (Refusal, bool) {
+// branchFactsValid is RuleValidation on a branch's NET change (#533 review
+// B1, decided by the coordinator): every fact whose content at the branch's
+// tip differs from main AND from the branch's merge base with main (so: the
+// branch changed it, and main does not already hold that content) keeps every
+// validation of ont, the judged repository's ontology read where the judge
+// reads it (main, never the branch's own tree, so a pushed ontology cannot
+// choose its own rules). A fact the branch did not touch is never judged,
+// even when main has moved since the fork; a fact an earlier commit broke and
+// a later one fixed is judged as fixed, so a branch is never stranded by a
+// commit it has since corrected (an ontology main tightened after the
+// commit was written included). Every OTHER rule of the judge stays per
+// commit. main nil (no consensus branch yet) judges every fact at the tip.
+// The refusal names the tip.
+func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string) (Refusal, bool) {
 	refuse := func(reason string) (Refusal, bool) {
-		return Refusal{Commit: c.Hash.String(), Rule: RuleValidation, Reason: reason}, false
+		return Refusal{Commit: tip.Hash.String(), Rule: RuleValidation, Reason: reason}, false
 	}
-	tree, err := c.Tree()
+	tree, err := tip.Tree()
 	if err != nil {
-		return refuse(fmt.Sprintf("the commit's tree cannot be read: %v", err))
+		return refuse(fmt.Sprintf("the branch's tree cannot be read: %v", err))
 	}
-	parents, err := parentTrees(c)
-	if err != nil {
-		return refuse(fmt.Sprintf("a parent's tree cannot be read: %v", err))
+	froms := []*object.Tree{nil}
+	if main != nil {
+		mt, err := main.Tree()
+		if err != nil {
+			return refuse(fmt.Sprintf("main's tree cannot be read: %v", err))
+		}
+		froms = []*object.Tree{mt}
+		bases, err := tip.MergeBase(main)
+		if err != nil {
+			return refuse(fmt.Sprintf("the branch's merge base with main cannot be read: %v", err))
+		}
+		if len(bases) > 0 {
+			bt, err := bases[0].Tree()
+			if err != nil {
+				return refuse(fmt.Sprintf("the merge base's tree cannot be read: %v", err))
+			}
+			froms = append(froms, bt)
+		}
 	}
-	reason, err := validateNewFacts(ont, root, parents, tree)
+	reason, err := validateNewFacts(ont, root, froms, tree)
 	if err != nil {
-		return refuse(fmt.Sprintf("the commit's facts cannot be read: %v", err))
+		return refuse(fmt.Sprintf("the branch's facts cannot be read: %v", err))
 	}
 	if reason != "" {
 		return refuse(reason)

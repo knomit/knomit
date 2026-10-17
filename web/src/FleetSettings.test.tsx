@@ -481,20 +481,30 @@ describe('FleetSettings', () => {
     const fetch = stubFleetFetch({
       'POST /api/v1/fleet/drop-commit': { body: { dropped: commit, replayed: 2, merges_dropped: 0, published: true } },
     });
-    const onChanged = mount({ ...hub, last_error: raw, last_error_main_held: true, last_error_main_held_commit: commit });
+    const onChanged = vi.fn();
+    const held: FleetStatus = { ...hub, last_error: raw, last_error_main_held: true, last_error_main_held_commit: commit };
+    const { rerender } = render(<FleetSettings fleet={held} onChanged={onChanged} />);
     expect(screen.getByTestId('fleet-last-error')).toHaveTextContent(raw);
     const notice = screen.getByTestId('fleet-main-held-notice');
     expect(notice).toHaveTextContent("The fleet's main is held where it is: the fleet's rules refuse commit 5a6d21e8 on this instance's own branch");
     expect(notice).toHaveTextContent('Main does not move while that commit is on the branch');
     expect(notice).toHaveTextContent('retrying does not help: knomit never removes a commit by itself');
-    expect(notice).toHaveTextContent("Drop it: this instance's branch is rebuilt on main without that commit. What it changed is lost");
+    // #533 review S3: what is lost is the commit's own changes; a later
+    // commit's edit of the same file is kept.
+    expect(notice).toHaveTextContent("Drop it: this instance's branch is rebuilt on main without that commit. That commit's own changes are lost, except where a later commit on this branch edited the same file: the later version is kept. Every other commit not yet on main is kept, members' merges included.");
     expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
     expect(screen.queryByTestId('fleet-commit-refused-notice')).toBeNull();
 
     fireEvent.click(screen.getByTestId('fleet-main-held-drop'));
-    await waitFor(() => expect(screen.getByTestId('fleet-main-held-done')).toHaveTextContent('✓ Dropped 5a6d21e8. Main moved on.'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(fetch.calls.find(c => c.route === 'POST /api/v1/fleet/drop-commit')?.body).toEqual({ commit });
-    expect(onChanged).toHaveBeenCalled();
+    // #533 review N1: onChanged reloads GET /fleet, main moved, last_error is
+    // gone and the notice unmounts. The outcome is still shown.
+    // SABOTAGE: keep the outcome inside MainHeldNotice -> it unmounts with
+    // the notice -> red.
+    rerender(<FleetSettings fleet={hub} onChanged={onChanged} />);
+    expect(screen.queryByTestId('fleet-main-held-notice')).toBeNull();
+    expect(screen.getByTestId('fleet-main-held-done')).toHaveTextContent('✓ Dropped 5a6d21e8. Main moved on.');
   });
 
   // Review S5 and the user's chip ruling: a pending record says when this

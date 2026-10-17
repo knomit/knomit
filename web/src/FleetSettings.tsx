@@ -58,6 +58,10 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   // the previous read stays in use until the new one lands (same origin), so
   // the Hosting actions do not blink out meanwhile.
   const [originRev, setOriginRev] = useState(0);
+  // The drop-commit outcome lives HERE, not in MainHeldNotice: a drop that
+  // moved main clears last_error on the refresh it triggers, which unmounts
+  // the notice, and the outcome must still be seen (#533 review N1).
+  const [dropped, setDropped] = useState<{ short: string; result: FleetDropResult } | null>(null);
   const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting}`;
   const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null; method: string }>({ key: '', peer: null, method: '' });
   useEffect(() => {
@@ -167,7 +171,8 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
           <div data-testid="fleet-last-error" role="alert" style={{ ...errBox, marginTop: 0 }}>
             Last sync failed: <span style={mono}>{fleet.last_error}</span>
             {fleet.last_error_main_held && fleet.last_error_main_held_commit
-              ? <MainHeldNotice commit={fleet.last_error_main_held_commit} local={!!fleet.local} onChanged={onChanged} />
+              ? <MainHeldNotice commit={fleet.last_error_main_held_commit} local={!!fleet.local}
+                  onDropped={(short, result) => { setDropped({ short, result }); onChanged(); }} />
               : fleet.last_error_refused
               ? <div data-testid="fleet-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet refuses this instance's certificate: it may have been revoked, or the fleet moved to another root. Retrying will not help; ask the fleet's master.</div>
               : fleet.last_error_commit_refused
@@ -176,6 +181,13 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
                 // would never be true.
                 ? <div data-testid="fleet-commit-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet's host refuses a commit on this instance's branch (the rule is named above). Retrying will not help: every sync sends the same commit. When the rule is host-record or an artifact rule, the refusal is permanent: to clear it, leave the fleet here, have the fleet's master enroll this instance again, then join again; what this instance wrote that the host does not hold is lost. The master revokes this instance's certificate by itself only once the left record that Leave pushes reaches the fleet's main; while this commit is on the branch, that push is refused like every other, so ask the fleet's master to revoke the certificate by hand before the enroll. Otherwise ask the fleet's master.</div>
                 : <div style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>Retrying on the next sync.</div>}
+          </div>
+        )}
+        {dropped && (
+          <div data-testid="fleet-main-held-done" role="status" style={{ fontSize: 12, color: dropped.result.published ? '#8ab68a' : '#a08a54' }}>
+            {dropped.result.published
+              ? `✓ Dropped ${dropped.short}. Main moved on.`
+              : `Dropped ${dropped.short}, but main still did not move: ${dropped.result.publish_error ?? ''}`}
           </div>
         )}
       </div>
@@ -410,33 +422,26 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
  *  (the judge of the master's own commits); every round refuses the same
  *  commit, and knomit never removes it by itself. POST /fleet/drop-commit
  *  is the way out. */
-function MainHeldNotice({ commit, local, onChanged }: { commit: string; local: boolean; onChanged: () => void }) {
+function MainHeldNotice({ commit, local, onDropped }: { commit: string; local: boolean; onDropped: (short: string, result: FleetDropResult) => void }) {
   const { busy, err, run } = useAction();
-  const [done, setDone] = useState<FleetDropResult | null>(null);
   const short = commit.slice(0, 8);
   return (
     <div data-testid="fleet-main-held-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>
       The fleet's main is held where it is: the fleet's rules refuse commit <span style={mono}>{short}</span> on this
       instance's own branch (the rule and the reason are above). Main does not move while that commit is on the
       branch, so nothing written here after it reaches the members, and retrying does not help: knomit never
-      removes a commit by itself. Drop it: this instance's branch is rebuilt on main without that commit. What it
-      changed is lost; every other commit not yet on main is kept, and members' branches merged since main last
-      moved are merged again. Then main moves on.
-      {done
-        ? <div data-testid="fleet-main-held-done" style={{ marginTop: 6 }}>
-            {done.published
-              ? `✓ Dropped ${short}. Main moved on.`
-              : `Dropped ${short}, but main still did not move: ${done.publish_error ?? ''}`}
+      removes a commit by itself. Drop it: this instance's branch is rebuilt on main without that commit. That
+      commit's own changes are lost, except where a later commit on this branch edited the same file: the later
+      version is kept. Every other commit not yet on main is kept, members' merges included. Then main moves on.
+      {local
+        ? <div style={{ marginTop: 6 }}>
+            <button type="button" data-testid="fleet-main-held-drop" style={btn(busy, 'danger')} disabled={busy}
+              onClick={() => { void run(async () => { onDropped(short, await api.dropFleetCommit(commit)); }); }}>
+              {busy ? 'Dropping…' : `Drop commit ${short}`}
+            </button>
+            <Refusal err={err} note="Nothing was dropped." testid="fleet-main-held-error" />
           </div>
-        : local
-          ? <div style={{ marginTop: 6 }}>
-              <button type="button" data-testid="fleet-main-held-drop" style={btn(busy, 'danger')} disabled={busy}
-                onClick={() => { void run(async () => { setDone(await api.dropFleetCommit(commit)); }, onChanged); }}>
-                {busy ? 'Dropping…' : `Drop commit ${short}`}
-              </button>
-              <Refusal err={err} note="Nothing was dropped." testid="fleet-main-held-error" />
-            </div>
-          : <div style={{ marginTop: 6 }}>Only the desktop app on this machine can drop it.</div>}
+        : <div style={{ marginTop: 6 }}>Only the desktop app on this machine can drop it.</div>}
     </div>
   );
 }
