@@ -195,13 +195,21 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 // land. Nothing to do when main is an ancestor of the candidate: the merge
 // is the candidate's tip, which branchFactsValid judged. Needs git 2.38 or
 // later; a git that cannot run the merge is an error (exit 2), never a pass.
+//
+// The merge reads its attributes (merge drivers such as merge=union) from
+// MAIN's tree (`-c attr.tree=<main>`, git 2.42 or later), never from the
+// checkout's work tree, which CI checks out at the candidate: a candidate's
+// .gitattributes must not choose how its own merge is judged (#533 review 4
+// NIT-B). A git from 2.38 to 2.41 ignores the key and reads the work tree's
+// attributes.
 func mergeResultValid(kbDir string, kb *gogit.Repository, mainC, candC *object.Commit, ont *fact.Ontology, root string) (Refusal, bool, error) {
 	if ff, err := mainC.IsAncestor(candC); err != nil {
 		return Refusal{}, false, fmt.Errorf("is main an ancestor of the candidate: %w", err)
 	} else if ff {
 		return Refusal{}, true, nil
 	}
-	cmd := exec.Command("git", "-C", kbDir, "merge-tree", "--write-tree", "--no-messages", mainC.Hash.String(), candC.Hash.String())
+	cmd := exec.Command("git", "-C", kbDir, "-c", "attr.tree="+mainC.Hash.String(),
+		"merge-tree", "--write-tree", "--no-messages", mainC.Hash.String(), candC.Hash.String())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	raw, err := cmd.Output()

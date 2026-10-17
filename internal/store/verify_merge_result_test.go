@@ -1,12 +1,76 @@
 package store
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
 )
+
+// #533 review 4 NIT-A, the reviewer's probe made a test: a git that cannot
+// run the merge (here a shim whose merge-tree prints the old usage and exits
+// 129, as a git before 2.38 does) makes the gate an error, "could not run"
+// (exit 2), never a pass.
+//
+// SABOTAGE (the reviewer's SC1): answer a pass when merge-tree fails -> no
+// error -> red.
+func TestValidation_AGitThatCannotMergeIsNeverAPass(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the git shim is a shell script")
+	}
+	f := newRangeFixture(t)
+	base := map[string]string{fact.OntologyFile: crossFieldOntology}
+	R := f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("a long title", 0.9)), "", nil)
+	mainC := f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("ab", 0.9)), "agent-m", nil, R)
+	f.ref(f.kb, "main", mainC)
+	f.ref(f.kb, "cand", f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("a long title", 0.99)), "agent-x", nil, R))
+
+	real, err := exec.LookPath("git")
+	require.NoError(t, err)
+	dir := t.TempDir()
+	shim := "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = merge-tree ]; then echo 'usage: git merge-tree <base-tree> <branch1> <branch2>' >&2; exit 129; fi\ndone\nexec " + real + " \"$@\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "git"), []byte(shim), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	require.Error(t, err, "could not run, never a pass")
+	require.Contains(t, err.Error(), "git merge-tree (git 2.38 or later)")
+}
+
+// #533 review 4 NIT-B: the merge reads its attributes from MAIN's tree, not
+// from the checkout's work tree (CI checks out the candidate). The candidate
+// adds `*.md merge=union` and edits x's title line, which main edits too: the
+// server's merge conflicts, and so must the gate's, whatever the candidate's
+// .gitattributes says.
+//
+// SABOTAGE: drop `-c attr.tree=<main>` -> the work tree's union driver
+// merges "clean" -> not merge-conflict -> red.
+func TestValidation_ACandidatesGitattributesDoNotChooseItsMerge(t *testing.T) {
+	f := newRangeFixture(t)
+	base := map[string]string{fact.OntologyFile: crossFieldOntology}
+	R := f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("a long title", 0.9)), "", nil)
+	f.ref(f.kb, "main", f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("a long titlE", 0.9)), "agent-m", nil, R))
+	f.ref(f.kb, "cand", f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("a long titleX", 0.9), ".gitattributes", "*.md merge=union\n"), "agent-x", nil, R))
+	// A non-bare checkout of the candidate, as CI makes, with main beside it.
+	wt := t.TempDir()
+	out, err := exec.Command("git", "clone", "-q", "-b", "cand", "file://"+f.kbDir, wt).CombinedOutput()
+	require.NoError(t, err, string(out))
+	out, err = exec.Command("git", "-C", wt, "branch", "main", "origin/main").CombinedOutput()
+	require.NoError(t, err, string(out))
+	_, err = os.Stat(filepath.Join(wt, ".gitattributes"))
+	require.NoError(t, err, "fixture: the work tree holds the candidate's union attribute")
+
+	v, err := CheckRange(RangeInput{KBDir: wt, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	require.NoError(t, err)
+	require.Equal(t, 1, v.ExitCode(), "%+v", v.Refused)
+	require.Len(t, v.Refused, 1)
+	require.Equal(t, RuleMergeConflict, v.Refused[0].Rule)
+}
 
 // noteConf is a note with a title and a confidence.
 func noteConf(title string, conf float64) string {
