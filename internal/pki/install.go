@@ -32,6 +32,10 @@ var (
 	ErrKeyMismatch     = errors.New("pki: bundle certificate is for another key")
 	ErrRootDiffers     = errors.New("pki: bundle is from a different fleet root")
 	ErrCRLRollback     = errors.New("pki: bundle CRL is older than the one held")
+	// ErrAlreadyInstalled: InstallBundle found this bundle's own root
+	// installed. A bundle installs only where nothing is (a first install);
+	// a renewed leaf installs alone (InstallLeaf).
+	ErrAlreadyInstalled = errors.New("pki: fleet trust material is already installed")
 )
 
 // classified carries a class sentinel beside the error it classifies,
@@ -66,9 +70,9 @@ func rootInfo(c *x509.Certificate) RootInfo {
 	return RootInfo{CommonName: c.Subject.CommonName, Fingerprint: fp}
 }
 
-// RootDiffersError is the refusal to move this instance to another fleet
-// without being asked to. It names both roots so a confirmation can show
-// what is being replaced by what.
+// RootDiffersError is the refusal to install the material of another fleet
+// root over the installed one (InstallBundle), or a CRL of another root
+// (InstallCRL). It names both roots.
 type RootDiffersError struct {
 	Installed RootInfo
 	Bundle    RootInfo
@@ -251,32 +255,24 @@ func SplitBundle(raw []byte) (Bundle, error) {
 	return b, nil
 }
 
-// InstallOptions is what the caller has SEEN before asking for an install.
-type InstallOptions struct {
-	// ExpectInstalledRoot is the fingerprint (RootID) of the root the caller
-	// read as installed — and showed the user, where there is one — or ""
-	// for "no root installed". The install goes ahead only if that is still
-	// the installed root when checked under the install lock; otherwise it
-	// is refused with a RootDiffersError naming the root found. It is also
-	// the ONLY consent pki takes to change fleets: a bundle from another
-	// root installs when ExpectInstalledRoot equals the installed root.
-	// Deciding that the user agreed to that root — a first install included
-	// — is the caller's job (knomit#299).
-	ExpectInstalledRoot string
-}
-
 // InstallBundle installs raw (an enrollment bundle) into dir for the key
-// at keyPath. Every check runs BEFORE anything is written — the directory
-// itself included — so a VERIFICATION failure leaves dir exactly as it was.
-// An I/O failure between the three renames can leave a mixed set; the
-// reloader adopts only a set that verifies together, and the next install
-// repairs it.
+// at keyPath, on an instance with NO fleet trust material installed: the
+// first install of a fleet create or join. Every check runs BEFORE anything
+// is written — the directory itself included — so a refusal leaves dir
+// exactly as it was. An I/O failure between the three renames can leave a
+// mixed set; the reloader adopts only a set that verifies together.
+//
+// It never replaces installed material: an installed root (any root, this
+// bundle's own included) is refused, a different one with a
+// RootDiffersError naming both, the same one with ErrAlreadyInstalled. Moving
+// to another fleet is a leave (Uninstall) and then a join; the CRL alone
+// moves with InstallCRL, a renewed leaf with InstallLeaf.
 //
 // The installed-root check and the writes run under a cross-process lock
-// (LockPath: "<dir>.lock", beside dir, not in it), so two installs — the
-// desktop's and a CLI's — cannot interleave, and the root compared with
-// opts.ExpectInstalledRoot is the root the writes replace.
-func InstallBundle(dir, keyPath string, raw []byte, opts InstallOptions) (Identity, error) {
+// (LockPath: "<dir>.lock", beside dir, not in it), so two installs — or an
+// install and an Uninstall — cannot interleave, and the "nothing installed"
+// that was checked is what the writes land on.
+func InstallBundle(dir, keyPath string, raw []byte) (Identity, error) {
 	b, id, err := checkBundle(keyPath, raw)
 	if err != nil {
 		return Identity{}, err
@@ -289,23 +285,25 @@ func InstallBundle(dir, keyPath string, raw []byte, opts InstallOptions) (Identi
 		return Identity{}, err
 	}
 	defer unlock()
-	// The installed root must be the one the caller saw. A different bundle
-	// root is then a move to another fleet the caller has vouched for.
-	// Nothing is reset on such a move: the CRL watermark is kept PER ROOT
-	// (AcceptedNumber), so the new fleet's CRL #1 is judged against the new
-	// root's entry, while an old bundle of a root seen before — after a
-	// detour A -> B -> A — is still judged against that root's own entry and
-	// refused if older.
+	// Nothing may be installed. Only a MISSING root.crt means "no root
+	// installed". One that exists but does not load (or has no RootID) fails
+	// closed, always: reading it as "none" would install over material
+	// nobody has seen. Removing the file is the way out.
 	//
-	// Only a MISSING root.crt means "no root installed". One that exists but
-	// does not load (or has no RootID) fails closed, always: reading it as
-	// "none" would let a caller that expects none install over it without
-	// anyone having seen what it was. Removing the file is the way out.
+	// Nothing is reset by an Uninstall: the CRL watermark is kept PER ROOT
+	// (AcceptedNumber), so another fleet's CRL #1 is judged against its own
+	// root's entry, while an old bundle of a root seen before — after a
+	// detour A -> B -> A through two leaves and joins — is still judged
+	// against that root's own entry and refused if older.
 	installed, err := InstalledRoot(dir)
 	if err != nil {
 		return Identity{}, err
 	}
-	if installed.Fingerprint != opts.ExpectInstalledRoot {
+	if installed.Fingerprint != "" {
+		if rootInfo(root).Fingerprint == installed.Fingerprint {
+			return Identity{}, &classified{class: ErrAlreadyInstalled,
+				msg: fmt.Sprintf("pki: this instance already has the trust material of fleet root %s installed: a bundle installs only where none is (leave the fleet first)", installed.Fingerprint)}
+		}
 		return Identity{}, &RootDiffersError{Installed: installed, Bundle: rootInfo(root)}
 	}
 	last, err := AcceptedNumber(dir, root) // the BUNDLE's root, not the installed one
@@ -463,12 +461,11 @@ func checkBundle(keyPath string, raw []byte) (Bundle, Identity, error) {
 }
 
 // InstalledRoot is the root installed in dir, as a caller reads it to show
-// the user and to pass as InstallOptions.ExpectInstalledRoot: the zero
-// RootInfo when root.crt is MISSING (nothing installed), an error naming the
-// file when it exists but does not load or is not Ed25519. A front-end must
-// refuse on that error before asking anything: reading an unreadable root
-// as "none" would show a first-install question that InstallBundle then
-// refuses (knomit#299 review).
+// the user: the zero RootInfo when root.crt is MISSING (nothing installed),
+// an error naming the file when it exists but does not load or is not
+// Ed25519. A front-end must refuse on that error before asking anything:
+// reading an unreadable root as "none" would show a first-install question
+// that InstallBundle then refuses (knomit#299 review).
 func InstalledRoot(dir string) (RootInfo, error) {
 	p := filepath.Join(dir, RootCertFile)
 	cur, err := LoadRootCert(p)

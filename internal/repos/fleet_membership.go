@@ -473,7 +473,7 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 	if err != nil {
 		return FleetStatus{}, err
 	}
-	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle, pki.InstallOptions{}); err != nil {
+	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle); err != nil {
 		return FleetStatus{}, fmt.Errorf("fleet join: install the bundle: %w", err)
 	}
 	refuse := func(ri *RepoInstance, ferr *FleetError) (FleetStatus, error) {

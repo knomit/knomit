@@ -164,7 +164,7 @@ func TestFleetIdentity_GetIdentityStates(t *testing.T) {
 	}
 	f := pkitest.New(t)
 	m := f.Enroll(t, "laptop@agents.knomit.io", keyPath)
-	if _, err := pki.InstallBundle(filepath.Join(home, "pki"), keyPath, []byte(bundle(t, f, m)), pki.InstallOptions{}); err != nil {
+	if _, err := pki.InstallBundle(filepath.Join(home, "pki"), keyPath, []byte(bundle(t, f, m))); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	// The running server's own account of its TLS listener, as `knomit serve`

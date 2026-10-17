@@ -451,7 +451,7 @@ func (m *Manager) foundFleet(ctx context.Context, cs CreateSpec, pub ed25519.Pub
 	bundle.Write(certPEM)
 	bundle.Write(rootPEM)
 	bundle.Write(crlPEM)
-	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, bundle.Bytes(), pki.InstallOptions{}); err != nil {
+	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, bundle.Bytes()); err != nil {
 		return nil, fmt.Errorf("fleet create: install this instance's certificate: %w", err)
 	}
 	if err := fleetCreateStep("installed"); err != nil {
