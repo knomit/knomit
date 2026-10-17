@@ -26,12 +26,13 @@ func hasFileAt(t *testing.T, svc *Service, branch, path string) bool {
 // commit (the agent moved since it opened), which deletes the experiment, so
 // the merge is the only reference to its work. Origin main is then rewound to
 // a commit that lacks m1. Nothing of the agent's own is a plain commit beyond
-// the watermark, so the replay's walk is empty: the branch must stay where it
-// is. Moving it onto the rewound main ("only merges beyond upstream") drops
-// the experiment's committed knowledge.
-// SABOTAGE: in replayOntoUpstream, move the branch onto upstream when the
-// walk is empty and the two diverged on shared history (the dropped "shape
-// 3") -> kb/exp.md is gone -> red.
+// the watermark; the experiment's work is only behind the merge. Since #535
+// the walk collects that merge (sideOf), so it is not empty and the branch
+// is rebuilt on the rewound main WITH the experiment; an empty walk is
+// rebuilt on upstream (the no-op that once protected this case pushed back
+// what the rewind removed).
+// SABOTAGE: skip a clean own side in unpushedCommitsDropping -> the walk is
+// empty, the branch is rebuilt without the merge, kb/exp.md is gone -> red.
 func TestReconcileAgentRebase_ExperimentMergeSurvivesARewind(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

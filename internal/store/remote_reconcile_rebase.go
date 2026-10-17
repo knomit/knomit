@@ -73,9 +73,10 @@ import (
 //
 // Returns empty (and disjoint=false) when localTip is an ancestor of
 // upstreamTip (nothing local to replay — caller will fast-forward), OR
-// when upstreamTip is an ancestor of localTip (local is a strict linear
-// extension — caller's force-push will fast-forward origin without
-// rewriting commit hashes).
+// when local is strictly ahead of upstreamTip (strictlyAhead: upstreamTip
+// is an ancestor of localTip and the watermark is not beyond it; the
+// caller's force-push will fast-forward origin without rewriting commit
+// hashes).
 func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumbing.Hash) ([]*object.Commit, bool, error) {
 	commits, disjoint, _, err := rh.unpushedCommitsDropping(localTip, upstreamTip, explicitBase)
 	return commits, disjoint, err
@@ -108,11 +109,11 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 		return nil, false, false, nil
 	}
 
-	upstreamAncestor, err := upstream.IsAncestor(local)
+	ahead, err := rh.strictlyAhead(local, upstream, explicitBase)
 	if err != nil {
-		return nil, false, false, fmt.Errorf("unpushedCommits: IsAncestor (upstream→local): %w", err)
+		return nil, false, false, fmt.Errorf("unpushedCommits: %w", err)
 	}
-	if upstreamAncestor {
+	if ahead {
 		return nil, false, false, nil
 	}
 
@@ -232,6 +233,33 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 		collected[i], collected[j] = collected[j], collected[i]
 	}
 	return collected, disjoint, droppedOut, nil
+}
+
+// strictlyAhead reports whether local is a strict linear extension of
+// upstream that the caller's force-push can send as it stands: upstream is an
+// ancestor of local AND the watermark (explicitBase, when set) is upstream
+// or one of its ancestors. A watermark beyond upstream means the rewind
+// moved main BACK past what this branch consumed (the plainest scrub, a
+// reset to an ancestor): what lies between upstream and the watermark is
+// what the origin removed, so the branch is not ahead of upstream but
+// behind a removal, and the walk must run.
+func (rh *repoHandler) strictlyAhead(local, upstream *object.Commit, explicitBase plumbing.Hash) (bool, error) {
+	upstreamAncestor, err := upstream.IsAncestor(local)
+	if err != nil {
+		return false, fmt.Errorf("IsAncestor (upstream→local): %w", err)
+	}
+	if !upstreamAncestor || explicitBase == plumbing.ZeroHash || explicitBase == upstream.Hash {
+		return upstreamAncestor, nil
+	}
+	base, err := rh.repo.CommitObject(explicitBase)
+	if err != nil {
+		return false, fmt.Errorf("watermark commit %s: %w", explicitBase, err)
+	}
+	held, err := base.IsAncestor(upstream)
+	if err != nil {
+		return false, fmt.Errorf("IsAncestor (watermark→upstream): %w", err)
+	}
+	return held, nil
 }
 
 // replayCommit synthesizes a new commit by applying orig's tree-delta
@@ -438,15 +466,23 @@ func (rh *repoHandler) replayOntoUpstream(
 		return AgentReconcileResult{}, err
 	}
 
-	// No unpushed commits. unpushedCommits returns empty in two distinct
-	// ancestry shapes:
+	// No unpushed commits. Two ancestry shapes keep the branch's hashes:
 	//   1. local is an ancestor of upstream → fast-forward local to upstream.
-	//   2. upstream is an ancestor of local → local is a strict linear
-	//      extension; the caller's force-push will fast-forward origin.
-	//      Do NOT rewind local — that would orphan its branch_commits rows.
-	// Neither applies when the walk DROPPED a commit (SetReplaySkipPaths):
-	// keeping the branch as it stands would carry the dropped commit, so the
-	// replay below rebuilds the branch on upstream with what is left.
+	//   2. local is strictly ahead of upstream (strictlyAhead: upstream is an
+	//      ancestor of local AND the watermark is at or below upstream); the
+	//      caller's force-push will fast-forward origin. Do NOT rewind local
+	//      — that would orphan its branch_commits rows.
+	//   3. local and upstream are disjoint (no common history): kept as it
+	//      stands, as before (see the comment at the check).
+	// Every other empty walk is a branch that diverged from upstream with
+	// nothing of this instance's own beyond the watermark: what it holds
+	// beyond upstream is what the rewind removed (a scrubbed commit at the
+	// watermark, old main, merges with nothing of the instance's own behind
+	// them). Kept as it stands, the caller's force-push would send that back
+	// to the origin that removed it, so it is rebuilt on upstream with
+	// nothing to replay, as is a walk that DROPPED a commit
+	// (SetReplaySkipPaths). An own experiment merge is not lost by this: the
+	// walk collects it (sideOf), so its walk is not empty.
 	if len(commits) == 0 && !dropped {
 		if localTip == upstreamTip {
 			return AgentReconcileResult{Mode: ModeNoop}, nil
@@ -463,25 +499,49 @@ func (rh *repoHandler) replayOntoUpstream(
 		if err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: IsAncestor: %w", err)
 		}
-		if !isLocalAncestor {
-			// Local is strictly ahead of upstream — no replay, no fast-forward.
-			// Caller's force-push will advance origin to local.
+		if isLocalAncestor {
+			if err := rh.deriveBeforeAdvance(ctx, upstreamTip); err != nil {
+				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+			}
+			newRef := plumbing.NewHashReference(localRefName, upstreamTip)
+			if err := rh.gits.SetReference(newRef); err != nil {
+				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+			}
+			if err := rh.populateCommitLog(ctx, localBranch); err != nil {
+				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: populate after FF: %w", err)
+			}
+			if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
+				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
+			}
+			return AgentReconcileResult{Mode: ModeFF, NewTip: upstreamTip.String()}, nil
+		}
+		ahead, err := rh.strictlyAhead(localCommit, upstreamCommit, explicitBase)
+		if err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: %w", err)
+		}
+		if ahead {
+			// No replay, no fast-forward: the caller's force-push will
+			// advance origin to local.
 			return AgentReconcileResult{Mode: ModeNoop, NewTip: localTip.String()}, nil
 		}
-		if err := rh.deriveBeforeAdvance(ctx, upstreamTip); err != nil {
-			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+		bases, err := localCommit.MergeBase(upstreamCommit)
+		if err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: MergeBase: %w", err)
 		}
-		newRef := plumbing.NewHashReference(localRefName, upstreamTip)
-		if err := rh.gits.SetReference(newRef); err != nil {
-			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+		if len(bases) == 0 {
+			// Disjoint histories keep the no-op: attaching a fresh local
+			// repository to a remote of the same knowledge base is this
+			// shape too (its watermark is the InitRepo seed, never on any
+			// origin), and taking the remote's main there would change the
+			// repository's identity (its root commit). A history rewritten
+			// down to its root to scrub something is the same shape; that
+			// residual is not closed here.
+			log.Info().Str("branch", localBranch).Str("upstream", upstreamTip.String()[:8]).
+				Msg("replayOntoUpstream: nothing to replay onto a disjoint upstream; the branch stays as it is")
+			return AgentReconcileResult{Mode: ModeNoop, NewTip: localTip.String()}, nil
 		}
-		if err := rh.populateCommitLog(ctx, localBranch); err != nil {
-			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: populate after FF: %w", err)
-		}
-		if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
-			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
-		}
-		return AgentReconcileResult{Mode: ModeFF, NewTip: upstreamTip.String()}, nil
+		log.Info().Str("branch", localBranch).Str("upstream", upstreamTip.String()[:8]).
+			Msg("replayOntoUpstream: nothing of the branch's own to replay; rebuilding it on upstream so what the rewind removed is not pushed back")
 	}
 
 	log.Info().
