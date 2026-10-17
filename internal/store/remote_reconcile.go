@@ -104,12 +104,12 @@ func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) er
 // kept, and the branch is rebuilt rather than kept as it stands (its own
 // commits get new hashes).
 //
-// The seed is not tied to the CURRENT origin. A remote-tracking ref left by a
-// previous origin URL survives a re-attach, and is read here as this origin's
-// last position: own commits that only the old origin held are then treated
-// as consumed and dropped from the branch on the first rewind against the new
-// origin. A repository WITH a watermark behaves the same way, because the
-// watermark is not reset when the origin changes either.
+// The seed is not tied to the CURRENT origin: a remote-tracking ref left by a
+// previous origin URL survives a re-attach. That does not matter across a
+// change of origin, because the agent is then reconciled against the origin
+// snapshot (origin_snapshot.go), not the watermark: what the old origin held
+// and the new one lacks is left out and reported, not silently dropped as
+// consumed.
 //
 // No lastOrigin (zero: no remote-tracking ref before this fetch, a truly
 // first sync) writes nothing, and the rewind replay keeps its merge-base

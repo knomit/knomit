@@ -88,6 +88,19 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 // when nothing else is left to replay, or it would carry the dropped commit
 // as it stands.
 func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBase plumbing.Hash) (collectedOut []*object.Commit, disjointOut, droppedOut bool, errOut error) {
+	return rh.unpushedCommitsHeld(localTip, upstreamTip, explicitBase, replayOpts{})
+}
+
+// unpushedCommitsHeld is unpushedCommitsDropping with extra commits the walk
+// treats as held, exactly like the upstream's history: it stops at them and
+// a merge's side does not replay them. reconcileAgentAcrossOrigins passes the
+// previous origin's snapshot history (class 3), so only commits reachable
+// from neither the upstream nor the snapshot are replayed. With opts.rebuild
+// the "strictly ahead, keep as it stands" answer is not taken: the branch is
+// known to hold commits that must not stay on it, and the walk must still
+// collect the class-1 commits above them.
+func (rh *repoHandler) unpushedCommitsHeld(localTip, upstreamTip, explicitBase plumbing.Hash, opts replayOpts) (collectedOut []*object.Commit, disjointOut, droppedOut bool, errOut error) {
+	extraHeld := opts.extraHeld
 	if localTip == upstreamTip {
 		return nil, false, false, nil
 	}
@@ -113,7 +126,7 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 	if err != nil {
 		return nil, false, false, fmt.Errorf("unpushedCommits: %w", err)
 	}
-	if ahead {
+	if ahead && !opts.rebuild {
 		return nil, false, false, nil
 	}
 
@@ -148,6 +161,9 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 		onUpstream = map[plumbing.Hash]bool{}
 		if err := walkHistory(rh.gits, upstreamTip, nil, func(c *object.Commit) { onUpstream[c.Hash] = true }); err != nil {
 			return nil, false, false, fmt.Errorf("unpushedCommits: upstream history: %w", err)
+		}
+		for h := range extraHeld {
+			onUpstream[h] = true
 		}
 	}
 
@@ -454,6 +470,28 @@ func (rh *repoHandler) replayOntoUpstream(
 	explicitBase plumbing.Hash,
 	strategy ConflictStrategy,
 ) (AgentReconcileResult, error) {
+	return rh.replayOntoUpstreamOpts(ctx, localBranch, upstreamTip, explicitBase, strategy, replayOpts{})
+}
+
+// replayOpts adjusts replayOntoUpstream for reconcileAgentAcrossOrigins.
+type replayOpts struct {
+	// extraHeld: commits the walk treats as held (unpushedCommitsHeld).
+	extraHeld map[plumbing.Hash]bool
+	// rebuild: the branch is known to hold commits that must not stay on it
+	// (class 3), so an empty walk rebuilds it on upstream instead of keeping
+	// it as it stands, whatever its ancestry.
+	rebuild bool
+}
+
+// replayOntoUpstreamOpts is replayOntoUpstream with replayOpts.
+func (rh *repoHandler) replayOntoUpstreamOpts(
+	ctx context.Context,
+	localBranch string,
+	upstreamTip plumbing.Hash,
+	explicitBase plumbing.Hash,
+	strategy ConflictStrategy,
+	opts replayOpts,
+) (AgentReconcileResult, error) {
 	localRefName := plumbing.NewBranchReferenceName(localBranch)
 	localRef, err := rh.gits.Reference(localRefName)
 	if err != nil {
@@ -461,7 +499,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	}
 	localTip := localRef.Hash()
 
-	commits, disjoint, dropped, err := rh.unpushedCommitsDropping(localTip, upstreamTip, explicitBase)
+	commits, disjoint, dropped, err := rh.unpushedCommitsHeld(localTip, upstreamTip, explicitBase, opts)
 	if err != nil {
 		return AgentReconcileResult{}, err
 	}
@@ -483,7 +521,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	// nothing to replay, as is a walk that DROPPED a commit
 	// (SetReplaySkipPaths). An own experiment merge is not lost by this: the
 	// walk collects it (sideOf), so its walk is not empty.
-	if len(commits) == 0 && !dropped {
+	if len(commits) == 0 && !dropped && !opts.rebuild {
 		if localTip == upstreamTip {
 			return AgentReconcileResult{Mode: ModeNoop}, nil
 		}

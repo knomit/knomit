@@ -84,6 +84,22 @@ func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 	fallbackCancel()
 	if fallbackErr == nil || errors.Is(fallbackErr, gogit.NoErrAlreadyUpToDate) {
 		log.Debug().Str("upstream", upstreamMain).Msg("fetchOrigin: agent ref not on origin yet; fetched upstream only")
+		// The origin has no branch for the other (non-wildcard) configured
+		// refspecs: their remote-tracking refs mirror that. A tracking ref left
+		// from earlier (another origin URL, or a branch deleted on the forge)
+		// would read in Push as "the origin already has this" and nothing
+		// would be sent.
+		if rem, rerr := repo.Remote("origin"); rerr == nil {
+			for _, rs := range rem.Config().Fetch {
+				if rs.IsWildcard() || rs == upstreamRefspec {
+					continue
+				}
+				dst := rs.Dst(plumbing.ReferenceName(rs.Src()))
+				if err := repo.Storer.RemoveReference(dst); err != nil {
+					log.Warn().Err(err).Str("ref", dst.String()).Msg("fetchOrigin: could not drop a tracking ref the origin has no branch for")
+				}
+			}
+		}
 		return nil
 	}
 	// Surface both failures so a misconfigured refspec (which would make
@@ -232,6 +248,39 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	if fetchErr != nil {
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", fetchErr)
 	}
+	if h := currentStoreHooks().afterFetch; h != nil {
+		if err := h(); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: %w", err)
+		}
+	}
+
+	// The origin snapshot (origin_snapshot.go): the last origin state this
+	// copy fully reconciled against. When it belongs to another origin than
+	// this one, the agent is reconciled by the cross-origin classification;
+	// otherwise by the existing rules. It is replaced only at the end of this
+	// round, after the reconcile succeeded, with what was fetched now.
+	snap, err := ri.rh.readOriginSnapshot()
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("Sync: %w", err)
+	}
+	identity := originIdentity(remote.URL)
+	var fetched plumbing.Hash
+	if ref, err := ri.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain)); err == nil {
+		fetched = ref.Hash()
+	}
+	var across originSnapshot
+	switch {
+	case snap.ok() && snap.Identity != identity:
+		across = snap
+	case snap.ok() && fetched != plumbing.ZeroHash && !snap.has(fetched):
+		// The same origin: cover what this round may take in BEFORE the
+		// reconcile moves the branch onto it. Added to the set, never
+		// written alone (origin_snapshot.go).
+		snap.Commits = append(snap.Commits, fetched)
+		if err := ri.rh.writeOriginSnapshot(snap); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: %w", err)
+		}
+	}
 
 	if agentBranch != "" && agentBranch != upstreamMain {
 		if err := ri.rh.seedMissingWatermark(agentBranch, lastOrigin); err != nil {
@@ -239,7 +288,21 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 		}
 	}
 
-	return ri.reconcileNow(ctx, agentBranch, upstreamMain)
+	res, err = ri.reconcileNowAcross(ctx, agentBranch, upstreamMain, across)
+	if err != nil {
+		return res, err
+	}
+	if h := currentStoreHooks().beforeOriginSnapshot; h != nil {
+		if err := h(); err != nil {
+			return res, fmt.Errorf("Sync: %w", err)
+		}
+	}
+	if fetched != plumbing.ZeroHash {
+		if err := ri.rh.writeOriginSnapshot(originSnapshot{Identity: identity, Commits: []plumbing.Hash{fetched}}); err != nil {
+			return res, fmt.Errorf("Sync: %w", err)
+		}
+	}
+	return res, nil
 }
 
 // reconcileNow runs the post-fetch portion of Sync. Exposed (package-private)
@@ -252,6 +315,14 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 // upstreamMain is the consensus branch name; Sync, the only production
 // caller, refuses an empty one before getting here.
 func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMain string) (SyncResult, error) {
+	return ri.reconcileNowAcross(ctx, agentBranch, upstreamMain, originSnapshot{})
+}
+
+// reconcileNowAcross is reconcileNow with the origin snapshot of ANOTHER
+// origin (zero when the snapshot is this origin's, or there is none): the
+// agent is then reconciled by reconcileAgentAcrossOrigins, a function of the
+// branch, main and that snapshot alone, whatever the main reconcile did.
+func (ri *remoteIndex) reconcileNowAcross(ctx context.Context, agentBranch, upstreamMain string, across originSnapshot) (SyncResult, error) {
 
 	// Degenerate config: the configured consensus branch IS this machine's
 	// own agent branch (e.g. a clone whose remote HEAD was an agent branch,
@@ -299,11 +370,28 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 	if s, on := ri.rh.conflictsStrategy(ctx, upstreamMain); on {
 		strategy = s
 	}
-	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, upstreamMain, strategy, mainRes.Mode == ModeRewound)
+	if h := currentStoreHooks().afterMainReconcile; h != nil {
+		if err := h(string(mainRes.Mode)); err != nil {
+			return SyncResult{Main: mainRes}, fmt.Errorf("Sync: %w", err)
+		}
+	}
+	var agentRes AgentReconcileResult
+	if across.ok() {
+		agentRes, err = ri.rh.reconcileAgentAcrossOrigins(ctx, agentBranch, upstreamMain, strategy, across)
+	} else {
+		agentRes, err = ri.rh.reconcileAgent(ctx, agentBranch, upstreamMain, strategy, mainRes.Mode == ModeRewound)
+	}
 	if err != nil {
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}
 
+	// The left-out report is derived from the durable left-out refs every
+	// round, whichever path ran (origin_snapshot.go).
+	if n, origins, refs, rerr := ri.rh.leftOutReport(agentBranch, upstreamMain); rerr != nil {
+		log.Warn().Err(rerr).Str("branch", agentBranch).Msg("Sync: could not derive the left-out report")
+	} else {
+		agentRes.LeftOut, agentRes.LeftOutOrigins, agentRes.LeftOutRefs = n, origins, refs
+	}
 	return SyncResult{Main: mainRes, Agent: agentRes}, nil
 }
 
@@ -354,6 +442,11 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 	if _, err := ri.rh.repo.Remote("origin"); err != nil {
 		log.Debug().Msg("Push: no origin remote configured, skipping")
 		return PushResult{}, nil
+	}
+	if h := currentStoreHooks().beforePush; h != nil {
+		if err := h(branch); err != nil {
+			return PushResult{}, fmt.Errorf("Push: %w", err)
+		}
 	}
 
 	defer func() {
@@ -653,6 +746,13 @@ type storeHooks struct {
 	// that writes proceed while it is "on the network", and that a commit
 	// landing meanwhile is not what this push sends.
 	afterSnapshot func(branch string, snap plumbing.Hash)
+	// Failure seams for the snapshot-then-reconcile tests: a non-nil error
+	// fails the Sync round at that step, as a crash there would.
+	afterFetch           func() error            // after a successful fetch
+	afterMainReconcile   func(mode string) error // after the main reconcile, before the agent's
+	beforeOriginSnapshot func() error            // after the reconcile, before the snapshot write
+	// beforePush fails a Push before any network.
+	beforePush func(branch string) error
 }
 
 var (
