@@ -350,11 +350,15 @@ func TestReconcileAgentRebase_ExperimentContentDeletedLaterStaysDeleted(t *testi
 func TestReconcileAgentRebase_ScrubbedOwnCommitBehindAnExperimentStaysScrubbed(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := sideStore(t)
-	x := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "S", "scrub me"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), x)))
-	require.NoError(t, svc.rh.writeAgentBase("agent/test", x))
+	writeMergeFact(t, svc, "agent/test", "kb/secret.md", "S", "scrub me")
+	// The experiment opens at the secret commit; one more own commit y is
+	// consumed with it, so the secret commit is BELOW the watermark, not the
+	// watermark itself.
 	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
+	y := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/y.md", "Y", "consumed with it"))
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), y)))
+	require.NoError(t, svc.rh.writeAgentBase("agent/test", y))
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	cr, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
