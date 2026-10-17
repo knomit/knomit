@@ -169,10 +169,17 @@ func TestFleetRenew_ARecordWithAnotherKeyIsNotRenewed(t *testing.T) {
 	require.NoError(t, err)
 	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), activeRecordFile(t, "alpha", other), "alpha's record names another key")
 	round(t, f.mri)
+	// Called directly: a renewal the duty did commit would be held back by
+	// the master's own judge (main would not move), which is exactly the
+	// stuck main this guard spares, so main alone cannot show it.
 	restore := SetFleetClockForTest(due)
-	round(t, f.mri)
-	restore()
-	require.Equal(t, old.SerialNumber, f.mainLeaf(t, "alpha").SerialNumber, "another key: not renewed")
+	defer restore()
+	head := localTip(t, f.mri, f.mri.AgentBranch())
+	renewed, err := f.master.renewFleetLeaves(context.Background(), f.mri)
+	require.NoError(t, err)
+	require.NotContains(t, renewed, "alpha", "another key: not renewed")
+	require.Equal(t, head, localTip(t, f.mri, f.mri.AgentBranch()), "nothing committed")
+	require.Equal(t, old.SerialNumber, f.mainLeaf(t, "alpha").SerialNumber)
 }
 
 // Guard 3 of 4: a renewal that is on the agent branch and not on main yet
