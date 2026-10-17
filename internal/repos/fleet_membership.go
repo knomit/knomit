@@ -169,8 +169,14 @@ func (m *Manager) publishMasterWrite(ctx context.Context, ri *RepoInstance) erro
 // hub (no origin): members push to it over the mTLS listener at the addresses
 // its record advertises. Create without an origin and the master's detach of
 // its origin both check it.
+//
+// The listener is judged as CONFIGURED (tlsAddr: the running listeners'
+// [tls].addr, which a reload can set), never as listening: an instance that
+// is not yet in a fleet cannot listen, for its listener waits for the
+// certificate the create installs, and the create starts it
+// (startTLSAfterInstall).
 func (m *Manager) refuseNoHubListener() error {
-	if m.deps.Cfg.TLS.Addr == "" {
+	if m.tlsAddr() == "" {
 		return fleetErr(http.StatusUnprocessableEntity, "listener_required", "a fleet hosted here needs the mTLS listener: set [tls].addr in knomit.toml (members push to it), then run `knomit reload`")
 	}
 	if len(m.deps.Cfg.ExternalAddresses) == 0 {

@@ -167,6 +167,26 @@ export function listenerNotRunning(configured: boolean, reason?: string): string
   return 'Members reach this instance over the fleet listener, and it is not running. A create, a join and Host the fleet here start it once this instance\'s certificate is installed; if it still does not run, restart knomit (or run `knomit reload` for a server you started yourself). Until then no member can join or push.';
 }
 
+/** HOST_HERE_COPY is what the New fleet wizard and Host the fleet here say
+ *  about the two things a fleet hosted HERE needs before the create, kept
+ *  apart (2026-10-17 chicken-and-egg report): the Fleet port, which Settings
+ *  → Network sets and a save applies, and an external address, which only
+ *  knomit.toml sets and only a restart applies (it is not a listener key:
+ *  kb decisions/serve/reload). A Fleet port that is set but not listening
+ *  for lack of a certificate is NOT missing: the create installs the
+ *  certificate and starts it. Proposed copy, pending the user's approval;
+ *  swap it here. */
+export const HOST_HERE_COPY = {
+  /** The Fleet port is not set ([tls].addr empty): listener_required. */
+  setFleetPort: 'Set the Fleet port in Settings → Network; saving applies it. Or choose a forge on the Hosting step.',
+  /** No external_addresses: addresses_required. */
+  addressHeadline: 'A fleet hosted here also needs an external address',
+  addressBody: (listener?: string): string => {
+    const port = /:(\d+)$/.exec(listener ?? '')?.[1] ?? '<Fleet port>';
+    return `Members reach this instance at the https:// address they are given, and none is set. Add it to knomit.toml, for example external_addresses = ["https://<this computer's name>:${port}"], then restart knomit (a reload does not apply it). Or choose a forge instead.`;
+  },
+};
+
 /** hostPortOf is hostOf with a non-default port kept (#528 N6): two fleet
  *  instances on one machine differ only by it, so "Hosted by 127.0.0.1"
  *  could not tell them apart. :443 on https and :80 on http are dropped, as

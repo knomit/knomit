@@ -85,6 +85,9 @@ func printReload(out io.Writer, cur serveraddr.LockInfo) {
 		if l.Reason != "" {
 			line += " (" + l.Reason + ")"
 		}
+		if l.Reason == "no_certificate" {
+			line += ": " + serveraddr.TLSWaitingForCertificate
+		}
 		fmt.Fprintln(out, line)
 	}
 	if len(cur.RestartNeeded) > 0 {

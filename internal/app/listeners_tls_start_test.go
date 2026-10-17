@@ -23,7 +23,7 @@ func TestStartTLSWhenInstalled_StartsTheConfiguredListenerOnceACertificateIsInst
 	f.keyPath, _ = pkitest.NewKey(t)
 	f.cfg.TLS.Addr = f.tlsAddr
 	r := newRig(t, f)
-	if l, why := r.ls.TLSListening(); l != "" || why != ListenerReasonNoCertificate {
+	if _, l, why := r.ls.TLSListening(); l != "" || why != ListenerReasonNoCertificate {
 		t.Fatalf("fixture: TLSListening = %q, %q; want down with no_certificate", l, why)
 	}
 	gen := r.lockInfo(t).Generation
@@ -40,7 +40,7 @@ func TestStartTLSWhenInstalled_StartsTheConfiguredListenerOnceACertificateIsInst
 		t.Fatalf("certificate installed: started=%v err=%v", started, err)
 	}
 	requireBound(t, f.tlsAddr)
-	if l, why := r.ls.TLSListening(); l != f.tlsAddr || why != "" {
+	if _, l, why := r.ls.TLSListening(); l != f.tlsAddr || why != "" {
 		t.Fatalf("TLSListening = %q, %q; want %s", l, why, f.tlsAddr)
 	}
 	info := r.lockInfo(t)
@@ -69,7 +69,7 @@ func TestStartTLSWhenInstalled_OnlyForAMissingCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := newRigOpts(t, f, func(o *ListenerOptions) { o.Supervised = true })
-	if l, why := r.ls.TLSListening(); l != "" || why != ListenerReasonAddrInUse {
+	if _, l, why := r.ls.TLSListening(); l != "" || why != ListenerReasonAddrInUse {
 		t.Fatalf("fixture: TLSListening = %q, %q; want down with addr_in_use", l, why)
 	}
 	held.Close()

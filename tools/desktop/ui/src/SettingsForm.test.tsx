@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { ALL_NETWORKS_WARNING, SettingsForm, type SaveAck, type Settings } from './SettingsForm.tsx'
+import { ALL_NETWORKS_WARNING, FLEET_PORT_WAITING, SettingsForm, type SaveAck, type Settings } from './SettingsForm.tsx'
 import { notEnrolled } from './fleetFixtures.ts'
 import { ack, attachedServer, baseSettings as base, spawnedServer } from './settingsFixtures.ts'
 
@@ -505,6 +505,47 @@ describe('SettingsForm after a save: what became of the running server', () => {
     await pending(ack({ outcome, error }))
     expect(await screen.findByRole('alert')).toHaveTextContent(text)
     expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  // A fresh instance sets the Fleet port BEFORE it is in a fleet: the
+  // listener waits for the certificate the create or join installs, which
+  // starts it. That is not an error (2026-10-17 chicken-and-egg report).
+  // SABOTAGE: drop the no_certificate branch from ackLine -> no note -> red.
+  it('applied with the Fleet port waiting for a certificate: a status note, not an error', async () => {
+    renderForm({ tlsAddr: '0.0.0.0:19279' }, { onSave: vi.fn().mockResolvedValue(ack({ tlsReason: 'no_certificate' })) })
+    save()
+    const line = await screen.findByRole('status')
+    expect(line).toHaveTextContent(/saved and applied/i)
+    expect(line).toHaveTextContent(FLEET_PORT_WAITING('0.0.0.0:19279'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  // An attached server from before the reload client counted no_certificate
+  // as waiting still answers listener_failed for it alone: the same note.
+  // SABOTAGE: drop the listener_failed no_certificate case -> alert -> red.
+  it('listener_failed for the waiting Fleet port alone (an older server): the same note, not an error', async () => {
+    renderForm({ tlsAddr: '0.0.0.0:19279' }, {
+      onSave: vi.fn().mockResolvedValue(ack({
+        outcome: 'listener_failed', tlsReason: 'no_certificate',
+        error: 'reloaded, but not every listener is as configured (tls: no_certificate); the previous listener keeps serving where there was one',
+      })),
+    })
+    save()
+    expect(await screen.findByRole('status')).toHaveTextContent(FLEET_PORT_WAITING('0.0.0.0:19279'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  // Positive control: a held HTTP port beside the waiting Fleet port is
+  // still the error it is.
+  it('listener_failed with a held HTTP port beside the waiting Fleet port: still an error', async () => {
+    renderForm({ tlsAddr: '0.0.0.0:19279' }, {
+      onSave: vi.fn().mockResolvedValue(ack({
+        outcome: 'listener_failed', tlsReason: 'no_certificate', httpReason: 'addr_in_use',
+        error: 'reloaded, but not every listener is as configured (http: addr_in_use, tls: no_certificate)',
+      })),
+    })
+    save()
+    expect(await screen.findByRole('alert')).toHaveTextContent(/port could not be opened.*addr_in_use/i)
   })
 
   it('not_running: confirms, and says it applies when the server starts', async () => {

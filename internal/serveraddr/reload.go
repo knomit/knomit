@@ -54,12 +54,23 @@ func (e *ReloadListenerError) Error() string {
 	return fmt.Sprintf("reloaded, but not every listener is as configured (%s); the previous listener keeps serving where there was one", strings.Join(e.Failed, ", "))
 }
 
+// TLSWaitingForCertificate is what `knomit reload` prints for a fleet
+// listener that is configured but waits for this instance's certificate
+// (reason no_certificate). Proposed copy (2026-10-17), pending the user's
+// approval; swap it here.
+const TLSWaitingForCertificate = "waits for this instance's certificate: it starts when this instance creates or joins a fleet"
+
 // ReloadListenerFailures lists the listeners whose reason says a requested
-// change did not happen ("off" is a state the user asked for, not a failure).
+// change did not happen. Two reasons are not failures: "off" is a state the
+// user asked for, and "no_certificate" is a fleet listener configured before
+// this instance has a certificate. That is the fresh-instance path (set the
+// Fleet port, then create or join a fleet), and the create or join that
+// installs the certificate starts it (app.Listeners.StartTLSWhenInstalled);
+// treating it as failed made the step before the create look broken.
 func ReloadListenerFailures(cur LockInfo) []string {
 	var bad []string
 	for n, l := range cur.Listeners {
-		if l.Reason != "" && l.Reason != "off" {
+		if l.Reason != "" && l.Reason != "off" && l.Reason != "no_certificate" {
 			bad = append(bad, n+": "+l.Reason)
 		}
 	}

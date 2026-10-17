@@ -5,6 +5,7 @@ import { FacetLayoutProvider } from './facetLayout';
 import { stepsFor, initialFleetWizardState, fleetWizardReducer } from './fleetWizardState';
 import type { FleetStatus, FleetJoinCheck } from './api';
 import { stubFleetFetch, problem } from './fleetTestFetch';
+import { HOST_HERE_COPY } from './fleetText';
 
 // New fleet, at the fetch seam: the rail lists only the steps the state has
 // established, each step sends exactly what its route takes, every refusal
@@ -111,13 +112,59 @@ describe('FleetWizard: create', () => {
     stubFleetFetch({ 'POST /api/v1/fleet/create': problem(422, 'listener_required', 'a fleet hosted here needs the mTLS listener: set [tls].addr') });
     mount({ ...standalone, host: { listener_on: false, external_addresses: [] } });
     expect(screen.getByTestId('fleet-start-cannot-host')).toHaveTextContent('This instance can create a fleet, but cannot host one yet');
+    expect(screen.getByTestId('fleet-start-cannot-host')).toHaveTextContent('Hosting needs the mTLS listener. Choose a forge on the next step, or set the Fleet port in Settings → Network first.');
+    // The address is its own card, never folded into the listener's.
+    expect(screen.getByTestId('fleet-start-needs-address')).toHaveTextContent(HOST_HERE_COPY.addressHeadline);
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     expect(screen.getByTestId('fleet-hosting-listener-off')).toHaveTextContent('The fleet listener is off on this instance');
+    expect(screen.getByTestId('fleet-hosting-listener-off')).not.toHaveTextContent('external address');
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     fireEvent.click(screen.getByTestId('fleet-wizard-primary'));
     expect(await screen.findByTestId('fleet-wizard-error-code')).toHaveTextContent('listener_required');
+    expect(screen.getByTestId('fleet-step-review')).toHaveTextContent(HOST_HERE_COPY.setFleetPort);
     expect(screen.getByTestId('fleet-wizard-error')).toHaveTextContent('No fleet was created. You can change something and try again.');
     expect(screen.getByTestId('fleet-wizard-primary')).toHaveTextContent('Try again');
+  });
+
+  // 2026-10-17 chicken-and-egg: a fresh instance with the Fleet port SET is
+  // waiting for the certificate the create installs (no_certificate). That
+  // must not read as "cannot host"; the create starts the listener.
+  // SABOTAGE: gate the Start card on !listening -> the cannot-host card -> red.
+  it('Fleet port set and waiting for its certificate: no cannot-host card, and the create goes ahead', async () => {
+    const { calls } = stubFleetFetch({ 'POST /api/v1/fleet/create': { status: 201, body: { ...standalone, state: 'registered', fleet_repo: 'fleet' } } });
+    const onDone = mount({ ...standalone, host: { ...standalone.host, listener: '0.0.0.0:19279', listening: false, listener_reason: 'no_certificate' } });
+    expect(screen.queryByTestId('fleet-start-cannot-host')).toBeNull();
+    expect(screen.queryByTestId('fleet-start-needs-address')).toBeNull();
+    fireEvent.click(screen.getByTestId('fleet-wizard-next'));
+    expect(screen.getByTestId('fleet-hosting-urls')).toHaveTextContent('The fleet listener is not running yet: it needs the certificate the create installs, and the create starts it.');
+    expect(screen.queryByTestId('fleet-hosting-listener-off')).toBeNull();
+    fireEvent.click(screen.getByTestId('fleet-wizard-next'));
+    fireEvent.click(screen.getByTestId('fleet-wizard-primary'));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith({ kind: 'created' }));
+    expect(calls.some(c => c.route === 'POST /api/v1/fleet/create')).toBe(true);
+  });
+
+  // An external address is genuinely required (addresses_required), and only
+  // knomit.toml sets it: the wizard says so precisely, apart from the
+  // listener, and never sends the user to Settings → Network for it.
+  // SABOTAGE: fold the address back into the cannot-host card -> red.
+  it('Fleet port set, no external address: a card that names knomit.toml and a restart, not the generic one', async () => {
+    stubFleetFetch({ 'POST /api/v1/fleet/create': problem(422, 'addresses_required', 'a fleet hosted here needs external_addresses in knomit.toml') });
+    mount({ ...standalone, host: { listener_on: true, listener: '0.0.0.0:19279', listening: false, listener_reason: 'no_certificate', external_addresses: [] } });
+    expect(screen.queryByTestId('fleet-start-cannot-host')).toBeNull();
+    const start = screen.getByTestId('fleet-start-needs-address');
+    expect(start).toHaveTextContent(HOST_HERE_COPY.addressHeadline);
+    expect(start).toHaveTextContent('external_addresses = ["https://<this computer\'s name>:19279"]');
+    expect(start).toHaveTextContent('restart knomit (a reload does not apply it)');
+    fireEvent.click(screen.getByTestId('fleet-wizard-next'));
+    expect(screen.queryByTestId('fleet-hosting-listener-off')).toBeNull();
+    expect(screen.getByTestId('fleet-hosting-needs-address')).toHaveTextContent(HOST_HERE_COPY.addressBody('0.0.0.0:19279'));
+    fireEvent.click(screen.getByTestId('fleet-wizard-next'));
+    fireEvent.click(screen.getByTestId('fleet-wizard-primary'));
+    expect(await screen.findByTestId('fleet-wizard-error-code')).toHaveTextContent('addresses_required');
+    const review = screen.getByTestId('fleet-step-review');
+    expect(review).toHaveTextContent(HOST_HERE_COPY.addressBody('0.0.0.0:19279'));
+    expect(review).not.toHaveTextContent('Settings → Network');
   });
 
   it('a forge: Connect probes, Access asks for the token, and the create sends the origin with it', async () => {

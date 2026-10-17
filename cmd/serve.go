@@ -257,8 +257,10 @@ func serveCmd() *cobra.Command {
 			// The address this server's own children (recipe `exec`) get as
 			// KNOMIT_SERVER: the local listener only if it bound.
 			a.Manager().SetServerAddress(ls.Address)
-			// GET /fleet's host.listening: whether the mTLS listener is UP,
-			// not only configured (a reload can start it later).
+			// GET /fleet's host.listener_on and host.listening: the [tls].addr
+			// the listeners reflect now (a reload can set it) and whether the
+			// mTLS listener is UP, not only configured (a reload or a fleet
+			// create can start it later).
 			a.Manager().SetTLSListener(ls.TLSListening)
 			// A fleet create, join or host-here installs the certificate the
 			// mTLS listener waits for: it starts that listener, and nothing

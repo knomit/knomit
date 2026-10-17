@@ -81,6 +81,16 @@ export const ALL_NETWORKS_WARNING =
   'They cannot change anything. To let other machines work with this one securely, enrol it in a fleet ' +
   'and use the Fleet port.'
 
+/**
+ * The save line's note for a Fleet port that is set while this instance has
+ * no certificate yet (listener reason no_certificate). That is the
+ * fresh-instance path, not an error: the fleet create or join that installs
+ * the certificate starts the listener. Proposed copy (2026-10-17), pending
+ * the user's approval; swap it here.
+ */
+export const FLEET_PORT_WAITING = (addr: string): string =>
+  `Fleet port ${addr} is set; it opens when this instance creates or joins a fleet, which installs the certificate it needs.`
+
 /** What the Fleet identity section needs; omitted, the section is not shown. */
 export interface FleetProps {
   identity: FleetIdentity | null
@@ -883,18 +893,24 @@ function majorMinor(v: string): string {
  * are a save that reached the file but not (all of) the running server.
  */
 function ackLine(a: SaveAck, s: Settings): { ok: boolean; text: string } {
-  switch (a.outcome) {
+  // A Fleet port waiting for this instance's certificate is as configured,
+  // not failed. An attached older server still answers listener_failed for
+  // it: when it is the only listener with a reason, it is the same note.
+  const fleetWaiting = a.tlsReason === 'no_certificate'
+  const waitingNote = fleetWaiting ? ` ${FLEET_PORT_WAITING(s.tlsAddr)}` : ''
+  const outcome = a.outcome === 'listener_failed' && fleetWaiting && !a.httpReason ? 'applied' : a.outcome
+  switch (outcome) {
     case 'applied': {
       const http = a.httpUrl
         ? ` HTTP port on ${a.httpUrl.replace(/^https?:\/\//, '')}.`
         : s.httpScope === 'off'
           ? ' HTTP port is off.'
           : ''
-      const fleet = a.tlsListening ? ` Fleet port on ${a.tlsListening}.` : ''
+      const fleet = a.tlsListening ? ` Fleet port on ${a.tlsListening}.` : waitingNote
       return { ok: true, text: `Saved and applied.${http}${fleet}` }
     }
     case 'restart_needed':
-      return { ok: true, text: 'Saved. Listener changes are applied; the rest waits for a restart.' }
+      return { ok: true, text: `Saved. Listener changes are applied; the rest waits for a restart.${waitingNote}` }
     case 'not_running':
       return { ok: true, text: 'Saved. The server is not running; the changes apply when it starts.' }
     case 'listener_failed':

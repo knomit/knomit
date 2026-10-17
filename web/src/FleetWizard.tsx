@@ -11,7 +11,7 @@ import {
   fleetWizardReducer, initialFleetWizardState, stepsFor, stepSummary, FLEET_STEP_LABEL,
   accessURL, accessRequired, fleetAuth, type FleetStepId, type FleetWizardState,
 } from './fleetWizardState';
-import { bundleHost, checkRefusalCard, joinRefusalNote, readTextFile } from './fleetText';
+import { HOST_HERE_COPY, bundleHost, checkRefusalCard, joinRefusalNote, readTextFile } from './fleetText';
 import { hostOf } from './wizardState';
 import {
   btn, card, cardLabel, fieldCaveat, fieldHint, fieldInput, fieldLabel, segDisclosure, wizardBody, wizardFooter,
@@ -153,6 +153,10 @@ export function FleetWizard({ fleet, onDone, onCancel }: {
 type S = FleetWizardState;
 
 function StepStart({ s, fleet, onChoose }: { s: S; fleet: FleetStatus | null; onChoose: (c: 'create' | 'join') => void }) {
+  // listener_on is CONFIGURED: a fresh instance's Fleet port cannot be
+  // listening before the create installs its certificate, and the create
+  // starts it, so only a port that is not set at all blocks hosting here.
+  // The external address is a separate requirement, said separately.
   const noListener = !fleet?.host.listener_on;
   const noAddress = (fleet?.host.external_addresses ?? []).length === 0;
   return (
@@ -165,10 +169,16 @@ function StepStart({ s, fleet, onChoose }: { s: S; fleet: FleetStatus | null; on
         {s.choice === 'create' ? (
           <>
             <p style={fieldHint}>This instance becomes the fleet's master and its first member: it holds the fleet's root key, enrolls every other member and merges their branches. The fleet repository is called fleet.</p>
-            {fleet && (noListener || noAddress) && (
+            {fleet && noListener && (
               <div style={{ marginTop: 12 }}>
                 <OutcomeCard tone="ask" testid="fleet-start-cannot-host" headline="This instance can create a fleet, but cannot host one yet"
-                  body={`Hosting needs the mTLS listener${noAddress ? ' and an external address' : ''}. Choose a forge on the next step, or set the Fleet port in Settings → Network first.`} />
+                  body="Hosting needs the mTLS listener. Choose a forge on the next step, or set the Fleet port in Settings → Network first." />
+              </div>
+            )}
+            {fleet && noAddress && (
+              <div style={{ marginTop: 12 }}>
+                <OutcomeCard tone="ask" testid="fleet-start-needs-address" headline={HOST_HERE_COPY.addressHeadline}
+                  body={HOST_HERE_COPY.addressBody(fleet.host.listener)} />
               </div>
             )}
           </>
@@ -237,12 +247,17 @@ function StepHosting({ s, fleet, checking, err, onHosting, onUrl, onConnect }: {
                     : 'The fleet listener is not running yet: it needs the certificate the create installs, and the create starts it.'}`}>
                   <div style={urlList}>{serve.map(u => <div key={u}>{u}</div>)}</div>
                 </OutcomeCard>
-              ) : (
-                <OutcomeCard tone="ask" testid="fleet-hosting-listener-off"
-                  headline={listenerOn ? 'This instance has no external address' : 'The fleet listener is off on this instance'}
-                  body={`A fleet hosted here needs the mTLS listener${hasAddress ? '' : ' and an external address'}. Set the Fleet port in Settings → Network; saving applies it. Create is refused until then (${listenerOn ? 'addresses_required' : 'listener_required'}).`} />
-              )}
+              ) : !listenerOn ? (
+                <OutcomeCard tone="ask" testid="fleet-hosting-listener-off" headline="The fleet listener is off on this instance"
+                  body="A fleet hosted here needs the mTLS listener. Set the Fleet port in Settings → Network; saving applies it. Create is refused until then (listener_required)." />
+              ) : null}
             </div>
+            {!hasAddress && (
+              <div style={{ marginTop: 12 }}>
+                <OutcomeCard tone="ask" testid="fleet-hosting-needs-address" headline={HOST_HERE_COPY.addressHeadline}
+                  body={HOST_HERE_COPY.addressBody(fleet?.host.listener)} />
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -426,9 +441,8 @@ function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: E
       )}
       <Refusal err={err} testid="fleet-wizard-error"
         note={s.choice === 'create' ? 'No fleet was created. You can change something and try again.' : joinRefusalNote(code)} />
-      {(code === 'listener_required' || code === 'addresses_required') && (
-        <div style={fieldHint}>Set the Fleet port and an external address in Settings → Network; saving applies them. Or choose a forge on the Hosting step.</div>
-      )}
+      {code === 'listener_required' && <div style={fieldHint}>{HOST_HERE_COPY.setFleetPort}</div>}
+      {code === 'addresses_required' && <div style={fieldHint}>{HOST_HERE_COPY.addressBody(fleet?.host.listener)}</div>}
     </div>
   );
 }
