@@ -710,6 +710,7 @@ func (m *Manager) publishFleetMainNow(ctx context.Context, ri *RepoInstance) err
 	}); werr != nil && perr == nil {
 		perr = werr
 	}
+	m.noteOwnJudge(perr)
 	return perr
 }
 

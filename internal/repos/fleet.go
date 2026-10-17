@@ -28,6 +28,10 @@ type FleetError struct {
 	// Choices, when set, are the values the caller may pick from to retry
 	// (address_required: this instance's external_addresses).
 	Choices []string
+	// LeaveOut, when set, is what the confirmed fallback of a refused drop
+	// (merge_commit, foreign_commit, leave_out_changed) would lose: the
+	// merge and every commit its side brought.
+	LeaveOut []store.LostCommit
 }
 
 func (e *FleetError) Error() string { return e.Code + ": " + e.Msg }
@@ -61,13 +65,30 @@ type FleetStatus struct {
 	// the text names the commit, the rule and the reason). Every sync sends
 	// the same commit, so a retry does not help. Under the host-record and
 	// artifact rules, which read the commit against its own parents, no later
-	// main admits it either: the way out is to leave, have the master revoke
-	// this instance's certificate (until Leave revokes it by itself) and
-	// enroll it again, then join again.
+	// main admits it either: the way out is to leave, have the master enroll
+	// this instance again, then join again. The master's leave duty revokes
+	// the old certificate only once the left record is on main, and the Leave
+	// push carrying it is refused too while the commit is on the branch: the
+	// master's operator revokes it by hand first.
 	// It is the dead-master fallback's residue (an old master's master write
-	// the new host's main lacks). Read from the recorded error only, as
-	// LastErrorRefused is.
+	// the new host's main lacks). It is also set for a commit that adds or
+	// changes a fact failing the ontology's validations
+	// (store.CommitRefusedByValidation). It is NOT set when the judge of the
+	// master's OWN commits held its main back (store.OwnCommitRefusedText):
+	// that is no host refusing this copy's push, and the leave/revoke advice
+	// the UI shows for one does not apply; last_error says it in full. Read
+	// from the recorded error only, as LastErrorRefused is.
 	LastErrorCommitRefused bool `json:"last_error_commit_refused,omitempty"`
+	// LastErrorMainHeld: LastError is the judge of THIS instance's own
+	// commits holding the fleet's main back (store.OwnCommitRefusedText):
+	// main stays where it is, every later move is refused too while the
+	// commit is on the agent branch, and the way out is POST
+	// /fleet/drop-commit with LastErrorMainHeldCommit. Read from the recorded
+	// error only.
+	LastErrorMainHeld bool `json:"last_error_main_held,omitempty"`
+	// LastErrorMainHeldCommit is the refused commit's hash, from the same
+	// text ("" when LastErrorMainHeld is false).
+	LastErrorMainHeldCommit string `json:"last_error_main_held_commit,omitempty"`
 	// LastErrorStoodDown: LastError is the fleet's old host refusing this
 	// copy's push because its master stood down (FleetPushRefusalStoodDown):
 	// the push goes to the new host once this copy points at it.
@@ -259,14 +280,17 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st := FleetStatus{
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
-		LastErrorRefused:       strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
-		LastErrorCommitRefused: strings.Contains(row.LastError, store.CommitRefusedByJudge),
-		LastErrorStoodDown:     strings.Contains(row.LastError, FleetPushRefusalStoodDown),
+		LastErrorRefused: strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
+		LastErrorCommitRefused: (strings.Contains(row.LastError, store.CommitRefusedByJudge) || strings.Contains(row.LastError, store.CommitRefusedByValidation)) &&
+			!strings.Contains(row.LastError, store.OwnCommitRefusedText),
+		LastErrorStoodDown:      strings.Contains(row.LastError, FleetPushRefusalStoodDown),
+		LastErrorMainHeldCommit: mainHeldCommit(row.LastError),
 		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
 			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
 		RootDir:   m.fleetRootDir(),
 		FleetURLs: []string{},
 	}
+	st.LastErrorMainHeld = st.LastErrorMainHeldCommit != ""
 	if f := m.tlsListener.Load(); f != nil {
 		listening, reason := (*f)()
 		st.Host.Listening = listening != ""

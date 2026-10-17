@@ -1,13 +1,16 @@
 package store
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path"
 	"strings"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"golang.org/x/crypto/ssh"
@@ -30,6 +33,9 @@ type RangeInput struct {
 	FleetDir  string // the fleet repository checkout; untouched when verification is off
 	FleetRev  string // the fleet revision holding the accepted records ("" = "HEAD")
 	FleetRoot string // the fleet's fact root ("" = "kb")
+	// KBRoot is the judged knowledge base's fact root, where RuleValidation
+	// finds its facts ("" = FleetRoot, then "kb").
+	KBRoot string
 }
 
 // RangeVerdict is the acceptance gate's answer for one candidate.
@@ -39,13 +45,16 @@ type RangeVerdict struct {
 	Refused []Refusal `json:"refused"`
 }
 
-// ExitCode is the gate's contract for a CI job: 0 mergeable (verification
-// off, a clean range, or failures in log mode, which are reported only), 1
-// blocked (failures in enforce). "Could not run" (2) is an error from
+// ExitCode is the gate's contract for a CI job: 0 mergeable (a clean range,
+// or signature failures in log mode or with verification off, which are
+// reported only), 1 blocked (failures in enforce, or ANY RuleValidation or
+// RuleMergeConflict refusal, which no mode waives). "Could not run" (2) is an error from
 // CheckRange, never a verdict.
 func (v RangeVerdict) ExitCode() int {
-	if v.Mode == VerifyEnforce && len(v.Refused) > 0 {
-		return 1
+	for _, r := range v.Refused {
+		if v.Mode == VerifyEnforce || r.Rule == RuleValidation || r.Rule == RuleMergeConflict {
+			return 1
+		}
 	}
 	return 0
 }
@@ -61,8 +70,14 @@ func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
 // knowledge base's main (the merge job, via `knomit verify ci`), over plain git
 // checkouts so it needs no knomit instance.
 //
-//  1. verify_signatures is read at Main's tip FIRST. Off or absent: the verdict
-//     is off and nothing else runs; the fleet is never touched.
+//  0. The candidate's NET change is checked against the ontology's
+//     validations at Main's tip (RuleValidation: each fact the candidate's
+//     tip holds that differs from Main and from every merge base), and so is
+//     what merging it into Main lands (mergeResultValid; a merge that is not
+//     clean is RuleMergeConflict), in EVERY mode, the fleet untouched; a
+//     refusal blocks.
+//  1. verify_signatures is read at Main's tip. Off or absent: the verdict is
+//     off and nothing else runs; the fleet is never touched.
 //  2. The fleet's member records and certificate artifacts (the files its
 //     ontology declares pki: root, crl and leaf) are loaded from the ONE fleet
 //     revision (malformed records skipped and logged). A missing or unreadable
@@ -92,17 +107,49 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 		return RangeVerdict{}, fmt.Errorf("verify: verify_signatures at %s has an unknown value", in.Main)
 	}
 	out := RangeVerdict{Mode: settings.Mode, Refused: []Refusal{}}
-	if settings.Mode == VerifyOff {
-		return out, nil
-	}
-	// The artifact rules (R7) are read from the SAME ontology, at main's tip.
-	// One that does not parse cannot say which rules hold: the gate could not
+	// The ontology at main's tip says which validations hold (RuleValidation,
+	// every mode) and, with verification on, the artifact rules (R7). One
+	// that does not parse cannot say which rules hold: the gate could not
 	// run, never a pass.
 	var ont *fact.Ontology
 	if raw != nil {
 		if ont, err = fact.ParseOntology(raw); err != nil {
 			return RangeVerdict{}, fmt.Errorf("verify: ontology at %s: %w", in.Main, err)
 		}
+	}
+	candC, err := resolveCommit(kb, in.Candidate)
+	if err != nil {
+		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
+	}
+	onMain := map[plumbing.Hash]bool{}
+	if err := walkHistory(kb.Storer, mainC.Hash, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
+		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
+	}
+	var commits []*object.Commit
+	if err := walkHistory(kb.Storer, candC.Hash, onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
+	}
+	// RuleValidation first, in EVERY mode and every repository, on the
+	// candidate's NET change (branchFactsValid): a fact it adds or changes
+	// against main and one or more of their merge bases must keep the ontology's validations,
+	// as the MCP write path requires. The refusal names the commit that wrote the
+	// failing content (introducedBy).
+	kbRoot := in.KBRoot
+	if kbRoot == "" {
+		kbRoot = in.FleetRoot
+	}
+	if len(commits) > 0 {
+		if r, ok := branchFactsValid(candC, mainC, ont, kbRoot); !ok {
+			out.Refused = append(out.Refused, r)
+		} else if r, ok, err := mergeResultValid(in.KBDir, kb, mainC, candC, ont, kbRoot); err != nil {
+			return RangeVerdict{}, fmt.Errorf("verify: %w", err)
+		} else if !ok {
+			out.Refused = append(out.Refused, r)
+		}
+	}
+	if settings.Mode == VerifyOff {
+		// Checked counts the commits the signature rules judged: none.
+		return out, nil
 	}
 
 	if in.FleetDir == "" {
@@ -125,28 +172,82 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 		}
 	}
 	gate := newJudge(fleet, selfRoot, ont, in.FleetRoot)
-
-	candC, err := resolveCommit(kb, in.Candidate)
-	if err != nil {
-		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
-	}
-	onMain := map[plumbing.Hash]bool{}
-	if err := walkHistory(kb.Storer, mainC.Hash, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
-		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
-	}
-	if onMain[candC.Hash] {
-		return out, nil
-	}
-	err = walkHistory(kb.Storer, candC.Hash, onMain, func(c *object.Commit) {
+	for _, c := range commits {
 		out.Checked++
 		if r, ok := gate.judgeCommit(c); !ok {
 			out.Refused = append(out.Refused, r)
 		}
-	})
-	if err != nil {
-		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
 	return out, nil
+}
+
+// mergeResultValid judges what merging the candidate into main LANDS, which
+// is not the candidate's tip when main has moved since the fork (#533 review
+// 3): git merges a fact hunk by hunk, so two sides that each keep the
+// ontology's validations can combine into a fact that breaks a cross-field
+// rule (main shortens the title, the branch raises the confidence). The
+// merge is git's own, `git merge-tree --write-tree` (the ort merge `gh pr
+// merge` makes; go-git v5 has no content merge), run in kbDir; it writes the
+// result's objects there and touches no ref, index or work tree. Every fact
+// in the result that differs from main is validated against main's
+// ontology. A merge that does not come out clean is refused
+// (RuleMergeConflict): the gate cannot judge what a hand resolution would
+// land. Nothing to do when main is an ancestor of the candidate: the merge
+// is the candidate's tip, which branchFactsValid judged. Needs git 2.38 or
+// later; a git that cannot run the merge is an error (exit 2), never a pass.
+//
+// The merge reads its attributes (merge drivers such as merge=union) from
+// MAIN's tree (`-c attr.tree=<main>`, git 2.42 or later), never from the
+// checkout's work tree, which CI checks out at the candidate: a candidate's
+// .gitattributes must not choose how its own merge is judged (#533 review 4
+// NIT-B). A git from 2.38 to 2.41 ignores the key and reads the work tree's
+// attributes.
+func mergeResultValid(kbDir string, kb *gogit.Repository, mainC, candC *object.Commit, ont *fact.Ontology, root string) (Refusal, bool, error) {
+	if ff, err := mainC.IsAncestor(candC); err != nil {
+		return Refusal{}, false, fmt.Errorf("is main an ancestor of the candidate: %w", err)
+	} else if ff {
+		return Refusal{}, true, nil
+	}
+	cmd := exec.Command("git", "-C", kbDir, "-c", "attr.tree="+mainC.Hash.String(),
+		"merge-tree", "--write-tree", "--no-messages", mainC.Hash.String(), candC.Hash.String())
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	raw, err := cmd.Output()
+	clean := err == nil
+	var exit *exec.ExitError
+	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
+		return Refusal{}, false, fmt.Errorf("git merge-tree (git 2.38 or later): %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	refused := func(rule, reason string) (Refusal, bool, error) {
+		return Refusal{Commit: candC.Hash.String(), Rule: rule, Reason: reason}, false, nil
+	}
+	if !clean {
+		return refused(RuleMergeConflict, "the branch does not merge cleanly into main, so what a merge would land cannot be judged; bring main into the branch and resolve it there")
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(raw)), "\n")
+	treeC, err := object.GetTree(kb.Storer, plumbing.NewHash(line))
+	if err != nil {
+		return Refusal{}, false, fmt.Errorf("the merge result %q: %w", line, err)
+	}
+	mainTree, err := mainC.Tree()
+	if err != nil {
+		return Refusal{}, false, fmt.Errorf("main's tree: %w", err)
+	}
+	if root == "" {
+		root = defaultOntologyRoot
+	}
+	paths, err := newFactPaths(root, []*object.Tree{mainTree}, treeC)
+	if err != nil {
+		return Refusal{}, false, fmt.Errorf("the merge result's facts: %w", err)
+	}
+	_, reason, err := invalidAmong(ont, root, paths, treeC)
+	if err != nil {
+		return Refusal{}, false, fmt.Errorf("the merge result's facts: %w", err)
+	}
+	if reason != "" {
+		return refused(RuleValidation, "merging the branch into main would land a fact that the branch and main each keep valid apart: "+reason+"; bring main into the branch and fix it there")
+	}
+	return Refusal{}, true, nil
 }
 
 // memberIndex is the fleet's member records, by agent id and by current key.
@@ -192,6 +293,24 @@ type judge struct {
 	// host-record rule (hostRecord) runs only there. CheckRange judges any
 	// range, the master's own commits included, so it is false there.
 	entry bool
+	// ownOntology lets the record-owner rule admit a change of the
+	// repository's ontology file (fact.OntologyPathsNewestFirst). Only
+	// judgeOwnRange sets it, for this instance's OWN commits: the fleet
+	// ontology is written by the instance that creates the fleet and
+	// refreshed by its master (refreshFleetOntology), never by a member
+	// (a pushed branch never changes a private path: privatePathClosure,
+	// guardPrivate).
+	ownOntology bool
+}
+
+// isOntologyPath reports whether p is one of the ontology file's paths.
+func isOntologyPath(p string) bool {
+	for _, o := range fact.OntologyPathsNewestFirst() {
+		if p == o {
+			return true
+		}
+	}
+	return false
 }
 
 // newJudge builds the judge for one fleet revision. selfRoot is the judged
@@ -648,7 +767,7 @@ func (j judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
 		}
 		for _, ch := range changes {
 			for _, name := range []string{ch.From.Name, ch.To.Name} {
-				if name != "" && !strings.HasPrefix(name, dir) && !j.declaredArtifact(name) {
+				if name != "" && !strings.HasPrefix(name, dir) && !j.declaredArtifact(name) && !(j.ownOntology && isOntologyPath(name)) {
 					return refuse(fmt.Sprintf("agent %q changes %s: a member writes only under %s (and declared artifact paths)", id, name, dir))
 				}
 			}

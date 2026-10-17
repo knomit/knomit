@@ -526,7 +526,7 @@ func TestSyncMode_LocalLoop(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runLocalReconcileLoop(ctx, svc, ri.Name(), trigAgent, 30*time.Second, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, 5*time.Second), false, nil)
+		runLocalReconcileLoop(ctx, svc, ri.Name(), trigAgent, 30*time.Second, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, 5*time.Second), false, nil, nil)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 
@@ -561,7 +561,7 @@ func TestSyncMode_LocalIntervalZero(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcileLoop(context.Background(), testService(t, ri), ri.Name(), trigAgent, 0, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, time.Second), false, nil)
+		runLocalReconcileLoop(context.Background(), testService(t, ri), ri.Name(), trigAgent, 0, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, time.Second), false, nil, nil)
 	}()
 	select {
 	case <-done:

@@ -23,6 +23,14 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error, defaultT
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid path", err.Error(), r.URL.Path)
 		return
 	}
+	// RuleValidation at the source (store validateWrite): the content fails
+	// the ontology's validations; the detail is the ontology's own message.
+	var invalid *store.FactInvalidError
+	if errors.As(err, &invalid) {
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Fact fails the ontology's validations",
+			invalid.Error(), r.URL.Path)
+		return
+	}
 	if errors.Is(err, store.ErrFactNotLive) {
 		hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
 			`no live version of this fact on branch "`+branch+`" — it may have been retracted (use the commit-anchored endpoint to read older versions)`,

@@ -121,7 +121,9 @@ func (e *BranchMovedError) Is(target error) bool { return target == ErrBranchMov
 //
 // A merge whose RESULT would change any private path of dst (.knomit/, any
 // dot segment) is refused with *PrivatePathMergeError, whatever side or
-// setting settled the conflicts (guardPrivate).
+// setting settled the conflicts (guardPrivate); one whose result adds or
+// changes a fact that fails the ontology's validations at dst's tip is
+// refused with *ValidationRefusedError (validateFacts, RuleValidation).
 func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumbing.Hash, side ResolutionSide) (AgentReconcileResult, error) {
 	if srcTip.IsZero() {
 		return AgentReconcileResult{}, fmt.Errorf("MergePushed: the reviewed tip of %s is required", src)
@@ -134,7 +136,7 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 	rh := s.rh
 	unlock := rh.lockBranch(dst)
 	defer unlock()
-	o := mergeOpts{srcTip: srcTip, record: true, side: side, guardPrivate: true}
+	o := mergeOpts{srcTip: srcTip, record: true, side: side, guardPrivate: true, validateFacts: true}
 	strategy := StrategyRefuse
 	if side == "" {
 		strategy = s.hostConflictStrategy(ctx, &o)
@@ -184,7 +186,7 @@ func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip pl
 	rh := s.rh
 	unlock := rh.lockBranch(dst)
 	defer unlock()
-	o := mergeOpts{srcTip: srcTip, record: true, skipMergeOnly: true, guardPrivate: true}
+	o := mergeOpts{srcTip: srcTip, record: true, skipMergeOnly: true, guardPrivate: true, validateFacts: true}
 	strategy := s.hostConflictStrategy(ctx, &o)
 	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
 }

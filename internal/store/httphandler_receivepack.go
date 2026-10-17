@@ -273,7 +273,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(msg)
 		return
 	}
-	if msg := rp.verify(r.Context(), pol, commits, lg); msg != "" {
+	if msg := rp.verify(r.Context(), pol, cmd.New, commits, lg); msg != "" {
 		judged(msg)
 		refuse(msg)
 		return
@@ -377,10 +377,10 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 // like every other judgement here: enforce refuses, log logs, off checks
 // nothing — under off and log an unsigned commit is accepted anyway, so a
 // signer rule there would stop nobody.
-func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*object.Commit, lg zerolog.Logger) string {
+func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, tip plumbing.Hash, commits []*object.Commit, lg zerolog.Logger) string {
 	return rp.rh.judgeIncoming(ctx, rp.upstream(), pol.Fleet, func(c *object.Commit) (Refusal, bool) {
 		return signerIsPusher(c, pol.Pusher)
-	}, commits, lg)
+	}, tip, commits, lg)
 }
 
 // CommitRefusedByJudge is the part of judgeIncoming's refusal text that says
@@ -390,14 +390,80 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, commits []*ob
 // a commit of its branch from a failure a retry can cure.
 const CommitRefusedByJudge = "refused by verify_signatures=enforce"
 
+// CommitRefusedByValidation is the part of a refusal text that says a branch's
+// net change adds or changes a fact that fails the ontology's validations
+// (RuleValidation): "knomit: commit <hash> refused by the ontology's
+// validations: validation: <reason>", where <hash> is the commit that WROTE
+// the failing content (introducedBy), not necessarily the tip. A retry of the
+// same tip cannot cure it; a later commit that fixes the fact does (the net
+// change is judged).
+const CommitRefusedByValidation = "refused by the ontology's validations"
+
+// incomingValid is RuleValidation on the NET change of the branch entering
+// this repository (judgeIncoming's first pass): the facts its tip holds that
+// differ from upstream's tip and from one or more merge bases
+// (branchFactsValid), with the ontology at upstream's tip, in every
+// verify_signatures mode and in every repository. A tip the host already
+// holds is judged too (it may be the invalid intermediate of a branch admitted
+// fixed). Returns the refusal text, or "".
+//
+// An ontology at upstream that does not parse refuses EVERY push here, in
+// every mode (its rules cannot be known), while the store's own writers
+// (validateWrite) skip validation on such a branch: a repository that cannot
+// read its ontology is made unwritable where it is opened, so the writers
+// need no second gate, but a branch entering from elsewhere cannot be judged
+// at all. Before #533 an off-mode host read only verify_signatures and
+// admitted such pushes; the likely trigger is an older binary hosting an
+// ontology a newer one wrote (#533 review N3).
+func (rh *repoHandler) incomingValid(ctx context.Context, upstream string, tip plumbing.Hash, commits []*object.Commit) string {
+	var tipC *object.Commit
+	for _, c := range commits {
+		if c.Hash == tip {
+			tipC = c
+		}
+	}
+	if tipC == nil {
+		// A tip this host already holds: still judged (#533 re-review S3).
+		// Under net-change judging the host holds the invalid intermediates
+		// of branches it admitted fixed, so a ref moved back onto one of
+		// them must be refused here, not only by the merge guard.
+		held, err := object.GetCommit(rh.gits, tip)
+		if err != nil {
+			return ""
+		}
+		tipC = held
+	}
+	h, err := rh.resolveRef(ctx, upstream)
+	if err != nil {
+		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
+	}
+	c, err := object.GetCommit(rh.gits, h)
+	if err != nil {
+		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
+	}
+	ont, err := ontologyOf(c)
+	if err != nil {
+		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
+	}
+	if r, ok := branchFactsValid(tipC, c, ont, rh.ontologyRoot()); !ok {
+		return fmt.Sprintf("knomit: commit %s %s: %s: %s", r.Commit, CommitRefusedByValidation, r.Rule, r.Reason)
+	}
+	return ""
+}
+
 // judgeIncoming is the judge where a branch ENTERS this repository, shared by
 // the two entries: receive-pack (a push to a knomit host, verify) and the
-// fleet master's fetch (AdmitPeerBranch, a forge). It reads verify_signatures
-// at upstream's tip, loads the fleet from fleet, and judges every commit with
-// judgeCommit; signer, when not nil, is one more rule for a commit judgeCommit
-// accepted (receive-pack's signer = pusher; a fetch has no pusher). Returns
-// the refusal text, or "".
-func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleetOf func(context.Context) (Fleet, error), signer func(*object.Commit) (Refusal, bool), commits []*object.Commit, lg zerolog.Logger) string {
+// fleet master's fetch (AdmitPeerBranch, a forge). It first runs the
+// ontology's validations on the branch's net change at tip (incomingValid,
+// every mode), then reads verify_signatures at upstream's tip,
+// loads the fleet from fleet, and judges every commit with judgeCommit;
+// signer, when not nil, is one more rule for a commit judgeCommit accepted
+// (receive-pack's signer = pusher; a fetch has no pusher). Returns the
+// refusal text, or "".
+func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleetOf func(context.Context) (Fleet, error), signer func(*object.Commit) (Refusal, bool), tip plumbing.Hash, commits []*object.Commit, lg zerolog.Logger) string {
+	if msg := rh.incomingValid(ctx, upstream, tip, commits); msg != "" {
+		return msg
+	}
 	mode, ont, err := rh.verifyModeAt(ctx, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: verify_signatures at %s could not be read: %v", upstream, err)

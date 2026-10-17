@@ -203,6 +203,11 @@ func (rh *repoHandler) replayCommit(
 	orig *object.Commit,
 	ontoHash plumbing.Hash,
 	strategy ConflictStrategy,
+	// extraParents, when given, become the replayed commit's parents after
+	// ontoHash: DropUnpublishedCommit replays a merge commit as a merge of
+	// the same other parents onto the rebuilt line (orig's delta against its
+	// FIRST parent is what the merge brought in).
+	extraParents ...plumbing.Hash,
 ) (plumbing.Hash, error) {
 	// The signer is resolved BEFORE the synthetic base or any merged tree is
 	// written: a refused replay (ErrNoSigner) must leave no object behind.
@@ -308,7 +313,7 @@ func (rh *repoHandler) replayCommit(
 		},
 		Message:      appendTrailerLines(orig.Message, append(trailers, walkTrailers...)),
 		TreeHash:     mergedTreeHash,
-		ParentHashes: []plumbing.Hash{ontoHash},
+		ParentHashes: append([]plumbing.Hash{ontoHash}, extraParents...),
 	}
 
 	h, err := storeCommit(rh.gits, signer, newCommit)

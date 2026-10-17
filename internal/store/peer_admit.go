@@ -137,7 +137,7 @@ func (s *Service) JudgePeerBranch(ctx context.Context, branch, own string, tip p
 	}
 	lg := log.With().Str("repo", rh.name).Str("branch", branch).Logger()
 	self := func(context.Context) (Fleet, error) { return s.FleetAt(upstream) }
-	return rh.judgeIncoming(ctx, upstream, self, nil, commits, lg), nil
+	return rh.judgeIncoming(ctx, upstream, self, nil, tip, commits, lg), nil
 }
 
 // DemotePeerBranch removes the local refs/heads/<branch> when it is still at

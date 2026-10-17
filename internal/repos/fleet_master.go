@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -456,6 +457,162 @@ func (p *fleetPeers) publish(ctx context.Context, svc *store.Service, own string
 		}
 	}
 	return res, err
+}
+
+// noteOwnJudge records a refusal of this instance's own commits by the judge
+// that runs before the fleet's main moves (store.ErrOwnCommitRefused: main
+// was NOT moved) as the fleet's last error, so GET /fleet last_error shows it
+// rather than a log line only; and, given nil (main moved), clears such a
+// recorded refusal. Any other outcome is not its to record: the callers that
+// own those errors record them.
+func (m *Manager) noteOwnJudge(err error) {
+	db := m.ControlDB()
+	if db == nil {
+		return
+	}
+	if errors.Is(err, store.ErrOwnCommitRefused) {
+		if rerr := recordFleetAttempt(db, err, time.Now()); rerr != nil {
+			log.Warn().Err(rerr).Msg("fleet: recording the judge's refusal of this instance's own commit failed")
+		}
+		return
+	}
+	if err != nil {
+		return
+	}
+	row, rerr := readFleetRow(db)
+	if rerr == nil && strings.Contains(row.LastError, store.OwnCommitRefusedText) {
+		_ = recordFleetAttempt(db, nil, time.Now())
+	}
+}
+
+// mainHeldCommit is the commit a recorded own-judge refusal names
+// ("knomit: main was not moved: commit <hash> refused by ..."), or "".
+func mainHeldCommit(lastError string) string {
+	_, rest, ok := strings.Cut(lastError, store.OwnCommitRefusedText+" ")
+	if !ok {
+		return ""
+	}
+	h, _, _ := strings.Cut(rest, " ")
+	if len(h) != 40 || strings.Trim(h, "0123456789abcdef") != "" {
+		return ""
+	}
+	return h
+}
+
+// FleetDropResult is POST /fleet/drop-commit's answer.
+type FleetDropResult struct {
+	Dropped       string `json:"dropped"`
+	Replayed      int    `json:"replayed"`
+	MergesDropped int    `json:"merges_dropped"`
+	// LeftOut: the commits the confirmed fallback left out (the merge and
+	// every commit its side brought); empty for a plain drop.
+	LeftOut []store.LostCommit `json:"left_out,omitempty"`
+	// Published: main moved (or already was) at the rebuilt branch.
+	// PublishError: why not, when it did not (another refused commit, a
+	// forge that refused the push); the fleet's last_error says it too.
+	Published    bool   `json:"published"`
+	PublishError string `json:"publish_error,omitempty"`
+}
+
+// DropFleetCommit is POST /fleet/drop-commit: the operator's way out when the
+// judge of this instance's own commits holds the fleet's main back
+// (GET /fleet last_error_main_held). The refused commit stays on the agent
+// branch and every later move of main is refused with it; this rebuilds the
+// fleet repository's agent branch on main without that commit
+// (store.DropUnpublishedCommit: that commit's own changes are gone, except
+// where a later commit on the branch edited the same file; every other
+// unpublished commit, members' merges included, is replayed), then publishes
+// main. Only a non-merge commit main does not hold can be dropped (409
+// not_unpublished, 422 merge_commit); one that would re-sign another agent's
+// commits is refused (409 foreign_commit), so nothing but the named commit's
+// own change is ever lost by a drop. Both of those refusals carry leave_out,
+// what the confirmed fallback (LeaveOutFleetMerge) would lose instead.
+func (m *Manager) DropFleetCommit(ctx context.Context, commit string) (FleetDropResult, error) {
+	return m.dropFleetCommit(ctx, commit, false, nil)
+}
+
+// LeaveOutFleetMerge is POST /fleet/drop-commit with leave_out_merge: the
+// confirmed fallback (#533 review 3 SF1) for when DropFleetCommit refuses
+// with merge_commit or foreign_commit and the member who could fix the
+// content cannot (it has left, or is gone for good). The merge that brought
+// commit in (or commit itself, when it is that merge) is left out WHOLE,
+// with every commit its side brought (store.DropUnpublishedCommitLeavingOutMerges);
+// the rest of the branch is replayed and main is published. confirmed is the
+// list of commit hashes the operator was shown (the refusal's leave_out) and
+// confirmed: when what would be left out differs now, nothing changes (409
+// leave_out_changed, with the new list).
+func (m *Manager) LeaveOutFleetMerge(ctx context.Context, commit string, confirmed []string) (FleetDropResult, error) {
+	if len(confirmed) == 0 {
+		return FleetDropResult{}, fleetErr(http.StatusUnprocessableEntity, "leave_out_unconfirmed", "leaving a merge out needs the list of commits it loses, as the refusal listed them and the operator confirmed them")
+	}
+	return m.dropFleetCommit(ctx, commit, true, confirmed)
+}
+
+func (m *Manager) dropFleetCommit(ctx context.Context, commit string, leaveOut bool, confirmed []string) (FleetDropResult, error) {
+	defer m.lockFleetOp()()
+	ri := m.fleetRepo()
+	if ri == nil {
+		return FleetDropResult{}, fleetErr(http.StatusConflict, "not_registered", "this instance is in no fleet")
+	}
+	if len(commit) != 40 || strings.Trim(commit, "0123456789abcdef") != "" {
+		return FleetDropResult{}, fleetErr(http.StatusUnprocessableEntity, "invalid_commit", "commit must be a full 40-hex commit hash")
+	}
+	out := FleetDropResult{Dropped: commit}
+	var derr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			derr = errors.New("fleet repository is not open")
+			return
+		}
+		if leaveOut {
+			out.Replayed, out.LeftOut, derr = svc.DropUnpublishedCommitLeavingOutMerges(ctx, ri.AgentBranch(), plumbing.NewHash(commit), confirmed)
+			return
+		}
+		out.Replayed, out.MergesDropped, derr = svc.DropUnpublishedCommit(ctx, ri.AgentBranch(), plumbing.NewHash(commit), true)
+	}); err != nil {
+		return FleetDropResult{}, err
+	}
+	if errors.Is(derr, store.ErrNotUnpublished) {
+		return FleetDropResult{}, fleetErr(http.StatusConflict, "not_unpublished", "commit "+commit+" is not on this instance's fleet branch, or the fleet's main already holds it: there is nothing to drop")
+	}
+	var merge *store.DropMergeError
+	if errors.As(derr, &merge) {
+		fe := fleetErr(http.StatusUnprocessableEntity, "merge_commit", "commit "+commit+" is a merge: it brings in another branch's commits and cannot be dropped as one; nothing was changed. Drop the commit that wrote the refused content, the one the Fleet page's notice names, or leave this whole merge out, which loses every commit listed with this answer")
+		fe.LeaveOut = merge.LeaveOut
+		return FleetDropResult{}, fe
+	}
+	var foreign *store.DropForeignError
+	if errors.As(derr, &foreign) {
+		fe := fleetErr(http.StatusConflict, "foreign_commit", "commit "+commit+" came in with a merge of agent "+foreign.Agent+"'s branch, and dropping it would re-sign that agent's other commits, which the fleet refuses; nothing was changed. Ask "+foreign.Agent+" to fix the content on its branch, or, if it cannot (it has left, or is gone for good), leave the whole merge out, which loses every commit listed with this answer")
+		fe.LeaveOut = foreign.LeaveOut
+		return FleetDropResult{}, fe
+	}
+	var changed *store.LeaveOutChangedError
+	if errors.As(derr, &changed) {
+		fe := fleetErr(http.StatusConflict, "leave_out_changed", "the fleet branch has moved since the list was shown: leaving the merge out would now lose the commits listed with this answer; nothing was changed")
+		fe.LeaveOut = changed.LeaveOut
+		return FleetDropResult{}, fe
+	}
+	if derr != nil {
+		return FleetDropResult{}, derr
+	}
+	ri.consensusKick()
+	if err := m.publishFleetMainNow(ctx, ri); err != nil {
+		out.PublishError = credentialFreeText(err.Error())
+	} else {
+		out.Published = true
+	}
+	return out, nil
+}
+
+// fleetMainAdvanced is the local reconcile's after hook (the hub's main
+// following its agent branch): on the fleet repository it records the
+// advance's outcome with noteOwnJudge. Every other repository: nothing.
+func (ri *RepoInstance) fleetMainAdvanced(err error) {
+	if ri == nil || !ri.fleetDoor || !ri.IsFleet() {
+		return
+	}
+	ri.env.m.noteOwnJudge(err)
 }
 
 // FleetPushRefusal is why ri accepts no push over /git, or "": a copy of the

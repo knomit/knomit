@@ -147,6 +147,14 @@ type mergeOpts struct {
 	// MergePushed and MergeConsensus — which makes them, not receive-pack,
 	// the authority for "a peer never changes the host's .knomit/".
 	guardPrivate bool
+	// validateFacts refuses the merge (*ValidationRefusedError) when a fact
+	// its RESULT adds or changes against dst fails the validations of the
+	// ontology at dst's tip (the merge commit's first parent): RuleValidation
+	// on the merge into the host's agent branch. Set by the same two routes
+	// as guardPrivate, and judged the same way: the state the merge would
+	// produce, so a branch that wrote an invalid fact and then fixed it
+	// passes, and a fact the merge does not touch is never judged.
+	validateFacts bool
 }
 
 func (o mergeOpts) factMerge(p conflictsPolicy) factMerge {
@@ -370,6 +378,18 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 			log.Info().Str("src", src).Str("dst", dst).Str("src_tip", srcHash.String()).
 				Strs("paths", paths).Msg("mergeIntoBranch: refused (the merge would change private paths of dst)")
 			return AgentReconcileResult{}, &PrivatePathMergeError{Src: src, Dst: dst, SrcTip: srcHash.String(), Paths: paths}
+		}
+	}
+
+	if o.validateFacts && mergedTreeHash != dstCommit.TreeHash {
+		reason, verr := rh.mergeFactsInvalid(dstCommit, mergedTreeHash)
+		if verr != nil {
+			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: validations: %w", verr)
+		}
+		if reason != "" {
+			log.Info().Str("src", src).Str("dst", dst).Str("src_tip", srcHash.String()).
+				Str("reason", reason).Msg("mergeIntoBranch: refused (a fact the merge brings fails the ontology's validations)")
+			return AgentReconcileResult{}, &ValidationRefusedError{Src: src, Dst: dst, SrcTip: srcHash.String(), Reason: reason}
 		}
 	}
 
@@ -797,4 +817,23 @@ func treeBlobHash(tree *object.Tree, path string) (plumbing.Hash, bool) {
 		return plumbing.ZeroHash, false
 	}
 	return f.Hash, true
+}
+
+// mergeFactsInvalid is RuleValidation on a merge into dst: the facts the
+// merged tree adds or changes against dst's tree, against the ontology at
+// dst's tip. Returns the refusal reason, or "".
+func (rh *repoHandler) mergeFactsInvalid(dstCommit *object.Commit, merged plumbing.Hash) (string, error) {
+	ont, err := ontologyOf(dstCommit)
+	if err != nil {
+		return "", fmt.Errorf("the ontology at %s: %w", dstCommit.Hash, err)
+	}
+	dt, err := dstCommit.Tree()
+	if err != nil {
+		return "", err
+	}
+	mt, err := object.GetTree(rh.gits, merged)
+	if err != nil {
+		return "", err
+	}
+	return validateNewFacts(ont, rh.ontologyRoot(), []*object.Tree{dt}, mt)
 }

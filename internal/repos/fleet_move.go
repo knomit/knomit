@@ -270,6 +270,7 @@ func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decide
 		return werr
 	}
 	if perr != nil {
+		m.noteOwnJudge(perr)
 		return fleetErr(http.StatusConflict, "publish_refused",
 			credentialFree(decided.URL)+" refused this fleet's "+decided.Branch+" (it must be empty or behind this copy's): "+perr.Error()+". Nothing changed here")
 	}

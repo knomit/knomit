@@ -631,8 +631,10 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 //
 // before (nil-safe) runs in each round that advances, before the advance:
 // the fleet hub's re-assertion of the host record (fleetHostRound), so main
-// follows it in the same round.
-func runLocalReconcileLoop(ctx context.Context, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}, mode *syncMode, once bool, before func(context.Context, *store.Service)) {
+// follows it in the same round. after (nil-safe) is told the advance's
+// outcome: the fleet hub records a judge's refusal of its own commits as the
+// fleet's last error, and clears it once main moves (fleetMainAdvanced).
+func runLocalReconcileLoop(ctx context.Context, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}, mode *syncMode, once bool, before func(context.Context, *store.Service), after func(error)) {
 	runLocalReconcile(ctx, repo, agentBranch, interval, mode, once,
 		func() (bool, error) {
 			r, err := svc.Remote().GetRemote("origin")
@@ -643,6 +645,9 @@ func runLocalReconcileLoop(ctx context.Context, svc *store.Service, repo, agentB
 				before(ctx, svc)
 			}
 			_, err := svc.AdvanceLocalUpstream(ctx, agentBranch, svc.UpstreamBranch())
+			if after != nil {
+				after(err)
+			}
 			return err
 		},
 		kick, wake)

@@ -334,6 +334,7 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 	res, err := svc.MergeConsensus(ctx, branch, m.agentBranch, tip)
 	var conflict *store.MergeConflictError
 	var private *store.PrivatePathMergeError
+	var invalid *store.ValidationRefusedError
 	switch {
 	case err == nil:
 		m.mu.Lock()
@@ -363,6 +364,13 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 		m.refuse(branch, tip, fmt.Sprintf(
 			"consensus: auto-merge of %s at %s into %s refused: it would change %s, which a pushed branch may never change; the member must revert that change on its branch, or merge the newest upstream if its branch only lags behind",
 			branch, shortHash(tipStr), m.agentBranch, strings.Join(private.Paths, ", ")))
+	case errors.As(err, &invalid):
+		// RuleValidation, remembered per tip like a conflict: the merge
+		// would bring a fact that fails the ontology's validations. The
+		// branch is retried once it moves (its author fixes the fact).
+		m.refuse(branch, tip, fmt.Sprintf(
+			"consensus: auto-merge of %s at %s into %s refused: %s; the branch's author must fix that fact",
+			branch, shortHash(tipStr), m.agentBranch, invalid.Reason))
 	case errors.Is(err, store.ErrUnrelatedHistories), errors.Is(err, store.ErrNoSigner):
 		m.refuse(branch, tip, fmt.Sprintf(
 			"consensus: auto-merge of %s at %s into %s refused: %v; left for a human", branch, shortHash(tipStr), m.agentBranch, err))

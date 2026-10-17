@@ -71,6 +71,8 @@ type repoHandler struct {
 	gits   *storegit.Storer
 	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer ssh.Signer        // SSH signer for commit signing (shared)
+	// writeOnt caches the ontology validateWrite last parsed.
+	writeOnt ontCache
 	// agentID is this instance's persisted agent id (SetAgentID), named by
 	// every authored commit. Never derived from a branch name.
 	agentID string

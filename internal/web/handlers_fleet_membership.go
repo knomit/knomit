@@ -305,3 +305,39 @@ func handleFleetIndexRebuild(b hal.URLBuilder, m *repos.Manager) http.HandlerFun
 		})
 	}
 }
+
+// handleDropFleetCommit: POST /api/v1/fleet/drop-commit {commit}, the way out
+// when the judge of this instance's own commits holds the fleet's main back
+// (GET /fleet last_error_main_held): the fleet repository's agent branch is
+// rebuilt on main without that commit, then main is published
+// (repos.Manager.DropFleetCommit). With leave_out_merge and left_out (the
+// commit hashes the operator confirmed from a refusal's leave_out), the
+// confirmed fallback leaves the whole merge out instead
+// (repos.Manager.LeaveOutFleetMerge). 200 with what was dropped or left out
+// and whether main moved; 409 not_registered, not_unpublished,
+// foreign_commit or leave_out_changed; 422 invalid_commit, merge_commit or
+// leave_out_unconfirmed.
+func handleDropFleetCommit(m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Commit        string   `json:"commit"`
+			LeaveOutMerge bool     `json:"leave_out_merge"`
+			LeftOut       []string `json:"left_out"`
+		}
+		if !decodeJSON(w, r, &req, 0) {
+			return
+		}
+		var out repos.FleetDropResult
+		var err error
+		if req.LeaveOutMerge {
+			out, err = m.LeaveOutFleetMerge(r.Context(), req.Commit, req.LeftOut)
+		} else {
+			out, err = m.DropFleetCommit(r.Context(), req.Commit)
+		}
+		if err != nil {
+			writeFleetError(w, r, err)
+			return
+		}
+		hal.WriteHAL(w, http.StatusOK, out)
+	}
+}

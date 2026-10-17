@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, type FleetRoot, type FleetStatus } from './api';
+import { api, FleetRefusal, type FleetDropResult, type FleetRoot, type FleetStatus } from './api';
 import { SettingsPage, type Section } from './SettingsPage';
 import { OutcomeCard } from './OutcomeCard';
 import { FleetFollowFlow, type FleetFollowMode } from './FleetFollowFlow';
@@ -58,6 +58,10 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   // the previous read stays in use until the new one lands (same origin), so
   // the Hosting actions do not blink out meanwhile.
   const [originRev, setOriginRev] = useState(0);
+  // The drop-commit outcome lives HERE, not in MainHeldNotice: a drop that
+  // moved main clears last_error on the refresh it triggers, which unmounts
+  // the notice, and the outcome must still be seen (#533 review N1).
+  const [dropped, setDropped] = useState<{ short: string; result: FleetDropResult } | null>(null);
   const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting}`;
   const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null; method: string }>({ key: '', peer: null, method: '' });
   useEffect(() => {
@@ -166,14 +170,28 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         {fleet.last_error && !fleet.last_error_fleet_moved && !fleet.last_error_stood_down && (
           <div data-testid="fleet-last-error" role="alert" style={{ ...errBox, marginTop: 0 }}>
             Last sync failed: <span style={mono}>{fleet.last_error}</span>
-            {fleet.last_error_refused
+            {fleet.last_error_main_held && fleet.last_error_main_held_commit
+              ? <MainHeldNotice commit={fleet.last_error_main_held_commit} local={!!fleet.local}
+                  onDropped={(short, result) => { setDropped({ short, result }); onChanged(); }} />
+              : fleet.last_error_refused
               ? <div data-testid="fleet-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet refuses this instance's certificate: it may have been revoked, or the fleet moved to another root. Retrying will not help; ask the fleet's master.</div>
               : fleet.last_error_commit_refused
                 // The host's judge refused a commit of this copy's branch
                 // (#528 N1): every sync sends the same commit, so "Retrying"
                 // would never be true.
-                ? <div data-testid="fleet-commit-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet's host refuses a commit on this instance's branch (the rule is named above). Retrying will not help: every sync sends the same commit. When the rule is host-record or an artifact rule, the refusal is permanent: to clear it, leave the fleet here, ask the fleet's master to revoke this instance's certificate (until Leave revokes it by itself) and enroll it again, then join again; what this instance wrote that the host does not hold is lost. Otherwise ask the fleet's master.</div>
+                ? <div data-testid="fleet-commit-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet's host refuses a commit on this instance's branch (the rule is named above). Retrying will not help: every sync sends the same commit. When the rule is host-record or an artifact rule, the refusal is permanent: to clear it, leave the fleet here, have the fleet's master enroll this instance again, then join again; what this instance wrote that the host does not hold is lost. The master revokes this instance's certificate by itself only once the left record that Leave pushes reaches the fleet's main; while this commit is on the branch, that push is refused like every other, so ask the fleet's master to revoke the certificate by hand before the enroll. Otherwise ask the fleet's master.</div>
                 : <div style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>Retrying on the next sync.</div>}
+          </div>
+        )}
+        {dropped && (
+          <div data-testid="fleet-main-held-done" role="status" style={{ fontSize: 12, color: dropped.result.published ? '#8ab68a' : '#a08a54' }}>
+            {dropped.result.left_out?.length
+              ? (dropped.result.published
+                ? `✓ Left the merge out (${dropped.result.left_out.length} commits). Main moved on.`
+                : `Left the merge out (${dropped.result.left_out.length} commits), but main still did not move: ${dropped.result.publish_error ?? ''}`)
+              : dropped.result.published
+              ? `✓ Dropped ${dropped.short}. Main moved on.`
+              : `Dropped ${dropped.short}, but main still did not move: ${dropped.result.publish_error ?? ''}`}
           </div>
         )}
       </div>
@@ -401,6 +419,57 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   }
 
   return <SettingsPage kind="fleet" sections={sections} testid="fleet-settings" />;
+}
+
+/** MainHeldNotice: GET /fleet last_error_main_held. The fleet's rules refuse
+ *  a commit on this instance's OWN fleet branch, so its main does not move
+ *  (the judge of the master's own commits); every round refuses the same
+ *  commit, and knomit never removes it by itself. POST /fleet/drop-commit
+ *  is the way out. */
+function MainHeldNotice({ commit, local, onDropped }: { commit: string; local: boolean; onDropped: (short: string, result: FleetDropResult) => void }) {
+  const { busy, err, run } = useAction();
+  const short = commit.slice(0, 8);
+  // A drop refused because nothing but the named commit could be lost
+  // (merge_commit, foreign_commit) offers the confirmed fallback: leave the
+  // whole merge out, listing what that loses (#533 review 3 SF1).
+  const leaveOut = err instanceof FleetRefusal && ['merge_commit', 'foreign_commit', 'leave_out_changed'].includes(err.code)
+    ? err.leaveOut : [];
+  return (
+    <div data-testid="fleet-main-held-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>
+      The fleet's main is held where it is: the fleet's rules refuse commit <span style={mono}>{short}</span> on this
+      instance's own branch (the rule and the reason are above). Main does not move while that commit is on the
+      branch, so nothing written here after it reaches the members, and retrying does not help: knomit never
+      removes a commit by itself. Drop it: this instance's branch is rebuilt on main without that commit. That
+      commit's own changes are lost, except where a later commit on this branch edited the same file: the later
+      version is kept. Every other commit not yet on main is kept, members' merges included. Then main moves on.
+      {local
+        ? <div style={{ marginTop: 6 }}>
+            <button type="button" data-testid="fleet-main-held-drop" style={btn(busy, 'danger')} disabled={busy}
+              onClick={() => { void run(async () => { onDropped(short, await api.dropFleetCommit(commit)); }); }}>
+              {busy ? 'Dropping…' : `Drop commit ${short}`}
+            </button>
+            <Refusal err={err} note="Nothing was dropped." testid="fleet-main-held-error" />
+            {leaveOut.length > 0 && (
+              <div data-testid="fleet-main-held-leave-out" style={{ marginTop: 6 }}>
+                You can leave the whole merge out instead. These {leaveOut.length} commits are then lost from this
+                instance's branch and never reach main; every other commit not yet on main is kept:
+                <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
+                  {leaveOut.map(c => (
+                    <li key={c.commit} data-testid="fleet-main-held-leave-out-commit">
+                      <span style={mono}>{c.commit.slice(0, 8)}</span> {c.agent || c.author}: {c.subject}
+                    </li>
+                  ))}
+                </ul>
+                <button type="button" data-testid="fleet-main-held-leave-out-confirm" style={btn(busy, 'danger')} disabled={busy}
+                  onClick={() => { void run(async () => { onDropped(short, await api.dropFleetCommit(commit, leaveOut.map(c => c.commit))); }); }}>
+                  {busy ? 'Leaving out…' : `Leave out the merge and these ${leaveOut.length} commits`}
+                </button>
+              </div>
+            )}
+          </div>
+        : <div style={{ marginTop: 6 }}>Only the desktop app on this machine can drop it.</div>}
+    </div>
+  );
 }
 
 function DangerRow({ title, action, note }: { title: string; action: ReactNode; note: string }) {

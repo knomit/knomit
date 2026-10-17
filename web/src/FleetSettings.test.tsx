@@ -453,9 +453,101 @@ describe('FleetSettings', () => {
     expect(screen.getByTestId('fleet-last-error')).toHaveTextContent('Last sync failed: ' + raw);
     expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("The fleet's host refuses a commit on this instance's branch");
     expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent('When the rule is host-record or an artifact rule, the refusal is permanent');
-    expect(screen.getByTestId('fleet-commit-refused-notice')).toHaveTextContent("leave the fleet here, ask the fleet's master to revoke this instance's certificate (until Leave revokes it by itself) and enroll it again, then join again");
+    // #532: the master revokes by itself only when the left record reaches
+    // main; a refused Leave push never gets it there, so the copy says when
+    // the master's operator still revokes by hand.
+    // SABOTAGE: restore the pre-#532 "(until Leave revokes it by itself)"
+    // sentence -> red.
+    const notice = screen.getByTestId('fleet-commit-refused-notice');
+    expect(notice).toHaveTextContent("leave the fleet here, have the fleet's master enroll this instance again, then join again");
+    expect(notice).toHaveTextContent("The master revokes this instance's certificate by itself only once the left record that Leave pushes reaches the fleet's main");
+    expect(notice).toHaveTextContent("while this commit is on the branch, that push is refused like every other, so ask the fleet's master to revoke the certificate by hand before the enroll");
+    expect(notice).not.toHaveTextContent('until Leave revokes it by itself');
     expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
     expect(screen.queryByTestId('fleet-refused-notice')).toBeNull();
+  });
+
+  // The judge of the master's OWN commits held main back (#533): the notice
+  // names the commit, says main stays where it is and that retrying does not
+  // help, and its button is the way out (POST /fleet/drop-commit with that
+  // commit). Neither "Retrying" nor the member's leave/revoke advice shows.
+  // SABOTAGE: drop the last_error_main_held arm from FleetSettings -> the
+  // generic "Retrying on the next sync." shows and there is no button -> red;
+  // send another commit than last_error_main_held_commit -> the call body
+  // assertion fails -> red.
+  it("the master's own refused commit: main is held, and Drop is the way out", async () => {
+    const commit = '5a6d21e8c0ffee00112233445566778899aabbcc';
+    const raw = `knomit: main was not moved: commit ${commit} refused by the ontology's validations: validation: kb/members/a3f9c0d12e7b/note.md fails the ontology's validation "members-are-policy" at members: a member record is a pragmatic policy fact`;
+    const fetch = stubFleetFetch({
+      'POST /api/v1/fleet/drop-commit': { body: { dropped: commit, replayed: 2, merges_dropped: 0, published: true } },
+    });
+    const onChanged = vi.fn();
+    const held: FleetStatus = { ...hub, last_error: raw, last_error_main_held: true, last_error_main_held_commit: commit };
+    const { rerender } = render(<FleetSettings fleet={held} onChanged={onChanged} />);
+    expect(screen.getByTestId('fleet-last-error')).toHaveTextContent(raw);
+    const notice = screen.getByTestId('fleet-main-held-notice');
+    expect(notice).toHaveTextContent("The fleet's main is held where it is: the fleet's rules refuse commit 5a6d21e8 on this instance's own branch");
+    expect(notice).toHaveTextContent('Main does not move while that commit is on the branch');
+    expect(notice).toHaveTextContent('retrying does not help: knomit never removes a commit by itself');
+    // #533 review S3: what is lost is the commit's own changes; a later
+    // commit's edit of the same file is kept.
+    expect(notice).toHaveTextContent("Drop it: this instance's branch is rebuilt on main without that commit. That commit's own changes are lost, except where a later commit on this branch edited the same file: the later version is kept. Every other commit not yet on main is kept, members' merges included.");
+    expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
+    expect(screen.queryByTestId('fleet-commit-refused-notice')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('fleet-main-held-drop'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(fetch.calls.find(c => c.route === 'POST /api/v1/fleet/drop-commit')?.body).toEqual({ commit });
+    // #533 review N1: onChanged reloads GET /fleet, main moved, last_error is
+    // gone and the notice unmounts. The outcome is still shown.
+    // SABOTAGE: keep the outcome inside MainHeldNotice -> it unmounts with
+    // the notice -> red.
+    rerender(<FleetSettings fleet={hub} onChanged={onChanged} />);
+    expect(screen.queryByTestId('fleet-main-held-notice')).toBeNull();
+    expect(screen.getByTestId('fleet-main-held-done')).toHaveTextContent('✓ Dropped 5a6d21e8. Main moved on.');
+  });
+
+  // #533 review 3 SF1: a drop refused with foreign_commit offers the
+  // confirmed fallback, leaving the whole merge out, and lists what it loses
+  // (author and subject) BEFORE anything runs; only the confirm button sends
+  // leave_out_merge, with exactly the listed hashes.
+  // SABOTAGE: send the fallback without left_out (or on the first click) ->
+  // the call bodies differ -> red; drop the list -> red.
+  it('a foreign_commit refusal offers leaving the merge out, listing what is lost, only on confirm', async () => {
+    const commit = '5a6d21e8c0ffee00112233445566778899aabbcc';
+    const merge = 'aaaaaaaa00000000000000000000000000000000';
+    const other = 'bbbbbbbb00000000000000000000000000000000';
+    const leaveOut = [
+      { commit: merge, author: 'master', agent: 'master', subject: 'Merge agent/alpha' },
+      { commit, author: 'alpha', agent: 'alpha', subject: 'alpha work one' },
+      { commit: other, author: 'alpha', agent: 'alpha', subject: 'alpha work two' },
+    ];
+    const fetch = stubFleetFetch({
+      'POST /api/v1/fleet/drop-commit': (body: unknown) => (body as { leave_out_merge?: boolean }).leave_out_merge
+        ? { body: { dropped: commit, replayed: 1, merges_dropped: 0, left_out: leaveOut, published: true } }
+        : problem(409, 'foreign_commit', "commit came in with a merge of agent alpha's branch", { leave_out: leaveOut }),
+    });
+    const onChanged = vi.fn();
+    const raw = `knomit: main was not moved: commit ${commit} refused by verify_signatures=enforce: not-owner: x`;
+    const held: FleetStatus = { ...hub, last_error: raw, last_error_main_held: true, last_error_main_held_commit: commit };
+    const { rerender } = render(<FleetSettings fleet={held} onChanged={onChanged} />);
+    fireEvent.click(screen.getByTestId('fleet-main-held-drop'));
+    const offer = await screen.findByTestId('fleet-main-held-leave-out');
+    expect(screen.getByTestId('fleet-main-held-error-code')).toHaveTextContent('foreign_commit');
+    expect(offer).toHaveTextContent("You can leave the whole merge out instead. These 3 commits are then lost from this instance's branch and never reach main");
+    const rows = screen.getAllByTestId('fleet-main-held-leave-out-commit');
+    expect(rows.map(r => r.textContent)).toEqual(['aaaaaaaa master: Merge agent/alpha', '5a6d21e8 alpha: alpha work one', 'bbbbbbbb alpha: alpha work two']);
+    expect(fetch.calls.filter(c => c.route === 'POST /api/v1/fleet/drop-commit').map(c => c.body)).toEqual([{ commit }]);
+    expect(onChanged).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('fleet-main-held-leave-out-confirm'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(fetch.calls.filter(c => c.route === 'POST /api/v1/fleet/drop-commit').map(c => c.body)).toEqual([
+      { commit },
+      { commit, leave_out_merge: true, left_out: [merge, commit, other] },
+    ]);
+    rerender(<FleetSettings fleet={hub} onChanged={onChanged} />);
+    expect(screen.getByTestId('fleet-main-held-done')).toHaveTextContent('✓ Left the merge out (3 commits). Main moved on.');
   });
 
   // Review S5 and the user's chip ruling: a pending record says when this

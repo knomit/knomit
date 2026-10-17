@@ -837,6 +837,10 @@ paths:
     post:
       tags: [facts]
       summary: Create a fact
+      description: |
+        422 "Fact fails the ontology's validations" when the fact fails a
+        validation of the repository's ontology (at the branch's tip): the
+        detail is the rule's own message, and nothing is written.
       operationId: createFact
       requestBody:
         required: true
@@ -862,6 +866,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches/{branch}/facts/{path}:
@@ -910,7 +915,10 @@ paths:
         with no exception — and 400 "Invalid artifact path" for a malformed
         path under `artifacts/` (any case). An `artifacts/<area>/<name>` path
         is written at the repo root, outside the ontology; a `context` on it
-        is 422.
+        is 422. 422 "Fact fails the ontology's validations" when the content
+        fails a validation of the repository's ontology (at the branch's tip),
+        with the rule's own message: an edit of a fact that already failed
+        one must bring it into compliance. Nothing is written.
       operationId: updateFact
       requestBody:
         required: true
@@ -2320,7 +2328,9 @@ paths:
         Refusals: `invalid_agent_id`, `invalid_key`, the address codes above
         (422); `own_id`, `not_registered`, `not_master`, `enrolled` (the id
         has an unrevoked leaf on `main`: revoke it first), `rekey_unsupported`
-        (the id has a leaf for another key) (409).
+        (the id has a leaf for another key), `never_joined` (the id has a
+        revoked leaf but no member record: only a member that joined can
+        rejoin, so enroll it under a new agent id) (409).
       operationId: enrollFleetMember
       requestBody:
         required: true
@@ -2349,7 +2359,7 @@ paths:
                   published: { type: boolean }
                   publish_error: { type: string }
         "403": { description: Not the local authenticated listener }
-        "409": { description: "not_registered, not_master, own_id, enrolled or rekey_unsupported" }
+        "409": { description: "not_registered, not_master, own_id, enrolled, rekey_unsupported or never_joined" }
         "422":
           description: "invalid_agent_id, invalid_key, addresses_required, address_required, address_unknown, address_not_https or address_not_applicable; address_required and address_unknown carry choices"
           content:
@@ -2862,6 +2872,85 @@ paths:
         "200": { description: An identical rebuild was already running; this is it }
         "403": { description: Not the local authenticated listener }
         "409": { description: not_registered }
+  /fleet/drop-commit:
+    post:
+      tags: [fleet]
+      summary: Drop a refused commit from this instance's fleet branch
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
+        any other transport is 403 and runs nothing. Takes the fleet lock.
+
+        The way out when the judge of this instance's own commits holds the
+        fleet's main back (GET /fleet `last_error_main_held`, the commit in
+        `last_error_main_held_commit`): that commit stays on this instance's
+        fleet branch, so every later move of main is refused too, and knomit
+        never rewinds a branch by itself. This rebuilds the branch on main
+        without the commit: every other unpublished commit of the branch is
+        replayed in order (re-signed by this instance), merge commits as
+        merges of the same parents, so members' merged work stays. The
+        dropped commit's own changes are gone, except where a later
+        unpublished commit edited the same file (its version is kept). A
+        merge that brought the dropped commit in is unfolded: its side's own
+        commits are replayed one by one, the dropped one excluded
+        (`merges_dropped` counts such merges). Nothing but the dropped
+        commit's own change is lost. Then main is published. `published`
+        false with `publish_error` means main still did not move (another
+        refused commit: drop it too). Refusals: `invalid_commit` (422, not a
+        full 40-hex hash), `merge_commit` (422: a merge cannot be dropped;
+        drop the commit that wrote the content), `not_registered`,
+        `not_unpublished` (409: the commit is not on the branch, or main
+        already holds it), `foreign_commit` (409: the commit came in with
+        another agent's merged branch, and dropping it would re-sign that
+        agent's other commits, which the fleet refuses).
+
+        `merge_commit` and `foreign_commit` carry `leave_out`: what the
+        CONFIRMED fallback would lose, the merge that brought the commit in
+        (or the named merge itself) and every commit its side brought, each
+        with its author and subject. The fallback is this route with
+        `leave_out_merge: true` and `left_out` set to exactly those commit
+        hashes, as the operator confirmed them: the merge is left out whole
+        (nothing is re-signed for another agent), every other unpublished
+        commit is replayed as above, and main is published; the answer's
+        `left_out` lists what was lost. Without `leave_out_merge` the
+        refusal stands. `leave_out_unconfirmed` (422): `leave_out_merge`
+        without `left_out`. `leave_out_changed` (409, with the new
+        `leave_out`): the branch moved since the list was shown, and nothing
+        was changed.
+      operationId: dropFleetCommit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [commit]
+              properties:
+                commit: { type: string, description: "The full hash of the commit to drop" }
+                leave_out_merge: { type: boolean, description: "The confirmed fallback: leave out whole the merge that brought the commit in (or the commit itself when it is that merge)" }
+                left_out:
+                  type: array
+                  items: { type: string }
+                  description: "With leave_out_merge: the commit hashes of the refusal's leave_out, as the operator confirmed them"
+      responses:
+        "200":
+          description: The branch was rebuilt without the commit
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  dropped: { type: string }
+                  replayed: { type: integer }
+                  merges_dropped: { type: integer }
+                  left_out:
+                    type: array
+                    description: "What the confirmed fallback left out; absent for a plain drop"
+                    items: { $ref: "#/components/schemas/FleetLostCommit" }
+                  published: { type: boolean }
+                  publish_error: { type: string }
+        "403": { description: Not the local authenticated listener }
+        "409": { description: "not_registered, not_unpublished, foreign_commit (with leave_out) or leave_out_changed (with leave_out)" }
+        "422": { description: "invalid_commit, merge_commit (with leave_out) or leave_out_unconfirmed" }
   /fleet/activity:
     get:
       tags: [fleet]
@@ -4239,6 +4328,15 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
+    FleetLostCommit:
+      type: object
+      description: "One commit the drop's confirmed fallback leaves (or left) out"
+      required: [commit, author, subject]
+      properties:
+        commit: { type: string }
+        agent: { type: string, description: "The agent id of an agent author; absent otherwise" }
+        author: { type: string }
+        subject: { type: string, description: "The first line of the commit message" }
     FleetStatus:
       type: object
       required: [state, agent_id, public_key, local, host, fleet_urls]
@@ -4272,7 +4370,13 @@ components:
           description: "true when last_error is the fleet refusing this instance's certificate at the TLS handshake (revoked, or the fleet moved to another root): a retry does not help. Read from the recorded error; absent otherwise."
         last_error_commit_refused:
           type: boolean
-          description: "true when last_error is the fleet's host refusing a commit of this copy's push with its commit judge (the text names the commit, the rule and the reason). A retry does not help: every sync sends the same commit. Under the host-record and artifact rules, which read the commit against its own parents, no later main admits it either; the way out is to leave the fleet, have the master revoke this instance's certificate (until Leave revokes it by itself) and enroll it again, then join again. It is the residue of the dead-master fallback (an old master's master write the new host's main lacks). Read from the recorded error; absent otherwise."
+          description: "true when last_error is the fleet's host refusing a commit of this copy's push with its commit judge (the text names the commit, the rule and the reason). A retry does not help: every sync sends the same commit. Under the host-record and artifact rules, which read the commit against its own parents, no later main admits it either; the way out is to leave the fleet, have the master enroll this instance again, then join again. The master revokes the old certificate by itself only once the left record reaches main; the Leave push that carries it is refused too while the refused commit is on the branch, so the master's operator revokes it by hand first (POST /fleet/revoke). It is the residue of the dead-master fallback (an old master's master write the new host's main lacks). Read from the recorded error; absent otherwise."
+        last_error_main_held:
+          type: boolean
+          description: "true when last_error is the judge of THIS instance's own commits holding the fleet's main back (a commit on its fleet branch breaks a rule: the text names the commit, the rule and the reason). Main stays where it is, and every later move is refused too while the commit is on the branch: POST /fleet/drop-commit with last_error_main_held_commit is the way out. Read from the recorded error; absent otherwise."
+        last_error_main_held_commit:
+          type: string
+          description: "The refused commit's full hash when last_error_main_held; absent otherwise."
         last_error_stood_down:
           type: boolean
           description: "true when last_error is this copy's host refusing its push because the master there stood down: the push goes to the new host once this copy points at it (POST /fleet/follow). Read from the recorded error; absent otherwise."

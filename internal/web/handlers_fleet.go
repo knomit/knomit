@@ -48,6 +48,9 @@ func writeFleetError(w http.ResponseWriter, r *http.Request, err error) {
 		if len(fe.Choices) > 0 {
 			extra["choices"] = fe.Choices
 		}
+		if len(fe.LeaveOut) > 0 {
+			extra["leave_out"] = fe.LeaveOut
+		}
 		hal.WriteProblemWithExtra(w, fe.Status, http.StatusText(fe.Status), fe.Msg, r.URL.Path, extra)
 		return
 	}

@@ -167,14 +167,25 @@ func originHeadUpstream(dir string) (string, error) {
 // checkouts: it needs no knomit home and boots nothing.
 func verifyCICmd() *cobra.Command {
 	var (
-		dir, upstream, candidate, fleet, fleetRev, fleetRoot string
-		asJSON                                               bool
+		dir, upstream, candidate, fleet, fleetRev, fleetRoot, kbRoot string
+		asJSON                                                       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "ci",
 		Short: "Check a candidate branch before it is merged into a knowledge base's main (F09 gate)",
-		Long: `Reads verify_signatures at the upstream's tip FIRST. Off or absent: exits 0 at
-once and touches nothing else (no fleet is needed). On (log or enforce): loads
+		Long: `First, in every mode and every knowledge base, every fact the candidate
+changes (a .md file under --kb-root whose content at the candidate's tip
+differs from the upstream's and from every merge base's) must keep the
+validations of the upstream's ontology, as knomit_learn and knomit_update
+require, and so must every fact that merging the candidate into the
+upstream would land (git merge-tree --write-tree; needs git 2.38 or later):
+else validation, which blocks (exit 1) whatever verify_signatures says. A
+candidate that does not merge cleanly into the upstream is refused with
+merge-conflict, which blocks too. Facts the candidate does not touch are
+never judged.
+
+Then reads verify_signatures at the upstream's tip. Off or absent: nothing
+else runs (no fleet is needed). On (log or enforce): loads
 the member records of the fleet repository checkout --fleet and checks every
 commit the candidate adds to the upstream: signed; its author's agent id has
 exactly one member record; the signing key is that record's current key and no
@@ -219,10 +230,13 @@ artifact-pki, artifact-not-a-file).
 set it in a CI checkout with ` + "`git remote set-head origin --auto`" + `). Without
 it, and without --upstream, the gate cannot run (exit 2).
 
-Exit codes: 0 mergeable (verification off, a clean range, or failures in log
-mode, which are reported only), 1 blocked (failures in enforce), 2 could not
-run (a missing or unreadable fleet while verification is on, a checkout whose
-ontology is not the fleet ontology, an unknown verify_signatures value).`,
+Exit codes: 0 mergeable (a clean range, or signature failures with
+verification off or in log mode, which are reported only), 1 blocked
+(failures in enforce, any validation failure, or a merge conflict with the
+upstream), 2 could not run (a git that cannot run the merge, a missing
+or unreadable fleet while verification is on, a checkout whose ontology is
+not the fleet ontology or does not parse, an unknown verify_signatures
+value).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -235,7 +249,7 @@ ontology is not the fleet ontology, an unknown verify_signatures value).`,
 			}
 			v, err := store.CheckRange(store.RangeInput{
 				KBDir: dir, Main: upstream, Candidate: candidate,
-				FleetDir: fleet, FleetRev: fleetRev, FleetRoot: fleetRoot,
+				FleetDir: fleet, FleetRev: fleetRev, FleetRoot: fleetRoot, KBRoot: kbRoot,
 			})
 			if err != nil {
 				if errors.Is(err, store.ErrNoFleet) {
@@ -250,8 +264,8 @@ ontology is not the fleet ontology, an unknown verify_signatures value).`,
 				if err := enc.Encode(v); err != nil {
 					return &ExitCodeError{Code: exitFailed, Err: err}
 				}
-			} else if v.Mode == store.VerifyOff {
-				fmt.Fprintf(out, "verification is off in %s: nothing to check\n", upstream)
+			} else if v.Mode == store.VerifyOff && len(v.Refused) == 0 {
+				fmt.Fprintf(out, "verification is off in %s: no signature to check; every new fact keeps the ontology's validations\n", upstream)
 			} else {
 				fmt.Fprintf(out, "%s onto %s: mode %s, %d new commit(s), %d refused\n",
 					candidate, upstream, v.Mode, v.Checked, len(v.Refused))
@@ -271,6 +285,7 @@ ontology is not the fleet ontology, an unknown verify_signatures value).`,
 	cmd.Flags().StringVar(&fleet, "fleet", "", "the fleet repository checkout (needed only when verification is on)")
 	cmd.Flags().StringVar(&fleetRev, "fleet-rev", "HEAD", "the fleet revision holding the accepted member records")
 	cmd.Flags().StringVar(&fleetRoot, "fleet-root", "kb", "the fleet repository's fact root")
+	cmd.Flags().StringVar(&kbRoot, "kb-root", "kb", "the knowledge base's fact root, where the ontology's validations find its facts")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the verdict as JSON")
 	return cmd
 }
