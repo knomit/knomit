@@ -2640,7 +2640,18 @@ paths:
         The files of `<home>/fleet` as one document: `root.key` (the root
         PRIVATE key), `root.crt`, `crl.pem`, `issued.jsonl`, `revoked.jsonl`
         (those present). Install them on the new master with `PUT`; stand
-        down here with `DELETE`. Refusals: `no_root` (404).
+        down here with `DELETE`. Refusals: `no_root` (404),
+        `unpublished_changes` (409, below).
+
+        On the ACTING master it first flushes: it publishes what its fleet
+        branch holds, and refuses with `unpublished_changes` (409) while the
+        fleet's main still lacks any commit of that branch (a revoke whose
+        publish failed, a renewal, a re-signed CRL, a merged member record):
+        the next master works from main and would never see them. Let the
+        publish succeed (fix the origin, or wait for the next sync round),
+        then try again. A master that never comes back to publish (the
+        dead-master fallback, Host here with `confirm_loss`) loses those
+        commits: revoke again on the new master.
       operationId: getFleetRoot
       responses:
         "200":
@@ -2650,6 +2661,7 @@ paths:
               schema: { $ref: "#/components/schemas/FleetRoot" }
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
+        "409": { description: unpublished_changes }
     put:
       tags: [fleet]
       summary: Install another master's root files here
@@ -2693,7 +2705,7 @@ paths:
         LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
         any other transport is 403 and runs nothing.
 
-        The first step of a master switch, and it needs nothing first. While
+        The first step of a master switch. While
         this instance does master work, its last act as master is one
         commit on main: the master marker (`artifacts/fleet/master`, the
         acting master's agent id) deleted, so main shows a fleet with no
@@ -2705,13 +2717,24 @@ paths:
         checks its own main for the marker. A master whose copy follows
         another instance of the fleet commits nothing (it is not the host). Refusals: `no_root` (404),
         `stand_down_unpublished` (409: the commit did not reach the fleet's
-        main, e.g. the forge refused it; the root stays, try again).
+        main, e.g. the forge refused it; the root stays, try again),
+        `unpublished_changes` (409, below).
+
+        On the ACTING master it first flushes: it publishes what its fleet
+        branch holds, and refuses with `unpublished_changes` (409) while the
+        fleet's main still lacks any commit of that branch (a revoke whose
+        publish failed, a renewal, a re-signed CRL, a merged member record):
+        the next master works from main and would never see them. Let the
+        publish succeed (fix the origin, or wait for the next sync round),
+        then try again. A master that never comes back to publish (the
+        dead-master fallback, Host here with `confirm_loss`) loses those
+        commits: revoke again on the new master.
       operationId: standDownFleetRoot
       responses:
         "204": { description: Stood down }
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
-        "409": { description: stand_down_unpublished }
+        "409": { description: "stand_down_unpublished or unpublished_changes" }
   /fleet/host:
     post:
       tags: [fleet]

@@ -1230,8 +1230,9 @@ func (m *Manager) InstallFleetRoot(files map[string]string) (FleetRoot, error) {
 }
 
 // StandDown is DELETE /fleet/root, the first step of a master switch (user
-// ruling 2026-10-16): this instance stops being the fleet's master, and it
-// needs nothing else first. While it still does master work
+// ruling 2026-10-16): this instance stops being the fleet's master. First it
+// flushes (flushBeforeSwitch: everything its fleet branch holds reaches
+// main, else 409 unpublished_changes). While it still does master work
 // (actsAsFleetMaster) its last act as master is one commit on main
 // (deleteFleetMaster: the master marker, fact.FleetMasterPath, deleted, so
 // main shows a fleet with no acting master); then <home>/fleet,
