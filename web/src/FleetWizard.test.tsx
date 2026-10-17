@@ -144,6 +144,18 @@ describe('FleetWizard: create', () => {
     expect(calls.some(c => c.route === 'POST /api/v1/fleet/create')).toBe(true);
   });
 
+  // With no Fleet port the create is refused listener_required, so Review
+  // must not promise a URL members will join at (seen on the real binary,
+  // 2026-10-17: external_addresses set, [tls].addr not).
+  // SABOTAGE: drop the listener_on condition from the Review clause -> red.
+  it('no Fleet port: Review names no join URL even when an external address is set', () => {
+    stubFleetFetch({});
+    mount({ ...standalone, host: { ...standalone.host, listener_on: false } });
+    fireEvent.click(screen.getByTestId('fleet-wizard-next'));
+    fireEvent.click(screen.getByTestId('fleet-wizard-next'));
+    expect(screen.getByTestId('fleet-step-review')).not.toHaveTextContent('Members will join at');
+  });
+
   // An external address is genuinely required (addresses_required), and only
   // knomit.toml sets it: the wizard says so precisely, apart from the
   // listener, and never sends the user to Settings → Network for it.

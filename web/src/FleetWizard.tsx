@@ -401,6 +401,8 @@ function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: E
   const rootDir = fleet?.root_dir ?? '';
   const serve = fleet?.host.would_serve ?? [];
   const listening = fleet?.host.listening === true;
+  // Members join only once the Fleet port is set: with none, the create is
+  // refused listener_required, so the step names no URL.
   const code = (err as { code?: string } | null)?.code ?? '';
   return (
     <div data-testid="fleet-step-review">
@@ -408,7 +410,7 @@ function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: E
       {s.choice === 'create' && s.hosting === 'here' && (
         <ol style={will}>
           <li>A fresh fleet root is created in {rootDir} on this machine; this instance is the master.</li>
-          <li>The fleet repository is created here, with this instance's record and certificate on main.{serve.length ? (listening ? ` Members will join at ${serve.join(' or ')}.` : fleet?.host.listener_reason === 'addr_in_use' ? ` Members will join at ${serve.join(' or ')} once the fleet listener's port is free (Settings → Network).` : ` Members will join at ${serve.join(' or ')}: the create starts the fleet listener.`) : ''}</li>
+          <li>The fleet repository is created here, with this instance's record and certificate on main.{serve.length && fleet?.host.listener_on ? (listening ? ` Members will join at ${serve.join(' or ')}.` : fleet?.host.listener_reason === 'addr_in_use' ? ` Members will join at ${serve.join(' or ')} once the fleet listener's port is free (Settings → Network).` : ` Members will join at ${serve.join(' or ')}: the create starts the fleet listener.`) : ''}</li>
           <li>Every joiner needs a bundle from Fleet → Members → Enroll a member. Each round, this instance judges and merges their branches into main.</li>
         </ol>
       )}
