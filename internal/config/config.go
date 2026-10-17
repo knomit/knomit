@@ -436,6 +436,12 @@ type AuthConfig struct {
 
 // validateExternalAddress accepts scheme://host[:port] and nothing more. Any
 // scheme is accepted: the operator knows what peers speak.
+// ValidateExternalAddress is the check Validate applies to each
+// external_addresses entry, for a front end that writes the key (the desktop
+// Settings) and must never write a file that stops knomit from starting. The
+// error is the reason alone ("has a path"), without the entry.
+func ValidateExternalAddress(a string) error { return validateExternalAddress(a) }
+
 func validateExternalAddress(a string) error {
 	if strings.ContainsAny(a, " \t\r\n") {
 		return errors.New("contains whitespace")

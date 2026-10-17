@@ -679,7 +679,7 @@ function HostConfirm({ fleet, interrupted, oldMaster, onCancel, onDone }: {
       )}
       {fleet.host.external_addresses.length === 0 && (
         <OutcomeCard tone="ask" testid="fleet-host-needs-address" headline={HOST_HERE_COPY.addressHeadline}
-          body={HOST_HERE_COPY.addressBody(fleet.host.listener)} />
+          body={HOST_HERE_COPY.addressBody} />
       )}
       {notUp && (
         <OutcomeCard tone="ask" testid="fleet-host-listener-down" headline="The fleet listener is not running"

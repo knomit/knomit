@@ -14,6 +14,12 @@ export interface Settings {
   /** [tls].addr: the fleet listener, "" = off. Applied by a reload. */
   tlsAddr: string
   /**
+   * external_addresses: the https:// URLs fleet peers reach the Fleet port
+   * at. A reload does not apply it, so a save that changes it restarts the
+   * server (see save()).
+   */
+  externalAddresses: string[]
+  /**
    * Who may reach the plaintext HTTP port. 'other' is a knomit.toml that binds
    * some other address: Settings leaves it alone and a save of 'other' writes
    * nothing.
@@ -85,11 +91,24 @@ export const ALL_NETWORKS_WARNING =
  * The save line's note for a Fleet port that is set while this instance has
  * no certificate yet (listener reason no_certificate). That is the
  * fresh-instance path, not an error: the fleet create or join that installs
- * the certificate starts the listener. Proposed copy (2026-10-17), pending
- * the user's approval; swap it here.
+ * the certificate starts the listener. Wording approved by the user
+ * (2026-10-17, PR #545).
  */
 export const FLEET_PORT_WAITING = (addr: string): string =>
-  `Fleet port ${addr} is set; it opens when this instance creates or joins a fleet, which installs the certificate it needs.`
+  `Fleet port ${addr} is set; it opens when this instance creates or joins a fleet.`
+
+/**
+ * The External address row (PR #545 option a). Proposed copy (2026-10-17),
+ * pending the user's approval; swap it here. The restart that applies it
+ * reuses the window's own restart flow and its words.
+ */
+export const EXTERNAL_ADDRESS_COPY = {
+  label: 'External address',
+  sub: 'https://host:port peers reach the Fleet port at; separate several with commas',
+  placeholder: 'none',
+  invalid: (a: string): string =>
+    `The external address must be https://host[:port] (e.g. https://kb.example:19279), got "${a}".`,
+}
 
 /** What the Fleet identity section needs; omitted, the section is not shown. */
 export interface FleetProps {
@@ -167,6 +186,7 @@ const PAGES: { id: Page; label: string; Icon: ComponentType<{ color: string; siz
 const PAGE_OF: Record<string, Page> = {
   port: 'network',
   tlsAddr: 'network',
+  externalAddresses: 'network',
   logLevel: 'logs',
   logFormat: 'logs',
 }
@@ -214,7 +234,22 @@ function validate(s: Settings): Record<string, string> {
   }
   const tls = tlsAddrError(s.tlsAddr, s.port)
   if (tls) errs.tlsAddr = tls
+  const bad = s.externalAddresses.find((a) => !EXTERNAL_ADDRESS.test(a))
+  if (bad !== undefined) errs.externalAddresses = EXTERNAL_ADDRESS_COPY.invalid(bad)
   return errs
+}
+
+/**
+ * validateExternalAddresses (settings.go), before the round trip:
+ * config.ValidateExternalAddress (a scheme, a host, an optional port; no
+ * user info, path, query or fragment) narrowed to https://, which is all an
+ * enroll accepts. Go stays the authority.
+ */
+const EXTERNAL_ADDRESS = /^https:\/\/(\[[^\]\s/]+\]|[^\s/:@?#[\]]+)(:\d+)?$/i
+
+/** The field's text as the list it saves: commas or spaces separate. */
+export function parseExternalAddresses(text: string): string[] {
+  return text.split(/[\s,]+/).filter((a) => a !== '')
 }
 
 /**
@@ -248,7 +283,12 @@ export function SettingsForm({
   restartTimeoutMs = 90_000,
   pollMs = 500,
 }: Props) {
-  const [s, setS] = useState(initial)
+  // GetSettings never sends null, but a window built against an older
+  // backend would: an absent list is an empty one.
+  const [s, setS] = useState<Settings>({ ...initial, externalAddresses: initial.externalAddresses ?? [] })
+  // The External address field's text as typed; s.externalAddresses is its
+  // parsed list, which is what is validated and saved.
+  const [extText, setExtText] = useState((initial.externalAddresses ?? []).join(', '))
   const [page, setPage] = useState<Page>('general')
   // Shown beside the buttons. Reserved for failures that belong to the WINDOW
   // rather than to one control: a save the backend refused, a restart that
@@ -360,6 +400,15 @@ export function SettingsForm({
     const line = ackLine(result, s)
     if (line.ok) setSaved(line.text)
     else setError(line.text)
+    // external_addresses is not applied by a reload (decision serve/reload):
+    // the server lists it as waiting for a restart. A server the app started
+    // is restarted right away, through the same restart the bar's button
+    // runs, so the fleet pages see the address without another step. An
+    // attached server keeps the bar's own "restart it where it was started".
+    if (result.restartNeeded.includes('external_addresses') && server.canRestart) {
+      await restart()
+      return
+    }
     void refresh()
   }
 
@@ -702,6 +751,29 @@ export function SettingsForm({
               >
                 {errFor('tlsAddr')}
                 {envNote('tlsAddr')}
+              </Row>
+              <Row
+                label={EXTERNAL_ADDRESS_COPY.label}
+                htmlFor="externalAddresses"
+                sub={EXTERNAL_ADDRESS_COPY.sub}
+                control={
+                  <input
+                    id="externalAddresses"
+                    className="k-input addr"
+                    value={extText}
+                    placeholder={EXTERNAL_ADDRESS_COPY.placeholder}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    aria-invalid={fieldErrors.externalAddresses ? true : undefined}
+                    onChange={(e) => {
+                      setExtText(e.target.value)
+                      edit({ externalAddresses: parseExternalAddresses(e.target.value) })
+                    }}
+                  />
+                }
+              >
+                {errFor('externalAddresses')}
               </Row>
             </div>
           </section>

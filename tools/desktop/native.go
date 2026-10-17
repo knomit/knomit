@@ -270,17 +270,19 @@ func (n *NativeService) GetSettings() (Settings, error) {
 	}
 
 	return Settings{
-		Port:            cfg.Port,
-		LogLevel:        resolved.Level,
-		LogFormat:       resolved.Format,
-		StartAtLogin:    on,
-		TLSAddr:         cfg.TLS.Addr,
-		HTTPScope:       scopeOf(cfg.HTTP, cfg.Host),
-		Server:          n.serverState(),
-		EffectivePort:   effective,
-		ConfigPath:      n.configPath,
-		LogFilePath:     resolved.File,
-		OverriddenByEnv: envOverrides(os.Getenv),
+		Port:         cfg.Port,
+		LogLevel:     resolved.Level,
+		LogFormat:    resolved.Format,
+		StartAtLogin: on,
+		TLSAddr:      cfg.TLS.Addr,
+		// Never null on the wire: the form edits a list.
+		ExternalAddresses: append([]string{}, cfg.ExternalAddresses...),
+		HTTPScope:         scopeOf(cfg.HTTP, cfg.Host),
+		Server:            n.serverState(),
+		EffectivePort:     effective,
+		ConfigPath:        n.configPath,
+		LogFilePath:       resolved.File,
+		OverriddenByEnv:   envOverrides(os.Getenv),
 	}, nil
 }
 

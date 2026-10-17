@@ -156,27 +156,26 @@ describe('FleetWizard: create', () => {
     expect(screen.getByTestId('fleet-step-review')).not.toHaveTextContent('Members will join at');
   });
 
-  // An external address is genuinely required (addresses_required), and only
-  // knomit.toml sets it: the wizard says so precisely, apart from the
-  // listener, and never sends the user to Settings → Network for it.
+  // An external address is genuinely required (addresses_required): the
+  // wizard says so in its own card, apart from the listener, and the refusal
+  // hint is the address's, never the Fleet port's (PR #545, approved copy).
   // SABOTAGE: fold the address back into the cannot-host card -> red.
-  it('Fleet port set, no external address: a card that names knomit.toml and a restart, not the generic one', async () => {
+  it('Fleet port set, no external address: its own card, not the generic one', async () => {
     stubFleetFetch({ 'POST /api/v1/fleet/create': problem(422, 'addresses_required', 'a fleet hosted here needs external_addresses in knomit.toml') });
     mount({ ...standalone, host: { listener_on: true, listener: '0.0.0.0:19279', listening: false, listener_reason: 'no_certificate', external_addresses: [] } });
     expect(screen.queryByTestId('fleet-start-cannot-host')).toBeNull();
     const start = screen.getByTestId('fleet-start-needs-address');
     expect(start).toHaveTextContent(HOST_HERE_COPY.addressHeadline);
-    expect(start).toHaveTextContent('external_addresses = ["https://<this computer\'s name>:19279"]');
-    expect(start).toHaveTextContent('restart knomit (a reload does not apply it)');
+    expect(start).toHaveTextContent('Members reach this instance at the https:// address they are given, and none is set. Add it in Settings → Network, or choose a forge instead.');
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     expect(screen.queryByTestId('fleet-hosting-listener-off')).toBeNull();
-    expect(screen.getByTestId('fleet-hosting-needs-address')).toHaveTextContent(HOST_HERE_COPY.addressBody('0.0.0.0:19279'));
+    expect(screen.getByTestId('fleet-hosting-needs-address')).toHaveTextContent(HOST_HERE_COPY.addressBody);
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     fireEvent.click(screen.getByTestId('fleet-wizard-primary'));
     expect(await screen.findByTestId('fleet-wizard-error-code')).toHaveTextContent('addresses_required');
     const review = screen.getByTestId('fleet-step-review');
-    expect(review).toHaveTextContent(HOST_HERE_COPY.addressBody('0.0.0.0:19279'));
-    expect(review).not.toHaveTextContent('Settings → Network');
+    expect(review).toHaveTextContent(HOST_HERE_COPY.addressBody);
+    expect(review).not.toHaveTextContent(HOST_HERE_COPY.setFleetPort);
   });
 
   it('a forge: Connect probes, Access asks for the token, and the create sends the origin with it', async () => {

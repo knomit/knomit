@@ -178,7 +178,7 @@ function StepStart({ s, fleet, onChoose }: { s: S; fleet: FleetStatus | null; on
             {fleet && noAddress && (
               <div style={{ marginTop: 12 }}>
                 <OutcomeCard tone="ask" testid="fleet-start-needs-address" headline={HOST_HERE_COPY.addressHeadline}
-                  body={HOST_HERE_COPY.addressBody(fleet.host.listener)} />
+                  body={HOST_HERE_COPY.addressBody} />
               </div>
             )}
           </>
@@ -255,7 +255,7 @@ function StepHosting({ s, fleet, checking, err, onHosting, onUrl, onConnect }: {
             {!hasAddress && (
               <div style={{ marginTop: 12 }}>
                 <OutcomeCard tone="ask" testid="fleet-hosting-needs-address" headline={HOST_HERE_COPY.addressHeadline}
-                  body={HOST_HERE_COPY.addressBody(fleet?.host.listener)} />
+                  body={HOST_HERE_COPY.addressBody} />
               </div>
             )}
           </>
@@ -444,7 +444,7 @@ function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: E
       <Refusal err={err} testid="fleet-wizard-error"
         note={s.choice === 'create' ? 'No fleet was created. You can change something and try again.' : joinRefusalNote(code)} />
       {code === 'listener_required' && <div style={fieldHint}>{HOST_HERE_COPY.setFleetPort}</div>}
-      {code === 'addresses_required' && <div style={fieldHint}>{HOST_HERE_COPY.addressBody(fleet?.host.listener)}</div>}
+      {code === 'addresses_required' && <div style={fieldHint}>{HOST_HERE_COPY.addressBody}</div>}
     </div>
   );
 }

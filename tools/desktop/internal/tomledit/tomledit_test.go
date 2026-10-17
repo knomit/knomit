@@ -351,3 +351,30 @@ func TestSetBoolWritesABareBoolean(t *testing.T) {
 		t.Fatalf("a root key landed inside a table:\n%s", out)
 	}
 }
+
+// external_addresses is a string array: written on one line, updated in
+// place, quoted like SetString's values, and an empty list is `[]`.
+// SABOTAGE: render without quoting -> the decode fails -> red.
+func TestSetStringArrayWritesAndUpdatesOneLine(t *testing.T) {
+	src := "port = \"19278\"\nexternal_addresses = [\"https://old.example\"] # mine\n\n[tls]\naddr = \"0.0.0.0:19279\"\n"
+	out, err := tomledit.SetStringArray([]byte(src), "", "external_addresses", []string{"https://a.example:19279", "https://b.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		ExternalAddresses []string `toml:"external_addresses"`
+	}
+	if _, err := toml.Decode(string(out), &got); err != nil {
+		t.Fatalf("does not parse: %v\n%s", err, out)
+	}
+	if strings.Join(got.ExternalAddresses, ",") != "https://a.example:19279,https://b.example" {
+		t.Fatalf("got %v\n%s", got.ExternalAddresses, out)
+	}
+	if !strings.Contains(string(out), "# mine") || strings.Count(string(out), "external_addresses") != 1 {
+		t.Fatalf("not updated in place with its comment:\n%s", out)
+	}
+	empty, err := tomledit.SetStringArray(out, "", "external_addresses", nil)
+	if err != nil || !strings.Contains(string(empty), "external_addresses = []") {
+		t.Fatalf("empty list: %v\n%s", err, empty)
+	}
+}

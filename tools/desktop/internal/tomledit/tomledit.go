@@ -54,6 +54,19 @@ func SetBool(src []byte, table, key string, value bool) ([]byte, error) {
 	return set(src, table, key, fmt.Sprintf("%t", value))
 }
 
+// SetStringArray returns src with table.key set to a one-line TOML array of
+// basic strings (`key = ["a", "b"]`), under exactly the matching and limits
+// SetString has. It replaces ONE line: an array the file spells over several
+// lines leaves its continuation lines behind, and the result no longer
+// parses (the settings dialog decodes the edit and refuses to write it).
+func SetStringArray(src []byte, table, key string, values []string) ([]byte, error) {
+	q := make([]string, len(values))
+	for i, v := range values {
+		q[i] = quote(v)
+	}
+	return set(src, table, key, "["+strings.Join(q, ", ")+"]")
+}
+
 // set writes `key = rendered`, rendered being an already-valid TOML value.
 func set(src []byte, table, key, rendered string) ([]byte, error) {
 	if key == "" {

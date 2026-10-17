@@ -56,8 +56,8 @@ func (e *ReloadListenerError) Error() string {
 
 // TLSWaitingForCertificate is what `knomit reload` prints for a fleet
 // listener that is configured but waits for this instance's certificate
-// (reason no_certificate). Proposed copy (2026-10-17), pending the user's
-// approval; swap it here.
+// (reason no_certificate). Wording approved by the user (2026-10-17, PR
+// #545).
 const TLSWaitingForCertificate = "waits for this instance's certificate: it starts when this instance creates or joins a fleet"
 
 // ReloadListenerFailures lists the listeners whose reason says a requested

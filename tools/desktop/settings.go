@@ -33,6 +33,13 @@ type Settings struct {
 	// binds, "" = off. Like Port it is bound once at boot, so a change needs
 	// the restart the form offers (knomit#256).
 	TLSAddr string `json:"tlsAddr"`
+	// ExternalAddresses is the root external_addresses: the https:// URLs
+	// fleet peers reach this instance's Fleet port at (config F10). A fleet
+	// hosted here is refused without one (addresses_required). A reload does
+	// not apply it (it is listed restart_needed, decision serve/reload), so
+	// the form restarts the server after a save that changed it. No
+	// environment variable overrides it.
+	ExternalAddresses []string `json:"externalAddresses"`
 	// HTTPScope is who may reach the plaintext HTTP port: "off" (http =
 	// false, socket only), "local" (this computer only: a loopback host) or
 	// "all" (every network interface). "other" is what GetSettings reports
@@ -195,7 +202,26 @@ func validateSettings(s Settings) error {
 	default:
 		return fmt.Errorf("http scope must be off, local or all, got %q", s.HTTPScope)
 	}
-	return validateTLSAddr(s.TLSAddr, p)
+	if err := validateTLSAddr(s.TLSAddr, p); err != nil {
+		return err
+	}
+	return validateExternalAddresses(s.ExternalAddresses)
+}
+
+// validateExternalAddresses applies config's own check to each entry (what
+// the next boot's config.Validate would refuse), plus https://: members
+// reach the hub's mTLS listener over https, and an enroll refuses any other
+// scheme (address_not_https), so the form must not save one.
+func validateExternalAddresses(addrs []string) error {
+	for _, a := range addrs {
+		if err := config.ValidateExternalAddress(a); err != nil {
+			return fmt.Errorf("external address %q %v (want https://host[:port], the address peers use)", a, err)
+		}
+		if !strings.HasPrefix(strings.ToLower(a), "https://") {
+			return fmt.Errorf("external address %q is not https:// (members reach the Fleet port over https)", a)
+		}
+	}
+	return nil
 }
 
 // validateTLSAddr checks [tls].addr as host:port — the host optional (all
@@ -280,6 +306,16 @@ func applySettings(s Settings, configPath string, tog autostart.Toggler, overrid
 	src, err = scopeEdits(src, s.HTTPScope, overriddenByEnv)
 	if err != nil {
 		return err
+	}
+	// external_addresses is a string array, so it is written here rather
+	// than by the string loop over configKeys; no environment variable owns
+	// it. Like an optional key, an empty list is not CREATED in a file that
+	// never had the key.
+	if len(s.ExternalAddresses) > 0 || tomledit.Has(src, "", "external_addresses") {
+		src, err = tomledit.SetStringArray(src, "", "external_addresses", s.ExternalAddresses)
+		if err != nil {
+			return fmt.Errorf("set external_addresses: %w", err)
+		}
 	}
 	// tomledit edits text within a subset of TOML (see its package doc): on a
 	// file outside it — an inline `tls = { … }`, say — an edit can produce a

@@ -300,7 +300,7 @@ describe('FleetSettings', () => {
     mount({ ...member, master: true, host: { listener_on: true, listener: '0.0.0.0:19279', listening: false, listener_reason: 'no_certificate', external_addresses: [] } });
     fireEvent.click(await screen.findByTestId('fleet-host-here'));
     expect(screen.queryByTestId('fleet-host-listener-off')).toBeNull();
-    expect(screen.getByTestId('fleet-host-needs-address')).toHaveTextContent(HOST_HERE_COPY.addressBody('0.0.0.0:19279'));
+    expect(screen.getByTestId('fleet-host-needs-address')).toHaveTextContent(HOST_HERE_COPY.addressBody);
   });
 
   it('Host here asks for the listener before the click when it is off, and shows a refusal with its code', async () => {

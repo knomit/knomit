@@ -517,6 +517,8 @@ describe('SettingsForm after a save: what became of the running server', () => {
     const line = await screen.findByRole('status')
     expect(line).toHaveTextContent(/saved and applied/i)
     expect(line).toHaveTextContent(FLEET_PORT_WAITING('0.0.0.0:19279'))
+    // The user's approved wording (PR #545), verbatim.
+    expect(line).toHaveTextContent('Fleet port 0.0.0.0:19279 is set; it opens when this instance creates or joins a fleet.')
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
