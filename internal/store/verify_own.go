@@ -364,15 +364,41 @@ var ErrNotUnpublished = errors.New("the commit is not an unpublished commit of t
 // ErrDropMerge: DropUnpublishedCommit was asked to drop a merge commit. A
 // merge brings in another branch's commits; the commit that wrote the
 // content is the one to drop (introducedBy names a non-merge commit when one
-// wrote it).
+// wrote it). The error is a *DropMergeError carrying what the confirmed
+// fallback, leaving the whole merge out, would lose.
 var ErrDropMerge = errors.New("a merge commit cannot be dropped: drop the commit that wrote the content")
+
+// LostCommit is one commit the confirmed fallback (DropUnpublishedCommitLeavingOutMerges)
+// leaves out: who wrote it and what it says it does.
+type LostCommit struct {
+	Commit  string `json:"commit"`
+	Agent   string `json:"agent,omitempty"` // the agent id of an agent author, else ""
+	Author  string `json:"author"`
+	Subject string `json:"subject"`
+}
+
+// DropMergeError: the drop target is a merge (errors.Is ErrDropMerge).
+// LeaveOut is what leaving the whole merge out would lose.
+type DropMergeError struct {
+	Commit   string
+	LeaveOut []LostCommit
+}
+
+func (e *DropMergeError) Error() string {
+	return fmt.Sprintf("%s: %v", e.Commit, ErrDropMerge)
+}
+
+func (e *DropMergeError) Is(target error) bool { return target == ErrDropMerge }
 
 // DropForeignError: dropping the commit would replay ANOTHER agent's commit
 // outside the merge that brought it (the merge carries the dropped commit),
 // re-signing it with this instance's key, which the fleet's judge refuses.
 // Returned only when the caller asked to keep signatures intact (ownOnly).
+// LeaveOut is what the confirmed fallback, leaving every merge that carries
+// the dropped commit out whole, would lose.
 type DropForeignError struct {
 	Commit, Agent, Merge string
+	LeaveOut             []LostCommit
 }
 
 func (e *DropForeignError) Error() string {
@@ -391,66 +417,120 @@ func (e *DropForeignError) Error() string {
 //     committed experiment);
 //   - a merge whose other parents reach drop (it brought drop in, or its
 //     side forked after drop) is unfolded: its side's own non-merge commits
-//     are replayed one by one, drop excluded (counted in mergesDropped). A
-//     conflict resolution the side's own merges made is not kept. With
-//     ownOnly (the fleet, whose judge refuses a commit re-signed for another
-//     agent) a side commit authored by another agent refuses the drop
-//     (*DropForeignError) instead of re-signing it;
+//     are replayed one by one, parents first, drop excluded (counted in
+//     mergesDropped). A conflict resolution the side's own merges made is
+//     not kept. With ownOnly (the fleet, whose judge refuses a commit
+//     re-signed for another agent) a side commit authored by another agent
+//     refuses the drop (*DropForeignError) instead of re-signing it;
 //   - where a later commit edited a file drop wrote, the later version is
 //     kept, whole (#533 review S3).
 //
 // drop must be a non-merge commit of branch that main does not hold
-// (ErrNotUnpublished, ErrDropMerge). Returns how many commits were replayed
-// and how many merges were unfolded.
+// (ErrNotUnpublished, *DropMergeError). Both refusals that leave the
+// operator stuck (*DropMergeError, *DropForeignError) carry what
+// DropUnpublishedCommitLeavingOutMerges would lose instead. Returns how many
+// commits were replayed and how many merges were unfolded.
 func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop plumbing.Hash, ownOnly bool) (replayed, mergesDropped int, err error) {
-	rh := s.rh
-	upstream := s.UpstreamBranch()
-	if upstream == "" || branch == "" || branch == upstream {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %q is not a branch to rebuild on %q", branch, upstream)
+	out, err := s.dropUnpublished(ctx, branch, drop, ownOnly, false, nil)
+	return out.replayed, out.unfolded, err
+}
+
+// DropUnpublishedCommitLeavingOutMerges is the CONFIRMED fallback (#533
+// review 3 SF1) for when DropUnpublishedCommit refuses because nothing but
+// the named commit can be lost and that cannot be kept (a merge as the
+// target; another agent's commit an unfold would re-sign, its author gone
+// for good): it rebuilds branch on the consensus branch's tip as
+// DropUnpublishedCommit does, except that drop, when it is on the
+// first-parent line, and every merge on that line whose other parents reach
+// drop are left out WHOLE, with every commit their sides brought (no
+// unfold, so nothing is re-signed for another agent). Every other commit and
+// merge is replayed as DropUnpublishedCommit replays it. Returns how many
+// commits were replayed and what was left out (the merges and their sides'
+// commits, as the refusal listed them). The caller asks the operator first:
+// the left-out work is gone from this branch. confirmed is the list of
+// commit hashes the operator was shown and confirmed; when what would be
+// left out now differs (the branch moved since), nothing changes and the
+// answer is a *LeaveOutChangedError carrying the new list to confirm.
+func (s *Service) DropUnpublishedCommitLeavingOutMerges(ctx context.Context, branch string, drop plumbing.Hash, confirmed []string) (replayed int, leftOut []LostCommit, err error) {
+	out, err := s.dropUnpublished(ctx, branch, drop, false, true, confirmed)
+	return out.replayed, out.leftOut, err
+}
+
+// LeaveOutChangedError: what the confirmed fallback would leave out is not
+// the list the operator confirmed. Nothing changed; LeaveOut is the list now.
+type LeaveOutChangedError struct {
+	LeaveOut []LostCommit
+}
+
+func (e *LeaveOutChangedError) Error() string {
+	return "what leaving the merge out would lose has changed since it was confirmed; nothing was changed"
+}
+
+// sameCommits: the commit hashes of lost are exactly confirmed, as sets.
+func sameCommits(lost []LostCommit, confirmed []string) bool {
+	want := map[string]bool{}
+	for _, h := range confirmed {
+		want[h] = true
 	}
-	unlock := rh.lockBranch(branch)
-	defer unlock()
-	localRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
-	if err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s: %w", branch, err)
+	if len(want) != len(lost) {
+		return false
 	}
-	upRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(upstream))
-	if err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s: %w", upstream, err)
+	for _, l := range lost {
+		if !want[l.Commit] {
+			return false
+		}
 	}
-	onUp := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
-	}
-	unpublished := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
-	}
-	if !unpublished[drop] {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s on %s: %w", drop, branch, ErrNotUnpublished)
-	}
+	return true
+}
+
+type dropOutcome struct {
+	replayed, unfolded int
+	leftOut            []LostCommit
+}
+
+// dropStep is one replay of a drop's rebuild.
+type dropStep struct {
+	c       *object.Commit
+	asMerge bool
+}
+
+func lostCommit(c *object.Commit) LostCommit {
+	subject, _, _ := strings.Cut(strings.TrimSpace(c.Message), "\n")
+	return LostCommit{Commit: c.Hash.String(), Agent: agentIDOfAuthor(c.Author.Email), Author: c.Author.Name, Subject: subject}
+}
+
+// dropPlan walks branch's first-parent line from tip down to the upstream
+// and answers, in replay order, what a drop of drop replays. leaveOut: the
+// confirmed fallback (see DropUnpublishedCommitLeavingOutMerges), which also
+// answers what is left out. Without it a merge target is a *DropMergeError
+// and, with ownOnly, a foreign side commit a *DropForeignError, each
+// carrying the fallback's left-out list.
+func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumbing.Hash]bool, drop plumbing.Hash, ownOnly, leaveOut bool) (line []dropStep, unfolded int, leftOut []LostCommit, err error) {
 	dropC, err := object.GetCommit(rh.gits, drop)
 	if err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+		return nil, 0, nil, err
 	}
-	if dropC.NumParents() > 1 {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %s: %w", drop, ErrDropMerge)
+	fallback := func() []LostCommit {
+		_, _, lost, ferr := rh.dropPlan(branch, tip, onUp, drop, false, true)
+		if ferr != nil {
+			return nil
+		}
+		return lost
+	}
+	if dropC.NumParents() > 1 && !leaveOut {
+		return nil, 0, nil, &DropMergeError{Commit: drop.String(), LeaveOut: fallback()}
 	}
 	own, _ := rh.ownAgentID(branch)
-	type step struct {
-		c       *object.Commit
-		asMerge bool
-	}
 	// groups in tip -> base order; each group's steps in replay order.
-	var groups [][]step
-	cur, err := object.GetCommit(rh.gits, localRef.Hash())
+	var groups [][]dropStep
+	cur, err := object.GetCommit(rh.gits, tip)
 	if err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+		return nil, 0, nil, err
 	}
-	reaches := func(from []plumbing.Hash, stop map[plumbing.Hash]bool, target plumbing.Hash) (bool, error) {
+	reaches := func(from []plumbing.Hash, target plumbing.Hash) (bool, error) {
 		found := false
 		for _, p := range from {
-			if err := walkHistory(rh.gits, p, stop, func(c *object.Commit) {
+			if err := walkHistory(rh.gits, p, onUp, func(c *object.Commit) {
 				if c.Hash == target {
 					found = true
 				}
@@ -460,69 +540,126 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 		}
 		return found, nil
 	}
+	// sideOf walks a merge's other parents parents-first (walkHistory is
+	// post-order), stopping at what its first parent already reaches.
+	sideOf := func(m *object.Commit, visit func(c *object.Commit)) error {
+		first := map[plumbing.Hash]bool{}
+		for h := range onUp {
+			first[h] = true
+		}
+		if err := walkHistory(rh.gits, m.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
+			return err
+		}
+		for _, p := range m.ParentHashes[1:] {
+			if err := walkHistory(rh.gits, p, first, func(c *object.Commit) {
+				first[c.Hash] = true // a commit two parents share once
+				visit(c)
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for !onUp[cur.Hash] {
+		carries := false
+		if cur.NumParents() > 1 {
+			if carries, err = reaches(cur.ParentHashes[1:], drop); err != nil {
+				return nil, 0, nil, err
+			}
+		}
 		switch {
+		case leaveOut && (cur.Hash == drop || carries):
+			// The fallback: the merge (or drop itself) is left out whole,
+			// with everything its side brought.
+			leftOut = append(leftOut, lostCommit(cur))
+			if cur.NumParents() > 1 {
+				if err := sideOf(cur, func(c *object.Commit) { leftOut = append(leftOut, lostCommit(c)) }); err != nil {
+					return nil, 0, nil, err
+				}
+			}
+		case cur.NumParents() > 1 && !carries:
+			// Every merge that does not carry drop is replayed as a merge of
+			// the same parents (#533 review S1).
+			groups = append(groups, []dropStep{{c: cur, asMerge: true}})
 		case cur.NumParents() > 1:
 			// A merge whose other parents reach drop (it brought drop in, or
 			// its side forked after drop) cannot be replayed as a merge: its
 			// history would carry drop again. Its side's OWN commits are
-			// replayed one by one instead, drop excluded (#533 re-review S1),
-			// so nothing but drop's own change is lost. Every other merge is
-			// replayed as a merge of the same parents (#533 review S1).
-			carries, err := reaches(cur.ParentHashes[1:], onUp, drop)
-			if err != nil {
-				return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
-			}
-			if !carries {
-				groups = append(groups, []step{{c: cur, asMerge: true}})
-				break
-			}
-			mergesDropped++
-			first := map[plumbing.Hash]bool{}
-			for h := range onUp {
-				first[h] = true
-			}
-			if err := walkHistory(rh.gits, cur.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
-				return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
-			}
-			var side []step
+			// replayed one by one, parents first, drop excluded (#533
+			// re-review S1), so nothing but drop's own change is lost.
+			unfolded++
+			var side []dropStep
 			var werr error
-			for _, p := range cur.ParentHashes[1:] {
-				if err := walkHistory(rh.gits, p, first, func(c *object.Commit) {
-					first[c.Hash] = true // a commit two parents share once
-					if c.Hash == drop || c.NumParents() > 1 {
-						return
-					}
-					// Replayed outside its merge, the commit is re-signed by this
-					// instance. Where signatures are judged (the fleet), another
-					// agent's commit cannot be: refuse instead of losing it.
-					if ownOnly && werr == nil {
-						if id := agentIDOfAuthor(c.Author.Email); id != own {
-							werr = &DropForeignError{Commit: c.Hash.String(), Agent: id, Merge: cur.Hash.String()}
-						}
-					}
-					side = append(side, step{c: c})
-				}); err != nil {
-					return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+			if err := sideOf(cur, func(c *object.Commit) {
+				if c.Hash == drop || c.NumParents() > 1 {
+					return
 				}
+				// Replayed outside its merge, the commit is re-signed by this
+				// instance. Where signatures are judged (the fleet), another
+				// agent's commit cannot be: refuse instead of losing it.
+				if ownOnly && werr == nil {
+					if id := agentIDOfAuthor(c.Author.Email); id != own {
+						werr = &DropForeignError{Commit: c.Hash.String(), Agent: id, Merge: cur.Hash.String()}
+					}
+				}
+				side = append(side, dropStep{c: c})
+			}); err != nil {
+				return nil, 0, nil, err
 			}
 			if werr != nil {
-				return 0, 0, werr
+				werr.(*DropForeignError).LeaveOut = fallback()
+				return nil, 0, nil, werr
 			}
 			groups = append(groups, side)
 		case cur.Hash != drop:
-			groups = append(groups, []step{{c: cur}})
+			groups = append(groups, []dropStep{{c: cur}})
 		}
 		if cur.NumParents() == 0 {
 			break
 		}
 		if cur, err = cur.Parent(0); err != nil {
-			return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+			return nil, 0, nil, err
 		}
 	}
-	var line []step
 	for i := len(groups) - 1; i >= 0; i-- {
 		line = append(line, groups[i]...)
+	}
+	return line, unfolded, leftOut, nil
+}
+
+func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumbing.Hash, ownOnly, leaveOut bool, confirmed []string) (dropOutcome, error) {
+	rh := s.rh
+	upstream := s.UpstreamBranch()
+	if upstream == "" || branch == "" || branch == upstream {
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %q is not a branch to rebuild on %q", branch, upstream)
+	}
+	unlock := rh.lockBranch(branch)
+	defer unlock()
+	localRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", branch, err)
+	}
+	upRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(upstream))
+	if err != nil {
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", upstream, err)
+	}
+	onUp := map[plumbing.Hash]bool{}
+	if err := walkHistory(rh.gits, upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	unpublished := map[plumbing.Hash]bool{}
+	if err := walkHistory(rh.gits, localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	if !unpublished[drop] {
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s on %s: %w", drop, branch, ErrNotUnpublished)
+	}
+	line, unfolded, leftOut, err := rh.dropPlan(branch, localRef.Hash(), onUp, drop, ownOnly, leaveOut)
+	if err != nil {
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
+	}
+	if leaveOut && !sameCommits(leftOut, confirmed) {
+		return dropOutcome{}, &LeaveOutChangedError{LeaveOut: leftOut}
 	}
 	tempRef := plumbing.NewBranchReferenceName(branch + "-dropping")
 	defer func() { _ = rh.gits.RemoveReference(tempRef) }()
@@ -533,26 +670,26 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 			others = st.c.ParentHashes[1:]
 		}
 		if current, err = rh.replayCommit(ctx, st.c, current, StrategyLocalWins, others...); err != nil {
-			return 0, 0, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", st.c.Hash, err)
+			return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", st.c.Hash, err)
 		}
 		if err := rh.gits.SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {
-			return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+			return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 		}
 	}
 	ctx = context.WithoutCancel(ctx)
 	if err := rh.deriveBeforeAdvance(ctx, current); err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), current)); err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: %w", err)
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
 	if err := rh.repopulateBranch(ctx, branch); err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: repopulate: %w", err)
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: repopulate: %w", err)
 	}
 	if err := rh.notifyCommit(ctx, branch, current); err != nil {
-		return 0, 0, fmt.Errorf("DropUnpublishedCommit: notify: %w", err)
+		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: notify: %w", err)
 	}
-	log.Warn().Str("branch", branch).Str("dropped", drop.String()).Int("replayed", len(line)).Int("merges_unfolded", mergesDropped).
+	log.Warn().Str("branch", branch).Str("dropped", drop.String()).Int("replayed", len(line)).Int("merges_unfolded", unfolded).Int("left_out", len(leftOut)).
 		Msg("DropUnpublishedCommit: the branch was rebuilt on its upstream without the dropped commit")
-	return len(line), mergesDropped, nil
+	return dropOutcome{replayed: len(line), unfolded: unfolded, leftOut: leftOut}, nil
 }
