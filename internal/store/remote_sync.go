@@ -269,8 +269,17 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 		fetched = ref.Hash()
 	}
 	var across originSnapshot
-	if snap.ok() && snap.Identity != identity {
+	switch {
+	case snap.ok() && snap.Identity != identity:
 		across = snap
+	case snap.ok() && fetched != plumbing.ZeroHash && !snap.has(fetched):
+		// The same origin: cover what this round may take in BEFORE the
+		// reconcile moves the branch onto it. Added to the set, never
+		// written alone (origin_snapshot.go).
+		snap.Commits = append(snap.Commits, fetched)
+		if err := ri.rh.writeOriginSnapshot(snap); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: %w", err)
+		}
 	}
 
 	if agentBranch != "" && agentBranch != upstreamMain {
@@ -289,7 +298,7 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 		}
 	}
 	if fetched != plumbing.ZeroHash {
-		if err := ri.rh.writeOriginSnapshot(originSnapshot{Identity: identity, Commit: fetched}); err != nil {
+		if err := ri.rh.writeOriginSnapshot(originSnapshot{Identity: identity, Commits: []plumbing.Hash{fetched}}); err != nil {
 			return res, fmt.Errorf("Sync: %w", err)
 		}
 	}
@@ -376,6 +385,13 @@ func (ri *remoteIndex) reconcileNowAcross(ctx context.Context, agentBranch, upst
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}
 
+	// The left-out report is derived from the durable left-out refs every
+	// round, whichever path ran (origin_snapshot.go).
+	if n, origins, refs, rerr := ri.rh.leftOutReport(agentBranch, upstreamMain); rerr != nil {
+		log.Warn().Err(rerr).Str("branch", agentBranch).Msg("Sync: could not derive the left-out report")
+	} else {
+		agentRes.LeftOut, agentRes.LeftOutOrigins, agentRes.LeftOutRefs = n, origins, refs
+	}
 	return SyncResult{Main: mainRes, Agent: agentRes}, nil
 }
 

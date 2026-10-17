@@ -88,15 +88,19 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 // when nothing else is left to replay, or it would carry the dropped commit
 // as it stands.
 func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBase plumbing.Hash) (collectedOut []*object.Commit, disjointOut, droppedOut bool, errOut error) {
-	return rh.unpushedCommitsHeld(localTip, upstreamTip, explicitBase, nil)
+	return rh.unpushedCommitsHeld(localTip, upstreamTip, explicitBase, replayOpts{})
 }
 
 // unpushedCommitsHeld is unpushedCommitsDropping with extra commits the walk
 // treats as held, exactly like the upstream's history: it stops at them and
 // a merge's side does not replay them. reconcileAgentAcrossOrigins passes the
 // previous origin's snapshot history (class 3), so only commits reachable
-// from neither the upstream nor the snapshot are replayed.
-func (rh *repoHandler) unpushedCommitsHeld(localTip, upstreamTip, explicitBase plumbing.Hash, extraHeld map[plumbing.Hash]bool) (collectedOut []*object.Commit, disjointOut, droppedOut bool, errOut error) {
+// from neither the upstream nor the snapshot are replayed. With opts.rebuild
+// the "strictly ahead, keep as it stands" answer is not taken: the branch is
+// known to hold commits that must not stay on it, and the walk must still
+// collect the class-1 commits above them.
+func (rh *repoHandler) unpushedCommitsHeld(localTip, upstreamTip, explicitBase plumbing.Hash, opts replayOpts) (collectedOut []*object.Commit, disjointOut, droppedOut bool, errOut error) {
+	extraHeld := opts.extraHeld
 	if localTip == upstreamTip {
 		return nil, false, false, nil
 	}
@@ -122,7 +126,7 @@ func (rh *repoHandler) unpushedCommitsHeld(localTip, upstreamTip, explicitBase p
 	if err != nil {
 		return nil, false, false, fmt.Errorf("unpushedCommits: %w", err)
 	}
-	if ahead {
+	if ahead && !opts.rebuild {
 		return nil, false, false, nil
 	}
 
@@ -495,7 +499,7 @@ func (rh *repoHandler) replayOntoUpstreamOpts(
 	}
 	localTip := localRef.Hash()
 
-	commits, disjoint, dropped, err := rh.unpushedCommitsHeld(localTip, upstreamTip, explicitBase, opts.extraHeld)
+	commits, disjoint, dropped, err := rh.unpushedCommitsHeld(localTip, upstreamTip, explicitBase, opts)
 	if err != nil {
 		return AgentReconcileResult{}, err
 	}

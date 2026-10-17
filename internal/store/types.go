@@ -89,12 +89,14 @@ type AgentReconcileResult struct {
 	NumReplayed int           `json:"num_replayed,omitempty"`
 	NewTip      string        `json:"new_tip,omitempty"`
 	Settled     []SettledPath `json:"settled,omitempty"`
-	// LeftOut counts the commits a rebuild left out because they came from
-	// the PREVIOUS origin (LeftOutOrigin, its identity) and the current one
-	// lacks them: not pushed, kept at LeftOutRef (origin_snapshot.go).
-	LeftOut       int    `json:"left_out,omitempty"`
-	LeftOutOrigin string `json:"left_out_origin,omitempty"`
-	LeftOutRef    string `json:"left_out_ref,omitempty"`
+	// LeftOut counts the commits that a rebuild across a change of origin
+	// left out (they came from a previous origin, LeftOutOrigins, and the
+	// current one lacked them) and that neither the agent branch nor main
+	// holds now: not pushed, kept at LeftOutRefs. Derived every round from
+	// those durable refs (origin_snapshot.go, leftOutReport).
+	LeftOut        int      `json:"left_out,omitempty"`
+	LeftOutOrigins []string `json:"left_out_origins,omitempty"`
+	LeftOutRefs    []string `json:"left_out_refs,omitempty"`
 }
 
 // SettledPath is how one conflicting path was settled.

@@ -17,26 +17,36 @@ import (
 // Snapshot-then-reconcile for a change of origin
 // (kb/decisions/store/sync-design/snapshot-and-reconcile/8f04bc80.md).
 //
-// THE SNAPSHOT is one immutable pair, the last origin state this copy FULLY
-// reconciled against: the origin's identity (originIdentity of its stored
-// URL) and the commit its consensus branch held (the fetched
-// refs/remotes/origin/<main>). It is one meta row, written in one statement
-// at the end of a Sync round that fetched and reconciled without an error,
-// and never deleted or rewritten anywhere else. A round that fails at any
-// step leaves it as it was.
+// THE SNAPSHOT is one meta row: an origin identity (originIdentity of its
+// stored URL) and the SET S of commits this copy may have taken from that
+// origin since it last FULLY reconciled with it. Every write replaces the
+// whole row in one statement:
+//   - after a fetch from the SAME identity succeeded, before the reconcile,
+//     the fetched refs/remotes/origin/<main> is ADDED to S: a round that
+//     then fails after the branch merged or rebuilt onto it still has that
+//     commit covered (#544 review 3, X1);
+//   - after a round's fetch and reconcile both succeeded, S COLLAPSES to
+//     {fetched} under the current identity.
+//
+// It is never deleted. A round that fails at any step leaves it covering at
+// least what it covered before. The fetched commit is never written ALONE
+// early: a same-origin scrub round that failed would then lose the scrubbed
+// commit from S, and a later change of origin would push it.
 //
 // THE CLASSIFICATION, recomputed every round from the snapshot (identity I0,
-// commit S) and what was just fetched (identity I, local main M after the
-// main reconcile), for the commits on the agent branch that M lacks:
-//  1. not reachable from S: this copy's own unsynced work. Replayed and
-//     pushed, whoever signed it.
+// set S) and what was just fetched (identity I, local main M after the main
+// reconcile), for the commits on the agent branch that M lacks:
+//  1. not reachable from any commit in S: this copy's own unsynced work.
+//     Replayed and pushed, whoever signed it.
 //  2. reachable from S, I == I0: the origin removed it. The existing rewind
 //     rules (the watermark, reconcileAgentRebase) decide, unchanged.
 //  3. reachable from S, I != I0: it came from the OLD origin and the new one
 //     lacks it. It is not replayed and not pushed; the branch is rebuilt
-//     without it, the tip that held it is kept under leftOutRefPrefix, and
-//     the count and the old origin are reported (AgentReconcileResult.LeftOut,
-//     a Warn). Issue #541 will add the review-and-choose flow.
+//     without it, and the tip that held it is kept under leftOutRefPrefix
+//     (with its origin in a meta row). The report (AgentReconcileResult.
+//     LeftOut*) is DERIVED every round from those durable refs
+//     (leftOutReport), so a failed round loses nothing. Issue #541 will add
+//     the review-and-choose flow.
 //
 // With no snapshot (a repository synced before this existed, or never), the
 // existing rules apply, and the first round that succeeds writes one.
@@ -54,16 +64,33 @@ const originSnapshotKey = "origin_snapshot"
 // deleted by the reconcile, so what was left out stays recoverable.
 const leftOutRefPrefix = "refs/knomit/left-out/"
 
-// originSnapshot is the recorded pair. Zero when none is recorded.
+// leftOutOriginKeyPrefix + <left-out ref name> is the meta row naming the
+// origin a left-out tip's class-3 commits came from. Written BEFORE its ref,
+// so every left-out ref has one; a row whose ref was never written is
+// ignored.
+const leftOutOriginKeyPrefix = "left_out_origin:"
+
+// originSnapshot is the recorded identity and commit set. Zero when none is
+// recorded.
 type originSnapshot struct {
 	Identity string
-	Commit   plumbing.Hash
+	Commits  []plumbing.Hash
 }
 
-func (s originSnapshot) ok() bool { return s.Identity != "" && s.Commit != plumbing.ZeroHash }
+func (s originSnapshot) ok() bool { return s.Identity != "" && len(s.Commits) > 0 }
+
+func (s originSnapshot) has(h plumbing.Hash) bool {
+	for _, c := range s.Commits {
+		if c == h {
+			return true
+		}
+	}
+	return false
+}
 
 // readOriginSnapshot returns the recorded snapshot, the zero value when none
-// is recorded or the row does not parse (then the existing rules apply).
+// is recorded or the row does not parse (then the existing rules apply). The
+// row is the identity, then one commit hash per line.
 func (rh *repoHandler) readOriginSnapshot() (originSnapshot, error) {
 	var v string
 	err := rh.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, originSnapshotKey).Scan(&v)
@@ -73,21 +100,67 @@ func (rh *repoHandler) readOriginSnapshot() (originSnapshot, error) {
 	if err != nil {
 		return originSnapshot{}, fmt.Errorf("read origin snapshot: %w", err)
 	}
-	id, hash, found := strings.Cut(v, "\n")
-	if !found || !plumbing.IsHash(hash) || id == "" {
+	s := parseOriginSnapshot(v)
+	if !s.ok() {
 		log.Warn().Msg("origin snapshot: unreadable row; the existing rules apply until a round rewrites it")
 		return originSnapshot{}, nil
 	}
-	return originSnapshot{Identity: id, Commit: plumbing.NewHash(hash)}, nil
+	return s, nil
+}
+
+// parseOriginSnapshot reads the row format: the identity, then one commit
+// hash per line. Zero when it does not parse.
+func parseOriginSnapshot(v string) originSnapshot {
+	lines := strings.Split(v, "\n")
+	s := originSnapshot{Identity: lines[0]}
+	for _, l := range lines[1:] {
+		if !plumbing.IsHash(l) {
+			return originSnapshot{}
+		}
+		s.Commits = append(s.Commits, plumbing.NewHash(l))
+	}
+	if !s.ok() {
+		return originSnapshot{}
+	}
+	return s
+}
+
+// String is the row format parseOriginSnapshot reads.
+func (s originSnapshot) String() string {
+	v := s.Identity
+	for _, c := range s.Commits {
+		v += "\n" + c.String()
+	}
+	return v
 }
 
 // writeOriginSnapshot replaces the snapshot in ONE statement.
 func (rh *repoHandler) writeOriginSnapshot(s originSnapshot) error {
-	if _, err := rh.db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
-		originSnapshotKey, s.Identity+"\n"+s.Commit.String()); err != nil {
+	if _, err := rh.db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, originSnapshotKey, s.String()); err != nil {
 		return fmt.Errorf("write origin snapshot: %w", err)
 	}
 	return nil
+}
+
+// historyOf is every commit reachable from any of tips, not entering prune.
+func (rh *repoHandler) historyOf(tips []plumbing.Hash, prune map[plumbing.Hash]bool) (map[plumbing.Hash]bool, error) {
+	out := map[plumbing.Hash]bool{}
+	for _, tip := range tips {
+		if out[tip] || prune[tip] {
+			continue
+		}
+		stop := map[plumbing.Hash]bool{}
+		for h := range prune {
+			stop[h] = true
+		}
+		for h := range out {
+			stop[h] = true
+		}
+		if err := walkHistory(rh.gits, tip, stop, func(c *object.Commit) { out[c.Hash] = true }); err != nil {
+			return nil, fmt.Errorf("history of %s: %w", tip, err)
+		}
+	}
+	return out, nil
 }
 
 // reconcileAgentAcrossOrigins reconciles the agent branch when the snapshot
@@ -103,7 +176,7 @@ func (rh *repoHandler) writeOriginSnapshot(s originSnapshot) error {
 // Holds rh.lockBranch(agentBranch) for the rebuild; the merge path takes it
 // itself. Writes the watermark like every reconcile.
 func (rh *repoHandler) reconcileAgentAcrossOrigins(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy, snap originSnapshot) (AgentReconcileResult, error) {
-	leftOut, tip, mainHash, err := rh.classifyLeftOut(agentBranch, upstreamMain, snap.Commit)
+	leftOut, tip, mainHash, err := rh.classifyLeftOut(agentBranch, upstreamMain, snap.Commits)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("reconcileAgentAcrossOrigins: %w", err)
 	}
@@ -122,17 +195,23 @@ func (rh *repoHandler) reconcileAgentAcrossOrigins(ctx context.Context, agentBra
 	tip = agentRef.Hash()
 
 	keep := plumbing.ReferenceName(leftOutRefPrefix + agentBranch + "/" + tip.String())
+	// The row first (the snapshot as it was: identity and set), then the ref:
+	// a ref never lacks it, and the report is derived from both.
+	if _, err := rh.db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
+		leftOutOriginKeyPrefix+keep.String(), snap.String()); err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("reconcileAgentAcrossOrigins: record the left-out origin: %w", err)
+	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(keep, tip)); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("reconcileAgentAcrossOrigins: keep the left-out tip: %w", err)
 	}
 	if err := rh.markExperimentsRewound(ctx, agentBranch, tip); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("reconcileAgentAcrossOrigins: %w", err)
 	}
-	held := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, snap.Commit, nil, func(c *object.Commit) { held[c.Hash] = true }); err != nil {
+	held, err := rh.historyOf(snap.Commits, nil)
+	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("reconcileAgentAcrossOrigins: snapshot history: %w", err)
 	}
-	res, err := rh.replayOntoUpstreamOpts(ctx, agentBranch, mainHash, snap.Commit, strategy,
+	res, err := rh.replayOntoUpstreamOpts(ctx, agentBranch, mainHash, snap.Commits[0], strategy,
 		replayOpts{extraHeld: held, rebuild: true})
 	if err != nil {
 		return res, err
@@ -140,19 +219,94 @@ func (rh *repoHandler) reconcileAgentAcrossOrigins(ctx context.Context, agentBra
 	if err := rh.writeAgentBase(agentBranch, mainHash); err != nil {
 		return res, fmt.Errorf("reconcileAgentAcrossOrigins: write watermark: %w", err)
 	}
-	res.LeftOut = leftOut
-	res.LeftOutOrigin = snap.Identity
-	res.LeftOutRef = keep.String()
 	log.Warn().Str("branch", agentBranch).Int("left_out", leftOut).
 		Str("previous_origin", snap.Identity).Str("kept_at", keep.String()).
 		Msg("reconcile: commits the previous origin held and this origin lacks were left out of the branch and are not pushed (see issue #541)")
 	return res, nil
 }
 
+// leftOutReport derives, from the durable left-out refs of agentBranch and
+// their rows (the snapshot each rebuild classified against), what is left out
+// NOW: the commits reachable from a kept tip AND from that snapshot's set that
+// neither the agent branch nor local main holds. Recomputed every round, so a
+// round that failed after a rebuild loses nothing, and a commit that came back
+// (the old origin re-attached) stops counting. The class-1 commits a kept tip
+// also holds were replayed, are not in the snapshot's history, and are not
+// counted.
+func (rh *repoHandler) leftOutReport(agentBranch, upstreamMain string) (n int, origins, refs []string, err error) {
+	iter, err := rh.gits.IterReferences()
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	prefix := leftOutRefPrefix + agentBranch + "/"
+	type kept struct {
+		name string
+		tip  plumbing.Hash
+	}
+	var all []kept
+	if err := iter.ForEach(func(r *plumbing.Reference) error {
+		if strings.HasPrefix(r.Name().String(), prefix) && r.Type() == plumbing.HashReference {
+			all = append(all, kept{r.Name().String(), r.Hash()})
+		}
+		return nil
+	}); err != nil {
+		return 0, nil, nil, err
+	}
+	if len(all) == 0 {
+		return 0, nil, nil, nil
+	}
+	var present []plumbing.Hash
+	for _, b := range []string{agentBranch, upstreamMain} {
+		if r, err := rh.gits.Reference(plumbing.NewBranchReferenceName(b)); err == nil {
+			present = append(present, r.Hash())
+		}
+	}
+	have, err := rh.historyOf(present, nil)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	counted := map[plumbing.Hash]bool{}
+	seen := map[string]bool{}
+	for _, k := range all {
+		var v string
+		if err := rh.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, leftOutOriginKeyPrefix+k.name).Scan(&v); err != nil {
+			continue
+		}
+		snap := parseOriginSnapshot(v)
+		if !snap.ok() {
+			continue
+		}
+		fromOld, err := rh.historyOf(snap.Commits, have)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		onTip, err := rh.historyOf([]plumbing.Hash{k.tip}, have)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		held := 0
+		for h := range onTip {
+			if fromOld[h] {
+				counted[h] = true
+				held++
+			}
+		}
+		if held == 0 {
+			continue // nothing of it is left out any more
+		}
+		refs = append(refs, k.name)
+		if !seen[snap.Identity] {
+			seen[snap.Identity] = true
+			origins = append(origins, snap.Identity)
+		}
+	}
+	return len(counted), origins, refs, nil
+}
+
 // classifyLeftOut counts the class-3 commits: on the agent branch, reachable
-// from the snapshot commit, not reachable from local main. Returns the count,
+// from any commit of the snapshot set, not reachable from local main. Returns the count,
 // the agent tip and local main.
-func (rh *repoHandler) classifyLeftOut(agentBranch, upstreamMain string, snapCommit plumbing.Hash) (int, plumbing.Hash, plumbing.Hash, error) {
+func (rh *repoHandler) classifyLeftOut(agentBranch, upstreamMain string, snapCommits []plumbing.Hash) (int, plumbing.Hash, plumbing.Hash, error) {
 	agentRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(agentBranch))
 	if err != nil {
 		return 0, plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("agent ref: %w", err)
@@ -165,8 +319,8 @@ func (rh *repoHandler) classifyLeftOut(agentBranch, upstreamMain string, snapCom
 	if err := walkHistory(rh.gits, mainRef.Hash(), nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
 		return 0, plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("main history: %w", err)
 	}
-	inSnap := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, snapCommit, onMain, func(c *object.Commit) { inSnap[c.Hash] = true }); err != nil {
+	inSnap, err := rh.historyOf(snapCommits, onMain)
+	if err != nil {
 		return 0, plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("snapshot history: %w", err)
 	}
 	n := 0

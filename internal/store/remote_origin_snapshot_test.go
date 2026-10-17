@@ -128,7 +128,7 @@ func ocAcross(t *testing.T, diverged bool) (svc *Service, a, b string, f, x plum
 	x = ocForeignOnBareMain(t, a, "kb/foreign.md", "someone else's write on A's main")
 	wmSync(t, svc)
 	require.True(t, reachableFrom(t, svc, "agent/test", x), "setup: the branch took x")
-	require.Equal(t, originSnapshot{Identity: originIdentity(fileuri.New(a)), Commit: x}, ocSnapshot(t, svc), "setup: the snapshot is A's main")
+	require.Equal(t, originSnapshot{Identity: originIdentity(fileuri.New(a)), Commits: []plumbing.Hash{x}}, ocSnapshot(t, svc), "setup: the snapshot is A's main")
 	if diverged {
 		ocForeignOnBareMain(t, b, "kb/b-own.md", "B's own main")
 	}
@@ -164,8 +164,9 @@ func TestSync_OriginChangeLeavesTheOldOriginsCommitsOutAndPushesOwnWork(t *testi
 			ocRepoint(t, svc, fileuri.New(b))
 			res := wmSync(t, svc)
 			require.Equal(t, 2, res.Agent.LeftOut, "f and x are class 3")
-			require.Equal(t, originIdentity(fileuri.New(a)), res.Agent.LeftOutOrigin)
-			kept, err := svc.rh.gits.Reference(plumbing.ReferenceName(res.Agent.LeftOutRef))
+			require.Equal(t, []string{originIdentity(fileuri.New(a))}, res.Agent.LeftOutOrigins)
+			require.Len(t, res.Agent.LeftOutRefs, 1)
+			kept, err := svc.rh.gits.Reference(plumbing.ReferenceName(res.Agent.LeftOutRefs[0]))
 			require.NoError(t, err, "the left-out tip is kept")
 			require.True(t, mustAncestor(t, svc, x, kept.Hash()), "the kept tip holds x")
 			require.True(t, mustAncestor(t, svc, f, kept.Hash()), "and f")
@@ -179,9 +180,10 @@ func TestSync_OriginChangeLeavesTheOldOriginsCommitsOutAndPushesOwnWork(t *testi
 			require.False(t, ocBareHasFile(t, b, "agent/test", "kb/own.md"), "f is not pushed")
 
 			bMain := mustHeadHash(t, svc, "main")
-			require.Equal(t, originSnapshot{Identity: originIdentity(fileuri.New(b)), Commit: bMain}, ocSnapshot(t, svc))
+			require.Equal(t, originSnapshot{Identity: originIdentity(fileuri.New(b)), Commits: []plumbing.Hash{bMain}}, ocSnapshot(t, svc))
 			res2 := wmSync(t, svc)
-			require.Zero(t, res2.Agent.LeftOut, "the next round with B has nothing to leave out")
+			require.Equal(t, 2, res2.Agent.LeftOut, "the report is derived every round: f and x are still left out")
+			require.Equal(t, res.Agent.LeftOutRefs, res2.Agent.LeftOutRefs)
 		})
 	}
 }
@@ -371,7 +373,7 @@ func TestSync_OriginChangeConvergesAfterAFailureAtAnyStep(t *testing.T) {
 			require.True(t, ocBareHasFile(t, b, "agent/test", "kb/w.md"), "w reaches B")
 			require.False(t, ocBareHasFile(t, b, "agent/test", "kb/foreign.md"), "x never reaches B")
 			require.False(t, ocBareHasFile(t, b, "agent/test", "kb/own.md"), "f never reaches B")
-			require.Equal(t, originSnapshot{Identity: originIdentity(fileuri.New(b)), Commit: mustHeadHash(t, svc, "main")}, ocSnapshot(t, svc))
+			require.Equal(t, originSnapshot{Identity: originIdentity(fileuri.New(b)), Commits: []plumbing.Hash{mustHeadHash(t, svc, "main")}}, ocSnapshot(t, svc))
 			require.True(t, leftOutKept(t, svc, x), "the left-out tip holding x is kept")
 		})
 	}
@@ -484,7 +486,7 @@ func TestSync_FirstSuccessfulRoundWritesTheSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ocSnapshot(t, svc).ok())
 	wmSync(t, svc)
-	require.Equal(t, originSnapshot{Identity: originIdentity(fileuri.New(a)), Commit: r}, ocSnapshot(t, svc))
+	require.Equal(t, originSnapshot{Identity: originIdentity(fileuri.New(a)), Commits: []plumbing.Hash{r}}, ocSnapshot(t, svc))
 }
 
 // ── identity ─────────────────────────────────────────────────────────────
