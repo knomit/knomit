@@ -389,8 +389,11 @@ func scrubbedOwnCommitBehindAMixedMerge(t *testing.T) {
 	sig := object.Signature{Name: "x", Email: "x@x", When: time.Now()}
 	s, _, err := writeFileToStore(svc.rh.gits, own, c1, "kb/secret.md", obsFact("Secret"), "own, consumed", sig, sig)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
-	require.NoError(t, svc.rh.writeAgentBase("agent/test", s))
+	// main moved on past s (s2), so s is BELOW the watermark, not at it.
+	s2, _, err := writeFileToStore(svc.rh.gits, own, s, "kb/s2.md", obsFact("S2"), "own, consumed", sig, sig)
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s2)))
+	require.NoError(t, svc.rh.writeAgentBase("agent/test", s2))
 	f, _, err := writeFileToStore(svc.rh.gits, foreign, s, "kb/member.md", obsFact("Member"), "member write", sig, sig)
 	require.NoError(t, err)
 	ownMerge(t, svc, "agent/test", f)
