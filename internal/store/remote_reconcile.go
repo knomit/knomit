@@ -94,10 +94,22 @@ func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) er
 // It is written once: every reconcile advances the watermark after this, so
 // the fallback is used for one sync only. It is NOT the branch's first commit:
 // that would count every unsynced commit of this copy's as consumed and drop
-// it on the next rewind. A seed beyond what this branch consumed (a fetch
-// whose reconcile failed) loses nothing either: the replay walk stops at it
-// only when the branch's first-parent chain holds it, and otherwise at the
-// first commit the new upstream holds.
+// it on the next rewind.
+//
+// A seed beyond what this branch consumed (a fetch whose reconcile failed)
+// loses no own work: the replay walk stops at it only when the branch's
+// first-parent chain holds it, and otherwise at the first commit the new
+// upstream holds. But it does NOT close the leak in that shape: the walk
+// runs down to the upstream, so a commit the origin removed is replayed and
+// kept, and the branch is rebuilt rather than kept as it stands (its own
+// commits get new hashes).
+//
+// The seed is not tied to the CURRENT origin. A remote-tracking ref left by a
+// previous origin URL survives a re-attach, and is read here as this origin's
+// last position: own commits that only the old origin held are then treated
+// as consumed and dropped from the branch on the first rewind against the new
+// origin. A repository WITH a watermark behaves the same way, because the
+// watermark is not reset when the origin changes either.
 //
 // No lastOrigin (zero: no remote-tracking ref before this fetch, a truly
 // first sync) writes nothing, and the rewind replay keeps its merge-base

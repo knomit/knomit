@@ -133,6 +133,36 @@ func TestSync_NoWatermarkResetToAnAncestorDoesNotKeepTheRemovedCommit(t *testing
 	})
 }
 
+// The seed writes ONLY a missing watermark; an existing one is never
+// overwritten (#542 review SF1). This copy consumed s, so its watermark is s.
+// The tracking ref then moved past it to x, a foreign commit on s (a fetch
+// whose reconcile failed). The origin then resets main to r. The real
+// watermark s stops the walk, so s is not kept, and the own write b is kept.
+// Overwritten with x, the walk would run past s down to r and replay s.
+// SABOTAGE: the seed overwrites an existing watermark (drop the "already
+// there" return) -> secret.md is kept -> red.
+func TestSync_ExistingWatermarkIsNotOverwritten(t *testing.T) {
+	svc, bare, r := wmFixture(t)
+	s := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "Secret", "scrub me"))
+	wmPush(t, svc)
+	wmSetOriginMain(t, bare, s)
+	wmSync(t, svc)
+	base, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, s, base, "setup: the watermark is s")
+
+	x := upstreamCommit(t, svc, s, "kb/x.md", obsFact("X"))
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), x)))
+	writeMergeFact(t, svc, "agent/test", "kb/b.md", "B", "own, not synced yet")
+
+	wmSetOriginMain(t, bare, r)
+	res := wmSync(t, svc)
+	require.Equal(t, ModeRewound, res.Main.Mode)
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/b.md"), "the own unsynced write is kept")
+	require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"), "the real watermark s stops the walk; s is not kept")
+	require.False(t, reachableFrom(t, svc, "agent/test", s))
+}
+
 // A branch genuinely ahead of the origin: its own write w sits on r, which is
 // where the origin was at the last fetch and still is. Local main was moved
 // past the origin locally (here set directly), so the main reconcile reports
