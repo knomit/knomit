@@ -2308,6 +2308,13 @@ paths:
         response), nothing else; the operator carries it to the joiner, whose
         join needs nothing more.
 
+        Renewal needs no call: once a leaf on `main` is in the final third
+        of its own lifetime, the acting master's round re-issues it for the
+        same key and its own lifetime (unless it is revoked, its record is
+        `left`, or the id has no member record), and the CRL likewise before
+        its NextUpdate; each instance installs its renewed leaf and the CRL
+        from `main` in its own next sync round.
+
         The fleet URL: when the fleet repository here syncs with an origin (a
         forge, or the hub when this master is not it), that origin's URL
         without its userinfo (a token in the origin URL is the master's own
