@@ -59,6 +59,12 @@ func (m *Manager) installMainCRL(svc *store.Service) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
+	if installed.Fingerprint == "" {
+		// Nothing installed (a standalone home, one mid-join or left): no
+		// CRL can be installed, and that is no news worth a warning each
+		// round (#536 review nit 2).
+		return nil, nil
+	}
 	f, err := svc.FleetAt(svc.UpstreamBranch())
 	if err != nil {
 		return nil, err

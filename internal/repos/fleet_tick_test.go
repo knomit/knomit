@@ -1,15 +1,20 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/pki"
+	"knomit/internal/pki/pkitest"
 	"knomit/internal/store"
 )
 
@@ -120,4 +125,58 @@ func TestFleetTick_NothingInstalledOrAnotherRootInstallsNothing(t *testing.T) {
 	require.NoError(t, err)
 	got, _ = installedCRL(t, alpha)
 	require.Equal(t, int64(2), got, "positive control: with its own root installed, main's CRL #2 installs")
+}
+
+// #536 review nit 2: with nothing installed the tick installs nothing and
+// logs nothing (it used to warn "another root" every round, since "" is not
+// main's root). Positive control: another root installed still warns once
+// per round.
+// SABOTAGE: drop the nothing-installed early return -> a warning -> red.
+func TestFleetTick_NothingInstalledLogsNothing(t *testing.T) {
+	f := newForgeFleet(t, nil)
+	installMasterLeaf(t, f)
+	alpha := f.namedMember(t, "alpha")
+	f.enrollAndJoin(t, alpha, "alpha")
+	dir := alpha.deps.Cfg.TLS.Dir
+	require.NoError(t, pki.Uninstall(dir))
+	var buf bytes.Buffer
+	prev := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = prev })
+	require.NoError(t, alpha.fleetRepo().WithRead(func(svc *store.Service) {
+		n, err := alpha.installMainCRL(svc)
+		require.NoError(t, err)
+		require.Nil(t, n)
+	}))
+	require.NotContains(t, buf.String(), "another root", "nothing installed: no warning")
+
+	other := newForgeFleet(t, nil).root
+	other.Install(t, other.Enroll(t, "alpha@"+pki.AgentEmailDomain, alpha.deps.KeyPath), dir)
+	require.NoError(t, alpha.fleetRepo().WithRead(func(svc *store.Service) {
+		_, err := alpha.installMainCRL(svc)
+		require.NoError(t, err)
+	}))
+	require.Contains(t, buf.String(), "another root", "positive control: another installed root still warns")
+}
+
+// #536 review nit 3: the master's revoke installs the CRL it signed; when
+// the tick (outside fleetOpMu) installed that same CRL from main first, the
+// EQUAL Number is success, not an install_error. A CRL older than the one
+// accepted is still an error.
+// SABOTAGE: return InstallCRL's error as is -> the equal row errs -> red.
+func TestInstallSignedCRL_AnEqualNumberIsSuccess(t *testing.T) {
+	fl := pkitest.New(t)
+	dir := filepath.Join(t.TempDir(), "pki")
+	fl.Install(t, fl.Enroll(t, "master@"+pki.AgentEmailDomain), dir)
+	cur, err := pki.LoadCRL(filepath.Join(fl.Dir, pki.CRLFile))
+	require.NoError(t, err)
+	now := time.Now()
+	n2 := big.NewInt(cur.Number.Int64() + 1)
+	raw2, err := pki.SignCRL(fl.Root, nil, n2, now, now.Add(time.Hour))
+	require.NoError(t, err)
+	_, err = pki.InstallCRL(dir, fl.Root.Cert, raw2) // the tick, first
+	require.NoError(t, err)
+	require.NoError(t, installSignedCRL(dir, fl.Root.Cert, raw2, n2), "the same Number, already installed: success")
+	raw1 := crlPEMOf(cur)
+	require.Error(t, installSignedCRL(dir, fl.Root.Cert, raw1, cur.Number), "an older Number is still refused")
 }
