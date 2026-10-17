@@ -54,6 +54,16 @@ func TestFleetDrop_AMemberWorkMergedWhileMainWasHeldSurvivesTheDrop(t *testing.T
 				require.NoError(t, err)
 				require.True(t, ok, "fixture: the master merged alpha's work while main was held")
 			}))
+			if !revoke {
+				// The tip is the master's merge of alpha's work: a merge
+				// cannot be dropped (422 merge_commit), and nothing changes.
+				tip := localTip(t, f.mri, f.mri.AgentBranch())
+				_, err := f.master.DropFleetCommit(ctx, tip)
+				status, code := fleetCode(t, err)
+				require.Equal(t, 422, status)
+				require.Equal(t, "merge_commit", code)
+				require.Equal(t, tip, localTip(t, f.mri, f.mri.AgentBranch()))
+			}
 			if revoke {
 				_, err := f.master.RevokeFleetMember(ctx, "alpha", "test")
 				require.NoError(t, err)
