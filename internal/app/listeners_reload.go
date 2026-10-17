@@ -507,6 +507,7 @@ func (l *Listeners) reconcileTLS(newCfg config.Config) (changed bool, err error)
 	key := tcfg.Addr + "\x00" + tcfg.Dir
 	l.mu.Lock()
 	oldSrv, oldLn, oldCancel, have := l.TLSServer, l.TLS, l.tlsCancel, l.boundTLS
+	l.tlsCfg = tcfg
 	l.mu.Unlock()
 
 	if tcfg.Addr == "" {

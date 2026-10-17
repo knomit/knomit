@@ -208,6 +208,7 @@ function StepHosting({ s, fleet, checking, err, onHosting, onUrl, onConnect }: {
   const serve = fleet?.host.would_serve ?? [];
   const listenerOn = !!fleet?.host.listener_on;
   const listening = fleet?.host.listening === true;
+  const addrHeld = fleet?.host.listener_reason === 'addr_in_use';
   const hasAddress = (fleet?.host.external_addresses ?? []).length > 0;
   return (
     <div data-testid="fleet-step-hosting">
@@ -227,9 +228,13 @@ function StepHosting({ s, fleet, checking, err, onHosting, onUrl, onConnect }: {
                 </OutcomeCard>
               ) : listenerOn && serve.length > 0 ? (
                 // Configured, not listening: on a fresh instance it cannot be
-                // yet, it needs the certificate the create installs (B1).
+                // yet, it needs the certificate the create installs (B1), and
+                // the create starts it (PR8). A port held by another program
+                // is the operator's to free.
                 <OutcomeCard tone="ask" testid="fleet-hosting-urls" headline={serve.length > 1 ? 'Members will join at one of these once the fleet listener runs' : 'Members will join here once the fleet listener runs'}
-                  body={`${serve.length > 1 ? 'Each bundle you issue names one of them; Enroll asks which.' : 'The URL goes into every bundle you issue.'} The fleet listener is not running: it starts when knomit restarts after the create, which installs the certificate it needs. Until then no member can join.`}>
+                  body={`${serve.length > 1 ? 'Each bundle you issue names one of them; Enroll asks which.' : 'The URL goes into every bundle you issue.'} ${addrHeld
+                    ? 'The fleet listener is not running: another program holds its port. Free it or choose another Fleet port in Settings → Network. Until then no member can join.'
+                    : 'The fleet listener is not running yet: it needs the certificate the create installs, and the create starts it.'}`}>
                   <div style={urlList}>{serve.map(u => <div key={u}>{u}</div>)}</div>
                 </OutcomeCard>
               ) : (
@@ -388,7 +393,7 @@ function StepReview({ s, fleet, err }: { s: S; fleet: FleetStatus | null; err: E
       {s.choice === 'create' && s.hosting === 'here' && (
         <ol style={will}>
           <li>A fresh fleet root is created in {rootDir} on this machine; this instance is the master.</li>
-          <li>The fleet repository is created here, with this instance's record and certificate on main.{serve.length ? (listening ? ` Members will join at ${serve.join(' or ')}.` : ` Members will join at ${serve.join(' or ')} once knomit restarts and its fleet listener starts.`) : ''}</li>
+          <li>The fleet repository is created here, with this instance's record and certificate on main.{serve.length ? (listening ? ` Members will join at ${serve.join(' or ')}.` : fleet?.host.listener_reason === 'addr_in_use' ? ` Members will join at ${serve.join(' or ')} once the fleet listener's port is free (Settings → Network).` : ` Members will join at ${serve.join(' or ')}: the create starts the fleet listener.`) : ''}</li>
           <li>Every joiner needs a bundle from Fleet → Members → Enroll a member. Each round, this instance judges and merges their branches into main.</li>
         </ol>
       )}

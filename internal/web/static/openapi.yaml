@@ -4411,8 +4411,11 @@ components:
                 The mTLS listener is bound and serving NOW (what server.json's
                 listeners.tls.listening says). Only this means members can reach
                 this instance. A listener configured before any certificate was
-                installed (a fresh instance that then creates, joins or hosts a
-                fleet) stays off until knomit restarts or `knomit reload` runs.
+                installed (a fresh instance) starts when a fleet create, join or
+                host-here succeeds on a `knomit serve` (or desktop) server,
+                with no restart; one down for another reason (its port held by
+                another program, a certificate that does not load) waits for a
+                restart or `knomit reload`.
             listener_reason:
               type: string
               enum: [no_certificate, addr_in_use]

@@ -158,12 +158,13 @@ export function intervalText(seconds: number): string {
 
 /** listenerNotRunning is what the page says when the fleet listener is not
  *  up (GET /fleet host.listening false): members cannot reach this instance
- *  until it starts, and it starts only when knomit does with a certificate
- *  installed (a create, a join or a host-here installs one). */
+ *  until it starts. A create, a join and a host-here start a configured
+ *  listener that waited for its certificate (PR8), so one still down after
+ *  them is down for another reason: a restart or a reload is the way. */
 export function listenerNotRunning(configured: boolean, reason?: string): string {
   if (!configured) return 'Members reach this instance over the fleet listener, and it is off. Set the Fleet port in Settings → Network; saving applies it.';
   if (reason === 'addr_in_use') return 'Members reach this instance over the fleet listener, and its port is held by another program. Free the port or choose another Fleet port in Settings → Network.';
-  return 'Members reach this instance over the fleet listener, and it starts only when knomit starts with this instance\'s certificate installed. Restart knomit (or run `knomit reload` for a server you started yourself) to start it; until then no member can join or push.';
+  return 'Members reach this instance over the fleet listener, and it is not running. A create, a join and Host the fleet here start it once this instance\'s certificate is installed; if it still does not run, restart knomit (or run `knomit reload` for a server you started yourself). Until then no member can join or push.';
 }
 
 /** hostPortOf is hostOf with a non-default port kept (#528 N6): two fleet

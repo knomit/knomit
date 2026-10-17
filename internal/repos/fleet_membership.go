@@ -523,6 +523,9 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 		return FleetStatus{}, err
 	}
 	log.Info().Str("fleet", ri.Name()).Msg("fleet: joined, record pending; it is accepted once the master merges it into main")
+	// The join installed this instance's certificate (fleet_create.go's
+	// create does the same).
+	m.startTLSAfterInstall("fleet join")
 	return m.FleetStatus(ctx)
 }
 
@@ -1283,6 +1286,9 @@ func (m *Manager) HostFleetHere(ctx context.Context, spec FleetHostSpec) (FleetS
 	if err := m.hostFleetHere(ctx, spec); err != nil {
 		return FleetStatus{}, err
 	}
+	// The hub serves members over the mTLS listener: a configured one that
+	// never started (the certificate came after the boot) starts now.
+	m.startTLSAfterInstall("fleet host")
 	return m.FleetStatus(ctx)
 }
 

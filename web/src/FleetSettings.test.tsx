@@ -61,7 +61,7 @@ describe('FleetSettings', () => {
     const card = screen.getByTestId('fleet-hub-listener-down');
     expect(card).toHaveAttribute('data-tone', 'ask');
     expect(card).toHaveTextContent('The fleet listener is not running');
-    expect(card).toHaveTextContent('Restart knomit');
+    expect(card).toHaveTextContent('restart knomit');
   });
 
   // Review B2: the old hub reaches Point at the new host (it has no origin by
@@ -288,7 +288,7 @@ describe('FleetSettings', () => {
     const confirm = screen.getByTestId('fleet-host-confirm');
     expect(confirm).toHaveTextContent('members push to https://served.example:7443/git/fleet once its fleet listener runs');
     expect(confirm).not.toHaveTextContent('from now on');
-    expect(screen.getByTestId('fleet-host-listener-down')).toHaveTextContent('Restart knomit');
+    expect(screen.getByTestId('fleet-host-listener-down')).toHaveTextContent('restart knomit');
   });
 
   it('Host here asks for the listener before the click when it is off, and shows a refusal with its code', async () => {

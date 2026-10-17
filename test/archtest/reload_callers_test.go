@@ -180,3 +180,47 @@ func TestReloadRequestHasOnlyTheCLIAndTheSettingsBindingAsCallers(t *testing.T) 
 		t.Fatalf("RequestReload/SignalReload are called from %v; only %v may: listener config reaches a running server through `knomit reload` and the Settings binding alone", callers, want)
 	}
 }
+
+// The one listener operation that IS reachable from fleet operations (and so
+// from the local-listener-only routes POST /fleet/create, /join and /host):
+// app.Listeners.StartTLSWhenInstalled. It is not a reload: it reads no
+// configuration and never closes, moves or re-binds a listener; it opens the
+// configured mTLS listener only while it is down for lack of a certificate
+// (internal/app/listeners_tls_start.go). The pin keeps it that narrow door: outside
+// internal/app the method is named only by cmd/serve.go, which hands it to
+// the repos Manager (SetTLSStarter); inside internal/app it calls neither
+// Apply nor Reload (the Apply pin above would catch that), and its file is
+// the only one that defines it. A second wiring site, or a handler reaching
+// Listeners directly, changes the list.
+func TestStartTLSWhenInstalledIsWiredOnlyByServe(t *testing.T) {
+	root := moduleRoot(t)
+	fset := token.NewFileSet()
+	var refs []string
+	for _, f := range prodGoFiles(t, root) {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		file, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.SelectorExpr:
+				if x.Sel.Name == "StartTLSWhenInstalled" {
+					refs = append(refs, rel)
+				}
+			case *ast.FuncDecl:
+				if x.Name.Name == "StartTLSWhenInstalled" {
+					refs = append(refs, rel+" (defines)")
+				}
+			}
+			return true
+		})
+	}
+	slices.Sort(refs)
+	refs = slices.Compact(refs)
+	want := []string{"cmd/serve.go", "internal/app/listeners_tls_start.go (defines)"}
+	if !slices.Equal(refs, want) {
+		t.Fatalf("StartTLSWhenInstalled is named in %v; only %v may: the fleet operations reach it through the Manager hook cmd/serve.go sets, never a handler", refs, want)
+	}
+}
