@@ -1009,7 +1009,10 @@ func parseCRLPEM(raw []byte) (*x509.RevocationList, error) {
 // DecommissionFleet ends the fleet (master only): the fleet repository here
 // (dropped from every lens first; a forge keeps its copy, inert), the
 // installed material and <home>/fleet, root key included. State standalone.
-// Members' syncs then fail, and each leaves (which works offline).
+// Members' syncs then fail, and each leaves (which works offline). On a
+// forge it first flushes (flushBeforeSwitch: 409 unpublished_changes while
+// main lacks a commit of this branch), since another root holder can take
+// the fleet over from main.
 func (m *Manager) DecommissionFleet(ctx context.Context) (FleetStatus, error) {
 	defer m.lockFleetOp()()
 	ri, err := m.masterFleet()
@@ -1022,6 +1025,16 @@ func (m *Manager) DecommissionFleet(ctx context.Context) (FleetStatus, error) {
 	if o, oerr := m.originOf(ri); oerr != nil {
 		return FleetStatus{}, oerr
 	} else if o != nil {
+		// A hand-off like a stand-down: flush first (flushBeforeSwitch), or
+		// a revoke this branch holds and main lacks is deleted with the
+		// repository below and the next master never sees it (PR #537
+		// re-review 2). Under fleetOpMu only, unlike StandDown: holding the
+		// merger's run lock across the removal below (removeFleetHere archives
+		// and purges the repository, stopping its loops) hung until the test
+		// timed out.
+		if err := m.flushBeforeSwitch(ctx, ri); err != nil {
+			return FleetStatus{}, err
+		}
 		if err := m.deleteFleetMaster(ctx, ri); err != nil {
 			return FleetStatus{}, fleetErr(http.StatusConflict, "decommission_unpublished", "the commit that removes this instance as the acting master did not reach the forge's main ("+credentialFreeErr(err).Error()+"): nothing is decommissioned. Try again")
 		}
@@ -1068,8 +1081,9 @@ const ErrCodeUnpublishedChanges = "unpublished_changes"
 // member record): a new master works from ITS main and would never see them,
 // so a revocation would be lost and the new master could renew the revoked
 // leaf or re-sign a CRL that collides with the unpublished one (PR #537
-// re-review R1). The caller holds fleetOpMu, which keeps every master duty
-// out (they TryLock it), and StandDown also holds the merger's run lock.
+// re-review R1). Root export, stand-down and a forge decommission call it.
+// The caller holds fleetOpMu, which keeps every master duty out (they
+// TryLock it), and StandDown also holds the merger's run lock.
 // Not the acting master: nothing to flush.
 func (m *Manager) flushBeforeSwitch(ctx context.Context, ri *RepoInstance) error {
 	acts := false
@@ -1091,7 +1105,30 @@ func (m *Manager) flushBeforeSwitch(ctx context.Context, ri *RepoInstance) error
 	if perr != nil {
 		why = " The publish just tried failed: " + credentialFreeErr(perr).Error() + "."
 	}
-	return fleetErr(http.StatusConflict, ErrCodeUnpublishedChanges, "this instance's fleet branch holds changes the fleet's main does not have yet (a revoke, a renewal, a re-signed CRL or a member's record): the master role cannot be handed on before they are published, or the next master would never see them."+why+" Let the publish succeed first (fix the fleet's origin, or wait for the next sync round), then try again")
+	origin, oerr := m.hasOrigin(ri)
+	if oerr != nil {
+		return oerr
+	}
+	return fleetErr(http.StatusConflict, ErrCodeUnpublishedChanges, "this instance's fleet branch holds changes the fleet's main does not have yet (a revoke, a renewal, a re-signed CRL or a member's record): the master role cannot be handed on before they are published, or the next master would never see them."+why+" "+unpublishedWayOut(perr, origin))
+}
+
+// unpublishedWayOut is the last sentence of an unpublished_changes refusal:
+// what lets the publish succeed. A main held by the judge of this instance's
+// own commits never moves by waiting (every round refuses the same commit),
+// so it points at the drop-commit card; otherwise a forge needs its origin
+// reachable, and the hub (no origin) needs its next sync round.
+func unpublishedWayOut(perr error, origin bool) string {
+	switch {
+	case errors.Is(perr, store.ErrOwnCommitRefused):
+		c := mainHeldCommit(perr.Error())
+		if c == "" {
+			return "The fleet's rules refuse a commit on this instance's own branch, so main does not move while it is there and waiting does not help: drop it first (the fleet page's \"Drop commit\" card), then try again"
+		}
+		return "The fleet's rules refuse commit " + shortHash(c) + " on this instance's own branch, so main does not move while it is there and waiting does not help: drop it first (the fleet page's \"Drop commit " + shortHash(c) + "\" card), then try again"
+	case origin:
+		return "Let the publish succeed first (fix the fleet's origin, or wait for the next sync round), then try again"
+	}
+	return "Let the publish succeed first (wait for the next sync round, or see the fleet's last error), then try again"
 }
 
 // fleetBranchPublished reports whether the fleet repository's main holds
