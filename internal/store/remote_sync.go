@@ -209,11 +209,19 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	// fetchOrigin tolerates a missing agent ref on origin (expected when the
 	// agent branch has not yet been pushed) by falling back to fetching only
 	// origin/<upstreamMain>.
+	//
+	// lastOrigin is where origin/<upstreamMain> pointed BEFORE this fetch
+	// moves it (zero when there was no such ref): the fallback watermark of a
+	// branch that has none (seedMissingWatermark). It can only be read here.
+	var lastOrigin plumbing.Hash
 	fetchErr := func() error {
 		ri.rh.configMu.RLock()
 		defer ri.rh.configMu.RUnlock()
 		if _, err := ri.rh.repo.Remote("origin"); err != nil {
 			return errNoOriginRemote
+		}
+		if ref, err := ri.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain)); err == nil {
+			lastOrigin = ref.Hash()
 		}
 		return fetchOrigin(ctx, ri.rh.repo, auth, upstreamMain, ri.rh.netTimeout, extra...)
 	}()
@@ -223,6 +231,12 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	}
 	if fetchErr != nil {
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", fetchErr)
+	}
+
+	if agentBranch != "" && agentBranch != upstreamMain {
+		if err := ri.rh.seedMissingWatermark(agentBranch, lastOrigin); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: %w", err)
+		}
 	}
 
 	return ri.reconcileNow(ctx, agentBranch, upstreamMain)
