@@ -316,11 +316,6 @@ func (s *Service) SetOrigin(o *Origin) {
 	if o != nil && o.Branch != "" {
 		s.recordConsensusBranch(o.Branch)
 	}
-	// Tag an untagged origin position with this URL (never re-tag one): Sync
-	// forgets the position when the URL it syncs with differs from the tag.
-	if o != nil && o.URL != "" && s.rh != nil && s.rh.db != nil {
-		s.rh.adoptOriginPositionURL(o.URL)
-	}
 }
 
 // ConfigureRemote wires the git remote named "origin" so go-git can fetch and

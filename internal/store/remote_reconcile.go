@@ -104,10 +104,12 @@ func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) er
 // kept, and the branch is rebuilt rather than kept as it stands (its own
 // commits get new hashes).
 //
-// The seed belongs to the CURRENT origin URL: when the URL changed, Sync
-// forgot the previous origin's remote-tracking refs and watermarks before
-// this fetch (origin_position.go), so lastOrigin is zero on that sync and
-// nothing is seeded from the old origin.
+// The seed is not tied to the CURRENT origin: a remote-tracking ref left by a
+// previous origin URL survives a re-attach. That does not matter across a
+// change of origin, because the agent is then reconciled against the origin
+// snapshot (origin_snapshot.go), not the watermark: what the old origin held
+// and the new one lacks is left out and reported, not silently dropped as
+// consumed.
 //
 // No lastOrigin (zero: no remote-tracking ref before this fetch, a truly
 // first sync) writes nothing, and the rewind replay keeps its merge-base
