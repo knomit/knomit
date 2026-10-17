@@ -2097,6 +2097,9 @@ export interface FleetStatus {
   // sync_stopped: this process stopped the fleet repository's sync rounds
   // because of it (a restart retries once).
   last_error_refusal?: 'revoked' | 'moved' | 'other';
+  // certificate_expired: this instance's installed certificate is outside
+  // its validity by this instance's clock (the `other` class's sentence).
+  certificate_expired?: boolean;
   revoked?: boolean;
   sync_stopped?: boolean;
   // last_error_commit_refused: last_error is the fleet's host refusing a

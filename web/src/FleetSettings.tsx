@@ -153,7 +153,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         {revoked && (
           <div data-testid="fleet-revoked-notice" style={{ fontSize: 12, color: '#e8a0a0' }}>
             {fleet.sync_stopped
-              ? "This instance's certificate is revoked: the fleet refuses it, so this copy has stopped syncing. To rejoin, leave the fleet here, ask the fleet's master to enroll this instance again, and join with the new bundle."
+              ? "This instance's certificate is revoked: the fleet refuses it, so this copy has stopped syncing. To rejoin, leave the fleet here, ask the fleet's master to enroll this instance again, and join with the new bundle. Syncing resumes only after knomit restarts or this instance rejoins."
               : "This instance's certificate is revoked: the fleet refuses its pushes."}
           </div>
         )}
@@ -182,7 +182,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
               ? <MainHeldNotice commit={fleet.last_error_main_held_commit} local={!!fleet.local}
                   onDropped={(short, result) => { setDropped({ short, result }); onChanged(); }} />
               : fleet.last_error_refusal || fleet.last_error_refused
-              ? <div data-testid="fleet-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>{refusalText(fleet.last_error_refusal)}</div>
+              ? <div data-testid="fleet-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>{refusalText(fleet.last_error_refusal, fleet.certificate_expired)}</div>
               : fleet.last_error_commit_refused
                 // The host's judge refused a commit of this copy's branch
                 // (#528 N1): every sync sends the same commit, so "Retrying"

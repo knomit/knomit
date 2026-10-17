@@ -66,6 +66,10 @@ type FleetStatus struct {
 	// installed CRL lists it), "moved" (this instance refused the peer: its
 	// certificate is not of the installed root), "other"; absent otherwise.
 	LastErrorRefusal string `json:"last_error_refusal,omitempty"`
+	// CertificateExpired: the certificate installed in [tls].dir is outside
+	// its validity by this instance's clock (pki.StandingExpired). With
+	// LastErrorRefusal "other" it says which of that class's two cases it is.
+	CertificateExpired bool `json:"certificate_expired,omitempty"`
 	// Revoked: this instance's certificate is revoked as far as it can
 	// tell, from what it holds: record_state revoked (main's CRL), the
 	// installed CRL listing the installed certificate, or LastErrorRefusal
@@ -416,6 +420,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	// instance holds (fleet_refusal.go).
 	own, _ := m.ownStanding()
 	st.LastErrorRefusal = classifyFleetRefusal(row.LastError, own)
+	st.CertificateExpired = own == pki.StandingExpired
 	revoked, _ := m.fleetRevokedHere(row.LastError)
 	st.Revoked = !st.RootHeld && (revoked || st.RecordState == fact.MemberRevoked)
 	st.SyncStopped = ri.fleetSyncHalt() != ""

@@ -2,8 +2,12 @@ package repos
 
 import (
 	"context"
+	"crypto/ed25519"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -141,4 +145,27 @@ func TestFleetRefusal_TheRootHolderIsNeverHalted(t *testing.T) {
 	f.enrollAndJoin(t, alpha, "alpha")
 	revoked, _ = alpha.fleetRevokedHere(refused)
 	require.True(t, revoked)
+}
+
+// GET /fleet certificate_expired (#536 review SF1, the user's copy split):
+// false while the installed certificate is valid here, true once it is past
+// its NotAfter by this clock.
+// SABOTAGE: CertificateExpired = false always -> red.
+func TestFleetStatus_CertificateExpiredIsThisClocksVerdict(t *testing.T) {
+	ctx := context.Background()
+	f := newForgeFleet(t, nil)
+	alpha := f.namedMember(t, "alpha")
+	f.enrollAndJoin(t, alpha, "alpha")
+	st, err := alpha.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.False(t, st.CertificateExpired, "fixture: a fresh certificate")
+
+	cur, err := pki.LoadInstanceCert(alpha.deps.Cfg.TLS.Dir)
+	require.NoError(t, err)
+	old, err := pki.IssueLeaf(f.root.Root, cur.PublicKey.(ed25519.PublicKey), "alpha@"+pki.AgentEmailDomain, time.Minute, time.Now().Add(-2*time.Hour))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(alpha.deps.Cfg.TLS.Dir, pki.InstanceCertFile), old.CertPEM, 0o600))
+	st, err = alpha.FleetStatus(ctx)
+	require.NoError(t, err)
+	require.True(t, st.CertificateExpired, "an installed certificate past its NotAfter")
 }
