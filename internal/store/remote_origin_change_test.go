@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"knomit/internal/platform/fileuri"
@@ -125,7 +126,7 @@ func TestSync_FirstSyncAfterAnOriginChangeIsAFirstSync(t *testing.T) {
 	require.Equal(t, r, base, "the reconcile writes a true watermark for B")
 	url, err := svc.rh.readOriginPositionURL()
 	require.NoError(t, err)
-	require.Equal(t, fileuri.New(b), url, "the position is now B's")
+	require.Equal(t, originIdentity(fileuri.New(b)), url, "the position is now B's")
 
 	// The next sync with B forgets nothing: same URL.
 	f2 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/later.md", "Later", "after the move"))
@@ -211,9 +212,52 @@ func TestSync_UntaggedRepositoryAdoptsItsOriginAtOpen(t *testing.T) {
 	svc.SetOrigin(&Origin{URL: fileuri.New(a), Branch: "main"}) // the open
 	url, err := svc.rh.readOriginPositionURL()
 	require.NoError(t, err)
-	require.Equal(t, fileuri.New(a), url, "adopted at open")
+	require.Equal(t, originIdentity(fileuri.New(a)), url, "adopted at open")
 
 	ocRepoint(t, svc, fileuri.New(b))
 	wmSync(t, svc)
 	require.True(t, reachableFrom(t, svc, "agent/test", f), "f is kept")
+}
+
+// What counts as the SAME origin: credentials in the URL, the case of the
+// scheme and host, a default port and a trailing slash do not; anything else
+// does. The recorded identity never carries a credential.
+// SABOTAGE: compare the raw URL (originIdentity returns raw) -> red.
+func TestOriginIdentity(t *testing.T) {
+	same := [][2]string{
+		{"https://forge.example/team/kb.git", "https://user:new-token@forge.example/team/kb.git"},
+		{"https://forge.example/team/kb.git", "HTTPS://Forge.Example:443/team/kb.git/"},
+		{"http://forge.example/kb", "http://forge.example:80/kb"},
+		{"/srv/kb.git", "/srv/kb.git/"},
+	}
+	for _, p := range same {
+		require.Equal(t, originIdentity(p[0]), originIdentity(p[1]), "%q vs %q", p[0], p[1])
+	}
+	differ := [][2]string{
+		{"https://forge.example/team/kb.git", "https://forge.example/team/fork.git"},
+		{"https://forge.example/kb", "https://other.example/kb"},
+		{"https://forge.example:8443/kb", "https://forge.example/kb"},
+		{"https://forge.example/kb", "ssh://forge.example/kb"},
+	}
+	for _, p := range differ {
+		require.NotEqual(t, originIdentity(p[0]), originIdentity(p[1]), "%q vs %q", p[0], p[1])
+	}
+	require.NotContains(t, originIdentity("https://user:s3cret@forge.example/kb"), "s3cret")
+}
+
+// A stored URL that differs only by a credential inside it (and a trailing
+// slash) is the same origin: the position is kept, so a later scrub on that
+// origin still holds.
+// SABOTAGE: compare the raw URL -> f kept -> red.
+func TestSync_CredentialInTheURLKeepsTheOriginPosition(t *testing.T) {
+	svc, a, r := wmFixture(t)
+	f := ocConsumeOwn(t, svc, a)
+
+	withCred := "file://user:token@" + strings.TrimPrefix(fileuri.New(a), "file://") + "/"
+	require.NotEqual(t, fileuri.New(a), withCred, "setup: the stored string differs")
+	svc.SetOrigin(&Origin{URL: withCred, Branch: "main"})
+	wmSetOriginMain(t, a, r)
+	res := wmSync(t, svc)
+	require.Equal(t, ModeRewound, res.Main.Mode)
+	require.False(t, reachableFrom(t, svc, "agent/test", f), "the removed commit stays removed")
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -36,32 +37,52 @@ import (
 // true one.
 //
 // The URL compared is the stored origin URL (control.db's, injected through
-// Service.SetOrigin), not the derived git URL: a credential change keeps the
-// URL and keeps the position. The check is lazy, at Sync, so every path that
-// changes the origin (PUT origin, the connect wizard, a swap, a detach and
-// re-attach, the fleet's follow and move) is covered by one place, and a
+// Service.SetOrigin), not the derived git URL, and it is compared by identity
+// (originIdentity): credentials in the URL, the case of the scheme and host, a
+// default port and a trailing slash do not count. A credential change keeps
+// the URL and keeps the position. The check is lazy, at Sync, so every path
+// that changes the origin (PUT origin, the connect wizard, a swap, a detach
+// and re-attach, the fleet's follow and move) is covered by one place, and a
 // change undone before any sync ran (a failed attach's restore) clears
 // nothing.
 const originPositionURLKey = "origin_position_url"
 
+// originIdentity is the part of an origin URL that names WHICH origin it is:
+// without credentials (user info, which may hold a token), with the scheme and
+// host lower-cased, a default port dropped and no trailing slash. A URL that
+// does not parse as scheme://host/path (the scp-like form, a bare path) only
+// loses a trailing slash. This is what is recorded, so no credential is ever
+// written to the meta table.
+func originIdentity(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || !strings.Contains(raw, "://") {
+		return strings.TrimSuffix(raw, "/")
+	}
+	host := strings.ToLower(u.Hostname())
+	if port := u.Port(); port != "" && !(u.Scheme == "https" && port == "443" || u.Scheme == "http" && port == "80") {
+		host += ":" + port
+	}
+	return strings.ToLower(u.Scheme) + "://" + host + strings.TrimSuffix(u.EscapedPath(), "/")
+}
+
 // readOriginPositionURL returns the origin URL the position is recorded for,
 // "" when none is recorded (a repository made before the tag existed).
 func (rh *repoHandler) readOriginPositionURL() (string, error) {
-	var url string
-	err := rh.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, originPositionURLKey).Scan(&url)
+	var recorded string
+	err := rh.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, originPositionURLKey).Scan(&recorded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("read origin position url: %w", err)
 	}
-	return url, nil
+	return recorded, nil
 }
 
-// recordOriginPositionURL records url as the origin the position belongs to.
-func (rh *repoHandler) recordOriginPositionURL(url string) error {
+// recordOriginPositionURL records originURL as the origin the position belongs to.
+func (rh *repoHandler) recordOriginPositionURL(originURL string) error {
 	if _, err := rh.db.Exec(
-		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, originPositionURLKey, url); err != nil {
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, originPositionURLKey, originIdentity(originURL)); err != nil {
 		return fmt.Errorf("record origin position url: %w", err)
 	}
 	return nil
@@ -74,25 +95,25 @@ func (rh *repoHandler) recordOriginPositionURL(url string) error {
 //
 // A failed write is logged, not returned: the next Sync adopts the URL it
 // syncs with when nothing is recorded.
-func (rh *repoHandler) adoptOriginPositionURL(url string) {
+func (rh *repoHandler) adoptOriginPositionURL(originURL string) {
 	if _, err := rh.db.ExecContext(context.Background(),
-		`INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)`, originPositionURLKey, url); err != nil {
+		`INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)`, originPositionURLKey, originIdentity(originURL)); err != nil {
 		log.Warn().Err(err).Msg("SetOrigin: tagging the origin position failed; the next Sync tags it")
 	}
 }
 
 // originPositionStale reports whether the recorded position belongs to an
-// origin other than url. With nothing recorded it adopts url and reports
-// false.
-func (rh *repoHandler) originPositionStale(url string) (bool, error) {
+// origin other than originURL. With nothing recorded it adopts originURL and
+// reports false.
+func (rh *repoHandler) originPositionStale(originURL string) (bool, error) {
 	recorded, err := rh.readOriginPositionURL()
 	if err != nil {
 		return false, err
 	}
 	if recorded == "" {
-		return false, rh.recordOriginPositionURL(url)
+		return false, rh.recordOriginPositionURL(originURL)
 	}
-	return recorded != url, nil
+	return recorded != originIdentity(originURL), nil
 }
 
 // forgetWatermarks deletes every refs/knomit/agent-base/* ref. Takes
@@ -135,7 +156,7 @@ func (rh *repoHandler) removeRefsWithPrefix(prefix string) (int, error) {
 }
 
 // logForgotOriginPosition reports a forgotten position once per Sync.
-func logForgotOriginPosition(url string, watermarks, tracking int) {
-	log.Info().Str("origin", url).Int("watermarks", watermarks).Int("tracking_refs", tracking).
+func logForgotOriginPosition(originURL string, watermarks, tracking int) {
+	log.Info().Str("origin", originIdentity(originURL)).Int("watermarks", watermarks).Int("tracking_refs", tracking).
 		Msg("Sync: the origin URL changed; forgot the previous origin's position, this sync is a first sync")
 }
