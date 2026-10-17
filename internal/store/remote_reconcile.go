@@ -15,6 +15,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -78,6 +79,46 @@ func (rh *repoHandler) readAgentBase(agentBranch string) (plumbing.Hash, error) 
 // is read on the next Sync tick as the base for unpushedCommits.
 func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) error {
 	return rh.gits.SetReference(plumbing.NewHashReference(agentBaseRefName(agentBranch), hash))
+}
+
+// seedMissingWatermark writes the watermark for agentBranch from lastOrigin,
+// where origin/<upstream> pointed before this sync's fetch moved it, when the
+// branch has no watermark yet (a repository made before the watermark
+// existed and not synced since). That is the last ORIGIN commit this copy
+// synced with, the same signal git's `pull --rebase --fork-point` reads from
+// the remote-tracking reflog (go-git keeps no reflog, so Sync captures it
+// before the fetch). Without it the rewind replay falls back to the merge
+// base, and an origin reset to an ancestor of the branch reads as "the branch
+// is ahead": the commit the origin removed is kept and pushed back.
+//
+// It is written once: every reconcile advances the watermark after this, so
+// the fallback is used for one sync only. It is NOT the branch's first commit:
+// that would count every unsynced commit of this copy's as consumed and drop
+// it on the next rewind. A seed beyond what this branch consumed (a fetch
+// whose reconcile failed) loses nothing either: the replay walk stops at it
+// only when the branch's first-parent chain holds it, and otherwise at the
+// first commit the new upstream holds.
+//
+// No lastOrigin (zero: no remote-tracking ref before this fetch, a truly
+// first sync) writes nothing, and the rewind replay keeps its merge-base
+// fallback. Takes rh.lockBranch(agentBranch).
+func (rh *repoHandler) seedMissingWatermark(agentBranch string, lastOrigin plumbing.Hash) error {
+	if lastOrigin == plumbing.ZeroHash {
+		return nil
+	}
+	unlock := rh.lockBranch(agentBranch)
+	defer unlock()
+	if _, err := rh.readAgentBase(agentBranch); err == nil {
+		return nil
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("read watermark: %w", err)
+	}
+	if err := rh.writeAgentBase(agentBranch, lastOrigin); err != nil {
+		return fmt.Errorf("write watermark: %w", err)
+	}
+	log.Info().Str("branch", agentBranch).Str("base", shortRefHash(lastOrigin)).
+		Msg("seedMissingWatermark: no watermark; using where the origin was at the last fetch")
+	return nil
 }
 
 // MainReconcileResult reports the outcome of reconcileMain.

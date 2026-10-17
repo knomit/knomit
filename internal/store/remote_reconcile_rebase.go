@@ -630,8 +630,10 @@ func (rh *repoHandler) replayOntoUpstream(
 // reconcileAgent when reconcileMain reported Mode=ModeRewound.
 //
 // Falls back to MergeBase (watermark=zero) when the watermark has never
-// been written (plumbing.ErrReferenceNotFound) — defensive for older
-// repos that predate the watermark. Any OTHER error reading the watermark
+// been written (plumbing.ErrReferenceNotFound). Sync seeds a missing
+// watermark from where the origin was at the last fetch first
+// (seedMissingWatermark), so this is reached only on a truly first sync, or
+// from a caller that does not fetch. Any OTHER error reading the watermark
 // is surfaced rather than silently downgraded to a full-history walk.
 //
 // Merge commits from prior steady-state ticks are skipped by
