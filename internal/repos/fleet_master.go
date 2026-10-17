@@ -547,7 +547,7 @@ func (m *Manager) DropFleetCommit(ctx context.Context, commit string) (FleetDrop
 		return FleetDropResult{}, fleetErr(http.StatusConflict, "not_unpublished", "commit "+commit+" is not on this instance's fleet branch, or the fleet's main already holds it: there is nothing to drop")
 	}
 	if errors.Is(derr, store.ErrDropMerge) {
-		return FleetDropResult{}, fleetErr(http.StatusUnprocessableEntity, "merge_commit", "commit "+commit+" is a merge: it brings in another branch's commits and cannot be dropped as one. Drop the commit that wrote the refused content (the one GET /fleet names); nothing was changed")
+		return FleetDropResult{}, fleetErr(http.StatusUnprocessableEntity, "merge_commit", "commit "+commit+" is a merge: it brings in another branch's commits and cannot be dropped as one. Drop the commit that wrote the refused content, the one the Fleet page's notice names; nothing was changed")
 	}
 	var foreign *store.DropForeignError
 	if errors.As(derr, &foreign) {
