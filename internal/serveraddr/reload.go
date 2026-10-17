@@ -60,17 +60,28 @@ func (e *ReloadListenerError) Error() string {
 // #545).
 const TLSWaitingForCertificate = "waits for this instance's certificate: it starts when this instance creates or joins a fleet"
 
+// ListenerWaitsForCertificate reports whether l is a fleet listener that is
+// configured before this instance has a certificate and that nothing serves
+// in the meantime: reason no_certificate AND nothing listening. That is the
+// fresh-instance path (set the Fleet port, then create or join a fleet), and
+// the create or join that installs the certificate starts it
+// (app.Listeners.StartTLSWhenInstalled). The same reason with a listener
+// still bound is NOT waiting: a reload asked for a change (a new address or
+// directory with no certificate in it) that did not happen, and the old
+// listener keeps serving.
+func ListenerWaitsForCertificate(l LockListener) bool {
+	return l.Reason == "no_certificate" && l.Listening == ""
+}
+
 // ReloadListenerFailures lists the listeners whose reason says a requested
-// change did not happen. Two reasons are not failures: "off" is a state the
-// user asked for, and "no_certificate" is a fleet listener configured before
-// this instance has a certificate. That is the fresh-instance path (set the
-// Fleet port, then create or join a fleet), and the create or join that
-// installs the certificate starts it (app.Listeners.StartTLSWhenInstalled);
-// treating it as failed made the step before the create look broken.
+// change did not happen. Two states are not failures: "off" is a state the
+// user asked for, and a listener waiting for its certificate
+// (ListenerWaitsForCertificate); treating that as failed made the step
+// before the create look broken.
 func ReloadListenerFailures(cur LockInfo) []string {
 	var bad []string
 	for n, l := range cur.Listeners {
-		if l.Reason != "" && l.Reason != "off" && l.Reason != "no_certificate" {
+		if l.Reason != "" && l.Reason != "off" && !ListenerWaitsForCertificate(l) {
 			bad = append(bad, n+": "+l.Reason)
 		}
 	}

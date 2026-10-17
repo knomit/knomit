@@ -306,9 +306,9 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 			!strings.Contains(row.LastError, store.OwnCommitRefusedText),
 		LastErrorStoodDown:      strings.Contains(row.LastError, FleetPushRefusalStoodDown),
 		LastErrorMainHeldCommit: mainHeldCommit(row.LastError),
-		Host: FleetHostOffer{Listener: m.tlsAddr(), ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
-		RootDir:   m.fleetRootDir(),
-		FleetURLs: []string{},
+		Host:                    FleetHostOffer{Listener: m.tlsAddr(), ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
+		RootDir:                 m.fleetRootDir(),
+		FleetURLs:               []string{},
 	}
 	st.LastErrorMainHeld = st.LastErrorMainHeldCommit != ""
 	st.Host.ListenerOn = st.Host.Listener != ""

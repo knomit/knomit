@@ -77,6 +77,39 @@ describe('SettingsForm External address', () => {
     expect(onRestart).not.toHaveBeenCalled()
   })
 
+  // PR #545 review F3: only a reload that applied (restart_needed) leads to
+  // the restart. After a listener failure, a refused file or a timeout the
+  // error line stays and nothing is restarted.
+  // SABOTAGE: drop the outcome condition -> onRestart runs and the error is
+  // replaced by "Server restarted." -> red.
+  it.each([
+    ['listener_failed', { httpReason: 'addr_in_use' }, /port could not be opened.*ERR-listener_failed/],
+    ['refused', {}, /could not load it.*ERR-refused/],
+    ['timeout', {}, /did not confirm.*ERR-timeout/],
+  ] as const)('%s with external_addresses pending: no restart, the error stays', async (outcome, extra, text) => {
+    const onSave = vi.fn().mockResolvedValue(ack({ outcome, restartNeeded: ['external_addresses'], error: `ERR-${outcome}`, ...extra }))
+    const onRefresh = vi.fn().mockResolvedValue({ ...base, server: { ...spawnedServer, pid: 5151 } })
+    const { onRestart } = mount({}, onSave, { onRefresh })
+    fireEvent.change(field(), { target: { value: 'https://kb-01.example:19279' } })
+    save()
+    expect(await screen.findByRole('alert')).toHaveTextContent(text)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(onRestart).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent(text)
+  })
+
+  // Probe 2 of the review, same rule as settings.go: a hand-written entry
+  // the field would refuse (http://) is checked only when the list changes.
+  // SABOTAGE: validate the list whatever changed -> onSave never runs -> red.
+  it('an unchanged hand-written http:// address does not block a save of something else', async () => {
+    const onSave = vi.fn().mockResolvedValue(ack())
+    mount({ externalAddresses: ['http://kb.example:19279'] }, onSave)
+    fireEvent.change(screen.getByLabelText(/^port$/i), { target: { value: '20000' } })
+    save()
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0].externalAddresses).toEqual(['http://kb.example:19279'])
+  })
+
   it('an attached server is not restarted: the bar says where to restart it', async () => {
     const onSave = vi.fn().mockResolvedValue(ack({ outcome: 'restart_needed', restartNeeded: ['external_addresses'] }))
     const { onRestart } = mount({ server: attachedServer }, onSave)

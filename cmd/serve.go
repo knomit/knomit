@@ -511,9 +511,23 @@ func reloadListeners(ls *app.Listeners, load func() (config.Config, error)) {
 	if err != nil {
 		return // logged by Reload; generation unchanged
 	}
+	_, tlsListening, _ := ls.TLSListening()
 	for item, why := range res.Failed {
+		if reloadItemWaits(item, why, tlsListening) {
+			log.Info().Str("item", item).Msg("reload: the mTLS listener waits for this instance's certificate; a fleet create or join starts it")
+			continue
+		}
 		log.Error().Str("item", item).Str("error", why).Msg("reload: left as it was")
 	}
+}
+
+// reloadItemWaits: the one reload "failure" that is not one, a fleet
+// listener configured before this instance has a certificate, with nothing
+// bound meanwhile (serveraddr.ListenerWaitsForCertificate is the same rule on
+// server.json). It is logged at Info, not as an error: the create or join
+// that installs the certificate starts it.
+func reloadItemWaits(item, why, tlsListening string) bool {
+	return item == "tls" && why == app.ListenerReasonNoCertificate && tlsListening == ""
 }
 
 // serveInto runs srv.Serve(ln) in a goroutine and sends any failure to errCh,

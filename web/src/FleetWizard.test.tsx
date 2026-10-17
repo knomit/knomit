@@ -121,7 +121,7 @@ describe('FleetWizard: create', () => {
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     fireEvent.click(screen.getByTestId('fleet-wizard-primary'));
     expect(await screen.findByTestId('fleet-wizard-error-code')).toHaveTextContent('listener_required');
-    expect(screen.getByTestId('fleet-step-review')).toHaveTextContent(HOST_HERE_COPY.setFleetPort);
+    expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('Set the Fleet port in Settings → Network. Or choose a forge on the Hosting step.'); // approved #545 string 5, verbatim
     expect(screen.getByTestId('fleet-wizard-error')).toHaveTextContent('No fleet was created. You can change something and try again.');
     expect(screen.getByTestId('fleet-wizard-primary')).toHaveTextContent('Try again');
   });
@@ -165,7 +165,7 @@ describe('FleetWizard: create', () => {
     mount({ ...standalone, host: { listener_on: true, listener: '0.0.0.0:19279', listening: false, listener_reason: 'no_certificate', external_addresses: [] } });
     expect(screen.queryByTestId('fleet-start-cannot-host')).toBeNull();
     const start = screen.getByTestId('fleet-start-needs-address');
-    expect(start).toHaveTextContent(HOST_HERE_COPY.addressHeadline);
+    expect(start).toHaveTextContent('A fleet hosted here also needs an external address'); // approved #545 string 3, verbatim
     expect(start).toHaveTextContent('Members reach this instance at the https:// address they are given, and none is set. Add it in Settings → Network, or choose a forge instead.');
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     expect(screen.queryByTestId('fleet-hosting-listener-off')).toBeNull();

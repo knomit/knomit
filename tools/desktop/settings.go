@@ -202,10 +202,10 @@ func validateSettings(s Settings) error {
 	default:
 		return fmt.Errorf("http scope must be off, local or all, got %q", s.HTTPScope)
 	}
-	if err := validateTLSAddr(s.TLSAddr, p); err != nil {
-		return err
-	}
-	return validateExternalAddresses(s.ExternalAddresses)
+	// external_addresses is checked by applySettings, and only when the list
+	// changed: a hand-written entry config accepts (say http://) must not
+	// block a save of something else.
+	return validateTLSAddr(s.TLSAddr, p)
 }
 
 // validateExternalAddresses applies config's own check to each entry (what
@@ -309,9 +309,17 @@ func applySettings(s Settings, configPath string, tog autostart.Toggler, overrid
 	}
 	// external_addresses is a string array, so it is written here rather
 	// than by the string loop over configKeys; no environment variable owns
-	// it. Like an optional key, an empty list is not CREATED in a file that
-	// never had the key.
-	if len(s.ExternalAddresses) > 0 || tomledit.Has(src, "", "external_addresses") {
+	// it. It is written ONLY when the list differs from the file's: a save
+	// of anything else leaves it byte for byte, so an array the user spelled
+	// over several lines (which tomledit's one-line rewrite would break, and
+	// the decode check below would then refuse) never blocks an unrelated
+	// save, and an empty list is not created in a file without the key.
+	// The same rule decides whether the list is checked: a changed list must
+	// pass validateExternalAddresses (nothing has been written yet).
+	if !slices.Equal(s.ExternalAddresses, fileExternalAddresses(src)) {
+		if err := validateExternalAddresses(s.ExternalAddresses); err != nil {
+			return err
+		}
 		src, err = tomledit.SetStringArray(src, "", "external_addresses", s.ExternalAddresses)
 		if err != nil {
 			return fmt.Errorf("set external_addresses: %w", err)
@@ -347,6 +355,19 @@ func applySettings(s Settings, configPath string, tog autostart.Toggler, overrid
 		return err
 	}
 	return nil
+}
+
+// fileExternalAddresses is external_addresses as src spells it (nil when
+// absent, or when src does not decode: then the write goes ahead and the
+// decode check after it decides).
+func fileExternalAddresses(src []byte) []string {
+	var f struct {
+		ExternalAddresses []string `toml:"external_addresses"`
+	}
+	if _, err := toml.Decode(string(src), &f); err != nil {
+		return nil
+	}
+	return f.ExternalAddresses
 }
 
 // scopeEdits moves the plaintext HTTP port to the requested scope, writing

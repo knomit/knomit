@@ -537,6 +537,22 @@ describe('SettingsForm after a save: what became of the running server', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
+  // PR #545 review F1: no_certificate while a listener is still bound is a
+  // change that did not happen (a member whose certificate disappeared), not
+  // a wait: it stays the error it is, with no waiting note.
+  // SABOTAGE: ignore tlsListening in fleetWaiting -> the note and no alert -> red.
+  it('listener_failed for no_certificate while the fleet listener is still bound: an error, not the waiting note', async () => {
+    renderForm({ tlsAddr: '0.0.0.0:19280' }, {
+      onSave: vi.fn().mockResolvedValue(ack({
+        outcome: 'listener_failed', tlsReason: 'no_certificate', tlsListening: '0.0.0.0:19279',
+        error: 'reloaded, but not every listener is as configured (tls: no_certificate); the previous listener keeps serving where there was one',
+      })),
+    })
+    save()
+    expect(await screen.findByRole('alert')).toHaveTextContent(/port could not be opened.*no_certificate/i)
+    expect(screen.queryByText(FLEET_PORT_WAITING('0.0.0.0:19280'), { exact: false })).toBeNull()
+  })
+
   // Positive control: a held HTTP port beside the waiting Fleet port is
   // still the error it is.
   it('listener_failed with a held HTTP port beside the waiting Fleet port: still an error', async () => {

@@ -292,10 +292,10 @@ describe('FleetSettings', () => {
     expect(screen.getByTestId('fleet-host-listener-down')).toHaveTextContent('restart knomit');
   });
 
-  // The Fleet port is set; only the external address is missing. Settings →
-  // Network cannot set that, so the card must not send the user there.
+  // The Fleet port is set; only the external address is missing: its own
+  // card (approved #545 copy), not the listener-off one.
   // SABOTAGE: fold the address back into the listener-off card -> red.
-  it('Host here with the Fleet port set but no external address names knomit.toml, not the listener', async () => {
+  it('Host here with the Fleet port set but no external address shows the address card, not the listener one', async () => {
     stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
     mount({ ...member, master: true, host: { listener_on: true, listener: '0.0.0.0:19279', listening: false, listener_reason: 'no_certificate', external_addresses: [] } });
     fireEvent.click(await screen.findByTestId('fleet-host-here'));

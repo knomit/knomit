@@ -211,7 +211,7 @@ const FORMATS = [
  * A single banner made the reader match a sentence against four inputs; a mark
  * on the offending field does not. Returns {} when the settings are acceptable.
  */
-function validate(s: Settings): Record<string, string> {
+function validate(s: Settings, savedExternal: string[]): Record<string, string> {
   const errs: Record<string, string> = {}
   // Not trimmed, and digits only: strconv.Atoi does not trim either, so " 20000"
   // is a value Go would reject and the form must not send.
@@ -234,7 +234,11 @@ function validate(s: Settings): Record<string, string> {
   }
   const tls = tlsAddrError(s.tlsAddr, s.port)
   if (tls) errs.tlsAddr = tls
-  const bad = s.externalAddresses.find((a) => !EXTERNAL_ADDRESS.test(a))
+  // Checked only when the list changed, as settings.go does: a hand-written
+  // entry config accepts (http://) must not block a save of something else.
+  const changed =
+    s.externalAddresses.length !== savedExternal.length || s.externalAddresses.some((a, i) => a !== savedExternal[i])
+  const bad = changed ? s.externalAddresses.find((a) => !EXTERNAL_ADDRESS.test(a)) : undefined
   if (bad !== undefined) errs.externalAddresses = EXTERNAL_ADDRESS_COPY.invalid(bad)
   return errs
 }
@@ -289,6 +293,9 @@ export function SettingsForm({
   // The External address field's text as typed; s.externalAddresses is its
   // parsed list, which is what is validated and saved.
   const [extText, setExtText] = useState((initial.externalAddresses ?? []).join(', '))
+  // The list as of the last save that reached the file: validate() checks
+  // the field only when it differs.
+  const [savedExt, setSavedExt] = useState<string[]>(initial.externalAddresses ?? [])
   const [page, setPage] = useState<Page>('general')
   // Shown beside the buttons. Reserved for failures that belong to the WINDOW
   // rather than to one control: a save the backend refused, a restart that
@@ -348,7 +355,7 @@ export function SettingsForm({
     // already marked, so typing into a clean form never raises an error
     // mid-keystroke — "1" on the way to "19278" is not a mistake to report.
     if (Object.keys(fieldErrors).length > 0) {
-      const still = validate(next)
+      const still = validate(next, savedExt)
       const kept: Record<string, string> = {}
       for (const k of Object.keys(fieldErrors)) if (still[k]) kept[k] = still[k]
       setFieldErrors(kept)
@@ -372,7 +379,7 @@ export function SettingsForm({
   async function save() {
     setError('')
     setSaved('')
-    const invalid = validate(s)
+    const invalid = validate(s, savedExt)
     setFieldErrors(invalid)
     if (Object.keys(invalid).length > 0) {
       // The messages render inline under their fields, and the sidebar marks
@@ -397,6 +404,7 @@ export function SettingsForm({
     // behind a cheerful "Saved.".
     setAck(result)
     setSavedPort(s.port)
+    setSavedExt(s.externalAddresses)
     const line = ackLine(result, s)
     if (line.ok) setSaved(line.text)
     else setError(line.text)
@@ -405,7 +413,10 @@ export function SettingsForm({
     // is restarted right away, through the same restart the bar's button
     // runs, so the fleet pages see the address without another step. An
     // attached server keeps the bar's own "restart it where it was started".
-    if (result.restartNeeded.includes('external_addresses') && server.canRestart) {
+    // Only after a reload that APPLIED (outcome restart_needed): after a
+    // listener failure, a refused file or a timeout the error line stays,
+    // and a restart would hide it or act on a file the server would not load.
+    if (result.outcome === 'restart_needed' && result.restartNeeded.includes('external_addresses') && server.canRestart) {
       await restart()
       return
     }
@@ -968,7 +979,9 @@ function ackLine(a: SaveAck, s: Settings): { ok: boolean; text: string } {
   // A Fleet port waiting for this instance's certificate is as configured,
   // not failed. An attached older server still answers listener_failed for
   // it: when it is the only listener with a reason, it is the same note.
-  const fleetWaiting = a.tlsReason === 'no_certificate'
+  // Only while nothing listens (serveraddr.ListenerWaitsForCertificate): the
+  // same reason with a listener still bound is a change that did not happen.
+  const fleetWaiting = a.tlsReason === 'no_certificate' && !a.tlsListening
   const waitingNote = fleetWaiting ? ` ${FLEET_PORT_WAITING(s.tlsAddr)}` : ''
   const outcome = a.outcome === 'listener_failed' && fleetWaiting && !a.httpReason ? 'applied' : a.outcome
   switch (outcome) {
