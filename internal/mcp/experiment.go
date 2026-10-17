@@ -129,6 +129,16 @@ func parseResolutions(raw any) (map[string]store.Resolution, error) {
 	return out, nil
 }
 
+// rewoundNote opens a refusal that came from rebuilding an experiment open
+// across a rewind, so the reader knows why the experiment is replayed.
+func rewoundNote(c *store.MergeConflictError) string {
+	if !c.Rewound {
+		return ""
+	}
+	return "the agent branch was rebuilt by an upstream rewind since this experiment forked, so the experiment is replayed onto it " +
+		"(a fact the rewind removed and the experiment edited counts as changed on both sides); "
+}
+
 // conflictReadingGuide names, per conflicting path, the commits to read it at.
 //
 // A path both sides ADDED has no version at the merge base, and that is said
@@ -409,13 +419,13 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 		var conflict *store.MergeConflictError
 		if errors.As(err, &conflict) {
 			return experimentResult{}, fmt.Errorf(
-				"commit refused: %s and %s both changed %d path(s) since the fork, and nothing was changed.\n"+
+				"commit refused: %s%s and %s both changed %d path(s) since the fork, and nothing was changed.\n"+
 					"%s\n"+
 					"Then retry with knomit_experiment {action: \"commit\", resolutions: {\"<path>\": \"ours\" | \"theirs\" | {\"body\": \"<merged text>\"}}} "+
 					"— one entry per path listed above, and no entry for anything else. "+
 					"\"ours\" keeps %s's version, \"theirs\" takes %s's. "+
 					"Or rollback to discard the experiment",
-				conflict.Src, conflict.Dst, len(conflict.Paths),
+				rewoundNote(conflict), conflict.Src, conflict.Dst, len(conflict.Paths),
 				conflictReadingGuide(conflict),
 				conflict.Src, conflict.Dst)
 		}
@@ -520,7 +530,30 @@ func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, n
 	}
 	result, err := svc.Experiments().SyncExperiment(ctx, name)
 	if err != nil {
+		// Only an experiment open across a rewind can be refused here: its
+		// sync rebuilds it on the new branch, and a parent-wins pick would
+		// drop its own version for good.
+		var conflict *store.MergeConflictError
+		if errors.As(err, &conflict) {
+			return experimentResult{}, fmt.Errorf(
+				"sync refused: %s%s and %s both changed %d path(s), and nothing was changed. "+
+					"A sync does not pick a side here, because the experiment's version would be lost for good.\n"+
+					"%s\n"+
+					"Settle them with knomit_experiment {action: \"commit\", resolutions: {\"<path>\": \"ours\" | \"theirs\" | {\"body\": \"<merged text>\"}}} "+
+					"(\"ours\" keeps %s's version, \"theirs\" takes %s's), or rollback to discard the experiment",
+				rewoundNote(conflict), conflict.Src, conflict.Dst, len(conflict.Paths),
+				conflictReadingGuide(conflict), conflict.Src, conflict.Dst)
+		}
 		return experimentResult{}, err
+	}
+	if result.Mode == store.ModeRebase {
+		return experimentResult{
+			Branch: store.ExperimentBranch(name), Active: name,
+			Summary: fmt.Sprintf(
+				"experiment %q rebuilt on %q: the agent branch was rebuilt by an upstream rewind since the fork, so the experiment's own %d commit(s) were squashed into one commit on it and nothing the rewind removed was kept. "+
+					"You are still inside the experiment",
+				name, b.Write().AgentBranch(), result.NumReplayed),
+		}, nil
 	}
 	return experimentResult{
 		Branch: store.ExperimentBranch(name), Active: name,

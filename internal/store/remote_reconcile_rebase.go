@@ -669,6 +669,16 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, up
 		Str("base", shortRefHash(base)).
 		Msgf("reconcileAgentRebase: replaying onto local %s with watermark base", upstreamMain)
 
+	// Every experiment of this branch is recorded BEFORE the branch moves:
+	// experiments are not rebuilt here, and one that still holds what this
+	// rewind scrubs must be rebuilt by its next commit or sync, not merged
+	// (rebuildRewoundExperiment).
+	if agentRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(agentBranch)); err == nil {
+		if err := rh.markExperimentsRewound(ctx, agentBranch, agentRef.Hash()); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("reconcileAgentRebase: %w", err)
+		}
+	}
+
 	res, err := rh.replayOntoUpstream(ctx, agentBranch, mainHash, base, strategy)
 	if err != nil {
 		return res, err
