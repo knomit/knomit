@@ -114,6 +114,18 @@ export function checkRefusalCard(code: string, host: string): { headline: string
   }
 }
 
+/** What the last-sync box says under a sync refused at the TLS handshake,
+ *  by the server's class (GET /fleet last_error_refusal); no class (an older
+ *  server) keeps the undecided sentence. None of them says "Retrying". */
+export function refusalText(refusal?: 'revoked' | 'moved' | 'other'): string {
+  switch (refusal) {
+    case 'revoked': return "The fleet refuses this instance's certificate although it is valid here: the fleet's master revoked it. Retrying will not help.";
+    case 'moved': return "The fleet's address answers with a certificate of another fleet root: the fleet moved to another root, or another fleet answers there. Retrying will not help; ask the fleet's master.";
+    case 'other': return "The fleet refuses this instance's certificate, and it is not valid here either (it may have expired). Retrying will not help; ask the fleet's master.";
+    default: return "The fleet refuses this instance's certificate: it may have been revoked, or the fleet moved to another root. Retrying will not help; ask the fleet's master.";
+  }
+}
+
 /** The note under a refused join on Review, by code. */
 export function joinRefusalNote(code: string): string {
   switch (code) {

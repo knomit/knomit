@@ -357,6 +357,13 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 			lg.Warn().Err(verr).Msg("reconcile: origin blocked by local-origin policy; skipping tick")
 			return
 		}
+		// The fleet repository of a member whose certificate is revoked
+		// (fleetPeers.halt): no fetch, no push, nothing recorded. Retrying
+		// cannot help; GET /fleet says so (sync_stopped).
+		if reason := peers.halted(); reason != "" {
+			lg.Debug().Str("reason", reason).Msg("reconcile: fleet sync stopped; round skipped")
+			return
+		}
 		// Snapshot the PRE-tick persisted status: Sync/Push overwrite it before
 		// they return, so the error→ok recovery edge is only visible from here.
 		// A step skipped by an open breaker writes nothing, so after an open
@@ -464,6 +471,15 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 				hub.broadcastSyncError("origin", err.Error())
 				logFailure(syncFails).Err(err).Msg("reconcile: sync failed")
 				recordStep("fetch", &fetchBrk, false, base)
+				// The fleet repository's host refused this instance at the
+				// TLS handshake, or this instance refused the host
+				// (fleetPeers.fetchRefused records it as the fleet's last
+				// error): a push to the same host meets the same refusal,
+				// and a push with nothing new to send would not even dial
+				// it and would read as a success, clearing that error.
+				if peers.refusedFetch(err) {
+					return
+				}
 			} else {
 				if syncFails > 0 {
 					lg.Info().Int("after_failures", syncFails).Msg("reconcile: sync recovered")
@@ -605,6 +621,24 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 			doTick(ctx)
 		}
 	}
+}
+
+// OriginRoundForTest runs ONE origin round of ri exactly as the Sync stage's
+// loop does (its fleet peers and the fleet state machine's onPush
+// included), without re-attaching the origin (an attach probes the origin
+// first, and a probe a revoked member fails never reaches the round). For
+// tests in other packages; Synchronous managers run no background loop.
+func (ri *RepoInstance) OriginRoundForTest(ctx context.Context) error {
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return err
+	}
+	defer release()
+	cfg := ri.env.cfg
+	runReconcileLoop(ctx, svc, ri.hub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
+		makeRemoteAuthFn(cfg.Remote, ri.env.keyPath), cfg.LocalOriginRoot, cfg.ReadOnly,
+		ri.env.onPush, nil, nil, nil, nil, ri.peers, true)
+	return nil
 }
 
 // runLocalReconcileLoop is the origin-less twin of runReconcileLoop. A repo

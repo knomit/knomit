@@ -42,6 +42,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -335,6 +336,12 @@ func TestGitTransport_RevokedClientIsRefusedWithNamedError(t *testing.T) {
 	if errors.Is(err, ErrRevoked) {
 		t.Fatalf("a remote alert was named ErrRevoked; only our own verifier can say that: %v", err)
 	}
+	// The TEXT a fleet member records and classifies (internal/repos
+	// classifyFleetRefusal reads the recorded error): our sentinel and the
+	// bad_certificate alert crypto/tls sends for a VerifyConnection refusal.
+	if s := err.Error(); !strings.Contains(s, ErrRefusedByPeer.Error()) || !strings.Contains(s, "tls: bad certificate") {
+		t.Fatalf("the refusal's text %q lost the sentinel or the bad_certificate alert", s)
+	}
 	if !x.bLog.has(ErrRevoked.Error()) {
 		t.Fatalf("server did not log why:\n%s", x.bLog)
 	}
@@ -369,6 +376,11 @@ func TestGitTransport_OtherRootServerIsRefused(t *testing.T) {
 	_, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(addr)})
 	if !errors.Is(err, ErrUntrustedRoot) {
 		t.Fatalf("err=%v, want ErrUntrustedRoot", err)
+	}
+	// The text a fleet member classifies as "moved" (internal/repos
+	// classifyFleetRefusal), and it is not a refusal BY the peer.
+	if s := err.Error(); !strings.Contains(s, ErrUntrustedRoot.Error()) || strings.Contains(s, ErrRefusedByPeer.Error()) {
+		t.Fatalf("the other root's text %q", s)
 	}
 }
 

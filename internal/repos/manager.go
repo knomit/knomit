@@ -92,6 +92,12 @@ type Manager struct {
 	// tlsListener reports the mTLS listener's live state (SetTLSListener).
 	tlsListener atomic.Pointer[func() (string, string)]
 
+	// fleetHaltSerial is the serial (lowercase hex) of this instance's
+	// certificate when this process found it revoked (fleet_tick.go): the
+	// fleet repository's origin rounds stop while that certificate is the
+	// installed one. nil: they run. In memory only: a restart retries once.
+	fleetHaltSerial atomic.Pointer[string]
+
 	// repoEventHub fans every repo's REPO-LEVEL events into one server-wide
 	// stream. Per-repo TaskHubs cannot serve the fleet-wide index chip: the web
 	// app holds one events stream, for the ACTIVE repo, while rendering a chip
@@ -854,6 +860,8 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 		ri.peers.claim = ri.fleetMasterClaimRound
 		ri.peers.duty = ri.fleetMasterDuty
 		ri.peers.tick = ri.fleetTickRound
+		ri.peers.halt = ri.fleetSyncHalt
+		ri.peers.fetchRefused = ri.fleetFetchRefused
 	}
 	// No sweeper for a subscription (no experiment can be forked from one)
 	// or when experiments.expiry_days is 0 (never expire: the loop must not

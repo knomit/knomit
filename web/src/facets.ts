@@ -355,11 +355,13 @@ export interface TargetLabel {
 
 /** fleetChip is the fleet target's chip, from GET /fleet as the server says
  *  it: the own record's state on main when it is pending or revoked (the two
- *  that need saying), else the role. */
-export function fleetChip(fleet: Pick<FleetStatus, 'master' | 'record_state'> | null): TargetLabel['chip'] {
+ *  that need saying), else the role. `revoked` also covers a member whose
+ *  main never shows it (refused at the hub's handshake): the server's
+ *  `revoked`. */
+export function fleetChip(fleet: Pick<FleetStatus, 'master' | 'record_state' | 'revoked'> | null): TargetLabel['chip'] {
   if (!fleet) return undefined;
   if (fleet.record_state === 'pending') return { text: 'record pending', tone: 'pending' };
-  if (fleet.record_state === 'revoked') return { text: 'revoked', tone: 'bad' };
+  if (fleet.record_state === 'revoked' || fleet.revoked) return { text: 'revoked', tone: 'bad' };
   return fleet.master ? { text: 'master', tone: 'fleet' } : { text: 'member', tone: 'neutral' };
 }
 

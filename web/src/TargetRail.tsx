@@ -368,7 +368,7 @@ export function TargetRail({
                 <span data-testid="rail-fleet-role" style={fleet?.master ? masterChip : memberChip}>{fleet?.master ? 'master' : 'member'}</span>
                 {/* A push refused because the master stood down is a wait, not
                     a failure (#531 re-review N3). */}
-                {((fleet?.last_error && !fleet?.last_error_stood_down) || fleet?.record_state === 'revoked') && (
+                {((fleet?.last_error && !fleet?.last_error_stood_down) || fleet?.record_state === 'revoked' || fleet?.revoked) && (
                   <span data-testid="rail-fleet-health" role="img" aria-label="fleet failing"
                     title={fleet?.last_error || 'certificate revoked'} style={healthDot} />
                 )}

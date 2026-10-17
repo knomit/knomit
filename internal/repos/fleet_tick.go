@@ -34,12 +34,16 @@ func (ri *RepoInstance) fleetTickRound(ctx context.Context, svc *store.Service) 
 	if ri == nil || !ri.fleetDoor || !ri.IsFleet() || svc == nil || ctx.Err() != nil {
 		return
 	}
-	n, err := ri.env.m.installMainCRL(svc)
+	m := ri.env.m
+	n, err := m.installMainCRL(svc)
 	switch {
 	case err != nil:
 		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: main's CRL was not installed here; the next round retries")
 	case n != nil:
 		log.Info().Str("fleet", ri.Name()).Str("crl_number", n.String()).Msg("fleet: installed the newer CRL from main")
+		// A CRL that lists this instance's own certificate stops its rounds
+		// from the next one (fleet_refusal.go).
+		m.noteFleetRevoked("")
 	}
 }
 
