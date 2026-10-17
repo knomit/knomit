@@ -1,13 +1,16 @@
 package store
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path"
 	"strings"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"golang.org/x/crypto/ssh"
@@ -44,12 +47,12 @@ type RangeVerdict struct {
 
 // ExitCode is the gate's contract for a CI job: 0 mergeable (a clean range,
 // or signature failures in log mode or with verification off, which are
-// reported only), 1 blocked (failures in enforce, or ANY RuleValidation
-// refusal, which no mode waives). "Could not run" (2) is an error from
+// reported only), 1 blocked (failures in enforce, or ANY RuleValidation or
+// RuleMergeConflict refusal, which no mode waives). "Could not run" (2) is an error from
 // CheckRange, never a verdict.
 func (v RangeVerdict) ExitCode() int {
 	for _, r := range v.Refused {
-		if v.Mode == VerifyEnforce || r.Rule == RuleValidation {
+		if v.Mode == VerifyEnforce || r.Rule == RuleValidation || r.Rule == RuleMergeConflict {
 			return 1
 		}
 	}
@@ -69,8 +72,10 @@ func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
 //
 //  0. The candidate's NET change is checked against the ontology's
 //     validations at Main's tip (RuleValidation: each fact the candidate's
-//     tip holds that differs from Main and from their merge base), in EVERY
-//     mode, the fleet untouched; a refusal blocks.
+//     tip holds that differs from Main and from every merge base), and so is
+//     what merging it into Main lands (mergeResultValid; a merge that is not
+//     clean is RuleMergeConflict), in EVERY mode, the fleet untouched; a
+//     refusal blocks.
 //  1. verify_signatures is read at Main's tip. Off or absent: the verdict is
 //     off and nothing else runs; the fleet is never touched.
 //  2. The fleet's member records and certificate artifacts (the files its
@@ -136,6 +141,10 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	if len(commits) > 0 {
 		if r, ok := branchFactsValid(candC, mainC, ont, kbRoot); !ok {
 			out.Refused = append(out.Refused, r)
+		} else if r, ok, err := mergeResultValid(in.KBDir, kb, mainC, candC, ont, kbRoot); err != nil {
+			return RangeVerdict{}, fmt.Errorf("verify: %w", err)
+		} else if !ok {
+			out.Refused = append(out.Refused, r)
 		}
 	}
 	if settings.Mode == VerifyOff {
@@ -170,6 +179,67 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 		}
 	}
 	return out, nil
+}
+
+// mergeResultValid judges what merging the candidate into main LANDS, which
+// is not the candidate's tip when main has moved since the fork (#533 review
+// 3): git merges a fact hunk by hunk, so two sides that each keep the
+// ontology's validations can combine into a fact that breaks a cross-field
+// rule (main shortens the title, the branch raises the confidence). The
+// merge is git's own, `git merge-tree --write-tree` (the ort merge `gh pr
+// merge` makes; go-git v5 has no content merge), run in kbDir; it writes the
+// result's objects there and touches no ref, index or work tree. Every fact
+// in the result that differs from main is validated against main's
+// ontology. A merge that does not come out clean is refused
+// (RuleMergeConflict): the gate cannot judge what a hand resolution would
+// land. Nothing to do when main is an ancestor of the candidate: the merge
+// is the candidate's tip, which branchFactsValid judged. Needs git 2.38 or
+// later; a git that cannot run the merge is an error (exit 2), never a pass.
+func mergeResultValid(kbDir string, kb *gogit.Repository, mainC, candC *object.Commit, ont *fact.Ontology, root string) (Refusal, bool, error) {
+	if ff, err := mainC.IsAncestor(candC); err != nil {
+		return Refusal{}, false, fmt.Errorf("is main an ancestor of the candidate: %w", err)
+	} else if ff {
+		return Refusal{}, true, nil
+	}
+	cmd := exec.Command("git", "-C", kbDir, "merge-tree", "--write-tree", "--no-messages", mainC.Hash.String(), candC.Hash.String())
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	raw, err := cmd.Output()
+	clean := err == nil
+	var exit *exec.ExitError
+	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
+		return Refusal{}, false, fmt.Errorf("git merge-tree (git 2.38 or later): %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	refused := func(rule, reason string) (Refusal, bool, error) {
+		return Refusal{Commit: candC.Hash.String(), Rule: rule, Reason: reason}, false, nil
+	}
+	if !clean {
+		return refused(RuleMergeConflict, "the branch does not merge cleanly into main, so what a merge would land cannot be judged; bring main into the branch and resolve it there")
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(raw)), "\n")
+	treeC, err := object.GetTree(kb.Storer, plumbing.NewHash(line))
+	if err != nil {
+		return Refusal{}, false, fmt.Errorf("the merge result %q: %w", line, err)
+	}
+	mainTree, err := mainC.Tree()
+	if err != nil {
+		return Refusal{}, false, fmt.Errorf("main's tree: %w", err)
+	}
+	if root == "" {
+		root = defaultOntologyRoot
+	}
+	paths, err := newFactPaths(root, []*object.Tree{mainTree}, treeC)
+	if err != nil {
+		return Refusal{}, false, fmt.Errorf("the merge result's facts: %w", err)
+	}
+	_, reason, err := invalidAmong(ont, root, paths, treeC)
+	if err != nil {
+		return Refusal{}, false, fmt.Errorf("the merge result's facts: %w", err)
+	}
+	if reason != "" {
+		return refused(RuleValidation, "merging the branch into main would land a fact that the branch and main each keep valid apart: "+reason+"; bring main into the branch and fix it there")
+	}
+	return Refusal{}, true, nil
 }
 
 // memberIndex is the fleet's member records, by agent id and by current key.

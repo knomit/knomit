@@ -173,11 +173,15 @@ func verifyCICmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ci",
 		Short: "Check a candidate branch before it is merged into a knowledge base's main (F09 gate)",
-		Long: `First, in every mode and every knowledge base, every fact a commit of the
-candidate adds or changes (a .md file under --kb-root whose content differs
-from every parent's) must keep the validations of the upstream's ontology,
-as knomit_learn and knomit_update require: else validation, which blocks
-(exit 1) whatever verify_signatures says. Facts a commit does not touch are
+		Long: `First, in every mode and every knowledge base, every fact the candidate
+changes (a .md file under --kb-root whose content at the candidate's tip
+differs from the upstream's and from every merge base's) must keep the
+validations of the upstream's ontology, as knomit_learn and knomit_update
+require, and so must every fact that merging the candidate into the
+upstream would land (git merge-tree --write-tree; needs git 2.38 or later):
+else validation, which blocks (exit 1) whatever verify_signatures says. A
+candidate that does not merge cleanly into the upstream is refused with
+merge-conflict, which blocks too. Facts the candidate does not touch are
 never judged.
 
 Then reads verify_signatures at the upstream's tip. Off or absent: nothing
@@ -228,7 +232,8 @@ it, and without --upstream, the gate cannot run (exit 2).
 
 Exit codes: 0 mergeable (a clean range, or signature failures with
 verification off or in log mode, which are reported only), 1 blocked
-(failures in enforce, or any validation failure), 2 could not run (a missing
+(failures in enforce, any validation failure, or a merge conflict with the
+upstream), 2 could not run (a git that cannot run the merge, a missing
 or unreadable fleet while verification is on, a checkout whose ontology is
 not the fleet ontology or does not parse, an unknown verify_signatures
 value).`,

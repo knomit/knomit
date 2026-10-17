@@ -28,6 +28,11 @@ import (
 // mode too.
 const RuleValidation = "validation"
 
+// RuleMergeConflict refuses, in every mode as RuleValidation does, a
+// candidate whose merge into main does not come out clean (mergeResultValid):
+// what a hand resolution would land on main cannot be judged.
+const RuleMergeConflict = "merge-conflict"
+
 // isFactPathUnder is the fact index's location rule (repoHandler.isFactPath)
 // for an explicit root: a .md file under root with no dot-prefixed segment.
 // Artifacts live beside the root, never under it, so they are never facts.
