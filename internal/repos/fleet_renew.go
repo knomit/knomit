@@ -158,13 +158,18 @@ func (m *Manager) resignFleetCRL(ctx context.Context, ri *RepoInstance) (string,
 
 // leafRenewalDue is the leaf the renewal duty re-issues for id, read from
 // main (f) and the master's agent branch (own), with the key it certifies;
-// nil when none is due (see the file comment for every condition).
+// nil when none is due. The leaf is main's, due by its own lifetime, and the
+// agent branch holds the same leaf (not renewed and unpublished). Every other
+// condition must hold on BOTH main and the agent branch (renewableAt),
+// because the round publishes the agent branch: a revocation, or a `left`
+// record, that is on the agent branch and not on main yet (a revoke whose
+// publish failed, a leave admitted in this very round) stops the renewal as
+// surely as one on main (PR #537 review B1, B2). Otherwise the round would
+// publish the revocation or the `left` record together with a fresh,
+// unrevoked leaf, and nothing would ever revoke that one.
 func leafRenewalDue(f, own store.Fleet, id string, now time.Time) (*x509.Certificate, ed25519.PublicKey) {
 	leaf, err := f.PKI.Cert(id)
-	if err != nil || leaf == nil || !pki.NeedsRenewal(leaf, now) || f.PKI.Revoked(id) {
-		return nil, nil
-	}
-	if f.PKI.CRL != nil && pki.IsRevoked(f.PKI.CRL, leaf.SerialNumber) {
+	if err != nil || leaf == nil || !pki.NeedsRenewal(leaf, now) {
 		return nil, nil
 	}
 	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
@@ -175,22 +180,34 @@ func leafRenewalDue(f, own store.Fleet, id string, now time.Time) (*x509.Certifi
 	if err != nil {
 		return nil, nil
 	}
-	var recs []store.FleetMember
-	for _, mem := range f.Members {
-		if mem.Agent == id {
-			recs = append(recs, mem)
-		}
-	}
-	if len(recs) != 1 || recs[0].State == fact.MemberLeft || !fact.SameKey(recs[0].Key, key) {
-		return nil, nil
-	}
 	if own.PKI == nil {
 		return nil, nil
 	}
 	if mine, err := own.PKI.Cert(id); err != nil || mine == nil || !bytes.Equal(mine.Raw, leaf.Raw) {
 		return nil, nil
 	}
+	if !renewableAt(f, id, leaf, key) || !renewableAt(own, id, leaf, key) {
+		return nil, nil
+	}
 	return leaf, pub
+}
+
+// renewableAt reports whether leaf (id's, certifying key) may be renewed as
+// fl, one branch's fleet, says: fl has a CRL and it does not list the leaf;
+// fl holds exactly ONE member record for id (what the leaf-renewal artifact
+// rule requires), and that record is not `left` (the leave duty revokes those)
+// and names key.
+func renewableAt(fl store.Fleet, id string, leaf *x509.Certificate, key ssh.PublicKey) bool {
+	if fl.PKI == nil || fl.PKI.CRL == nil || pki.IsRevoked(fl.PKI.CRL, leaf.SerialNumber) {
+		return false
+	}
+	var recs []store.FleetMember
+	for _, mem := range fl.Members {
+		if mem.Agent == id {
+			recs = append(recs, mem)
+		}
+	}
+	return len(recs) == 1 && recs[0].State != fact.MemberLeft && fact.SameKey(recs[0].Key, key)
 }
 
 // renewFleetLeaves is the leaf renewal duty: the agent ids it re-issued a

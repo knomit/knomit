@@ -2310,10 +2310,14 @@ paths:
 
         Renewal needs no call: once a leaf on `main` is in the final third
         of its own lifetime, the acting master's round re-issues it for the
-        same key and its own lifetime (unless it is revoked, its record is
-        `left`, or the id has no member record), and the CRL likewise before
-        its NextUpdate; each instance installs its renewed leaf and the CRL
-        from `main` in its own next sync round.
+        same key and its own lifetime, and the CRL likewise before its
+        NextUpdate. A leaf is renewed only when BOTH `main` and the master's
+        own branch (what the round publishes) hold a CRL that does not list
+        it and exactly one member record for the id, not `left`, naming the
+        leaf's key, and the master's branch holds the same leaf as `main`: a
+        revocation or a `left` record the master has not published yet stops
+        it too. Each instance installs its renewed leaf and the CRL from
+        `main` in its own next sync round.
 
         The fleet URL: when the fleet repository here syncs with an origin (a
         forge, or the hub when this master is not it), that origin's URL
@@ -4425,8 +4429,8 @@ components:
                 restart or `knomit reload`.
             listener_reason:
               type: string
-              enum: [no_certificate, addr_in_use]
-              description: "Why a configured listener is not listening; absent when it is listening or not configured"
+              enum: [no_certificate, addr_in_use, tls_failed, bind_failed]
+              description: "Why a configured listener is not listening; absent when it is listening or not configured. no_certificate: nothing installed when it last started (a create, join or host-here starts it once one is); addr_in_use: another program holds the address; tls_failed: a certificate is installed but cannot be used; bind_failed: the bind failed for another reason (a reload's)."
             external_addresses:
               type: array
               items: { type: string }
