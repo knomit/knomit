@@ -79,6 +79,23 @@ func TestStartTLSWhenInstalled_OnlyForAMissingCertificate(t *testing.T) {
 	requireFree(t, f.tlsAddr)
 }
 
+// PR #537 review N2: a server that is closing binds nothing, even with the
+// certificate installed and the listener down for lack of one.
+// SABOTAGE: drop the closed check -> it binds after Close -> red.
+func TestStartTLSWhenInstalled_AfterCloseStartsNothing(t *testing.T) {
+	f := newFixture(t)
+	f.keyPath, _ = pkitest.NewKey(t)
+	f.cfg.TLS.Addr = f.tlsAddr
+	r := newRig(t, f)
+	fleet := pkitest.New(t)
+	fleet.Install(t, fleet.Enroll(t, "serve@agents.knomit.io", f.keyPath), f.cfg.TLS.Dir)
+	r.ls.Close()
+	if started, err := r.ls.StartTLSWhenInstalled(); started || err != nil {
+		t.Fatalf("after Close: started=%v err=%v", started, err)
+	}
+	requireFree(t, f.tlsAddr)
+}
+
 func TestStartTLSWhenInstalled_NoAddressStartsNothing(t *testing.T) {
 	f := newFixture(t)
 	f.withCert(t)

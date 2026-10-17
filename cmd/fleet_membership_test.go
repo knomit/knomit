@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +44,17 @@ type fleetNode struct {
 	srv      *web.Server
 	tlsAddr  string
 	receives atomic.Int32
+	// seen is the serial (lowercase hex) of the client certificate each
+	// /git request on n's mTLS listener presented, in order.
+	seenMu sync.Mutex
+	seen   []string
+}
+
+// peerSerials is what seen holds now.
+func (n *fleetNode) peerSerials() []string {
+	n.seenMu.Lock()
+	defer n.seenMu.Unlock()
+	return append([]string(nil), n.seen...)
 }
 
 // fleetFreePort is a TCP port free on 127.0.0.1 a moment ago (every OS:
@@ -92,6 +104,11 @@ func (n *fleetNode) serve(t *testing.T) {
 	counted := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-receive-pack") {
 			n.receives.Add(1)
+		}
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 && strings.Contains(r.URL.Path, "/git/") {
+			n.seenMu.Lock()
+			n.seen = append(n.seen, r.TLS.PeerCertificates[0].SerialNumber.Text(16))
+			n.seenMu.Unlock()
 		}
 		h.ServeHTTP(w, r)
 	})

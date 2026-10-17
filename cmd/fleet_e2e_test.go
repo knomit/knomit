@@ -100,13 +100,39 @@ func TestFleetE2E_KnomitHosted(t *testing.T) {
 	if !bytes.Equal(installedLeafOf(t, bravo).Raw, newB.Raw) || installedCRLNumber(t, bravo) != 3 {
 		t.Fatalf("bravo after its round: leaf %s, CRL #%d; want the renewal and #3", installedLeafOf(t, bravo).SerialNumber.Text(16), installedCRLNumber(t, bravo))
 	}
+	// The renewal is what bravo PRESENTS (review S2): the old leaf is still
+	// valid and unrevoked, so "no sync error" alone would prove nothing.
+	seenBefore := len(alpha.peerSerials())
 	bravo.round(t)
 	if st, _ := bravo.mgr.FleetStatus(ctx); st.LastError != "" {
 		t.Fatalf("bravo syncs with its renewed leaf: %s", st.LastError)
 	}
+	seen := alpha.peerSerials()[seenBefore:]
+	if len(seen) == 0 {
+		t.Fatal("bravo's round reached the hub's /git with no request")
+	}
+	for _, s := range seen {
+		if s != newB.SerialNumber.Text(16) {
+			t.Fatalf("bravo presented serial %s to the hub, want its renewal %s (old %s)", s, newB.SerialNumber.Text(16), oldB.SerialNumber.Text(16))
+		}
+	}
 	hubRound(t, alpha)
 	if !bytes.Equal(installedLeafOf(t, alpha).Raw, newA.Raw) {
 		t.Fatal("the hub did not install its own renewal")
+	}
+	// And the hub presents its renewal to bravo's client: the certificate
+	// bravo's mTLS client verified on a fresh handshake.
+	c, err := pki.HTTPClient(bravo.cfg.TLS.Dir, bravo.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Get("https://" + alpha.tlsAddr + "/api/v1/fleet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.TLS.PeerCertificates[0].SerialNumber; got.Cmp(newA.SerialNumber) != 0 {
+		t.Fatalf("the hub presented serial %s, want its renewal %s (old %s)", got.Text(16), newA.SerialNumber.Text(16), oldA.SerialNumber.Text(16))
 	}
 	bravo.round(t)
 	if st, _ := bravo.mgr.FleetStatus(ctx); st.LastError != "" {

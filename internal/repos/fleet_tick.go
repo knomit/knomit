@@ -74,8 +74,17 @@ func (m *Manager) installMainLeaf(svc *store.Service) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if f.PKI == nil {
+	if f.PKI == nil || f.PKI.Root == nil {
 		return "", nil
+	}
+	// A main of another root (after a fleet move) has nothing to install
+	// here, as installMainCRL says; InstallLeaf would refuse it every round.
+	installed, err := pki.InstalledRoot(m.deps.Cfg.TLS.Dir)
+	if err != nil {
+		return "", err
+	}
+	if onMain, err := pki.RootID(f.PKI.Root); err != nil || onMain != installed.Fingerprint {
+		return "", err
 	}
 	leaf, err := f.PKI.Cert(m.AgentID())
 	if err != nil || leaf == nil || bytes.Equal(leaf.Raw, cur.Raw) || !leaf.NotBefore.After(cur.NotBefore) {
