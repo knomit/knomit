@@ -50,18 +50,14 @@ func (ri *RepoInstance) fleetTickRound(ctx context.Context, svc *store.Service) 
 // installMainCRL installs the CRL on svc's main (the fleet repository) into
 // [tls].dir when it is newer than the CRL this instance accepted for the
 // installed root, and answers its Number; nil, nil when there is nothing to
-// install: no PKI or no usable CRL on main, nothing installed here (a
-// standalone home, or one mid-join), main's root not the installed one
-// (logged: a copy of another fleet installs nothing), or a Number not above
-// the accepted one.
+// install: no PKI or no usable CRL on main, main's root not the installed
+// one (nothing installed here included; logged: a CRL never installs or
+// changes a root), or a Number not above the accepted one.
 func (m *Manager) installMainCRL(svc *store.Service) (*big.Int, error) {
 	dir := m.deps.Cfg.TLS.Dir
 	installed, err := pki.InstalledRoot(dir)
 	if err != nil {
 		return nil, err
-	}
-	if installed.Fingerprint == "" {
-		return nil, nil
 	}
 	f, err := svc.FleetAt(svc.UpstreamBranch())
 	if err != nil {
