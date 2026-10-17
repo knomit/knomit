@@ -37,6 +37,22 @@ import (
 // have a first-parent delta that is independent of what the merge pulled
 // in from old main (delta is computed against the merge commit's tree).
 //
+// Not every merge is a reconcile-merge: CommitExperiment's merge brings this
+// copy's own experiment commits in through its second parent, and nothing
+// else references them once the experiment is deleted. At each merge the walk
+// therefore looks behind its non-first parents (sideOf) at the commits held
+// by neither the upstream, the stop point's history nor the first-parent
+// chain. When every non-merge commit there is signed by this INSTANCE's keys
+// (the instance key deps.Signer, shared by all its repositories and branches,
+// plus its fleet member record's keys), none changes only replay-skipped
+// paths, and the side reaches no held commit off the first parent's history,
+// the merge itself is replayed as one commit (its change against its first
+// parent), so its own resolution of a conflict comes back as decided. When
+// the side also holds anything else, only the instance's own non-merge
+// commits are replayed, one by one, ahead of the commits above the merge, and
+// a warning names the merge whose own resolution is not replayed. Commits
+// signed by anyone else are never replayed.
+//
 // When explicitBase is non-zero, it is used directly as the walk's stop
 // point (the watermark — "the main commit this agent last consumed").
 // disjoint is reported false when explicitBase is set, because the
@@ -134,6 +150,11 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 		}
 	}
 
+	// side is what a merge on the walk brought in through its non-first
+	// parents that is this copy's own work (ownSideCommits): built on the
+	// first merge the walk meets, shared by every merge after it.
+	var side *sideWalk
+
 	var collected []*object.Commit
 	cur := local
 	for {
@@ -155,6 +176,47 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 				Str("commit", cur.Hash.String()[:8]).
 				Int("parents", cur.NumParents()).
 				Msg("unpushedCommits: skipping merge commit (reconcile-merge from prior steady-state tick)")
+			if side == nil {
+				if side, err = rh.newSideWalk(local, stopAt, onUpstream); err != nil {
+					return nil, false, false, fmt.Errorf("unpushedCommits: %w", err)
+				}
+			}
+			sr, err := rh.sideOf(side, cur)
+			if err != nil {
+				return nil, false, false, fmt.Errorf("unpushedCommits: merge %s: %w", cur.Hash.String()[:8], err)
+			}
+			if sr.dropped {
+				droppedOut = true
+			}
+			switch {
+			case len(sr.own) == 0:
+				// Nothing of this instance's own behind it: a reconcile
+				// merge, or a consensus merge of others' commits. Skipped.
+			case sr.foreign == 0 && !sr.dropped && !sr.heldOffLine:
+				// Only this instance's own work behind it (an experiment
+				// commit, an experiment sync): the merge is replayed as ONE
+				// commit, its change against its first parent, so whatever
+				// the merge itself decided (a conflict kept on the dst side,
+				// a written body, a field merge by the conflicts setting)
+				// comes back exactly as decided.
+				collected = append(collected, cur)
+			default:
+				// Mixed: own commits next to others' (foreign, which must
+				// never be replayed), a marker-only commit that must be
+				// dropped, or commits the upstream or the stop point already
+				// holds. The merge's change would carry those, so only the
+				// own commits are replayed, one by one: none of the
+				// instance's own work is lost, but what the merge itself
+				// decided is not replayed, and the log says so.
+				log.Warn().Str("merge", cur.Hash.String()[:8]).
+					Int("own", len(sr.own)).Int("foreign", sr.foreign).
+					Bool("dropped", sr.dropped).Bool("held", sr.heldOffLine).
+					Msg("unpushedCommits: replaying a merge's own commits one by one; the merge's own resolution is not replayed")
+				// collected is newest first; own is parents first.
+				for i := len(sr.own) - 1; i >= 0; i-- {
+					collected = append(collected, sr.own[i])
+				}
+			}
 		}
 		if cur.NumParents() == 0 {
 			break
@@ -607,4 +669,203 @@ func (rh *repoHandler) replaySkips(c *object.Commit) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// sideWalk is the state sideOf shares across the merges of one
+// unpushedCommits walk: this instance's key fingerprints, the commits the
+// upstream or the stop point already hold, and every commit a side walk must
+// not enter or has already entered.
+type sideWalk struct {
+	own  map[string]bool
+	held map[plumbing.Hash]bool
+	stop map[plumbing.Hash]bool
+}
+
+// newSideWalk builds the side walk's state for a first-parent walk from local
+// that stops at stopAt or at a commit onUpstream holds. The own keys are
+// checkOwnLineage's (E4): the key this store signs with, which is the
+// INSTANCE key (deps.Signer, rh.signer), shared by every repository and
+// branch on this instance, plus every key this instance's fleet member record
+// has held. "Own" therefore means "this instance's", not "this agent
+// branch's". held is the upstream's history and the stop point's history;
+// stop is held plus the first-parent chain the main walk visits itself.
+func (rh *repoHandler) newSideWalk(local *object.Commit, stopAt plumbing.Hash, onUpstream map[plumbing.Hash]bool) (*sideWalk, error) {
+	sw := &sideWalk{own: map[string]bool{}, held: map[plumbing.Hash]bool{}, stop: map[plumbing.Hash]bool{}}
+	if signer, err := rh.commitSigner(); err == nil {
+		if fp, err := keyFingerprint(signer.PublicKey()); err == nil {
+			sw.own[fp] = true
+		}
+	}
+	if rh.ownKeys != nil {
+		for _, k := range rh.ownKeys() {
+			if fp, err := keyFingerprint(k); err == nil {
+				sw.own[fp] = true
+			}
+		}
+	}
+	if len(sw.own) == 0 {
+		return sw, nil
+	}
+	for h := range onUpstream {
+		sw.held[h] = true
+	}
+	if stopAt != plumbing.ZeroHash {
+		// onUpstream is ancestry-closed, so it prunes this walk.
+		if err := walkHistory(rh.gits, stopAt, sw.held, func(c *object.Commit) { sw.held[c.Hash] = true }); err != nil {
+			return nil, fmt.Errorf("stop point history: %w", err)
+		}
+		sw.held[stopAt] = true
+	}
+	for h := range sw.held {
+		sw.stop[h] = true
+	}
+	for c := local; ; {
+		if c.Hash == stopAt || onUpstream[c.Hash] {
+			break
+		}
+		sw.stop[c.Hash] = true
+		if c.NumParents() == 0 {
+			break
+		}
+		p, err := c.Parents().Next()
+		if err != nil {
+			return nil, fmt.Errorf("first-parent chain at %s: %w", c.Hash, err)
+		}
+		c = p
+	}
+	return sw, nil
+}
+
+// sideResult is what sideOf found behind one merge's non-first parents.
+type sideResult struct {
+	// own: the non-merge commits signed by this instance's keys, parents
+	// first, less those that change only replay-skipped paths.
+	own []*object.Commit
+	// foreign: how many non-merge commits are signed by any other key, or
+	// unsigned.
+	foreign int
+	// dropped: an own commit changed only replay-skipped paths.
+	dropped bool
+	// heldOffLine: the side reaches a commit the upstream or the stop point
+	// holds that is NOT an ancestor of the merge's first parent, so the
+	// merge's change against its first parent carries content already held.
+	heldOffLine bool
+}
+
+// sideOf walks what merge brought in through its NON-FIRST parents: every
+// commit not held by the upstream, the stop point's history, the
+// first-parent chain, or an earlier merge's side walk. Its non-merge commits
+// are sorted into this instance's own (sideWalk.own) and everyone else's.
+//
+// A committed experiment's work lives there: CommitExperiment writes a merge
+// whose second parent is the experiment and deletes the experiment, so the
+// merge is the only reference to that work, and the first-parent walk, which
+// skips merges, would lose it on the first rewind after any later write. So
+// does the agent's own work an experiment's sync merge brought in, when the
+// experiment commit then fast-forwarded the agent branch onto the
+// experiment. A commit signed by anyone else (a member's commit in a hub
+// master's consensus merge) is never replayed: it would be re-signed as this
+// instance, which a fleet's new host refuses for good (#528 N1).
+func (rh *repoHandler) sideOf(sw *sideWalk, merge *object.Commit) (sideResult, error) {
+	var res sideResult
+	if len(sw.own) == 0 {
+		return res, nil
+	}
+	boundary := map[plumbing.Hash]bool{}
+	var visited []*object.Commit
+	type frame struct {
+		c    *object.Commit
+		next int
+	}
+	enter := func(h plumbing.Hash) (*frame, error) {
+		if sw.held[h] {
+			boundary[h] = true
+			return nil, nil
+		}
+		if sw.stop[h] {
+			return nil, nil
+		}
+		sw.stop[h] = true
+		c, err := object.GetCommit(rh.gits, h)
+		if err != nil {
+			return nil, err
+		}
+		return &frame{c: c}, nil
+	}
+	// A depth-first post-order walk (parents before children), as
+	// walkHistory, that also records where it met a held commit.
+	for _, p := range merge.ParentHashes[1:] {
+		root, err := enter(p)
+		if err != nil {
+			return res, err
+		}
+		if root == nil {
+			continue
+		}
+		stack := []*frame{root}
+		for len(stack) > 0 {
+			f := stack[len(stack)-1]
+			if f.next < len(f.c.ParentHashes) {
+				pf, err := enter(f.c.ParentHashes[f.next])
+				f.next++
+				if err != nil {
+					return res, err
+				}
+				if pf != nil {
+					stack = append(stack, pf)
+				}
+				continue
+			}
+			stack = stack[:len(stack)-1]
+			visited = append(visited, f.c)
+		}
+	}
+	for _, c := range visited {
+		if c.NumParents() > 1 {
+			continue
+		}
+		s, serr := verifyCommitSignature(c)
+		if serr != nil || !sw.own[s.Fingerprint] {
+			res.foreign++
+			continue
+		}
+		skip, err := rh.replaySkips(c)
+		if err != nil {
+			return res, err
+		}
+		if skip {
+			res.dropped = true
+			log.Info().Str("commit", c.Hash.String()[:8]).
+				Msg("unpushedCommits: dropping a merged-in commit that changes only paths a replay never carries")
+			continue
+		}
+		res.own = append(res.own, c)
+	}
+	// Only a side that would be replayed as the merge itself needs the
+	// held-commit check: a held commit the first parent does not reach is
+	// content the merge's change carries although it is already held.
+	if len(res.own) > 0 && res.foreign == 0 && !res.dropped && len(boundary) > 0 {
+		first, err := merge.Parents().Next()
+		if err != nil {
+			return res, err
+		}
+		for h := range boundary {
+			if h == first.Hash {
+				continue
+			}
+			hc, err := object.GetCommit(rh.gits, h)
+			if err != nil {
+				return res, err
+			}
+			ok, err := hc.IsAncestor(first)
+			if err != nil {
+				return res, err
+			}
+			if !ok {
+				res.heldOffLine = true
+				break
+			}
+		}
+	}
+	return res, nil
 }
