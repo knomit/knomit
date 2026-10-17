@@ -853,6 +853,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 		ri.peers = newFleetPeers(ri.actsAsFleetMaster, ri.publishesFleetMain)
 		ri.peers.claim = ri.fleetMasterClaimRound
 		ri.peers.duty = ri.fleetMasterDuty
+		ri.peers.tick = ri.fleetTickRound
 	}
 	// No sweeper for a subscription (no experiment can be forked from one)
 	// or when experiments.expiry_days is 0 (never expire: the loop must not

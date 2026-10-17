@@ -483,6 +483,9 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 				} else {
 					lg.Debug().Msg("reconcile: sync up to date")
 				}
+				// Every copy installs what main holds for it (the CRL), master
+				// or member, before the master's duties read main.
+				peers.runTick(ctx, svc)
 				if master {
 					peers.admit(ctx, svc, agentBranch, &lg)
 					peers.runDuty(ctx, svc)

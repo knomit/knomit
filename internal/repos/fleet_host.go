@@ -91,6 +91,8 @@ func (ri *RepoInstance) fleetHostRound(ctx context.Context, svc *store.Service) 
 	if ri == nil || !ri.fleetDoor || !ri.IsFleet() || svc == nil {
 		return
 	}
+	// The tick duty of every copy (fleet_tick.go); it takes no fleetOpMu.
+	ri.fleetTickRound(ctx, svc)
 	m := ri.env.m
 	if !m.fleetOpMu.TryLock() {
 		return
