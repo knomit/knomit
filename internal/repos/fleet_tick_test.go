@@ -30,10 +30,10 @@ func installedCRL(t *testing.T, m *Manager) (int64, []byte) {
 // main's CRL #2 (the bytes main holds, the watermark raised to 2); a second
 // round installs nothing (the file is untouched). Bravo's round installs it
 // too: a revoked member that can still read main learns it.
-// SABOTAGE: drop peers.runTick from the origin round -> alpha keeps #1 -> red;
-// install whatever main holds without the Number check -> the second round
-// rewrites crl.pem (InstallCRL refuses an equal Number, so it would be an
-// error logged each round) -> the mtime assert is red.
+// SABOTAGE: drop peers.runTick from the origin round -> alpha keeps #1 -> red.
+// (The Number pre-check only spares a lock and a refusal: InstallCRL itself
+// refuses an equal Number, which installMainCRL treats as nothing to do, so
+// the mtime assert holds either way.)
 func TestFleetTick_AMemberInstallsMainsNewerCRLInItsRound(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
