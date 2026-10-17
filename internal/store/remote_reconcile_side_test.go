@@ -369,6 +369,37 @@ func TestReconcileAgentRebase_ScrubbedOwnCommitBehindAnExperimentStaysScrubbed(t
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/e.md"))
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/w.md"))
 	require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"), "a commit below the watermark stays scrubbed")
+	t.Run("behind a mixed merge, replayed one by one", scrubbedOwnCommitBehindAMixedMerge)
+}
+
+// scrubbedOwnCommitBehindAMixedMerge: the same exclusion on the one-by-one
+// path. An own commit s below the watermark (consumed from main), then a
+// foreign commit on it merged into the agent branch: s is held, so the side
+// holds nothing of the instance's own, and nothing is replayed from it. Left
+// out of the held set, s would be collected as an own commit of a mixed side
+// and replayed.
+func scrubbedOwnCommitBehindAMixedMerge(t *testing.T) {
+	svc, c1 := sideStore(t)
+	own, err := svc.rh.commitSigner()
+	require.NoError(t, err)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	foreign, err := ssh.NewSignerFromKey(priv)
+	require.NoError(t, err)
+	sig := object.Signature{Name: "x", Email: "x@x", When: time.Now()}
+	s, _, err := writeFileToStore(svc.rh.gits, own, c1, "kb/secret.md", obsFact("Secret"), "own, consumed", sig, sig)
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
+	require.NoError(t, svc.rh.writeAgentBase("agent/test", s))
+	f, _, err := writeFileToStore(svc.rh.gits, foreign, s, "kb/member.md", obsFact("Member"), "member write", sig, sig)
+	require.NoError(t, err)
+	ownMerge(t, svc, "agent/test", f)
+	writeMergeFact(t, svc, "agent/test", "kb/later.md", "Later", "after the merge")
+
+	res := rewindTo(t, svc, c1)
+	require.Equal(t, 1, res.NumReplayed, "only the later write")
+	require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"), "a commit below the watermark stays scrubbed")
+	require.False(t, hasFileAt(t, svc, "agent/test", "kb/member.md"))
 }
 
 // A merge whose side holds this instance's own commit AND another key's: the
