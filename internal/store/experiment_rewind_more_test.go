@@ -154,7 +154,9 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
 
 	done := make(chan error, 1)
+	hooked := false
 	testHookOpenExperimentForked = func() {
+		hooked = true
 		// The rewind starts now, between the fork and the row. Give it the
 		// time to finish if nothing holds it back.
 		go func() {
@@ -171,7 +173,13 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	testHookOpenExperimentForked = nil
-	require.NoError(t, <-done)
+	require.True(t, hooked, "OpenExperiment must run the hook between the fork and the row")
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the rewind never finished")
+	}
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath), "setup: the rewind scrubbed it")
 
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
