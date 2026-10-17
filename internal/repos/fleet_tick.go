@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math/big"
@@ -22,6 +23,10 @@ import (
 //     every member's mTLS listener refuses the revoked peer once its own
 //     round has run: the listener adopts the new crl.pem on its next
 //     handshake or tick (pki.Server's reloader).
+//   - Its own certificate: main's certs/<own id>.pem when the master renewed
+//     it (fleet_renew.go): a later NotBefore than the installed one's
+//     (pki.InstallLeaf checks key, identity and chain under the install
+//     lock). Installed after the CRL, which it is verified against.
 //
 // It runs in the forge round after a successful fetch (fleetPeers.tick,
 // before the master's duties) and in the hub's local round (fleetHostRound).
@@ -45,6 +50,42 @@ func (ri *RepoInstance) fleetTickRound(ctx context.Context, svc *store.Service) 
 		// from the next one (fleet_refusal.go).
 		m.noteFleetRevoked("")
 	}
+	if serial, err := m.installMainLeaf(svc); err != nil {
+		log.Warn().Err(err).Str("fleet", ri.Name()).Msg("fleet: this instance's renewed certificate on main was not installed; the next round retries")
+	} else if serial != "" {
+		log.Info().Str("fleet", ri.Name()).Str("serial", serial).Msg("fleet: installed this instance's renewed certificate from main")
+	}
+}
+
+// installMainLeaf installs this instance's certificate as main holds it
+// (certs/<own id>.pem), when it is a RENEWAL of the installed one: another
+// serial whose NotBefore is later than the installed certificate's
+// (pki.InstallLeaf then checks the key, the identity, and the chain against
+// the installed root and CRL under the install lock). Answers the installed
+// serial, "" when there was nothing to install: no leaf for this instance on
+// main, the installed one, or an older one (a revoked-and-reissued leaf the
+// join installed is newer than main's until main catches up).
+func (m *Manager) installMainLeaf(svc *store.Service) (string, error) {
+	cur, err := pki.LoadInstanceCert(m.deps.Cfg.TLS.Dir)
+	if err != nil {
+		return "", nil // nothing installed: nothing to renew
+	}
+	f, err := svc.FleetAt(svc.UpstreamBranch())
+	if err != nil {
+		return "", err
+	}
+	if f.PKI == nil {
+		return "", nil
+	}
+	leaf, err := f.PKI.Cert(m.AgentID())
+	if err != nil || leaf == nil || bytes.Equal(leaf.Raw, cur.Raw) || !leaf.NotBefore.After(cur.NotBefore) {
+		return "", err
+	}
+	id, err := pki.InstallLeaf(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, certPEMOf(leaf))
+	if err != nil {
+		return "", err
+	}
+	return id.Serial.Text(16), nil
 }
 
 // installMainCRL installs the CRL on svc's main (the fleet repository) into

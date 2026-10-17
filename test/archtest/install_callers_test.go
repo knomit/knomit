@@ -62,6 +62,17 @@ var installCRLCallers = []string{
 	"internal/repos/fleet_tick.go",
 }
 
+// installLeafCallers are the ONLY production files that may call
+// pki.InstallLeaf, the renewed-leaf install (fleet design D17). The one
+// caller is every copy's tick duty (internal/repos/fleet_tick.go): this
+// instance's own certificate as the fleet's main holds it after the master
+// renewed it, installed only for this instance's key and identity, chaining
+// to the INSTALLED root and CRL, with a later NotBefore (InstallLeaf checks
+// each under the install lock). No route reaches it.
+var installLeafCallers = []string{
+	"internal/repos/fleet_tick.go",
+}
+
 // TestInstallBundleHasOnlyTheListedCallers parses every non-test Go file of
 // every package in the module — the desktop's included, which needs its
 // build tag to be listed — and fails on a call to pki.InstallBundle (through
@@ -99,7 +110,7 @@ func TestInstallBundleHasOnlyTheListedCallers(t *testing.T) {
 		t.Fatalf("listed only %d files; the guard would pass vacuously", len(files))
 	}
 
-	pinned := map[string][]string{"InstallBundle": installCallers, "InstallCRL": installCRLCallers}
+	pinned := map[string][]string{"InstallBundle": installCallers, "InstallCRL": installCRLCallers, "InstallLeaf": installLeafCallers}
 	found := map[string][]string{}
 	fset := token.NewFileSet()
 	for _, f := range files {
