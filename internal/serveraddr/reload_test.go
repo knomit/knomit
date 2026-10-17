@@ -25,7 +25,23 @@ func TestReloadListenerFailures_OnlyAFailedListenerCounts(t *testing.T) {
 	if bad := ReloadListenerFailures(ok); len(bad) != 0 {
 		t.Fatalf("off and healthy are not failures: %v", bad)
 	}
-	for _, reason := range []string{"addr_in_use", "bind_failed", "tls_failed", "no_certificate", "refused"} {
+	// A listener configured before this instance has a certificate waits for
+	// the create or join that installs one (which starts it): not a failure.
+	// SABOTAGE: drop the no_certificate exclusion -> red.
+	waiting := LockInfo{Listeners: map[string]LockListener{"tls": {Configured: "0.0.0.0:19279", Reason: "no_certificate"}}}
+	if bad := ReloadListenerFailures(waiting); len(bad) != 0 {
+		t.Fatalf("a listener waiting for its certificate is not a failure: %v", bad)
+	}
+	// The same reason while a listener is still bound is not waiting: the
+	// reload's change (a new address or directory holding no certificate,
+	// say on a member whose certificate disappeared) did not happen, and
+	// the old listener keeps serving. PR #545 review F1.
+	// SABOTAGE: ListenerWaitsForCertificate ignores Listening -> red.
+	stuck := LockInfo{Listeners: map[string]LockListener{"tls": {Configured: "0.0.0.0:19280", Listening: "0.0.0.0:19279", Reason: "no_certificate"}}}
+	if bad := ReloadListenerFailures(stuck); len(bad) != 1 || !strings.Contains(bad[0], "tls: no_certificate") {
+		t.Fatalf("no_certificate with a listener still bound must be a failure: %v", bad)
+	}
+	for _, reason := range []string{"addr_in_use", "bind_failed", "tls_failed", "refused"} {
 		bad := LockInfo{Listeners: map[string]LockListener{"http": {Configured: "x", Reason: reason}}}
 		failed := ReloadListenerFailures(bad)
 		if len(failed) != 1 || !strings.Contains(failed[0], reason) {

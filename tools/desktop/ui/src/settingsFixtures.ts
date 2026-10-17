@@ -33,6 +33,7 @@ export const baseSettings: Settings = {
   logFormat: 'console',
   startAtLogin: false,
   tlsAddr: '',
+  externalAddresses: [],
   httpScope: 'local',
   server: spawnedServer,
   effectivePort: 19278,

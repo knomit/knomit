@@ -436,6 +436,14 @@ type AuthConfig struct {
 
 // validateExternalAddress accepts scheme://host[:port] and nothing more. Any
 // scheme is accepted: the operator knows what peers speak.
+// ValidateExternalAddress reports whether a is an external_addresses entry
+// Validate accepts: scheme://host[:port] with no whitespace, user info,
+// path, query or fragment. It accepts ANY scheme (http://, git://), so a
+// caller that needs the address to be reachable by an enroll (https:// only:
+// address_not_https) checks the scheme itself, as the desktop Settings does.
+// The error is the reason alone ("has a path"), without the entry.
+func ValidateExternalAddress(a string) error { return validateExternalAddress(a) }
+
 func validateExternalAddress(a string) error {
 	if strings.ContainsAny(a, " \t\r\n") {
 		return errors.New("contains whitespace")

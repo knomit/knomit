@@ -90,7 +90,7 @@ type Manager struct {
 	serverAddr atomic.Pointer[string]
 
 	// tlsListener reports the mTLS listener's live state (SetTLSListener).
-	tlsListener atomic.Pointer[func() (string, string)]
+	tlsListener atomic.Pointer[func() (string, string, string)]
 	// tlsStarter starts the mTLS listener once a certificate is installed
 	// (SetTLSStarter).
 	tlsStarter atomic.Pointer[func() (bool, error)]
@@ -600,12 +600,31 @@ func (m *Manager) ControlDB() *sql.DB {
 }
 
 // SetTLSListener hands the Manager the mTLS listener's live state: f
-// returns the address it is bound to ("" when not listening) and why a
-// configured one is not (app.ListenerReason*). GET /fleet reports it as
-// host.listening, so no page claims members can reach a listener that is
-// only configured. cmd/serve.go sets it once the listeners are bound; a
-// reload changes what f returns. Unset, nothing is listening.
-func (m *Manager) SetTLSListener(f func() (listening, reason string)) { m.tlsListener.Store(&f) }
+// returns the [tls].addr the listeners reflect ("" when off), the address it
+// is bound to ("" when not listening) and why a configured one is not
+// (app.ListenerReason*). GET /fleet reports it as host.listener_on,
+// host.listening and host.listener_reason, so no page claims members can
+// reach a listener that is only configured, and the hub check
+// (refuseNoHubListener) judges the listener this process HAS, not the boot
+// config's: a Fleet port set by a reload counts before the certificate the
+// create installs. cmd/serve.go sets it once the listeners are bound; a
+// reload changes what f returns. Unset, nothing is listening and the boot
+// config's [tls].addr is the configured one.
+func (m *Manager) SetTLSListener(f func() (configured, listening, reason string)) {
+	m.tlsListener.Store(&f)
+}
+
+// tlsAddr is the mTLS listener address this process is configured with NOW:
+// the listeners' (SetTLSListener: the boot's [tls].addr, then each
+// reload's), else the boot config's when nothing reports (tests, a process
+// without listeners).
+func (m *Manager) tlsAddr() string {
+	if f := m.tlsListener.Load(); f != nil {
+		configured, _, _ := (*f)()
+		return configured
+	}
+	return m.deps.Cfg.TLS.Addr
+}
 
 // SetTLSStarter hands the Manager the one way it may start the mTLS
 // listener: f (app.Listeners.StartTLSWhenInstalled) starts the configured

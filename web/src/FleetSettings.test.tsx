@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FleetSettings } from './FleetSettings';
 import type { FleetStatus } from './api';
 import { stubFleetFetch, problem } from './fleetTestFetch';
+import { HOST_HERE_COPY } from './fleetText';
 
 // The fleet's Settings tab. Every card and control is decided by GET /fleet
 // as the server says it: `local` (any control at all), `master`, `hosting`,
@@ -289,6 +290,17 @@ describe('FleetSettings', () => {
     expect(confirm).toHaveTextContent('members push to https://served.example:7443/git/fleet once its fleet listener runs');
     expect(confirm).not.toHaveTextContent('from now on');
     expect(screen.getByTestId('fleet-host-listener-down')).toHaveTextContent('restart knomit');
+  });
+
+  // The Fleet port is set; only the external address is missing: its own
+  // card (approved #545 copy), not the listener-off one.
+  // SABOTAGE: fold the address back into the listener-off card -> red.
+  it('Host here with the Fleet port set but no external address shows the address card, not the listener one', async () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    mount({ ...member, master: true, host: { listener_on: true, listener: '0.0.0.0:19279', listening: false, listener_reason: 'no_certificate', external_addresses: [] } });
+    fireEvent.click(await screen.findByTestId('fleet-host-here'));
+    expect(screen.queryByTestId('fleet-host-listener-off')).toBeNull();
+    expect(screen.getByTestId('fleet-host-needs-address')).toHaveTextContent(HOST_HERE_COPY.addressBody);
   });
 
   it('Host here asks for the listener before the click when it is off, and shows a refusal with its code', async () => {

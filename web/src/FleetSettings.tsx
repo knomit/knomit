@@ -5,7 +5,7 @@ import { OutcomeCard } from './OutcomeCard';
 import { FleetFollowFlow, type FleetFollowMode } from './FleetFollowFlow';
 import type { FleetAuthMethod } from './fleetWizardState';
 import { Chip, CopyValue, Kv, Refusal } from './fleetParts';
-import { ONE_MASTER, hostPortOf, intervalText, listenerNotRunning, readTextFile, refusalText } from './fleetText';
+import { HOST_HERE_COPY, ONE_MASTER, hostPortOf, intervalText, listenerNotRunning, readTextFile, refusalText } from './fleetText';
 import { saveTextFile, saveOutcomeLine, type SaveOutcome } from './saveFile';
 import { btn, confirmBox, confirmInput, fieldHint, fieldLabel } from './manageStyles';
 import { dangerBox } from './settingsStyles';
@@ -673,9 +673,13 @@ function HostConfirm({ fleet, interrupted, oldMaster, onCancel, onDone }: {
           </>
         )}
       </ol>
-      {listenerOff && (
+      {!fleet.host.listener_on && (
         <OutcomeCard tone="ask" testid="fleet-host-listener-off" headline="The fleet listener is off on this instance"
-          body="Hosting needs the mTLS listener and an external address. Set the Fleet port in Settings → Network; saving applies it." />
+          body="Hosting needs the mTLS listener. Set the Fleet port in Settings → Network; saving applies it." />
+      )}
+      {fleet.host.external_addresses.length === 0 && (
+        <OutcomeCard tone="ask" testid="fleet-host-needs-address" headline={HOST_HERE_COPY.addressHeadline}
+          body={HOST_HERE_COPY.addressBody} />
       )}
       {notUp && (
         <OutcomeCard tone="ask" testid="fleet-host-listener-down" headline="The fleet listener is not running"

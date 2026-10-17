@@ -257,8 +257,10 @@ func serveCmd() *cobra.Command {
 			// The address this server's own children (recipe `exec`) get as
 			// KNOMIT_SERVER: the local listener only if it bound.
 			a.Manager().SetServerAddress(ls.Address)
-			// GET /fleet's host.listening: whether the mTLS listener is UP,
-			// not only configured (a reload can start it later).
+			// GET /fleet's host.listener_on and host.listening: the [tls].addr
+			// the listeners reflect now (a reload can set it) and whether the
+			// mTLS listener is UP, not only configured (a reload or a fleet
+			// create can start it later).
 			a.Manager().SetTLSListener(ls.TLSListening)
 			// A fleet create, join or host-here installs the certificate the
 			// mTLS listener waits for: it starts that listener, and nothing
@@ -509,9 +511,23 @@ func reloadListeners(ls *app.Listeners, load func() (config.Config, error)) {
 	if err != nil {
 		return // logged by Reload; generation unchanged
 	}
+	_, tlsListening, _ := ls.TLSListening()
 	for item, why := range res.Failed {
+		if reloadItemWaits(item, why, tlsListening) {
+			log.Info().Str("item", item).Msg("reload: the mTLS listener waits for this instance's certificate; a fleet create or join starts it")
+			continue
+		}
 		log.Error().Str("item", item).Str("error", why).Msg("reload: left as it was")
 	}
+}
+
+// reloadItemWaits: the one reload "failure" that is not one, a fleet
+// listener configured before this instance has a certificate, with nothing
+// bound meanwhile (serveraddr.ListenerWaitsForCertificate is the same rule on
+// server.json). It is logged at Info, not as an error: the create or join
+// that installs the certificate starts it.
+func reloadItemWaits(item, why, tlsListening string) bool {
+	return item == "tls" && why == app.ListenerReasonNoCertificate && tlsListening == ""
 }
 
 // serveInto runs srv.Serve(ln) in a goroutine and sends any failure to errCh,

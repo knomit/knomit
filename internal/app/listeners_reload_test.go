@@ -375,9 +375,12 @@ func TestApply_TLSAddrWithoutACertificateIsReported(t *testing.T) {
 	if got := r.lockInfo(t).Listeners["tls"]; got.Reason != ListenerReasonNoCertificate || got.Configured != tlsAddr || got.Listening != "" {
 		t.Fatalf("listeners.tls = %+v", got)
 	}
-	// What GET /fleet's host.listening reads (PR #528 B1).
-	if l, why := r.ls.TLSListening(); l != "" || why != ListenerReasonNoCertificate {
-		t.Fatalf("TLSListening = %q, %q; want not listening, no_certificate", l, why)
+	// What GET /fleet's host.listener_on, listening and listener_reason read
+	// (PR #528 B1): the address this reload configured counts as configured
+	// although nothing listens yet, so the create that installs the
+	// certificate is not refused listener_required (2026-10-17).
+	if c, l, why := r.ls.TLSListening(); c != tlsAddr || l != "" || why != ListenerReasonNoCertificate {
+		t.Fatalf("TLSListening = %q, %q, %q; want configured %q, not listening, no_certificate", c, l, why, tlsAddr)
 	}
 }
 
@@ -408,7 +411,7 @@ func TestApply_TLSRebindMovesTheListenerAndKeepsTheOldOnFailure(t *testing.T) {
 	}
 	requireFree(t, oldAddr)
 	requireBound(t, newAddr)
-	if l, why := r.ls.TLSListening(); l != newAddr || why != "" {
+	if _, l, why := r.ls.TLSListening(); l != newAddr || why != "" {
 		t.Fatalf("TLSListening = %q, %q; want %s", l, why, newAddr)
 	}
 	r.requireNoServeFailure(t)

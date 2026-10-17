@@ -270,17 +270,19 @@ func (n *NativeService) GetSettings() (Settings, error) {
 	}
 
 	return Settings{
-		Port:            cfg.Port,
-		LogLevel:        resolved.Level,
-		LogFormat:       resolved.Format,
-		StartAtLogin:    on,
-		TLSAddr:         cfg.TLS.Addr,
-		HTTPScope:       scopeOf(cfg.HTTP, cfg.Host),
-		Server:          n.serverState(),
-		EffectivePort:   effective,
-		ConfigPath:      n.configPath,
-		LogFilePath:     resolved.File,
-		OverriddenByEnv: envOverrides(os.Getenv),
+		Port:         cfg.Port,
+		LogLevel:     resolved.Level,
+		LogFormat:    resolved.Format,
+		StartAtLogin: on,
+		TLSAddr:      cfg.TLS.Addr,
+		// Never null on the wire: the form edits a list.
+		ExternalAddresses: append([]string{}, cfg.ExternalAddresses...),
+		HTTPScope:         scopeOf(cfg.HTTP, cfg.Host),
+		Server:            n.serverState(),
+		EffectivePort:     effective,
+		ConfigPath:        n.configPath,
+		LogFilePath:       resolved.File,
+		OverriddenByEnv:   envOverrides(os.Getenv),
 	}, nil
 }
 
@@ -290,6 +292,9 @@ func (n *NativeService) GetSettings() (Settings, error) {
 type SaveAck struct {
 	// Outcome is one of:
 	//   applied         the server reloaded and every listener is as configured
+	//                   (a Fleet port waiting for this instance's certificate,
+	//                   TLSReason no_certificate, is as configured: the fleet
+	//                   create or join that installs the certificate starts it)
 	//   restart_needed  reloaded, but RestartNeeded keys wait for a restart
 	//   listener_failed reloaded, but a listener could not bind (Error says
 	//                   why); the previous listener keeps serving
