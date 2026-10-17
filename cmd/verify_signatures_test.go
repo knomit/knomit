@@ -35,7 +35,9 @@ func TestVerifyCmd_SignatureSubcommandsRegistered(t *testing.T) {
 		require.NotNil(t, accept.Flags().Lookup(f), "accept --%s", f)
 	}
 	ci, _, _ := c.Find([]string{"ci"})
-	require.Contains(t, ci.Long, "First, in every mode and every knowledge base, every fact a commit of the\ncandidate adds or changes")
+	require.Contains(t, ci.Long, "First, in every mode and every knowledge base, every fact the candidate\nchanges")
+	require.Contains(t, ci.Long, "and so must every fact that merging the candidate into the\nupstream would land (git merge-tree --write-tree; needs git 2.38 or later)")
+	require.Contains(t, ci.Long, "merge-conflict, which blocks too")
 	require.Contains(t, ci.Long, "Then reads verify_signatures at the upstream's tip")
 	require.NotNil(t, ci.Flags().Lookup("kb-root"))
 	require.NotNil(t, ci.Flags().Lookup("fleet"))
