@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,15 +190,19 @@ func TestReconcileAgentRebase_TwoExperimentsSurviveARewind(t *testing.T) {
 	}
 }
 
-// An experiment whose first commit the new upstream already holds: only the
-// commit upstream lacks is replayed from it (a commit upstream holds is
-// never re-submitted).
+// An experiment whose first commit the new upstream already holds, and
+// whose file the upstream then edited: the merge is NOT replayed as one (its
+// change against its first parent would re-add e1's version over the
+// upstream's edit); only the commit upstream lacks is replayed from it (a
+// commit upstream holds is never re-submitted).
+// SABOTAGE: never set heldOffLine in sideOf -> the merge is replayed whole,
+// kb/e1.md is back at the experiment's version -> red.
 func TestReconcileAgentRebase_ExperimentPartlyUpstreamReplaysOnlyTheRest(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := sideStore(t)
 	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
-	e1 := plumbing.NewHash(writeMergeFact(t, svc, "exp/e", "kb/e1.md", "E1", "upstream will hold this"))
+	e1 := plumbing.NewHash(writeMergeFact(t, svc, "exp/e", "kb/e1.md", "E1", "EXPV upstream will hold this"))
 	writeMergeFact(t, svc, "exp/e", "kb/e2.md", "E2", "upstream lacks this")
 	writeMergeFact(t, svc, "agent/test", "kb/agent.md", "Agent", "agent moved")
 	cr, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
@@ -205,11 +210,190 @@ func TestReconcileAgentRebase_ExperimentPartlyUpstreamReplaysOnlyTheRest(t *test
 	require.Equal(t, ModeMerge, cr.Mode)
 	writeMergeFact(t, svc, "agent/test", "kb/later.md", "Later", "after the commit")
 
-	res := rewindTo(t, svc, e1)
+	edited := upstreamCommit(t, svc, e1, "kb/e1.md", "---\ntype: observation\n---\n# E1\n\nMAINV upstream edited it\n")
+	res := rewindTo(t, svc, edited)
 	require.Equal(t, 3, res.NumReplayed, "e2, agent, later: e1 is upstream")
 	for _, p := range []string{"kb/e1.md", "kb/e2.md", "kb/agent.md", "kb/later.md"} {
 		require.True(t, hasFileAt(t, svc, "agent/test", p), "%s on the branch", p)
 	}
+	require.Equal(t, "MAINV", bodyMark(t, svc, "kb/e1.md"), "the upstream's edit of a commit it holds is never reverted")
+}
+
+// bodyMark returns which marker (EXPV, AGENTV, RESOLVEDV, MAINV) the file at
+// path on agent/test's tip holds, "<absent>" when there is none.
+func bodyMark(t *testing.T, svc *Service, path string) string {
+	t.Helper()
+	tree, err := mustCommit(t, svc, mustHeadHash(t, svc, "agent/test")).Tree()
+	require.NoError(t, err)
+	f, err := tree.File(path)
+	if err != nil {
+		return "<absent>"
+	}
+	s, err := f.Contents()
+	require.NoError(t, err)
+	for _, m := range []string{"EXPV", "AGENTV", "RESOLVEDV", "MAINV"} {
+		if strings.Contains(s, m) {
+			return m
+		}
+	}
+	return s
+}
+
+// conflictedCommit opens experiment e at agent/test's tip, writes kb/p.md
+// (EXPV) and kb/other.md on it, writes kb/p.md (AGENTV) on agent/test, and
+// commits the experiment: refused, then retried with res for kb/p.md.
+func conflictedCommit(t *testing.T, svc *Service, res Resolution) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "exp/e", "kb/p.md", "P", "EXPV")
+	writeMergeFact(t, svc, "exp/e", "kb/other.md", "O", "exp other")
+	writeMergeFact(t, svc, "agent/test", "kb/p.md", "P", "AGENTV")
+	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	require.Error(t, err, "setup: the conflict refuses")
+	cr, err := svc.Experiments().CommitExperiment(ctx, "e", map[string]Resolution{"kb/p.md": res})
+	require.NoError(t, err)
+	require.Equal(t, ModeMerge, cr.Mode)
+}
+
+// #535 review B1 (probes P1, P2): a conflicted experiment commit, resolved by
+// the caller, then a later write and a rewind. The merge's own decision
+// comes back as decided: the agent's version kept on "dst", the written
+// body. Replaying the experiment's commits one by one instead brought back
+// the experiment's version, the one the merge dropped.
+// SABOTAGE: replay a clean own side commit by commit (never the merge as
+// one) -> p.md is EXPV -> red.
+func TestReconcileAgentRebase_AResolvedExperimentMergeComesBackAsDecided(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  Resolution
+		want string
+	}{
+		{"dst", Resolution{Side: ResolveDst}, "AGENTV"},
+		{"body", Resolution{Body: []byte("---\ntype: observation\n---\n# P\n\nRESOLVEDV\n")}, "RESOLVEDV"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, c1 := sideStore(t)
+			conflictedCommit(t, svc, tc.res)
+			require.Equal(t, tc.want, bodyMark(t, svc, "kb/p.md"), "setup: the merge decided")
+			writeMergeFact(t, svc, "agent/test", "kb/later.md", "L", "later")
+
+			res := rewindTo(t, svc, c1)
+			require.Equal(t, ModeRebase, res.Mode)
+			require.Equal(t, 3, res.NumReplayed, "the agent's write, the merge as one commit, the later write")
+			require.Equal(t, tc.want, bodyMark(t, svc, "kb/p.md"), "the merge's resolution survives the rewind")
+			require.True(t, hasFileAt(t, svc, "agent/test", "kb/other.md"), "the experiment's other work survives")
+			require.True(t, hasFileAt(t, svc, "agent/test", "kb/later.md"))
+		})
+	}
+}
+
+// #535 review B1 (probe P3), the #531 B1 shape plus a conflict: the agent
+// fast-forwarded onto main m1 (which wrote p.md), the experiment commit kept
+// main's p.md ("dst"), nothing else beyond the watermark; main is rewound to
+// a child of m1. dev kept the branch as it stood (correct); the per-commit
+// side replay rebuilt it with the experiment's p.md (a regression).
+// SABOTAGE: as above -> p.md is EXPV -> red.
+func TestReconcileAgentRebase_AResolvedMergeOnlyDivergenceKeepsTheResolution(t *testing.T) {
+	ctx := context.Background()
+	svc, c1 := sideStore(t)
+	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "exp/e", "kb/p.md", "P", "EXPV")
+	writeMergeFact(t, svc, "exp/e", "kb/other.md", "O", "exp other")
+	m1 := upstreamCommit(t, svc, c1, "kb/p.md", "---\ntype: observation\n---\n# P\n\nMAINV\n")
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
+	r0, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, ModeFF, r0.Mode, "setup: the agent fast-forwards onto m1")
+	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	require.Error(t, err, "setup: the conflict refuses")
+	_, err = svc.Experiments().CommitExperiment(ctx, "e", map[string]Resolution{"kb/p.md": {Side: ResolveDst}})
+	require.NoError(t, err)
+	require.Equal(t, "MAINV", bodyMark(t, svc, "kb/p.md"), "setup: the merge kept main's version")
+
+	rewindTo(t, svc, m1)
+	require.Equal(t, "MAINV", bodyMark(t, svc, "kb/p.md"), "the merge's resolution survives the rewind")
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/other.md"))
+}
+
+// #535 review probe P4: experiment content deleted later on the first-parent
+// line stays deleted (what the merge brought in is replayed before the
+// commits above it).
+// SABOTAGE: replay the merge after the commits above it (prepend it to the
+// newest-first list) -> x.md is back -> red.
+func TestReconcileAgentRebase_ExperimentContentDeletedLaterStaysDeleted(t *testing.T) {
+	ctx := context.Background()
+	svc, c1 := sideStore(t)
+	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "exp/e", "kb/x.md", "X", "EXPV")
+	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
+	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	require.NoError(t, err)
+	_, _, err = svc.Facts().BatchWriteFacts(ctx, "agent/test", nil, []string{"kb/x.md"}, "revert x", "deleted")
+	require.NoError(t, err)
+	require.False(t, hasFileAt(t, svc, "agent/test", "kb/x.md"))
+
+	res := rewindTo(t, svc, c1)
+	require.Equal(t, 3, res.NumReplayed)
+	require.False(t, hasFileAt(t, svc, "agent/test", "kb/x.md"), "the later delete wins")
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/w.md"))
+}
+
+// #535 review S1 (probe P5): an own commit below the watermark (pushed,
+// consumed, then scrubbed by the rewind) that the experiment's merge reaches
+// through its second parent stays scrubbed: the stop point's history is held.
+// SABOTAGE: leave the stop point's history out of sideWalk.held -> the side
+// walk collects secret.md's commit -> red.
+func TestReconcileAgentRebase_ScrubbedOwnCommitBehindAnExperimentStaysScrubbed(t *testing.T) {
+	ctx := context.Background()
+	svc, c1 := sideStore(t)
+	x := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "S", "scrub me"))
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), x)))
+	require.NoError(t, svc.rh.writeAgentBase("agent/test", x))
+	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
+	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
+	cr, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
+	require.NoError(t, err)
+	require.Equal(t, ModeMerge, cr.Mode)
+
+	rewindTo(t, svc, c1)
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/e.md"))
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/w.md"))
+	require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"), "a commit below the watermark stays scrubbed")
+}
+
+// A merge whose side holds this instance's own commit AND another key's: the
+// merge is not replayed as one (its change would carry the foreign content);
+// the own commit is replayed on its own, the foreign one never.
+// SABOTAGE: treat a mixed side as clean (ignore foreign in the switch) ->
+// the merge is replayed whole and member.md comes back -> red; drop the own
+// commits of a mixed side -> own-side.md is lost -> red.
+func TestReconcileAgentRebase_AMixedMergeReplaysOnlyItsOwnCommits(t *testing.T) {
+	svc, c1 := sideStore(t)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	foreign, err := ssh.NewSignerFromKey(priv)
+	require.NoError(t, err)
+	own, err := svc.rh.commitSigner()
+	require.NoError(t, err)
+	sig := object.Signature{Name: "x", Email: "x@x", When: time.Now()}
+	f, _, err := writeFileToStore(svc.rh.gits, foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
+	require.NoError(t, err)
+	o, _, err := writeFileToStore(svc.rh.gits, own, f, "kb/own-side.md", obsFact("OwnSide"), "own write on the side", sig, sig)
+	require.NoError(t, err)
+	ownMerge(t, svc, "agent/test", o)
+	writeMergeFact(t, svc, "agent/test", "kb/later.md", "Later", "after the merge")
+
+	res := rewindTo(t, svc, c1)
+	require.Equal(t, 2, res.NumReplayed, "own-side and later")
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/own-side.md"), "the own commit is replayed")
+	require.True(t, hasFileAt(t, svc, "agent/test", "kb/later.md"))
+	require.False(t, hasFileAt(t, svc, "agent/test", "kb/member.md"), "foreign content is never replayed")
 }
 
 func mustCommit(t *testing.T, svc *Service, h plumbing.Hash) *object.Commit {
