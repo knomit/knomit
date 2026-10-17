@@ -227,13 +227,13 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
         {!serverOpen && (
           <>
             <span className="k-bar-sep" data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
-            <span data-testid="target-label" style={{
+            <span className="k-bar-label" data-testid="target-label" title={label.name ? (target.chip ? `${label.name} (${target.chip.text})` : label.name) : undefined} style={{
               display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden',
               fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
               color: label.color,
             }}>
               {label.icon}
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
+              <span className="k-bar-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
               {/* A target with only Settings says why: archived, its store
                   missing, or still being created. */}
               {target.chip && (
@@ -384,7 +384,7 @@ const CHIP_TONE: Record<NonNullable<TargetLabel['chip']>['tone'], CSSProperties>
 // the bar: they scroll sideways inside their own strip (PR #528 nit 9), and
 // the target label keeps its share.
 const facetTabs: CSSProperties = {
-  display: 'flex', alignItems: 'stretch', minWidth: 0, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none',
+  display: 'flex', alignItems: 'stretch', minWidth: 0, flexShrink: 1, overflowX: 'auto', scrollbarWidth: 'none',
 };
 
 // PanelIcon is the rail toggle's glyph: a window with its left column ruled off.
