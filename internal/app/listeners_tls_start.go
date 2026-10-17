@@ -28,9 +28,11 @@ func (l *Listeners) StartTLSWhenInstalled() (started bool, err error) {
 	l.applyMu.Lock()
 	defer l.applyMu.Unlock()
 	l.mu.Lock()
-	closed, running, state, tcfg := l.closed, l.TLS != nil, l.TLSState, l.tlsCfg
+	closed, state, tcfg := l.closed, l.TLSState, l.tlsCfg
 	l.mu.Unlock()
-	if closed || running || tcfg.Addr == "" || state.Reason != ListenerReasonNoCertificate {
+	// A listening one has no reason (installTLS clears it), so the reason
+	// alone also says "not running".
+	if closed || tcfg.Addr == "" || state.Reason != ListenerReasonNoCertificate {
 		return false, nil
 	}
 	if l.opts.Serve == nil {

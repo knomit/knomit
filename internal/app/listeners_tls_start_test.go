@@ -13,8 +13,8 @@ import (
 // (re-bind check), TLSListening and server.json say so with the generation
 // advanced; a second call is a no-op. A server with no [tls].addr starts
 // nothing even with a certificate installed.
-// SABOTAGE: drop the running check -> the second call opens on the bound
-// address and fails -> red; skip the server.json rewrite -> the generation
+// SABOTAGE: (a listening listener has no reason, so the reason check is what
+// keeps the second call a no-op) skip the server.json rewrite -> the generation
 // assert is red. (The no_certificate condition: the next test.)
 func TestStartTLSWhenInstalled_StartsTheConfiguredListenerOnceACertificateIsInstalled(t *testing.T) {
 	f := newFixture(t)
