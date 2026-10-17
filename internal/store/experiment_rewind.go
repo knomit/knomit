@@ -11,31 +11,44 @@
 //
 // So the rewind RECORDS, for every experiment of the branch, the agent tip as
 // it stood before the rewind (refs/knomit/experiment-rewound/<name>), and the
-// next commit or sync of that experiment rebuilds it first: the experiment's
-// OWN commits (reachable from its tip, not from that recorded tip) are
-// replayed one by one onto the agent branch's current tip, the same way the
-// rewind replays the agent's own commits. What the experiment held of the old
-// agent branch is not replayed; the agent branch already has whatever of it
-// survived the rewind.
+// next commit or sync of that experiment rebuilds it first, as ONE commit on
+// the agent branch's current tip: the three-way merge a plain commit would
+// make, base = merge-base(experiment tip, recorded tip) (where the experiment
+// last met the old branch: its fork or its latest sync), src = the
+// experiment's tip, dst = the agent branch's tip, written as a single-parent
+// commit. The base and the experiment's tip agree on everything the
+// experiment did not change, so what the rewind removed stays removed, and
+// whatever a sync merge settled is in the experiment's tip and stays settled.
+// The experiment's old commits are not parents of the result, so the scrubbed
+// commit stays unreachable.
+//
+// THE COST: the experiment's per-commit history is squashed into that one
+// commit (its message says so). Only an experiment open across a rewind pays
+// it, but the rewind re-hashes the agent's own commits, so in practice an
+// experiment forked after any own write of the agent is rebuilt, scrub or not.
 //
 // Nothing is settled silently. A path the experiment changed that the agent
 // branch also changed since (an edit of a scrubbed file included) is a
-// conflict: the commit refuses with the paths and takes the caller's
-// resolutions (and the repo's `conflicts` setting) exactly as a plain commit
-// does, and the sync refuses too, since its parent-wins rule would drop the
-// experiment's own version for good once the old commits are no longer
-// reachable. The experiment is left as it was until the rebuild succeeds.
+// conflict: the commit refuses with the paths and the three real versions,
+// and takes the caller's resolutions (and the repo's `conflicts` setting)
+// exactly as a plain commit does; the sync refuses too, since its parent-wins
+// rule would drop the experiment's own version for good once the old commits
+// are no longer reachable. The experiment is left as it was until the rebuild
+// succeeds.
 //
 // An experiment that held nothing the rewind removed (every commit it shares
 // with the old agent branch is still on the new one) is not rebuilt: the
 // record is dropped and the commit or sync proceeds as it always did.
+//
+// NOT COVERED: an experiment open across a rewind that ran before this record
+// existed (before #538) has no record and merges as before; the pre-rewind
+// tip is gone, so nothing can tell its own work from what was scrubbed.
 package store
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -100,16 +113,17 @@ func (rh *repoHandler) clearExperimentRewound(name string) error {
 
 // rebuildRewoundExperiment rebuilds exp on its parent's current tip when a
 // rewind recorded it (see the file comment). It returns what a `conflicts`
-// setting settled along the way. With no record, or a record that turns out
-// to have removed nothing the experiment holds, it changes nothing but the
-// record and returns rebuilt=false.
+// setting settled. With no record, or a record that turns out to have removed
+// nothing the experiment holds, it changes nothing but the record and returns
+// rebuilt=false. squashed is how many of the experiment's own non-merge
+// commits the rebuilt commit stands for.
 //
 // strategy, resolutions and o are the commit's (a sync passes StrategyRefuse
-// and no resolutions). Every resolution must name a path that conflicted in
-// some step, as for a plain merge.
+// and no resolutions); every resolution must name a path that conflicts, as
+// for a plain merge.
 //
 // Caller holds lockBranch(exp.Parent) and lockBranch(exp.Branch()).
-func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experiment, strategy ConflictStrategy, resolutions map[string]Resolution, o mergeOpts) (rebuilt bool, replayed int, settled []SettledPath, err error) {
+func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experiment, strategy ConflictStrategy, resolutions map[string]Resolution, o mergeOpts) (rebuilt bool, squashed int, settled []SettledPath, err error) {
 	rec, err := rh.gits.Reference(experimentRewoundRefName(exp.Name))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, 0, nil, nil
@@ -135,9 +149,9 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 	if err := walkHistory(rh.gits, oldAgent, nil, func(c *object.Commit) { oldHist[c.Hash] = true }); err != nil {
 		return false, 0, nil, fmt.Errorf("old agent history: %w", err)
 	}
-	// The experiment's own commits, parents first.
-	var own []*object.Commit
+	// The experiment's own commits.
 	ownSet := map[plumbing.Hash]bool{}
+	var own []*object.Commit
 	if err := walkHistory(rh.gits, expTip, oldHist, func(c *object.Commit) {
 		own = append(own, c)
 		ownSet[c.Hash] = true
@@ -153,6 +167,9 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 		boundary[expTip] = true
 	}
 	for _, c := range own {
+		if c.NumParents() == 1 {
+			squashed++
+		}
 		for _, p := range c.ParentHashes {
 			if !ownSet[p] {
 				boundary[p] = true
@@ -177,116 +194,110 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 		return false, 0, nil, nil
 	}
 
+	srcCommit, err := rh.repo.CommitObject(expTip)
+	if err != nil {
+		return false, 0, nil, fmt.Errorf("experiment commit: %w", err)
+	}
+	dstCommit, err := rh.repo.CommitObject(parentTip)
+	if err != nil {
+		return false, 0, nil, fmt.Errorf("parent commit: %w", err)
+	}
+	oldCommit, err := rh.repo.CommitObject(oldAgent)
+	if err != nil {
+		return false, 0, nil, fmt.Errorf("recorded agent commit: %w", err)
+	}
+	// The base a plain commit made before the rewind would have used: where
+	// the experiment last met the old branch (its fork, or its latest sync).
+	bases, err := srcCommit.MergeBase(oldCommit)
+	if err != nil {
+		return false, 0, nil, fmt.Errorf("merge base: %w", err)
+	}
+	if len(bases) == 0 {
+		return false, 0, nil, fmt.Errorf("experiment %q shares no history with the branch it was forked from: %w", exp.Name, ErrUnrelatedHistories)
+	}
+	baseCommit := bases[0]
+
+	// From here on, the three-way merge mergeIntoBranchLockedOpts makes, with
+	// this base, written as a single-parent commit.
+	policy, mergeFacts := conflictsPolicyOf(strategy)
+	if len(resolutions) > 0 {
+		detected, err := rh.detectConflicts(ctx, baseCommit, srcCommit, dstCommit)
+		if err != nil {
+			return false, 0, nil, fmt.Errorf("detect conflicts: %w", err)
+		}
+		if err := noLeftoverResolutions(resolutions, detected); err != nil {
+			return false, 0, nil, err
+		}
+	}
 	signer, err := rh.commitSigner()
 	if err != nil {
 		return false, 0, nil, err
 	}
-	_, committer, err := rh.commitSigs(ctx, exp.Branch(), "rebuild")
+	author, committer, err := rh.commitSigs(ctx, exp.Branch(), "rebuild")
 	if err != nil {
 		return false, 0, nil, err
 	}
-	policy, mergeFacts := conflictsPolicyOf(strategy)
-
-	cur, err := rh.repo.CommitObject(parentTip)
-	if err != nil {
-		return false, 0, nil, fmt.Errorf("parent commit: %w", err)
+	var trailers []string
+	res := resolutions
+	if mergeFacts {
+		fr, lines, err := rh.factMergeResolutions(ctx, baseCommit, srcCommit, dstCommit, o.factMerge(policy))
+		if err != nil {
+			return false, 0, nil, fmt.Errorf("merge facts: %w", err)
+		}
+		if o.overlayResolutions && len(resolutions) > 0 {
+			if fr, lines, err = overlayCallerResolutions(fr, lines, resolutions, baseCommit, srcCommit, dstCommit); err != nil {
+				return false, 0, nil, fmt.Errorf("overlay resolutions: %w", err)
+			}
+		}
+		res, trailers = fr, lines
 	}
-	detectedAll := map[string]bool{}
-	unresolved := map[string]bool{}
-	var trailersAll []string
-	for _, orig := range own {
-		// A merge of the experiment's (a sync) is not replayed: what it
-		// brought is the old agent branch's. The own commits above it carry
-		// their own change against it, which is what is replayed.
-		if orig.NumParents() != 1 {
-			continue
+	tree, walkLines, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, StrategyRefuse, res)
+	if err != nil {
+		var conflict *MergeConflictError
+		if errors.As(err, &conflict) {
+			conflict.Src, conflict.Dst = exp.Branch(), exp.Parent
+			conflict.BaseCommit = baseCommit.Hash.String()
+			conflict.SrcCommit = expTip.String()
+			conflict.DstCommit = parentTip.String()
+			conflict.Rewound = true
+			log.Info().Str("experiment", exp.Name).Strs("paths", conflict.Paths).
+				Msg("experiment open across a rewind: rebuild refused (conflicting paths)")
+			return false, 0, nil, conflict
 		}
-		base, err := orig.Parents().Next()
-		if err != nil {
-			return false, 0, nil, fmt.Errorf("parent of %s: %w", orig.Hash, err)
-		}
-		detected, err := rh.detectConflicts(ctx, base, orig, cur)
-		if err != nil {
-			return false, 0, nil, fmt.Errorf("replay %s: %w", shortHash(orig.Hash.String()), err)
-		}
-		for p := range detected {
-			detectedAll[p] = true
-		}
-		var res map[string]Resolution
-		var lines []string
-		if mergeFacts {
-			if res, lines, err = rh.factMergeResolutions(ctx, base, orig, cur, o.factMerge(policy)); err != nil {
-				return false, 0, nil, fmt.Errorf("replay %s: merge facts: %w", shortHash(orig.Hash.String()), err)
-			}
-		}
-		caller := map[string]Resolution{}
-		for p, r := range resolutions {
-			if detected[p] {
-				caller[p] = r
-			}
-		}
-		if len(caller) > 0 {
-			if mergeFacts && o.overlayResolutions {
-				if res, lines, err = overlayCallerResolutions(res, lines, caller, base, orig, cur); err != nil {
-					return false, 0, nil, fmt.Errorf("replay %s: overlay resolutions: %w", shortHash(orig.Hash.String()), err)
-				}
-			} else if !mergeFacts {
-				res = caller
-			}
-		}
-		// What is still unresolved is collected, and the walk goes on with
-		// the experiment's version of it, so every conflicting path of every
-		// step is reported at once; nothing is written to a ref unless none is
-		// left.
-		step := map[string]Resolution{}
-		for p, r := range res {
-			step[p] = r
-		}
-		for p := range detected {
-			if _, ok := step[p]; !ok {
-				unresolved[p] = true
-				step[p] = Resolution{Side: ResolveSrc}
-			}
-		}
-		tree, walkLines, err := rh.mergeTreesWithStrategy(ctx, base, orig, cur, StrategyRefuse, step)
-		if err != nil {
-			return false, 0, nil, fmt.Errorf("replay %s: %w", shortHash(orig.Hash.String()), err)
-		}
-		lines = append(lines, walkLines...)
-		trailersAll = append(trailersAll, lines...)
+		return false, 0, nil, fmt.Errorf("three-way merge: %w", err)
+	}
+	trailers = append(trailers, walkLines...)
+
+	// An experiment that adds nothing becomes the parent's tip: no empty
+	// commit.
+	newTip := parentTip
+	if tree != dstCommit.TreeHash {
+		msg := fmt.Sprintf("experiment %s rebuilt on %s after an upstream rewind\n\n"+
+			"%d commit(s) of the experiment are squashed into this one: the rewind removed\n"+
+			"content their history held, and keeping them would keep it reachable. Their\n"+
+			"per-commit history is not kept.", exp.Name, exp.Parent, squashed)
 		nc := &object.Commit{
-			Author:       orig.Author,
+			Author:       author,
 			Committer:    committer,
-			Message:      appendTrailerLines(orig.Message, lines),
+			Message:      appendTrailersToParagraph(appendTrailerLines(msg, trailers), o.trace),
 			TreeHash:     tree,
-			ParentHashes: []plumbing.Hash{cur.Hash},
+			ParentHashes: []plumbing.Hash{parentTip},
 		}
-		replayed++
-		h, err := storeCommit(rh.gits, signer, nc)
-		if err != nil {
-			return false, 0, nil, fmt.Errorf("replay %s: %w", shortHash(orig.Hash.String()), err)
-		}
-		if cur, err = rh.repo.CommitObject(h); err != nil {
+		if newTip, err = storeCommit(rh.gits, signer, nc); err != nil {
 			return false, 0, nil, err
 		}
 	}
-	if err := noLeftoverResolutions(resolutions, detectedAll); err != nil {
-		return false, 0, nil, err
-	}
-	if len(unresolved) > 0 {
-		return false, 0, nil, rh.rewoundConflict(exp, unresolved, expTip, parentTip, oldAgent)
-	}
 
-	if err := rh.deriveBeforeAdvance(ctx, cur.Hash); err != nil {
+	if err := rh.deriveBeforeAdvance(ctx, newTip); err != nil {
 		return false, 0, nil, err
 	}
-	if err := rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(exp.Branch()), cur.Hash)); err != nil {
+	if err := rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(exp.Branch()), newTip)); err != nil {
 		return false, 0, nil, fmt.Errorf("move experiment ref: %w", err)
 	}
 	if err := rh.repopulateBranch(ctx, exp.Branch()); err != nil {
 		return false, 0, nil, fmt.Errorf("repopulate: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, exp.Branch(), cur.Hash); err != nil {
+	if err := rh.notifyCommit(ctx, exp.Branch(), newTip); err != nil {
 		return false, 0, nil, fmt.Errorf("notify: %w", err)
 	}
 	// The fork point moves to where the experiment now starts: "changed since
@@ -295,44 +306,23 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 		`UPDATE experiments SET fork_commit = ? WHERE name = ?`, parentTip.String(), exp.Name); err != nil {
 		return false, 0, nil, fmt.Errorf("record new fork point: %w", err)
 	}
+	// The pipeline watermarks follow. One at the old tip (everything
+	// reviewed) moves to the rebuilt tip. Any other names a commit off the new
+	// chain and moves to the new fork point, so the next run reviews the whole
+	// rebuilt delta rather than diffing from a commit that still holds what
+	// the rewind removed.
+	if _, err := conn(ctx, rh.db).ExecContext(ctx, `
+		UPDATE pipeline_watermarks
+		SET commit_hash = CASE WHEN commit_hash = ? THEN ? ELSE ? END
+		WHERE branch = ?`,
+		expTip.String(), newTip.String(), parentTip.String(), exp.Branch()); err != nil {
+		return false, 0, nil, fmt.Errorf("move pipeline watermarks: %w", err)
+	}
 	if err := rh.clearExperimentRewound(exp.Name); err != nil {
 		return false, 0, nil, fmt.Errorf("clear rewind record: %w", err)
 	}
 	log.Info().Str("experiment", exp.Name).Str("onto", shortHash(parentTip.String())).
-		Int("replayed", replayed).Str("new_tip", shortHash(cur.Hash.String())).
-		Msg("experiment open across a rewind: rebuilt on the new agent branch")
-	return true, replayed, settledFrom(trailersAll), nil
-}
-
-// rewoundConflict is the refusal of a rebuild: the paths, and the three
-// commits to read each at. The base is where the experiment last met the old
-// agent branch (its fork, or its latest sync), so it is the version a plain
-// commit would have used as its base.
-func (rh *repoHandler) rewoundConflict(exp Experiment, paths map[string]bool, expTip, parentTip, oldAgent plumbing.Hash) error {
-	ce := &MergeConflictError{Src: exp.Branch(), Dst: exp.Parent, SrcCommit: expTip.String(), DstCommit: parentTip.String(), Rewound: true}
-	for p := range paths {
-		ce.Paths = append(ce.Paths, p)
-	}
-	sort.Strings(ce.Paths)
-	ec, err := rh.repo.CommitObject(expTip)
-	if err != nil {
-		return err
-	}
-	oc, err := rh.repo.CommitObject(oldAgent)
-	if err != nil {
-		return err
-	}
-	if bases, err := ec.MergeBase(oc); err == nil && len(bases) > 0 {
-		ce.BaseCommit = bases[0].Hash.String()
-		if bt, err := bases[0].Tree(); err == nil {
-			for _, p := range ce.Paths {
-				if _, has := treeBlobHash(bt, p); !has {
-					ce.PathsWithoutBase = append(ce.PathsWithoutBase, p)
-				}
-			}
-		}
-	}
-	log.Info().Str("experiment", exp.Name).Strs("paths", ce.Paths).
-		Msg("experiment open across a rewind: rebuild refused (conflicting paths)")
-	return ce
+		Int("squashed", squashed).Str("new_tip", shortHash(newTip.String())).
+		Msg("experiment open across a rewind: rebuilt on the new agent branch as one commit")
+	return true, squashed, settledFrom(trailers), nil
 }

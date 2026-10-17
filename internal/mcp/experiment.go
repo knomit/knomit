@@ -550,7 +550,7 @@ func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, n
 		return experimentResult{
 			Branch: store.ExperimentBranch(name), Active: name,
 			Summary: fmt.Sprintf(
-				"experiment %q rebuilt on %q: the agent branch was rebuilt by an upstream rewind since the fork, so the experiment's own %d commit(s) were replayed onto it and nothing the rewind removed was kept. "+
+				"experiment %q rebuilt on %q: the agent branch was rebuilt by an upstream rewind since the fork, so the experiment's own %d commit(s) were squashed into one commit on it and nothing the rewind removed was kept. "+
 					"You are still inside the experiment",
 				name, b.Write().AgentBranch(), result.NumReplayed),
 		}, nil

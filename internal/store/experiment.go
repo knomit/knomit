@@ -216,6 +216,10 @@ type Resolution struct {
 	Body []byte
 }
 
+// testHookOpenExperimentForked, when set (tests only), runs in OpenExperiment
+// between the fork and the experiments row, inside the parent's lock.
+var testHookOpenExperimentForked func()
+
 // Experiments returns the experiment lifecycle sub-service.
 func (s *Service) Experiments() ExperimentIndex { return s.rh }
 
@@ -283,16 +287,23 @@ func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, pa
 	if err := rh.clearExperimentRewound(name); err != nil {
 		return Experiment{}, fmt.Errorf("OpenExperiment %q: clear stale rewind record: %w", name, err)
 	}
+	// The PARENT'S LOCK is held from the fork to the experiments row. A rewind
+	// records the experiments it finds as ROWS (markExperimentsRewound, under
+	// the same lock), so without it a rewind could run between the fork (at
+	// the pre-rewind tip) and the row: an experiment holding the scrubbed
+	// commits with no record, whose commit would bring them back.
+	unlockParent := rh.lockBranch(parent)
+	defer unlockParent()
 	if err := rh.CreateBranch(ctx, branch, parent); err != nil {
 		return Experiment{}, fmt.Errorf("OpenExperiment %q: %w", name, err)
 	}
+	if testHookOpenExperimentForked != nil {
+		testHookOpenExperimentForked()
+	}
 	// The fork point is read from the NEW BRANCH, after it exists — never
-	// from the parent beforehand. CreateBranch resolves the parent itself and
-	// neither step holds the parent's lock, so a commit landing on the parent
-	// in between would make a fork point read here an ANCESTOR of where the
-	// branch actually starts. fork_commit is the only anchor a "changed since
-	// the fork" view has, so an ancestor there shows a delta that includes
-	// work the experiment never did.
+	// from the parent beforehand: fork_commit is the only anchor a "changed
+	// since the fork" view has, and it must be exactly where the branch
+	// starts.
 	forkCommit, err := rh.HeadCommit(ctx, branch)
 	if err != nil {
 		return Experiment{}, fmt.Errorf("OpenExperiment %q: resolve new branch %q: %w", name, branch, err)
@@ -476,6 +487,7 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	// (rebuildRewoundExperiment), under both locks, so a commit never merges
 	// back what the rewind scrubbed. The rebuild consumes the resolutions; the
 	// merge after it is then a fast-forward.
+	opts.trace = trailersFromContext(ctx)
 	unlockParent := rh.lockBranch(exp.Parent)
 	unlockExp := rh.lockBranch(exp.Branch())
 	rebuilt, _, settled, err := rh.rebuildRewoundExperiment(ctx, exp, strategy, resolutions, opts)
@@ -487,7 +499,6 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	if rebuilt {
 		resolutions = nil
 	}
-	opts.trace = trailersFromContext(ctx)
 	res, err := rh.mergeIntoBranchLockedOpts(ctx, exp.Branch(), exp.Parent, strategy, resolutions, opts)
 	unlockParent()
 	if err != nil {
@@ -528,13 +539,33 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 	// scrubbed. Its conflicts are refused, never settled parent-wins: the
 	// experiment's own version would be gone for good, since the commits that
 	// held it are not kept.
-	unlockParent := rh.lockBranch(exp.Parent)
-	defer unlockParent()
+	//
+	// LOCKS. A plain sync holds only the experiment's lock (the merge's dst),
+	// as it always has. A recorded experiment's rebuild also takes the
+	// parent's, first, the order commit and the rewind use. The record is
+	// read here without the parent's lock: a rewind that records the
+	// experiment just after this read lets one plain sync through, which
+	// keeps the scrubbed content in the experiment, but the record stays and
+	// the next commit or sync rebuilds from it (its base is still where the
+	// experiment met the old branch), so nothing leaks.
+	o := mergeOpts{trace: trailersFromContext(ctx)}
+	recorded := false
+	if _, err := rh.gits.Reference(experimentRewoundRefName(exp.Name)); err == nil {
+		recorded = true
+		unlockParent := rh.lockBranch(exp.Parent)
+		defer unlockParent()
+	}
 	unlockExp := rh.lockBranch(exp.Branch())
 	defer unlockExp()
-	rebuilt, replayed, settled, err := rh.rebuildRewoundExperiment(ctx, exp, StrategyRefuse, nil, mergeOpts{})
-	if err != nil {
-		return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: rebuild after a rewind: %w", name, err)
+	rebuilt, squashed := false, 0
+	var settled []SettledPath
+	if recorded {
+		// Never without the parent's lock: a rewind moving the parent under a
+		// rebuild would leave the experiment on a tip the rewind replaced,
+		// with its record already cleared.
+		if rebuilt, squashed, settled, err = rh.rebuildRewoundExperiment(ctx, exp, StrategyRefuse, nil, o); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: rebuild after a rewind: %w", name, err)
+		}
 	}
 	if rebuilt {
 		tip, err := rh.HeadCommit(ctx, exp.Branch())
@@ -542,10 +573,9 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 			return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: %w", name, err)
 		}
 		log.Info().Str("experiment", name).Str("parent", exp.Parent).
-			Int("replayed", replayed).Msg("experiment rebuilt on its parent after a rewind")
-		return AgentReconcileResult{Mode: ModeRebase, NumReplayed: replayed, NewTip: tip, Settled: settled}, nil
+			Int("squashed", squashed).Msg("experiment rebuilt on its parent after a rewind")
+		return AgentReconcileResult{Mode: ModeRebase, NumReplayed: squashed, NewTip: tip, Settled: settled}, nil
 	}
-	o := mergeOpts{trace: trailersFromContext(ctx)}
 	res, err := rh.mergeIntoBranchLockedOpts(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins, nil, o)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: %w", name, err)
