@@ -226,14 +226,14 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             over the server pages the word mark stands alone. */}
         {!serverOpen && (
           <>
-            <span data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
-            <span data-testid="target-label" style={{
-              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden',
+            <span className="k-bar-sep" data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
+            <span className="k-bar-label" data-testid="target-label" title={label.name ? (target.chip ? `${label.name} (${target.chip.text})` : label.name) : undefined} style={{
+              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden',
               fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
               color: label.color,
             }}>
               {label.icon}
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
+              <span className="k-bar-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
               {/* A target with only Settings says why: archived, its store
                   missing, or still being created. */}
               {target.chip && (
@@ -245,14 +245,14 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           </>
         )}
         {(server ? server.pages.length > 0 : facets.length > 0) && (
-          <span data-testid="bar-divider" aria-hidden="true" style={{ alignSelf: 'center', width: 1, height: 18, margin: '0 14px', background: '#1e1e1e', flexShrink: 0 }} />
+          <span className="k-bar-divider" data-testid="bar-divider" aria-hidden="true" style={{ alignSelf: 'center', width: 1, height: 18, margin: '0 14px', background: '#1e1e1e', flexShrink: 0 }} />
         )}
 
         {/* ── Facet tabs: the pages of the target named on the left ──
             Exactly facetsFor's list; a tab the target lacks is not drawn. The
             active tab's underline sits on the bar's bottom edge. */}
         {server && (
-          <div role="tablist" aria-label="Server pages" data-testid="server-tabs" style={{ display: 'flex', alignItems: 'stretch' }}>
+          <div role="tablist" aria-label="Server pages" data-testid="server-tabs" className="k-bar-tabs" style={{ display: 'flex', alignItems: 'stretch' }}>
             {server.pages.map(p => {
               const on = p === server.page;
               return (
@@ -278,7 +278,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           </div>
         )}
         {!serverOpen && facets.length > 0 && (
-          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" style={facetTabs}>
+          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" className="k-bar-tabs" style={facetTabs}>
             {facets.map(f => {
               const on = f === facet;
               return (

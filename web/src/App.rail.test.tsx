@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent, cleanup, within } from '@testing-library/react';
 import App from './App';
+import { computed } from './cascade.testutil';
 import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
 import { __resetRepoCreatesForTest } from './useRepoCreates';
 
@@ -97,6 +98,27 @@ describe('the target rail in the app', () => {
     pressMod('b');
     expect(screen.queryByTestId('target-rail')).toBeNull();
     await waitFor(() => expect(localStorage.getItem('knomit.rail')).toBe('0'));
+  });
+
+  // SABOTAGE: delete the @media (max-width: 640px) block in App.css, or drop the
+  // k-shell-body / k-rail class from App.tsx / TargetRail.tsx -> red.
+  it('pushes the page sideways wide, and stacks above it at phone width (real App.css cascade)', async () => {
+    await primeApi();
+    await mountApp();
+    fireEvent.click(screen.getByTestId('rail-toggle'));
+    const rail = screen.getByTestId('target-rail');
+    const body = rail.parentElement!;
+    expect(rail.className).toBe('k-rail');
+    expect(body.className).toBe('k-shell-body');
+    for (const width of [1280, 641]) {
+      expect(computed(body, 'flex-direction', width), `body at ${width}`).toBe('');
+      expect(computed(rail, 'width', width), `rail at ${width}`).toBe('236px');
+    }
+    for (const width of [640, 375]) {
+      expect(computed(body, 'flex-direction', width), `body at ${width}`).toBe('column');
+      expect(computed(rail, 'width', width), `rail at ${width}`).toBe('100%');
+      expect(computed(rail, 'max-height', width), `rail at ${width}`).toBe('40%');
+    }
   });
 
   it('the toggle opens and closes it too', async () => {

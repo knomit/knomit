@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { TopBar } from './TopBar';
+import { computed } from './cascade.testutil';
 import { init } from './state';
 import type { AppState } from './state';
 import type { RepoInfo, Lens } from './api';
@@ -486,5 +487,33 @@ describe('the fleet target', () => {
     unmount();
     render(bar({ gear: true }));
     expect(screen.getByTestId('server-toggle')).toBeInTheDocument();
+  });
+});
+
+// The phone-width rules live in App.css; jsdom evaluates no @media, so the
+// cascade is resolved over the real stylesheet (cascade.testutil), as
+// connectNarrow.test.tsx does for the Connect grid.
+// SABOTAGE: delete the @media (max-width: 640px) block, drop a hook class, or
+// change the tab strip's flexShrink -> red.
+describe('TopBar at a narrow width', () => {
+  it('keeps the target label a readable width and lets the tab strip scroll, only at phone width', () => {
+    render(bar({ facets: ['browse', 'activity', 'settings'] as BarProps['facets'] }));
+    const label = screen.getByTestId('target-label');
+    const tabs = screen.getByTestId('facet-tabs');
+    expect(label.className).toBe('k-bar-label');
+    expect(label.title).toBe('alpha');
+    expect(screen.getByTestId('crumb-sep').className).toBe('k-bar-sep');
+    expect(screen.getByTestId('bar-divider').className).toBe('k-bar-divider');
+    expect(tabs.className).toBe('k-bar-tabs');
+    // The strip shrinks and scrolls inside itself rather than push the label out.
+    expect(tabs.style.flexShrink).toBe('1');
+    expect(tabs.style.overflowX).toBe('auto');
+    for (const width of [640, 375]) {
+      expect(computed(label, 'min-width', width), `label at ${width}`).toBe('96px');
+      expect(computed(screen.getByTestId('crumb-sep'), 'margin', width), `sep at ${width}`).toBe('0px 4px 0px 6px');
+    }
+    for (const width of [1280, 641]) {
+      expect(computed(label, 'min-width', width), `label at ${width}`).toBe('0px');
+    }
   });
 });

@@ -144,7 +144,7 @@ export function TargetRail({
   const onContext = draftShown === null && pinned === null;
 
   return (
-    <nav data-testid="target-rail" aria-label="Repositories, lenses and fleet" style={rail}>
+    <nav className="k-rail" data-testid="target-rail" aria-label="Repositories, lenses and fleet" style={rail}>
       <label style={searchBox}>
         <SearchGlyph />
         <input
