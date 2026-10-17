@@ -2902,6 +2902,20 @@ paths:
         already holds it), `foreign_commit` (409: the commit came in with
         another agent's merged branch, and dropping it would re-sign that
         agent's other commits, which the fleet refuses).
+
+        `merge_commit` and `foreign_commit` carry `leave_out`: what the
+        CONFIRMED fallback would lose, the merge that brought the commit in
+        (or the named merge itself) and every commit its side brought, each
+        with its author and subject. The fallback is this route with
+        `leave_out_merge: true` and `left_out` set to exactly those commit
+        hashes, as the operator confirmed them: the merge is left out whole
+        (nothing is re-signed for another agent), every other unpublished
+        commit is replayed as above, and main is published; the answer's
+        `left_out` lists what was lost. Without `leave_out_merge` the
+        refusal stands. `leave_out_unconfirmed` (422): `leave_out_merge`
+        without `left_out`. `leave_out_changed` (409, with the new
+        `leave_out`): the branch moved since the list was shown, and nothing
+        was changed.
       operationId: dropFleetCommit
       requestBody:
         required: true
@@ -2912,6 +2926,11 @@ paths:
               required: [commit]
               properties:
                 commit: { type: string, description: "The full hash of the commit to drop" }
+                leave_out_merge: { type: boolean, description: "The confirmed fallback: leave out whole the merge that brought the commit in (or the commit itself when it is that merge)" }
+                left_out:
+                  type: array
+                  items: { type: string }
+                  description: "With leave_out_merge: the commit hashes of the refusal's leave_out, as the operator confirmed them"
       responses:
         "200":
           description: The branch was rebuilt without the commit
@@ -2923,11 +2942,15 @@ paths:
                   dropped: { type: string }
                   replayed: { type: integer }
                   merges_dropped: { type: integer }
+                  left_out:
+                    type: array
+                    description: "What the confirmed fallback left out; absent for a plain drop"
+                    items: { $ref: "#/components/schemas/FleetLostCommit" }
                   published: { type: boolean }
                   publish_error: { type: string }
         "403": { description: Not the local authenticated listener }
-        "409": { description: not_registered, not_unpublished or foreign_commit }
-        "422": { description: invalid_commit or merge_commit }
+        "409": { description: "not_registered, not_unpublished, foreign_commit (with leave_out) or leave_out_changed (with leave_out)" }
+        "422": { description: "invalid_commit, merge_commit (with leave_out) or leave_out_unconfirmed" }
   /fleet/activity:
     get:
       tags: [fleet]
@@ -4305,6 +4328,15 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
+    FleetLostCommit:
+      type: object
+      description: "One commit the drop's confirmed fallback leaves (or left) out"
+      required: [commit, author, subject]
+      properties:
+        commit: { type: string }
+        agent: { type: string, description: "The agent id of an agent author; absent otherwise" }
+        author: { type: string }
+        subject: { type: string, description: "The first line of the commit message" }
     FleetStatus:
       type: object
       required: [state, agent_id, public_key, local, host, fleet_urls]

@@ -28,6 +28,10 @@ type FleetError struct {
 	// Choices, when set, are the values the caller may pick from to retry
 	// (address_required: this instance's external_addresses).
 	Choices []string
+	// LeaveOut, when set, is what the confirmed fallback of a refused drop
+	// (merge_commit, foreign_commit, leave_out_changed) would lose: the
+	// merge and every commit its side brought.
+	LeaveOut []store.LostCommit
 }
 
 func (e *FleetError) Error() string { return e.Code + ": " + e.Msg }
