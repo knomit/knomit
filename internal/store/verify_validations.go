@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/fact"
@@ -86,21 +87,28 @@ func newFactPaths(root string, froms []*object.Tree, to *object.Tree) ([]string,
 // rules; the context gate still runs (a fact with context and no ontology is
 // refused, as on learn).
 func validateNewFacts(ont *fact.Ontology, root string, froms []*object.Tree, to *object.Tree) (string, error) {
+	_, reason, err := firstInvalidFact(ont, root, froms, to)
+	return reason, err
+}
+
+// firstInvalidFact is validateNewFacts also answering the failing fact's
+// path ("" when none).
+func firstInvalidFact(ont *fact.Ontology, root string, froms []*object.Tree, to *object.Tree) (string, string, error) {
 	if root == "" {
 		root = defaultOntologyRoot
 	}
 	paths, err := newFactPaths(root, froms, to)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	for _, p := range paths {
 		file, err := to.File(p)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", p, err)
+			return "", "", fmt.Errorf("%s: %w", p, err)
 		}
 		content, err := file.Contents()
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", p, err)
+			return "", "", fmt.Errorf("%s: %w", p, err)
 		}
 		f, err := fact.ParseFact(p, content)
 		if err != nil {
@@ -110,12 +118,86 @@ func validateNewFacts(ont *fact.Ontology, root string, froms []*object.Tree, to 
 		if err := fact.ValidateFact(ont, topicPath, f); err != nil {
 			var ve *fact.ValidationError
 			if errors.As(err, &ve) {
-				return fmt.Sprintf("%s fails the ontology's validation %q at %s: %s", p, ve.RuleName, ve.Topic, ve.Message), nil
+				return p, fmt.Sprintf("%s fails the ontology's validation %q at %s: %s", p, ve.RuleName, ve.Topic, ve.Message), nil
 			}
-			return fmt.Sprintf("%s fails the ontology's validations: %v", p, err), nil
+			return p, fmt.Sprintf("%s fails the ontology's validations: %v", p, err), nil
 		}
 	}
-	return "", nil
+	return "", "", nil
+}
+
+// introducedBy is the commit of tip ∖ main that wrote p's content at tip:
+// the latest commit (closest to tip) whose tree holds tip's blob at p while
+// none of its parents does. The tip itself when none is found (a merge that
+// resolved the path to new content is found as that merge). main nil walks
+// tip's whole history.
+func introducedBy(tip, main *object.Commit, p string) plumbing.Hash {
+	tipTree, err := tip.Tree()
+	if err != nil {
+		return tip.Hash
+	}
+	want, err := tipTree.FindEntry(p)
+	if err != nil {
+		return tip.Hash
+	}
+	blobAt := func(c *object.Commit) (plumbing.Hash, bool) {
+		t, err := c.Tree()
+		if err != nil {
+			return plumbing.ZeroHash, false
+		}
+		e, err := t.FindEntry(p)
+		if err != nil {
+			return plumbing.ZeroHash, false
+		}
+		return e.Hash, true
+	}
+	// The commits' own storers (a push's quarantine reads through to the
+	// host), walked by parent links.
+	walk := func(from *object.Commit, stop map[plumbing.Hash]bool, visit func(*object.Commit)) {
+		seen := map[plumbing.Hash]bool{}
+		stack := []*object.Commit{from}
+		for len(stack) > 0 {
+			c := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if seen[c.Hash] || stop[c.Hash] {
+				continue
+			}
+			seen[c.Hash] = true
+			visit(c)
+			for i := range c.NumParents() {
+				if pc, err := c.Parent(i); err == nil {
+					stack = append(stack, pc)
+				}
+			}
+		}
+	}
+	stop := map[plumbing.Hash]bool{}
+	if main != nil {
+		walk(main, nil, func(c *object.Commit) { stop[c.Hash] = true })
+	}
+	var found *object.Commit
+	walk(tip, stop, func(c *object.Commit) {
+		if h, ok := blobAt(c); !ok || h != want.Hash {
+			return
+		}
+		for i := range c.NumParents() {
+			pc, err := c.Parent(i)
+			if err != nil {
+				return
+			}
+			if h, ok := blobAt(pc); ok && h == want.Hash {
+				return
+			}
+		}
+		// Several can hold it (the same content written twice): the latest.
+		if found == nil || c.Committer.When.After(found.Committer.When) {
+			found = c
+		}
+	})
+	if found == nil {
+		return tip.Hash
+	}
+	return found.Hash
 }
 
 // branchFactsValid is RuleValidation on a branch's NET change (#533 review
@@ -130,7 +212,8 @@ func validateNewFacts(ont *fact.Ontology, root string, froms []*object.Tree, to 
 // commit it has since corrected (an ontology main tightened after the
 // commit was written included). Every OTHER rule of the judge stays per
 // commit. main nil (no consensus branch yet) judges every fact at the tip.
-// The refusal names the tip.
+// The refusal names the commit that wrote the failing content
+// (introducedBy), the one a fix or a drop has to deal with, not the tip.
 func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string) (Refusal, bool) {
 	refuse := func(reason string) (Refusal, bool) {
 		return Refusal{Commit: tip.Hash.String(), Rule: RuleValidation, Reason: reason}, false
@@ -158,12 +241,12 @@ func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string)
 			froms = append(froms, bt)
 		}
 	}
-	reason, err := validateNewFacts(ont, root, froms, tree)
+	p, reason, err := firstInvalidFact(ont, root, froms, tree)
 	if err != nil {
 		return refuse(fmt.Sprintf("the branch's facts cannot be read: %v", err))
 	}
 	if reason != "" {
-		return refuse(reason)
+		return Refusal{Commit: introducedBy(tip, main, p).String(), Rule: RuleValidation, Reason: reason}, false
 	}
 	return Refusal{}, true
 }
