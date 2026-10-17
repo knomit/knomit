@@ -214,6 +214,10 @@ func (m *Manager) CreateFleet(ctx context.Context, spec FleetCreateSpec) (FleetS
 	}
 	log.Info().Str("fleet", ri.Name()).Bool("forge", spec.Origin != nil).
 		Msg("fleet created: fresh root, this instance's leaf and record; this instance is the master")
+	// The create installed this instance's certificate: a configured mTLS
+	// listener that was down for lack of one starts now (members join a hub
+	// through it).
+	m.startTLSAfterInstall("fleet create")
 	return m.FleetStatus(ctx)
 }
 

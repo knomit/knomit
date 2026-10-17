@@ -2308,6 +2308,17 @@ paths:
         response), nothing else; the operator carries it to the joiner, whose
         join needs nothing more.
 
+        Renewal needs no call: once a leaf on `main` is in the final third
+        of its own lifetime, the acting master's round re-issues it for the
+        same key and its own lifetime, and the CRL likewise before its
+        NextUpdate. A leaf is renewed only when BOTH `main` and the master's
+        own branch (what the round publishes) hold a CRL that does not list
+        it and exactly one member record for the id, not `left`, naming the
+        leaf's key, and the master's branch holds the same leaf as `main`: a
+        revocation or a `left` record the master has not published yet stops
+        it too. Each instance installs its renewed leaf and the CRL from
+        `main` in its own next sync round.
+
         The fleet URL: when the fleet repository here syncs with an origin (a
         forge, or the hub when this master is not it), that origin's URL
         without its userinfo (a token in the origin URL is the master's own
@@ -2607,17 +2618,22 @@ paths:
         forge's main, so the fleet there names no master and any other
         holder of the root key can claim it (user ruling 2026-10-16); if that
         publish fails nothing is decommissioned (`decommission_unpublished`,
-        409). Then the fleet repository here is dropped from every lens and
+        409). Before that it flushes, as a stand-down does (DELETE
+        /fleet/root): it publishes what its fleet branch holds, and refuses
+        with `unpublished_changes` (409) while the fleet's main still lacks
+        any commit of that branch, since the next holder takes the fleet
+        over from main. Then the fleet repository here is dropped from every lens and
         deleted (a forge keeps its copy), the trust material is uninstalled
         and `<home>/fleet` (the root key included) is deleted; state
         `standalone`. On a knomit-hosted fleet the repository goes with it:
         members' syncs then fail, and each leaves. Refusals: `not_master`,
-        `not_registered`, `decommission_unpublished` (409).
+        `not_registered`, `decommission_unpublished`, `unpublished_changes`
+        (409).
       operationId: decommissionFleet
       responses:
         "200": { description: Decommissioned, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
         "403": { description: Not the local authenticated listener }
-        "409": { description: "not_master, not_registered or decommission_unpublished" }
+        "409": { description: "not_master, not_registered, decommission_unpublished or unpublished_changes" }
   /fleet/root:
     get:
       tags: [fleet]
@@ -2629,7 +2645,25 @@ paths:
         The files of `<home>/fleet` as one document: `root.key` (the root
         PRIVATE key), `root.crt`, `crl.pem`, `issued.jsonl`, `revoked.jsonl`
         (those present). Install them on the new master with `PUT`; stand
-        down here with `DELETE`. Refusals: `no_root` (404).
+        down here with `DELETE`. Refusals: `no_root` (404),
+        `unpublished_changes` (409, below).
+
+        On the ACTING master it first flushes: it publishes what its fleet
+        branch holds, and refuses with `unpublished_changes` (409) while the
+        fleet's main still lacks any commit of that branch (a revoke whose
+        publish failed, a renewal, a re-signed CRL, a merged member record):
+        the next master works from main and would never see them. Let the
+        publish succeed, then try again: on a forge, fix the origin or wait
+        for the next sync round; on the hub, wait for the next sync round.
+        While the fleet's rules refuse a commit on this instance's own
+        branch (GET /fleet `last_error_main_held`), main never moves and
+        waiting does not help: drop that commit first (POST
+        /fleet/drop-commit). A master that never comes back to publish (the
+        dead-master fallback, Host here with `confirm_loss`) may lose those
+        commits. A late one can still land only while the new master has
+        issued no CRL of its own; once it has, the fleet's rules refuse the
+        old master's CRL, so an old CRL never undoes a newer one. Revoke
+        again on the new master.
       operationId: getFleetRoot
       responses:
         "200":
@@ -2639,6 +2673,7 @@ paths:
               schema: { $ref: "#/components/schemas/FleetRoot" }
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
+        "409": { description: unpublished_changes }
     put:
       tags: [fleet]
       summary: Install another master's root files here
@@ -2682,7 +2717,7 @@ paths:
         LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows):
         any other transport is 403 and runs nothing.
 
-        The first step of a master switch, and it needs nothing first. While
+        The first step of a master switch. While
         this instance does master work, its last act as master is one
         commit on main: the master marker (`artifacts/fleet/master`, the
         acting master's agent id) deleted, so main shows a fleet with no
@@ -2694,13 +2729,31 @@ paths:
         checks its own main for the marker. A master whose copy follows
         another instance of the fleet commits nothing (it is not the host). Refusals: `no_root` (404),
         `stand_down_unpublished` (409: the commit did not reach the fleet's
-        main, e.g. the forge refused it; the root stays, try again).
+        main, e.g. the forge refused it; the root stays, try again),
+        `unpublished_changes` (409, below).
+
+        On the ACTING master it first flushes: it publishes what its fleet
+        branch holds, and refuses with `unpublished_changes` (409) while the
+        fleet's main still lacks any commit of that branch (a revoke whose
+        publish failed, a renewal, a re-signed CRL, a merged member record):
+        the next master works from main and would never see them. Let the
+        publish succeed, then try again: on a forge, fix the origin or wait
+        for the next sync round; on the hub, wait for the next sync round.
+        While the fleet's rules refuse a commit on this instance's own
+        branch (GET /fleet `last_error_main_held`), main never moves and
+        waiting does not help: drop that commit first (POST
+        /fleet/drop-commit). A master that never comes back to publish (the
+        dead-master fallback, Host here with `confirm_loss`) may lose those
+        commits. A late one can still land only while the new master has
+        issued no CRL of its own; once it has, the fleet's rules refuse the
+        old master's CRL, so an old CRL never undoes a newer one. Revoke
+        again on the new master.
       operationId: standDownFleetRoot
       responses:
         "204": { description: Stood down }
         "403": { description: Not the local authenticated listener }
         "404": { description: no_root }
-        "409": { description: stand_down_unpublished }
+        "409": { description: "stand_down_unpublished or unpublished_changes" }
   /fleet/host:
     post:
       tags: [fleet]
@@ -4411,12 +4464,15 @@ components:
                 The mTLS listener is bound and serving NOW (what server.json's
                 listeners.tls.listening says). Only this means members can reach
                 this instance. A listener configured before any certificate was
-                installed (a fresh instance that then creates, joins or hosts a
-                fleet) stays off until knomit restarts or `knomit reload` runs.
+                installed (a fresh instance) starts when a fleet create, join or
+                host-here succeeds on a `knomit serve` (or desktop) server,
+                with no restart; one down for another reason (its port held by
+                another program, a certificate that does not load) waits for a
+                restart or `knomit reload`.
             listener_reason:
               type: string
-              enum: [no_certificate, addr_in_use]
-              description: "Why a configured listener is not listening; absent when it is listening or not configured"
+              enum: [no_certificate, addr_in_use, tls_failed, bind_failed]
+              description: "Why a configured listener is not listening; absent when it is listening or not configured. no_certificate: nothing installed when it last started (a create, join or host-here starts it once one is); addr_in_use: another program holds the address; tls_failed: a certificate is installed but cannot be used; bind_failed: the bind failed for another reason (a reload's)."
             external_addresses:
               type: array
               items: { type: string }

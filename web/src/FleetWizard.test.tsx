@@ -71,11 +71,13 @@ describe('FleetWizard: create', () => {
     const urls = screen.getByTestId('fleet-hosting-urls');
     expect(urls).toHaveTextContent('https://kb-01.acme.example:7443/git/fleet');
     expect(urls).toHaveAttribute('data-tone', 'ask');
-    expect(urls).toHaveTextContent('it starts when knomit restarts after the create');
+    // PR8: the create starts the listener; no restart is asked for.
+    expect(urls).toHaveTextContent('it needs the certificate the create installs, and the create starts it');
+    expect(urls).not.toHaveTextContent('restart');
     expect(screen.getByTestId('wizard-step-1-summary')).toHaveTextContent('create');
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('A fresh fleet root is created in /home/k/fleet on this machine');
-    expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('Members will join at https://kb-01.acme.example:7443/git/fleet once knomit restarts and its fleet listener starts.');
+    expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('Members will join at https://kb-01.acme.example:7443/git/fleet: the create starts the fleet listener.');
     fireEvent.click(screen.getByTestId('fleet-wizard-primary'));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith({ kind: 'created' }));
     expect(calls.find(c => c.route === 'POST /api/v1/fleet/create')?.body).toEqual({});
@@ -92,7 +94,7 @@ describe('FleetWizard: create', () => {
     expect(screen.getByTestId('fleet-hosting-urls')).toHaveTextContent('Members will join at');
     fireEvent.click(screen.getByTestId('fleet-wizard-next'));
     expect(screen.getByTestId('fleet-step-review')).toHaveTextContent('Members will join at https://kb-01.acme.example:7443/git/fleet.');
-    expect(screen.getByTestId('fleet-step-review')).not.toHaveTextContent('once knomit restarts');
+    expect(screen.getByTestId('fleet-step-review')).not.toHaveTextContent('the create starts the fleet listener');
   });
 
   // Review nit 6: the wizard has its own `local` guard.

@@ -112,6 +112,9 @@ func (ri *RepoInstance) fleetHostRound(ctx context.Context, svc *store.Service) 
 	// The leave duty (fleet_leave.go; it checks actsAsFleetMaster itself):
 	// main follows its revocations in this same round.
 	ri.fleetLeaveRound(ctx, svc)
+	// The renewal duties (fleet_renew.go; they check it too), after the
+	// leave duty: a revocation's fresh CRL needs no re-sign.
+	ri.fleetRenewRound(ctx, svc)
 }
 
 // credentialFreeAll is credentialFree of each of urls, in order.

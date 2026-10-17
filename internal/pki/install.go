@@ -437,6 +437,82 @@ func InstallCRL(dir string, rootCert *x509.Certificate, raw []byte) (*big.Int, e
 	return crl.Number, nil
 }
 
+// ErrLeafNotNewer: InstallLeaf was handed a certificate whose NotBefore is
+// not later than the installed one's (the installed certificate itself, or
+// an older one).
+var ErrLeafNotNewer = errors.New("pki: the certificate is not newer than the installed one")
+
+// InstallLeaf installs a RENEWED instance certificate on its own (fleet
+// design D17): the leaf the fleet's master re-issued for this instance's key
+// and published on the fleet's main. No root and no CRL change. Checks, the
+// first two before the lock and the rest under the same cross-process lock
+// as InstallBundle:
+//   - raw is exactly one CERTIFICATE block (ErrMalformedBundle otherwise);
+//   - it certifies the key at keyPath (ErrKeyMismatch);
+//   - an instance certificate, a root and a CRL are installed in dir;
+//   - it verifies NOW against the INSTALLED root and CRL (VerifyInstanceChain:
+//     ErrUntrustedRoot, ErrExpired, ErrRevoked): a renewal never moves an
+//     instance to another fleet;
+//   - it names the same identity (email SAN) as the installed certificate;
+//   - its NotBefore is strictly later than the installed one's
+//     (ErrLeafNotNewer), the fleet repository's leaf-renewal rule.
+//
+// Only then instance.crt is replaced, atomically. A running mTLS listener
+// adopts it at its next handshake or tick, and the fleet transport's next
+// session presents it.
+func InstallLeaf(dir, keyPath string, raw []byte) (Identity, error) {
+	blk, rest := pem.Decode(raw)
+	if blk == nil || blk.Type != "CERTIFICATE" {
+		return Identity{}, malformed(errors.New("no CERTIFICATE PEM block"))
+	}
+	if extra, _ := pem.Decode(rest); extra != nil {
+		return Identity{}, malformed(fmt.Errorf("more than one PEM block (found %q after the certificate)", extra.Type))
+	}
+	leaf, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		return Identity{}, malformed(err)
+	}
+	_, pub, err := LoadSigner(keyPath)
+	if err != nil {
+		return Identity{}, fmt.Errorf("instance key: %w", err)
+	}
+	if !pub.Equal(leaf.PublicKey) {
+		return Identity{}, &classified{class: ErrKeyMismatch, msg: fmt.Sprintf("the certificate is for key %s, not this instance's %s (%s)",
+			Short(fingerprintOf(leaf)), Short(Fingerprint(pub)), keyPath)}
+	}
+	unlock, err := lockInstall(dir)
+	if err != nil {
+		return Identity{}, err
+	}
+	defer unlock()
+	cur, err := LoadInstanceCert(dir)
+	if err != nil {
+		return Identity{}, fmt.Errorf("pki: no instance certificate is installed to renew: %w", err)
+	}
+	root, err := LoadRootCert(filepath.Join(dir, RootCertFile))
+	if err != nil {
+		return Identity{}, err
+	}
+	crl, err := LoadCRL(filepath.Join(dir, CRLFile))
+	if err != nil {
+		return Identity{}, err
+	}
+	id, err := VerifyInstanceChain(leaf, nil, root, crl, time.Now(), UsageClient)
+	if err != nil {
+		return Identity{}, err
+	}
+	if curID, cerr := IdentityOf(cur); cerr != nil || curID.Email != id.Email {
+		return Identity{}, fmt.Errorf("pki: the certificate names %q, the installed one %q: a renewal keeps the identity", id.Email, curID.Email)
+	}
+	if !leaf.NotBefore.After(cur.NotBefore) {
+		return Identity{}, fmt.Errorf("%w: NotBefore %s, installed %s", ErrLeafNotNewer, leaf.NotBefore, cur.NotBefore)
+	}
+	if err := writeFileAtomic(filepath.Join(dir, InstanceCertFile), certPEM(leaf.Raw), 0o600); err != nil {
+		return Identity{}, err
+	}
+	return id, nil
+}
+
 // checkBundle runs the checks that read only the bundle and the key: its
 // shape, that its certificate is for this instance's key, and that the
 // certificate chains to the bundle's own root under its own CRL.

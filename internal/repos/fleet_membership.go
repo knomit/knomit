@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -523,6 +524,9 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 		return FleetStatus{}, err
 	}
 	log.Info().Str("fleet", ri.Name()).Msg("fleet: joined, record pending; it is accepted once the master merges it into main")
+	// The join installed this instance's certificate (fleet_create.go's
+	// create does the same).
+	m.startTLSAfterInstall("fleet join")
 	return m.FleetStatus(ctx)
 }
 
@@ -1005,7 +1009,10 @@ func parseCRLPEM(raw []byte) (*x509.RevocationList, error) {
 // DecommissionFleet ends the fleet (master only): the fleet repository here
 // (dropped from every lens first; a forge keeps its copy, inert), the
 // installed material and <home>/fleet, root key included. State standalone.
-// Members' syncs then fail, and each leaves (which works offline).
+// Members' syncs then fail, and each leaves (which works offline). On a
+// forge it first flushes (flushBeforeSwitch: 409 unpublished_changes while
+// main lacks a commit of this branch), since another root holder can take
+// the fleet over from main.
 func (m *Manager) DecommissionFleet(ctx context.Context) (FleetStatus, error) {
 	defer m.lockFleetOp()()
 	ri, err := m.masterFleet()
@@ -1018,6 +1025,16 @@ func (m *Manager) DecommissionFleet(ctx context.Context) (FleetStatus, error) {
 	if o, oerr := m.originOf(ri); oerr != nil {
 		return FleetStatus{}, oerr
 	} else if o != nil {
+		// A hand-off like a stand-down: flush first (flushBeforeSwitch), or
+		// a revoke this branch holds and main lacks is deleted with the
+		// repository below and the next master never sees it (PR #537
+		// re-review 2). Under fleetOpMu only, unlike StandDown: holding the
+		// merger's run lock across the removal below (removeFleetHere archives
+		// and purges the repository, stopping its loops) hung until the test
+		// timed out.
+		if err := m.flushBeforeSwitch(ctx, ri); err != nil {
+			return FleetStatus{}, err
+		}
 		if err := m.deleteFleetMaster(ctx, ri); err != nil {
 			return FleetStatus{}, fleetErr(http.StatusConflict, "decommission_unpublished", "the commit that removes this instance as the acting master did not reach the forge's main ("+credentialFreeErr(err).Error()+"): nothing is decommissioned. Try again")
 		}
@@ -1050,8 +1067,103 @@ func (m *Manager) rootKeyHere() (bool, error) {
 	return false, err
 }
 
+// ErrCodeUnpublishedChanges is the refusal of a root export or a stand-down
+// while the acting master's fleet branch holds commits its main does not.
+const ErrCodeUnpublishedChanges = "unpublished_changes"
+
+// flushBeforeSwitch is the master switch's first step (user ruling: "flush"
+// all changes, "block any new incoming changes, THEN give up the master
+// role"): on the acting master, publish what its fleet branch holds
+// (publishMasterWrite: a forge's agent branch and main, the hub's local
+// main), then refuse (409 unpublished_changes) while the branch still holds
+// a commit main does not. Those commits are master writes main has not seen
+// (a revoke whose publish failed, a renewal, a re-signed CRL, a merged
+// member record): a new master works from ITS main and would never see them,
+// so a revocation would be lost and the new master could renew the revoked
+// leaf or re-sign a CRL that collides with the unpublished one (PR #537
+// re-review R1). Root export, stand-down and a forge decommission call it.
+// The caller holds fleetOpMu, which keeps every master duty out (they
+// TryLock it), and StandDown also holds the merger's run lock.
+// Not the acting master: nothing to flush.
+func (m *Manager) flushBeforeSwitch(ctx context.Context, ri *RepoInstance) error {
+	acts := false
+	if err := ri.WithRead(func(svc *store.Service) { acts = ri.actsAsFleetMaster(svc) }); err != nil {
+		return err
+	}
+	if !acts {
+		return nil
+	}
+	perr := m.publishMasterWrite(ctx, ri)
+	published, err := m.fleetBranchPublished(ctx, ri)
+	if err != nil {
+		return err
+	}
+	if published {
+		return nil
+	}
+	why := ""
+	if perr != nil {
+		why = " The publish just tried failed: " + credentialFreeErr(perr).Error() + "."
+	}
+	origin, oerr := m.hasOrigin(ri)
+	if oerr != nil {
+		return oerr
+	}
+	return fleetErr(http.StatusConflict, ErrCodeUnpublishedChanges, "this instance's fleet branch holds changes the fleet's main does not have yet (a revoke, a renewal, a re-signed CRL or a member's record): the master role cannot be handed on before they are published, or the next master would never see them."+why+" "+unpublishedWayOut(perr, origin))
+}
+
+// unpublishedWayOut is the last sentence of an unpublished_changes refusal:
+// what lets the publish succeed. A main held by the judge of this instance's
+// own commits never moves by waiting (every round refuses the same commit),
+// so it points at the drop-commit card; otherwise a forge needs its origin
+// reachable, and the hub (no origin) needs its next sync round.
+func unpublishedWayOut(perr error, origin bool) string {
+	switch {
+	case errors.Is(perr, store.ErrOwnCommitRefused):
+		c := mainHeldCommit(perr.Error())
+		if c == "" {
+			return "The fleet's rules refuse a commit on this instance's own branch, so main does not move while it is there and waiting does not help: drop it first (the fleet page's \"Drop commit\" card), then try again"
+		}
+		return "The fleet's rules refuse commit " + shortHash(c) + " on this instance's own branch, so main does not move while it is there and waiting does not help: drop it first (the fleet page's \"Drop commit " + shortHash(c) + "\" card), then try again"
+	case origin:
+		return "Let the publish succeed first (fix the fleet's origin, or wait for the next sync round), then try again"
+	}
+	return "Let the publish succeed first (wait for the next sync round, or see the fleet's last error), then try again"
+}
+
+// fleetBranchPublished reports whether the fleet repository's main holds
+// every commit of this instance's fleet branch (its tip is main's tip or an
+// ancestor of it).
+func (m *Manager) fleetBranchPublished(ctx context.Context, ri *RepoInstance) (bool, error) {
+	var ok bool
+	var rerr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			rerr = errors.New("fleet repository is not open")
+			return
+		}
+		agent, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+		if err != nil {
+			rerr = err
+			return
+		}
+		main, err := svc.Branches().HeadCommit(ctx, svc.UpstreamBranch())
+		if err != nil {
+			rerr = err
+			return
+		}
+		ok, rerr = svc.Triggers().IsAncestor(ctx, plumbing.NewHash(agent), plumbing.NewHash(main))
+	}); err != nil {
+		return false, err
+	}
+	return ok, rerr
+}
+
 // FleetRootFiles returns the files of <home>/fleet (GET /fleet/root): what a
-// master switch copies to the new master.
+// master switch copies to the new master. On the acting master it first
+// flushes its fleet branch, and refuses (unpublished_changes) while the
+// branch holds commits main does not (flushBeforeSwitch): the new master
+// takes over from main.
 func (m *Manager) FleetRootFiles() (FleetRoot, error) {
 	defer m.lockFleetOp()()
 	dir := m.fleetRootDir()
@@ -1059,6 +1171,11 @@ func (m *Manager) FleetRootFiles() (FleetRoot, error) {
 		return FleetRoot{}, err
 	} else if !ok {
 		return FleetRoot{}, fleetErr(http.StatusNotFound, "no_root", "this instance holds no fleet root ("+filepath.Join(dir, pki.RootKeyFile)+" is absent)")
+	}
+	if ri := m.fleetRepo(); ri != nil {
+		if err := m.flushBeforeSwitch(m.ctx, ri); err != nil {
+			return FleetRoot{}, err
+		}
 	}
 	out := FleetRoot{Dir: dir, Files: map[string]string{}}
 	for _, name := range fleetRootFiles {
@@ -1150,8 +1267,9 @@ func (m *Manager) InstallFleetRoot(files map[string]string) (FleetRoot, error) {
 }
 
 // StandDown is DELETE /fleet/root, the first step of a master switch (user
-// ruling 2026-10-16): this instance stops being the fleet's master, and it
-// needs nothing else first. While it still does master work
+// ruling 2026-10-16): this instance stops being the fleet's master. First it
+// flushes (flushBeforeSwitch: everything its fleet branch holds reaches
+// main, else 409 unpublished_changes). While it still does master work
 // (actsAsFleetMaster) its last act as master is one commit on main
 // (deleteFleetMaster: the master marker, fact.FleetMasterPath, deleted, so
 // main shows a fleet with no acting master); then <home>/fleet,
@@ -1180,6 +1298,11 @@ func (m *Manager) StandDown(ctx context.Context) error {
 		if c := ri.consensus; c != nil {
 			c.runMu.Lock()
 			defer c.runMu.Unlock()
+		}
+		// Flush, then give up the role (user ruling): with the merger held
+		// and fleetOpMu taken, nothing new enters the fleet branch.
+		if err := m.flushBeforeSwitch(ctx, ri); err != nil {
+			return err
 		}
 		acts := false
 		if err := ri.WithRead(func(svc *store.Service) { acts = ri.actsAsFleetMaster(svc) }); err != nil {
@@ -1283,6 +1406,9 @@ func (m *Manager) HostFleetHere(ctx context.Context, spec FleetHostSpec) (FleetS
 	if err := m.hostFleetHere(ctx, spec); err != nil {
 		return FleetStatus{}, err
 	}
+	// The hub serves members over the mTLS listener: a configured one that
+	// never started (the certificate came after the boot) starts now.
+	m.startTLSAfterInstall("fleet host")
 	return m.FleetStatus(ctx)
 }
 

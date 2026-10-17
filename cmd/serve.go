@@ -260,6 +260,10 @@ func serveCmd() *cobra.Command {
 			// GET /fleet's host.listening: whether the mTLS listener is UP,
 			// not only configured (a reload can start it later).
 			a.Manager().SetTLSListener(ls.TLSListening)
+			// A fleet create, join or host-here installs the certificate the
+			// mTLS listener waits for: it starts that listener, and nothing
+			// else (app.Listeners.StartTLSWhenInstalled is not a reload).
+			a.Manager().SetTLSStarter(ls.StartTLSWhenInstalled)
 			// The one line to copy into KNOMIT_SERVER to reach THIS instance.
 			log.Info().Str("knomit_server", ls.Address).Msg("this server's address (KNOMIT_SERVER for kb)")
 

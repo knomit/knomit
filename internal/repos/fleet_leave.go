@@ -179,4 +179,5 @@ func (ri *RepoInstance) fleetMasterDuty(ctx context.Context, svc *store.Service)
 	}
 	defer m.fleetOpMu.Unlock()
 	ri.fleetLeaveRound(ctx, svc)
+	ri.fleetRenewRound(ctx, svc) // fleet_renew.go
 }

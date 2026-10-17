@@ -91,6 +91,9 @@ type Manager struct {
 
 	// tlsListener reports the mTLS listener's live state (SetTLSListener).
 	tlsListener atomic.Pointer[func() (string, string)]
+	// tlsStarter starts the mTLS listener once a certificate is installed
+	// (SetTLSStarter).
+	tlsStarter atomic.Pointer[func() (bool, error)]
 
 	// fleetHaltSerial is the serial (lowercase hex) of this instance's
 	// certificate when this process found it revoked (fleet_tick.go): the
@@ -603,6 +606,33 @@ func (m *Manager) ControlDB() *sql.DB {
 // only configured. cmd/serve.go sets it once the listeners are bound; a
 // reload changes what f returns. Unset, nothing is listening.
 func (m *Manager) SetTLSListener(f func() (listening, reason string)) { m.tlsListener.Store(&f) }
+
+// SetTLSStarter hands the Manager the one way it may start the mTLS
+// listener: f (app.Listeners.StartTLSWhenInstalled) starts the configured
+// listener when it is down only for lack of a certificate, and does nothing
+// else. The fleet create, join and host-here call it once they succeed
+// (startTLSAfterInstall), so members can reach this instance without a
+// restart. cmd/serve.go sets it once the listeners are bound; unset (tests,
+// a process without listeners), nothing is started.
+func (m *Manager) SetTLSStarter(f func() (bool, error)) { m.tlsStarter.Store(&f) }
+
+// startTLSAfterInstall starts the mTLS listener after a fleet operation
+// installed (or relies on) this instance's certificate (SetTLSStarter). A
+// failure is logged; GET /fleet's host.listening and listener_reason say
+// what the listener is doing either way.
+func (m *Manager) startTLSAfterInstall(op string) {
+	f := m.tlsStarter.Load()
+	if f == nil {
+		return
+	}
+	started, err := (*f)()
+	switch {
+	case err != nil:
+		log.Warn().Err(err).Str("after", op).Msg("fleet: the mTLS listener did not start; restart knomit or run `knomit reload`")
+	case started:
+		log.Info().Str("after", op).Msg("fleet: the mTLS listener started")
+	}
+}
 
 // SetServerAddress records this server's own address (serveraddr.ForLocal of
 // the local listener it BOUND, else serveraddr.ForTCP of its TCP listener) for

@@ -161,7 +161,10 @@ type Listeners struct {
 	boundHTTP     string  // host:port the TCP listener was bound for; "" = none
 	boundTLS      string  // [tls].addr + dir the TLS listener was opened for; "" = none
 	boundTLSCfg   *config.TLSConfig
-	tlsCancel     context.CancelFunc // stops the TLS certificate re-check loop
+	// tlsCfg is the [tls] config the mTLS listener reflects: the boot's, then
+	// each reload's (reconcileTLS). StartTLSWhenInstalled starts THIS one.
+	tlsCfg    config.TLSConfig
+	tlsCancel context.CancelFunc // stops the TLS certificate re-check loop
 }
 
 // OpenListeners binds the listeners in the documented order. On any error it has
@@ -264,6 +267,7 @@ func OpenListeners(ctx context.Context, o ListenerOptions) (*Listeners, error) {
 	// until [tls].addr is set and a fleet join or create has placed a
 	// certificate.
 	tcfg := cfg.TLS
+	l.tlsCfg = tcfg
 	l.TLSState.Configured = tcfg.Addr
 	tctx, tcancel := context.WithCancel(o.Base)
 	tlsSrv, tln, err := OpenTLSServer(tctx, tcfg, o.KeyPath, l.HTTP)

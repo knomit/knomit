@@ -223,8 +223,8 @@ type FleetHostOffer struct {
 	Listening bool `json:"listening"`
 	// ListenerReason is why a configured listener is not listening:
 	// no_certificate (nothing installed in [tls].dir when it last started:
-	// a create or join installs one, and a restart or `knomit reload` starts
-	// it), addr_in_use, or "" when it is listening, off, or unknown.
+	// a create, join or host-here that succeeds starts it, SetTLSStarter),
+	// addr_in_use, or "" when it is listening, off, or unknown.
 	ListenerReason    string   `json:"listener_reason,omitempty"`
 	ExternalAddresses []string `json:"external_addresses"`
 	WouldServe        []string `json:"would_serve,omitempty"`
