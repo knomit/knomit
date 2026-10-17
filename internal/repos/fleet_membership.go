@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -1053,8 +1054,79 @@ func (m *Manager) rootKeyHere() (bool, error) {
 	return false, err
 }
 
+// ErrCodeUnpublishedChanges is the refusal of a root export or a stand-down
+// while the acting master's fleet branch holds commits its main does not.
+const ErrCodeUnpublishedChanges = "unpublished_changes"
+
+// flushBeforeSwitch is the master switch's first step (user ruling: "flush"
+// all changes, "block any new incoming changes, THEN give up the master
+// role"): on the acting master, publish what its fleet branch holds
+// (publishMasterWrite: a forge's agent branch and main, the hub's local
+// main), then refuse (409 unpublished_changes) while the branch still holds
+// a commit main does not. Those commits are master writes main has not seen
+// (a revoke whose publish failed, a renewal, a re-signed CRL, a merged
+// member record): a new master works from ITS main and would never see them,
+// so a revocation would be lost and the new master could renew the revoked
+// leaf or re-sign a CRL that collides with the unpublished one (PR #537
+// re-review R1). The caller holds fleetOpMu, which keeps every master duty
+// out (they TryLock it), and StandDown also holds the merger's run lock.
+// Not the acting master: nothing to flush.
+func (m *Manager) flushBeforeSwitch(ctx context.Context, ri *RepoInstance) error {
+	acts := false
+	if err := ri.WithRead(func(svc *store.Service) { acts = ri.actsAsFleetMaster(svc) }); err != nil {
+		return err
+	}
+	if !acts {
+		return nil
+	}
+	perr := m.publishMasterWrite(ctx, ri)
+	published, err := m.fleetBranchPublished(ctx, ri)
+	if err != nil {
+		return err
+	}
+	if published {
+		return nil
+	}
+	why := ""
+	if perr != nil {
+		why = " The publish just tried failed: " + credentialFreeErr(perr).Error() + "."
+	}
+	return fleetErr(http.StatusConflict, ErrCodeUnpublishedChanges, "this instance's fleet branch holds changes the fleet's main does not have yet (a revoke, a renewal, a re-signed CRL or a member's record): the master role cannot be handed on before they are published, or the next master would never see them."+why+" Let the publish succeed first (fix the fleet's origin, or wait for the next sync round), then try again")
+}
+
+// fleetBranchPublished reports whether the fleet repository's main holds
+// every commit of this instance's fleet branch (its tip is main's tip or an
+// ancestor of it).
+func (m *Manager) fleetBranchPublished(ctx context.Context, ri *RepoInstance) (bool, error) {
+	var ok bool
+	var rerr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			rerr = errors.New("fleet repository is not open")
+			return
+		}
+		agent, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+		if err != nil {
+			rerr = err
+			return
+		}
+		main, err := svc.Branches().HeadCommit(ctx, svc.UpstreamBranch())
+		if err != nil {
+			rerr = err
+			return
+		}
+		ok, rerr = svc.Triggers().IsAncestor(ctx, plumbing.NewHash(agent), plumbing.NewHash(main))
+	}); err != nil {
+		return false, err
+	}
+	return ok, rerr
+}
+
 // FleetRootFiles returns the files of <home>/fleet (GET /fleet/root): what a
-// master switch copies to the new master.
+// master switch copies to the new master. On the acting master it first
+// flushes its fleet branch, and refuses (unpublished_changes) while the
+// branch holds commits main does not (flushBeforeSwitch): the new master
+// takes over from main.
 func (m *Manager) FleetRootFiles() (FleetRoot, error) {
 	defer m.lockFleetOp()()
 	dir := m.fleetRootDir()
@@ -1062,6 +1134,11 @@ func (m *Manager) FleetRootFiles() (FleetRoot, error) {
 		return FleetRoot{}, err
 	} else if !ok {
 		return FleetRoot{}, fleetErr(http.StatusNotFound, "no_root", "this instance holds no fleet root ("+filepath.Join(dir, pki.RootKeyFile)+" is absent)")
+	}
+	if ri := m.fleetRepo(); ri != nil {
+		if err := m.flushBeforeSwitch(m.ctx, ri); err != nil {
+			return FleetRoot{}, err
+		}
 	}
 	out := FleetRoot{Dir: dir, Files: map[string]string{}}
 	for _, name := range fleetRootFiles {
@@ -1183,6 +1260,11 @@ func (m *Manager) StandDown(ctx context.Context) error {
 		if c := ri.consensus; c != nil {
 			c.runMu.Lock()
 			defer c.runMu.Unlock()
+		}
+		// Flush, then give up the role (user ruling): with the merger held
+		// and fleetOpMu taken, nothing new enters the fleet branch.
+		if err := m.flushBeforeSwitch(ctx, ri); err != nil {
+			return err
 		}
 		acts := false
 		if err := ri.WithRead(func(svc *store.Service) { acts = ri.actsAsFleetMaster(svc) }); err != nil {
