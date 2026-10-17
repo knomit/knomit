@@ -37,6 +37,15 @@ import (
 // have a first-parent delta that is independent of what the merge pulled
 // in from old main (delta is computed against the merge commit's tree).
 //
+// Not every merge is a reconcile-merge: CommitExperiment's merge brings this
+// copy's own experiment commits in through its second parent, and nothing
+// else references them once the experiment is deleted. At each merge the walk
+// therefore also collects, parents first and ahead of the commits above the
+// merge, the non-merge commits behind its non-first parents that are signed
+// by this copy's own key and held by neither the upstream, the stop point's
+// history nor the first-parent chain (ownSideCommits). Commits signed by
+// anyone else stay behind, as before.
+//
 // When explicitBase is non-zero, it is used directly as the walk's stop
 // point (the watermark — "the main commit this agent last consumed").
 // disjoint is reported false when explicitBase is set, because the
@@ -134,6 +143,11 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 		}
 	}
 
+	// side is what a merge on the walk brought in through its non-first
+	// parents that is this copy's own work (ownSideCommits): built on the
+	// first merge the walk meets, shared by every merge after it.
+	var side *sideWalk
+
 	var collected []*object.Commit
 	cur := local
 	for {
@@ -155,6 +169,22 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 				Str("commit", cur.Hash.String()[:8]).
 				Int("parents", cur.NumParents()).
 				Msg("unpushedCommits: skipping merge commit (reconcile-merge from prior steady-state tick)")
+			if side == nil {
+				if side, err = rh.newSideWalk(local, stopAt, onUpstream); err != nil {
+					return nil, false, false, fmt.Errorf("unpushedCommits: %w", err)
+				}
+			}
+			own, dropped, err := rh.ownSideCommits(side, cur)
+			if err != nil {
+				return nil, false, false, fmt.Errorf("unpushedCommits: merge %s: %w", cur.Hash.String()[:8], err)
+			}
+			if dropped {
+				droppedOut = true
+			}
+			// collected is newest first; own is parents first.
+			for i := len(own) - 1; i >= 0; i-- {
+				collected = append(collected, own[i])
+			}
 		}
 		if cur.NumParents() == 0 {
 			break
@@ -607,4 +637,114 @@ func (rh *repoHandler) replaySkips(c *object.Commit) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// sideWalk is the state ownSideCommits shares across the merges of one
+// unpushedCommits walk: this copy's own key fingerprints, and every commit a
+// side walk must not enter or has already entered.
+type sideWalk struct {
+	own  map[string]bool
+	stop map[plumbing.Hash]bool
+}
+
+// newSideWalk builds the side walk's state for a first-parent walk from local
+// that stops at stopAt or at a commit onUpstream holds. The own keys are
+// checkOwnLineage's (E4): the key this store signs with, plus every key this
+// instance's fleet member record has held. The stop set is the upstream's
+// history, the stop point's history, and the first-parent chain the main
+// walk visits itself.
+func (rh *repoHandler) newSideWalk(local *object.Commit, stopAt plumbing.Hash, onUpstream map[plumbing.Hash]bool) (*sideWalk, error) {
+	sw := &sideWalk{own: map[string]bool{}, stop: map[plumbing.Hash]bool{}}
+	if signer, err := rh.commitSigner(); err == nil {
+		if fp, err := keyFingerprint(signer.PublicKey()); err == nil {
+			sw.own[fp] = true
+		}
+	}
+	if rh.ownKeys != nil {
+		for _, k := range rh.ownKeys() {
+			if fp, err := keyFingerprint(k); err == nil {
+				sw.own[fp] = true
+			}
+		}
+	}
+	if len(sw.own) == 0 {
+		return sw, nil
+	}
+	for h := range onUpstream {
+		sw.stop[h] = true
+	}
+	if stopAt != plumbing.ZeroHash {
+		if err := walkHistory(rh.gits, stopAt, nil, func(c *object.Commit) { sw.stop[c.Hash] = true }); err != nil {
+			return nil, fmt.Errorf("stop point history: %w", err)
+		}
+	}
+	for c := local; ; {
+		if c.Hash == stopAt || onUpstream[c.Hash] {
+			break
+		}
+		sw.stop[c.Hash] = true
+		if c.NumParents() == 0 {
+			break
+		}
+		p, err := c.Parents().Next()
+		if err != nil {
+			return nil, fmt.Errorf("first-parent chain at %s: %w", c.Hash, err)
+		}
+		c = p
+	}
+	return sw, nil
+}
+
+// ownSideCommits returns, parents first, the non-merge commits merge brought
+// in through its NON-FIRST parents that this copy must replay: signed by one
+// of its own keys (sideWalk.own), and held by neither the upstream, the stop
+// point's history, the first-parent chain, nor an earlier merge's side walk.
+// That is a committed experiment's work: CommitExperiment writes a merge
+// commit whose second parent is the experiment and deletes the experiment, so
+// the merge is the only reference to that work, and the first-parent walk,
+// which skips merges, would lose it on the first rewind after any later
+// write. It is also this copy's own agent-branch commits that an experiment's
+// sync merge brought in, when the experiment commit then fast-forwarded the
+// agent branch onto the experiment. A commit signed by anyone else (a
+// member's commit in a hub master's consensus merge, an upstream commit an
+// old reconcile merge brought in) is never collected: replaying it would
+// re-sign it as this copy, which a fleet's new host refuses for good (#528
+// N1). A commit that changes only replay-skipped paths is dropped (dropped
+// reports it), exactly as on the first-parent walk.
+func (rh *repoHandler) ownSideCommits(sw *sideWalk, merge *object.Commit) (out []*object.Commit, dropped bool, err error) {
+	if len(sw.own) == 0 {
+		return nil, false, nil
+	}
+	var verr error
+	for _, p := range merge.ParentHashes[1:] {
+		werr := walkHistory(rh.gits, p, sw.stop, func(c *object.Commit) {
+			sw.stop[c.Hash] = true
+			if verr != nil || c.NumParents() > 1 {
+				return
+			}
+			s, serr := verifyCommitSignature(c)
+			if serr != nil || !sw.own[s.Fingerprint] {
+				return
+			}
+			skip, serr := rh.replaySkips(c)
+			if serr != nil {
+				verr = serr
+				return
+			}
+			if skip {
+				dropped = true
+				log.Info().Str("commit", c.Hash.String()[:8]).
+					Msg("unpushedCommits: dropping a merged-in commit that changes only paths a replay never carries")
+				return
+			}
+			out = append(out, c)
+		})
+		if werr != nil {
+			return nil, false, werr
+		}
+		if verr != nil {
+			return nil, false, verr
+		}
+	}
+	return out, dropped, nil
 }
