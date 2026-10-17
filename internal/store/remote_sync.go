@@ -218,13 +218,20 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	// for (origin_position.go), that position is forgotten FIRST: the
 	// watermarks here, the remote-tracking refs inside the lock below, before
 	// lastOrigin is read. The new URL is recorded only after the fetch
-	// succeeded, so a failed attempt forgets again on the next round.
+	// succeeded, so a failed attempt (or a round that stops at "no git
+	// remote" before the tracking refs are forgotten) forgets again on the
+	// next round. The forgotten mark is set before anything is deleted and
+	// cleared only after a reconcile succeeded: while it is set the rewind
+	// replays only this instance's own commits.
 	stale, err := ri.rh.originPositionStale(remote.URL)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("Sync: %w", err)
 	}
 	var forgotWatermarks, forgotTracking int
 	if stale {
+		if err := ri.rh.setOriginPositionForgotten(true); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: %w", err)
+		}
 		if forgotWatermarks, err = ri.rh.forgetWatermarks(agentBranch); err != nil {
 			return SyncResult{}, fmt.Errorf("Sync: forget the previous origin's watermarks: %w", err)
 		}
@@ -268,7 +275,18 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 		}
 	}
 
-	return ri.reconcileNow(ctx, agentBranch, upstreamMain)
+	res, err = ri.reconcileNow(ctx, agentBranch, upstreamMain)
+	if err != nil {
+		return res, err
+	}
+	if forgotten, ferr := ri.rh.originPositionForgotten(); ferr != nil {
+		return res, fmt.Errorf("Sync: %w", ferr)
+	} else if forgotten {
+		if err := ri.rh.setOriginPositionForgotten(false); err != nil {
+			return res, fmt.Errorf("Sync: %w", err)
+		}
+	}
+	return res, nil
 }
 
 // reconcileNow runs the post-fetch portion of Sync. Exposed (package-private)

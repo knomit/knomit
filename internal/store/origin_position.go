@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -38,8 +39,8 @@ import (
 //
 // The URL compared is the stored origin URL (control.db's, injected through
 // Service.SetOrigin), not the derived git URL, and it is compared by identity
-// (originIdentity): credentials in the URL, the case of the scheme and host, a
-// default port and a trailing slash do not count. A credential change keeps
+// (originIdentity, which lists the spellings that count as the same origin).
+// A credential change keeps
 // the URL and keeps the position. The check is lazy, at Sync, so every path
 // that changes the origin (PUT origin, the connect wizard, a swap, a detach
 // and re-attach, the fleet's follow and move) is covered by one place, and a
@@ -47,22 +48,150 @@ import (
 // nothing.
 const originPositionURLKey = "origin_position_url"
 
-// originIdentity is the part of an origin URL that names WHICH origin it is:
-// without credentials (user info, which may hold a token), with the scheme and
-// host lower-cased, a default port dropped and no trailing slash. A URL that
-// does not parse as scheme://host/path (the scp-like form, a bare path) only
-// loses a trailing slash. This is what is recorded, so no credential is ever
-// written to the meta table.
+// originIdentity is the part of an origin URL that names WHICH origin it is.
+// These spellings of one origin give one identity:
+//   - credentials (user info, which may hold a token) are dropped, also from a
+//     URL that does not parse;
+//   - the scheme and host are lower-cased and a default port (https 443,
+//     http 80, ssh 22) is dropped;
+//   - the path is cleaned (`/./`, `/../`, doubled slashes), and a trailing
+//     `.git` and a trailing slash are dropped;
+//   - the scp form (`user@host:owner/repo`) is the ssh URL of the same host
+//     and path (`ssh://host/owner/repo`);
+//   - a bare absolute path is the file:// URL of that path.
+//
+// Every other difference is a different origin: the path's case, http versus
+// https, https versus ssh, another host name for the same server, a
+// non-default port, a symlinked path. This is what is recorded, so no
+// credential is ever written to the meta table or logged.
+//
+// It has siblings that answer "the same origin?" for other purposes:
+// repos.sameFleetURL (the fleet's credential-change test) and the web UI's
+// own comparison; they are not required to agree with this one.
 func originIdentity(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || !strings.Contains(raw, "://") {
-		return strings.TrimSuffix(raw, "/")
+	raw = strings.TrimSpace(raw)
+	switch {
+	case strings.Contains(raw, "://"):
+		u, err := url.Parse(raw)
+		if err != nil {
+			// Unparseable: drop the user info by hand, never keep it.
+			return strings.TrimSuffix(stripUserinfo(raw), "/")
+		}
+		scheme := strings.ToLower(u.Scheme)
+		host := strings.ToLower(u.Hostname())
+		if port := u.Port(); port != "" && !isDefaultPort(scheme, port) {
+			host += ":" + port
+		}
+		return scheme + "://" + host + cleanOriginPath(u.EscapedPath())
+	case isScpLike(raw):
+		hostPart, p, _ := scpSplit(raw)
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		return "ssh://" + strings.ToLower(hostPart) + cleanOriginPath(p)
+	case strings.HasPrefix(raw, "/"):
+		return "file://" + cleanOriginPath(raw)
+	case len(raw) >= 3 && raw[1] == ':' && (raw[2] == '/' || raw[2] == '\\'):
+		// A Windows drive path, C:\kb or C:/kb.
+		return "file://" + cleanOriginPath("/"+strings.ReplaceAll(raw, `\`, "/"))
+	default:
+		return strings.TrimSuffix(stripUserinfo(raw), "/")
 	}
-	host := strings.ToLower(u.Hostname())
-	if port := u.Port(); port != "" && !(u.Scheme == "https" && port == "443" || u.Scheme == "http" && port == "80") {
-		host += ":" + port
+}
+
+// cleanOriginPath cleans a URL path and drops a trailing ".git" and slash.
+func cleanOriginPath(p string) string {
+	if p == "" {
+		return ""
 	}
-	return strings.ToLower(u.Scheme) + "://" + host + strings.TrimSuffix(u.EscapedPath(), "/")
+	p = path.Clean(p)
+	p = strings.TrimSuffix(p, ".git")
+	p = strings.TrimSuffix(p, "/")
+	return p
+}
+
+func isDefaultPort(scheme, port string) bool {
+	return scheme == "https" && port == "443" || scheme == "http" && port == "80" || scheme == "ssh" && port == "22"
+}
+
+// isScpLike reports the scp form, [user@]host:path: no scheme, a colon whose
+// left side is a host (no slash or backslash, longer than a drive letter).
+func isScpLike(raw string) bool {
+	_, _, ok := scpSplit(raw)
+	return ok
+}
+
+// scpSplit splits the scp form [user[:secret]@]host:path into its host and
+// path, without the user info: everything up to the last "@" before the path
+// is dropped first, so a secret in it is never kept.
+func scpSplit(raw string) (host, p string, ok bool) {
+	s := raw
+	head := s
+	if i := strings.IndexAny(s, `/\`); i >= 0 {
+		head = s[:i]
+	}
+	if at := strings.LastIndex(head, "@"); at >= 0 {
+		s = s[at+1:]
+	}
+	host, p, ok = strings.Cut(s, ":")
+	if !ok || strings.ContainsAny(host, `/\`) || len(host) <= 1 {
+		return "", "", false
+	}
+	return strings.ToLower(host), p, true
+}
+
+// stripUserinfo removes everything between "://" (or the start, for the scp
+// form) and the last "@" before the path, so no credential survives even in
+// a string url.Parse refuses.
+func stripUserinfo(s string) string {
+	prefix, rest := "", s
+	if i := strings.Index(s, "://"); i >= 0 {
+		prefix, rest = s[:i+3], s[i+3:]
+	}
+	end := strings.IndexAny(rest, "/?#")
+	if end < 0 {
+		end = len(rest)
+	}
+	if at := strings.LastIndex(rest[:end], "@"); at >= 0 {
+		rest = rest[at+1:]
+	}
+	return prefix + rest
+}
+
+// originPositionForgottenKey marks that the position was forgotten and no
+// reconcile has completed since. While it is set, the rewind replay keeps
+// only this instance's own commits (unpushedCommitsWalk's own-only mode):
+// with no watermark, the walk would otherwise also pass what the OLD origin
+// wrote and push it to the new one as this copy's work. It is set BEFORE the
+// watermarks are deleted and cleared only after a Sync's reconcile succeeded,
+// so a round that fails in between leaves it set for the next one.
+const originPositionForgottenKey = "origin_position_forgotten"
+
+// setOriginPositionForgotten sets or clears the forgotten mark.
+func (rh *repoHandler) setOriginPositionForgotten(on bool) error {
+	var err error
+	if on {
+		_, err = rh.db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')`, originPositionForgottenKey)
+	} else {
+		_, err = rh.db.Exec(`DELETE FROM meta WHERE key = ?`, originPositionForgottenKey)
+	}
+	if err != nil {
+		return fmt.Errorf("origin position forgotten mark: %w", err)
+	}
+	return nil
+}
+
+// originPositionForgotten reports the forgotten mark.
+func (rh *repoHandler) originPositionForgotten() (bool, error) {
+	var v string
+	err := rh.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, originPositionForgottenKey).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read origin position forgotten mark: %w", err)
+	}
+	return true, nil
 }
 
 // readOriginPositionURL returns the origin URL the position is recorded for,

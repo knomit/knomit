@@ -88,6 +88,29 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 // when nothing else is left to replay, or it would carry the dropped commit
 // as it stands.
 func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBase plumbing.Hash) (collectedOut []*object.Commit, disjointOut, droppedOut bool, errOut error) {
+	return rh.unpushedCommitsWalk(localTip, upstreamTip, explicitBase, false)
+}
+
+// unpushedCommitsWalk is unpushedCommitsDropping with OWN-ONLY mode, used by
+// the first sync after the origin URL changed (origin_position.go), when the
+// previous origin's position was forgotten. With no watermark the walk runs
+// down to the first commit the new origin holds, and what it passes includes
+// what the OLD origin wrote: its main's commits (a squash merge, a fleet
+// master's member records, CRL, host record) reached this branch by a
+// fast-forward or a reconcile merge. Those are not this copy's to re-sign and
+// push, and a fleet's new host refuses a member's copy of the master's writes
+// for good. So in own-only mode:
+//   - a first-parent non-merge commit is collected only when this instance's
+//     keys signed it (ownKeySet, the side collection's key set);
+//   - a merge's foreign side is never replayed (as always);
+//   - a foreign commit met makes the branch rebuilt on the upstream (dropped
+//     is reported), even when nothing is left to replay;
+//   - a branch strictly ahead of the upstream is kept as it stands only when
+//     nothing foreign lies above the upstream.
+//
+// With no own key known at all (no signer), own-only mode cannot tell own
+// from foreign and is not applied: nothing is dropped.
+func (rh *repoHandler) unpushedCommitsWalk(localTip, upstreamTip, explicitBase plumbing.Hash, ownOnly bool) (collectedOut []*object.Commit, disjointOut, droppedOut bool, errOut error) {
 	if localTip == upstreamTip {
 		return nil, false, false, nil
 	}
@@ -113,9 +136,19 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 	if err != nil {
 		return nil, false, false, fmt.Errorf("unpushedCommits: %w", err)
 	}
-	if ahead {
+	var own map[string]bool
+	if ownOnly {
+		if own = rh.ownKeySet(); len(own) == 0 {
+			log.Warn().Msg("unpushedCommits: no own key known; the first sync after an origin change replays without the own-key filter")
+			ownOnly = false
+		}
+	}
+	if ahead && !ownOnly {
 		return nil, false, false, nil
 	}
+	// foreign: own-only mode met a commit above the upstream that is not this
+	// instance's own.
+	foreign := false
 
 	var stopAt plumbing.Hash
 	disjoint := false
@@ -169,6 +202,10 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 				droppedOut = true
 				log.Info().Str("commit", cur.Hash.String()[:8]).
 					Msg("unpushedCommits: dropping a commit that changes only paths a replay never carries")
+			} else if ownOnly && !signedBy(cur, own) {
+				foreign, droppedOut = true, true
+				log.Info().Str("commit", cur.Hash.String()[:8]).
+					Msg("unpushedCommits: first sync with a new origin; dropping a commit this instance did not sign")
 			} else {
 				collected = append(collected, cur)
 			}
@@ -188,6 +225,12 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 			}
 			if sr.dropped {
 				droppedOut = true
+			}
+			if ownOnly && sr.foreign > 0 {
+				// The merge brought in others' work the new origin lacks:
+				// the branch must not keep it (rebuild), and only the own
+				// commits behind it are replayed (below).
+				foreign, droppedOut = true, true
 			}
 			switch {
 			case len(sr.own) == 0:
@@ -229,10 +272,43 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 		cur = parent
 	}
 
+	if ahead && !foreign {
+		// Own-only mode, nothing foreign above the upstream: the branch is a
+		// strict extension of it holding only this instance's work, kept as
+		// it stands (its hashes too), exactly as without the mode.
+		return nil, false, false, nil
+	}
+
 	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
 		collected[i], collected[j] = collected[j], collected[i]
 	}
 	return collected, disjoint, droppedOut, nil
+}
+
+// ownKeySet is the fingerprints of this instance's keys, checkOwnLineage's
+// (E4) set and the side collection's: the key this store signs with (the
+// INSTANCE key) plus every key this instance's fleet member record has held.
+func (rh *repoHandler) ownKeySet() map[string]bool {
+	own := map[string]bool{}
+	if signer, err := rh.commitSigner(); err == nil {
+		if fp, err := keyFingerprint(signer.PublicKey()); err == nil {
+			own[fp] = true
+		}
+	}
+	if rh.ownKeys != nil {
+		for _, k := range rh.ownKeys() {
+			if fp, err := keyFingerprint(k); err == nil {
+				own[fp] = true
+			}
+		}
+	}
+	return own
+}
+
+// signedBy reports whether c carries a valid signature by one of keys.
+func signedBy(c *object.Commit, keys map[string]bool) bool {
+	s, err := verifyCommitSignature(c)
+	return err == nil && keys[s.Fingerprint]
 }
 
 // strictlyAhead reports whether local is a strict linear extension of
@@ -454,6 +530,19 @@ func (rh *repoHandler) replayOntoUpstream(
 	explicitBase plumbing.Hash,
 	strategy ConflictStrategy,
 ) (AgentReconcileResult, error) {
+	return rh.replayOntoUpstreamMode(ctx, localBranch, upstreamTip, explicitBase, strategy, false)
+}
+
+// replayOntoUpstreamMode is replayOntoUpstream with the walk's own-only mode
+// (unpushedCommitsWalk): the first sync after the origin URL changed.
+func (rh *repoHandler) replayOntoUpstreamMode(
+	ctx context.Context,
+	localBranch string,
+	upstreamTip plumbing.Hash,
+	explicitBase plumbing.Hash,
+	strategy ConflictStrategy,
+	ownOnly bool,
+) (AgentReconcileResult, error) {
 	localRefName := plumbing.NewBranchReferenceName(localBranch)
 	localRef, err := rh.gits.Reference(localRefName)
 	if err != nil {
@@ -461,7 +550,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	}
 	localTip := localRef.Hash()
 
-	commits, disjoint, dropped, err := rh.unpushedCommitsDropping(localTip, upstreamTip, explicitBase)
+	commits, disjoint, dropped, err := rh.unpushedCommitsWalk(localTip, upstreamTip, explicitBase, ownOnly)
 	if err != nil {
 		return AgentReconcileResult{}, err
 	}
@@ -681,7 +770,13 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, up
 		}
 	}
 
-	res, err := rh.replayOntoUpstream(ctx, agentBranch, mainHash, base, strategy)
+	// The first sync after the origin URL changed replays only this
+	// instance's own commits (unpushedCommitsWalk).
+	ownOnly, err := rh.originPositionForgotten()
+	if err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("reconcileAgentRebase: %w", err)
+	}
+	res, err := rh.replayOntoUpstreamMode(ctx, agentBranch, mainHash, base, strategy, ownOnly)
 	if err != nil {
 		return res, err
 	}
@@ -762,19 +857,7 @@ type sideWalk struct {
 // branch's". held is the upstream's history and the stop point's history;
 // stop is held plus the first-parent chain the main walk visits itself.
 func (rh *repoHandler) newSideWalk(local *object.Commit, stopAt plumbing.Hash, onUpstream map[plumbing.Hash]bool) (*sideWalk, error) {
-	sw := &sideWalk{own: map[string]bool{}, held: map[plumbing.Hash]bool{}, stop: map[plumbing.Hash]bool{}}
-	if signer, err := rh.commitSigner(); err == nil {
-		if fp, err := keyFingerprint(signer.PublicKey()); err == nil {
-			sw.own[fp] = true
-		}
-	}
-	if rh.ownKeys != nil {
-		for _, k := range rh.ownKeys() {
-			if fp, err := keyFingerprint(k); err == nil {
-				sw.own[fp] = true
-			}
-		}
-	}
+	sw := &sideWalk{own: rh.ownKeySet(), held: map[plumbing.Hash]bool{}, stop: map[plumbing.Hash]bool{}}
 	if len(sw.own) == 0 {
 		return sw, nil
 	}
