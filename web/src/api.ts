@@ -2089,6 +2089,19 @@ export interface FleetStatus {
   // does not help. sync_interval_seconds: how often this copy's origin round
   // runs (absent on the hub), which is when it next sees main.
   last_error_refused?: boolean;
+  // last_error_refusal classifies a last_error that is a TLS refusal, from
+  // what this instance holds: revoked (the host refused a certificate that
+  // is valid here), moved (this instance refused the host: another root
+  // answers there), other. revoked: this instance's certificate is revoked
+  // as far as it can tell (also when a hub member never reads main's CRL).
+  // sync_stopped: this process stopped the fleet repository's sync rounds
+  // because of it (a restart retries once).
+  last_error_refusal?: 'revoked' | 'moved' | 'other';
+  // certificate_expired: this instance's installed certificate is outside
+  // its validity by this instance's clock (the `other` class's sentence).
+  certificate_expired?: boolean;
+  revoked?: boolean;
+  sync_stopped?: boolean;
   // last_error_commit_refused: last_error is the fleet's host refusing a
   // commit of this copy's push with its judge (commit, rule, reason in the
   // text). A retry does not help; under the host-record and artifact rules

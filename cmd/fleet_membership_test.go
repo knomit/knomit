@@ -402,7 +402,7 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 		t.Fatal(err)
 	}
 	requireFleetActivity(t, alpha, enr.Serial)
-	if _, err := pki.InstallBundle(charlie.cfg.TLS.Dir, charlie.key, []byte(enr.Bundle), pki.InstallOptions{}); err != nil {
+	if _, err := pki.InstallBundle(charlie.cfg.TLS.Dir, charlie.key, []byte(enr.Bundle)); err != nil {
 		t.Fatal(err)
 	}
 	peer, err := pki.HTTPClient(charlie.cfg.TLS.Dir, charlie.key)

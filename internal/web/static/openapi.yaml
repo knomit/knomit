@@ -2556,8 +2556,10 @@ paths:
         statement (`revocations/<serial>.txt`), committed on the master's
         agent branch and published (`published` / `publish_error`); the CRL
         is installed here at once (`install_error`) and copied to
-        `<home>/fleet`. Only the master installs it: no member installs the
-        newer CRL from `main` (not built). A member whose `left` record is
+        `<home>/fleet`. Every other copy installs it from `main` in its own
+        next sync round (a newer CRL Number than the one it accepted, under
+        the root installed there): from then on its mTLS listener refuses the
+        revoked peer. A member whose `left` record is
         on main, naming the certificate main holds for it, is revoked the
         same way by the master's own round, with no call, while main's master
         marker names this instance and it is not paused. Refusals:
@@ -4367,7 +4369,20 @@ components:
         last_error: { type: string, description: "The latest push or fetch failure; empty after a success" }
         last_error_refused:
           type: boolean
-          description: "true when last_error is the fleet refusing this instance's certificate at the TLS handshake (revoked, or the fleet moved to another root): a retry does not help. Read from the recorded error; absent otherwise."
+          description: "true when last_error is the fleet refusing this instance's certificate at the TLS handshake: a retry does not help. last_error_refusal says why. Read from the recorded error (a fetch refused at the handshake is recorded too); absent otherwise."
+        last_error_refusal:
+          type: string
+          enum: [revoked, moved, other]
+          description: "Classifies a last_error that is a TLS refusal, from the recorded error and this instance's own installed certificate, root and CRL (nobody is asked). `revoked`: the fleet's host refused this instance's certificate with the bad_certificate alert while it is valid here (it chains to the installed root, is inside its validity, and the installed CRL does not list it): the host shares this root, and the one thing it refuses such a certificate for is its CRL; also when the installed CRL lists the installed certificate. `moved`: THIS instance refused the host: its certificate does not chain to the installed root, so another fleet, or the fleet on another root, answers at that address. `other`: refused, and either the certificate has expired by this instance's clock (`certificate_expired`) or the host sent another alert. Absent when last_error is no TLS refusal."
+        certificate_expired:
+          type: boolean
+          description: "true when the certificate installed here is outside its validity by this instance's clock. With last_error_refusal `other` it says which of that class's two cases it is (expired here, or another alert). Absent otherwise."
+        revoked:
+          type: boolean
+          description: "true when this instance's certificate is revoked as far as it can tell from what it holds: record_state revoked (main's CRL), its installed CRL listing its installed certificate, or last_error_refusal revoked. A member of a knomit-hosted fleet that is refused at the handshake never reads main's CRL (its record_state stays as its last main said): this is how it shows. Never on a holder of the fleet root. Absent otherwise."
+        sync_stopped:
+          type: boolean
+          description: "true when this process stopped the fleet repository's sync rounds because the certificate is revoked (revoked): no fetch, no push. A restart retries once. The way back is to leave the fleet, have the master enroll this instance again (same key), and join with the new bundle; the new certificate syncs again. Absent otherwise."
         last_error_commit_refused:
           type: boolean
           description: "true when last_error is the fleet's host refusing a commit of this copy's push with its commit judge (the text names the commit, the rule and the reason). A retry does not help: every sync sends the same commit. Under the host-record and artifact rules, which read the commit against its own parents, no later main admits it either; the way out is to leave the fleet, have the master enroll this instance again, then join again. The master revokes the old certificate by itself only once the left record reaches main; the Leave push that carries it is refused too while the refused commit is on the branch, so the master's operator revokes it by hand first (POST /fleet/revoke). It is the residue of the dead-master fallback (an old master's master write the new host's main lacks). Read from the recorded error; absent otherwise."

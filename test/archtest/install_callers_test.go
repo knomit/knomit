@@ -45,12 +45,21 @@ var installCallers = []string{
 // installCRLCallers are the ONLY production files that may call
 // pki.InstallCRL, the CRL-only install (fleet design D13). It writes trust
 // material like InstallBundle and must never be reachable over a network
-// route. The one caller is the master's revoke (POST /api/v1/fleet/revoke,
-// behind RequireLocalVia), which installs the CRL it just signed under its
-// own installed root; the members' tick will be the next, a reviewed
-// decision, not a silent new path.
+// route. The callers are:
+//
+//   - internal/repos/fleet_membership.go, the master's revoke (POST
+//     /api/v1/fleet/revoke, behind RequireLocalVia, and the master's leave
+//     duty), which installs the CRL it just signed under its own installed
+//     root;
+//   - internal/repos/fleet_tick.go, every copy's tick duty (fleet design
+//     P6): the CRL on the fleet repository's main, installed only when its
+//     root is the INSTALLED root and its Number is above the accepted one
+//     (InstallCRL checks both under the install lock). No route reaches it:
+//     it runs in the sync rounds, from what the master published to main,
+//     which the master's own judge held before it moved.
 var installCRLCallers = []string{
 	"internal/repos/fleet_membership.go",
+	"internal/repos/fleet_tick.go",
 }
 
 // TestInstallBundleHasOnlyTheListedCallers parses every non-test Go file of

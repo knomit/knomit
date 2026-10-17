@@ -60,6 +60,26 @@ type FleetStatus struct {
 	// A retry does not help, and the member cannot read the CRL to tell
 	// which. Read from the recorded error only; nothing new is kept.
 	LastErrorRefused bool `json:"last_error_refused,omitempty"`
+	// LastErrorRefusal classifies a LastError that is a TLS refusal
+	// (fleet_refusal.go): "revoked" (the peer refused this instance's
+	// certificate with bad_certificate while it is valid here, or the
+	// installed CRL lists it), "moved" (this instance refused the peer: its
+	// certificate is not of the installed root), "other"; absent otherwise.
+	LastErrorRefusal string `json:"last_error_refusal,omitempty"`
+	// CertificateExpired: the certificate installed in [tls].dir is outside
+	// its validity by this instance's clock (pki.StandingExpired). With
+	// LastErrorRefusal "other" it says which of that class's two cases it is.
+	CertificateExpired bool `json:"certificate_expired,omitempty"`
+	// Revoked: this instance's certificate is revoked as far as it can
+	// tell, from what it holds: record_state revoked (main's CRL), the
+	// installed CRL listing the installed certificate, or LastErrorRefusal
+	// revoked. A hub member refused at the handshake never reads main's CRL;
+	// this is how it shows. Never on a holder of the fleet root.
+	Revoked bool `json:"revoked,omitempty"`
+	// SyncStopped: this process stopped the fleet repository's sync rounds
+	// because the certificate is revoked (no fetch, no push; a restart
+	// retries once). Leave, then join again with a new bundle.
+	SyncStopped bool `json:"sync_stopped,omitempty"`
 	// LastErrorCommitRefused: LastError is the fleet's host refusing a
 	// commit of this copy's push with its judge (store.CommitRefusedByJudge;
 	// the text names the commit, the rule and the reason). Every sync sends
@@ -396,6 +416,14 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		// on its branch only.
 		st.RecordState = RecordPending
 	}
+	// The refused sync, classified from the recorded error and what this
+	// instance holds (fleet_refusal.go).
+	own, _ := m.ownStanding()
+	st.LastErrorRefusal = classifyFleetRefusal(row.LastError, own)
+	st.CertificateExpired = own == pki.StandingExpired
+	revoked, _ := m.fleetRevokedHere(row.LastError)
+	st.Revoked = !st.RootHeld && (revoked || st.RecordState == fact.MemberRevoked)
+	st.SyncStopped = ri.fleetSyncHalt() != ""
 	return st, nil
 }
 
@@ -669,6 +697,9 @@ func (m *Manager) fleetPushed(repo string, pushErr error) {
 		log.Warn().Err(err).Msg("fleet: recording the push attempt failed")
 	}
 	if pushErr != nil {
+		// A refusal that says this instance is revoked stops the rounds
+		// (fleet_refusal.go): retrying cannot help.
+		m.noteFleetRevoked(pushErr.Error())
 		return
 	}
 	row, err := readFleetRow(db)

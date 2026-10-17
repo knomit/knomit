@@ -440,6 +440,56 @@ describe('FleetSettings', () => {
     expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
   });
 
+  // PR8 S2: a hub member refused at the handshake never reads main's CRL, so
+  // record_state still says active; the server's `revoked` (classified from
+  // what this instance holds) is what the page shows: the revoked chip, the
+  // plain sentence that the copy stopped syncing and how to come back, and the
+  // refusal's own class under the raw error. Never "Retrying".
+  // SABOTAGE: read record_state alone for the chip and the notice -> the role
+  // reads "member" and no notice -> red; ignore sync_stopped -> the short
+  // sentence -> red; ignore last_error_refusal -> the undecided sentence ->
+  // red.
+  it('a revoked member that cannot read the CRL says revoked, that sync stopped, and how to rejoin', () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    mount({
+      ...member, record_state: 'active', revoked: true, sync_stopped: true,
+      last_error: "sync: pki: the peer refused this instance's certificate: remote error: tls: bad certificate",
+      last_error_refused: true, last_error_refusal: 'revoked',
+    });
+    expect(screen.getByTestId('fleet-settings-role')).toHaveTextContent('revoked');
+    expect(screen.getByTestId('fleet-revoked-notice')).toHaveTextContent("This instance's certificate is revoked: the fleet refuses it, so this copy has stopped syncing. To rejoin, leave the fleet here, ask the fleet's master to enroll this instance again, and join with the new bundle. Syncing resumes only after knomit restarts or this instance rejoins.");
+    expect(screen.getByTestId('fleet-refused-notice')).toHaveTextContent("The fleet refuses this instance's certificate although it is valid here, most likely because the fleet's master revoked it (a clock that is far off can also cause this). Retrying will not help.");
+    expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
+  });
+
+  // PR8 S2: THIS instance refusing the host's certificate (another root
+  // answers there) is "moved", not revoked: no revoked chip or notice.
+  // SABOTAGE: show the refused notice only for last_error_refused -> no
+  // notice, "Retrying on the next sync." -> red.
+  // #536 review SF1 (user-approved copy): the `other` class says expired only
+  // when the server says the certificate expired here; another alert gets
+  // the plain sentence.
+  // SABOTAGE: ignore certificate_expired -> the expired row reads the plain
+  // sentence -> red.
+  it('the other class says expired only when the certificate expired here', () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    const { unmount } = render(<FleetSettings fleet={{ ...member, last_error: "sync: pki: the peer refused this instance's certificate: remote error: tls: bad certificate", last_error_refused: true, last_error_refusal: 'other', certificate_expired: true }} onChanged={vi.fn()} />);
+    expect(screen.getByTestId('fleet-refused-notice')).toHaveTextContent("The fleet refuses this instance's certificate, and it has expired here. Retrying will not help; ask the fleet's master.");
+    unmount();
+    mount({ ...member, last_error: "sync: pki: the peer refused this instance's certificate: remote error: tls: handshake failure", last_error_refused: true, last_error_refusal: 'other' });
+    expect(screen.getByTestId('fleet-refused-notice')).toHaveTextContent("The fleet refuses this instance's certificate. Retrying will not help; ask the fleet's master.");
+    expect(screen.getByTestId('fleet-refused-notice')).not.toHaveTextContent('expired');
+  });
+
+  it('a host presenting another root says the fleet moved, not revoked', () => {
+    stubFleetFetch({ 'GET /api/v1/repos/fleet/origin': ORIGIN_CERT });
+    mount({ ...member, last_error: 'sync: pki: certificate does not chain to the fleet root: x509: certificate signed by unknown authority', last_error_refusal: 'moved' });
+    expect(screen.getByTestId('fleet-settings-role')).toHaveTextContent('member');
+    expect(screen.queryByTestId('fleet-revoked-notice')).toBeNull();
+    expect(screen.getByTestId('fleet-refused-notice')).toHaveTextContent('answers with a certificate of another fleet root');
+    expect(screen.getByTestId('fleet-last-error')).not.toHaveTextContent('Retrying on the next sync.');
+  });
+
   // #528 N1: a push whose commit the host's judge refuses
   // (last_error_commit_refused) is sent again by every sync and refused
   // again, so the page never promises a retry; the raw text stays, since it

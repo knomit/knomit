@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -473,7 +474,7 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 	if err != nil {
 		return FleetStatus{}, err
 	}
-	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle, pki.InstallOptions{}); err != nil {
+	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle); err != nil {
 		return FleetStatus{}, fmt.Errorf("fleet join: install the bundle: %w", err)
 	}
 	refuse := func(ri *RepoInstance, ferr *FleetError) (FleetStatus, error) {
@@ -969,11 +970,27 @@ func (m *Manager) revokeLeaf(ctx context.Context, ri *RepoInstance, root pki.Roo
 	if err := pki.RecordRevocation(m.fleetRootDir(), rv); err != nil {
 		log.Warn().Err(err).Msg("fleet revoke: the local revocation log or CRL copy was not written")
 	}
-	if _, err := pki.InstallCRL(m.deps.Cfg.TLS.Dir, root.Cert, rv.CRLPEM); err != nil {
+	if err := installSignedCRL(m.deps.Cfg.TLS.Dir, root.Cert, rv.CRLPEM, rv.Number); err != nil {
 		out.InstallError = err.Error()
 	}
 	log.Info().Str("agent", agentID).Str("serial", serial).Str("reason", reason).Msg("fleet: member revoked")
 	return out, next, nil
+}
+
+// installSignedCRL installs the CRL this master just signed (raw, Number
+// number) into dir. The tick runs outside fleetOpMu (fleet_tick.go), so
+// between the commit and this install it may already have installed the
+// same CRL from main: pki.InstallCRL then refuses an EQUAL Number with
+// ErrCRLRollback, which is success here, as the tick treats it (#536 review
+// nit 3). An accepted Number that is not this one stays an error.
+func installSignedCRL(dir string, root *x509.Certificate, raw []byte, number *big.Int) error {
+	_, err := pki.InstallCRL(dir, root, raw)
+	if errors.Is(err, pki.ErrCRLRollback) {
+		if acc, aerr := pki.AcceptedNumber(dir, root); aerr == nil && acc != nil && number != nil && acc.Cmp(number) == 0 {
+			return nil
+		}
+	}
+	return err
 }
 
 // parseCRLPEM parses one X509 CRL PEM block.

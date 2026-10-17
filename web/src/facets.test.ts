@@ -446,6 +446,10 @@ describe('the fleet target', () => {
     expect(fleetChip({ master: false, record_state: 'active' })).toEqual({ text: 'member', tone: 'neutral' });
     expect(fleetChip({ master: false, record_state: 'pending' })).toEqual({ text: 'record pending', tone: 'pending' });
     expect(fleetChip({ master: true, record_state: 'revoked' })).toEqual({ text: 'revoked', tone: 'bad' });
+    // PR8 S2: a hub member refused at the handshake: main still says active,
+    // the server's `revoked` says what it holds. SABOTAGE: read record_state
+    // alone -> "member" -> red.
+    expect(fleetChip({ master: false, record_state: 'active', revoked: true })).toEqual({ text: 'revoked', tone: 'bad' });
     expect(targetLabelFor({ kind: 'draft', draft: 'fleet' }, [], [], [])).toEqual({ kind: 'fleet', name: 'New fleet', draft: true });
   });
 

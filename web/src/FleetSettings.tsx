@@ -5,7 +5,7 @@ import { OutcomeCard } from './OutcomeCard';
 import { FleetFollowFlow, type FleetFollowMode } from './FleetFollowFlow';
 import type { FleetAuthMethod } from './fleetWizardState';
 import { Chip, CopyValue, Kv, Refusal } from './fleetParts';
-import { ONE_MASTER, hostPortOf, intervalText, listenerNotRunning, readTextFile } from './fleetText';
+import { ONE_MASTER, hostPortOf, intervalText, listenerNotRunning, readTextFile, refusalText } from './fleetText';
 import { saveTextFile, saveOutcomeLine, type SaveOutcome } from './saveFile';
 import { btn, confirmBox, confirmInput, fieldHint, fieldLabel } from './manageStyles';
 import { dangerBox } from './settingsStyles';
@@ -118,13 +118,17 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   }
 
   // ── This instance ──
+  // Revoked as far as this instance can tell: main's CRL (record_state), or
+  // the server's `revoked` for a member that never reads main's CRL (a hub
+  // member refused at the handshake).
+  const revoked = fleet.record_state === 'revoked' || !!fleet.revoked;
   const role = fleet.record_state === 'pending' ? <Chip text="record pending" tone="pending" />
-    : fleet.record_state === 'revoked' ? <Chip text="revoked" tone="revoked" />
+    : revoked ? <Chip text="revoked" tone="revoked" />
       : master ? <Chip text="master" tone="master" /> : <Chip text="member" tone="member" />;
   const advertised = fleet.record?.addresses ?? fleet.host.external_addresses;
   sections.push({
     id: 'this-instance', title: 'This instance', action: <span data-testid="fleet-settings-role">{role}</span>,
-    problem: !!fleet.last_error || fleet.record_state === 'revoked',
+    problem: !!fleet.last_error || revoked,
     body: (
       <div style={col}>
         <div style={dim}>
@@ -146,8 +150,12 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
           ['Advertised addresses', advertised.length ? <span style={mono}>{advertised.join(' ')}</span> : <span style={dim}>none</span>],
         ]} />
         {fleet.notice && <div data-testid="fleet-notice" style={dim}>{fleet.notice}</div>}
-        {fleet.record_state === 'revoked' && (
-          <div data-testid="fleet-revoked-notice" style={{ fontSize: 12, color: '#e8a0a0' }}>This instance's certificate is revoked: the fleet refuses its pushes.</div>
+        {revoked && (
+          <div data-testid="fleet-revoked-notice" style={{ fontSize: 12, color: '#e8a0a0' }}>
+            {fleet.sync_stopped
+              ? "This instance's certificate is revoked: the fleet refuses it, so this copy has stopped syncing. To rejoin, leave the fleet here, ask the fleet's master to enroll this instance again, and join with the new bundle. Syncing resumes only after knomit restarts or this instance rejoins."
+              : "This instance's certificate is revoked: the fleet refuses its pushes."}
+          </div>
         )}
         {fleet.last_error && fleet.last_error_stood_down && !fleet.last_error_fleet_moved && (
           // The host this copy follows stood down as master: its pushes wait
@@ -173,8 +181,8 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
             {fleet.last_error_main_held && fleet.last_error_main_held_commit
               ? <MainHeldNotice commit={fleet.last_error_main_held_commit} local={!!fleet.local}
                   onDropped={(short, result) => { setDropped({ short, result }); onChanged(); }} />
-              : fleet.last_error_refused
-              ? <div data-testid="fleet-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>The fleet refuses this instance's certificate: it may have been revoked, or the fleet moved to another root. Retrying will not help; ask the fleet's master.</div>
+              : fleet.last_error_refusal || fleet.last_error_refused
+              ? <div data-testid="fleet-refused-notice" style={{ color: '#a08a54', fontSize: 12, marginTop: 6 }}>{refusalText(fleet.last_error_refusal, fleet.certificate_expired)}</div>
               : fleet.last_error_commit_refused
                 // The host's judge refused a commit of this copy's branch
                 // (#528 N1): every sync sends the same commit, so "Retrying"

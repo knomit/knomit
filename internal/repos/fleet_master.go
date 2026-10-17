@@ -88,6 +88,19 @@ type fleetPeers struct {
 	// commits goes out in the same round (RepoInstance.fleetMasterDuty: the
 	// leave duty). nil: none.
 	duty func(context.Context, *store.Service)
+	// tick is every copy's tick duty in its origin round, master or member,
+	// after a successful fetch and before the master's duties
+	// (RepoInstance.fleetTickRound: main's newer CRL installed here). nil:
+	// none.
+	tick func(context.Context, *store.Service)
+	// halt says why this copy's origin rounds stop, "" while they run
+	// (Manager.fleetSyncHalt: this member's certificate is revoked). nil:
+	// never.
+	halt func() string
+	// fetchRefused is told a failed fetch of this copy and answers whether
+	// it was a TLS refusal (RepoInstance.fleetFetchRefused: recorded as the
+	// fleet's last error, the round then pushes nothing). nil: never.
+	fetchRefused func(error) bool
 
 	mu sync.Mutex
 	// judged is the memo, per branch: the verdict (true = refused) at each
@@ -137,6 +150,28 @@ func (p *fleetPeers) publishesMain(svc *store.Service) bool {
 func (p *fleetPeers) runDuty(ctx context.Context, svc *store.Service) {
 	if p != nil && p.duty != nil {
 		p.duty(ctx, svc)
+	}
+}
+
+// halted is why this copy's origin rounds stop (halt), "" while they run;
+// nil-safe.
+func (p *fleetPeers) halted() string {
+	if p == nil || p.halt == nil {
+		return ""
+	}
+	return p.halt()
+}
+
+// refusedFetch reports a failed fetch (fetchRefused): true when it was a TLS
+// refusal and the round must push nothing; nil-safe.
+func (p *fleetPeers) refusedFetch(err error) bool {
+	return p != nil && p.fetchRefused != nil && p.fetchRefused(err)
+}
+
+// runTick runs every copy's tick duty (tick); nil-safe.
+func (p *fleetPeers) runTick(ctx context.Context, svc *store.Service) {
+	if p != nil && p.tick != nil {
+		p.tick(ctx, svc)
 	}
 }
 
