@@ -157,6 +157,14 @@ type MergeConflictError struct {
 	// "read the base version" of a dual-add would be shown something
 	// unrelated and have no way to tell.
 	PathsWithoutBase []string
+
+	// Rewound says the refusal came from rebuilding an experiment that was
+	// open across a rewind of its agent branch (rebuildRewoundExperiment):
+	// its own commits are replayed onto the rebuilt branch, so a path the
+	// rewind removed that the experiment edited conflicts as well. The base
+	// is where the experiment last met the old branch; DstCommit is the
+	// rebuilt branch.
+	Rewound bool
 }
 
 // HasBase reports whether the given conflicting path has a base version worth
@@ -269,6 +277,11 @@ func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, pa
 		return Experiment{}, fmt.Errorf("%w: %q already exists at %s with no experiments row; "+
 			"roll back %q and open it again, or pick another name",
 			ErrOrphanExperimentRef, branch, shortHash(existing), name)
+	}
+	// A rewind record left by an experiment of the same name (a drop that
+	// failed after its branch went) must not make the new one look rewound.
+	if err := rh.clearExperimentRewound(name); err != nil {
+		return Experiment{}, fmt.Errorf("OpenExperiment %q: clear stale rewind record: %w", name, err)
 	}
 	if err := rh.CreateBranch(ctx, branch, parent); err != nil {
 		return Experiment{}, fmt.Errorf("OpenExperiment %q: %w", name, err)
@@ -425,9 +438,10 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 		return AgentReconcileResult{}, err
 	}
 
-	// mergeIntoBranch takes the DST lock — the parent's — which is what
-	// serialises this against a concurrent fact write on the agent branch, and
-	// it carries that lock through notifyCommit.
+	// The parent's lock (the merge's DST) serialises this against a concurrent
+	// fact write on the agent branch and against a rewind of it, and is held
+	// through notifyCommit. An experiment's own merges (commit and sync) are
+	// the only merges that stamp the call's agent trace (opts.trace).
 	// STILL ONE MERGE. Resolutions are an input to it, not a second pass over
 	// the tree afterwards: a path the caller adjudicated is decided inside the
 	// same three-way walk that would otherwise have refused it, so everything
@@ -457,10 +471,29 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 			opts = mergeOpts{factConsensus: fact.MergeDst, factFallback: StrategyRefuse, overlayResolutions: true}
 		}
 	}
-	res, err := rh.mergeExperiment(ctx, exp.Branch(), exp.Parent, strategy, resolutions, opts)
+	//
+	// AN EXPERIMENT OPEN ACROSS A REWIND is rebuilt on the parent first
+	// (rebuildRewoundExperiment), under both locks, so a commit never merges
+	// back what the rewind scrubbed. The rebuild consumes the resolutions; the
+	// merge after it is then a fast-forward.
+	unlockParent := rh.lockBranch(exp.Parent)
+	unlockExp := rh.lockBranch(exp.Branch())
+	rebuilt, _, settled, err := rh.rebuildRewoundExperiment(ctx, exp, strategy, resolutions, opts)
+	unlockExp()
+	if err != nil {
+		unlockParent()
+		return AgentReconcileResult{}, fmt.Errorf("CommitExperiment %q: rebuild after a rewind: %w", name, err)
+	}
+	if rebuilt {
+		resolutions = nil
+	}
+	opts.trace = trailersFromContext(ctx)
+	res, err := rh.mergeIntoBranchLockedOpts(ctx, exp.Branch(), exp.Parent, strategy, resolutions, opts)
+	unlockParent()
 	if err != nil {
 		return AgentReconcileResult{}, err
 	}
+	res.Settled = append(settled, res.Settled...)
 
 	if err := rh.dropExperiment(ctx, exp); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("CommitExperiment %q: %w", name, err)
@@ -468,17 +501,6 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	log.Info().Str("experiment", name).Str("parent", exp.Parent).
 		Str("mode", string(res.Mode)).Msg("experiment committed")
 	return res, nil
-}
-
-// mergeExperiment is an experiment's OWN merge (commit: exp into its parent;
-// sync: the parent into exp) under the dst lock, with the call's agent trace
-// (the ctx set store.WithAgentTrace put there) opted in for the merge commit.
-// No other merge reads the ctx trace: they keep the transport-commit contract.
-func (rh *repoHandler) mergeExperiment(ctx context.Context, src, dst string, strategy ConflictStrategy, resolutions map[string]Resolution, o mergeOpts) (AgentReconcileResult, error) {
-	unlock := rh.lockBranch(dst)
-	defer unlock()
-	o.trace = trailersFromContext(ctx)
-	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, resolutions, o)
 }
 
 // SyncExperiment merges the parent INTO the experiment, parent-wins on
@@ -501,7 +523,30 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 	if err := rh.checkExperimentParentCurrent(ctx, exp); err != nil {
 		return AgentReconcileResult{}, err
 	}
-	res, err := rh.mergeExperiment(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins, nil, mergeOpts{})
+	// An experiment open across a rewind is rebuilt on the parent instead of
+	// merged (rebuildRewoundExperiment): a merge would keep what the rewind
+	// scrubbed. Its conflicts are refused, never settled parent-wins: the
+	// experiment's own version would be gone for good, since the commits that
+	// held it are not kept.
+	unlockParent := rh.lockBranch(exp.Parent)
+	defer unlockParent()
+	unlockExp := rh.lockBranch(exp.Branch())
+	defer unlockExp()
+	rebuilt, replayed, settled, err := rh.rebuildRewoundExperiment(ctx, exp, StrategyRefuse, nil, mergeOpts{})
+	if err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: rebuild after a rewind: %w", name, err)
+	}
+	if rebuilt {
+		tip, err := rh.HeadCommit(ctx, exp.Branch())
+		if err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: %w", name, err)
+		}
+		log.Info().Str("experiment", name).Str("parent", exp.Parent).
+			Int("replayed", replayed).Msg("experiment rebuilt on its parent after a rewind")
+		return AgentReconcileResult{Mode: ModeRebase, NumReplayed: replayed, NewTip: tip, Settled: settled}, nil
+	}
+	o := mergeOpts{trace: trailersFromContext(ctx)}
+	res, err := rh.mergeIntoBranchLockedOpts(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins, nil, o)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: %w", name, err)
 	}
@@ -620,6 +665,9 @@ func (rh *repoHandler) dropExperiment(ctx context.Context, exp Experiment) error
 		`DELETE FROM meta WHERE key = ? OR key = ?`,
 		"last_commit:"+branch, "graph_schema_version:"+branch); err != nil {
 		return fmt.Errorf("drop experiment meta keys: %w", err)
+	}
+	if err := rh.clearExperimentRewound(exp.Name); err != nil {
+		return fmt.Errorf("drop experiment rewind record: %w", err)
 	}
 	if _, err := conn(ctx, rh.db).ExecContext(ctx,
 		`DELETE FROM experiments WHERE name = ?`, exp.Name); err != nil {
