@@ -137,8 +137,9 @@ func abandonedByCaller(ctx context.Context, retErr error) bool {
 // main advances always propagate into the agent — even after the agent
 // has previously pushed (the design bug this rework fixes). The rewind
 // case is also handled by the watermark: when the watermark equals the
-// old main and the agent has no local-only commits, the agent
-// fast-forwards onto the new main and scrubbed files drop correctly.
+// old main and the agent has no local-only commits, the agent branch is
+// rebuilt on the new main (ModeRebase, nothing replayed; see
+// replayOntoUpstream) and scrubbed files drop correctly.
 //
 // Safe to call repeatedly; each step is a no-op when there's nothing to do.
 func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {

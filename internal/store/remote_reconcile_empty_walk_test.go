@@ -107,6 +107,24 @@ func TestReconcileAgentRebase_RewindToAnAncestorDoesNotKeepAScrubbedCommit(t *te
 		require.Equal(t, ModeNoop, res.Mode)
 		require.Equal(t, w, mustHeadHash(t, svc, "agent/test"))
 	})
+	// The watermark STRICTLY below an upstream that is an ancestor of the
+	// branch (#539 review N1): the upstream is w1, the branch w2 on it, the
+	// watermark still c1. Nothing beyond the watermark was removed, so the
+	// branch is ahead and keeps its hashes.
+	// SABOTAGE: swap the watermark/upstream ancestry in strictlyAhead
+	// (upstream.IsAncestor(base)) -> w2 is replayed onto w1 under a new hash
+	// -> red.
+	t.Run("watermark below the upstream stays as it is", func(t *testing.T) {
+		svc, c1 := sideStore(t)
+		w1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/w1.md", "W1", "first"))
+		w2 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/w2.md", "W2", "second"))
+		base, err := svc.rh.readAgentBase("agent/test")
+		require.NoError(t, err)
+		require.Equal(t, c1, base, "setup: the watermark is c1, below w1")
+		res := rewindToCommit(t, svc, w1)
+		require.Equal(t, ModeNoop, res.Mode)
+		require.Equal(t, w2, mustHeadHash(t, svc, "agent/test"), "hashes unchanged")
+	})
 }
 
 // An agent branch with nothing of its own at all: it fast-forwarded onto
