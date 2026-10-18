@@ -84,6 +84,22 @@ func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 	fallbackCancel()
 	if fallbackErr == nil || errors.Is(fallbackErr, gogit.NoErrAlreadyUpToDate) {
 		log.Debug().Str("upstream", upstreamMain).Msg("fetchOrigin: agent ref not on origin yet; fetched upstream only")
+		// The origin has no branch for the other (non-wildcard) configured
+		// refspecs: their remote-tracking refs mirror that. A tracking ref
+		// left from earlier (another origin URL, or a branch deleted on the
+		// forge) would read in Push as "the origin already has this" and
+		// nothing would be sent.
+		if rem, rerr := repo.Remote("origin"); rerr == nil {
+			for _, rs := range rem.Config().Fetch {
+				if rs.IsWildcard() || rs == upstreamRefspec {
+					continue
+				}
+				dst := rs.Dst(plumbing.ReferenceName(rs.Src()))
+				if err := repo.Storer.RemoveReference(dst); err != nil {
+					log.Warn().Err(err).Str("ref", dst.String()).Msg("fetchOrigin: could not drop a tracking ref the origin has no branch for")
+				}
+			}
+		}
 		return nil
 	}
 	// Surface both failures so a misconfigured refspec (which would make
@@ -232,6 +248,22 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	if fetchErr != nil {
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", fetchErr)
 	}
+	if h := currentStoreHooks().afterFetch; h != nil {
+		if err := h(); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: %w", err)
+		}
+	}
+
+	// A different origin than the one this copy last synced with is a
+	// switch: synced by the ordinary merge path, never "rewound"
+	// (origin_identity.go). The identity is recorded only after this round
+	// succeeds.
+	identity := originIdentity(remote.URL)
+	recorded, err := ri.rh.readOriginIdentity()
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("Sync: %w", err)
+	}
+	switched := recorded != "" && recorded != identity
 
 	if agentBranch != "" && agentBranch != upstreamMain {
 		if err := ri.rh.seedMissingWatermark(agentBranch, lastOrigin); err != nil {
@@ -239,7 +271,20 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 		}
 	}
 
-	return ri.reconcileNow(ctx, agentBranch, upstreamMain)
+	res, err = ri.reconcileNowSwitched(ctx, agentBranch, upstreamMain, switched)
+	if err != nil {
+		return res, err
+	}
+	if switched {
+		log.Info().Str("origin", identity).Str("previous_origin", recorded).
+			Msg("Sync: first sync with a different origin; synced normally (no rewind)")
+	}
+	if recorded != identity {
+		if err := ri.rh.recordOriginIdentity(identity); err != nil {
+			return res, fmt.Errorf("Sync: %w", err)
+		}
+	}
+	return res, nil
 }
 
 // reconcileNow runs the post-fetch portion of Sync. Exposed (package-private)
@@ -252,6 +297,14 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 // upstreamMain is the consensus branch name; Sync, the only production
 // caller, refuses an empty one before getting here.
 func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMain string) (SyncResult, error) {
+	return ri.reconcileNowSwitched(ctx, agentBranch, upstreamMain, false)
+}
+
+// reconcileNowSwitched is reconcileNow for a round that may be the first with
+// a different origin (switched): then the agent is reconciled by the ordinary
+// merge path even when the main reconcile rewound, unless the branch and the
+// new main share no history at all (unrelated: the existing rules).
+func (ri *remoteIndex) reconcileNowSwitched(ctx context.Context, agentBranch, upstreamMain string, switched bool) (SyncResult, error) {
 
 	// Degenerate config: the configured consensus branch IS this machine's
 	// own agent branch (e.g. a clone whose remote HEAD was an agent branch,
@@ -299,7 +352,17 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 	if s, on := ri.rh.conflictsStrategy(ctx, upstreamMain); on {
 		strategy = s
 	}
-	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, upstreamMain, strategy, mainRes.Mode == ModeRewound)
+	rewound := mainRes.Mode == ModeRewound
+	if rewound && switched {
+		related, rerr := ri.rh.branchSharesHistory(agentBranch, upstreamMain)
+		if rerr != nil {
+			return SyncResult{Main: mainRes}, fmt.Errorf("Sync: %w", rerr)
+		}
+		// A switch: the new origin's main being behind or beside the old
+		// one's removed nothing. Unrelated histories keep the existing rules.
+		rewound = !related
+	}
+	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, upstreamMain, strategy, rewound)
 	if err != nil {
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}
@@ -653,6 +716,9 @@ type storeHooks struct {
 	// that writes proceed while it is "on the network", and that a commit
 	// landing meanwhile is not what this push sends.
 	afterSnapshot func(branch string, snap plumbing.Hash)
+	// afterFetch fails a Sync round right after a successful fetch, before
+	// the reconcile, as a crash there would.
+	afterFetch func() error
 }
 
 var (
