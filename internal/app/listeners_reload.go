@@ -108,12 +108,16 @@ func (l *Listeners) Snapshot() Snapshot {
 }
 
 // TLSListening is the mTLS listener's live state, for
-// repos.Manager.SetTLSListener: the address it is bound to ("" when it is
-// not listening) and why a configured one is not (ListenerReason*). It reads
-// the state under the lock, so a reload's change shows at once.
-func (l *Listeners) TLSListening() (listening, reason string) {
+// repos.Manager.SetTLSListener: the [tls].addr these listeners reflect (the
+// boot's, then each reload's; "" when it is off), the address it is bound to
+// ("" when it is not listening) and why a configured one is not
+// (ListenerReason*). It reads the state under the lock, so a reload's change
+// shows at once: a Fleet port set by a reload on an instance that has no
+// certificate yet is configured with reason no_certificate, and the fleet
+// create that installs the certificate must see it as configured.
+func (l *Listeners) TLSListening() (configured, listening, reason string) {
 	s := l.Snapshot()
-	return s.TLS.Listening, s.TLS.Reason
+	return s.TLS.Configured, s.TLS.Listening, s.TLS.Reason
 }
 
 // SetReloadable records, before Advertise, whether the caller installed a

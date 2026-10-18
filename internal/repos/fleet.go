@@ -213,8 +213,9 @@ type FleetInterruptedMove struct {
 // wizard's Hosting step).
 type FleetHostOffer struct {
 	Listener string `json:"listener"`
-	// ListenerOn: the mTLS listener is CONFIGURED ([tls].addr is set). It
-	// says nothing about whether it is up: see Listening.
+	// ListenerOn: the mTLS listener is CONFIGURED ([tls].addr is set in the
+	// config the running listeners reflect: the boot's, or the last
+	// reload's). It says nothing about whether it is up: see Listening.
 	ListenerOn bool `json:"listener_on"`
 	// Listening: the mTLS listener is bound and serving NOW, as the process
 	// that bound the listeners reports it (SetTLSListener). false when it is
@@ -305,14 +306,14 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 			!strings.Contains(row.LastError, store.OwnCommitRefusedText),
 		LastErrorStoodDown:      strings.Contains(row.LastError, FleetPushRefusalStoodDown),
 		LastErrorMainHeldCommit: mainHeldCommit(row.LastError),
-		Host: FleetHostOffer{Listener: m.deps.Cfg.TLS.Addr, ListenerOn: m.deps.Cfg.TLS.Addr != "",
-			ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
-		RootDir:   m.fleetRootDir(),
-		FleetURLs: []string{},
+		Host:                    FleetHostOffer{Listener: m.tlsAddr(), ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
+		RootDir:                 m.fleetRootDir(),
+		FleetURLs:               []string{},
 	}
 	st.LastErrorMainHeld = st.LastErrorMainHeldCommit != ""
+	st.Host.ListenerOn = st.Host.Listener != ""
 	if f := m.tlsListener.Load(); f != nil {
-		listening, reason := (*f)()
+		_, listening, reason := (*f)()
 		st.Host.Listening = listening != ""
 		if st.Host.ListenerOn && !st.Host.Listening {
 			st.Host.ListenerReason = reason

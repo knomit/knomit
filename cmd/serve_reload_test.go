@@ -287,6 +287,23 @@ func TestReloadCmd_ExitStatusReflectsWhatHappened(t *testing.T) {
 	if cur, _ := serveraddr.ReadLock(h.lock); cur.Generation != 3 || cur.ReloadError != "" {
 		t.Fatalf("after a good reload: %+v", cur)
 	}
+
+	// A fleet listener configured before this instance has a certificate
+	// (the fresh-instance path: set the Fleet port, then create) is WAITING,
+	// not failed: exit 0, and the output says what starts it.
+	// SABOTAGE: count no_certificate in ReloadListenerFailures -> red.
+	writeToml(t, home, "[tls]\naddr = \"127.0.0.1:"+freePort(t)+"\"\n")
+	out.Reset()
+	if err := runReload(context.Background(), &out, 10*time.Second); err != nil {
+		t.Fatalf("a listener waiting for its certificate is not a failed reload: %v\n%s", err, out.String())
+	}
+	// Approved #545 string 2, verbatim.
+	if !strings.Contains(out.String(), "  tls: off (no_certificate), waits for this instance's certificate: it starts when this instance creates or joins a fleet\n") {
+		t.Fatalf("the output must say the fleet listener waits for its certificate:\n%s", out.String())
+	}
+	if cur, _ := serveraddr.ReadLock(h.lock); cur.Generation != 4 || cur.Listeners["tls"].Reason != "no_certificate" {
+		t.Fatalf("after the [tls].addr reload: %+v", cur)
+	}
 	h.cancel()
 	_ = h.wait(15 * time.Second)
 }

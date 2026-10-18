@@ -205,20 +205,20 @@ func TestFleetStatus_ListeningIsTheLiveListener(t *testing.T) {
 	require.True(t, st.Host.ListenerOn, "fixture: [tls].addr is set")
 	require.False(t, st.Host.Listening, "nobody reported a bound listener")
 
-	m.SetTLSListener(func() (string, string) { return "", "no_certificate" })
+	m.SetTLSListener(func() (string, string, string) { return "127.0.0.1:0", "", "no_certificate" })
 	st, err = m.FleetStatus(ctx)
 	require.NoError(t, err)
 	require.False(t, st.Host.Listening)
 	require.Equal(t, "no_certificate", st.Host.ListenerReason)
 
-	m.SetTLSListener(func() (string, string) { return "127.0.0.1:18931", "" })
+	m.SetTLSListener(func() (string, string, string) { return "127.0.0.1:0", "127.0.0.1:18931", "" })
 	st, err = m.FleetStatus(ctx)
 	require.NoError(t, err)
 	require.True(t, st.Host.Listening)
 	require.Empty(t, st.Host.ListenerReason)
 
 	off := newFleetHost(t, t.TempDir(), func(d *Deps) { d.Cfg.TLS.Addr = "" })
-	off.SetTLSListener(func() (string, string) { return "", "off" })
+	off.SetTLSListener(func() (string, string, string) { return "", "", "off" })
 	st, err = off.FleetStatus(ctx)
 	require.NoError(t, err)
 	require.False(t, st.Host.ListenerOn)
