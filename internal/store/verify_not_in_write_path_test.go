@@ -18,6 +18,9 @@ func TestVerifyIsNeverInTheWritePath(t *testing.T) {
 	// a name the list does not hold. Reject ANY package-qualified call into
 	// the fleetrec package, so a new export cannot slip past the list.
 	pkgCall := regexp.MustCompile(`\bfleetrec\.\w+\(`)
+	// Likewise for internal/store/verify: any verify.<Export>( call is
+	// verification, whether or not its name is in the list above.
+	verifyPkgCall := regexp.MustCompile(`\bverify\.\w+\(`)
 	for _, f := range []string{"fact_write.go", "internal/vcs/sign.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -28,6 +31,9 @@ func TestVerifyIsNeverInTheWritePath(t *testing.T) {
 		}
 		if m := pkgCall.FindAll(src, -1); len(m) > 0 {
 			t.Errorf("%s calls into the fleetrec package from the write path: %q", f, m)
+		}
+		if m := verifyPkgCall.FindAll(src, -1); len(m) > 0 {
+			t.Errorf("%s calls into the verify package from the write path: %q", f, m)
 		}
 	}
 }
