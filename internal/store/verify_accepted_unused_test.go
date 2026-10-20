@@ -18,6 +18,16 @@ func TestRepoVerifyAcceptedTableIsNeverUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The store's children (internal/sqlite, internal/sessions, internal/vcs,
+	// where the accept list's type lives) are the store too.
+	children, err := filepath.Glob(filepath.Join("internal", "*", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) == 0 {
+		t.Fatal("no Go files under internal/*: the scan no longer reads the store's children")
+	}
+	files = append(files, children...)
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
