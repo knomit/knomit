@@ -1,6 +1,9 @@
 package store
 
-import "knomit/internal/store/internal/sessions"
+import (
+	"knomit/internal/store/facts"
+	"knomit/internal/store/internal/sessions"
+)
 
 // Compile-time interface guards. The published interfaces (interfaces.go)
 // are the facade's contract; the sub-indices that implement them are checked
@@ -14,7 +17,7 @@ import "knomit/internal/store/internal/sessions"
 
 var _ BranchIndex = (*repoHandler)(nil)
 var _ ExperimentIndex = (*repoHandler)(nil)
-var _ FactIndex = (*factIndex)(nil)
+var _ FactIndex = (*facts.Index)(nil)
 var _ PipelineIndex = (*sessions.PipelineIndex)(nil)
 var _ RemoteIndex = (*remoteIndex)(nil)
 var _ ToolSessionIndex = (*sessions.ToolIndex)(nil)

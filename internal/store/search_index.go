@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -602,7 +603,7 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 		commitHash = last
 	}
 
-	rec, err := parseFact(path, content)
+	rec, err := facts.ParseFactRecord(path, content)
 	if err != nil {
 		return nil, nil // not a fact file (e.g. README.md manifest, the ontology file)
 	}
@@ -1250,7 +1251,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 			factAtCommit[key] = cf
 			continue
 		}
-		rec, err := parseFact(e.path, content)
+		rec, err := facts.ParseFactRecord(e.path, content)
 		if err != nil {
 			log.Debug().Err(err).Str("path", e.path).Msg("rebuildGraph: skip (parse failed)")
 			factAtCommit[key] = cf

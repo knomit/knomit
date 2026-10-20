@@ -1,4 +1,4 @@
-package store
+package facts
 
 import (
 	"context"
@@ -58,12 +58,12 @@ type SystemFile struct {
 
 // SystemFileAt implements SystemFileIndex for FactIndex: the same reader as
 // Service.SystemFiles, over the same repo handle.
-func (fi *factIndex) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {
+func (fi *Index) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {
 	return fi.rh.SystemFileAt(ctx, branch, commit, path, maxContent)
 }
 
 // SystemFileAt implements SystemFileIndex.
-func (rh *repoHandler) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {
+func (rh *Repo) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {
 	if !fact.IsSystemFilePath(path) {
 		return SystemFile{}, false, fmt.Errorf("%w: system file: %q is not a file path under %s/", ErrInvalidPath, path, fact.PrivateRoot)
 	}

@@ -120,6 +120,16 @@ var sameLayerEdges = map[string]bool{
 	// and fsck clusters reach up to it, never the reverse.
 	"store/verify -> store/fleetrec":     true,
 	"store/verify -> store/internal/vcs": true,
+	// The facts child (fact files read and written through the git layer, the
+	// system-file / template / skill readers, the trigger dispatcher's store
+	// half) sits above vcs and verify in the store's child order (proposal
+	// 4.3: facts -> vcs, verify). It also reaches the sqlite child directly,
+	// for the ctx-carried transaction its trigger tables use (sqlite is below
+	// vcs in the order, so the direction is still downward); the merge, index,
+	// sync and fsck clusters reach up to facts, never the reverse.
+	"store/facts -> store/internal/sqlite": true,
+	"store/facts -> store/internal/vcs":    true,
+	"store/facts -> store/verify":          true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

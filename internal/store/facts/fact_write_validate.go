@@ -1,4 +1,4 @@
-package store
+package facts
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 var ErrFactInvalid = errors.New("the fact fails the ontology's validations")
 
 // FactInvalidError is a write refused at the source (writeFileExact,
-// batchWriteLocked) because a fact it would add or change fails the
+// BatchWriteLocked) because a fact it would add or change fails the
 // validations of the ontology at the branch's tip (RuleValidation). Nothing
 // was written. Err is the *fact.ValidationError (or the context gate's
 // error), whose message is the ontology's own.
@@ -60,7 +60,7 @@ func carriedOver(ctx context.Context) bool {
 // (user ruling 2026-10-16: validations are honoured everywhere): REST fact
 // writes, the review pipeline (distill, prune, reflect, dedup, discovery),
 // the fleet code, trigger scripts and the MCP tools all commit through
-// writeFileExact or batchWriteLocked, which call it under the branch lock
+// writeFileExact or BatchWriteLocked, which call it under the branch lock
 // before any object is written. Each file in files that is a fact
 // (verify.IsFactPathUnder the fact root, not in deletes) and whose content differs
 // from the blob at head is parsed and validated against the ontology at head,
@@ -70,7 +70,7 @@ func carriedOver(ctx context.Context) bool {
 // tip (a repository being created), or one whose ontology does not parse,
 // runs nothing. A file that does not parse as a fact is left to the caller,
 // as before.
-func (rh *repoHandler) validateWrite(head plumbing.Hash, files map[string]string, deletes []string) error {
+func (rh *Repo) validateWrite(head plumbing.Hash, files map[string]string, deletes []string) error {
 	if head.IsZero() || len(files) == 0 {
 		return nil
 	}

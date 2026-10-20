@@ -1,4 +1,4 @@
-package store
+package facts
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"knomit/internal/store/internal/vcs"
 )
 
-// validatePath refuses a path the store must never commit, wrapping
+// ValidatePath refuses a path the store must never commit, wrapping
 // ErrInvalidPath: an empty path, one containing "..", or one go-git would
 // refuse to READ back (gitReadablePath).
 // It does not normalise case; callers must lower-case before calling.
@@ -28,7 +28,7 @@ import (
 // first run in NotifyCommit's im.Sync, AFTER SetReference. A path git cannot
 // read back, refused there, leaves a commit on the branch that every later
 // sync trips over (#384).
-func validatePath(path string) error {
+func ValidatePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("%w: path must not be empty", ErrInvalidPath)
 	}
@@ -58,7 +58,7 @@ var gitErrInvalidPath = func() error {
 	sentinel := errors.Unwrap(err)
 	if sentinel == nil {
 		panic(fmt.Sprintf("store: cannot recover go-git's invalid-path sentinel (FindEntry(NUL) returned %v); "+
-			"validatePath would accept every path go-git refuses to read back (#384). "+
+			"ValidatePath would accept every path go-git refuses to read back (#384). "+
 			"Re-check gitReadablePath against this go-git version.", err))
 	}
 	return sentinel
@@ -115,28 +115,28 @@ func IsInvalidPath(err error) bool {
 	return errors.Is(err, ErrInvalidPath) || (gitErrInvalidPath != nil && errors.Is(err, gitErrInvalidPath))
 }
 
-// writeFile writes content to path in a new commit with message on branch,
+// WriteFile writes content to path in a new commit with message on branch,
 // normalizing case first. Returns the commit hash and the blob hash.
 //
 // The lowercasing keeps FACT paths free of case-duplicate topics ("AI" vs
 // "ai") — see fact.NormalizePath. It is a fact-path rule, not a storage rule,
 // so writeFileExact is the door for files that are not facts.
-func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
+func (fi *Index) WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
 	return fi.writeFileExact(ctx, branch, strings.ToLower(path), content, message, operation, "")
 }
 
-// writeFileExact is writeFile without case normalization. Callers own the
+// writeFileExact is WriteFile without case normalization. Callers own the
 // exact bytes of the path they pass.
 //
 // A non-empty expectBlob is a compare-and-swap precondition: the blob at path
 // on the branch tip must be expectBlob, checked INSIDE the branch write lock so
 // no other write can land between the check and the commit. On a mismatch
 // nothing is written and the error wraps ErrFactChanged.
-func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, message, operation, expectBlob string) (commitHash string, blobHash string, err error) {
+func (fi *Index) writeFileExact(ctx context.Context, branch, path, content, message, operation, expectBlob string) (commitHash string, blobHash string, err error) {
 	if fi.rh.ReadOnly() {
 		return "", "", ErrRepoReadOnly
 	}
-	if err := validatePath(path); err != nil {
+	if err := ValidatePath(path); err != nil {
 		return "", "", fmt.Errorf("store: WriteFile: %w", err)
 	}
 
@@ -205,12 +205,12 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 
 // deleteFile removes path from branch and creates a commit.
 // Returns the commit hash of the new commit.
-func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error) {
+func (fi *Index) deleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error) {
 	if fi.rh.ReadOnly() {
 		return "", ErrRepoReadOnly
 	}
 	path = strings.ToLower(path)
-	if err := validatePath(path); err != nil {
+	if err := ValidatePath(path); err != nil {
 		return "", fmt.Errorf("store: DeleteFile: %w", err)
 	}
 
@@ -228,13 +228,13 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
 	}
 	if !exists {
-		// Wrapped as ErrPathNotFound — the same sentinel ReadFileWithHash
+		// Wrapped as vcs.ErrPathNotFound — the same sentinel ReadFileWithHash
 		// wraps for a missing read — so a caller one layer up (the REST
 		// DELETE handler) can tell "nothing there" from a real backend
 		// failure and answer 404, exactly as a GET of the same missing path
 		// already does, instead of a bare error string that falls through
 		// writeStoreError's default 500.
-		return "", fmt.Errorf("DeleteFile: %q: %w", path, ErrPathNotFound)
+		return "", fmt.Errorf("DeleteFile: %q: %w", path, vcs.ErrPathNotFound)
 	}
 
 	signer, err := fi.rh.CommitSigner()
@@ -259,7 +259,7 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", err
 	}
 
-	// NotifyCommit runs inside the branch lock — see writeFile for rationale.
+	// NotifyCommit runs inside the branch lock — see WriteFile for rationale.
 	if err := fi.rh.NotifyCommit(ctx, branch, newCommitHash); err != nil {
 		return "", err
 	}
@@ -289,8 +289,9 @@ var batchWriteUnlockedHook atomic.Pointer[func()]
 
 // SetBatchWriteUnlockedHookForTest installs f as the pre-lock hook of every
 // batch write in this process and returns the function that removes it.
-// EXISTS ONLY for tests.
+// EXISTS ONLY for tests: it panics outside a test binary.
 func SetBatchWriteUnlockedHookForTest(f func()) (restore func()) {
+	mustBeTest("SetBatchWriteUnlockedHookForTest")
 	batchWriteUnlockedHook.Store(&f)
 	return func() { batchWriteUnlockedHook.Store(nil) }
 }
@@ -306,7 +307,7 @@ func SetBatchWriteUnlockedHookForTest(f func()) (restore func()) {
 // present at the branch tip, checked UNDER the branch lock before any object
 // is written; otherwise nothing is written and the error is a
 // *RetractMissingError. nil means no precondition.
-func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+func (fi *Index) batchWrite(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	if fi.rh.ReadOnly() {
 		return "", nil, ErrRepoReadOnly
 	}
@@ -334,12 +335,12 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 
 	// Pre-flight validation: reject empty paths and paths containing "..".
 	for path := range files {
-		if err := validatePath(path); err != nil {
+		if err := ValidatePath(path); err != nil {
 			return "", nil, fmt.Errorf("store: batchWrite: %w", err)
 		}
 	}
 	for _, path := range deletes {
-		if err := validatePath(path); err != nil {
+		if err := ValidatePath(path); err != nil {
 			return "", nil, fmt.Errorf("store: batchWrite delete: %w", err)
 		}
 	}
@@ -350,20 +351,20 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 
 	unlock := fi.rh.LockBranch(branch)
 	defer unlock()
-	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, deletes, mustExist, message, operation)
+	cHash, blobHashes, err := fi.BatchWriteLocked(ctx, branch, files, deletes, mustExist, message, operation)
 	if err != nil {
 		return "", nil, err
 	}
 
-	// NotifyCommit runs inside the branch lock — see writeFile for rationale.
+	// NotifyCommit runs inside the branch lock — see WriteFile for rationale.
 	if err := fi.rh.NotifyCommit(ctx, branch, cHash); err != nil {
 		return "", nil, err
 	}
 	return cHash.String(), blobHashes, nil
 }
 
-// batchWriteLocked performs the actual batchWrite work. Caller must hold the branch lock.
-func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (plumbing.Hash, map[string]string, error) {
+// BatchWriteLocked performs the actual batchWrite work. Caller must hold the branch lock.
+func (fi *Index) BatchWriteLocked(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (plumbing.Hash, map[string]string, error) {
 	// Before any object is written: a refused batch must leave nothing behind.
 	signer, err := fi.rh.CommitSigner()
 	if err != nil {
@@ -507,10 +508,10 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 }
 
 // WriteFact writes a fact to the store and returns the commit and blob hashes.
-// Index sync (branch_facts / facts_vec / graph) is triggered inside writeFile
+// Index sync (branch_facts / facts_vec / graph) is triggered inside WriteFile
 // via rh.NotifyCommit — no redundant fi.im.Sync call here.
-func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
-	commitHash, blobHash, err := fi.writeFile(ctx, branch, path, content, message, operation)
+func (fi *Index) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
+	commitHash, blobHash, err := fi.WriteFile(ctx, branch, path, content, message, operation)
 	if err != nil {
 		return WriteFactResult{}, err
 	}
@@ -523,7 +524,7 @@ func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, messa
 // lock. Otherwise nothing is written and the error wraps ErrFactChanged. This
 // is what makes a read-modify-write of one fact safe against a concurrent
 // writer.
-func (fi *factIndex) WriteFactIfUnchanged(ctx context.Context, branch, path, content, message, operation, expectBlob string) (WriteFactResult, error) {
+func (fi *Index) WriteFactIfUnchanged(ctx context.Context, branch, path, content, message, operation, expectBlob string) (WriteFactResult, error) {
 	if expectBlob == "" {
 		return WriteFactResult{}, fmt.Errorf("WriteFactIfUnchanged: expectBlob is required")
 	}
@@ -537,7 +538,7 @@ func (fi *factIndex) WriteFactIfUnchanged(ctx context.Context, branch, path, con
 // WriteRootFile writes a root-level, non-fact file (README.md, and any future
 // sibling) preserving the case of path. Root-level only: a nested path would
 // otherwise be a way around fact-path normalization.
-func (fi *factIndex) WriteRootFile(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
+func (fi *Index) WriteRootFile(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
 	if strings.Contains(path, "/") {
 		return WriteFactResult{}, fmt.Errorf("store: WriteRootFile: %q is not root-level", path)
 	}
@@ -550,7 +551,7 @@ func (fi *factIndex) WriteRootFile(ctx context.Context, branch, path, content, m
 
 // DeleteFact deletes a fact. Index sync happens inside deleteFile via
 // rh.NotifyCommit.
-func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
+func (fi *Index) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
 	commitHash, err := fi.deleteFile(ctx, branch, path, message, "retract")
 	if err != nil {
 		return "", fmt.Errorf("DeleteFact git: %w", err)
@@ -560,7 +561,7 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 
 // BatchWriteFacts writes and deletes multiple facts in a single commit. Index
 // sync happens inside batchWrite via rh.NotifyCommit.
-func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+func (fi *Index) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, deletes, nil, message, operation)
 	return
 }
@@ -570,12 +571,12 @@ func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files m
 // write lock. Otherwise nothing is written and the error is a
 // *RetractMissingError naming the absent paths. The F04 move passes its
 // retracted paths here.
-func (fi *factIndex) BatchWriteFactsMustExist(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+func (fi *Index) BatchWriteFactsMustExist(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	return fi.batchWrite(ctx, branch, files, deletes, mustExist, message, operation)
 }
 
 // tag creates a lightweight tag ref at the tip of branch.
-func (fi *factIndex) tag(ctx context.Context, branch, name string) error {
+func (fi *Index) tag(ctx context.Context, branch, name string) error {
 	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("tag: ref: %w", err)
@@ -586,7 +587,7 @@ func (fi *factIndex) tag(ctx context.Context, branch, name string) error {
 }
 
 // tagsContaining returns tag names whose target is reachable from hash.
-func (fi *factIndex) tagsContaining(ctx context.Context, hash string) ([]string, error) {
+func (fi *Index) tagsContaining(ctx context.Context, hash string) ([]string, error) {
 	targetHash := plumbing.NewHash(hash)
 
 	// Build set of all commits reachable from targetHash (one walk).

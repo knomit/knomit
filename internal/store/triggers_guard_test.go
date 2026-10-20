@@ -21,7 +21,7 @@ import (
 // for fired_at, written for the operator, never read; time.Unix/UTC/Format
 // render a stored stamp as RFC 3339 Z.
 var triggersAllowedCalls = map[string][]string{
-	"triggers.go": {
+	"facts/triggers.go": {
 		// git reads
 		"?.CommitObject", "c.Tree", "cur.NumParents", "tree.FindEntry", "tree.TreeEntryFile", "tree.File",
 		"f.Contents", "vcs.WalkHistory", "?.Reference", "ref.Hash", "?.String",
@@ -43,7 +43,7 @@ var triggersAllowedCalls = map[string][]string{
 		// git reads above, the database for this store's own tables below
 		"rh.Repository", "?.Repository", "rh.Storer", "rh.DB",
 		// this store's own tables (and the read-only liveness join)
-		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn", "rh.BranchID",
+		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "sqlite.Conn", "rh.BranchID",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",
 		// the signer
 		"rh.CommitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",

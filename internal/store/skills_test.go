@@ -12,7 +12,7 @@ import (
 // lowercases every nested path, so it cannot write SKILL.md).
 func putRaw(t *testing.T, svc *Service, branch, path, content string) plumbing.Hash {
 	t.Helper()
-	c, _, err := svc.fi.writeFileExact(context.Background(), branch, path, content, "w "+path, "updated", "")
+	c, _, err := svc.fi.WriteFileExactForTest(context.Background(), branch, path, content, "w "+path, "updated", "")
 	require.NoError(t, err)
 	return plumbing.NewHash(c)
 }

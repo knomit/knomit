@@ -1,4 +1,4 @@
-package store
+package facts
 
 import (
 	"context"
@@ -7,12 +7,14 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
 // path existed and returns its content and commit hash. Used to read facts
 // that were deleted in beforeCommitHash (e.g. retract commits).
-func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error) {
+func (fi *Index) readFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error) {
 	path = strings.ToLower(path)
 
 	// "Before" is exclusive: start the walk from the first parent so a version
@@ -23,7 +25,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
 	if parent == "" {
-		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, ErrPathNotFound)
+		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, vcs.ErrPathNotFound)
 	}
 
 	// Resolve, via the index, the last commit ≤ parent on the first-parent
@@ -38,7 +40,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
 	if !ok {
-		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, ErrPathNotFound)
+		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, vcs.ErrPathNotFound)
 	}
 
 	content, err = fi.rh.ReadFileAtCommit(ctx, path, hash)
@@ -53,7 +55,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 // — ReadFact, ListDir, and treeFileInsensitive — and every write path
 // lowercases before calling here, so this is a no-op for internal callers and a
 // fix for external ones (knomit_update, knomit_retract).
-func (fi *factIndex) fileExists(ctx context.Context, branch, path string) (bool, error) {
+func (fi *Index) fileExists(ctx context.Context, branch, path string) (bool, error) {
 	path = strings.ToLower(path)
 	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
@@ -81,7 +83,7 @@ func (fi *factIndex) fileExists(ctx context.Context, branch, path string) (bool,
 }
 
 // ReadFact reads a fact from the store. With nil opts it reads from branch HEAD.
-func (fi *factIndex) ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error) {
+func (fi *Index) ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error) {
 	if opts == nil {
 		opts = &ReadFactOpts{}
 	}
@@ -114,13 +116,13 @@ func (fi *factIndex) ReadFact(ctx context.Context, branch, path string, opts *Re
 }
 
 // FactExists returns true if a fact exists at path on branch HEAD.
-func (fi *factIndex) FactExists(ctx context.Context, branch, path string) (bool, error) {
+func (fi *Index) FactExists(ctx context.Context, branch, path string) (bool, error) {
 	return fi.fileExists(ctx, branch, path)
 }
 
 // ListDir returns entries under path at the tip of branch.
 // Subdirectories have IsDir=true, .md files have IsDir=false.
-func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEntry, error) {
+func (fi *Index) ListDir(ctx context.Context, branch, path string) ([]DirEntry, error) {
 	path = strings.ToLower(path)
 	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
@@ -163,11 +165,11 @@ func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEnt
 
 // ListAllWithHash returns all .md files at the tip of branch with their blob hashes.
 // Single tree walk — no per-file I/O.
-func (fi *factIndex) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
+func (fi *Index) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
 	return fi.rh.ListAllWithHash(ctx, branch)
 }
 
 // ListAll returns paths of all .md files at the tip of branch.
-func (fi *factIndex) ListAll(ctx context.Context, branch string) ([]string, error) {
+func (fi *Index) ListAll(ctx context.Context, branch string) ([]string, error) {
 	return fi.rh.ListAll(ctx, branch)
 }

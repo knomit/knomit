@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // mergeFn is MergePushed or MergeConsensus, as the merge-time guard tests
@@ -32,9 +33,9 @@ func (h *pushHost) branchWith(branch, from string, kv ...string) plumbing.Hash {
 	h.t.Helper()
 	ctx := context.Background()
 	require.NoError(h.t, h.svc.Branches().CreateBranch(ctx, branch, from))
-	fi := h.svc.Facts().(*factIndex)
+	fi := h.svc.Facts().(*facts.Index)
 	for i := 0; i+1 < len(kv); i += 2 {
-		_, _, err := fi.writeFileExact(ctx, branch, kv[i], kv[i+1], "write "+kv[i], "edit", "")
+		_, _, err := fi.WriteFileExactForTest(ctx, branch, kv[i], kv[i+1], "write "+kv[i], "edit", "")
 		require.NoError(h.t, err)
 	}
 	return h.ref(branch)
@@ -57,7 +58,7 @@ func TestMergeGuard_RefusesPrivateRevertMergesKB(t *testing.T) {
 
 			// The host's agent branch changes its ontology.
 			newer := kbOntology(VerifyOff) + "# host edit\n"
-			_, _, err := h.svc.Facts().(*factIndex).writeFileExact(ctx, hostBranch, fact.OntologyFile, newer, "ontology", "edit", "")
+			_, _, err := h.svc.Facts().(*facts.Index).WriteFileExactForTest(ctx, hostBranch, fact.OntologyFile, newer, "ontology", "edit", "")
 			require.NoError(t, err)
 
 			// bad: forked AFTER the edit, puts the old ontology back (a revert).
@@ -109,7 +110,7 @@ func TestMergeGuard_SideCannotOverrideIt(t *testing.T) {
 	h := newPushHost(t, VerifyOff, 1)
 	h.svc.SetSigner(newTestSigner(t))
 	peer := h.branchWith("agent/peer-44444444", hostBranch, fact.OntologyFile, kbOntology(VerifyOff)+"# peer\n")
-	_, _, err := h.svc.Facts().(*factIndex).writeFileExact(ctx, hostBranch, fact.OntologyFile, kbOntology(VerifyOff)+"# host\n", "o", "edit", "")
+	_, _, err := h.svc.Facts().(*facts.Index).WriteFileExactForTest(ctx, hostBranch, fact.OntologyFile, kbOntology(VerifyOff)+"# host\n", "o", "edit", "")
 	require.NoError(t, err)
 	tip := h.ref(hostBranch)
 	_, err = h.svc.MergePushed(ctx, "agent/peer-44444444", hostBranch, peer, ResolveSrc)

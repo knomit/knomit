@@ -21,7 +21,7 @@ func TestVerifyIsNeverInTheWritePath(t *testing.T) {
 	// Likewise for internal/store/verify: any verify.<Export>( call is
 	// verification, whether or not its name is in the list above.
 	verifyPkgCall := regexp.MustCompile(`\bverify\.\w+\(`)
-	for _, f := range []string{"fact_write.go", "internal/vcs/sign.go"} {
+	for _, f := range []string{"facts/fact_write.go", "internal/vcs/sign.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

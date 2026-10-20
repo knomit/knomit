@@ -8,7 +8,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
-// FactIndex is the interface for fact storage. Implemented by *factIndex.
+// FactIndex is the interface for fact storage. Implemented by *facts.Index.
 type FactIndex interface {
 	// SystemFileIndex is here so a holder of the fact store can resolve a
 	// ref to a .knomit/ file against the SAME Service (and so the same branch
