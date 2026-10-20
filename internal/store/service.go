@@ -122,7 +122,7 @@ func Open(path string) (*Service, error) {
 		db.SetConnMaxIdleTime(0) // never close idle connections
 
 		// Per-connection performance pragmas are applied in the ConnectHook
-		// (vec.go) so every pooled connection is configured, not just the first.
+		// (internal/sqlite/vec.go) so every pooled connection is configured, not just the first.
 	}
 
 	// Update query planner statistics (one-time hint, not per-connection).

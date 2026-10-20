@@ -752,7 +752,7 @@ print-semver:
 
 # Server tarball. The per-platform dist dir already IS the runtime layout —
 # knomit + kb resolve their ONNX libs from <exe>/lib
-# (internal/embeddings/embedder.go, internal/store/vec.go) — so we just stage
+# (internal/embeddings/embedder.go, internal/store/internal/sqlite/vec.go) — so we just stage
 # those things under a versioned top-level dir and tar it. libtokenizers.a
 # is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.
 # knomit-okf ships too: it is the only OKF export path, and a tool nobody can

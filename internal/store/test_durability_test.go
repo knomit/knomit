@@ -23,7 +23,7 @@ import (
 func TestSetTestFastDurability_SyncOffWALKept(t *testing.T) {
 	// Restore whatever TestMain set, so the rest of the binary runs as it
 	// asked to whether or not this package enables the switch.
-	prev := testFastDurability.Load()
+	prev := SyncDSNParam() != ""
 	t.Cleanup(func() { SetTestFastDurability(prev) })
 
 	// synchronous: 0 = OFF, 1 = NORMAL.

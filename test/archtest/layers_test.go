@@ -90,6 +90,10 @@ var sameLayerEdges = map[string]bool{
 	"serveraddr -> config": true,
 	// engine
 	"store/git -> store/migrate": true,
+	// The ctx-carried transaction (ctxKeyTx, Conn, BeginTxIfNeeded) is defined
+	// by the git storer; the sqlite child re-exposes those helpers to the
+	// store's sub-indices rather than redefining them.
+	"store/internal/sqlite -> store/git": true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

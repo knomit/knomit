@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import "context"
 
@@ -28,10 +28,10 @@ func WithPrecomputedEmbeddings(ctx context.Context, byPath map[string][]float32)
 	return context.WithValue(ctx, embeddingCacheKey{}, byPath)
 }
 
-// precomputedEmbedding returns a donated vector for path if the context
+// PrecomputedEmbedding returns a donated vector for path if the context
 // carries one. ok=false means "no cache attached or no entry for this
 // path" — caller should fall back to embedding.
-func precomputedEmbedding(ctx context.Context, path string) ([]float32, bool) {
+func PrecomputedEmbedding(ctx context.Context, path string) ([]float32, bool) {
 	m, ok := ctx.Value(embeddingCacheKey{}).(map[string][]float32)
 	if !ok {
 		return nil, false
