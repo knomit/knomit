@@ -15,7 +15,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
@@ -26,13 +25,6 @@ import (
 
 	"knomit/internal/fact"
 )
-
-// ExperimentPrefix is the ref namespace every experiment branch lives under.
-// Deliberately NOT `agent/…`: the /git advertisement is an allowlist of the
-// upstream plus `refs/heads/agent/`, so a name outside it is unreachable from
-// the network by construction rather than by a second rule that could drift
-// (kb/decisions/repos/git-serve/curated-advertisement).
-const ExperimentPrefix = "exp/"
 
 // MaxExperimentNameLen bounds the name so a ref path stays sane and an
 // accidental paste cannot become a branch.
@@ -54,59 +46,7 @@ var (
 	// so the caller gets "no such experiment" rather than a missing-ref error
 	// from deep inside the merge.
 	ErrNoSuchExperiment = errors.New("no such experiment")
-	// ErrStaleExperimentParent is returned by commit/sync when the
-	// experiment's recorded parent is no longer the agent branch this
-	// database records as its owner — the repo was taken over between the
-	// fork and now. Rollback is still allowed: throwing away orphaned work is
-	// always safe, and it is the only way out of the state.
-	ErrStaleExperimentParent = errors.New("experiment's parent is no longer this database's agent branch")
-	// ErrOrphanExperimentRef is returned when an exp/<name> ref exists with no
-	// experiments row behind it. Refused rather than adopted: the ref's
-	// content is unknown, and its parentage is unknowable (that is what the
-	// missing row means), so adopting it would present someone else's commits
-	// as a fresh fork of the agent branch. RollbackExperiment clears it — the
-	// refusal is only reasonable because the recovery needs no shell.
-	ErrOrphanExperimentRef = errors.New("an experiment branch with no record already exists")
 )
-
-// Experiment is one row of the `experiments` table: an `exp/<name>` branch
-// plus the fork it came from.
-type Experiment struct {
-	Name        string
-	Description string
-	// Parent is the branch this experiment was forked FROM, recorded at fork
-	// time. Eligibility compares it against the instance's current agent
-	// branch; it is never re-derived.
-	Parent string
-	// ForkCommit is the parent's tip at fork time — the point a "changed since
-	// the fork" view is computed against.
-	ForkCommit     string
-	CreatedAt      time.Time
-	LastActivityAt time.Time
-}
-
-// Branch returns the git branch name this experiment lives on.
-func (e Experiment) Branch() string { return ExperimentPrefix + e.Name }
-
-// ExperimentBranch maps a bare experiment name to its branch name.
-func ExperimentBranch(name string) string { return ExperimentPrefix + name }
-
-// IsExperimentBranch reports whether a branch name sits in the experiment
-// namespace. This is a cheap SHAPE test and answers nothing about
-// eligibility — a branch in the namespace may still have no record, or a
-// record naming another instance's agent branch as its parent. Callers
-// deciding whether a branch may be WRITTEN must read the record.
-func IsExperimentBranch(branch string) bool {
-	return strings.HasPrefix(branch, ExperimentPrefix) && len(branch) > len(ExperimentPrefix)
-}
-
-// ExperimentNameOf returns the bare name for an experiment branch.
-func ExperimentNameOf(branch string) (string, bool) {
-	if !IsExperimentBranch(branch) {
-		return "", false
-	}
-	return strings.TrimPrefix(branch, ExperimentPrefix), true
-}
 
 // validateExperimentName is the one gate every entry point goes through,
 // BEFORE anything is created, so a rejected name leaves no ref behind.
@@ -220,12 +160,6 @@ type Resolution struct {
 // between the fork and the experiments row, inside the parent's lock.
 var testHookOpenExperimentForked func()
 
-// Experiments returns the experiment lifecycle sub-service.
-func (s *Service) Experiments() ExperimentIndex { return s.rh }
-
-// Compile-time assertion: repoHandler must implement ExperimentIndex.
-var _ ExperimentIndex = (*repoHandler)(nil)
-
 // OpenExperiment creates the experiment if it is absent and RESUMES it if it
 // is not — the same call either way, because an agent that reconnects should
 // not have to know which of the two it is doing.
@@ -338,30 +272,6 @@ func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, pa
 	}, nil
 }
 
-// GetExperiment reads one record. The bool distinguishes "no such experiment"
-// from an error, so eligibility can answer "not writable" without treating a
-// DB failure as an answer.
-func (rh *repoHandler) GetExperiment(ctx context.Context, name string) (Experiment, bool, error) {
-	var (
-		e          Experiment
-		created    int64
-		lastActive int64
-	)
-	err := conn(ctx, rh.db).QueryRowContext(ctx, `
-		SELECT name, description, parent_branch, fork_commit, created_at, last_activity_at
-		FROM experiments WHERE name = ?`, name,
-	).Scan(&e.Name, &e.Description, &e.Parent, &e.ForkCommit, &created, &lastActive)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Experiment{}, false, nil
-	}
-	if err != nil {
-		return Experiment{}, false, fmt.Errorf("GetExperiment %q: %w", name, err)
-	}
-	e.CreatedAt = time.Unix(created, 0)
-	e.LastActivityAt = time.Unix(lastActive, 0)
-	return e, true, nil
-}
-
 // ListExperiments returns every experiment in this repo, ordered by name so
 // the listing is stable for a UI and for a test.
 func (rh *repoHandler) ListExperiments(ctx context.Context) ([]Experiment, error) {
@@ -391,35 +301,6 @@ func (rh *repoHandler) ListExperiments(ctx context.Context) ([]Experiment, error
 		return nil, fmt.Errorf("ListExperiments: %w", err)
 	}
 	return out, nil
-}
-
-// checkExperimentParentCurrent refuses an experiment whose recorded parent is
-// no longer the agent branch this database records as its owner.
-//
-// This is the STORE's half of a two-layer refusal, the same shape as the
-// subscription write refusal: RepoInstance.WritableBranch answers the client
-// from the live instance's agent branch, and this answers from the record, so
-// an in-process caller that never passed through a binding gate cannot merge
-// an orphaned experiment into a branch this database has stopped writing.
-// The record is the right authority here because the store has no instance to
-// ask (kb/invariants/store/branch-roles: the role comes from the record).
-//
-// An EMPTY owner is UNKNOWN, not a mismatch. AgentBranchOwner's contract says
-// so explicitly — a database created before the key existed, or one that has
-// never completed a boot, reports "" — and reading it as "no previous branch"
-// would refuse every commit on such a database. Same guard verify.go applies
-// to the same value. So the check bites only on a KNOWN, different owner.
-func (rh *repoHandler) checkExperimentParentCurrent(ctx context.Context, exp Experiment) error {
-	owner, err := rh.AgentBranchOwner(ctx)
-	if err != nil {
-		return fmt.Errorf("experiment %q: read agent branch owner: %w", exp.Name, err)
-	}
-	if owner == "" || owner == exp.Parent {
-		return nil
-	}
-	return fmt.Errorf("%w: experiment %q was forked from %q, but this database is now written by %q "+
-		"(roll it back, or re-open it from the current branch)",
-		ErrStaleExperimentParent, exp.Name, exp.Parent, owner)
 }
 
 // CommitExperiment merges the experiment into its RECORDED parent and, on
@@ -706,28 +587,6 @@ func (rh *repoHandler) dropExperiment(ctx context.Context, exp Experiment) error
 	return nil
 }
 
-// touchExperimentActivity records that a commit landed on branch, when branch
-// is an experiment. Called from notifyCommit, the single chokepoint every ref
-// mutation goes through, so "activity" means exactly "a commit happened here"
-// with no second definition to keep in sync.
-//
-// It runs on EVERY branch's every commit, so the shape test comes first and
-// costs a prefix compare; only an experiment branch reaches SQL. A branch with
-// no row updates nothing, which is the correct answer for a hand-made `exp/…`
-// ref nobody opened.
-func (rh *repoHandler) touchExperimentActivity(ctx context.Context, branch string) error {
-	if !IsExperimentBranch(branch) {
-		return nil
-	}
-	name, _ := ExperimentNameOf(branch)
-	if _, err := conn(ctx, rh.db).ExecContext(ctx,
-		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`,
-		time.Now().Unix(), name); err != nil {
-		return fmt.Errorf("touch experiment %q: %w", name, err)
-	}
-	return nil
-}
-
 // shortHash abbreviates a hash for a log line without panicking on a short or
 // empty one.
 func shortHash(h string) string {
@@ -735,31 +594,4 @@ func shortHash(h string) string {
 		return h
 	}
 	return h[:8]
-}
-
-// SetExperimentActivityForTest backdates an experiment's last_activity_at.
-//
-// TEST SEAM, and exported only because the sweeper's tests live in
-// internal/repos and cannot reach this table any other way. Expiry is
-// measured in days, so the alternative is a test that either sleeps for days
-// or asserts nothing; backdating the row makes the assertion about WHICH
-// experiment the cutoff selects, which is the part that can be wrong.
-//
-// Not part of ExperimentIndex: production code records activity through
-// notifyCommit, which is what keeps "activity" meaning exactly "a commit
-// landed here".
-func (s *Service) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
-	res, err := conn(ctx, s.rh.db).ExecContext(ctx,
-		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`, when.Unix(), name)
-	if err != nil {
-		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
-	}
-	return nil
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 )
 
@@ -29,54 +30,54 @@ type RevisionMeta struct {
 	Action      string // "added" | "modified"
 }
 
-// RevisionsBefore returns up to `limit` revisions of `path` in the first-parent
-// ancestry of `anchorCommit`, newest → oldest, restricted to commits where
-// `path` was added or modified. Deletions are stepped over — they are write
-// events in the sparse history, not stop conditions.
+// resolveActiveCommitForPath walks first-parent ancestry of fromCommit on
+// `branch`, returning the most recent commit where `path` was added or
+// modified. Deletions are stepped over: they're write events in the
+// sparse history, not stop conditions.
 //
-// History is bounded to the ancestry of `anchorCommit`: revisions committed
-// after the anchor are never surfaced ("explain as of C" rewinds the timeline).
+// Implementation: a single recursive CTE over commit_parents (parent_order
+// = 0 = first parent), JOINed with commit_log and capped by LIMIT 1.
+// SQLite's recursive-CTE planner is pull-based: with the outer LIMIT 1
+// satisfied, the recursion stops walking — same streaming + short-circuit
+// semantics as the previous first_parent_chain virtual table, without the
+// Go-side cursor callback that could re-enter the *sql.DB pool mid-scan.
 //
-// Walks first-parent ancestry via the shared firstParentChainCTE — NEVER
-// wall-clock ordering. See resolveTargetCommit's doc-comment for the
-// merge-branch rationale. The walk is scoped to `branch` by joining
-// branch_commits on the resolved branch_id, so revisions reachable only via an
-// off-branch lineage never surface even when anchorCommit was committed
-// elsewhere.
-func (hq *historyQuery) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error) {
-	if anchorCommit == "" || limit <= 0 {
-		return nil, nil
+// SCHEMA INVARIANT: branch_commits is populated by full-reachability walk
+// from the branch tip (populateCommitLog uses gogit.LogOrderDefault), so
+// any first-parent ancestor of an on-branch commit is itself on-branch.
+// The commit_log JOIN further restricts to indexed commits, so off-branch
+// commits cannot appear in the result set even though the walk itself is
+// branch-agnostic.
+//
+// Returns ("", false, nil) when no add/modify ancestor exists. Errors
+// propagate.
+//
+// First-parent (not wall-clock) ancestry is the correct semantic — see
+// resolveTargetCommit's doc-comment for the merge-branch rationale.
+// resolveActiveCommitForPath lives on repoHandler (it only needs rh.db) so its
+// callers — factIndex, searchIndex, factQuery and graphStore — share it directly —
+// factIndex's fallback-before read resolves the last-valid version through the
+// SAME index walk the graph resolver uses, instead of a divergent go-git walk.
+func (rh *repoHandler) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+	if fromCommit == "" {
+		return "", false, nil
 	}
-	branchID, err := hq.rh.branchID(ctx, branch)
-	if err != nil {
-		return nil, fmt.Errorf("RevisionsBefore: branchID: %w", err)
-	}
-	rows, err := conn(ctx, hq.rh.db).QueryContext(ctx, firstParentChainCTE+`
-		SELECT cl.commit_hash, COALESCE(cl.committed_at, 0), cl.message, cl.action
+
+	var hash string
+	err := conn(ctx, rh.db).QueryRowContext(ctx, firstParentChainCTE+`
+		SELECT cl.commit_hash
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
-		  JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-		 WHERE bc.branch_id = ? AND cl.path = ? AND cl.action IN ('added','modified')
+		 WHERE cl.path = ? AND cl.action IN ('added','modified')
 		 ORDER BY fpc.depth ASC
-		 LIMIT ?
-	`, anchorCommit, branchID, path, limit)
+		 LIMIT 1
+	`, fromCommit, path).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("RevisionsBefore: %w", err)
+		return "", false, fmt.Errorf("resolveActiveCommitForPath: %w", err)
 	}
-	defer rows.Close()
-
-	var out []RevisionMeta
-	for rows.Next() {
-		var rm RevisionMeta
-		var msg string
-		if err := rows.Scan(&rm.Commit, &rm.CommittedAt, &msg, &rm.Action); err != nil {
-			return nil, fmt.Errorf("RevisionsBefore: scan: %w", err)
-		}
-		rm.Message = firstLine(msg)
-		out = append(out, rm)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("RevisionsBefore: rows: %w", err)
-	}
-	return out, nil
+	_ = branch // See SCHEMA INVARIANT above — branch is implicit.
+	return hash, true, nil
 }

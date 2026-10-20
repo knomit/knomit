@@ -56,9 +56,6 @@ type SystemFile struct {
 	Truncated bool
 }
 
-// SystemFiles returns the system-file reader of this store.
-func (s *Service) SystemFiles() SystemFileIndex { return s.rh }
-
 // SystemFileAt implements SystemFileIndex for FactIndex: the same reader as
 // Service.SystemFiles, over the same repo handle.
 func (fi *factIndex) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {

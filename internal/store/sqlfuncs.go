@@ -4,8 +4,11 @@ package store
 
 import (
 	"encoding/json"
+	"sort"
+	"strings"
 
 	"knomit/internal/fact"
+	"knomit/internal/fact/textnorm"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
@@ -128,4 +131,54 @@ func sqlCosineSim(a, b []byte) interface{} {
 		return nil
 	}
 	return sim
+}
+
+// groupingKey is the mechanical cluster key for a motif spelling: its
+// canonicalized tokens, stemmed, SORTED and rejoined.
+//
+// Sorted, so the key is a token MULTISET and word order cannot split a
+// cluster — "atomic-write" and "write-atomic" name the same mechanism.
+//
+// Stemming comes from textnorm.Tokens, which already returns STEMMED tokens
+// (see its doc) — so "silent-fallbacks" and "silent-fallback" group without a
+// second Stem call here. An earlier draft called textnorm.Stem again on each
+// token; it was invisible because stemming is idempotent, and it was caught by
+// sabotaging it and watching the test still pass. Reaching for the shared
+// matcher rather than re-deriving is also what invariant 7a6af15e requires.
+//
+// This key is internal. It is deliberately NOT the canonical id: sorting reads
+// badly ("fallback-silent"), and the id is shown to readers in the §6 explain
+// surface and to an LLM in the backfill prompt. The id is a real member
+// spelling; see RebuildAliases.
+func groupingKey(motif string) string {
+	toks := textnorm.Tokens(textnorm.Canonicalize(motif))
+	stemmed := make([]string, 0, len(toks))
+	for _, t := range toks {
+		if t == "" {
+			continue
+		}
+		stemmed = append(stemmed, t)
+	}
+	sort.Strings(stemmed)
+	return strings.Join(stemmed, "-")
+}
+
+// motifClusterKeyExpr renders the ONE SQL expression that keys a motif
+// spelling to its cluster, for the readers that must agree with each other.
+//
+// Three steps, and each is a posture decision rather than defensiveness:
+//   - the STORED key, when the vocabulary has been resolved;
+//   - else the key a rebuild WOULD compute (knomit_motif_key is groupingKey),
+//     so a corpus with facts written since the last rebuild reads the way it
+//     will read a moment later rather than a different way in the meantime;
+//   - else the spelling itself, for a motif whose every token normalizes away.
+//     Those have no mechanical cluster to join, and letting them share the
+//     empty key would fuse unrelated motifs into one; RebuildAliases makes the
+//     same call by skipping them.
+//
+// Shared as TEXT because the alternative is three hand-written COALESCEs that
+// agree until one of them is edited. The caller supplies the motif column
+// (queries name it differently) and must alias motif_aliases as `a`.
+func motifClusterKeyExpr(motifCol string) string {
+	return `COALESCE(NULLIF(a.cluster_key, ''), NULLIF(knomit_motif_key(` + motifCol + `), ''), ` + motifCol + `)`
 }

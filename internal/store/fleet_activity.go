@@ -2,7 +2,6 @@ package store
 
 import (
 	"errors"
-	"path"
 	"strings"
 	"time"
 
@@ -36,61 +35,6 @@ type FleetMainCommit struct {
 	HostChanged bool
 	Host        []string
 	Records     []FleetRecordChange
-}
-
-// FleetMainLog returns the first-parent commits of branch (newest first)
-// that add rootCert (the fleet ontology's pki: root path), change the host
-// record or a member record under the store's <root>/members/, or merge a
-// branch, walking at most maxCommits commits (walkFirstParent) and stopping
-// once maxEntries are found: the walk is newest first, so a caller that
-// shows only the newest n events needs no more than n entries.
-func (s *Service) FleetMainLog(branch, rootCert string, maxCommits, maxEntries int) ([]FleetMainCommit, error) {
-	root := s.rh.factRoot
-	if root == "" {
-		root = "kb"
-	}
-	members := path.Join(root, fact.MembersTopic)
-	var out []FleetMainCommit
-	err := s.walkFirstParent(branch, maxCommits, func(c *object.Commit, parent *object.Commit) error {
-		mc := FleetMainCommit{Hash: c.Hash.String(), At: c.Committer.When.UTC(), Author: agentIDOfAuthor(c.Author.Email)}
-		if c.NumParents() >= 2 {
-			p2, err := c.Parent(1)
-			if err != nil {
-				return err
-			}
-			mc.MergedTip, mc.MergedBy = p2.Hash.String(), agentIDOfAuthor(p2.Author.Email)
-		}
-		tree, err := c.Tree()
-		if err != nil {
-			return err
-		}
-		var ptree *object.Tree
-		if parent != nil {
-			if ptree, err = parent.Tree(); err != nil {
-				return err
-			}
-		}
-		if rootCert != "" {
-			mc.RootAdded = !fileHash(tree, rootCert).IsZero() && fileHash(ptree, rootCert).IsZero()
-		}
-		if fileHash(tree, fact.FleetHostPath) != fileHash(ptree, fact.FleetHostPath) {
-			mc.HostChanged = true
-			if raw, ok, err := treeBytesCapped(tree, fact.FleetHostPath, 64<<10); err == nil && ok {
-				mc.Host, _ = fact.ParseFleetHost(raw)
-			}
-		}
-		if mc.Records, err = recordChanges(ptree, tree, members); err != nil {
-			return err
-		}
-		if mc.RootAdded || mc.HostChanged || mc.MergedTip != "" || len(mc.Records) > 0 {
-			out = append(out, mc)
-		}
-		if len(out) >= maxEntries {
-			return errStopWalk
-		}
-		return nil
-	})
-	return out, err
 }
 
 // recordChanges is every member record under dir that differs between the

@@ -453,9 +453,6 @@ func (si *searchIndex) SyncLocked(ctx context.Context, branch string) error {
 	return si.Sync(ctx, branch)
 }
 
-// RebuildProgress is called during Rebuild to report progress.
-type RebuildProgress func(phase string, done, total int)
-
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
 //

@@ -115,25 +115,22 @@ type PipelineWorkItem struct {
 }
 
 // pipelineIndex spans two databases. Watermark methods (durable progress: how
-// far review/hypothesize has processed git history) use the MAIN db on rh.
+// far review/hypothesize has processed git history) use the MAIN db (db).
 // Session and work-item methods (ephemeral, in-flight work-stealing state) use
 // the separate session DB (sessionDB). Session methods use sessionDB DIRECTLY
 // and never conn(ctx, …) / beginTxIfNeeded(ctx, …): a ctx-carried *sql.Tx is
 // bound to the MAIN db, so routing session SQL through it would hit the wrong
 // database (where these tables no longer exist).
 type pipelineIndex struct {
-	rh        *repoHandler
+	db        *sql.DB // the MAIN db (the repo database)
 	sessionDB *sql.DB
 }
-
-// Compile-time assertion: pipelineIndex must implement PipelineIndex.
-var _ PipelineIndex = (*pipelineIndex)(nil)
 
 // GetPipelineWatermark returns the last-processed commit hash for the given tool+branch,
 // or "" if no watermark has been set.
 func (pi *pipelineIndex) GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error) {
 	var hash string
-	err := conn(ctx, pi.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, pi.db).QueryRowContext(ctx,
 		`SELECT commit_hash FROM pipeline_watermarks WHERE tool = ? AND branch = ?`, tool, branch,
 	).Scan(&hash)
 	if err == sql.ErrNoRows {
@@ -147,7 +144,7 @@ func (pi *pipelineIndex) GetPipelineWatermark(ctx context.Context, tool, branch 
 
 // SetPipelineWatermark upserts the last-processed commit hash for a tool+branch.
 func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error {
-	_, err := conn(ctx, pi.rh.db).ExecContext(ctx,
+	_, err := conn(ctx, pi.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO pipeline_watermarks(tool, branch, commit_hash) VALUES (?, ?, ?)`,
 		tool, branch, hash,
 	)

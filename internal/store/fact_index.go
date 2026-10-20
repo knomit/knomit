@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	"knomit/internal/fact"
@@ -14,9 +16,6 @@ func parseFact(path, content string) (FactRecord, error) {
 	return NewFactRecord(f, ""), nil
 }
 
-// Compile-time interface checks.
-var _ FactIndex = (*factIndex)(nil)
-
 // factIndex owns all git-backed fact operations: reading and writing.
 // All shared git-level plumbing lives on repoHandler — factIndex reaches up
 // via fi.rh.*. In particular, index sync after a commit happens inside
@@ -25,4 +24,16 @@ var _ FactIndex = (*factIndex)(nil)
 type factIndex struct {
 	rh   *repoHandler
 	auth transport.AuthMethod
+}
+
+// DiffFiles returns paths added/modified/deleted between fromCommit and the tip of branch.
+// Only .md files are returned. If fromCommit is empty, diffs from empty tree.
+func (fi *factIndex) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
+	return fi.rh.DiffFiles(ctx, branch, fromCommit)
+}
+
+// ChangesUnder reports what differs under a folder between two commits. See
+// changes.go: a read of two trees, no clock, no write.
+func (fi *factIndex) ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error) {
+	return fi.rh.ChangesUnder(ctx, branch, q)
 }

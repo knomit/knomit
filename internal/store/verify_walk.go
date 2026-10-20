@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/pki"
@@ -76,48 +74,6 @@ const (
 	RuleArtifactNotAFile   = "artifact-not-a-file"  // a tree, symlink or submodule at a declared path, or anything under a directory a pattern declares a file (fact.Ontology.ArtifactFileAt)
 )
 
-// walkHistory visits every commit reachable from start and not from stop,
-// parents before children (a depth-first post-order), once each. A start in
-// stop is reachable from stop, so nothing is visited: E4 must not judge an
-// agent tip that is already on origin's main (a forge merge it fast-forwarded
-// onto).
-func walkHistory(st storer.EncodedObjectStorer, start plumbing.Hash, stop map[plumbing.Hash]bool, visit func(*object.Commit)) error {
-	if stop[start] {
-		return nil
-	}
-	seen := map[plumbing.Hash]bool{}
-	type frame struct {
-		c    *object.Commit
-		next int
-	}
-	root, err := object.GetCommit(st, start)
-	if err != nil {
-		return fmt.Errorf("verify: commit %s: %w", start, err)
-	}
-	stack := []*frame{{c: root}}
-	seen[start] = true
-	for len(stack) > 0 {
-		f := stack[len(stack)-1]
-		if f.next < len(f.c.ParentHashes) {
-			p := f.c.ParentHashes[f.next]
-			f.next++
-			if seen[p] || stop[p] {
-				continue
-			}
-			seen[p] = true
-			pc, err := object.GetCommit(st, p)
-			if err != nil {
-				return fmt.Errorf("verify: commit %s: %w", p, err)
-			}
-			stack = append(stack, &frame{c: pc})
-			continue
-		}
-		stack = stack[:len(stack)-1]
-		visit(f.c)
-	}
-	return nil
-}
-
 // keyFingerprint is pki.Fingerprint of an ssh-ed25519 public key.
 func keyFingerprint(pk ssh.PublicKey) (string, error) {
 	cpk, ok := pk.(ssh.CryptoPublicKey)
@@ -131,44 +87,6 @@ func keyFingerprint(pk ssh.PublicKey) (string, error) {
 	return pki.Fingerprint(ed), nil
 }
 
-// Accept is one entry of the operator's accept list.
-type Accept struct {
-	Commit  string `json:"commit"`
-	RepoUID string `json:"repo_uid,omitempty"` // "" = any repository
-	Note    string `json:"note,omitempty"`
-}
-
-// AcceptList is the operator's per-INSTANCE accept list (control.db). Its only
-// reader is E4: an accept waives the own-lineage refusal for one commit on
-// origin's copy of this instance's agent branch (for example commits made
-// before signing existed). The repo-database table verify_accepted (repo
-// migration 000027) is never read or written.
-type AcceptList interface {
-	Lookup(commit plumbing.Hash) (Accept, bool)
-}
-
-// CommitExists reports whether this repository's object store holds commit h.
-func (s *Service) CommitExists(h plumbing.Hash) bool {
-	_, err := object.GetCommit(s.rh.gits, h)
-	return err == nil
-}
-
-// CommitAgent is the agent id in the author address of commit h (the lookup
-// the commit judge makes, agentIDOfAuthor): "" when this repository does not
-// hold h or its author is not an agent address. Nothing is derived from a
-// branch name.
-func (s *Service) CommitAgent(h plumbing.Hash) string {
-	c, err := object.GetCommit(s.rh.gits, h)
-	if err != nil {
-		return ""
-	}
-	return agentIDOfAuthor(c.Author.Email)
-}
-
-// SetAcceptList installs the accept list, bound to this repository. Like
-// SetSigner it must be re-applied on every store reopen.
-func (s *Service) SetAcceptList(a AcceptList) { s.rh.acceptList = a }
-
 // acceptedCommit reports whether h is on this instance's accept list, which
 // waives E4 for that one commit.
 func (rh *repoHandler) acceptedCommit(h plumbing.Hash) bool {
@@ -178,8 +96,3 @@ func (rh *repoHandler) acceptedCommit(h plumbing.Hash) bool {
 	_, ok := rh.acceptList.Lookup(h)
 	return ok
 }
-
-// SetOwnKeys installs the source of this instance's historical keys (its
-// fleet member record's versions) for E4. Re-applied on every store reopen,
-// like SetSigner.
-func (s *Service) SetOwnKeys(f func() []ssh.PublicKey) { s.rh.ownKeys = f }

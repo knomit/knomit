@@ -63,9 +63,6 @@ func (f SkillBundledFile) Contents() ([]byte, error) {
 	return io.ReadAll(r)
 }
 
-// Skills returns the skill reader of this store.
-func (s *Service) Skills() SkillIndex { return s.rh }
-
 // skillsTree is fact.SkillsDir at commit, or nil when the commit has none.
 func (rh *repoHandler) skillsTree(commit plumbing.Hash) (*object.Tree, error) {
 	c, err := rh.repo.CommitObject(commit)

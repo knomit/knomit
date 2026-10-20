@@ -69,9 +69,6 @@ type TemplateFactFile struct {
 	Data   []byte
 }
 
-// Templates returns the template reader of this store.
-func (s *Service) Templates() TemplateIndex { return s.rh }
-
 func (rh *repoHandler) treeAt(commit plumbing.Hash, dir string) (*object.Tree, error) {
 	c, err := rh.repo.CommitObject(commit)
 	if err != nil {
@@ -229,47 +226,3 @@ func (rh *repoHandler) TemplateFactsAt(ctx context.Context, commit plumbing.Hash
 // ErrSystemTreePath refuses a WriteSystemTree path outside the template
 // layout (fact.TemplatePathAllowed).
 var ErrSystemTreePath = errors.New("system tree: only README.md and paths under .knomit/ may be written")
-
-// WriteSystemTree writes files as ONE authored commit on branch, KEEPING THE
-// CASE of every path. It is the door F24's create-from-template writes a
-// template through: every fact door lowercases a nested path, which would
-// turn .knomit/skills/x/SKILL.md into skill.md and README.md into readme.md.
-//
-// Because it goes around that normalization, it accepts the narrowest set
-// that works and nothing else: README.md and paths under .knomit/
-// (fact.TemplatePathAllowed), no two paths that differ only by case. It is
-// never on the MCP surface. Otherwise it is batchWrite: read-only refused,
-// validatePath, the signer taken before any object is written, the ctx
-// trailers stamped, notifyCommit under the branch lock.
-func (s *Service) WriteSystemTree(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
-	fi := s.fi
-	if fi.rh.readOnly {
-		return "", nil, ErrRepoReadOnly
-	}
-	if len(files) == 0 {
-		return "", nil, fmt.Errorf("%w: nothing to write", ErrSystemTreePath)
-	}
-	seen := make(map[string]string, len(files))
-	for p := range files {
-		if !fact.TemplatePathAllowed(p) {
-			return "", nil, fmt.Errorf("%w: %q", ErrSystemTreePath, p)
-		}
-		if other, dup := seen[strings.ToLower(p)]; dup {
-			return "", nil, fmt.Errorf("%w: %q and %q differ only by case", ErrSystemTreePath, other, p)
-		}
-		seen[strings.ToLower(p)] = p
-		if err := validatePath(p); err != nil {
-			return "", nil, fmt.Errorf("store: WriteSystemTree: %w", err)
-		}
-	}
-	unlock := fi.rh.lockBranch(branch)
-	defer unlock()
-	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, nil, nil, message, operation)
-	if err != nil {
-		return "", nil, err
-	}
-	if err := fi.rh.notifyCommit(ctx, branch, cHash); err != nil {
-		return "", nil, err
-	}
-	return cHash.String(), blobHashes, nil
-}

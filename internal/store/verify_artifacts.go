@@ -87,27 +87,6 @@ func (j judge) artifactRules(c *object.Commit) (Refusal, bool) {
 
 func underArtifacts(p string) bool { return strings.HasPrefix(p, fact.ArtifactsRoot+"/") }
 
-// parentTrees returns the trees of c's parents, or the empty tree (nil) for a
-// root commit.
-func parentTrees(c *object.Commit) ([]*object.Tree, error) {
-	if c.NumParents() == 0 {
-		return []*object.Tree{nil}, nil
-	}
-	out := make([]*object.Tree, 0, c.NumParents())
-	for i := range c.NumParents() {
-		p, err := c.Parent(i)
-		if err != nil {
-			return nil, err
-		}
-		pt, err := p.Tree()
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, pt)
-	}
-	return out, nil
-}
-
 // artifactCheck judges the changes of one commit, reading its tree's PKI at
 // most once.
 type artifactCheck struct {

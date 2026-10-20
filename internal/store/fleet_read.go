@@ -16,7 +16,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
@@ -51,39 +50,6 @@ func resolveCommit(repo *gogit.Repository, rev string) (*object.Commit, error) {
 		return nil, fmt.Errorf("resolve %q: %w", rev, err)
 	}
 	return repo.CommitObject(*h)
-}
-
-// treeOntology reads the ontology file from a commit's tree, trying every
-// ontology path newest first. (nil, nil) when the tree has none. A symlink at
-// the first rung present is fact.ErrSymlinkNotFollowed naming it: never its
-// link text, never "none".
-func treeOntology(c *object.Commit) ([]byte, error) {
-	_, data, err := treeOntologyFile(c)
-	return data, err
-}
-
-// treeOntologyFile is treeOntology also returning the rung it read ("" when
-// none).
-func treeOntologyFile(c *object.Commit) (string, []byte, error) {
-	tree, err := c.Tree()
-	if err != nil {
-		return "", nil, err
-	}
-	for _, p := range fact.OntologyPathsNewestFirst() {
-		f, err := tree.File(p)
-		if errors.Is(err, object.ErrFileNotFound) {
-			continue
-		}
-		if err != nil {
-			return "", nil, err
-		}
-		if f.Mode == filemode.Symlink {
-			return "", nil, fact.SymlinkNotFollowed(p)
-		}
-		s, err := f.Contents()
-		return p, []byte(s), err
-	}
-	return "", nil, nil
 }
 
 // malformedLogged is the ONE-error-per-(fleet, path, blob) latch for member
@@ -175,57 +141,6 @@ func LoadFleetAt(dir, rev, root string) (Fleet, error) {
 		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
 	return loadFleetAt(dir, c, root)
-}
-
-// FleetMembersAt returns the member records at branch in THIS store (a
-// mounted fleet repository), after checking that its ontology there is the
-// fleet ontology. root is the store's fact root.
-func (s *Service) FleetMembersAt(branch string) ([]FleetMember, error) {
-	f, err := s.FleetAt(branch)
-	return f.Members, err
-}
-
-// FleetPKIAt returns the fleet's certificate artifacts at branch in THIS store
-// (a mounted fleet repository): nil, nil when that revision declares no
-// pki: root or holds no root file.
-func (s *Service) FleetPKIAt(branch string) (*FleetPKI, error) {
-	f, err := s.FleetAt(branch)
-	return f.PKI, err
-}
-
-// FleetAt returns everything the judge reads from THIS store (a mounted fleet
-// repository) at branch, all from the ONE commit branch names: the member
-// records and the certificate artifacts. Reading them separately could pair
-// the records of one revision with the CRL of another.
-func (s *Service) FleetAt(branch string) (Fleet, error) {
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
-	if err != nil {
-		return Fleet{}, fmt.Errorf("fleet: %s: %w", branch, err)
-	}
-	c, err := object.GetCommit(s.rh.gits, ref.Hash())
-	if err != nil {
-		return Fleet{}, fmt.Errorf("fleet: %w", err)
-	}
-	return loadFleetAt("mounted", c, s.rh.factRoot)
-}
-
-// FileAt reads the regular file p (a repo-root path) at branch's tip in THIS
-// store: ok is false when there is none (a symlink counts as none). A blob
-// larger than limit is an error and is not read.
-func (s *Service) FileAt(branch, p string, limit int64) ([]byte, bool, error) {
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
-	if err != nil {
-		return nil, false, fmt.Errorf("%s: %w", branch, err)
-	}
-	c, err := object.GetCommit(s.rh.gits, ref.Hash())
-	if err != nil {
-		return nil, false, err
-	}
-	tree, err := c.Tree()
-	if err != nil {
-		return nil, false, err
-	}
-	return treeBytesCapped(tree, p, limit)
 }
 
 // Fleet is the judge's input from a fleet repository at ONE revision.
@@ -526,35 +441,4 @@ func treeBytesCapped(tree *object.Tree, p string, limit int64) ([]byte, bool, er
 		return nil, false, err
 	}
 	return []byte(s), true, nil
-}
-
-// FleetKeysOf returns every key agentID's member record has held in this
-// store's (a mounted fleet repository's) history of branch: the record's
-// VERSIONS, which is where an agent's key history lives. Malformed versions
-// are skipped.
-func (s *Service) FleetKeysOf(branch, agentID string) ([]ssh.PublicKey, error) {
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
-	if err != nil {
-		return nil, fmt.Errorf("fleet: %s: %w", branch, err)
-	}
-	root := s.rh.factRoot
-	if root == "" {
-		root = "kb"
-	}
-	var keys []ssh.PublicKey
-	seen := map[string]bool{}
-	err = walkHistory(s.rh.gits, ref.Hash(), nil, func(c *object.Commit) {
-		ms, lerr := loadMembers("mounted", c, root)
-		if lerr != nil {
-			return
-		}
-		for _, m := range ms {
-			k := string(m.Key.Marshal())
-			if m.Agent == agentID && !seen[k] {
-				seen[k] = true
-				keys = append(keys, m.Key)
-			}
-		}
-	})
-	return keys, err
 }

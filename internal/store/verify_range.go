@@ -59,13 +59,6 @@ func (v RangeVerdict) ExitCode() int {
 	return 0
 }
 
-// agentIDOfAuthor returns the agent id in an agent author address,
-// <id>[+<op>]@agents.knomit.io, or "" for any other address. It is
-// pki.AgentIDOfEmail, the ONE string operation on an identity, shared with the
-// certificate's email SAN so the two can never disagree (R2). The id is
-// OPAQUE: it is looked up and compared, never parsed further.
-func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
-
 // CheckRange is F09's acceptance gate: it runs ONCE, where a change enters a
 // knowledge base's main (the merge job, via `knomit verify ci`), over plain git
 // checkouts so it needs no knomit instance.

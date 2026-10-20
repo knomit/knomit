@@ -2,13 +2,11 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"path"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -33,29 +31,6 @@ func (e *FactInvalidError) Error() string { return fmt.Sprintf("%s: %v", e.Path,
 func (e *FactInvalidError) Unwrap() error { return e.Err }
 func (e *FactInvalidError) Is(target error) bool {
 	return target == ErrFactInvalid
-}
-
-// ontCache keeps the last ontology parsed per repository, keyed by the
-// SHA-256 of its bytes: every write reads the ontology at the branch's tip,
-// and parsing compiles its rules.
-type ontCache struct {
-	mu  sync.Mutex
-	key [32]byte
-	ont *fact.Ontology
-	err error
-	set bool
-}
-
-func (c *ontCache) parse(raw []byte) (*fact.Ontology, error) {
-	k := sha256.Sum256(raw)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.set && c.key == k {
-		return c.ont, c.err
-	}
-	c.ont, c.err = fact.ParseOntology(raw)
-	c.key, c.set = k, true
-	return c.ont, c.err
 }
 
 func (rh *repoHandler) ontologyCache() *ontCache { return &rh.writeOnt }
