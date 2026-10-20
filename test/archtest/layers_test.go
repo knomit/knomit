@@ -195,6 +195,15 @@ var sameLayerEdges = map[string]bool{
 	"store/gitserve -> store/merge":        true,
 	"store/gitserve -> store/remotesync":   true,
 	"store/gitserve -> store/verify":       true,
+	// The fsck child (the integrity checker behind Service.Verify and
+	// PruneGeneratedRefs) sits at the top of the store's child order (proposal
+	// 4.3: fsck -> everything above): it reads the one *vcs.Repo and the two
+	// sub-indices its checks need, the fact index for the fact-format check and
+	// the search index for the parity and embedding checks. Nothing in the
+	// store imports it but the facade.
+	"store/fsck -> store/facts":        true,
+	"store/fsck -> store/index":        true,
+	"store/fsck -> store/internal/vcs": true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,
