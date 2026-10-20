@@ -30,11 +30,3 @@ type searchFacade struct {
 	*historyQuery
 	*methodologyMatcher
 }
-
-var (
-	_ FactQuery          = (*factQuery)(nil)
-	_ GraphStore         = (*graphStore)(nil)
-	_ HistoryQuery       = (*historyQuery)(nil)
-	_ MethodologyMatcher = (*methodologyMatcher)(nil)
-	_ SearchIndex        = (*searchFacade)(nil)
-)

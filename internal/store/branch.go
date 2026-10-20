@@ -223,9 +223,6 @@ func (rh *repoHandler) getEmbedder() Embedder {
 	return rh.embedder
 }
 
-// Compile-time assertion.
-var _ BranchIndex = (*repoHandler)(nil)
-
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 	return &repoHandler{db: db, cache: newBranchCache(), gits: gits}
 }

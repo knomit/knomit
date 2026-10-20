@@ -13,7 +13,6 @@ package store
 
 import (
 	"context"
-	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -27,10 +26,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
-	"knomit/internal/pki"
 )
 
 // TriggerFireRetention is how many fire-log rows a repo keeps: the newest
@@ -326,31 +323,8 @@ type TriggerIndex interface {
 	DueMarks(ctx context.Context, branch string) (map[DueKey]int64, error)
 }
 
-// Triggers returns the trigger dispatcher's store surface.
-func (s *Service) Triggers() TriggerIndex { return s.rh }
-
 // Compile-time assertion: repoHandler must implement TriggerIndex.
 var _ TriggerIndex = (*repoHandler)(nil)
-
-// SignerFingerprint is the full pki.Fingerprint of the key this store signs
-// authored commits with (its signer, or inside a test binary the test
-// fallback), or "" when it has none. `change.source` is `local` exactly when
-// the firing commit's verified signer carries this fingerprint.
-func (s *Service) SignerFingerprint() string {
-	signer, err := s.rh.commitSigner()
-	if err != nil {
-		return ""
-	}
-	cpk, ok := signer.PublicKey().(ssh.CryptoPublicKey)
-	if !ok {
-		return ""
-	}
-	ed, ok := cpk.CryptoPublicKey().(ed25519.PublicKey)
-	if !ok {
-		return ""
-	}
-	return pki.Fingerprint(ed)
-}
 
 // OntologyAtCommit implements TriggerIndex. A path present as a directory or a
 // blob that cannot be read is an error, never "try the next path", so a

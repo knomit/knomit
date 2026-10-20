@@ -126,9 +126,6 @@ type pipelineIndex struct {
 	sessionDB *sql.DB
 }
 
-// Compile-time assertion: pipelineIndex must implement PipelineIndex.
-var _ PipelineIndex = (*pipelineIndex)(nil)
-
 // GetPipelineWatermark returns the last-processed commit hash for the given tool+branch,
 // or "" if no watermark has been set.
 func (pi *pipelineIndex) GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error) {

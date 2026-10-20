@@ -16,9 +16,6 @@ func parseFact(path, content string) (FactRecord, error) {
 	return NewFactRecord(f, ""), nil
 }
 
-// Compile-time interface checks.
-var _ FactIndex = (*factIndex)(nil)
-
 // factIndex owns all git-backed fact operations: reading and writing.
 // All shared git-level plumbing lives on repoHandler — factIndex reaches up
 // via fi.rh.*. In particular, index sync after a commit happens inside

@@ -29,48 +29,6 @@ import (
 // branch, so an empty remote cannot be connected.
 var ErrEmptyRemote = errors.New("remote repository has no branches")
 
-// ErrBranchNotFound is returned by ref-resolving code paths (ListDir, ReadFact,
-// HeadCommit, etc.) when the requested branch has no matching git ref. Handlers
-// in internal/web detect this via errors.Is and map it to HTTP 404 instead of
-// 500. The underlying go-git plumbing.ErrReferenceNotFound is preserved in the
-// error chain for introspection.
-var ErrBranchNotFound = errors.New("branch not found")
-
-// ErrNoAgentBranch is returned by Push when asked to push an empty branch
-// name: a subscription has no agent branch and nothing of its own to push.
-var ErrNoAgentBranch = errors.New("repo has no agent branch to push")
-
-// ErrRepoReadOnly is returned by every authored-write door when the store has
-// been marked read-only (a subscription). Sync merges are not authored writes
-// and are not gated.
-var ErrRepoReadOnly = errors.New("repo is read-only")
-
-// ErrFactChanged is returned by a conditional write (WriteFactIfUnchanged)
-// whose file no longer holds the blob the caller read: another write landed
-// in between, and committing would silently discard it.
-var ErrFactChanged = errors.New("fact changed since it was read")
-
-// ErrInvalidPath is wrapped by every write door when it refuses the path
-// itself: empty, containing "..", or one go-git would refuse to read back
-// (#384). Nothing was written. Callers map it (IsInvalidPath) to a 400 rather
-// than a 500: the path is the caller's mistake, not a store failure.
-var ErrInvalidPath = errors.New("invalid path")
-
-// ErrFactNotLive is returned by ExplainFact (and any other HEAD-anchored read
-// path that needs to resolve a path's active commit via branch_facts) when
-// no row exists for (branch, path). This means the fact is not currently live
-// at HEAD — typically because it was retracted, or because the path was never
-// indexed on this branch. Older versions may still exist in the graph and be
-// reachable via commit-anchored endpoints.
-var ErrFactNotLive = errors.New("fact not live at HEAD")
-
-// ErrPathNotFound is returned by ReadFact (and the underlying readFile* helpers)
-// when the requested path does not exist at the requested anchor. This is the
-// "true 404" condition — distinct from a git/database error reading a path that
-// should exist. Callers use errors.Is to surface a 404 while propagating real
-// errors as 500.
-var ErrPathNotFound = errors.New("path not found")
-
 // initRepoConfig stamps the repo config with the knomit identity and disables
 // GPG signing, which must be done for both fresh and remote-initialized repos.
 func initRepoConfig(repo *gogit.Repository, label string) error {

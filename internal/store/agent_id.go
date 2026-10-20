@@ -14,14 +14,6 @@ import (
 // writing refuses to write them, as a store without a signer does.
 var ErrNoAgentID = errors.New("store has no agent id: refusing to author a commit")
 
-// SetAgentID sets the agent id every commit this store AUTHORS names: the
-// author <id>+<operation>@agents.knomit.io and the committer
-// <id>@agents.knomit.io. Every authored commit is signed by this instance's
-// key, so it is this instance's id whichever branch the commit lands on (the
-// agent branch, an experiment forked from it, the replay store of the origin
-// wizard). Like SetSigner it must be re-applied on every store reopen.
-func (s *Service) SetAgentID(id string) { s.rh.agentID = id }
-
 // ownAgentID is the id an authored commit names: the id SetAgentID gave this
 // store, else (inside a test binary only) the installed fallback's answer for
 // branch, else ErrNoAgentID. branch is the AGENT branch the commit is

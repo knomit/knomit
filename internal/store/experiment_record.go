@@ -16,20 +16,20 @@ import (
 // (kb/decisions/repos/git-serve/curated-advertisement).
 const ExperimentPrefix = "exp/"
 
-var // ErrStaleExperimentParent is returned by commit/sync when the
+// ErrStaleExperimentParent is returned by commit/sync when the
 // experiment's recorded parent is no longer the agent branch this
 // database records as its owner — the repo was taken over between the
 // fork and now. Rollback is still allowed: throwing away orphaned work is
 // always safe, and it is the only way out of the state.
-ErrStaleExperimentParent = errors.New("experiment's parent is no longer this database's agent branch")
+var ErrStaleExperimentParent = errors.New("experiment's parent is no longer this database's agent branch")
 
-var // ErrOrphanExperimentRef is returned when an exp/<name> ref exists with no
+// ErrOrphanExperimentRef is returned when an exp/<name> ref exists with no
 // experiments row behind it. Refused rather than adopted: the ref's
 // content is unknown, and its parentage is unknowable (that is what the
 // missing row means), so adopting it would present someone else's commits
 // as a fresh fork of the agent branch. RollbackExperiment clears it — the
 // refusal is only reasonable because the recovery needs no shell.
-ErrOrphanExperimentRef = errors.New("an experiment branch with no record already exists")
+var ErrOrphanExperimentRef = errors.New("an experiment branch with no record already exists")
 
 // Experiment is one row of the `experiments` table: an `exp/<name>` branch
 // plus the fork it came from.

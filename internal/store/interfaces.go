@@ -6,8 +6,6 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-
-	"knomit/internal/embeddings/params"
 )
 
 // FactIndex is the interface for fact storage. Implemented by *factIndex.
@@ -167,27 +165,6 @@ type SearchIndex interface {
 	GraphStore
 	HistoryQuery
 	MethodologyMatcher
-}
-
-// IndexManager is the interface for search index lifecycle operations. Implemented by *searchIndex.
-type IndexManager interface {
-	// Sync is lock-FREE: the caller MUST already hold lockBranch(branch). Its
-	// only such caller is notifyCommit (the inline write path). Out-of-band
-	// callers (commit observer, startup heal) MUST use SyncLocked instead.
-	Sync(ctx context.Context, branch string) error
-	// SyncLocked runs Sync while acquiring lockBranch(branch), for callers that
-	// are NOT already inside the branch lock — so the index mutation can't race
-	// an inline write's sync or a concurrent Rebuild on the same branch.
-	SyncLocked(ctx context.Context, branch string) error
-	// Rebuild acquires lockBranch(branch) for its full duration; it is safe to
-	// call out-of-band (no caller holds the branch lock first).
-	Rebuild(ctx context.Context, branch string, progress RebuildProgress) error
-	SyncWatermark(ctx context.Context, branch string) (string, error)
-	// NeedsRebuild reports whether this BRANCH's persisted derived state was
-	// written by an older schema version and must be regenerated via Rebuild.
-	// Per-branch: Rebuild bumps only the branch it rebuilt, so one branch's
-	// answer never speaks for another's.
-	NeedsRebuild(ctx context.Context, branch string) (bool, error)
 }
 
 // RemoteIndex is the interface for git remote configuration and synchronization.
@@ -364,28 +341,6 @@ type PipelineIndex interface {
 	DeletePipelineWorkItem(ctx context.Context, id int64) (deleted bool, err error)
 	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
-}
-
-// TitleTarget is a fact whose title still needs embedding onto the abstraction
-// axis.
-type TitleTarget struct {
-	FactID int64
-	Path   string
-	Title  string
-}
-
-// TitleVector is one fact's title embedding, keyed by fact id — the same
-// content-addressed key facts_vec uses.
-type TitleVector struct {
-	FactID int64
-	Vec    []float32
-}
-
-// TitleNeighbour is one KNN hit on the abstraction axis.
-type TitleNeighbour struct {
-	FactID     int64
-	Path       string
-	Similarity float64
 }
 
 // AbstractionIndex is the title-embedding axis ("the abstraction axis") and the
@@ -587,47 +542,8 @@ type AbstractionIndex interface {
 	SetProbeSessionsWaited(ctx context.Context, branch string, n int) error
 }
 
-// RestatementVerdict is one judge outcome on a shortlist-originated pair.
-//
-// Resolved, not Merged: a judge that consolidates a restatement by RETRACTING
-// the redundant half has done exactly the work this mechanism exists to buy.
-// Counting only merges would defund a corpus that is consolidating
-// successfully by another route — which is the failure mode a throttle can
-// least afford, since it looks identical to "the shortlist finds nothing".
-//
-// It carries fact ids as well as paths because ids are content-addressed: a
-// "keep" applies to the exact pair of versions that was judged, and editing
-// either fact makes the pair eligible again with no staleness rule needed.
-type RestatementVerdict struct {
-	APath    string
-	BPath    string
-	AFactID  int64
-	BFactID  int64
-	Resolved bool
-	JudgedAt time.Time
-}
-
-// RestatementPair is one standing candidate: two facts whose TITLES are close
-// on the abstraction axis while their bodies are not close enough for the
-// mechanical dedup gate to have merged them. Canonical order: APath < BPath.
-type RestatementPair struct {
-	APath    string
-	BPath    string
-	AFactID  int64
-	BFactID  int64
-	TitleCos float64
-	// MatchKind records HOW the pair was found. Selection reads it because the
-	// two routes want different treatment: a title-KNN pair is ranked by its
-	// cosine, while a structurally matched pair is a near-certain duplicate
-	// whatever its cosine happens to be. Empty on construction means
-	// MatchTitleKNN; the store normalises.
-	MatchKind string
-}
-
 // Restatement pair match kinds — how a standing pair was found.
 const (
-	// MatchTitleKNN: the two facts are top-K title neighbours of each other.
-	MatchTitleKNN = "title-knn"
 	// MatchPathIdentity: their paths normalise to one identity — the same
 	// segment set, or one path's segments a subset of the other's, after
 	// casefolding, stemming, and ignoring a UUID filename.
@@ -637,75 +553,5 @@ const (
 	MatchRareToken = "rare-token"
 )
 
-// RestatementPairStats describes the standing pair population for health
-// output: how many pairs stand, and where the top of the distribution sits.
-type RestatementPairStats struct {
-	Count int
-	P99   float64
-	P999  float64
-	// Structural counts the pairs found by something other than title
-	// proximity. Observability: reported, read by no branch.
-	Structural int
-}
-
-// LiveFactTitle is one live fact's path and title, keyed by fact id.
-type LiveFactTitle struct {
-	Path  string
-	Title string
-}
-
-// Embedder computes vector embeddings. Roles differ because retrieval models
-// embed queries and documents with different prompts.
-//
-// On ctx and what it does NOT promise: the in-process ONNX implementation runs
-// inference through a session handle that exposes no run-termination hook, so
-// ctx is observed only at entry to each call — and, in EmbedDocuments, between
-// batches. An inference already in flight runs to completion regardless of
-// cancellation; cancelling bounds latency to one batch, it does not abort one.
-// The parameter is here so the interface is honest about being a cancellation
-// checkpoint and so a future remote embedder (which genuinely could abort a
-// request) needs no signature change — not because this implementation can
-// interrupt itself.
-//
-// Note "one batch" is not a fixed quantity: the in-process implementation packs
-// batches to a padded-token budget (embeddings.max_batch_tokens), so this
-// latency bound scales with that setting and with the length of the documents
-// in flight.
-type Embedder interface {
-	EmbedQuery(ctx context.Context, text string) ([]float32, error)
-	EmbedDocument(ctx context.Context, title, body string) ([]float32, error)
-	Dim() int
-	ID() string
-	// Thresholds returns the model's calibrated cosine cutoffs (dedup, search
-	// recall, SIMILAR_TO, reflect novelty). They are model-dependent, so they
-	// travel with the embedder rather than living as hard-coded constants.
-	Thresholds() params.Thresholds
-}
-
-// EmbedderThresholds returns emb's calibrated cutoffs, or the historical
-// nomic-era defaults when no embedder is configured (embeddings disabled), so
-// callers get usable values without a nil check at every site.
-func EmbedderThresholds(emb Embedder) params.Thresholds {
-	if emb == nil {
-		return params.Defaults()
-	}
-	return emb.Thresholds()
-}
-
 //go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=store knomit/internal/store BatchEmbedder
 //go:generate go run go.uber.org/mock/mockgen -destination=../mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/store BatchEmbedder
-
-// BatchEmbedder extends Embedder with batched document inference. This is the
-// one embed path where ctx buys something material: a full-corpus re-embed
-// issues many inferences, and the per-batch checkpoint bounds cancellation
-// latency to a single batch rather than the whole corpus.
-type BatchEmbedder interface {
-	Embedder
-	EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error)
-	// EmbedShortStrings embeds bare short strings (fact titles today, motif
-	// names later) through the model's short-string template. Separate from
-	// EmbedDocuments because the RENDERING differs, not the batching: a few
-	// words in the document template embed measurably worse than the same words
-	// in the title slot (see embeddings.Model.ShortStringTemplate).
-	EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error)
-}

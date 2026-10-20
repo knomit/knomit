@@ -20,8 +20,6 @@ type toolIndex struct {
 	db *sql.DB
 }
 
-var _ ToolSessionIndex = (*toolIndex)(nil)
-
 // ToolSession represents a paginated tool session for a branch.
 type ToolSession struct {
 	ID         string

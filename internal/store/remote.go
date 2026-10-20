@@ -56,8 +56,6 @@ func (ri *remoteIndex) getOrigin() *Origin {
 	return ri.origin
 }
 
-var _ RemoteIndex = (*remoteIndex)(nil)
-
 // Origin is a repo's remote connection, supplied from OUTSIDE the store. The
 // store no longer owns this: <home>/control.db does, so a lost .db can be
 // re-cloned from a record that outlives it. AuthToken is plaintext — the

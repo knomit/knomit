@@ -31,9 +31,6 @@ import (
 //go:embed session_schema.sql
 var sessionSchema string
 
-// blobObjectType is the go-git integer for plumbing.BlobObject.
-const blobObjectType = 3
-
 // Service is the single entry point for all database and git access. It opens one
 // SQLite file with the sqlite-vec extension, runs the embedded
 // schema, and provides both a go-git Storer and typed index accessors.

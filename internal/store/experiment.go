@@ -160,12 +160,6 @@ type Resolution struct {
 // between the fork and the experiments row, inside the parent's lock.
 var testHookOpenExperimentForked func()
 
-// Experiments returns the experiment lifecycle sub-service.
-func (s *Service) Experiments() ExperimentIndex { return s.rh }
-
-// Compile-time assertion: repoHandler must implement ExperimentIndex.
-var _ ExperimentIndex = (*repoHandler)(nil)
-
 // OpenExperiment creates the experiment if it is absent and RESUMES it if it
 // is not — the same call either way, because an agent that reconnects should
 // not have to know which of the two it is doing.
@@ -600,31 +594,4 @@ func shortHash(h string) string {
 		return h
 	}
 	return h[:8]
-}
-
-// SetExperimentActivityForTest backdates an experiment's last_activity_at.
-//
-// TEST SEAM, and exported only because the sweeper's tests live in
-// internal/repos and cannot reach this table any other way. Expiry is
-// measured in days, so the alternative is a test that either sleeps for days
-// or asserts nothing; backdating the row makes the assertion about WHICH
-// experiment the cutoff selects, which is the part that can be wrong.
-//
-// Not part of ExperimentIndex: production code records activity through
-// notifyCommit, which is what keeps "activity" meaning exactly "a commit
-// landed here".
-func (s *Service) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
-	res, err := conn(ctx, s.rh.db).ExecContext(ctx,
-		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`, when.Unix(), name)
-	if err != nil {
-		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
-	}
-	return nil
 }

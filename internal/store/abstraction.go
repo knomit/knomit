@@ -50,8 +50,6 @@ func idPlaceholders(ids []int64) (string, []any) {
 // another sub-service (invariants/store/sub-index-up-not-sideways).
 type abstractionIndex struct{ rh *repoHandler }
 
-var _ AbstractionIndex = (*abstractionIndex)(nil)
-
 // epistemicLiveJoin is the join every query here shares: the version of each
 // path that `branch` currently sees, epistemic facts only.
 //
@@ -892,4 +890,83 @@ func (ax *abstractionIndex) SetProbeSessionsWaited(ctx context.Context, branch s
 		return fmt.Errorf("abstraction: set probe wait: %w", err)
 	}
 	return nil
+}
+
+// TitleTarget is a fact whose title still needs embedding onto the abstraction
+// axis.
+type TitleTarget struct {
+	FactID int64
+	Path   string
+	Title  string
+}
+
+// TitleVector is one fact's title embedding, keyed by fact id — the same
+// content-addressed key facts_vec uses.
+type TitleVector struct {
+	FactID int64
+	Vec    []float32
+}
+
+// TitleNeighbour is one KNN hit on the abstraction axis.
+type TitleNeighbour struct {
+	FactID     int64
+	Path       string
+	Similarity float64
+}
+
+// RestatementVerdict is one judge outcome on a shortlist-originated pair.
+//
+// Resolved, not Merged: a judge that consolidates a restatement by RETRACTING
+// the redundant half has done exactly the work this mechanism exists to buy.
+// Counting only merges would defund a corpus that is consolidating
+// successfully by another route — which is the failure mode a throttle can
+// least afford, since it looks identical to "the shortlist finds nothing".
+//
+// It carries fact ids as well as paths because ids are content-addressed: a
+// "keep" applies to the exact pair of versions that was judged, and editing
+// either fact makes the pair eligible again with no staleness rule needed.
+type RestatementVerdict struct {
+	APath    string
+	BPath    string
+	AFactID  int64
+	BFactID  int64
+	Resolved bool
+	JudgedAt time.Time
+}
+
+// RestatementPair is one standing candidate: two facts whose TITLES are close
+// on the abstraction axis while their bodies are not close enough for the
+// mechanical dedup gate to have merged them. Canonical order: APath < BPath.
+type RestatementPair struct {
+	APath    string
+	BPath    string
+	AFactID  int64
+	BFactID  int64
+	TitleCos float64
+	// MatchKind records HOW the pair was found. Selection reads it because the
+	// two routes want different treatment: a title-KNN pair is ranked by its
+	// cosine, while a structurally matched pair is a near-certain duplicate
+	// whatever its cosine happens to be. Empty on construction means
+	// MatchTitleKNN; the store normalises.
+	MatchKind string
+}
+
+// MatchTitleKNN: the two facts are top-K title neighbours of each other.
+const MatchTitleKNN = "title-knn"
+
+// RestatementPairStats describes the standing pair population for health
+// output: how many pairs stand, and where the top of the distribution sits.
+type RestatementPairStats struct {
+	Count int
+	P99   float64
+	P999  float64
+	// Structural counts the pairs found by something other than title
+	// proximity. Observability: reported, read by no branch.
+	Structural int
+}
+
+// LiveFactTitle is one live fact's path and title, keyed by fact id.
+type LiveFactTitle struct {
+	Path  string
+	Title string
 }

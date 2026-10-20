@@ -5,6 +5,7 @@
 package store
 
 import (
+	_ "embed"
 	"fmt"
 	"io"
 	"sort"
@@ -384,3 +385,6 @@ func treeEntryInsensitiveVia(load func(plumbing.Hash) (*object.Tree, error), tre
 func treeEntryInsensitive(repo *gogit.Repository, tree *object.Tree, path string) (*object.TreeEntry, error) {
 	return treeEntryInsensitiveVia(repo.TreeObject, tree, path)
 }
+
+// blobObjectType is the go-git integer for plumbing.BlobObject.
+const blobObjectType = 3
