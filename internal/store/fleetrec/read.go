@@ -1,4 +1,4 @@
-package store
+package fleetrec
 
 import (
 	"crypto/x509"
@@ -25,16 +25,16 @@ import (
 // ErrNotFleet: the repository's ontology is not the fleet ontology.
 var ErrNotFleet = errors.New("not a fleet repository (its ontology is not the fleet ontology)")
 
-// FleetMember is one member record as read from a fleet repository's tree.
-type FleetMember struct {
+// Member is one member record as read from a fleet repository's tree.
+type Member struct {
 	fact.Member
 	Path string // the record's path in the fleet repository
 	Blob string // the record's blob hash at the read commit
 }
 
-// openGitDir opens a plain git repository: the directory itself (a bare
+// OpenGitDir opens a plain git repository: the directory itself (a bare
 // repository or a work tree's root), else the enclosing work tree's .git.
-func openGitDir(dir string) (*gogit.Repository, error) {
+func OpenGitDir(dir string) (*gogit.Repository, error) {
 	repo, err := gogit.PlainOpen(dir)
 	if err != nil {
 		repo, err = gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{DetectDotGit: true})
@@ -45,7 +45,7 @@ func openGitDir(dir string) (*gogit.Repository, error) {
 	return repo, nil
 }
 
-func resolveCommit(repo *gogit.Repository, rev string) (*object.Commit, error) {
+func ResolveCommit(repo *gogit.Repository, rev string) (*object.Commit, error) {
 	h, err := repo.ResolveRevision(plumbing.Revision(rev))
 	if err != nil {
 		return nil, fmt.Errorf("resolve %q: %w", rev, err)
@@ -58,18 +58,18 @@ func resolveCommit(repo *gogit.Repository, rev string) (*object.Commit, error) {
 // this process meets that exact blob, never once per run.
 var malformedLogged sync.Map
 
-// loadMembers reads every member record under <root>/members/ in c's tree.
+// LoadMembers reads every member record under <root>/members/ in c's tree.
 // A record that does not parse is skipped and logged (once per blob); it never
 // fails the load.
-func loadMembers(fleetID string, c *object.Commit, root string) ([]FleetMember, error) {
+func LoadMembers(fleetID string, c *object.Commit, root string) ([]Member, error) {
 	tree, err := c.Tree()
 	if err != nil {
 		return nil, err
 	}
-	return loadMembersOfTree(fleetID, tree, root)
+	return LoadMembersOfTree(fleetID, tree, root)
 }
 
-// loadMembersOfTree is loadMembers over a tree.
+// LoadMembersOfTree is LoadMembers over a tree.
 //
 // A record counts only in its OWN folder: a record at members/<x>/... whose
 // agent: is not <x> (or a file directly under members/, in no folder) is
@@ -79,7 +79,7 @@ func loadMembers(fleetID string, c *object.Commit, root string) ([]FleetMember, 
 // rule A; the record-owner rule (recordOwner) refuses writing such a record,
 // and this keeps one that is already on main harmless to every reader and
 // to the judge.
-func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetMember, error) {
+func LoadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]Member, error) {
 	// tree.Files() ends SILENTLY at a directory entry that is not a tree, so
 	// one bogus entry would hide every record after it (and a member could
 	// plant one in its own folder to make the members sorting after it
@@ -88,7 +88,7 @@ func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetM
 		return nil, fmt.Errorf("fleet %s: malformed tree: %w", fleetID, err)
 	}
 	prefix := path.Join(root, fact.MembersTopic) + "/"
-	var out []FleetMember
+	var out []Member
 	err := tree.Files().ForEach(func(f *object.File) error {
 		if !strings.HasPrefix(f.Name, prefix) || !strings.HasSuffix(f.Name, ".md") {
 			return nil
@@ -116,7 +116,7 @@ func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetM
 			}
 			return nil
 		}
-		out = append(out, FleetMember{Member: m, Path: f.Name, Blob: f.Hash.String()})
+		out = append(out, Member{Member: m, Path: f.Name, Blob: f.Hash.String()})
 		return nil
 	})
 	return out, err
@@ -125,7 +125,7 @@ func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetM
 // LoadFleet opens the fleet repository at dir, checks that its ontology (at
 // rev) is the fleet ontology, and returns the member records at rev. root is the
 // repository's fact root ("" = "kb").
-func LoadFleet(dir, rev, root string) ([]FleetMember, error) {
+func LoadFleet(dir, rev, root string) ([]Member, error) {
 	f, err := LoadFleetAt(dir, rev, root)
 	return f.Members, err
 }
@@ -133,27 +133,27 @@ func LoadFleet(dir, rev, root string) ([]FleetMember, error) {
 // LoadFleetAt is LoadFleet also returning the certificate artifacts at rev,
 // read from the same commit.
 func LoadFleetAt(dir, rev, root string) (Fleet, error) {
-	repo, err := openGitDir(dir)
+	repo, err := OpenGitDir(dir)
 	if err != nil {
 		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
-	c, err := resolveCommit(repo, rev)
+	c, err := ResolveCommit(repo, rev)
 	if err != nil {
 		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
-	return loadFleetAt(dir, c, root)
+	return LoadFleetAtCommit(dir, c, root)
 }
 
 // Fleet is the judge's input from a fleet repository at ONE revision.
 type Fleet struct {
-	Members []FleetMember
-	PKI     *FleetPKI // nil: the revision declares no pki: root, or holds no root file yet
+	Members []Member
+	PKI     *PKI // nil: the revision declares no pki: root, or holds no root file yet
 }
 
-// loadFleetAt checks that c's ontology is the fleet ontology and reads its
+// LoadFleetAtCommit checks that c's ontology is the fleet ontology and reads its
 // member records (under <root>/members/) and the certificate artifacts its
 // ontology's artifacts section declares (pki: root | crl | leaf).
-func loadFleetAt(fleetID string, c *object.Commit, root string) (Fleet, error) {
+func LoadFleetAtCommit(fleetID string, c *object.Commit, root string) (Fleet, error) {
 	if root == "" {
 		root = "kb"
 	}
@@ -165,7 +165,7 @@ func loadFleetAt(fleetID string, c *object.Commit, root string) (Fleet, error) {
 	if raw == nil || perr != nil || !fact.IsFleetOntology(ont) {
 		return Fleet{}, ErrNotFleet
 	}
-	members, err := loadMembers(fleetID, c, root)
+	members, err := LoadMembers(fleetID, c, root)
 	if err != nil {
 		return Fleet{}, err
 	}
@@ -191,11 +191,11 @@ const defaultPKIFileCap = 64 << 10
 // entry is about 40 bytes: over a million revocations).
 const crlReadBound = 64 << 20
 
-// readBound is how much of a declared artifact with attributes a a reader
+// ReadBound is how much of a declared artifact with attributes a a reader
 // reads: its max_size; else crlReadBound for a CRL, defaultPKIFileCap for any
 // other pki file; else (a declared file with no pki role and no cap) no
 // bound.
-func readBound(a fact.ArtifactAttrs) int64 {
+func ReadBound(a fact.ArtifactAttrs) int64 {
 	switch {
 	case a.MaxSize > 0:
 		return a.MaxSize
@@ -207,7 +207,7 @@ func readBound(a fact.ArtifactAttrs) int64 {
 	return math.MaxInt64
 }
 
-// FleetPKI is the fleet's certificate artifacts at one revision: the root
+// PKI is the fleet's certificate artifacts at one revision: the root
 // certificate, the CRL, and the leaf for each agent id, at the paths the
 // fleet's ontology declares (Layout).
 //
@@ -217,7 +217,7 @@ func readBound(a fact.ArtifactAttrs) int64 {
 // fails CLOSED: a self-registration is never admitted on a root, CRL or leaf
 // nobody can read, and a revocation is believed only from a CRL the root
 // signed, about a leaf the root signed.
-type FleetPKI struct {
+type PKI struct {
 	Layout  fact.PKILayout
 	Root    *x509.Certificate    // nil when RootErr is set
 	RootErr error                // the root file is present but unusable
@@ -236,7 +236,7 @@ type leafBlob struct {
 // Cert returns the leaf artifact for agent id, looked up by the id as a file
 // name, byte for byte, and never parsed or case folded: nil, nil when there is
 // none.
-func (p *FleetPKI) Cert(id string) (*x509.Certificate, error) {
+func (p *PKI) Cert(id string) (*x509.Certificate, error) {
 	b, ok := p.certs[id]
 	if !ok {
 		return nil, nil
@@ -245,20 +245,20 @@ func (p *FleetPKI) Cert(id string) (*x509.Certificate, error) {
 	if b.err != nil {
 		return nil, fmt.Errorf("%s: %w", name, b.err)
 	}
-	c, err := parseCertPEM(b.raw)
+	c, err := ParseCertPEM(b.raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return c, nil
 }
 
-// verifyLeaf verifies leaf against this revision's root and CRL, at a moment
+// VerifyLeaf verifies leaf against this revision's root and CRL, at a moment
 // inside the leaf's own validity (never the current time: the judge is
 // historical, and TLS refuses an expired certificate on every connection).
 // An unusable root or CRL is its load error; a listed serial is
 // pki.ErrRevoked, and only from a CRL the root signed, about a leaf the root
 // signed.
-func (p *FleetPKI) verifyLeaf(leaf *x509.Certificate) (pki.Identity, error) {
+func (p *PKI) VerifyLeaf(leaf *x509.Certificate) (pki.Identity, error) {
 	if p.Root == nil {
 		return pki.Identity{}, p.RootErr
 	}
@@ -278,7 +278,7 @@ func (p *FleetPKI) verifyLeaf(leaf *x509.Certificate) (pki.Identity, error) {
 // state is never written to a record, it is the CRL's. A missing, unreadable
 // or foreign leaf, or an unusable root or CRL, is not "revoked" (nothing the
 // root signed says so); the judge refuses those on its own terms (rule B).
-func (p *FleetPKI) Revoked(id string) bool {
+func (p *PKI) Revoked(id string) bool {
 	if p == nil {
 		return false
 	}
@@ -286,13 +286,13 @@ func (p *FleetPKI) Revoked(id string) bool {
 	if leaf == nil || err != nil {
 		return false
 	}
-	_, err = p.verifyLeaf(leaf)
+	_, err = p.VerifyLeaf(leaf)
 	return errors.Is(err, pki.ErrRevoked)
 }
 
 // CertIDs is every agent id a leaf file is filed under (the leaf pattern's
 // '*' part, as Cert looks it up), sorted; nil-safe.
-func (p *FleetPKI) CertIDs() []string {
+func (p *PKI) CertIDs() []string {
 	if p == nil {
 		return nil
 	}
@@ -304,8 +304,8 @@ func (p *FleetPKI) CertIDs() []string {
 	return ids
 }
 
-// parseCertPEM parses one CERTIFICATE PEM block.
-func parseCertPEM(raw []byte) (*x509.Certificate, error) {
+// ParseCertPEM parses one CERTIFICATE PEM block.
+func ParseCertPEM(raw []byte) (*x509.Certificate, error) {
 	blk, _ := pem.Decode(raw)
 	if blk == nil || blk.Type != "CERTIFICATE" {
 		return nil, errors.New("no CERTIFICATE PEM block")
@@ -313,9 +313,9 @@ func parseCertPEM(raw []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(blk.Bytes)
 }
 
-// parseRootPEM parses a root certificate: a CA certificate.
-func parseRootPEM(raw []byte) (*x509.Certificate, error) {
-	c, err := parseCertPEM(raw)
+// ParseRootPEM parses a root certificate: a CA certificate.
+func ParseRootPEM(raw []byte) (*x509.Certificate, error) {
+	c, err := ParseCertPEM(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -325,8 +325,8 @@ func parseRootPEM(raw []byte) (*x509.Certificate, error) {
 	return c, nil
 }
 
-// parseCRLPEM parses one X509 CRL PEM block.
-func parseCRLPEM(raw []byte) (*x509.RevocationList, error) {
+// ParseCRLPEM parses one X509 CRL PEM block.
+func ParseCRLPEM(raw []byte) (*x509.RevocationList, error) {
 	blk, _ := pem.Decode(raw)
 	if blk == nil || blk.Type != "X509 CRL" {
 		return nil, fmt.Errorf("%w: no X509 CRL PEM block", pki.ErrCRLInvalid)
@@ -338,14 +338,14 @@ func parseCRLPEM(raw []byte) (*x509.RevocationList, error) {
 	return crl, nil
 }
 
-// pkiFileCap is the read bound for a declared certificate artifact
-// (readBound); defaultPKIFileCap when its rules cannot be resolved.
-func pkiFileCap(ont *fact.Ontology, p string) int64 {
+// PKIFileCap is the read bound for a declared certificate artifact
+// (ReadBound); defaultPKIFileCap when its rules cannot be resolved.
+func PKIFileCap(ont *fact.Ontology, p string) int64 {
 	a, err := ont.ArtifactAttrs(p)
 	if err != nil {
 		return defaultPKIFileCap
 	}
-	return readBound(a)
+	return ReadBound(a)
 }
 
 // errTooLarge: a declared artifact is larger than its cap.
@@ -358,30 +358,30 @@ var errTooLarge = errors.New("larger than its max_size")
 // read eagerly because a caller may judge after its read handle on the store
 // is released (receive-pack's policy callback), so nothing may touch the
 // store lazily. Every read is bounded by the file's cap.
-func loadPKI(tree *object.Tree, ont *fact.Ontology) (*FleetPKI, error) {
+func loadPKI(tree *object.Tree, ont *fact.Ontology) (*PKI, error) {
 	layout, ok := ont.PKILayout()
 	if !ok {
 		return nil, nil
 	}
-	rootRaw, ok, err := treeBytesCapped(tree, layout.Root, pkiFileCap(ont, layout.Root))
+	rootRaw, ok, err := TreeBytesCapped(tree, layout.Root, PKIFileCap(ont, layout.Root))
 	if !ok && err == nil {
 		return nil, nil
 	}
-	p := &FleetPKI{Layout: layout, certs: map[string]leafBlob{}}
+	p := &PKI{Layout: layout, certs: map[string]leafBlob{}}
 	switch {
 	case errors.Is(err, errTooLarge):
 		p.RootErr = fmt.Errorf("%s: %w", layout.Root, err)
 	case err != nil:
 		return nil, err
 	default:
-		if p.Root, err = parseRootPEM(rootRaw); err != nil {
+		if p.Root, err = ParseRootPEM(rootRaw); err != nil {
 			p.Root, p.RootErr = nil, fmt.Errorf("%s: %w", layout.Root, err)
 		}
 	}
 	if layout.CRL == "" {
 		p.CRLErr = fmt.Errorf("%w: the ontology declares no pki: crl", pki.ErrCRLMissing)
 	} else {
-		crlRaw, ok, err := treeBytesCapped(tree, layout.CRL, pkiFileCap(ont, layout.CRL))
+		crlRaw, ok, err := TreeBytesCapped(tree, layout.CRL, PKIFileCap(ont, layout.CRL))
 		switch {
 		case errors.Is(err, errTooLarge):
 			p.CRLErr = fmt.Errorf("%w: %s: %v", pki.ErrCRLInvalid, layout.CRL, err)
@@ -390,7 +390,7 @@ func loadPKI(tree *object.Tree, ont *fact.Ontology) (*FleetPKI, error) {
 		case !ok:
 			p.CRLErr = fmt.Errorf("%w: no %s", pki.ErrCRLMissing, layout.CRL)
 		default:
-			if p.CRL, err = parseCRLPEM(crlRaw); err != nil {
+			if p.CRL, err = ParseCRLPEM(crlRaw); err != nil {
 				p.CRL, p.CRLErr = nil, fmt.Errorf("%s: %w", layout.CRL, err)
 			}
 		}
@@ -411,7 +411,7 @@ func loadPKI(tree *object.Tree, ont *fact.Ontology) (*FleetPKI, error) {
 			continue
 		}
 		full := layout.LeafDir + "/" + e.Name
-		raw, _, err := treeBytesCapped(certs, e.Name, pkiFileCap(ont, full))
+		raw, _, err := TreeBytesCapped(certs, e.Name, PKIFileCap(ont, full))
 		if err != nil && !errors.Is(err, errTooLarge) {
 			return nil, err
 		}
@@ -420,10 +420,10 @@ func loadPKI(tree *object.Tree, ont *fact.Ontology) (*FleetPKI, error) {
 	return p, nil
 }
 
-// treeBytesCapped reads a regular file from tree: ok=false when absent. A
+// TreeBytesCapped reads a regular file from tree: ok=false when absent. A
 // symlink counts as absent: its link text is not the file. A blob larger than
 // limit is errTooLarge and is not read.
-func treeBytesCapped(tree *object.Tree, p string, limit int64) ([]byte, bool, error) {
+func TreeBytesCapped(tree *object.Tree, p string, limit int64) ([]byte, bool, error) {
 	f, err := tree.File(p)
 	if errors.Is(err, object.ErrFileNotFound) {
 		return nil, false, nil

@@ -28,6 +28,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -159,12 +160,12 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	// at tip.
 	var fleet Fleet
 	if ontC == baseC {
-		if fleet, err = loadFleetAt("own", baseC, root); err != nil {
+		if fleet, err = fleetrec.LoadFleetAtCommit("own", baseC, root); err != nil {
 			return fmt.Errorf("judge own commits: the fleet at %s: %w", base, err)
 		}
 	}
 	if ontC != baseC || fleet.PKI == nil {
-		if fleet, err = loadFleetAt("own", tipC, root); err != nil {
+		if fleet, err = fleetrec.LoadFleetAtCommit("own", tipC, root); err != nil {
 			return fmt.Errorf("judge own commits: the fleet at %s: %w", tip, err)
 		}
 	}
@@ -181,7 +182,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	if err != nil {
 		return fmt.Errorf("judge own commits: %s: %w", vouch, err)
 	}
-	vouched, err := loadFleetAt("own", vouchC, root)
+	vouched, err := fleetrec.LoadFleetAtCommit("own", vouchC, root)
 	if err != nil {
 		return fmt.Errorf("judge own commits: the fleet at %s: %w", vouch, err)
 	}

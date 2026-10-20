@@ -9,6 +9,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -58,7 +59,7 @@ type keyVersion struct {
 // key since rotated away, is attributed to its agent instead of flagged. It
 // never moves a ref and is never in a write path.
 func Audit(in AuditInput) (AuditReport, error) {
-	fleet, err := openGitDir(in.FleetDir)
+	fleet, err := fleetrec.OpenGitDir(in.FleetDir)
 	if err != nil {
 		return AuditReport{}, fmt.Errorf("audit: fleet: %w", err)
 	}
@@ -70,7 +71,7 @@ func Audit(in AuditInput) (AuditReport, error) {
 	if root == "" {
 		root = "kb"
 	}
-	tip, err := resolveCommit(fleet, rev)
+	tip, err := fleetrec.ResolveCommit(fleet, rev)
 	if err != nil {
 		return AuditReport{}, fmt.Errorf("audit: fleet: %w", err)
 	}
@@ -88,7 +89,7 @@ func Audit(in AuditInput) (AuditReport, error) {
 	versions := map[string][]keyVersion{} // wire key -> versions
 	seenBlob := map[string]bool{}
 	err = vcs.WalkHistory(fleet.Storer, tip.Hash, nil, func(c *object.Commit) {
-		ms, lerr := loadMembers(in.FleetDir, c, root)
+		ms, lerr := fleetrec.LoadMembers(in.FleetDir, c, root)
 		if lerr != nil {
 			return
 		}
@@ -107,11 +108,11 @@ func Audit(in AuditInput) (AuditReport, error) {
 		return AuditReport{}, fmt.Errorf("audit: fleet history: %w", err)
 	}
 
-	kb, err := openGitDir(in.KBDir)
+	kb, err := fleetrec.OpenGitDir(in.KBDir)
 	if err != nil {
 		return AuditReport{}, fmt.Errorf("audit: %w", err)
 	}
-	head, err := resolveCommit(kb, in.Branch)
+	head, err := fleetrec.ResolveCommit(kb, in.Branch)
 	if err != nil {
 		return AuditReport{}, fmt.Errorf("audit: %w", err)
 	}
