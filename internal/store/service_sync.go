@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store/internal/vcs"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 )
 
 // DropUnpublishedCommit is the operator's way out of a refusal by the judge
@@ -65,10 +65,10 @@ func (s *Service) DropUnpublishedCommitLeavingOutMerges(ctx context.Context, bra
 	return out.Replayed, out.LeftOut, err
 }
 
-func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumbing.Hash, ownOnly, leaveOut bool, confirmed []string) (storesync.DropOutcome, error) {
+func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumbing.Hash, ownOnly, leaveOut bool, confirmed []string) (remotesync.DropOutcome, error) {
 	upstream := s.UpstreamBranch()
 	if upstream == "" || branch == "" || branch == upstream {
-		return storesync.DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %q is not a branch to rebuild on %q", branch, upstream)
+		return remotesync.DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %q is not a branch to rebuild on %q", branch, upstream)
 	}
 	return s.rh.DropUnpublished(ctx, upstream, branch, drop, ownOnly, leaveOut, confirmed)
 }
@@ -103,7 +103,7 @@ func (s *Service) MainHistory(ctx context.Context) (*MainHistory, error) {
 	if err := vcs.WalkHistory(s.rh.Storer(), uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("MainHistory: %w", err)
 	}
-	return storesync.NewMainHistory(uh, onMain), nil
+	return remotesync.NewMainHistory(uh, onMain), nil
 }
 
 // AdmitPeerBranch is where a fetched member branch enters this repository.

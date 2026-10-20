@@ -11,7 +11,7 @@
 //
 // The reconcile primitives are the single source of truth for "what does
 // sync do" — Sync/Push/InitFromRemote/ActivateSync all call into them.
-package sync
+package remotesync
 
 import (
 	"context"

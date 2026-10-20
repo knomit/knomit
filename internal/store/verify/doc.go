@@ -15,6 +15,6 @@
 // re-exports the public names callers outside store use, and keeps the
 // repoHandler methods the receive-pack, sync and clone paths call (they pass
 // the embedded *vcs.Repo). The own-range judge that publishes the fleet's
-// main (internal/store/sync/verify_own.go) is a publish-time concern and lives
-// in the sync child, driving a Judge with its Entry and OwnOntology flags.
+// main (internal/store/remotesync/verify_own.go) is a publish-time concern and lives
+// in the remotesync child, driving a Judge with its Entry and OwnOntology flags.
 package verify

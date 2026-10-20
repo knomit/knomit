@@ -1,10 +1,11 @@
 package store
 
 import (
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 )
 
-// This file is the parent's seam to the sync child (internal/store/sync):
+// This file is the parent's seam to the remotesync child
+// (internal/store/remotesync):
 // the origin remote and its status row, the fetch, the reconcile of the
 // consensus branch and of the agent branch (merge, and the rewind replay
 // with its watermark), push and publish, the origin identity, peer admission
@@ -14,7 +15,7 @@ import (
 // service_sync.go and consensus_branch.go, Open/Clone/Init (repo.go), the
 // receive-pack handler, and replay.go.
 //
-// repoHandler embeds *storesync.Repo next to *vcs.Repo, *facts.Repo and
+// repoHandler embeds *remotesync.Repo next to *vcs.Repo, *facts.Repo and
 // *merge.Repo (see vcs_seam.go), so the methods that used to be declared on
 // repoHandler in the remote_*.go files are reached as rh.<Name> by
 // promotion. Embedding is not virtual: the child never calls a method
@@ -26,35 +27,35 @@ import (
 // The names callers outside store use are re-exported below unchanged, so
 // the public surface of package store does not move.
 
-// syncRepo is the embedded storesync.Repo; the alias gives the embedded field
+// syncRepo is the embedded remotesync.Repo; the alias gives the embedded field
 // a name that does not collide with the embedded *vcs.Repo's `Repo`.
-type syncRepo = storesync.Repo
+type syncRepo = remotesync.Repo
 
 // Types.
 type (
-	DropForeignError      = storesync.DropForeignError
-	DropMergeError        = storesync.DropMergeError
-	LeaveOutChangedError  = storesync.LeaveOutChangedError
-	LostCommit            = storesync.LostCommit
-	MainHistory           = storesync.MainHistory
-	MainReconcileResult   = storesync.MainReconcileResult
-	Origin                = storesync.Origin
-	OwnCommitRefusedError = storesync.OwnCommitRefusedError
-	PushResult            = storesync.PushResult
-	Remote                = storesync.Remote
-	SyncResult            = storesync.SyncResult
+	DropForeignError      = remotesync.DropForeignError
+	DropMergeError        = remotesync.DropMergeError
+	LeaveOutChangedError  = remotesync.LeaveOutChangedError
+	LostCommit            = remotesync.LostCommit
+	MainHistory           = remotesync.MainHistory
+	MainReconcileResult   = remotesync.MainReconcileResult
+	Origin                = remotesync.Origin
+	OwnCommitRefusedError = remotesync.OwnCommitRefusedError
+	PushResult            = remotesync.PushResult
+	Remote                = remotesync.Remote
+	SyncResult            = remotesync.SyncResult
 )
 
 // Constants.
 const (
-	OwnCommitRefusedText = storesync.OwnCommitRefusedText
+	OwnCommitRefusedText = remotesync.OwnCommitRefusedText
 )
 
 // Sentinel errors: the same values, so errors.Is matches across the seam.
 var (
-	ErrDropMerge        = storesync.ErrDropMerge
-	ErrNoAgentBranch    = storesync.ErrNoAgentBranch
-	ErrNotUnpublished   = storesync.ErrNotUnpublished
-	ErrOwnCommitRefused = storesync.ErrOwnCommitRefused
-	ErrUpstreamMoved    = storesync.ErrUpstreamMoved
+	ErrDropMerge        = remotesync.ErrDropMerge
+	ErrNoAgentBranch    = remotesync.ErrNoAgentBranch
+	ErrNotUnpublished   = remotesync.ErrNotUnpublished
+	ErrOwnCommitRefused = remotesync.ErrOwnCommitRefused
+	ErrUpstreamMoved    = remotesync.ErrUpstreamMoved
 )

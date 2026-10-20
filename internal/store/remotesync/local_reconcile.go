@@ -9,4 +9,4 @@
 // follow the agent branch) and fatal to a peer: a knomit instance subscribing
 // to this one over /git reads the consensus branch, and would have seen one
 // empty commit.
-package sync
+package remotesync

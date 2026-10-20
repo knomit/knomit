@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"knomit/internal/platform/fileuri"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -56,7 +56,7 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*storesync.Index)
+	ri := svc.Remote().(*remotesync.Index)
 
 	// Simulate ConfigureRemote mid-rewrite by holding the write lock.
 	unlockConfig := svc.rh.LockConfigForTest()

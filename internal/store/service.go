@@ -22,7 +22,7 @@ import (
 	"knomit/internal/store/index"
 	"knomit/internal/store/internal/sessions"
 	"knomit/internal/store/migrate"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/store/vocab"
 )
 
@@ -56,7 +56,7 @@ type Service struct {
 	search *searchFacade
 	pi     *sessions.PipelineIndex
 	ti     *sessions.ToolIndex
-	ri     *storesync.Index
+	ri     *remotesync.Index
 	dbPath string
 
 	// sessionDB is a separate, ephemeral SQLite file holding all in-flight
@@ -148,7 +148,7 @@ func Open(path string) (*Service, error) {
 	rh.SetOnDrop(si.GC)
 	rh.SetIndexManager(si) // notifyCommit delegates to im.Sync after every commit.
 	fi := facts.NewIndex(rh.factsRepo)
-	ri := storesync.NewIndex(rh.syncRepo)
+	ri := remotesync.NewIndex(rh.syncRepo)
 	fq := index.NewFactQuery(rh.Repo)
 	gq := index.NewGraphStore(rh.Repo)
 	hq := index.NewHistoryQuery(rh.Repo)
