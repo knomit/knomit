@@ -9,13 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // mainWrite commits one file on the push host's main and returns that
 // commit's committer time.
 func (h *pushHost) mainWrite(p, content string) time.Time {
 	h.t.Helper()
-	_, _, err := h.svc.Facts().(*factIndex).writeFileExact(context.Background(), "main", p, content, "write "+p, "edit", "")
+	_, _, err := h.svc.Facts().(*facts.Index).WriteFileExactForTest(context.Background(), "main", p, content, "write "+p, "edit", "")
 	require.NoError(h.t, err)
 	c, err := object.GetCommit(h.svc.rh.Storer(), h.ref("main"))
 	require.NoError(h.t, err)

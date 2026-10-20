@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // Review tests for PR #511 (written by the reviewer; asserts adjusted to the
@@ -107,7 +108,7 @@ func TestReceivePack_AdoptedHostHeldTipMergeRefused(t *testing.T) {
 	const legacy = "agent/legacy-11111111"
 	require.NoError(t, h.svc.Branches().CreateBranch(ctx, legacy, "main"))
 	evil := kbOntology(VerifyOff) + "# legacy edit\n"
-	_, _, err := h.svc.Facts().(*factIndex).writeFileExact(ctx, legacy, fact.OntologyFile, evil, "ontology", "edit", "")
+	_, _, err := h.svc.Facts().(*facts.Index).WriteFileExactForTest(ctx, legacy, fact.OntologyFile, evil, "ontology", "edit", "")
 	require.NoError(t, err)
 
 	p := newPeer(t, h.srv.URL) // clones every advertised agent/* ref

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"knomit/internal/embeddings/params"
+	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
 )
@@ -26,10 +27,12 @@ import (
 // the public surface of package store does not move.
 type repoHandler struct {
 	*vcs.Repo
+	*factsRepo // the facts child's methods on the same handle; see facts_seam.go
 }
 
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
-	return &repoHandler{Repo: vcs.New(db, gits)}
+	r := vcs.New(db, gits)
+	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r)}
 }
 
 // Types.

@@ -9,7 +9,7 @@
 // the tables, RFC 3339 with an explicit Z wherever a row is rendered. The
 // dispatcher itself is internal/repos/triggers.go; this file is what it calls
 // under Acquire.
-package store
+package facts
 
 import (
 	"context"
@@ -31,6 +31,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/sqlite"
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/verify"
 )
@@ -243,7 +244,7 @@ type TriggerIndex interface {
 	// DiffFacts is the two-tree diff of the whole ontology root between two
 	// commits with NO ancestry check (changes.go): the dispatcher's advance
 	// may be a rewind replay, which ChangesUnder refuses.
-	DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]PathChange, error)
+	DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]vcs.PathChange, error)
 	// OntologyAtCommit reads the ontology file from the commit's own tree,
 	// choosing the path exactly as the store does (the first of
 	// fact.OntologyPathsNewestFirst that exists as a file), and returns its
@@ -275,7 +276,7 @@ type TriggerIndex interface {
 	CommitInfo(ctx context.Context, hash plumbing.Hash) (CommitInfo, error)
 	// CommitSignerOf returns the verified SSHSIG signer of a commit; the
 	// fingerprint is set ONLY when the signature verifies over the payload.
-	CommitSignerOf(ctx context.Context, hash plumbing.Hash) (CommitSigner, error)
+	CommitSignerOf(ctx context.Context, hash plumbing.Hash) (verify.CommitSigner, error)
 	// BlobAt reads path's content at commit; ok is false when absent.
 	BlobAt(ctx context.Context, commit plumbing.Hash, path string) (content string, ok bool, err error)
 	IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool, error)
@@ -329,13 +330,13 @@ type TriggerIndex interface {
 }
 
 // Compile-time assertion: repoHandler must implement TriggerIndex.
-var _ TriggerIndex = (*repoHandler)(nil)
+var _ TriggerIndex = (*Repo)(nil)
 
 // OntologyAtCommit implements TriggerIndex. A path present as a directory or a
 // blob that cannot be read is an error, never "try the next path", so a
 // shadowing directory cannot fall through (the same rule as verify_fold's
 // settingsAt).
-func (rh *repoHandler) OntologyAtCommit(ctx context.Context, commit plumbing.Hash) (string, string, []byte, error) {
+func (rh *Repo) OntologyAtCommit(ctx context.Context, commit plumbing.Hash) (string, string, []byte, error) {
 	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("triggers: ontology at %s: %w", commit, err)
@@ -376,13 +377,13 @@ func (rh *repoHandler) OntologyAtCommit(ctx context.Context, commit plumbing.Has
 // ScriptAt implements TriggerIndex. The path is fact.TriggerScriptPath(name);
 // the name was validated kebab-case at compile time, so it names a file
 // directly under .knomit/triggers/ and nothing else.
-func (rh *repoHandler) ScriptAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
+func (rh *Repo) ScriptAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
 	return rh.privateFileAt(commit, "script", fact.TriggerScriptPath(name), ErrNoScriptAtCommit)
 }
 
 // RecipeAt implements TriggerIndex. The path is fact.TriggerRecipePath(name);
 // the name is validated kebab-case by every caller.
-func (rh *repoHandler) RecipeAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
+func (rh *Repo) RecipeAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
 	return rh.privateFileAt(commit, "recipe", fact.TriggerRecipePath(name), ErrNoRecipeAtCommit)
 }
 
@@ -390,7 +391,7 @@ func (rh *repoHandler) RecipeAt(ctx context.Context, commit plumbing.Hash, name 
 // target's name) is never followed: it reads as absent,
 // ErrNoGuidanceAtCommit, like privateFileAt's. The size is checked BEFORE
 // reading the blob, so an oversized file is never loaded.
-func (rh *repoHandler) GuidanceAt(ctx context.Context, commit plumbing.Hash, file string) (string, []byte, error) {
+func (rh *Repo) GuidanceAt(ctx context.Context, commit plumbing.Hash, file string) (string, []byte, error) {
 	if !strings.HasPrefix(file, fact.GuidanceDir+"/") || path.Clean(file) != file || slices.Contains(strings.Split(file, "/"), "..") {
 		return "", nil, fmt.Errorf("%w: %q is not under %s/", ErrGuidanceUnusable, file, fact.GuidanceDir)
 	}
@@ -436,7 +437,7 @@ func (rh *repoHandler) GuidanceAt(ctx context.Context, commit plumbing.Hash, fil
 // and so is a symlink, which is never followed (its blob is only the target's
 // name; user ruling 2026-10-08). A directory, a submodule or an unreadable
 // blob is an error, never "absent". An executable (+x) file is a file.
-func (rh *repoHandler) privateFileAt(commit plumbing.Hash, what, p string, notFound error) (string, []byte, error) {
+func (rh *Repo) privateFileAt(commit plumbing.Hash, what, p string, notFound error) (string, []byte, error) {
 	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return "", nil, fmt.Errorf("triggers: %s at %s: %w", what, commit, err)
@@ -482,13 +483,13 @@ type TriggerTrees interface {
 }
 
 type triggerTrees struct {
-	rh      *repoHandler
+	rh      *Repo
 	commits map[plumbing.Hash]*object.Commit
 	trees   map[plumbing.Hash]*object.Tree
 }
 
 // TreeReader implements TriggerIndex.
-func (rh *repoHandler) TreeReader() TriggerTrees {
+func (rh *Repo) TreeReader() TriggerTrees {
 	return &triggerTrees{rh: rh, commits: map[plumbing.Hash]*object.Commit{}, trees: map[plumbing.Hash]*object.Tree{}}
 }
 
@@ -619,12 +620,12 @@ func (tt *triggerTrees) BlobAt(ctx context.Context, commit plumbing.Hash, path s
 }
 
 // Toucher implements TriggerIndex with a one-shot reader (see TriggerTrees).
-func (rh *repoHandler) Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error) {
+func (rh *Repo) Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error) {
 	return rh.TreeReader().Toucher(ctx, head, path)
 }
 
 // CommitInfo implements TriggerIndex.
-func (rh *repoHandler) CommitInfo(ctx context.Context, hash plumbing.Hash) (CommitInfo, error) {
+func (rh *Repo) CommitInfo(ctx context.Context, hash plumbing.Hash) (CommitInfo, error) {
 	c, err := rh.Repository().CommitObject(hash)
 	if err != nil {
 		return CommitInfo{}, fmt.Errorf("triggers: commit %s: %w", hash, err)
@@ -639,21 +640,21 @@ func (rh *repoHandler) CommitInfo(ctx context.Context, hash plumbing.Hash) (Comm
 }
 
 // CommitSignerOf implements TriggerIndex.
-func (rh *repoHandler) CommitSignerOf(ctx context.Context, hash plumbing.Hash) (CommitSigner, error) {
+func (rh *Repo) CommitSignerOf(ctx context.Context, hash plumbing.Hash) (verify.CommitSigner, error) {
 	c, err := rh.Repository().CommitObject(hash)
 	if err != nil {
-		return CommitSigner{}, fmt.Errorf("triggers: commit %s: %w", hash, err)
+		return verify.CommitSigner{}, fmt.Errorf("triggers: commit %s: %w", hash, err)
 	}
 	return verify.VerifyCommitSignature(c)
 }
 
 // BlobAt implements TriggerIndex with a one-shot reader (see TriggerTrees).
-func (rh *repoHandler) BlobAt(ctx context.Context, commit plumbing.Hash, path string) (string, bool, error) {
+func (rh *Repo) BlobAt(ctx context.Context, commit plumbing.Hash, path string) (string, bool, error) {
 	return rh.TreeReader().BlobAt(ctx, commit, path)
 }
 
 // IsAncestor implements TriggerIndex: a is b or an ancestor of b.
-func (rh *repoHandler) IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool, error) {
+func (rh *Repo) IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool, error) {
 	if a == b {
 		return true, nil
 	}
@@ -672,7 +673,7 @@ func (rh *repoHandler) IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool
 }
 
 // UpstreamTip implements TriggerIndex.
-func (rh *repoHandler) UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash, error) {
+func (rh *Repo) UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash, error) {
 	ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(upstream))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return plumbing.ZeroHash, nil
@@ -686,7 +687,7 @@ func (rh *repoHandler) UpstreamTip(ctx context.Context, upstream string) (plumbi
 // AncestorSet implements TriggerIndex, with F09's own history walk
 // (verify_walk.go). Nothing is re-verified here: the gate that advanced main
 // did that, and reachability from main IS acceptance.
-func (rh *repoHandler) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error) {
+func (rh *Repo) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error) {
 	set := map[plumbing.Hash]bool{}
 	if err := vcs.WalkHistory(rh.Storer(), tip, nil, func(c *object.Commit) { set[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("triggers: walk from %s: %w", tip, err)
@@ -695,8 +696,8 @@ func (rh *repoHandler) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[
 }
 
 // TriggerWatermarks implements TriggerIndex.
-func (rh *repoHandler) TriggerWatermarks(ctx context.Context, branch string) (map[string]string, error) {
-	rows, err := conn(ctx, rh.DB()).QueryContext(ctx,
+func (rh *Repo) TriggerWatermarks(ctx context.Context, branch string) (map[string]string, error) {
+	rows, err := sqlite.Conn(ctx, rh.DB()).QueryContext(ctx,
 		`SELECT trigger, commit_hash FROM trigger_watermarks WHERE branch = ?`, branch)
 	if err != nil {
 		return nil, fmt.Errorf("TriggerWatermarks: %w", err)
@@ -734,14 +735,14 @@ const triggerFireSelect = `SELECT id, trigger, branch, path, episode, source, co
 const fireRowBatch = 400
 
 // RecordTriggerRun implements TriggerIndex (tx1 for one run).
-func (rh *repoHandler) RecordTriggerRun(ctx context.Context, run TriggerRun) (int, error) {
+func (rh *Repo) RecordTriggerRun(ctx context.Context, run TriggerRun) (int, error) {
 	return rh.RecordTriggerRuns(ctx, []TriggerRun{run})
 }
 
 // RecordTriggerRuns implements TriggerIndex (tx1). One transaction, so the
 // process-wide write lock (_txlock=immediate) is taken once, for a few
 // multi-row inserts, never across `if` or emit.
-func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, error) {
+func (rh *Repo) RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, error) {
 	tx, err := rh.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("RecordTriggerRun: begin: %w", err)
@@ -796,7 +797,7 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 // result rows of recipes, each with its own branch and range, no run row, and
 // the retention prune in the same transaction (the prune otherwise rides tx2,
 // which a result-only flush does not run).
-func (rh *repoHandler) RecordTriggerResults(ctx context.Context, rows []TriggerFire) error {
+func (rh *Repo) RecordTriggerResults(ctx context.Context, rows []TriggerFire) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -843,7 +844,7 @@ func boolInt(b bool) int {
 }
 
 // AdvanceTriggerWatermarks implements TriggerIndex (tx2).
-func (rh *repoHandler) AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error {
+func (rh *Repo) AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error {
 	tx, err := rh.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("AdvanceTriggerWatermarks: begin: %w", err)
@@ -926,7 +927,7 @@ func (rh *repoHandler) AdvanceTriggerWatermarks(ctx context.Context, branch stri
 }
 
 // RecentTriggerFires implements TriggerIndex.
-func (rh *repoHandler) RecentTriggerFires(ctx context.Context, branch string, limit int) ([]TriggerFire, error) {
+func (rh *Repo) RecentTriggerFires(ctx context.Context, branch string, limit int) ([]TriggerFire, error) {
 	if limit <= 0 {
 		return []TriggerFire{}, nil
 	}
@@ -935,7 +936,7 @@ func (rh *repoHandler) RecentTriggerFires(ctx context.Context, branch string, li
 }
 
 // TriggerFiresByRun implements TriggerIndex.
-func (rh *repoHandler) TriggerFiresByRun(ctx context.Context, branch, id string) ([]TriggerFire, error) {
+func (rh *Repo) TriggerFiresByRun(ctx context.Context, branch, id string) ([]TriggerFire, error) {
 	if id == "" {
 		return []TriggerFire{}, nil
 	}
@@ -943,8 +944,8 @@ func (rh *repoHandler) TriggerFiresByRun(ctx context.Context, branch, id string)
 		triggerFireSelect+` WHERE branch = ? AND run_id = ? ORDER BY id`, branch, id)
 }
 
-func (rh *repoHandler) queryTriggerFires(ctx context.Context, who, query string, args ...any) ([]TriggerFire, error) {
-	rows, err := conn(ctx, rh.DB()).QueryContext(ctx, query, args...)
+func (rh *Repo) queryTriggerFires(ctx context.Context, who, query string, args ...any) ([]TriggerFire, error) {
+	rows, err := sqlite.Conn(ctx, rh.DB()).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", who, err)
 	}
@@ -982,7 +983,7 @@ func UTCStamp(unix int64) string {
 // branch's, orphans included), independent of the KB's size: measured 5–11 µs
 // with none due, ~5 ms with 5,000, ~22 ms with 25,000 (proposal, Apple
 // M-series). Rows are ordered by path so a run's work is deterministic.
-func (rh *repoHandler) DueCandidates(ctx context.Context, branch string, nowUnix int64) ([]DueCandidate, error) {
+func (rh *Repo) DueCandidates(ctx context.Context, branch string, nowUnix int64) ([]DueCandidate, error) {
 	branchID, err := rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DueCandidates: %w", err)
@@ -994,7 +995,7 @@ func (rh *repoHandler) DueCandidates(ctx context.Context, branch string, nowUnix
 	// (measured: ~0.5 ms per 10,000 live facts). Driven from the covering
 	// index fact_expires_at the query is linear in the PAST-DATED rows only,
 	// and an idle sweep is microseconds.
-	rows, err := conn(ctx, rh.DB()).QueryContext(ctx,
+	rows, err := sqlite.Conn(ctx, rh.DB()).QueryContext(ctx,
 		`SELECT bf.path, fe.expires_at
 		   FROM fact_expires fe
 		   CROSS JOIN branch_facts bf ON bf.fact_id = fe.fact_id
@@ -1017,8 +1018,8 @@ func (rh *repoHandler) DueCandidates(ctx context.Context, branch string, nowUnix
 }
 
 // DueMarks implements TriggerIndex.
-func (rh *repoHandler) DueMarks(ctx context.Context, branch string) (map[DueKey]int64, error) {
-	rows, err := conn(ctx, rh.DB()).QueryContext(ctx,
+func (rh *Repo) DueMarks(ctx context.Context, branch string) (map[DueKey]int64, error) {
+	rows, err := sqlite.Conn(ctx, rh.DB()).QueryContext(ctx,
 		`SELECT trigger, path, expires_at FROM trigger_due_fires WHERE branch = ?`, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DueMarks: %w", err)
@@ -1036,11 +1037,11 @@ func (rh *repoHandler) DueMarks(ctx context.Context, branch string) (map[DueKey]
 	return out, rows.Err()
 }
 
-// signerFingerprint is the full pki.Fingerprint of the key this store signs
+// SignerFingerprint is the full pki.Fingerprint of the key this store signs
 // authored commits with (its signer, or inside a test binary the test
 // fallback), or "" when it has none. `change.source` is `local` exactly when
 // the firing commit's verified signer carries this fingerprint.
-func (rh *repoHandler) signerFingerprint() string {
+func (rh *Repo) SignerFingerprint() string {
 	signer, err := rh.CommitSigner()
 	if err != nil {
 		return ""

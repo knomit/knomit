@@ -1,4 +1,4 @@
-package store
+package facts
 
 import (
 	"context"
@@ -69,7 +69,7 @@ type TemplateFactFile struct {
 	Data   []byte
 }
 
-func (rh *repoHandler) treeAt(commit plumbing.Hash, dir string) (*object.Tree, error) {
+func (rh *Repo) treeAt(commit plumbing.Hash, dir string) (*object.Tree, error) {
 	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return nil, fmt.Errorf("templates: commit %s: %w", commit, err)
@@ -89,7 +89,7 @@ func (rh *repoHandler) treeAt(commit plumbing.Hash, dir string) (*object.Tree, e
 }
 
 // TemplateExistsAt implements TemplateIndex.
-func (rh *repoHandler) TemplateExistsAt(ctx context.Context, commit plumbing.Hash, name string) (bool, error) {
+func (rh *Repo) TemplateExistsAt(ctx context.Context, commit plumbing.Hash, name string) (bool, error) {
 	if !fact.ValidTemplateName(name) {
 		return false, nil
 	}
@@ -98,7 +98,7 @@ func (rh *repoHandler) TemplateExistsAt(ctx context.Context, commit plumbing.Has
 }
 
 // TemplateFilesAt implements TemplateIndex.
-func (rh *repoHandler) TemplateFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]TemplateFile, error) {
+func (rh *Repo) TemplateFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]TemplateFile, error) {
 	if !fact.ValidTemplateName(name) {
 		return nil, fmt.Errorf("%w: invalid template name %q", ErrTemplateNotFound, name)
 	}
@@ -118,7 +118,7 @@ func (rh *repoHandler) TemplateFilesAt(ctx context.Context, commit plumbing.Hash
 }
 
 type templateWalk struct {
-	rh    *repoHandler
+	rh    *Repo
 	out   []TemplateFile
 	total int64
 	seen  map[string]string // lowercased path -> path, for case duplicates
@@ -181,7 +181,7 @@ func (w *templateWalk) walk(ctx context.Context, t *object.Tree, prefix string) 
 }
 
 // TemplateFactsAt implements TemplateIndex.
-func (rh *repoHandler) TemplateFactsAt(ctx context.Context, commit plumbing.Hash, ontologyRoot string) ([]TemplateFactFile, error) {
+func (rh *Repo) TemplateFactsAt(ctx context.Context, commit plumbing.Hash, ontologyRoot string) ([]TemplateFactFile, error) {
 	dir := fact.TemplateFactsDir
 	if r := strings.Trim(ontologyRoot, "/"); r != "" {
 		dir = r + "/" + dir

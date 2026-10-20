@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/internal/vcs"
 	"strings"
 	"testing"
@@ -120,7 +121,7 @@ func (s *Service) Templates() TemplateIndex { return s.rh }
 // trailers stamped, NotifyCommit under the branch lock.
 func (s *Service) WriteSystemTree(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	fi := s.fi
-	if fi.rh.ReadOnly() {
+	if s.rh.ReadOnly() {
 		return "", nil, ErrRepoReadOnly
 	}
 	if len(files) == 0 {
@@ -135,17 +136,17 @@ func (s *Service) WriteSystemTree(ctx context.Context, branch string, files map[
 			return "", nil, fmt.Errorf("%w: %q and %q differ only by case", ErrSystemTreePath, other, p)
 		}
 		seen[strings.ToLower(p)] = p
-		if err := validatePath(p); err != nil {
+		if err := facts.ValidatePath(p); err != nil {
 			return "", nil, fmt.Errorf("store: WriteSystemTree: %w", err)
 		}
 	}
-	unlock := fi.rh.LockBranch(branch)
+	unlock := s.rh.LockBranch(branch)
 	defer unlock()
-	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, nil, nil, message, operation)
+	cHash, blobHashes, err := fi.BatchWriteLocked(ctx, branch, files, nil, nil, message, operation)
 	if err != nil {
 		return "", nil, err
 	}
-	if err := fi.rh.NotifyCommit(ctx, branch, cHash); err != nil {
+	if err := s.rh.NotifyCommit(ctx, branch, cHash); err != nil {
 		return "", nil, err
 	}
 	return cHash.String(), blobHashes, nil
@@ -159,4 +160,4 @@ func (s *Service) Skills() SkillIndex { return s.rh }
 
 // SignerFingerprint is the full pki.Fingerprint of the key this store signs
 // authored commits with, or "" when it has none. See repoHandler.signerFingerprint.
-func (s *Service) SignerFingerprint() string { return s.rh.signerFingerprint() }
+func (s *Service) SignerFingerprint() string { return s.rh.SignerFingerprint() }

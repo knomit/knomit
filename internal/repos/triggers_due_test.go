@@ -527,8 +527,8 @@ func TestDue_ClockReadOncePerRun(t *testing.T) {
 // DueCandidates from fact_write.go.
 func TestDue_SweepNotReachableFromWritePath(t *testing.T) {
 	allowed := map[string]bool{
-		"internal/store/triggers.go": true,
-		"internal/repos/triggers.go": true,
+		"internal/store/facts/triggers.go": true,
+		"internal/repos/triggers.go":       true,
 	}
 	root := filepath.Join("..", "..")
 	var offenders []string

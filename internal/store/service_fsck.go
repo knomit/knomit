@@ -92,7 +92,7 @@ func (s *Service) RemoteURLsForTest(remote string) []string {
 // is signed. commit_log and the index are synced so the post-state is
 // structurally consistent — only the FACT FORMAT is broken.
 func (s *Service) RawWriteForTest(ctx context.Context, branch, path, content, message string) (string, error) {
-	commitHash, _, err := s.fi.writeFile(ctx, branch, path, content, message, "raw-write-test")
+	commitHash, _, err := s.fi.WriteFile(ctx, branch, path, content, message, "raw-write-test")
 	if err != nil {
 		return "", err
 	}

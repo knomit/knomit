@@ -1,4 +1,4 @@
-package store
+package facts
 
 import (
 	"context"
@@ -64,7 +64,7 @@ func (f SkillBundledFile) Contents() ([]byte, error) {
 }
 
 // skillsTree is fact.SkillsDir at commit, or nil when the commit has none.
-func (rh *repoHandler) skillsTree(commit plumbing.Hash) (*object.Tree, error) {
+func (rh *Repo) skillsTree(commit plumbing.Hash) (*object.Tree, error) {
 	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return nil, fmt.Errorf("skills: commit %s: %w", commit, err)
@@ -108,7 +108,7 @@ func skillFileEntry(sub *object.Tree) *object.TreeEntry {
 }
 
 // SkillsAt implements SkillIndex.
-func (rh *repoHandler) SkillsAt(ctx context.Context, commit plumbing.Hash) ([]SkillEntry, error) {
+func (rh *Repo) SkillsAt(ctx context.Context, commit plumbing.Hash) ([]SkillEntry, error) {
 	t, err := rh.skillsTree(commit)
 	if err != nil || t == nil {
 		return nil, err
@@ -141,7 +141,7 @@ func (rh *repoHandler) SkillsAt(ctx context.Context, commit plumbing.Hash) ([]Sk
 }
 
 // SkillFilesAt implements SkillIndex.
-func (rh *repoHandler) SkillFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]SkillBundledFile, error) {
+func (rh *Repo) SkillFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]SkillBundledFile, error) {
 	if !fact.ValidSkillName(name) {
 		return nil, fmt.Errorf("skills: invalid skill name %q", name)
 	}

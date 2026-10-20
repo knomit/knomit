@@ -58,7 +58,7 @@ func TestFactExistsAt_CaseInsensitive(t *testing.T) {
 	ctx := context.Background()
 	svc, branch, _ := newCaseFixture(t)
 
-	head, err := svc.Facts().(*factIndex).rh.ResolveRef(ctx, branch)
+	head, err := svc.rh.ResolveRef(ctx, branch)
 	require.NoError(t, err)
 
 	casings := []string{

@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/sessions"
 	"knomit/internal/store/migrate"
@@ -26,14 +27,14 @@ import (
 // SQLite file with the sqlite-vec extension, runs the embedded
 // schema, and provides both a go-git Storer and typed index accessors.
 //
-// Git-backed fact operations are delegated to fi (*factIndex), which is
+// Git-backed fact operations are delegated to fi (*facts.Index), which is
 // populated by the repo constructors (OpenRepo, InitRepo, etc.) and is nil/zero
 // when Service is used in DB-only mode via Open().
 type Service struct {
 	rh          *repoHandler
 	handlerOnce sync.Once
 	handler     http.Handler
-	fi          *factIndex
+	fi          *facts.Index
 	si          *searchIndex
 	// The four query sub-services carved out of searchIndex (P1.3). searchIndex
 	// (si) keeps IndexManager + the write/rebuild path; these own the read
@@ -143,7 +144,7 @@ func Open(path string) (*Service, error) {
 
 	rh.SetOnDrop(si.GC)
 	rh.SetIndexManager(si) // notifyCommit delegates to im.Sync after every commit.
-	fi := &factIndex{rh: rh}
+	fi := facts.NewIndex(rh.factsRepo)
 	ri := &remoteIndex{rh: rh}
 	fq := &factQuery{rh: rh}
 	gq := &graphStore{rh: rh}

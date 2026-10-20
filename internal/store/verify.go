@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/internal/vcs"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -1686,6 +1687,6 @@ func (s *integrity) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 // call.
 type integrity struct {
 	rh *repoHandler
-	fi *factIndex
+	fi *facts.Index
 	si *searchIndex
 }

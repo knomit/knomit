@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"knomit/internal/store/facts"
 	"path/filepath"
 	"testing"
 
@@ -66,23 +67,15 @@ var readablePaths = []string{
 
 func TestValidatePath_FollowsGoGitReadBackRule(t *testing.T) {
 	for name, p := range unreadablePaths {
-		err := validatePath(p)
+		err := facts.ValidatePath(p)
 		require.ErrorIs(t, err, ErrInvalidPath, name)
 		require.True(t, IsInvalidPath(err), name)
 	}
 	for _, p := range readablePaths {
-		require.NoError(t, validatePath(p), p)
+		require.NoError(t, facts.ValidatePath(p), p)
 	}
-	require.ErrorIs(t, validatePath(""), ErrInvalidPath)
-	require.ErrorIs(t, validatePath("kb/a/../b.md"), ErrInvalidPath)
-}
-
-// The sentinel is recovered from go-git's internal package by unwrapping a
-// probe. If an upgrade stopped wrapping it, gitReadablePath would accept
-// everything; this pins it.
-func TestGitErrInvalidPath_Recovered(t *testing.T) {
-	require.NotNil(t, gitErrInvalidPath)
-	require.Equal(t, "invalid path", gitErrInvalidPath.Error())
+	require.ErrorIs(t, facts.ValidatePath(""), ErrInvalidPath)
+	require.ErrorIs(t, facts.ValidatePath("kb/a/../b.md"), ErrInvalidPath)
 }
 
 func TestWriteFact_RefusesUnreadablePath(t *testing.T) {
@@ -190,7 +183,7 @@ func TestWriteFact_RefusesBackslashOnlyName(t *testing.T) {
 func TestWriteFact_EmptySegmentRefusedBeforeRefMoves(t *testing.T) {
 	for _, path := range []string{"kb//x.md", "/kb/x.md", "kb/x/"} {
 		t.Run(path, func(t *testing.T) {
-			require.NoError(t, validatePath(path))
+			require.NoError(t, facts.ValidatePath(path))
 			svc := newInvalidPathTestStore(t)
 			before := headOfBranch(t, svc, "main")
 			_, err := svc.Facts().WriteFact(context.Background(), "main", path, "body", "m", "learn")

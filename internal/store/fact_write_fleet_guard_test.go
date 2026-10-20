@@ -13,7 +13,7 @@ import (
 // which store cannot import (it would be a cycle); this pins the other half:
 // nothing fact_write.go calls is fleet-anything.
 func TestFactWrite_CallsNothingFleet(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "fact_write.go", nil, 0)
+	f, err := parser.ParseFile(token.NewFileSet(), "facts/fact_write.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

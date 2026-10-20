@@ -1,4 +1,4 @@
-package store
+package facts
 
 import (
 	"knomit/internal/fact"
