@@ -22,6 +22,7 @@ import (
 	"knomit/internal/store/index"
 	"knomit/internal/store/internal/sessions"
 	"knomit/internal/store/migrate"
+	"knomit/internal/store/vocab"
 )
 
 // Service is the single entry point for all database and git access. It opens one
@@ -151,8 +152,8 @@ func Open(path string) (*Service, error) {
 	gq := index.NewGraphStore(rh.Repo)
 	hq := index.NewHistoryQuery(rh.Repo)
 	mq := index.NewMethodologyMatcher(rh.Repo)
-	ax := &abstractionIndex{rh: rh}
-	mo := &motifIndex{rh: rh}
+	ax := vocab.NewAbstractionIndex(rh.Repo)
+	mo := vocab.NewMotifIndex(rh.Repo)
 	search := index.NewFacade(fq, gq, hq, mq)
 	canonPath := canonicalizePath(path)
 

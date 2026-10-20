@@ -37,7 +37,7 @@ var budgetLiterals = map[string]string{
 // one file.
 var phase0Files = []string{
 	"restatement.go",
-	"../store/abstraction.go",
+	"../store/vocab/abstraction.go",
 }
 
 // TestConformance_NoCorpusPropertyConstants fails if a float literal appears in
@@ -71,7 +71,7 @@ func TestConformance_NoCorpusPropertyConstants(t *testing.T) {
 // spend has to say so where it is defined, or the next reader cannot tell it
 // from a threshold somebody measured.
 func TestConformance_BudgetConstantsSayWhatTheyBudget(t *testing.T) {
-	src := readSourceFile(t, "restatement.go") + readSourceFile(t, "../store/abstraction.go")
+	src := readSourceFile(t, "restatement.go") + readSourceFile(t, "../store/vocab/abstraction.go")
 	for _, want := range []struct{ name, classification string }{
 		{"titleBackfillBudget", "LATENCY BUDGET"},
 		{"titleBackfillBatch", "THROUGHPUT BUDGET"},
@@ -144,11 +144,11 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 			require.NoError(t, err)
 			if pkg == "../store" {
 				// internal/vcs/branch.go follows #550's move of branch.go out of
-				// the store root, and index/vec_table.go follows the index
-				// child's move of vec_table.go; each exemption covers the same
-				// code as before.
+				// the store root, and index/vec_table.go and vocab/abstraction.go
+				// follow the index and vocab children's moves of vec_table.go and
+				// abstraction.go; each exemption covers the same code as before.
 				switch filepath.ToSlash(rel) {
-				case "abstraction.go", "interfaces.go", "index/vec_table.go", "internal/vcs/branch.go", "service.go":
+				case "vocab/abstraction.go", "interfaces.go", "index/vec_table.go", "internal/vcs/branch.go", "service.go":
 					continue
 				}
 			}
