@@ -1,4 +1,4 @@
-package store
+package gitserve
 
 import (
 	"errors"
@@ -59,7 +59,7 @@ type negotiation struct {
 //     into a depth-1 clone drags the entire history across.
 //   - WITH a depth: the depth cut governs, and the shallows are only consulted
 //     to work out what changed. Grafting here would make deepening impossible.
-func negotiateCommits(rh *repoHandler, req *packp.UploadPackRequest) (*negotiation, error) {
+func negotiateCommits(rh *host, req *packp.UploadPackRequest) (*negotiation, error) {
 	depth := 0
 	if d, ok := req.Depth.(packp.DepthCommits); ok {
 		depth = int(d)
@@ -113,7 +113,7 @@ func negotiateCommits(rh *repoHandler, req *packp.UploadPackRequest) (*negotiati
 // caller must run it only once negotiation is settled. A client's shallows
 // bound the have walk: a shallow client holds nothing below its own boundary,
 // so nothing there may be assumed present.
-func (n *negotiation) objects(rh *repoHandler, req *packp.UploadPackRequest) ([]plumbing.Hash, error) {
+func (n *negotiation) objects(rh *host, req *packp.UploadPackRequest) ([]plumbing.Hash, error) {
 	haveCommits, _, err := walkCommits(rh, presentOnly(rh, req.Haves), 0, n.clientShallow)
 	if err != nil {
 		return nil, err
@@ -155,7 +155,7 @@ func (n *negotiation) objects(rh *repoHandler, req *packp.UploadPackRequest) ([]
 // parentsTransferred reports whether every parent of commit h is in set.
 // A commit absent from set (not walked at all) is not transferred, so it
 // cannot be unshallowed.
-func parentsTransferred(rh *repoHandler, h plumbing.Hash, set map[plumbing.Hash]struct{}) bool {
+func parentsTransferred(rh *host, h plumbing.Hash, set map[plumbing.Hash]struct{}) bool {
 	if _, ok := set[h]; !ok {
 		return false
 	}
@@ -179,7 +179,7 @@ func sortHashes(hs []plumbing.Hash) {
 // unlimited. stop commits are visited but not descended below. It returns the
 // visited set and the boundary: commits reached at exactly depth that still
 // have parents — the ones a shallow client records as its new graft points.
-func walkCommits(rh *repoHandler, starts []plumbing.Hash, depth int, stop map[plumbing.Hash]struct{}) (visited, boundary map[plumbing.Hash]struct{}, err error) {
+func walkCommits(rh *host, starts []plumbing.Hash, depth int, stop map[plumbing.Hash]struct{}) (visited, boundary map[plumbing.Hash]struct{}, err error) {
 	visited = map[plumbing.Hash]struct{}{}
 	boundary = map[plumbing.Hash]struct{}{}
 	type item struct {
@@ -229,7 +229,7 @@ func walkCommits(rh *repoHandler, starts []plumbing.Hash, depth int, stop map[pl
 // object still reads as end-of-tree here and this check cannot catch it. What
 // it does catch is ErrMaxTreeDepth and the invalid-tree-path errors, which
 // arrive distinguishable.
-func addTreeObjects(rh *repoHandler, commit plumbing.Hash, out map[plumbing.Hash]struct{}) error {
+func addTreeObjects(rh *host, commit plumbing.Hash, out map[plumbing.Hash]struct{}) error {
 	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return err
@@ -255,7 +255,7 @@ func addTreeObjects(rh *repoHandler, commit plumbing.Hash, out map[plumbing.Hash
 
 // presentOnly keeps the haves this store actually holds; git clients may
 // offer haves from other remotes.
-func presentOnly(rh *repoHandler, haves []plumbing.Hash) []plumbing.Hash {
+func presentOnly(rh *host, haves []plumbing.Hash) []plumbing.Hash {
 	var out []plumbing.Hash
 	for _, h := range haves {
 		if rh.Storer().HasEncodedObject(h) == nil {

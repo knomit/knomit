@@ -179,6 +179,22 @@ var sameLayerEdges = map[string]bool{
 	"store/remotesync -> store/internal/vcs": true,
 	"store/remotesync -> store/merge":        true,
 	"store/remotesync -> store/verify":       true,
+	// The gitserve child (the smart-HTTP handler: the advertisement, the pack
+	// negotiation and upload-pack, and receive-pack with its quarantine, the
+	// incoming-push judge, the all-or-nothing promote and the registration) sits
+	// above vcs, verify and remotesync in the store's child order (proposal 4.3:
+	// gitserve -> vcs, verify, remotesync). It reads a store through the one
+	// *vcs.Repo, judges a push with verify, and moves a pushed branch through
+	// remotesync's AdvanceBranchTo. Two edges go beyond the proposal's arrow and are
+	// types only: fleetrec, for the Fleet a PushPolicy hands the judge (verify's
+	// signature already names it), and merge, for the Mode constants a branch
+	// move reports (ModeRewound, ModeNoop). The facade reaches up to gitserve,
+	// never the reverse.
+	"store/gitserve -> store/fleetrec":     true,
+	"store/gitserve -> store/internal/vcs": true,
+	"store/gitserve -> store/merge":        true,
+	"store/gitserve -> store/remotesync":   true,
+	"store/gitserve -> store/verify":       true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

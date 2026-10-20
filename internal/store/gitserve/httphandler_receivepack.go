@@ -1,4 +1,4 @@
-package store
+package gitserve
 
 import (
 	"bufio"
@@ -21,7 +21,10 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/platform/version"
+	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/store/verify"
 )
 
@@ -50,7 +53,7 @@ type PushPolicy struct {
 	// artifacts, both read from its main at ONE revision. Called only when
 	// verify_signatures is log or enforce; nil or an error means this instance
 	// has no fleet to judge against.
-	Fleet func(context.Context) (Fleet, error)
+	Fleet func(context.Context) (fleetrec.Fleet, error)
 	// Judged, when set, is told the commit judge's verdict on the pushed
 	// branch: refusal is the text the pusher was refused with by the
 	// private-path closure or verify, or "" when the push was admitted and
@@ -102,7 +105,7 @@ const errNoPushPolicy = "knomit: pushing is not available here: no verified push
 // client that disconnects, because the ref moves before the SQL that
 // describes it.
 type receivePack struct {
-	rh       *repoHandler
+	rh       *host
 	upstream func() string
 }
 
@@ -296,7 +299,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case seeded:
 		ev.Msg("receive-pack: registered")
-	case res.Mode == ModeRewound:
+	case res.Mode == merge.ModeRewound:
 		// A real non-fast-forward of an existing agent/ branch: allowed, by
 		// design. No branch is owned (D18/D19), so ANY authenticated pusher
 		// may update or rewind ANY peer's agent/ branch here, not only the
@@ -378,7 +381,7 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 // nothing — under off and log an unsigned commit is accepted anyway, so a
 // signer rule there would stop nobody.
 func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, tip plumbing.Hash, commits []*object.Commit, lg zerolog.Logger) string {
-	return rp.rh.judgeIncoming(ctx, rp.upstream(), pol.Fleet, func(c *object.Commit) (Refusal, bool) {
+	return verify.JudgeIncoming(ctx, rp.rh.Repo, rp.upstream(), pol.Fleet, func(c *object.Commit) (verify.Refusal, bool) {
 		return verify.SignerIsPusher(c, pol.Pusher)
 	}, tip, commits, lg)
 }
@@ -408,7 +411,7 @@ func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, tip plumbing.
 // commit may carry no private path at all. A missing upstream never gets
 // here: judgeRequest refuses the push first.
 func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, commits []*object.Commit) string {
-	return rp.rh.privatePathClosure(ctx, q, rp.upstream(), commits)
+	return verify.PrivatePathClosure(ctx, rp.rh.Repo, q, rp.upstream(), commits)
 }
 
 // register makes the pushed tip the branch's tip on this host, through the
@@ -419,7 +422,7 @@ func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, co
 // (F11 review M1): CreateBranch and AdvanceBranchTo both move the ref BEFORE
 // the context-bound SQL that describes it, and a request context is
 // cancelled whenever the client goes away.
-func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []plumbing.EncodedObject) (res MainReconcileResult, seeded bool, refusal string, err error) {
+func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []plumbing.EncodedObject) (res remotesync.MainReconcileResult, seeded bool, refusal string, err error) {
 	branch := cmd.Name.Short()
 	defer rp.rh.LockBranch(branch)()
 
@@ -450,11 +453,11 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 		}
 		seeded = true
 	}
-	res, _, err = rp.rh.AdvanceBranchTo(ctx, branch, cmd.New)
+	res, _, err = rp.rh.sy.AdvanceBranchTo(ctx, branch, cmd.New)
 	if err != nil {
 		return res, seeded, "", err
 	}
-	if seeded && res.Mode == ModeNoop {
+	if seeded && res.Mode == merge.ModeNoop {
 		// The pushed tip IS the upstream tip: CreateBranch set the ref and its
 		// rows, but no move ran NotifyCommit. Run it, so a registration always
 		// passes the chokepoint.
@@ -482,8 +485,8 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 // builds, once per push and only then, the set of commits reachable from the
 // heads. The fleet repository is small; every other repository keeps the walk
 // proportional to the push.
-func (rh *repoHandler) heldAdmitted(ctx context.Context, upstream string) func(plumbing.Hash) (bool, error) {
-	if _, ont, err := rh.verifyModeAt(ctx, upstream); err == nil && !fact.IsFleetOntology(ont) {
+func (rh *host) heldAdmitted(ctx context.Context, upstream string) func(plumbing.Hash) (bool, error) {
+	if _, ont, err := verify.VerifyModeAt(ctx, rh.Repo, upstream); err == nil && !fact.IsFleetOntology(ont) {
 		return nil
 	}
 	var heads []plumbing.Hash

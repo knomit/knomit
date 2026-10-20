@@ -1,4 +1,4 @@
-package store
+package gitserve
 
 import (
 	"bytes"
@@ -45,7 +45,7 @@ const packProgressWindow = 1 << 20
 // upstream is evaluated PER REQUEST, not captured once: a repo can gain an
 // origin (and with it a configured Remote.Branch) after the handler is built,
 // and the advertisement must follow.
-func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
+func newGitHTTPHandler(rh *host, upstream func() string) http.Handler {
 	sto := rh.Storer()
 	mux := http.NewServeMux()
 	// One cache per handler, shared by both endpoints: the advertisement is

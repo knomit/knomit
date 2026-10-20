@@ -8,7 +8,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/rs/zerolog"
 
-	"knomit/internal/fact"
 	"knomit/internal/store/verify"
 )
 
@@ -16,9 +15,9 @@ import (
 // the judge. Pure predicates over commits and trees, plus the acceptance
 // gate (CheckRange), the audit, the incoming-push judge and the own-lineage
 // check. The child reads a store only through *vcs.Repo and the fleet
-// records through fleetrec; the writers that call it (receive-pack, the
-// reconcile/sync paths, the own-range judge in the remotesync child) stay in this
-// package. The names callers outside store use are re-exported below
+// records through fleetrec; the writers that call it (the receive-pack handler
+// in gitserve, the reconcile/sync paths and the own-range judge in remotesync)
+// reach it directly. The names callers outside store use are re-exported below
 // unchanged, so the public surface of package store does not move.
 
 // Types.
@@ -89,8 +88,9 @@ func Audit(in AuditInput) (AuditReport, error) { return verify.Audit(in) }
 func CheckRange(in RangeInput) (RangeVerdict, error) { return verify.CheckRange(in) }
 
 // The methods of the parent's repoHandler that reach the verify child. They
-// stay declared here (the receive-pack, sync and clone paths call them as
-// before); each passes the embedded *vcs.Repo, which is all the child reads.
+// stay declared here for the parent's own callers (Open/Clone in repo.go and
+// the Service's JudgePeerBranch in service_sync.go); each passes the embedded
+// *vcs.Repo, which is all the child reads.
 
 func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
 	return verify.CheckOwnLineage(ctx, rh.Repo, branch, agentTip, upstream)
@@ -102,8 +102,4 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 
 func (rh *repoHandler) privatePathClosure(ctx context.Context, st storer.EncodedObjectStorer, upstream string, commits []*object.Commit) string {
 	return verify.PrivatePathClosure(ctx, rh.Repo, st, upstream, commits)
-}
-
-func (rh *repoHandler) verifyModeAt(ctx context.Context, branch string) (mode string, ont *fact.Ontology, err error) {
-	return verify.VerifyModeAt(ctx, rh.Repo, branch)
 }

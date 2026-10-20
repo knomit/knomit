@@ -13,8 +13,9 @@
 // rh.<Name> by promotion; the parent embeds it next to the other children.
 // Embedding is not virtual: nothing here calls a method declared on the
 // parent. The Service-level orchestration (consensus_branch.go, replay.go,
-// service_sync.go, Open/Clone/Init in repo.go) and the receive-pack handler
-// stay in the parent and call the exported cores.
+// service_sync.go, Open/Clone/Init in repo.go) stay in the parent and call
+// the exported cores; the receive-pack handler is the gitserve child, which
+// calls AdvanceBranchTo.
 //
 // The package is named remotesync, not sync, so it does not collide with the
 // standard library's sync (the same collision that ruled out runtime for
