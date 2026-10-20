@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 )
 
 func TestConfigureRemote_WritesTwoRefspecs(t *testing.T) {
@@ -59,7 +59,7 @@ func TestConfigureRemote_IsIdempotent(t *testing.T) {
 }
 
 func TestAgentBaseRefName_FormatsUnderKnomitNamespace(t *testing.T) {
-	got := storesync.AgentBaseRefNameForTest("agent/test")
+	got := remotesync.AgentBaseRefNameForTest("agent/test")
 	require.Equal(t, "refs/knomit/agent-base/agent/test", got.String(),
 		"watermark refs must live under refs/knomit/ to stay out of branch listings")
 }
@@ -72,7 +72,7 @@ func TestReadAgentBase_MissingIsReferenceNotFound(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// InitRepo seeds the watermark; clear it to model the missing case.
-	require.NoError(t, svc.rh.Storer().RemoveReference(storesync.AgentBaseRefNameForTest("agent/test")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(remotesync.AgentBaseRefNameForTest("agent/test")))
 
 	_, err = svc.rh.ReadAgentBaseForTest("agent/test")
 	require.Error(t, err)
@@ -840,7 +840,7 @@ func TestReconcileAgentRebase_FallsBackToMergeBaseWhenWatermarkMissing(t *testin
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Drop the watermark to model the legacy/corruption case.
-	require.NoError(t, svc.rh.Storer().RemoveReference(storesync.AgentBaseRefNameForTest("agent/test")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(remotesync.AgentBaseRefNameForTest("agent/test")))
 
 	// Standard "agent has local, main has advanced" setup.
 	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
@@ -950,7 +950,7 @@ func TestSync_OrchestratesMainAndAgent(t *testing.T) {
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 
 	// Use the in-process reconcile entry point that skips fetch (no real remote).
-	res, err := svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), "agent/test", "main")
+	res, err := svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), "agent/test", "main")
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Agent.Mode, "steady-state Sync merges local main into agent (one merge commit)")
 	require.Equal(t, plumbing.NewHash(originMain), mustHeadHash(t, svc, "main"))
@@ -984,7 +984,7 @@ func TestReconcileNow_UpstreamEqualsAgentIsPushOnly(t *testing.T) {
 	))
 
 	// upstreamMain == agentBranch (the degenerate config).
-	res, err := svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), "agent/test", "agent/test")
+	res, err := svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), "agent/test", "agent/test")
 	require.NoError(t, err)
 	require.Empty(t, res.Main.Mode, "no main reconcile must run when upstream == agent branch")
 	require.Empty(t, res.Agent.Mode, "no agent reconcile must run when upstream == agent branch")
@@ -1033,7 +1033,7 @@ func TestClassifyMainRewind_DistinguishesSharedAndDisjoint(t *testing.T) {
 	commitB, err := svc.rh.Repository().CommitObject(plumbing.NewHash(sideB))
 	require.NoError(t, err)
 
-	sharedDisjoint, sharedBaseErr := storesync.ClassifyMainRewindForTest(commitA, commitB)
+	sharedDisjoint, sharedBaseErr := remotesync.ClassifyMainRewindForTest(commitA, commitB)
 	require.NoError(t, sharedBaseErr,
 		"shared ancestry must not surface a MergeBase error")
 	require.False(t, sharedDisjoint,
@@ -1044,7 +1044,7 @@ func TestClassifyMainRewind_DistinguishesSharedAndDisjoint(t *testing.T) {
 	disjointCommit, err := svc.rh.Repository().CommitObject(disjointHash)
 	require.NoError(t, err)
 
-	disjointDisjoint, disjointBaseErr := storesync.ClassifyMainRewindForTest(commitA, disjointCommit)
+	disjointDisjoint, disjointBaseErr := remotesync.ClassifyMainRewindForTest(commitA, disjointCommit)
 	require.NoError(t, disjointBaseErr,
 		"disjoint histories must not surface a MergeBase error — the call succeeded, it just found no common ancestor")
 	require.True(t, disjointDisjoint,

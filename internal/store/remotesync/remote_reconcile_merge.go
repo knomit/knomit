@@ -8,7 +8,7 @@
 //
 // Conflict resolution is StrategyLocalWins for steady-state sync: the
 // agent's local edits win overlapping paths against main.
-package sync
+package remotesync
 
 import (
 	"context"

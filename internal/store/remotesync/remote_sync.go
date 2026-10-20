@@ -3,7 +3,7 @@
 // Push force-pushes the agent branch — safe because only this machine
 // writes its own agent branch, and Sync has already reconciled any
 // upstream drift onto the local replayed history.
-package sync
+package remotesync
 
 import (
 	"bytes"

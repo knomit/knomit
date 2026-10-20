@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 )
 
 // A sync that WE cancelled established nothing about the remote, so it must not
@@ -33,7 +33,7 @@ func TestSync_CallerCancellationLeavesStatusAlone(t *testing.T) {
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*storesync.Index)
+	ri := svc.Remote().(*remotesync.Index)
 	// What the last completed sync established.
 	require.NoError(t, ri.UpdateRemoteStatusForTest("origin", "ok", nil))
 
@@ -61,7 +61,7 @@ func TestPush_CallerCancellationLeavesStatusAlone(t *testing.T) {
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*storesync.Index)
+	ri := svc.Remote().(*remotesync.Index)
 	require.NoError(t, ri.UpdateRemotePushStatusForTest("origin", "ok", nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -94,7 +94,7 @@ func TestSync_CallerDeadlineIsRecorded(t *testing.T) {
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*storesync.Index)
+	ri := svc.Remote().(*remotesync.Index)
 	require.NoError(t, ri.UpdateRemoteStatusForTest("origin", "ok", nil))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)

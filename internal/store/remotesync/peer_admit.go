@@ -6,7 +6,7 @@
 // becomes a local refs/heads/agent/<x> — the same shape a push leaves on a
 // knomit host, so the consensus merger and everything after it is unchanged.
 // A refused tip stays a remote-tracking ref nothing reads: "left behind".
-package sync
+package remotesync
 
 import (
 	"context"

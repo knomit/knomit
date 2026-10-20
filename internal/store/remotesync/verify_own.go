@@ -16,7 +16,7 @@
 //
 // A refusal moves nothing and is an *OwnCommitRefusedError; the repos layer
 // records it as the fleet's last error (GET /fleet last_error).
-package sync
+package remotesync
 
 import (
 	"errors"

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"knomit/internal/platform/fileuri"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -41,7 +41,7 @@ func wmFixture(t *testing.T) (*Service, string, plumbing.Hash) {
 // wmSync runs one Sync and returns its agent result.
 func wmSync(t *testing.T, svc *Service) SyncResult {
 	t.Helper()
-	res, err := svc.Remote().(*storesync.Index).Sync(context.Background(), "agent/test", nil)
+	res, err := svc.Remote().(*remotesync.Index).Sync(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 	return res
 }
@@ -49,7 +49,7 @@ func wmSync(t *testing.T, svc *Service) SyncResult {
 // wmPush pushes the agent branch to the bare remote.
 func wmPush(t *testing.T, svc *Service) {
 	t.Helper()
-	_, err := svc.Remote().(*storesync.Index).Push(context.Background(), "agent/test", nil)
+	_, err := svc.Remote().(*remotesync.Index).Push(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 }
 
@@ -63,7 +63,7 @@ func wmSetOriginMain(t *testing.T, bare string, h plumbing.Hash) {
 // looks like one made before the watermark existed.
 func wmDropWatermark(t *testing.T, svc *Service) {
 	t.Helper()
-	require.NoError(t, svc.rh.Storer().RemoveReference(storesync.AgentBaseRefNameForTest("agent/test")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(remotesync.AgentBaseRefNameForTest("agent/test")))
 	_, err := svc.rh.ReadAgentBaseForTest("agent/test")
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "setup: no watermark")
 }

@@ -11,7 +11,7 @@ import (
 // negotiation and the pack) and receive-pack (the quarantine, the incoming-push
 // judge, the all-or-nothing promote and the registration through the commit
 // chokepoint). The child reads a store through the one shared *vcs.Repo, moves
-// a pushed branch through the sync child's AdvanceBranchTo, and judges a push
+// a pushed branch through the remotesync child's AdvanceBranchTo, and judges a push
 // with verify; nothing in it reaches the Service. Service.Handler (service_gitserve.go)
 // builds it once, from the handles repoHandler embeds.
 //
