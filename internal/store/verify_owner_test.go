@@ -258,7 +258,7 @@ func TestRecordOwner_ARecordInTheOwnFolderIsForTheOwner(t *testing.T) {
 // and the joiner's first registration is rule A's as usual (the stray record
 // made mayRegister false). The loader returns one record per own folder.
 //
-// SABOTAGE: drop the folder check in loadMembersOfTree → boss is ambiguous
+// SABOTAGE: drop the folder check in fleetrec.LoadMembersOfTree → boss is ambiguous
 // and the joiner is refused → red.
 func TestFleetLoader_IgnoresARecordInAnotherAgentsFolder(t *testing.T) {
 	p := newTestFleetPKI(t)

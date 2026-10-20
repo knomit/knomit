@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -316,11 +317,7 @@ func TestCheckRange_MalformedRecordSkipped(t *testing.T) {
 	require.Equal(t, before+1, countMalformedLogged(), "one ERROR per malformed blob, over two runs")
 }
 
-func countMalformedLogged() int {
-	n := 0
-	malformedLogged.Range(func(_, _ any) bool { n++; return true })
-	return n
-}
+func countMalformedLogged() int { return fleetrec.MalformedLoggedForTest() }
 
 // G11: log reports and exits 0; enforce blocks with 1. The literals are the
 // contract a CI job reads.

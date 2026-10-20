@@ -17,6 +17,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -79,11 +80,11 @@ func (v RangeVerdict) ExitCode() int {
 //     gate could not run. Missing artifacts are not an error: no PKI.
 //  3. Every commit in Candidate ∖ Main is judged by judgeCommit.
 func CheckRange(in RangeInput) (RangeVerdict, error) {
-	kb, err := openGitDir(in.KBDir)
+	kb, err := fleetrec.OpenGitDir(in.KBDir)
 	if err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
-	mainC, err := resolveCommit(kb, in.Main)
+	mainC, err := fleetrec.ResolveCommit(kb, in.Main)
 	if err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
@@ -111,7 +112,7 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 			return RangeVerdict{}, fmt.Errorf("verify: ontology at %s: %w", in.Main, err)
 		}
 	}
-	candC, err := resolveCommit(kb, in.Candidate)
+	candC, err := fleetrec.ResolveCommit(kb, in.Candidate)
 	if err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
@@ -687,7 +688,7 @@ func (j judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
 	if err != nil || !fact.SameKey(certKey, s.Key) {
 		return leaf, errLeafOtherKey
 	}
-	ident, err := j.pki.verifyLeaf(leaf)
+	ident, err := j.pki.VerifyLeaf(leaf)
 	if err != nil {
 		return leaf, err
 	}
@@ -723,7 +724,7 @@ var errLeafOtherID = errors.New("the certificate is not issued to this agent id"
 //     parses must be FOR id (its agent: equals id). Otherwise any member
 //     could plant a record for another agent in its own folder and make that
 //     agent ambiguous, or pre-empt a joiner's rule A. The loader also skips
-//     such a record (loadMembersOfTree), so one already on main locks no one
+//     such a record (fleetrec.LoadMembersOfTree), so one already on main locks no one
 //     out; this refusal keeps new ones off main. A file that does not parse
 //     as a record is no record: the loader skips it too.
 //

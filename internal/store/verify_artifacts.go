@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -174,7 +175,7 @@ func (a *artifactCheck) change(ch *object.Change) (rule, reason string) {
 	if attrs.MaxSize > 0 && newF.Size > attrs.MaxSize {
 		return RuleArtifactSize, fmt.Sprintf("%s is %d bytes, larger than its max_size of %d", name, newF.Size, attrs.MaxSize)
 	}
-	if bound := readBound(attrs); newF.Size > bound {
+	if bound := fleetrec.ReadBound(attrs); newF.Size > bound {
 		return RuleArtifactRules, fmt.Sprintf("%s is %d bytes, more than the judge reads of a %s file (%d)", name, newF.Size, attrs.PKI, bound)
 	}
 	added := ch.From.Name == ""
@@ -283,14 +284,14 @@ func (a *artifactCheck) readPKI() {
 		a.rootErr, a.crlErr = errors.New("the ontology declares no pki: root"), errors.New("the ontology declares no pki: root")
 		return
 	}
-	raw, ok, err := treeBytesCapped(a.tree, layout.Root, pkiFileCap(a.j.ont, layout.Root))
+	raw, ok, err := fleetrec.TreeBytesCapped(a.tree, layout.Root, fleetrec.PKIFileCap(a.j.ont, layout.Root))
 	switch {
 	case err != nil:
 		a.rootErr = fmt.Errorf("%s: %w", layout.Root, err)
 	case !ok:
 		a.rootErr = fmt.Errorf("no %s", layout.Root)
 	default:
-		if a.root, err = parseRootPEM(raw); err != nil {
+		if a.root, err = fleetrec.ParseRootPEM(raw); err != nil {
 			a.root, a.rootErr = nil, fmt.Errorf("%s: %w", layout.Root, err)
 		}
 	}
@@ -298,14 +299,14 @@ func (a *artifactCheck) readPKI() {
 		a.crlErr = errors.New("the ontology declares no pki: crl")
 		return
 	}
-	raw, ok, err = treeBytesCapped(a.tree, layout.CRL, pkiFileCap(a.j.ont, layout.CRL))
+	raw, ok, err = fleetrec.TreeBytesCapped(a.tree, layout.CRL, fleetrec.PKIFileCap(a.j.ont, layout.CRL))
 	switch {
 	case err != nil:
 		a.crlErr = fmt.Errorf("%s: %w", layout.CRL, err)
 	case !ok:
 		a.crlErr = fmt.Errorf("no %s", layout.CRL)
 	default:
-		if a.crl, err = parseCRLPEM(raw); err != nil {
+		if a.crl, err = fleetrec.ParseCRLPEM(raw); err != nil {
 			a.crl, a.crlErr = nil, fmt.Errorf("%s: %w", layout.CRL, err)
 		}
 	}
@@ -315,10 +316,10 @@ func (a *artifactCheck) readPKI() {
 func (a *artifactCheck) pkiAdd(role, name string, raw []byte) error {
 	switch role {
 	case fact.PKIRoot:
-		_, err := parseRootPEM(raw)
+		_, err := fleetrec.ParseRootPEM(raw)
 		return err
 	case fact.PKICRL:
-		crl, err := parseCRLPEM(raw)
+		crl, err := fleetrec.ParseCRLPEM(raw)
 		if err != nil {
 			return err
 		}
@@ -358,7 +359,7 @@ func (a *artifactCheck) validLeaf(name string, raw []byte) (*x509.Certificate, s
 	if !ok || path.Dir(name) != layout.LeafDir {
 		return nil, "", fmt.Errorf("%s is not at a leaf path (%s)", name, layout.LeafPath("<id>"))
 	}
-	leaf, err := parseCertPEM(raw)
+	leaf, err := fleetrec.ParseCertPEM(raw)
 	if err != nil {
 		return nil, "", err
 	}
@@ -389,7 +390,7 @@ func (a *artifactCheck) validLeaf(name string, raw []byte) (*x509.Certificate, s
 // superset (revoked_set: superset) the new CRL must also list every serial
 // the old one lists: a reissue never un-revokes.
 func (a *artifactCheck) crlNewer(oldRaw, newRaw []byte, superset bool) error {
-	crl, err := parseCRLPEM(newRaw)
+	crl, err := fleetrec.ParseCRLPEM(newRaw)
 	if err != nil {
 		return err
 	}
@@ -400,7 +401,7 @@ func (a *artifactCheck) crlNewer(oldRaw, newRaw []byte, superset bool) error {
 	if _, err := pki.CheckCRL(crl, a.root, nil); err != nil {
 		return err
 	}
-	old, err := parseCRLPEM(oldRaw)
+	old, err := fleetrec.ParseCRLPEM(oldRaw)
 	if err != nil || old.Number == nil {
 		return fmt.Errorf("the CRL it replaces has no readable Number: %v", err)
 	}
@@ -433,7 +434,7 @@ func (a *artifactCheck) leafRenewal(name string, oldRaw, newRaw []byte) error {
 	if err != nil {
 		return err
 	}
-	old, err := parseCertPEM(oldRaw)
+	old, err := fleetrec.ParseCertPEM(oldRaw)
 	if err != nil {
 		return fmt.Errorf("the leaf it replaces does not parse: %v", err)
 	}
@@ -448,7 +449,7 @@ func (a *artifactCheck) leafRenewal(name string, oldRaw, newRaw []byte) error {
 	if err != nil {
 		return err
 	}
-	members, err := loadMembersOfTree("judged", a.tree, a.j.kbRoot)
+	members, err := fleetrec.LoadMembersOfTree("judged", a.tree, a.j.kbRoot)
 	if err != nil {
 		return err
 	}

@@ -110,22 +110,25 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 	// loose tier, or an error string that merely NAMED one as available, is
 	// exactly what this scan exists to catch — web validation is an allowlist
 	// and must stay silent about the tiers beyond it.
-	// The store's children (internal/store/internal/...) are the store's own
-	// code moved into subpackages; os.ReadDir does not descend, so each is
-	// named here or a file moved into one silently leaves the scan.
-	dirs := []string{".", "../synthesize", "../store", "../store/internal/sqlite",
-		"../store/internal/sessions", "../store/internal/vcs", "../web"}
+	// The store is WALKED recursively, not listed: its children
+	// (internal/store/internal/..., internal/store/fleetrec, ...) are the
+	// store's own code moved into subpackages, and a hand-written directory
+	// list silently lets every new child (and any file moved into it) leave
+	// the scan. The flat roots below hold no subpackage the rule reaches.
+	flat := []string{".", "../synthesize", "../web"}
 	var files []string
-	for _, dir := range dirs {
+	nonTest := func(name string) bool {
+		return strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
+	}
+	for _, dir := range flat {
 		entries, err := os.ReadDir(dir)
 		require.NoErrorf(t, err, "read %s", dir)
 		found := 0
 		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			if e.IsDir() || !nonTest(e.Name()) {
 				continue
 			}
-			files = append(files, filepath.Join(dir, name))
+			files = append(files, filepath.Join(dir, e.Name()))
 			found++
 		}
 		// Fail closed: a directory that suddenly yields nothing is a moved
@@ -133,6 +136,41 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 		// success just as loudly as a scan that found no violations.
 		require.Positivef(t, found, "no Go sources found under %s — the scan is not reading its subject", dir)
 	}
+	storeFound, storeDirs := 0, 0
+	require.NoError(t, filepath.WalkDir("../store", func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			storeDirs++
+			return nil
+		}
+		if nonTest(d.Name()) {
+			files = append(files, p)
+			storeFound++
+		}
+		return nil
+	}), "walk ../store")
+	require.Positivef(t, storeFound, "no Go sources found under ../store — the scan is not reading its subject")
+	require.Greaterf(t, storeDirs, 4, "the walk of ../store saw %d directories: the store's children are not being reached", storeDirs)
+	// Non-vacuous per directory: every directory under the store that has
+	// non-test Go files must have contributed them. The walk above and this
+	// glob read each directory by different routes, so a walk that stops
+	// descending (a skipped directory, a filter on the wrong name) shows up
+	// here instead of passing silently.
+	require.NoError(t, filepath.WalkDir("../store", func(p string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return err
+		}
+		matches, gerr := filepath.Glob(filepath.Join(p, "*.go"))
+		require.NoError(t, gerr)
+		for _, m := range matches {
+			if nonTest(filepath.Base(m)) {
+				require.Containsf(t, files, m, "%s has non-test Go sources the scan did not read", p)
+			}
+		}
+		return nil
+	}))
 
 	for _, rel := range files {
 		fset := token.NewFileSet()

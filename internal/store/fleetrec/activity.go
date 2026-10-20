@@ -1,4 +1,4 @@
-package store
+package fleetrec
 
 import (
 	"errors"
@@ -10,16 +10,16 @@ import (
 	"knomit/internal/fact"
 )
 
-// FleetRecordChange is one member record a main commit changed: the record
+// RecordChange is one member record a main commit changed: the record
 // before and after (nil: absent, or not a readable record in its own folder).
-type FleetRecordChange struct {
+type RecordChange struct {
 	Agent         string
 	Before, After *fact.Member
 }
 
-// FleetMainCommit is one first-parent commit of the fleet repository's main
+// MainCommit is one first-parent commit of the fleet repository's main
 // that changed something the Fleet page's Activity shows.
-type FleetMainCommit struct {
+type MainCommit struct {
 	Hash   string
 	At     time.Time // the committer time: when it landed on main
 	Author string    // the author's agent id ("" for an address that is no agent's)
@@ -34,13 +34,13 @@ type FleetMainCommit struct {
 	// Host is the record it leaves (nil: deleted or unreadable).
 	HostChanged bool
 	Host        []string
-	Records     []FleetRecordChange
+	Records     []RecordChange
 }
 
 // recordChanges is every member record under dir that differs between the
 // trees before and after (before nil: a root commit), each side read as the
 // loader reads it: a .md under dir/<id>/ that parses as a record for <id>.
-func recordChanges(before, after *object.Tree, dir string) ([]FleetRecordChange, error) {
+func recordChanges(before, after *object.Tree, dir string) ([]RecordChange, error) {
 	sub := func(t *object.Tree) (*object.Tree, error) {
 		if t == nil {
 			return nil, nil
@@ -66,7 +66,7 @@ func recordChanges(before, after *object.Tree, dir string) ([]FleetRecordChange,
 	if err != nil {
 		return nil, err
 	}
-	var out []FleetRecordChange
+	var out []RecordChange
 	for _, ch := range changes {
 		name := ch.To.Name
 		if name == "" {
@@ -76,7 +76,7 @@ func recordChanges(before, after *object.Tree, dir string) ([]FleetRecordChange,
 		if !ok || !strings.HasSuffix(name, ".md") {
 			continue
 		}
-		rc := FleetRecordChange{Agent: folder}
+		rc := RecordChange{Agent: folder}
 		if ch.From.Name != "" {
 			rc.Before = recordOf(b, ch.From, folder)
 		}

@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -269,12 +270,12 @@ func TestCheckRange_MalformedTreeInTheOwnFolder(t *testing.T) {
 	require.Contains(t, got.Reason, "kb/members/agent-x/zz")
 
 	// Control: before the bogus commit, the loader sees both members.
-	ms, err := loadMembers("t", main, "kb")
+	ms, err := fleetrec.LoadMembers("t", main, "kb")
 	require.NoError(t, err)
 	require.Len(t, ms, 2)
 
 	// The commit reached main anyway (the gate was not in its way).
-	ms, err = loadMembers("t", evil, "kb")
+	ms, err = fleetrec.LoadMembers("t", evil, "kb")
 	require.Error(t, err, "loaded %d members", len(ms))
 	require.Contains(t, err.Error(), "kb/members/agent-x/zz")
 	f.ref(f.fleet, "main", evil)
