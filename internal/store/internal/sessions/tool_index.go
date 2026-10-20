@@ -1,5 +1,5 @@
 // Tool session CRUD for progressive knowledge-base exploration and other paginated tools.
-package store
+package sessions
 
 import (
 	"context"
@@ -10,13 +10,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// toolIndex persists tool-session paging state. It targets the ephemeral
+// ToolIndex persists tool-session paging state. It targets the ephemeral
 // session DB (db), NOT the main git-derived DB — so every method uses the db
 // handle directly and never conn(ctx, …): the context may carry a *sql.Tx bound
 // to the MAIN db, and conn would hand that back, executing session SQL against
 // the wrong database. It deliberately holds no *repoHandler, so there is no main
 // DB handle to reach for by mistake.
-type toolIndex struct {
+type ToolIndex struct {
 	db *sql.DB
 }
 
@@ -51,7 +51,7 @@ type QueueItem struct {
 // binding's identity and readSet pins its read set (each mount at its branch);
 // resume through another binding, or against a re-pinned read set, is rejected
 // (lenses RFC §7.3).
-func (ti *toolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*ToolSession, error) {
+func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*ToolSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	s := &ToolSession{
@@ -78,7 +78,7 @@ func (ti *toolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPr
 }
 
 // GetToolSession returns the session with the given ID, or nil if not found.
-func (ti *toolIndex) GetToolSession(ctx context.Context, id string) (*ToolSession, error) {
+func (ti *ToolIndex) GetToolSession(ctx context.Context, id string) (*ToolSession, error) {
 	var s ToolSession
 	err := ti.db.QueryRowContext(ctx,
 		`SELECT id, tool, branch, path_prefix, binding, read_set, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
@@ -93,7 +93,7 @@ func (ti *toolIndex) GetToolSession(ctx context.Context, id string) (*ToolSessio
 }
 
 // UpdateToolSession updates the last_commit, status, and updated_at for a session.
-func (ti *toolIndex) UpdateToolSession(ctx context.Context, id, lastCommit, status string) error {
+func (ti *ToolIndex) UpdateToolSession(ctx context.Context, id, lastCommit, status string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := ti.db.ExecContext(ctx,
 		`UPDATE tool_sessions SET last_commit = ?, status = ?, updated_at = ? WHERE id = ?`,
@@ -106,7 +106,7 @@ func (ti *toolIndex) UpdateToolSession(ctx context.Context, id, lastCommit, stat
 }
 
 // GetSeenPaths returns all seen paths for the given session as a set.
-func (ti *toolIndex) GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error) {
+func (ti *ToolIndex) GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error) {
 	rows, err := ti.db.QueryContext(ctx,
 		`SELECT path FROM tool_seen_paths WHERE session_id = ?`, sessionID,
 	)
@@ -130,7 +130,7 @@ func (ti *toolIndex) GetSeenPaths(ctx context.Context, sessionID string) (map[st
 }
 
 // AddSeenPaths batch-inserts seen paths for a session, ignoring duplicates.
-func (ti *toolIndex) AddSeenPaths(ctx context.Context, sessionID string, paths []string) error {
+func (ti *ToolIndex) AddSeenPaths(ctx context.Context, sessionID string, paths []string) error {
 	tx, err := ti.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("AddSeenPaths begin: %w", err)
@@ -156,7 +156,7 @@ func (ti *toolIndex) AddSeenPaths(ctx context.Context, sessionID string, paths [
 }
 
 // EnqueuePaths batch-inserts items into the tool_queue for a session, ignoring duplicates.
-func (ti *toolIndex) EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error {
+func (ti *ToolIndex) EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error {
 	tx, err := ti.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("EnqueuePaths begin: %w", err)
@@ -185,7 +185,7 @@ func (ti *toolIndex) EnqueuePaths(ctx context.Context, sessionID string, items [
 // queue, ordered by sort_key ASC then rowid ASC (breadth-first for explain;
 // rank order for query). It also bumps the session's last_used_at in the same
 // transaction so an actively-paged session is never reaped as idle.
-func (ti *toolIndex) DequeuePaths(ctx context.Context, sessionID string, limit int) ([]QueueItem, error) {
+func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit int) ([]QueueItem, error) {
 	tx, err := ti.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("DequeuePaths begin: %w", err)
@@ -242,7 +242,7 @@ func (ti *toolIndex) DequeuePaths(ctx context.Context, sessionID string, limit i
 }
 
 // QueueSize returns the number of items in the queue for a session.
-func (ti *toolIndex) QueueSize(ctx context.Context, sessionID string) (int, error) {
+func (ti *ToolIndex) QueueSize(ctx context.Context, sessionID string) (int, error) {
 	var count int
 	err := ti.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM tool_queue WHERE session_id = ?`, sessionID,

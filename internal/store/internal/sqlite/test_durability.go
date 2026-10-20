@@ -12,7 +12,7 @@ var testFastDurability atomic.Bool
 // SetTestFastDurability turns SQLite's fsyncs off (synchronous=OFF) for every
 // database this test binary opens from then on: the main store DB (the
 // ConnectHook in vec.go), the session sidecar (already OFF, see
-// openSessionDB) and control.db (repos.OpenRegistryNoSchema,
+// sessions.Open) and control.db (repos.OpenRegistryNoSchema,
 // repos.OpenLensRegistry, and test fixtures that splice SyncDSNParam into
 // their own DSN). Call it from a test package's TestMain, before m.Run, so no
 // connection opened before the switch keeps the slow setting. Pass false to

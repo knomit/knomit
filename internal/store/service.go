@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	_ "embed"
 	"fmt"
 	"net/http"
 	"os"
@@ -16,20 +15,12 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/sessions"
 	"knomit/internal/store/migrate"
 )
-
-// sessionSchema is the full DDL for the ephemeral session database, applied
-// wholesale to the fresh DB at Open (see initSessionSchema). It is NOT run
-// through the versioned migration runner — the DB is disposable and recreated
-// empty each start, so there is nothing to version.
-//
-//go:embed session_schema.sql
-var sessionSchema string
 
 // Service is the single entry point for all database and git access. It opens one
 // SQLite file with the sqlite-vec extension, runs the embedded
@@ -59,8 +50,8 @@ type Service struct {
 	// (MN3), rebuildable from fact_motifs alone.
 	mo     *motifIndex
 	search *searchFacade
-	pi     *pipelineIndex
-	ti     *toolIndex
+	pi     *sessions.PipelineIndex
+	ti     *sessions.ToolIndex
 	ri     *remoteIndex
 	dbPath string
 
@@ -168,7 +159,7 @@ func Open(path string) (*Service, error) {
 	// in the main DB, so a Service without it could not page queries or run the
 	// work-stealing pipeline. A setup failure therefore fails Open rather than
 	// silently degrading.
-	sessionDB, sessionPath, err := openSessionDB(path)
+	sessionDB, sessionPath, err := sessions.Open(path)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store.Open: session DB: %w", err)
@@ -185,8 +176,8 @@ func Open(path string) (*Service, error) {
 		ax:            ax,
 		mo:            mo,
 		search:        search,
-		pi:            &pipelineIndex{db: rh.db, sessionDB: sessionDB},
-		ti:            &toolIndex{db: sessionDB},
+		pi:            sessions.NewPipelineIndex(rh.db, sessionDB),
+		ti:            sessions.NewToolIndex(sessionDB),
 		ri:            ri,
 		dbPath:        canonPath,
 		sessionDB:     sessionDB,
@@ -194,71 +185,6 @@ func Open(path string) (*Service, error) {
 	}
 	rh.consensusBranch = s.UpstreamBranch
 	return s, nil
-}
-
-// SessionDBSuffix is the filename suffix of a Service's ephemeral session
-// database, written as a sibling of the main DB at "<name>.sessions.db".
-// Repo discovery uses IsSessionDBFile to skip these sidecars, which share the
-// repos directory with real repo DBs.
-const SessionDBSuffix = ".sessions.db"
-
-// IsSessionDBFile reports whether base names a session sidecar database (a
-// "<name>.sessions.db" file). Repo names can never contain a '.', so this
-// suffix unambiguously identifies a session DB rather than a repo DB.
-func IsSessionDBFile(base string) bool {
-	return strings.HasSuffix(base, SessionDBSuffix)
-}
-
-// SessionDBPathFor derives the ephemeral session DB path from the main DB path.
-// For a file DB it is a sibling "<name>.sessions.db"; for the :memory: fallback
-// (tests, DB-only mode) it is a unique temp file so multiple in-memory Services
-// don't collide on one session file.
-//
-// Exported so callers that need to locate a repo's session sidecar without
-// opening it (repos.Manager.Archive, dropping the ephemeral sidecar on
-// archive) can derive the same path this package uses internally, rather than
-// reimplementing the derivation.
-func SessionDBPathFor(mainPath string) string {
-	if mainPath == ":memory:" || mainPath == "" {
-		return filepath.Join(os.TempDir(), "knomit-sessions-"+uuid.New().String()+".db")
-	}
-	return strings.TrimSuffix(mainPath, ".db") + SessionDBSuffix
-}
-
-// openSessionDB removes any leftover session files (so the DB starts empty) and
-// opens a fresh one with the stock sqlite3 driver, then applies the schema.
-// Returns the opened DB and the resolved path.
-func openSessionDB(mainPath string) (*sql.DB, string, error) {
-	sessionPath := SessionDBPathFor(mainPath)
-	// Start empty: a session cursor from a previous run is dead anyway.
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		_ = os.Remove(sessionPath + suffix)
-	}
-
-	// Stock "sqlite3" driver — NO vec extension, so no need for
-	// _txlock=immediate or the warm/pinned pool the main DB requires.
-	dsn := sessionPath + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1&_synchronous=OFF"
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		return nil, "", fmt.Errorf("open: %w", err)
-	}
-	if err := initSessionSchema(db); err != nil {
-		db.Close()
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			_ = os.Remove(sessionPath + suffix)
-		}
-		return nil, "", err
-	}
-	return db, sessionPath, nil
-}
-
-// initSessionSchema execs the embedded session schema wholesale against the
-// fresh DB. No versioning — the DB is recreated empty each start.
-func initSessionSchema(db *sql.DB) error {
-	if _, err := db.Exec(sessionSchema); err != nil {
-		return fmt.Errorf("init session schema: %w", err)
-	}
-	return nil
 }
 
 // ReapIdleSessions deletes session rows whose last_used_at is older than the
@@ -270,29 +196,7 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 	if s.sessionDB == nil {
 		return 0, nil
 	}
-	var total int
-	now := time.Now().UTC()
-	reap := func(table string, ttl time.Duration) error {
-		if ttl <= 0 {
-			return nil
-		}
-		cutoff := now.Add(-ttl).Format(time.RFC3339)
-		res, err := s.sessionDB.ExecContext(ctx,
-			"DELETE FROM "+table+" WHERE last_used_at < ?", cutoff)
-		if err != nil {
-			return fmt.Errorf("reap %s: %w", table, err)
-		}
-		n, _ := res.RowsAffected()
-		total += int(n)
-		return nil
-	}
-	if err := reap("tool_sessions", toolTTL); err != nil {
-		return total, err
-	}
-	if err := reap("pipeline_sessions", pipelineTTL); err != nil {
-		return total, err
-	}
-	return total, nil
+	return sessions.ReapIdle(ctx, s.sessionDB, toolTTL, pipelineTTL)
 }
 
 // SetOrigin supplies the repo's remote connection from control.db. A nil
