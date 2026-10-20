@@ -12,7 +12,7 @@ import (
 // the fact write path or the signing chokepoint, so writing a fact costs
 // exactly what it did before F09 (signing only).
 func TestVerifyIsNeverInTheWritePath(t *testing.T) {
-	forbidden := regexp.MustCompile(`\b(CheckRange|Audit|LoadFleet|LoadFleetAt|FleetMembersAt|FleetPKIAt|FleetAt|loadMembers|loadFleetPKI|newJudge|verifyCommitSignature|checkM3|checkOwnLineage|judgeCommit)\(`)
+	forbidden := regexp.MustCompile(`\b(CheckRange|Audit|LoadFleet|LoadFleetAt|FleetMembersAt|FleetPKIAt|FleetAt|loadMembers|LoadMembers|LoadMembersOfTree|LoadFleetAtCommit|loadFleetPKI|newJudge|verifyCommitSignature|checkM3|checkOwnLineage|judgeCommit)\(`)
 	for _, f := range []string{"fact_write.go", "internal/vcs/sign.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {

@@ -106,6 +106,12 @@ var sameLayerEdges = map[string]bool{
 	// ctx-carried tx helpers (sqlite.Conn, sqlite.BeginTxIfNeeded).
 	"store/internal/vcs -> store/git":             true,
 	"store/internal/vcs -> store/internal/sqlite": true,
+	// The fleetrec child (a fleet repository's member records, certificate
+	// artifacts and main-history log, read from one commit) sits directly above
+	// vcs in the store's child order (proposal 4.3: fleetrec -> vcs): it reads
+	// the ontology at a commit and checks the tree shape through the vcs
+	// primitives. verify and the facade reach up to it, never the reverse.
+	"store/fleetrec -> store/internal/vcs": true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,
