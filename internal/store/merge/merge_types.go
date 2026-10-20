@@ -1,4 +1,4 @@
-package store
+package merge
 
 // Mode classifies the outcome of a reconcile step. The same vocabulary is
 // used by both MainReconcileResult (main side) and AgentReconcileResult
@@ -66,7 +66,7 @@ const StrategyRemoteWins ConflictStrategy = "remote_wins"
 // agent branch — where picking either side silently would discard work
 // nobody chose to discard.
 //
-// The VALUE is non-empty on purpose. mergeIntoBranchLocked rewrites an
+// The VALUE is non-empty on purpose. MergeIntoBranchLocked rewrites an
 // empty strategy to StrategyLocalWins, so a zero-value "refuse" would be
 // silently downgraded to the very resolution it exists to prevent.
 const StrategyRefuse ConflictStrategy = "refuse"

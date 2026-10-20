@@ -491,7 +491,7 @@ func TestCommitExperiment_ResolutionsRejectedForResolvingStrategies(t *testing.T
 	writeMergeFact(t, svc, "exp/strat", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	_, err = svc.rh.mergeIntoBranchResolved(ctx, "exp/strat", testAgentBranch, StrategyLocalWins,
+	_, err = svc.rh.MergeIntoBranchResolvedForTest(ctx, "exp/strat", testAgentBranch, StrategyLocalWins,
 		map[string]Resolution{"kb/base.md": {Side: ResolveSrc}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "resolutions are only valid with")

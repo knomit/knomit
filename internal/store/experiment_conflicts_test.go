@@ -196,7 +196,7 @@ func TestCommitExperiment_ConflictsMerge_CallerResolutionWins(t *testing.T) {
 // SABOTAGE S1g (guard relaxed for every site) → no error → red.
 func TestConflictsStrategy_ResolutionsStillRefusedElsewhere(t *testing.T) {
 	svc, _ := expConflictFork(t, cmOntology("merge"))
-	_, err := svc.rh.mergeIntoBranchResolved(context.Background(), "exp/x", testAgentBranch, stratMerge,
+	_, err := svc.rh.MergeIntoBranchResolvedForTest(context.Background(), "exp/x", testAgentBranch, stratMerge,
 		map[string]Resolution{expF: {Side: ResolveSrc}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "computes its own resolutions")

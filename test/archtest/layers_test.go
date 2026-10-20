@@ -130,6 +130,18 @@ var sameLayerEdges = map[string]bool{
 	"store/facts -> store/internal/sqlite": true,
 	"store/facts -> store/internal/vcs":    true,
 	"store/facts -> store/verify":          true,
+	// The merge child (branch merges and the conflict strategies, the
+	// pushed-branch and consensus merge cores, the experiment lifecycle) sits
+	// above vcs and verify in the store's child order (proposal 4.3: merge ->
+	// vcs, verify, facts). It reads a store only through *vcs.Repo, uses
+	// verify for the merge-time validation, and reaches the sqlite child
+	// directly for the ctx-carried transaction its experiments rows use (sqlite
+	// is below vcs, so the direction is still downward). It does NOT import
+	// facts: nothing in the moved files needs it. sync, gitserve and fsck reach
+	// up to merge, never the reverse.
+	"store/merge -> store/internal/sqlite": true,
+	"store/merge -> store/internal/vcs":    true,
+	"store/merge -> store/verify":          true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

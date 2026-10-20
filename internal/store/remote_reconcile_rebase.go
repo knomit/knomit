@@ -20,6 +20,7 @@ import (
 	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/verify"
 )
 
@@ -284,7 +285,7 @@ func (rh *repoHandler) strictlyAhead(local, upstream *object.Commit, explicitBas
 //     edits are preserved when both sides modified the same path.
 //   - StrategyRemoteWins → the upstream's (ontoCommit's) content wins.
 //
-// Note the inversion versus mergeTreesWithStrategy: that helper's
+// Note the inversion versus MergeTreesWithStrategy: that helper's
 // "Local/Remote" refers to dst/src (merge-target/merge-source), while
 // the user-facing replay framing here refers to agent/origin. Inside
 // replayCommit, orig is passed as src and ontoCommit as dst, so the
@@ -322,7 +323,7 @@ func (rh *repoHandler) replayCommit(
 		}
 		baseCommit = parent
 	} else {
-		// Synthesize an empty-tree commit as the base. mergeTreesWithStrategy
+		// Synthesize an empty-tree commit as the base. MergeTreesWithStrategy
 		// only reads .Tree() from baseCommit; an empty tree means every file
 		// in orig.TreeHash registers as an Insert (non-conflicting), which is
 		// the correct semantic for replaying a root commit.
@@ -357,7 +358,7 @@ func (rh *repoHandler) replayCommit(
 
 	// Strategy translation: in the user-facing replay framing, "Local"
 	// refers to this machine's agent (which IS the src commit being
-	// replayed). In mergeTreesWithStrategy's framing, "Local" = dst (the
+	// replayed). In MergeTreesWithStrategy's framing, "Local" = dst (the
 	// side being updated, which is ontoCommit/upstream here). The two
 	// "Local"s are OPPOSITES. Invert when calling the merge helper so
 	// callers can pass the strategy they actually mean. (See replayCommit
@@ -365,15 +366,15 @@ func (rh *repoHandler) replayCommit(
 	var mergeStrategy ConflictStrategy
 	var resolutions map[string]Resolution
 	var trailers []string
-	policy, settle := conflictsPolicyOf(strategy)
+	policy, settle := merge.ConflictsPolicyOf(strategy)
 	switch {
 	case settle:
 		// The `conflicts` setting, with THIS framing's sides: the consensus
 		// side is ontoCommit (dst), and a key set to off keeps today's replay
 		// rule, the agent's commit (src) wins. Its lines go on the replayed
 		// commit's own message — a replay writes no merge commit.
-		res, lines, err := rh.factMergeResolutions(ctx, baseCommit, orig, ontoCommit,
-			factMerge{policy: policy, consensus: fact.MergeDst, fallback: StrategyRemoteWins})
+		res, lines, err := rh.FactMergeResolutions(ctx, baseCommit, orig, ontoCommit,
+			merge.FactMerge{Policy: policy, Consensus: fact.MergeDst, Fallback: StrategyRemoteWins})
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("replayCommit: merge facts: %w", err)
 		}
@@ -391,7 +392,7 @@ func (rh *repoHandler) replayCommit(
 	// Three-way merge: base = baseCommit (orig's parent or empty),
 	//                  src  = orig (what orig adds),
 	//                  dst  = ontoCommit (what we're replaying on top of).
-	mergedTreeHash, walkTrailers, err := rh.mergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy, resolutions)
+	mergedTreeHash, walkTrailers, err := rh.MergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy, resolutions)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: three-way merge: %w", err)
 	}
@@ -403,7 +404,7 @@ func (rh *repoHandler) replayCommit(
 			Email: "knomit@local",
 			When:  timeNow(),
 		},
-		Message:      appendTrailerLines(orig.Message, append(trailers, walkTrailers...)),
+		Message:      merge.AppendTrailerLines(orig.Message, append(trailers, walkTrailers...)),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: append([]plumbing.Hash{ontoHash}, extraParents...),
 	}
@@ -678,7 +679,7 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, up
 	// rewind scrubs must be rebuilt by its next commit or sync, not merged
 	// (rebuildRewoundExperiment).
 	if agentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch)); err == nil {
-		if err := rh.markExperimentsRewound(ctx, agentBranch, agentRef.Hash()); err != nil {
+		if err := rh.MarkExperimentsRewound(ctx, agentBranch, agentRef.Hash()); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("reconcileAgentRebase: %w", err)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"knomit/internal/fact"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 	"strings"
 	"time"
 
@@ -50,12 +51,12 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 	rh := s.rh
 	unlock := rh.LockBranch(dst)
 	defer unlock()
-	o := mergeOpts{srcTip: srcTip, record: true, side: side, guardPrivate: true, validateFacts: true}
+	o := merge.MergeOpts{SrcTip: srcTip, Record: true, Side: side, GuardPrivate: true, ValidateFacts: true}
 	strategy := StrategyRefuse
 	if side == "" {
 		strategy = s.hostConflictStrategy(ctx, &o)
 	}
-	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
+	return rh.MergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
 }
 
 // hostConflictStrategy is the strategy a host merge of a peer's branch runs
@@ -64,12 +65,12 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 // — that setting, with the host's own branch (dst, which the consensus branch
 // follows) as the consensus side and Refuse for whatever a key set to off
 // leaves.
-func (s *Service) hostConflictStrategy(ctx context.Context, o *mergeOpts) ConflictStrategy {
-	strategy, on := s.rh.conflictsStrategy(ctx, s.UpstreamBranch())
+func (s *Service) hostConflictStrategy(ctx context.Context, o *merge.MergeOpts) ConflictStrategy {
+	strategy, on := s.rh.ConflictsStrategy(ctx, s.UpstreamBranch())
 	if !on {
 		return StrategyRefuse
 	}
-	o.factConsensus, o.factFallback = fact.MergeDst, StrategyRefuse
+	o.FactConsensus, o.FactFallback = fact.MergeDst, StrategyRefuse
 	return strategy
 }
 
@@ -100,9 +101,9 @@ func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip pl
 	rh := s.rh
 	unlock := rh.LockBranch(dst)
 	defer unlock()
-	o := mergeOpts{srcTip: srcTip, record: true, skipMergeOnly: true, guardPrivate: true, validateFacts: true}
+	o := merge.MergeOpts{SrcTip: srcTip, Record: true, SkipMergeOnly: true, GuardPrivate: true, ValidateFacts: true}
 	strategy := s.hostConflictStrategy(ctx, &o)
-	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
+	return rh.MergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
 }
 
 // OntologyAt returns the ontology file at branch's tip, trying every ontology

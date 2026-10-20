@@ -8,6 +8,7 @@ import (
 	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 )
 
 // This file is the parent's seam to the vcs child (internal/vcs): the git
@@ -28,11 +29,12 @@ import (
 type repoHandler struct {
 	*vcs.Repo
 	*factsRepo // the facts child's methods on the same handle; see facts_seam.go
+	*mergeRepo // the merge child's methods on the same handle; see merge_seam.go
 }
 
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 	r := vcs.New(db, gits)
-	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r)}
+	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r), mergeRepo: merge.NewRepo(r)}
 }
 
 // Types.

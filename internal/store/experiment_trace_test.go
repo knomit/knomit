@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 )
 
 // AppendTrailersToParagraph joins the trace to a merge commit's EXISTING
@@ -17,7 +18,7 @@ import (
 // last paragraph, TrailerValues reads nothing).
 func TestAppendTrailersToParagraph_JoinsTheRecord(t *testing.T) {
 	tr := Trailers{Trace: "task-1", Run: "run-" + "0123456789abcdef0123456789abcdef"}
-	withRecord := appendTrailerLines("merge: exp/x into agent/a (refuse)", []string{TrailerMerge + ": kb/a.md src", TrailerMerge + ": kb/b.md dst"})
+	withRecord := merge.AppendTrailerLines("merge: exp/x into agent/a (refuse)", []string{TrailerMerge + ": kb/a.md src", TrailerMerge + ": kb/b.md dst"})
 	got := vcs.AppendTrailersToParagraph(withRecord, tr)
 	require.Equal(t, "merge: exp/x into agent/a (refuse)\n\n"+
 		"Knomit-Merge: kb/a.md src\nKnomit-Merge: kb/b.md dst\n"+

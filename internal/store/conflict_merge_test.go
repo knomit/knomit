@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/merge"
 )
 
 // cmFact is a fact version for the conflict-merge tests.
@@ -51,10 +52,10 @@ func cmOntology(conflicts string) string {
 
 // Strategies as the sites build them from a `conflicts` setting.
 var (
-	stratMerge          = conflictsPolicy{facts: fact.ConflictsMerge, state: fact.ConflictsOff}.strategy()
-	stratMergeConsensus = conflictsPolicy{facts: fact.ConflictsMergeConsensus, state: fact.ConflictsOff}.strategy()
-	stratConsensus      = conflictsPolicy{facts: fact.ConflictsConsensus, state: fact.ConflictsOff}.strategy()
-	stratMergeState     = conflictsPolicy{facts: fact.ConflictsMerge, state: fact.ConflictsConsensus}.strategy()
+	stratMerge          = merge.ConflictsStrategyForTest(fact.ConflictsMerge, fact.ConflictsOff)
+	stratMergeConsensus = merge.ConflictsStrategyForTest(fact.ConflictsMergeConsensus, fact.ConflictsOff)
+	stratConsensus      = merge.ConflictsStrategyForTest(fact.ConflictsConsensus, fact.ConflictsOff)
+	stratMergeState     = merge.ConflictsStrategyForTest(fact.ConflictsMerge, fact.ConflictsConsensus)
 )
 
 type cmRepo struct {
@@ -124,6 +125,16 @@ func (r *cmRepo) setOriginTip(branch string) {
 	r.t.Helper()
 	require.NoError(r.t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewRemoteReferenceName("origin", branch), r.tip(branch).Hash)))
+}
+
+// blobName is how the merge trailers spell a version: the blob hash, or
+// "none" for an absent one. Written out here (not borrowed from the merge
+// child) so the test states the trailer format independently.
+func blobName(h plumbing.Hash) string {
+	if h.IsZero() {
+		return "none"
+	}
+	return h.String()
 }
 
 func mergeLine(path string, base, src, dst, out plumbing.Hash, decided string) string {
@@ -501,10 +512,10 @@ func TestPeerSync_Off_RecordsEverySidePick(t *testing.T) {
 // last paragraph; sorted by path.
 func TestAppendTrailerLines(t *testing.T) {
 	require.Equal(t, "merge: a into b (x)\n\nKnomit-Conflict: a.md k\nKnomit-Merge: b.md m\n",
-		appendTrailerLines("merge: a into b (x)", []string{"Knomit-Merge: b.md m", "Knomit-Conflict: a.md k"}))
+		merge.AppendTrailerLines("merge: a into b (x)", []string{"Knomit-Merge: b.md m", "Knomit-Conflict: a.md k"}))
 	require.Equal(t, "learn: x\n\nKnomit-Trace: t\nKnomit-Merge: f.md m\n",
-		appendTrailerLines("learn: x\n\nKnomit-Trace: t\n", []string{"Knomit-Merge: f.md m"}))
+		merge.AppendTrailerLines("learn: x\n\nKnomit-Trace: t\n", []string{"Knomit-Merge: f.md m"}))
 	require.Equal(t, "learn: x\n\nbody words here.\n\nKnomit-Merge: f.md m\n",
-		appendTrailerLines("learn: x\n\nbody words here.", []string{"Knomit-Merge: f.md m"}))
-	require.Equal(t, "same", appendTrailerLines("same", nil))
+		merge.AppendTrailerLines("learn: x\n\nbody words here.", []string{"Knomit-Merge: f.md m"}))
+	require.Equal(t, "same", merge.AppendTrailerLines("same", nil))
 }
