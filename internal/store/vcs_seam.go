@@ -32,7 +32,7 @@ type repoHandler struct {
 	*vcs.Repo
 	*factsRepo // the facts child's methods on the same handle; see facts_seam.go
 	*mergeRepo // the merge child's methods on the same handle; see merge_seam.go
-	*syncRepo  // the remotesync child's methods on the same handle; see remoteremotesync_seam.go
+	*syncRepo  // the remotesync child's methods on the same handle; see remotesync_seam.go
 }
 
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
