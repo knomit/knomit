@@ -2,16 +2,13 @@ package store
 
 import (
 	"context"
-	"crypto/ed25519"
 	"fmt"
 	"knomit/internal/fact"
-	"knomit/internal/pki"
 	"strings"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"golang.org/x/crypto/ssh"
 )
 
 // TestingSetRef moves (or creates) a git reference WITHOUT a commit and without
@@ -106,26 +103,6 @@ func (s *Service) TestingCommitFiles(branch string, files map[string]string, mes
 // Triggers returns the trigger dispatcher's store surface.
 func (s *Service) Triggers() TriggerIndex { return s.rh }
 
-// SignerFingerprint is the full pki.Fingerprint of the key this store signs
-// authored commits with (its signer, or inside a test binary the test
-// fallback), or "" when it has none. `change.source` is `local` exactly when
-// the firing commit's verified signer carries this fingerprint.
-func (s *Service) SignerFingerprint() string {
-	signer, err := s.rh.commitSigner()
-	if err != nil {
-		return ""
-	}
-	cpk, ok := signer.PublicKey().(ssh.CryptoPublicKey)
-	if !ok {
-		return ""
-	}
-	ed, ok := cpk.CryptoPublicKey().(ed25519.PublicKey)
-	if !ok {
-		return ""
-	}
-	return pki.Fingerprint(ed)
-}
-
 // Templates returns the template reader of this store.
 func (s *Service) Templates() TemplateIndex { return s.rh }
 
@@ -178,3 +155,7 @@ func (s *Service) SystemFiles() SystemFileIndex { return s.rh }
 
 // Skills returns the skill reader of this store.
 func (s *Service) Skills() SkillIndex { return s.rh }
+
+// SignerFingerprint is the full pki.Fingerprint of the key this store signs
+// authored commits with, or "" when it has none. See repoHandler.signerFingerprint.
+func (s *Service) SignerFingerprint() string { return s.rh.signerFingerprint() }

@@ -13,6 +13,7 @@ package store
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -26,8 +27,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/pki"
 )
 
 // TriggerFireRetention is how many fire-log rows a repo keeps: the newest
@@ -1029,4 +1032,24 @@ func (rh *repoHandler) DueMarks(ctx context.Context, branch string) (map[DueKey]
 		out[k] = at
 	}
 	return out, rows.Err()
+}
+
+// signerFingerprint is the full pki.Fingerprint of the key this store signs
+// authored commits with (its signer, or inside a test binary the test
+// fallback), or "" when it has none. `change.source` is `local` exactly when
+// the firing commit's verified signer carries this fingerprint.
+func (rh *repoHandler) signerFingerprint() string {
+	signer, err := rh.commitSigner()
+	if err != nil {
+		return ""
+	}
+	cpk, ok := signer.PublicKey().(ssh.CryptoPublicKey)
+	if !ok {
+		return ""
+	}
+	ed, ok := cpk.CryptoPublicKey().(ed25519.PublicKey)
+	if !ok {
+		return ""
+	}
+	return pki.Fingerprint(ed)
 }

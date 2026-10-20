@@ -42,7 +42,7 @@ var triggersAllowedCalls = map[string][]string{
 		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn", "rh.branchID",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",
 		// the signer
-		"?.commitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",
+		"rh.commitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",
 		// pure helpers
 		"boolInt", "UTCStamp", "time.Now", "time.Unix", "?.UTC", "?.Unix", "?.Format", "ctx.Err", "errors.Is", "errors.New", "fmt.Errorf", "sort.Strings",
 		"append", "len", "make", "min",
@@ -60,6 +60,9 @@ var triggersAllowedCalls = map[string][]string{
 		// commit's trailer paragraph (appendTrailersToParagraph) — string
 		// helpers, no write
 		"t.lines", "isTrailerParagraph", "appendTrailers",
+		// isTrailerParagraph itself (moved here from conflict_merge.go so the
+		// commit path does not reach up into the merge cluster): a string test
+		"strings.ContainsAny",
 	},
 }
 
