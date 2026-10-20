@@ -15,6 +15,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // Round-6 tests: the upgrade runs once, at open, before release (user
@@ -41,7 +43,7 @@ func derivedCounts(t *testing.T, svc *Service) [3]int {
 
 func storedVersion(t *testing.T, svc *Service) string {
 	t.Helper()
-	v, err := MetaGetForTest(context.Background(), svc.rh.DB(), PathChangesVersionKey)
+	v, err := vcs.MetaGetForTest(context.Background(), svc.rh.DB(), vcs.PathChangesVersionKey)
 	require.NoError(t, err)
 	return v
 }
@@ -63,19 +65,19 @@ func TestOpenHistory_FailedPassKeepsRepoClosed(t *testing.T) {
 
 			injected := errors.New("injected failure")
 			if where == "prepare" {
-				DeriveObjectHook = func(kind string, h plumbing.Hash) error {
+				vcs.DeriveObjectHook = func(kind string, h plumbing.Hash) error {
 					if kind == "commit" && h.String() == c[1] {
 						return injected
 					}
 					return nil
 				}
 			} else {
-				OpenHistoryHook = func() error { return injected }
+				vcs.OpenHistoryHook = func() error { return injected }
 			}
 			svc, err := Open(dbPath)
 			require.NoError(t, err)
 			err = svc.OpenRepo()
-			DeriveObjectHook, OpenHistoryHook = nil, nil
+			vcs.DeriveObjectHook, vcs.OpenHistoryHook = nil, nil
 			require.ErrorIs(t, err, injected, "the repo does not open")
 			require.Equal(t, before, derivedCounts(t, svc), "rolled back: nothing half-derived")
 			require.Equal(t, "0", storedVersion(t, svc))
@@ -85,7 +87,7 @@ func TestOpenHistory_FailedPassKeepsRepoClosed(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = svc.Close() })
 			require.NoError(t, svc.OpenRepo(), "the next open retries")
-			require.Equal(t, PathChangesVersion, storedVersion(t, svc))
+			require.Equal(t, vcs.PathChangesVersion, storedVersion(t, svc))
 			require.Equal(t, want, historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[3])))
 		})
 	}
@@ -109,7 +111,7 @@ func TestOpenHistory_UnresolvableBranchIsSkippedAndLogged(t *testing.T) {
 	prev := log.Logger
 	log.Logger = zerolog.New(&buf)
 	t.Cleanup(func() { log.Logger = prev })
-	BranchTipHook = func(branch string) error {
+	vcs.BranchTipHook = func(branch string) error {
 		if branch == "broken" {
 			return errors.New("injected ref read error")
 		}
@@ -119,11 +121,11 @@ func TestOpenHistory_UnresolvableBranchIsSkippedAndLogged(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	err = svc.OpenRepo()
-	BranchTipHook = nil
+	vcs.BranchTipHook = nil
 	require.NoError(t, err, "an unresolvable branch does not block the open")
 	require.Contains(t, buf.String(), "branch ref unresolved")
 	require.Contains(t, buf.String(), `"branch":"broken"`)
-	require.Equal(t, PathChangesVersion, storedVersion(t, svc))
+	require.Equal(t, vcs.PathChangesVersion, storedVersion(t, svc))
 	require.Equal(t, reversed(c), historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[1])))
 	_, _, err = svc.Search().PathHistory(ctx, "broken", "kb/t.md", b.CommitHash, nil, 3)
 	require.ErrorContains(t, err, "never derived", "nothing is served for the skipped branch")
@@ -151,13 +153,13 @@ func knownCommits(t *testing.T, svc *Service) map[plumbing.Hash]bool {
 // failNewCommits makes every derivation read of a commit not in known fail,
 // until the returned function is called.
 func failNewCommits(known map[plumbing.Hash]bool, err error) func() {
-	DeriveObjectHook = func(kind string, h plumbing.Hash) error {
+	vcs.DeriveObjectHook = func(kind string, h plumbing.Hash) error {
 		if kind == "commit" && !known[h] {
 			return err
 		}
 		return nil
 	}
-	return func() { DeriveObjectHook = nil }
+	return func() { vcs.DeriveObjectHook = nil }
 }
 
 // TestRefMoves_DeriveBeforeTheRef covers B3 and B4: at the rebase
@@ -302,7 +304,7 @@ func TestRebuild_ReplacesEveryCommitLogRowOfTheBranch(t *testing.T) {
 	for _, h := range c {
 		co, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
 		require.NoError(t, err)
-		files, err := ChangedFilesInCommit(co)
+		files, err := vcs.ChangedFilesInCommit(co)
 		require.NoError(t, err)
 		var want []string
 		for _, f := range firstWins(files) {
@@ -325,9 +327,9 @@ func TestRebuild_FailedSwapLeavesNothingStaged(t *testing.T) {
 		return n
 	}
 	injected := errors.New("injected swap failure")
-	SwapHook = func() error { return injected }
+	vcs.SwapHook = func() error { return injected }
 	err := svc.rh.RebuildCommitLog(ctx, "main")
-	SwapHook = nil
+	vcs.SwapHook = nil
 	require.ErrorIs(t, err, injected)
 	require.Equal(t, 0, stageRows(), "a failed rebuild leaves nothing staged")
 
@@ -342,10 +344,10 @@ func TestRebuild_FailedSwapLeavesNothingStaged(t *testing.T) {
 func TestIndex_OneDiffPerCommit(t *testing.T) {
 	svc, ctx := openPathHistoryStore(t)
 	writeVersionsStore(t, svc, 2)
-	n := CommitDiffs.Load()
+	n := vcs.CommitDiffs.Load()
 	_, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("one diff", 0.9, nil), "w", "")
 	require.NoError(t, err)
-	require.Equal(t, int64(1), CommitDiffs.Load()-n, "a write diffs its commit once")
+	require.Equal(t, int64(1), vcs.CommitDiffs.Load()-n, "a write diffs its commit once")
 
 	tip := mustHeadHash(t, svc, "main")
 	prev := []string{tip.String()}
@@ -354,9 +356,9 @@ func TestIndex_OneDiffPerCommit(t *testing.T) {
 		prev = []string{writeRawCommit(t, svc, prev, map[string]string{"kb/t.md": testFactBody(fmt.Sprintf("p%d", i), 0.5, nil)}, t0.Add(time.Duration(i)*time.Minute), "p")}
 	}
 	moveBranch(t, svc, "main", prev[0])
-	n = CommitDiffs.Load()
+	n = vcs.CommitDiffs.Load()
 	require.NoError(t, svc.rh.PopulateCommitLog(ctx, "main"))
-	require.Equal(t, int64(5), CommitDiffs.Load()-n, "a populate diffs each commit once")
+	require.Equal(t, int64(5), vcs.CommitDiffs.Load()-n, "a populate diffs each commit once")
 }
 
 // TestCommitChanges_EqualsGitDiff pins derivation's tree diff to go-git's
@@ -384,13 +386,13 @@ func TestCommitChanges_EqualsGitDiff(t *testing.T) {
 	for _, h := range commits {
 		co, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
 		require.NoError(t, err)
-		files, err := ChangedFilesInCommit(co)
+		files, err := vcs.ChangedFilesInCommit(co)
 		require.NoError(t, err)
 		got, err := svc.rh.CommitChangesForTest(co)
 		require.NoError(t, err)
-		gotFiles := make([]ChangedFileEntry, len(got))
+		gotFiles := make([]vcs.ChangedFileEntry, len(got))
 		for i, e := range got {
-			gotFiles[i] = ChangedFileEntry{Path: e.Path, Action: e.Action}
+			gotFiles[i] = vcs.ChangedFileEntry{Path: e.Path, Action: e.Action}
 		}
 		require.Equal(t, firstWins(files), firstWins(gotFiles), "commit %s", h)
 	}
@@ -398,9 +400,9 @@ func TestCommitChanges_EqualsGitDiff(t *testing.T) {
 
 // firstWins keeps the first entry per path — what commit_log stores (INSERT OR
 // IGNORE on (commit, path)) — sorted by path.
-func firstWins(files []ChangedFileEntry) []ChangedFileEntry {
+func firstWins(files []vcs.ChangedFileEntry) []vcs.ChangedFileEntry {
 	seen := map[string]bool{}
-	var out []ChangedFileEntry
+	var out []vcs.ChangedFileEntry
 	for _, f := range files {
 		if !seen[f.Path] {
 			seen[f.Path] = true
@@ -411,7 +413,7 @@ func firstWins(files []ChangedFileEntry) []ChangedFileEntry {
 	return out
 }
 
-func sortEntries(es []ChangedFileEntry) {
+func sortEntries(es []vcs.ChangedFileEntry) {
 	for i := 1; i < len(es); i++ {
 		for j := i; j > 0 && es[j].Path < es[j-1].Path; j-- {
 			es[j], es[j-1] = es[j-1], es[j]

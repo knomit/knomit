@@ -21,7 +21,7 @@ import (
 // after checking it neither writes (refs, objects, SQLite rows) nor reads a
 // clock or the commit log.
 var changesAllowedCalls = map[string][]string{
-	"changes.go": {
+	"internal/vcs/changes.go": {
 		// git reads
 		"?.CommitObject", "c.IsAncestor", "sinceCommit.IsAncestor", "c.Tree", "root.Tree", "object.DiffTree",
 		"rh.ResolveRef", "rh.OntologyRoot", "plumbing.NewHash", "?.String",

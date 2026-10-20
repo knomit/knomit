@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 	"path"
 	"time"
 
@@ -78,7 +79,7 @@ func (s *Service) FleetKeysOf(branch, agentID string) ([]ssh.PublicKey, error) {
 	}
 	var keys []ssh.PublicKey
 	seen := map[string]bool{}
-	err = WalkHistory(s.rh.Storer(), ref.Hash(), nil, func(c *object.Commit) {
+	err = vcs.WalkHistory(s.rh.Storer(), ref.Hash(), nil, func(c *object.Commit) {
 		ms, lerr := loadMembers("mounted", c, root)
 		if lerr != nil {
 			return
@@ -179,13 +180,13 @@ func (s *Service) FleetMainLog(branch, rootCert string, maxCommits, maxEntries i
 	members := path.Join(root, fact.MembersTopic)
 	var out []FleetMainCommit
 	err := s.walkFirstParent(branch, maxCommits, func(c *object.Commit, parent *object.Commit) error {
-		mc := FleetMainCommit{Hash: c.Hash.String(), At: c.Committer.When.UTC(), Author: AgentIDOfAuthor(c.Author.Email)}
+		mc := FleetMainCommit{Hash: c.Hash.String(), At: c.Committer.When.UTC(), Author: vcs.AgentIDOfAuthor(c.Author.Email)}
 		if c.NumParents() >= 2 {
 			p2, err := c.Parent(1)
 			if err != nil {
 				return err
 			}
-			mc.MergedTip, mc.MergedBy = p2.Hash.String(), AgentIDOfAuthor(p2.Author.Email)
+			mc.MergedTip, mc.MergedBy = p2.Hash.String(), vcs.AgentIDOfAuthor(p2.Author.Email)
 		}
 		tree, err := c.Tree()
 		if err != nil {

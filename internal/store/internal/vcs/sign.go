@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"errors"
@@ -31,7 +31,7 @@ var ErrNoSigner = errors.New("store has no commit signer: refusing to write an u
 // signer, else (inside a test binary only) the test fallback, else
 // ErrNoSigner. Callers ask for it BEFORE writing any object, so a refused write
 // leaves nothing behind in the object store.
-func (rh *repoHandler) CommitSigner() (ssh.Signer, error) {
+func (rh *Repo) CommitSigner() (ssh.Signer, error) {
 	if rh.signer != nil {
 		return rh.signer, nil
 	}

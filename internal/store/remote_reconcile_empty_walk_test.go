@@ -11,6 +11,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // A rewind whose replay walk is EMPTY (nothing of this instance's own beyond
@@ -159,7 +161,7 @@ func TestReconcileAgentRebase_MergesOnlyDivergenceIsNotPushedAsItStands(t *testi
 	foreign, err := ssh.NewSignerFromKey(priv)
 	require.NoError(t, err)
 	sig := object.Signature{Name: "member", Email: "m@m", When: time.Now()}
-	f, _, err := WriteFileToStore(svc.rh.Storer(), foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
+	f, _, err := vcs.WriteFileToStore(svc.rh.Storer(), foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
 	require.NoError(t, err)
 	m := ownMerge(t, svc, "agent/test", f)
 
@@ -221,14 +223,14 @@ func TestReconcileAgentRebase_FleetMemberAfterAFallbackPushesNoMasterCommit(t *t
 	require.NoError(t, err)
 	sig := object.Signature{Name: "x", Email: "x@x", When: time.Now()}
 
-	x, _, err := WriteFileToStore(svc.rh.Storer(), own, c1, "kb/x.md", obsFact("X"), "member write", sig, sig)
+	x, _, err := vcs.WriteFileToStore(svc.rh.Storer(), own, c1, "kb/x.md", obsFact("X"), "member write", sig, sig)
 	require.NoError(t, err)
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("agent/test"), x)))
-	h, _, err := WriteFileToStore(svc.rh.Storer(), master, c1, "kb/host.md", obsFact("Host"), "host record", sig, sig)
+	h, _, err := vcs.WriteFileToStore(svc.rh.Storer(), master, c1, "kb/host.md", obsFact("Host"), "host record", sig, sig)
 	require.NoError(t, err)
-	both, _, err := WriteFileToStore(svc.rh.Storer(), master, h, "kb/x.md", obsFact("X"), "tree of the merge", sig, sig)
+	both, _, err := vcs.WriteFileToStore(svc.rh.Storer(), master, h, "kb/x.md", obsFact("X"), "tree of the merge", sig, sig)
 	require.NoError(t, err)
-	m, err := StoreCommit(svc.rh.Storer(), master, &object.Commit{Author: sig, Committer: sig, Message: "consensus merge",
+	m, err := vcs.StoreCommit(svc.rh.Storer(), master, &object.Commit{Author: sig, Committer: sig, Message: "consensus merge",
 		TreeHash: mustCommit(t, svc, both).TreeHash, ParentHashes: []plumbing.Hash{h, x}})
 	require.NoError(t, err)
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m)))

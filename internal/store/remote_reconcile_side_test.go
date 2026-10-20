@@ -13,6 +13,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // The rewind replay keeps a committed experiment's work behind a merge only
@@ -120,7 +122,7 @@ func TestReconcileAgentRebase_ForeignMergedCommitsStayOffTheReplay(t *testing.T)
 	foreign, err := ssh.NewSignerFromKey(priv)
 	require.NoError(t, err)
 	sig := object.Signature{Name: "member", Email: "m@m", When: time.Now()}
-	f, _, err := WriteFileToStore(svc.rh.Storer(), foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
+	f, _, err := vcs.WriteFileToStore(svc.rh.Storer(), foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
 	require.NoError(t, err)
 	s, err := verifyCommitSignature(mustCommit(t, svc, f))
 	require.NoError(t, err, "setup: the member commit is signed")
@@ -387,14 +389,14 @@ func scrubbedOwnCommitBehindAMixedMerge(t *testing.T) {
 	foreign, err := ssh.NewSignerFromKey(priv)
 	require.NoError(t, err)
 	sig := object.Signature{Name: "x", Email: "x@x", When: time.Now()}
-	s, _, err := WriteFileToStore(svc.rh.Storer(), own, c1, "kb/secret.md", obsFact("Secret"), "own, consumed", sig, sig)
+	s, _, err := vcs.WriteFileToStore(svc.rh.Storer(), own, c1, "kb/secret.md", obsFact("Secret"), "own, consumed", sig, sig)
 	require.NoError(t, err)
 	// main moved on past s (s2), so s is BELOW the watermark, not at it.
-	s2, _, err := WriteFileToStore(svc.rh.Storer(), own, s, "kb/s2.md", obsFact("S2"), "own, consumed", sig, sig)
+	s2, _, err := vcs.WriteFileToStore(svc.rh.Storer(), own, s, "kb/s2.md", obsFact("S2"), "own, consumed", sig, sig)
 	require.NoError(t, err)
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s2)))
 	require.NoError(t, svc.rh.writeAgentBase("agent/test", s2))
-	f, _, err := WriteFileToStore(svc.rh.Storer(), foreign, s, "kb/member.md", obsFact("Member"), "member write", sig, sig)
+	f, _, err := vcs.WriteFileToStore(svc.rh.Storer(), foreign, s, "kb/member.md", obsFact("Member"), "member write", sig, sig)
 	require.NoError(t, err)
 	ownMerge(t, svc, "agent/test", f)
 	writeMergeFact(t, svc, "agent/test", "kb/later.md", "Later", "after the merge")
@@ -420,9 +422,9 @@ func TestReconcileAgentRebase_AMixedMergeReplaysOnlyItsOwnCommits(t *testing.T) 
 	own, err := svc.rh.CommitSigner()
 	require.NoError(t, err)
 	sig := object.Signature{Name: "x", Email: "x@x", When: time.Now()}
-	f, _, err := WriteFileToStore(svc.rh.Storer(), foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
+	f, _, err := vcs.WriteFileToStore(svc.rh.Storer(), foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
 	require.NoError(t, err)
-	o, _, err := WriteFileToStore(svc.rh.Storer(), own, f, "kb/own-side.md", obsFact("OwnSide"), "own write on the side", sig, sig)
+	o, _, err := vcs.WriteFileToStore(svc.rh.Storer(), own, f, "kb/own-side.md", obsFact("OwnSide"), "own write on the side", sig, sig)
 	require.NoError(t, err)
 	ownMerge(t, svc, "agent/test", o)
 	writeMergeFact(t, svc, "agent/test", "kb/later.md", "Later", "after the merge")
@@ -452,7 +454,7 @@ func ownMerge(t *testing.T, svc *Service, branch string, other plumbing.Hash) pl
 	sig := object.Signature{Name: "master", Email: "m@m", When: time.Now()}
 	mc := &object.Commit{Author: sig, Committer: sig, Message: "consensus merge of member",
 		TreeHash: mustCommit(t, svc, other).TreeHash, ParentHashes: []plumbing.Hash{tip, other}}
-	h, err := StoreCommit(svc.rh.Storer(), signer, mc)
+	h, err := vcs.StoreCommit(svc.rh.Storer(), signer, mc)
 	require.NoError(t, err)
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)))
 	return h

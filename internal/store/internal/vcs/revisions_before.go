@@ -1,9 +1,11 @@
-package store
+package vcs
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"knomit/internal/store/internal/sqlite"
 )
 
 // FirstParentChainCTE is the recursive first-parent ancestry walk shared by the
@@ -54,17 +56,17 @@ type RevisionMeta struct {
 //
 // First-parent (not wall-clock) ancestry is the correct semantic — see
 // resolveTargetCommit's doc-comment for the merge-branch rationale.
-// ResolveActiveCommitForPath lives on repoHandler (it only needs rh.db) so its
+// ResolveActiveCommitForPath lives on Repo (it only needs rh.db) so its
 // callers — factIndex, searchIndex, factQuery and graphStore — share it directly —
 // factIndex's fallback-before read resolves the last-valid version through the
 // SAME index walk the graph resolver uses, instead of a divergent go-git walk.
-func (rh *repoHandler) ResolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+func (rh *Repo) ResolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	if fromCommit == "" {
 		return "", false, nil
 	}
 
 	var hash string
-	err := conn(ctx, rh.db).QueryRowContext(ctx, FirstParentChainCTE+`
+	err := sqlite.Conn(ctx, rh.db).QueryRowContext(ctx, FirstParentChainCTE+`
 		SELECT cl.commit_hash
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash

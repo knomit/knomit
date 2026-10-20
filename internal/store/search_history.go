@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // Log returns up to 50 log entries for commits that modified path on branch.
@@ -19,7 +21,7 @@ func (hq *historyQuery) Log(ctx context.Context, branch, path string) ([]LogEntr
 		entries = append(entries, LogEntry{
 			Commit:  r.Hash,
 			Date:    time.Unix(r.Timestamp, 0).UTC().Format(time.RFC3339),
-			Message: FirstLine(r.Message),
+			Message: vcs.FirstLine(r.Message),
 		})
 	}
 	return entries, nil
@@ -37,7 +39,7 @@ func (hq *historyQuery) LogPaginated(ctx context.Context, branch, path string, l
 		entries = append(entries, LogEntryWithTags{
 			Commit:    r.Hash,
 			Date:      time.Unix(r.Timestamp, 0).UTC().Format(time.RFC3339),
-			Message:   FirstLine(r.Message),
+			Message:   vcs.FirstLine(r.Message),
 			Operation: r.Operation,
 			Author:    CommitAuthor{Name: r.AuthorName, Email: r.AuthorEmail},
 		})
@@ -141,7 +143,7 @@ func (hq *historyQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix
 	return &CommitDetailResult{
 		Commit:    commitHash,
 		Date:      time.Unix(committedAt, 0).UTC().Format(time.RFC3339),
-		Message:   FirstLine(message),
+		Message:   vcs.FirstLine(message),
 		Operation: operation,
 		Author:    CommitAuthor{Name: authorName, Email: authorEmail},
 		Files:     files,
@@ -150,9 +152,9 @@ func (hq *historyQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix
 
 // Activity returns commit-activity metrics for path using SQL aggregates.
 func (hq *historyQuery) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
-	cutoff7 := CommitLogAge(7)
-	cutoff30 := CommitLogAge(30)
-	cutoff90 := CommitLogAge(90)
+	cutoff7 := vcs.CommitLogAge(7)
+	cutoff30 := vcs.CommitLogAge(30)
+	cutoff90 := vcs.CommitLogAge(90)
 
 	r, err := hq.rh.CommitLogActivity(ctx, branch, path, cutoff7, cutoff30, cutoff90)
 	if err != nil {

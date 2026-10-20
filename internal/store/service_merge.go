@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 	"strings"
 	"time"
 
@@ -128,7 +129,7 @@ func (s *Service) OntologyFileAt(ctx context.Context, branch string) (string, []
 	if err != nil {
 		return "", nil, fmt.Errorf("OntologyAt %s: %w", branch, err)
 	}
-	return TreeOntologyFile(c)
+	return vcs.TreeOntologyFile(c)
 }
 
 // PushedBranches reports each named branch against agentBranch. The caller
@@ -145,7 +146,7 @@ func (s *Service) PushedBranches(ctx context.Context, names []string, agentBranc
 		return nil, fmt.Errorf("pushed branches: agent tip: %w", err)
 	}
 	inAgent := map[plumbing.Hash]bool{}
-	if err := WalkHistory(rh.Storer(), agentRef.Hash(), nil, func(c *object.Commit) { inAgent[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), agentRef.Hash(), nil, func(c *object.Commit) { inAgent[c.Hash] = true }); err != nil {
 		return nil, err
 	}
 	prefix := strings.TrimSuffix(ontologyRoot, "/") + "/"
@@ -168,7 +169,7 @@ func (s *Service) PushedBranches(ctx context.Context, names []string, agentBranc
 			TipTime: tip.Committer.When, TipAuthor: tip.Author.Name,
 		}
 		if !inAgent[tip.Hash] {
-			if err := WalkHistory(rh.Storer(), tip.Hash, inAgent, func(*object.Commit) { info.ToMerge++ }); err != nil {
+			if err := vcs.WalkHistory(rh.Storer(), tip.Hash, inAgent, func(*object.Commit) { info.ToMerge++ }); err != nil {
 				return nil, err
 			}
 		}

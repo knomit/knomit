@@ -12,6 +12,8 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // validatePath refuses a path the store must never commit, wrapping
@@ -172,8 +174,8 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 	}
 	// The causal-trace trailers (F07): stamped here, on the message the
 	// builder signs, when the caller's ctx carries a set; nothing otherwise.
-	message = AppendTrailers(message, TrailersFromContext(ctx))
-	newCommitHash, newBlobHash, err := WriteFileToStore(fi.rh.Storer(), signer, headHash, path, content, message, author, committer)
+	message = vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx))
+	newCommitHash, newBlobHash, err := vcs.WriteFileToStore(fi.rh.Storer(), signer, headHash, path, content, message, author, committer)
 	if err != nil {
 		return "", "", err
 	}
@@ -243,8 +245,8 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	if err != nil {
 		return "", fmt.Errorf("DeleteFile: %w", err)
 	}
-	message = AppendTrailers(message, TrailersFromContext(ctx)) // see writeFileExact
-	newCommitHash, err := DeleteFileFromStore(fi.rh.Storer(), signer, headHash, path, message, author, committer)
+	message = vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx)) // see writeFileExact
+	newCommitHash, err := vcs.DeleteFileFromStore(fi.rh.Storer(), signer, headHash, path, message, author, committer)
 	if err != nil {
 		return "", err
 	}
@@ -446,7 +448,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		blobHashes[path] = blobHash.String()
 
 		// Update tree.
-		currentRootHash, err = BuildTree(fi.rh.Storer(), rootTree, path, blobHash)
+		currentRootHash, err = vcs.BuildTree(fi.rh.Storer(), rootTree, path, blobHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: build tree for %q: %w", path, err)
 		}
@@ -464,7 +466,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		if rootTree == nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: delete %q: branch has no tree", path)
 		}
-		currentRootHash, err = DeleteFromTree(fi.rh.Storer(), rootTree, path)
+		currentRootHash, err = vcs.DeleteFromTree(fi.rh.Storer(), rootTree, path)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: delete %q: %w", path, err)
 		}
@@ -482,14 +484,14 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	commit := &object.Commit{
 		Author:    author,
 		Committer: committer,
-		Message:   AppendTrailers(message, TrailersFromContext(ctx)), // see writeFileExact
+		Message:   vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx)), // see writeFileExact
 		TreeHash:  currentRootHash,
 	}
 	if parentHash != plumbing.ZeroHash {
 		commit.ParentHashes = []plumbing.Hash{parentHash}
 	}
 
-	cHash, err := StoreCommit(fi.rh.Storer(), signer, commit)
+	cHash, err := vcs.StoreCommit(fi.rh.Storer(), signer, commit)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
 	}

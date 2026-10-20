@@ -24,6 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // MaxExperimentNameLen bounds the name so a ref path stays sane and an
@@ -368,7 +369,7 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	// (rebuildRewoundExperiment), under both locks, so a commit never merges
 	// back what the rewind scrubbed. The rebuild consumes the resolutions; the
 	// merge after it is then a fast-forward.
-	opts.trace = TrailersFromContext(ctx)
+	opts.trace = vcs.TrailersFromContext(ctx)
 	unlockParent := rh.LockBranch(exp.Parent)
 	unlockExp := rh.LockBranch(exp.Branch())
 	rebuilt, _, settled, err := rh.rebuildRewoundExperiment(ctx, exp, strategy, resolutions, opts)
@@ -429,7 +430,7 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 	// keeps the scrubbed content in the experiment, but the record stays and
 	// the next commit or sync rebuilds from it (its base is still where the
 	// experiment met the old branch), so nothing leaks.
-	o := mergeOpts{trace: TrailersFromContext(ctx)}
+	o := mergeOpts{trace: vcs.TrailersFromContext(ctx)}
 	recorded := false
 	if _, err := rh.Storer().Reference(experimentRewoundRefName(exp.Name)); err == nil {
 		recorded = true

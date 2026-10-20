@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"context"
@@ -11,81 +11,81 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
-// Accessors and build-time setters for the repoHandler's wiring. The parent
+// Accessors and build-time setters for the Repo's wiring. The parent
 // store reads the shared backend state through the getters and wires the
 // hooks through the setters; every setter is called at build/swap time
 // (Service.Open, Set* on the Service) before the store is published, exactly
 // as the field assignments it replaces were, so none takes a lock.
 
 // DB is the repository database.
-func (rh *repoHandler) DB() *sql.DB { return rh.db }
+func (rh *Repo) DB() *sql.DB { return rh.db }
 
 // Storer is the go-git storage over the repository database.
-func (rh *repoHandler) Storer() *storegit.Storer { return rh.gits }
+func (rh *Repo) Storer() *storegit.Storer { return rh.gits }
 
 // Repository is the go-git repository (nil until OpenRepo/InitRepo/Clone).
-func (rh *repoHandler) Repository() *gogit.Repository { return rh.repo }
+func (rh *Repo) Repository() *gogit.Repository { return rh.repo }
 
 // SetRepository installs the go-git repository opened over Storer.
-func (rh *repoHandler) SetRepository(r *gogit.Repository) { rh.repo = r }
+func (rh *Repo) SetRepository(r *gogit.Repository) { rh.repo = r }
 
 // Name is the repo name, derived from the database path at Open.
-func (rh *repoHandler) Name() string { return rh.name }
+func (rh *Repo) Name() string { return rh.name }
 
 // SetName sets the repo name.
-func (rh *repoHandler) SetName(name string) { rh.name = name }
+func (rh *Repo) SetName(name string) { rh.name = name }
 
 // SetOnDrop installs the hook DropBranch runs after a branch is dropped.
-func (rh *repoHandler) SetOnDrop(f func(context.Context) error) { rh.onDrop = f }
+func (rh *Repo) SetOnDrop(f func(context.Context) error) { rh.onDrop = f }
 
 // SetIndexManager installs the index manager NotifyCommit syncs after every
 // commit (nil: NotifyCommit skips the sync).
-func (rh *repoHandler) SetIndexManager(im IndexManager) { rh.im = im }
+func (rh *Repo) SetIndexManager(im IndexManager) { rh.im = im }
 
 // SetOnCommit installs the external commit observer NotifyCommit calls last.
-func (rh *repoHandler) SetOnCommit(f func(branch, hash string)) { rh.onCommit = f }
+func (rh *Repo) SetOnCommit(f func(branch, hash string)) { rh.onCommit = f }
 
 // ConsensusBranchFunc returns the consensus-branch resolver (nil only on a
-// repoHandler built bare in a test).
-func (rh *repoHandler) ConsensusBranchFunc() func() string { return rh.consensusBranch }
+// Repo built bare in a test).
+func (rh *Repo) ConsensusBranchFunc() func() string { return rh.consensusBranch }
 
 // SetConsensusBranchFunc installs the consensus-branch resolver.
-func (rh *repoHandler) SetConsensusBranchFunc(f func() string) { rh.consensusBranch = f }
+func (rh *Repo) SetConsensusBranchFunc(f func() string) { rh.consensusBranch = f }
 
 // NetTimeout bounds every remote git network operation (0: no bound).
-func (rh *repoHandler) NetTimeout() time.Duration { return rh.netTimeout }
+func (rh *Repo) NetTimeout() time.Duration { return rh.netTimeout }
 
 // SetNetTimeout sets NetTimeout.
-func (rh *repoHandler) SetNetTimeout(d time.Duration) { rh.netTimeout = d }
+func (rh *Repo) SetNetTimeout(d time.Duration) { rh.netTimeout = d }
 
 // FactRoot is the configured ontology root, empty when not configured (see
 // OntologyRoot for the defaulted value).
-func (rh *repoHandler) FactRoot() string { return rh.factRoot }
+func (rh *Repo) FactRoot() string { return rh.factRoot }
 
 // SetFactRoot sets the configured ontology root.
-func (rh *repoHandler) SetFactRoot(root string) { rh.factRoot = root }
+func (rh *Repo) SetFactRoot(root string) { rh.factRoot = root }
 
 // ReadOnly reports whether authored commits are refused (a subscription).
-func (rh *repoHandler) ReadOnly() bool { return rh.readOnly }
+func (rh *Repo) ReadOnly() bool { return rh.readOnly }
 
 // SetReadOnly sets ReadOnly.
-func (rh *repoHandler) SetReadOnly(ro bool) { rh.readOnly = ro }
+func (rh *Repo) SetReadOnly(ro bool) { rh.readOnly = ro }
 
 // SetSigner sets the commit signer.
-func (rh *repoHandler) SetSigner(s ssh.Signer) { rh.signer = s }
+func (rh *Repo) SetSigner(s ssh.Signer) { rh.signer = s }
 
 // SetAgentID sets this instance's persisted agent id.
-func (rh *repoHandler) SetAgentID(id string) { rh.agentID = id }
+func (rh *Repo) SetAgentID(id string) { rh.agentID = id }
 
 // AcceptList is the operator's accept list (nil is empty).
-func (rh *repoHandler) AcceptList() AcceptList { return rh.acceptList }
+func (rh *Repo) AcceptList() AcceptList { return rh.acceptList }
 
 // SetAcceptList sets AcceptList.
-func (rh *repoHandler) SetAcceptList(a AcceptList) { rh.acceptList = a }
+func (rh *Repo) SetAcceptList(a AcceptList) { rh.acceptList = a }
 
 // OwnKeys returns every key this instance's fleet member record has held, or
 // nil when no source is installed (standalone).
-func (rh *repoHandler) OwnKeys() []ssh.PublicKey {
+func (rh *Repo) OwnKeys() []ssh.PublicKey {
 	if rh.ownKeys == nil {
 		return nil
 	}
@@ -93,20 +93,20 @@ func (rh *repoHandler) OwnKeys() []ssh.PublicKey {
 }
 
 // SetOwnKeys installs the source of OwnKeys.
-func (rh *repoHandler) SetOwnKeys(f func() []ssh.PublicKey) { rh.ownKeys = f }
+func (rh *Repo) SetOwnKeys(f func() []ssh.PublicKey) { rh.ownKeys = f }
 
 // ReplaySkip is the set of paths a rewind replay never carries.
-func (rh *repoHandler) ReplaySkip() map[string]bool { return rh.replaySkip }
+func (rh *Repo) ReplaySkip() map[string]bool { return rh.replaySkip }
 
 // SetReplaySkip sets ReplaySkip.
-func (rh *repoHandler) SetReplaySkip(set map[string]bool) { rh.replaySkip = set }
+func (rh *Repo) SetReplaySkip(set map[string]bool) { rh.replaySkip = set }
 
 // RLockConfig takes the remote-config read lock (ConfigureRemote holds the
 // write side across a refspec rewrite) and returns its unlock.
-func (rh *repoHandler) RLockConfig() func() {
+func (rh *Repo) RLockConfig() func() {
 	rh.configMu.RLock()
 	return rh.configMu.RUnlock
 }
 
 // OntologyCache is the cache of the ontology validateWrite last parsed.
-func (rh *repoHandler) OntologyCache() *OntCache { return &rh.writeOnt }
+func (rh *Repo) OntologyCache() *OntCache { return &rh.writeOnt }

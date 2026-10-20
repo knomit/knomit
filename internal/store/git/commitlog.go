@@ -110,7 +110,7 @@ func (s *Storer) CommitLogApply(ctx context.Context, branchName string, items []
 	}
 	if opts.Derive == nil {
 		// Recording a commit without the hook would make it visible without
-		// its derived history (see internal/store/path_changes.go).
+		// its derived history (see internal/store/internal/vcs/path_changes.go).
 		return fmt.Errorf("CommitLogApply: Derive is required")
 	}
 	ctx, tx, own, err := BeginTxIfNeeded(ctx, s.db)

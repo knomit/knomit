@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // testingDir is one directory of a TestingCommitFiles batch: its files (name
@@ -65,7 +66,7 @@ func (d *testingDir) write(s *storegit.Storer, existing *object.Tree) (plumbing.
 		}
 	}
 	for name, content := range d.files {
-		h, err := WriteBlobToStore(s, []byte(content))
+		h, err := vcs.WriteBlobToStore(s, []byte(content))
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}

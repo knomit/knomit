@@ -9,6 +9,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // TestingCommitFiles builds its trees in one pass (testingTree) instead of one
@@ -45,9 +47,9 @@ func TestTestingCommitFiles_TreeMatchesPerPathBuild(t *testing.T) {
 	sort.Strings(paths)
 	want, tree := parentTree.Hash, parentTree
 	for _, p := range paths {
-		blob, err := WriteBlobToStore(svc.rh.Storer(), []byte(files[p]))
+		blob, err := vcs.WriteBlobToStore(svc.rh.Storer(), []byte(files[p]))
 		require.NoError(t, err)
-		want, err = BuildTree(svc.rh.Storer(), tree, p, blob)
+		want, err = vcs.BuildTree(svc.rh.Storer(), tree, p, blob)
 		require.NoError(t, err)
 		tree, err = object.GetTree(svc.rh.Storer(), want)
 		require.NoError(t, err)

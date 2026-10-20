@@ -9,6 +9,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // pushedFixture is a host store with its agent branch and one pushed peer
@@ -270,7 +272,7 @@ func (f *pushedFixture) noFFMerge(other plumbing.Hash, tree plumbing.Hash) plumb
 		Message:   "merge: main into " + pmPeer, TreeHash: tree,
 		ParentHashes: []plumbing.Hash{parent, other},
 	}
-	h, err := StoreCommit(f.svc.rh.Storer(), f.peer, c)
+	h, err := vcs.StoreCommit(f.svc.rh.Storer(), f.peer, c)
 	require.NoError(f.t, err)
 	require.NoError(f.t, f.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(pmPeer), h)))
 	require.NoError(f.t, f.svc.rh.PopulateCommitLog(context.Background(), pmPeer))

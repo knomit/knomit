@@ -9,6 +9,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 func TestConfigureRemote_WritesTwoRefspecs(t *testing.T) {
@@ -253,7 +255,7 @@ func TestUnpushedCommits_SkipsMergeCommits(t *testing.T) {
 // root, so MergeBase against it returns empty.
 func makeDisjointRoot(t *testing.T, svc *Service, path, content string) plumbing.Hash {
 	t.Helper()
-	hash, _, err := WriteFileToStore(
+	hash, _, err := vcs.WriteFileToStore(
 		svc.rh.Storer(), nil, plumbing.ZeroHash, path, content,
 		"disjoint root",
 		object.Signature{Name: "test", Email: "t@t"},
@@ -1133,7 +1135,7 @@ func TestReconcileNow_NoAgentBranchReconcilesMainOnly(t *testing.T) {
 func upstreamCommit(t *testing.T, svc *Service, parent plumbing.Hash, path, content string) plumbing.Hash {
 	t.Helper()
 	sig := object.Signature{Name: "upstream", Email: "u@u"}
-	h, _, err := WriteFileToStore(svc.rh.Storer(), nil, parent, path, content, "upstream: "+path, sig, sig)
+	h, _, err := vcs.WriteFileToStore(svc.rh.Storer(), nil, parent, path, content, "upstream: "+path, sig, sig)
 	require.NoError(t, err)
 	return h
 }

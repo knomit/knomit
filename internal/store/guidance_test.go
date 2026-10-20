@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // commitGuidanceEntry commits, on top of branch's tip, an entry name with the
@@ -32,13 +33,13 @@ func commitGuidanceEntry(t *testing.T, svc *Service, branch, name string, mode f
 	guid, err := knomit.Tree("guidance")
 	require.NoError(t, err)
 
-	blob, err := WriteBlobToStore(rh.Storer(), []byte(content))
+	blob, err := vcs.WriteBlobToStore(rh.Storer(), []byte(content))
 	require.NoError(t, err)
-	gh, err := UpsertEntry(rh.Storer(), guid, object.TreeEntry{Name: name, Mode: mode, Hash: blob})
+	gh, err := vcs.UpsertEntry(rh.Storer(), guid, object.TreeEntry{Name: name, Mode: mode, Hash: blob})
 	require.NoError(t, err)
-	kh, err := UpsertEntry(rh.Storer(), knomit, object.TreeEntry{Name: "guidance", Mode: filemode.Dir, Hash: gh})
+	kh, err := vcs.UpsertEntry(rh.Storer(), knomit, object.TreeEntry{Name: "guidance", Mode: filemode.Dir, Hash: gh})
 	require.NoError(t, err)
-	rootHash, err := UpsertEntry(rh.Storer(), root, object.TreeEntry{Name: ".knomit", Mode: filemode.Dir, Hash: kh})
+	rootHash, err := vcs.UpsertEntry(rh.Storer(), root, object.TreeEntry{Name: ".knomit", Mode: filemode.Dir, Hash: kh})
 	require.NoError(t, err)
 
 	c := &object.Commit{Author: tip.Author, Committer: tip.Committer, Message: "entry " + name,

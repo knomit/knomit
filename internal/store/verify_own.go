@@ -28,6 +28,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // OwnCommitRefusedText is the part of every *OwnCommitRefusedError's text
@@ -104,20 +105,20 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 		if baseC, err = object.GetCommit(rh.Storer(), base); err != nil {
 			return fmt.Errorf("judge own commits: %s: %w", base, err)
 		}
-		if err := WalkHistory(rh.Storer(), base, nil, func(c *object.Commit) { onBase[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.Storer(), base, nil, func(c *object.Commit) { onBase[c.Hash] = true }); err != nil {
 			return fmt.Errorf("judge own commits: %w", err)
 		}
 	}
 	ontC := baseC
 	raw := []byte(nil)
 	if baseC != nil {
-		if raw, err = TreeOntology(baseC); err != nil {
+		if raw, err = vcs.TreeOntology(baseC); err != nil {
 			return fmt.Errorf("judge own commits: the ontology at %s: %w", base, err)
 		}
 	}
 	if raw == nil {
 		ontC = tipC
-		if raw, err = TreeOntology(tipC); err != nil {
+		if raw, err = vcs.TreeOntology(tipC); err != nil {
 			return fmt.Errorf("judge own commits: the ontology at %s: %w", tip, err)
 		}
 	}
@@ -132,7 +133,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 		return nil
 	}
 	var commits []*object.Commit
-	if err := WalkHistory(rh.Storer(), tip, onBase, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), tip, onBase, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return fmt.Errorf("judge own commits: %w", err)
 	}
 	if len(commits) == 0 {
@@ -203,7 +204,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	mineVouched := newJudge(vouched, root, ont, root)
 	mineVouched.ownOntology = true
 	for _, c := range commits {
-		id := AgentIDOfAuthor(c.Author.Email)
+		id := vcs.AgentIDOfAuthor(c.Author.Email)
 		var r Refusal
 		var ok bool
 		if id != own || own == "" {
@@ -284,7 +285,7 @@ func changesHostRecord(c *object.Commit) (host, marker bool, err error) {
 	if err != nil {
 		return false, false, fmt.Errorf("the commit's tree cannot be read: %v", err)
 	}
-	parents, err := ParentTrees(c)
+	parents, err := vcs.ParentTrees(c)
 	if err != nil {
 		return false, false, fmt.Errorf("a parent's tree cannot be read: %v", err)
 	}
@@ -444,7 +445,7 @@ type dropStep struct {
 
 func lostCommit(c *object.Commit) LostCommit {
 	subject, _, _ := strings.Cut(strings.TrimSpace(c.Message), "\n")
-	return LostCommit{Commit: c.Hash.String(), Agent: AgentIDOfAuthor(c.Author.Email), Author: c.Author.Name, Subject: subject}
+	return LostCommit{Commit: c.Hash.String(), Agent: vcs.AgentIDOfAuthor(c.Author.Email), Author: c.Author.Name, Subject: subject}
 }
 
 // dropPlan walks branch's first-parent line from tip down to the upstream
@@ -478,7 +479,7 @@ func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumb
 	reaches := func(from []plumbing.Hash, target plumbing.Hash) (bool, error) {
 		found := false
 		for _, p := range from {
-			if err := WalkHistory(rh.Storer(), p, onUp, func(c *object.Commit) {
+			if err := vcs.WalkHistory(rh.Storer(), p, onUp, func(c *object.Commit) {
 				if c.Hash == target {
 					found = true
 				}
@@ -495,11 +496,11 @@ func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumb
 		for h := range onUp {
 			first[h] = true
 		}
-		if err := WalkHistory(rh.Storer(), m.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.Storer(), m.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
 			return err
 		}
 		for _, p := range m.ParentHashes[1:] {
-			if err := WalkHistory(rh.Storer(), p, first, func(c *object.Commit) {
+			if err := vcs.WalkHistory(rh.Storer(), p, first, func(c *object.Commit) {
 				first[c.Hash] = true // a commit two parents share once
 				visit(c)
 			}); err != nil {
@@ -546,7 +547,7 @@ func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumb
 				// instance. Where signatures are judged (the fleet), another
 				// agent's commit cannot be: refuse instead of losing it.
 				if ownOnly && werr == nil {
-					if id := AgentIDOfAuthor(c.Author.Email); id != own {
+					if id := vcs.AgentIDOfAuthor(c.Author.Email); id != own {
 						werr = &DropForeignError{Commit: c.Hash.String(), Agent: id, Merge: cur.Hash.String()}
 					}
 				}

@@ -53,6 +53,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // experimentRewoundRefName is where a rewind records the agent tip an
@@ -146,13 +148,13 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 	// The old agent branch's history: everything the experiment holds of it
 	// is the agent's, not the experiment's.
 	oldHist := map[plumbing.Hash]bool{}
-	if err := WalkHistory(rh.Storer(), oldAgent, nil, func(c *object.Commit) { oldHist[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), oldAgent, nil, func(c *object.Commit) { oldHist[c.Hash] = true }); err != nil {
 		return false, 0, nil, fmt.Errorf("old agent history: %w", err)
 	}
 	// The experiment's own commits.
 	ownSet := map[plumbing.Hash]bool{}
 	var own []*object.Commit
-	if err := WalkHistory(rh.Storer(), expTip, oldHist, func(c *object.Commit) {
+	if err := vcs.WalkHistory(rh.Storer(), expTip, oldHist, func(c *object.Commit) {
 		own = append(own, c)
 		ownSet[c.Hash] = true
 	}); err != nil {
@@ -177,7 +179,7 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 		}
 	}
 	parentHist := map[plumbing.Hash]bool{}
-	if err := WalkHistory(rh.Storer(), parentTip, nil, func(c *object.Commit) { parentHist[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), parentTip, nil, func(c *object.Commit) { parentHist[c.Hash] = true }); err != nil {
 		return false, 0, nil, fmt.Errorf("parent history: %w", err)
 	}
 	removed := false
@@ -279,11 +281,11 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 		nc := &object.Commit{
 			Author:       author,
 			Committer:    committer,
-			Message:      AppendTrailersToParagraph(appendTrailerLines(msg, trailers), o.trace),
+			Message:      vcs.AppendTrailersToParagraph(appendTrailerLines(msg, trailers), o.trace),
 			TreeHash:     tree,
 			ParentHashes: []plumbing.Hash{parentTip},
 		}
-		if newTip, err = StoreCommit(rh.Storer(), signer, nc); err != nil {
+		if newTip, err = vcs.StoreCommit(rh.Storer(), signer, nc); err != nil {
 			return false, 0, nil, err
 		}
 	}

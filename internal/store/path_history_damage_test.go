@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // Round-5 tests: derivation from git alone, missing objects as boundaries or
@@ -146,14 +148,14 @@ func TestPathHistory_TreeAndParentReadErrorsFail(t *testing.T) {
 				target = parent.Hash
 			}
 			injected := errors.New("injected " + kind + " read error")
-			DeriveObjectHook = func(k string, h plumbing.Hash) error {
+			vcs.DeriveObjectHook = func(k string, h plumbing.Hash) error {
 				if k == kind && h == target {
 					return injected
 				}
 				return nil
 			}
 			err = svc.rh.DeriveBeforeAdvance(ctx, plumbing.NewHash(next))
-			DeriveObjectHook = nil
+			vcs.DeriveObjectHook = nil
 			require.ErrorIs(t, err, injected)
 			derived, err := svc.rh.IsDerivedForTest(ctx, next)
 			require.NoError(t, err)
@@ -173,7 +175,7 @@ func TestDeriver_ApplyNeverReadsGit(t *testing.T) {
 	svc, _ := openPathHistoryStore(t)
 	c := writeVersionsStore(t, svc, 1)
 	err := svc.rh.DeriveReadWhileApplyingForTest(plumbing.NewHash(c[0]))
-	require.ErrorIs(t, err, ErrReadInApply)
+	require.ErrorIs(t, err, vcs.ErrReadInApply)
 }
 
 // TestLiveRevision_EqualsRevisionsBeforeEdgeCases extends the equivalence to a

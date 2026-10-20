@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // GraphSchemaVersion is the expected version of the property-graph layout.
@@ -827,7 +828,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			refs            = excluded.refs,
 			evidence_weight = excluded.evidence_weight,
 			origin          = excluded.origin
-	`, BlobObjectType)
+	`, vcs.BlobObjectType)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: upsert facts: %w", err)
 	}
@@ -852,7 +853,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 		SELECT fact_id, json_extract(parsed, '$.expires'), json_extract(parsed, '$.expires_at')
 		FROM dated
 		WHERE json_extract(parsed, '$.expires_at') IS NOT NULL
-	`, BlobObjectType); err != nil {
+	`, vcs.BlobObjectType); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: fact_expires: %w", err)
 	}
 
@@ -882,7 +883,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 		SELECT l.fact_id, je.key, je.value, json_extract(l.parsed, '$.context_num."' || je.key || '"')
 		FROM labelled l, json_each(l.parsed, '$.context') je
 		WHERE json_extract(l.parsed, '$.context') IS NOT NULL
-	`, BlobObjectType); err != nil {
+	`, vcs.BlobObjectType); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: fact_context: %w", err)
 	}
 
@@ -1087,7 +1088,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 			FROM facts f
 			JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 			WHERE f.rowid IN (` + string(placeholders) + `)`
-		qargs := append([]any{BlobObjectType}, args...)
+		qargs := append([]any{vcs.BlobObjectType}, args...)
 
 		bodyRows, err := conn(ctx, si.rh.DB()).QueryContext(ctx, q, qargs...)
 		if err != nil {

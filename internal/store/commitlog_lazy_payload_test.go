@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // newCommitLogService opens a fresh single-branch repo for commit-log tests.
@@ -56,13 +57,13 @@ func TestPopulateCommitLog_SkipsPayloadForKnownCommits(t *testing.T) {
 		_, err := svc.Facts().WriteFact(ctx, branch, "kb/"+name+".md", testFactBody(name, 0.9, nil), "learn "+name, "learn")
 		require.NoError(t, err)
 	}
-	before := PayloadsComputed.Load()
+	before := vcs.PayloadsComputed.Load()
 	require.NoError(t, svc.rh.PopulateCommitLog(ctx, branch))
-	require.Equal(t, before, PayloadsComputed.Load(), "re-walk of fully-recorded commits must compute no payloads")
+	require.Equal(t, before, vcs.PayloadsComputed.Load(), "re-walk of fully-recorded commits must compute no payloads")
 
 	_, err := svc.Facts().WriteFact(ctx, branch, "kb/d.md", testFactBody("d", 0.9, nil), "learn d", "learn")
 	require.NoError(t, err)
-	require.Equal(t, before+1, PayloadsComputed.Load(), "a new commit is computed once")
+	require.Equal(t, before+1, vcs.PayloadsComputed.Load(), "a new commit is computed once")
 }
 
 // TestCommitLogApply_WalksPastDedupHits guards the DAG invariant: a dedup hit

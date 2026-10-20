@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 func TestResolveRef_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
@@ -53,7 +55,7 @@ func TestBranchID_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 // non-deferred `unlock := rh.LockBranch(x); ...; unlock()` form would have
 // leaked the lock on panic, deadlocking every subsequent op on that branch.
 func TestLockBranch_DeferReleasesOnPanic(t *testing.T) {
-	rh := &repoHandler{}
+	rh := &repoHandler{Repo: &vcs.Repo{}}
 
 	func() {
 		defer func() { _ = recover() }()

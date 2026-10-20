@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // MergeBranch merges src into dst using the given conflict strategy.
@@ -418,12 +419,12 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	mc := &object.Commit{
 		Author:       author,
 		Committer:    committer,
-		Message:      AppendTrailersToParagraph(appendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.trace),
+		Message:      vcs.AppendTrailersToParagraph(appendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.trace),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},
 	}
 
-	mergeHash, err := StoreCommit(rh.Storer(), signer, mc)
+	mergeHash, err := vcs.StoreCommit(rh.Storer(), signer, mc)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge commit: %w", err)
 	}
@@ -575,7 +576,7 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 					pickSide(path, ResolveSrc, plumbing.ZeroHash, blobHash, dstBlob)
 				}
 			}
-			newRootHash, err := BuildTree(rh.Storer(), currentTree, path, blobHash)
+			newRootHash, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("apply insert %q: %w", path, err)
 			}
@@ -631,7 +632,7 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 				}
 			}
 
-			newRootHash, err := BuildTree(rh.Storer(), currentTree, path, blobHash)
+			newRootHash, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("apply modify %q: %w", path, err)
 			}
@@ -677,7 +678,7 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 				pickSide(path, ResolveSrc, baseHash, plumbing.ZeroHash, dstHashAtPath)
 			}
 
-			newRootHash, err := DeleteFromTree(rh.Storer(), currentTree, path)
+			newRootHash, err := vcs.DeleteFromTree(rh.Storer(), currentTree, path)
 			if err != nil {
 				// dstHas was confirmed above, so the path SHOULD be present
 				// in currentTree (an earlier iteration cannot have removed
@@ -774,7 +775,7 @@ func (rh *repoHandler) applyResolution(
 ) (*object.Tree, error) {
 	switch {
 	case res.Body != nil:
-		blobHash, err := WriteBlobToStore(rh.Storer(), res.Body)
+		blobHash, err := vcs.WriteBlobToStore(rh.Storer(), res.Body)
 		if err != nil {
 			return nil, fmt.Errorf("resolution body for %q: %w", path, err)
 		}
@@ -782,7 +783,7 @@ func (rh *repoHandler) applyResolution(
 
 	case res.Side == ResolveSrc:
 		if srcDeleted {
-			newRoot, err := DeleteFromTree(rh.Storer(), currentTree, path)
+			newRoot, err := vcs.DeleteFromTree(rh.Storer(), currentTree, path)
 			if err != nil {
 				return nil, fmt.Errorf("resolution src-delete %q: %w", path, err)
 			}
@@ -802,7 +803,7 @@ func (rh *repoHandler) applyResolution(
 
 // setPath puts blobHash at path in the tree and reloads it.
 func (rh *repoHandler) setPath(currentTree *object.Tree, path string, blobHash plumbing.Hash) (*object.Tree, error) {
-	newRoot, err := BuildTree(rh.Storer(), currentTree, path, blobHash)
+	newRoot, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
 	if err != nil {
 		return nil, fmt.Errorf("apply resolution %q: %w", path, err)
 	}

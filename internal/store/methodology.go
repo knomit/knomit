@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // Composite-score coefficients: Score = vectorWeight*VectorScore + tagWeight*TagOverlap.
@@ -297,7 +299,7 @@ func (mm *methodologyMatcher) readFactBodyByBlobHash(ctx context.Context, blobHa
 	var raw []byte
 	err := conn(ctx, mm.rh.DB()).QueryRowContext(ctx,
 		`SELECT data FROM objects WHERE hash = ? AND type = ?`,
-		blobHash, BlobObjectType,
+		blobHash, vcs.BlobObjectType,
 	).Scan(&raw)
 	if err != nil {
 		return "", fmt.Errorf("readFactBodyByBlobHash: %w", err)

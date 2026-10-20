@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // Tests for derive-at-index (review rounds 3-4): a commit's path_changes rows
@@ -42,7 +43,7 @@ func TestPathHistory_TipFirstIndexingNeverTruncates(t *testing.T) {
 	// Recording a commit that is not derived is refused, and nothing lands.
 	err := svc.rh.Storer().CommitLogApply(ctx, "main", []storegit.CommitLogItem{{Hash: tip, Parents: []string{parent}}},
 		storegit.CommitLogApplyOptions{Derive: svc.rh.DeriveHookForTest([]string{tip})})
-	require.ErrorIs(t, err, ErrNotDerived)
+	require.ErrorIs(t, err, vcs.ErrNotDerived)
 	var visible int
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits WHERE commit_hash = ?`, tip).Scan(&visible))
 	require.Zero(t, visible, "the refused commit is not visible: its transaction rolled back")
@@ -162,14 +163,14 @@ func TestPathHistory_ReadErrorRecordsNothing(t *testing.T) {
 	moveBranch(t, svc, "main", next)
 	prevBlob := plumbing.NewHash(blobOf(t, svc, commits[2], "kb/t.md"))
 	injected := errors.New("injected read error")
-	DeriveObjectHook = func(kind string, h plumbing.Hash) error {
+	vcs.DeriveObjectHook = func(kind string, h plumbing.Hash) error {
 		if kind == "blob" && h == prevBlob {
 			return injected
 		}
 		return nil
 	}
 	err := svc.rh.AppendCommitLog(ctx, "main", next)
-	DeriveObjectHook = nil
+	vcs.DeriveObjectHook = nil
 	require.ErrorIs(t, err, injected)
 	for _, table := range []string{"branch_commits", "commit_fp", "path_changes"} {
 		var n int
@@ -185,8 +186,8 @@ func TestPathHistory_ReadErrorRecordsNothing(t *testing.T) {
 // transaction, after it cleared the branch and before it re-records it.
 func pauseSwap(t *testing.T, check func()) {
 	t.Helper()
-	SwapHook = func() error { check(); return nil }
-	t.Cleanup(func() { SwapHook = nil })
+	vcs.SwapHook = func() error { check(); return nil }
+	t.Cleanup(func() { vcs.SwapHook = nil })
 }
 
 func branchCommitCount(t *testing.T, svc *Service, branch string) int {
@@ -322,8 +323,8 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	moveBranch(t, svc, "writer", writeRawCommit(t, svc, nil, map[string]string{"kb/w.md": testFactBody("w", 0.5, nil)}, t0, "writer root"))
 	require.NoError(t, svc.rh.PopulateCommitLog(ctx, "writer"))
 	// Force the rebuild to derive everything again, in batches.
-	clearDerived(t, svc, PathChangesVersion)
-	require.Greater(t, len(commits), 4*PathChangeBatch, "the fixture spans several batches")
+	clearDerived(t, svc, vcs.PathChangesVersion)
+	require.Greater(t, len(commits), 4*vcs.PathChangeBatch, "the fixture spans several batches")
 
 	treeOf := func(h string) plumbing.Hash {
 		c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
@@ -338,7 +339,7 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 		hash            plumbing.Hash
 	}
 	triggers := []trigger{
-		{"derive", "deriveCommits", "tree", treeOf(commits[PathChangeBatch])},
+		{"derive", "deriveCommits", "tree", treeOf(commits[vcs.PathChangeBatch])},
 		{"derive-end", "deriveCommits", "tree", treeOf(tip)},
 		// The parent read of commits[1000]: in no first chunk, whichever
 		// order staging takes.
@@ -352,7 +353,7 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	abort := make(chan struct{})
 	// Advanced only by the rebuild's goroutine, but read by the writers'.
 	var next atomic.Int32
-	DeriveObjectHook = func(kind string, h plumbing.Hash) error {
+	vcs.DeriveObjectHook = func(kind string, h plumbing.Hash) error {
 		i := int(next.Load())
 		if i == len(triggers) {
 			return nil
@@ -375,7 +376,7 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 		return nil
 	}
 	var swapped atomic.Bool
-	SwapHook = func() error { swapped.Store(true); return nil }
+	vcs.SwapHook = func() error { swapped.Store(true); return nil }
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
@@ -415,7 +416,7 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	// the store closes.
 	t.Cleanup(func() {
 		shutdown()
-		DeriveObjectHook, SwapHook = nil, nil
+		vcs.DeriveObjectHook, vcs.SwapHook = nil, nil
 	})
 
 	start := time.Now()
@@ -446,9 +447,9 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 		switch p.phase {
 		case "derive":
 			require.True(t, derived(commits[0]), "batch 0 is committed")
-			require.False(t, derived(commits[PathChangeBatch]), "batch 1 is not")
+			require.False(t, derived(commits[vcs.PathChangeBatch]), "batch 1 is not")
 		case "derive-end":
-			lastBatch := (len(commits) - 1) / PathChangeBatch * PathChangeBatch
+			lastBatch := (len(commits) - 1) / vcs.PathChangeBatch * vcs.PathChangeBatch
 			require.True(t, derived(commits[lastBatch-1]), "every batch before the tip's is committed")
 			require.False(t, derived(commits[lastBatch]), "the tip's batch is not")
 			require.False(t, derived(tip), "the tip is not derived yet")
@@ -469,7 +470,7 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	shutdown()
 	require.True(t, swapped.Load(), "the rebuild swapped")
 	require.NoError(t, werr, "a concurrent writer never fails with a lock timeout")
-	swap := time.Duration(LastSwapDuration.Load())
+	swap := time.Duration(vcs.LastSwapDuration.Load())
 	t.Logf("rebuild %v unpaused (re-deriving 2000 commits); swap transaction %v; worst concurrent write %v (logged, not asserted)", elapsed, swap, worst)
 	// The lock is held only for the swap: re-deriving 2000 commits happens
 	// before it, in short batches. A rebuild that derived inside the swap
@@ -485,7 +486,7 @@ func callerIs(name string) bool {
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
 	for {
 		f, more := frames.Next()
-		if strings.HasPrefix(f.Function, "knomit/internal/store.") && strings.HasSuffix(f.Function, "."+name) {
+		if strings.HasPrefix(f.Function, "knomit/internal/store/internal/vcs.") && strings.HasSuffix(f.Function, "."+name) {
 			return true
 		}
 		if !more {
@@ -702,7 +703,7 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 	elapsed := time.Since(start)
 	close(stop)
 	<-done
-	b.Logf("rebuild of %d commits: %v; swap transaction %v; worst concurrent write %v (worst of 20 writes with no rebuild: %v)", n, elapsed, time.Duration(LastSwapDuration.Load()), worst, base)
+	b.Logf("rebuild of %d commits: %v; swap transaction %v; worst concurrent write %v (worst of 20 writes with no rebuild: %v)", n, elapsed, time.Duration(vcs.LastSwapDuration.Load()), worst, base)
 }
 
 func fullHistoryB(b *testing.B, svc *Service, branch, path, anchor string) []FactRevision {

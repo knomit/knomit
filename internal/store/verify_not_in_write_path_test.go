@@ -13,7 +13,7 @@ import (
 // exactly what it did before F09 (signing only).
 func TestVerifyIsNeverInTheWritePath(t *testing.T) {
 	forbidden := regexp.MustCompile(`\b(CheckRange|Audit|LoadFleet|LoadFleetAt|FleetMembersAt|FleetPKIAt|FleetAt|loadMembers|loadFleetPKI|newJudge|verifyCommitSignature|checkM3|checkOwnLineage|judgeCommit)\(`)
-	for _, f := range []string{"fact_write.go", "sign.go"} {
+	for _, f := range []string{"fact_write.go", "internal/vcs/sign.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

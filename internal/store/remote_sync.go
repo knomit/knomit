@@ -21,6 +21,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // errNoOriginRemote signals (within Sync) that no "origin" git remote is
@@ -61,7 +63,7 @@ func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 		opts.RefSpecs = append(append([]gogitconfig.RefSpec(nil), rem.Config().Fetch...), extra...)
 		opts.Prune = true
 	}
-	strictCtx, strictCancel := NetCtxWith(ctx, timeout)
+	strictCtx, strictCancel := vcs.NetCtxWith(ctx, timeout)
 	err := repo.FetchContext(strictCtx, opts)
 	strictCancel()
 	if err == nil || errors.Is(err, gogit.NoErrAlreadyUpToDate) {
@@ -75,7 +77,7 @@ func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 	// with just the upstream refspec — origin/<upstreamMain> is the only ref
 	// we strictly require for reconcile to proceed.
 	upstreamRefspec := gogitconfig.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", upstreamMain, upstreamMain))
-	fallbackCtx, fallbackCancel := NetCtxWith(ctx, timeout)
+	fallbackCtx, fallbackCancel := vcs.NetCtxWith(ctx, timeout)
 	fallbackErr := repo.FetchContext(fallbackCtx, &gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
@@ -827,10 +829,10 @@ func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, from, path str
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
-		if root, err = BuildTree(rh.Storer(), tree, path, bh); err != nil {
+		if root, err = vcs.BuildTree(rh.Storer(), tree, path, bh); err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 		}
-	} else if root, err = DeleteFromTree(rh.Storer(), tree, path); err != nil {
+	} else if root, err = vcs.DeleteFromTree(rh.Storer(), tree, path); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
 	if root == tree.Hash {
@@ -841,7 +843,7 @@ func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, from, path str
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
 	c := &object.Commit{Author: author, Committer: committer, Message: message, TreeHash: root, ParentHashes: []plumbing.Hash{parent}}
-	h, err := StoreCommit(rh.Storer(), signer, c)
+	h, err := vcs.StoreCommit(rh.Storer(), signer, c)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}

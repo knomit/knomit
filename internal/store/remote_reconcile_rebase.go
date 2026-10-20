@@ -19,6 +19,7 @@ import (
 
 	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // unpushedCommits returns commits reachable from localTip but not from
@@ -146,7 +147,7 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 	var onUpstream map[plumbing.Hash]bool
 	if !disjoint {
 		onUpstream = map[plumbing.Hash]bool{}
-		if err := WalkHistory(rh.Storer(), upstreamTip, nil, func(c *object.Commit) { onUpstream[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.Storer(), upstreamTip, nil, func(c *object.Commit) { onUpstream[c.Hash] = true }); err != nil {
 			return nil, false, false, fmt.Errorf("unpushedCommits: upstream history: %w", err)
 		}
 	}
@@ -406,7 +407,7 @@ func (rh *repoHandler) replayCommit(
 		ParentHashes: append([]plumbing.Hash{ontoHash}, extraParents...),
 	}
 
-	h, err := StoreCommit(rh.Storer(), signer, newCommit)
+	h, err := vcs.StoreCommit(rh.Storer(), signer, newCommit)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: %w", err)
 	}
@@ -668,7 +669,7 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, up
 	log.Info().
 		Str("branch", agentBranch).
 		Str("upstream", "refs/heads/"+upstreamMain).
-		Str("base", ShortRefHash(base)).
+		Str("base", vcs.ShortRefHash(base)).
 		Msgf("reconcileAgentRebase: replaying onto local %s with watermark base", upstreamMain)
 
 	// Every experiment of this branch is recorded BEFORE the branch moves:
@@ -765,7 +766,7 @@ func (rh *repoHandler) newSideWalk(local *object.Commit, stopAt plumbing.Hash, o
 	}
 	if stopAt != plumbing.ZeroHash {
 		// onUpstream is ancestry-closed, so it prunes this walk.
-		if err := WalkHistory(rh.Storer(), stopAt, sw.held, func(c *object.Commit) { sw.held[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.Storer(), stopAt, sw.held, func(c *object.Commit) { sw.held[c.Hash] = true }); err != nil {
 			return nil, fmt.Errorf("stop point history: %w", err)
 		}
 		sw.held[stopAt] = true

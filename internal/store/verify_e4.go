@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // ErrForeignLineage is E4's refusal: origin's copy of this instance's agent
@@ -73,7 +75,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 	}
 	below := map[plumbing.Hash]bool{}
 	if upstream != plumbing.ZeroHash {
-		if err := WalkHistory(rh.Storer(), upstream, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.Storer(), upstream, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
 			return err
 		}
 	}
@@ -86,7 +88,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 		ownSig bool   // signed by an own key (accepted alone does not vouch)
 	}
 	var order []seenCommit
-	err := WalkHistory(rh.Storer(), agentTip, below, func(c *object.Commit) {
+	err := vcs.WalkHistory(rh.Storer(), agentTip, below, func(c *object.Commit) {
 		if rh.acceptedCommit(c.Hash) {
 			order = append(order, seenCommit{c: c})
 			return
@@ -122,7 +124,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 			if below[p] || vouched[p] {
 				continue
 			}
-			if err := WalkHistory(rh.Storer(), p, below, func(c *object.Commit) { vouched[c.Hash] = true }); err != nil {
+			if err := vcs.WalkHistory(rh.Storer(), p, below, func(c *object.Commit) { vouched[c.Hash] = true }); err != nil {
 				return err
 			}
 		}
@@ -133,7 +135,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 		if sc.reason == "" || vouched[sc.c.Hash] {
 			continue
 		}
-		refused = append(refused, ShortRefHash(sc.c.Hash)+": "+sc.reason)
+		refused = append(refused, vcs.ShortRefHash(sc.c.Hash)+": "+sc.reason)
 		commits = append(commits, sc.c.Hash.String())
 	}
 	if len(refused) > 0 {

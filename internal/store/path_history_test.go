@@ -13,6 +13,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 func openPathHistoryStore(t *testing.T) (*Service, context.Context) {
@@ -67,7 +69,7 @@ func blobOf(t *testing.T, svc *Service, commit, path string) string {
 	require.NoError(t, err)
 	tree, err := co.Tree()
 	require.NoError(t, err)
-	e, err := TreeEntryInsensitive(svc.rh.Repository(), tree, path)
+	e, err := vcs.TreeEntryInsensitive(svc.rh.Repository(), tree, path)
 	require.NoError(t, err)
 	return e.Hash.String()
 }
@@ -443,7 +445,7 @@ func TestPathHistory_RebuildAndVersionResetAreConsistent(t *testing.T) {
 	require.NoError(t, svc.rh.RebuildCommitLog(ctx, "main"))
 	require.Equal(t, before, historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip)))
 
-	_, err = svc.rh.DB().ExecContext(ctx, `UPDATE meta SET value = 'stale' WHERE key = ?`, PathChangesVersionKey)
+	_, err = svc.rh.DB().ExecContext(ctx, `UPDATE meta SET value = 'stale' WHERE key = ?`, vcs.PathChangesVersionKey)
 	require.NoError(t, err)
 	require.NoError(t, svc.rh.OpenHistory(ctx))
 	require.Equal(t, before, historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip)))

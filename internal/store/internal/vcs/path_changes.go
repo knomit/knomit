@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 
 	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/sqlite"
 )
 
 // Per-path change history, precomputed (tables: migration 000032).
@@ -136,12 +137,12 @@ func metaGet(ctx context.Context, q storegit.CtxExecer, key string) (string, err
 // and logged; nothing is derived for it. The pass also clears
 // commit_log_stage: rows left there belong to a rebuild that died before its
 // swap.
-func (rh *repoHandler) OpenHistory(ctx context.Context) error {
+func (rh *Repo) OpenHistory(ctx context.Context) error {
 	if rh.repo == nil || !rh.gits.CommitLogAvailable() {
 		return nil
 	}
 	start := time.Now()
-	q := conn(ctx, rh.db)
+	q := sqlite.Conn(ctx, rh.db)
 	v, err := metaGet(ctx, q, PathChangesVersionKey)
 	if err != nil {
 		return fmt.Errorf("path changes: version: %w", err)
@@ -194,7 +195,7 @@ func (rh *repoHandler) OpenHistory(ctx context.Context) error {
 	n := len(order)
 	d.dropCaches()
 
-	ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
+	ctx, tx, own, err := sqlite.BeginTxIfNeeded(ctx, rh.db)
 	if err != nil {
 		return fmt.Errorf("path changes: open: %w", err)
 	}
@@ -242,8 +243,8 @@ var OpenHistoryHook func() error
 // branchTips resolves every registered branch's tip. A branch with no ref has
 // no history to derive; one whose ref fails to resolve for another reason is
 // skipped and logged.
-func (rh *repoHandler) branchTips(ctx context.Context) ([]plumbing.Hash, error) {
-	rows, err := conn(ctx, rh.db).QueryContext(ctx, `SELECT name FROM branches`)
+func (rh *Repo) branchTips(ctx context.Context) ([]plumbing.Hash, error) {
+	rows, err := sqlite.Conn(ctx, rh.db).QueryContext(ctx, `SELECT name FROM branches`)
 	if err != nil {
 		return nil, fmt.Errorf("path changes: branches: %w", err)
 	}
@@ -289,7 +290,7 @@ func (rh *repoHandler) branchTips(ctx context.Context) ([]plumbing.Hash, error) 
 // Caller cancellation is dropped, as in NotifyCommit: a write that has built
 // its commit completes (fact_write_cancel_test.go); honouring cancellation
 // here would fail it for no reason the store can act on.
-func (rh *repoHandler) DeriveBeforeAdvance(ctx context.Context, hash plumbing.Hash) error {
+func (rh *Repo) DeriveBeforeAdvance(ctx context.Context, hash plumbing.Hash) error {
 	if rh.repo == nil || !rh.gits.CommitLogAvailable() {
 		return nil
 	}
@@ -304,8 +305,8 @@ func (rh *repoHandler) DeriveBeforeAdvance(ctx context.Context, hash plumbing.Ha
 // derived commits and at commits absent from the object store. A read error
 // other than not-found fails it; what earlier batches committed stays.
 // Returns how many commits it derived.
-func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []plumbing.Hash) (int, error) {
-	q := conn(ctx, rh.db)
+func (rh *Repo) deriveClosure(ctx context.Context, d *deriver, starts []plumbing.Hash) (int, error) {
+	q := sqlite.Conn(ctx, rh.db)
 	var pending []*commitMeta
 	seen := map[plumbing.Hash]bool{}
 	stack := append([]plumbing.Hash(nil), starts...)
@@ -339,7 +340,7 @@ func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []p
 // deriveCommits prepares and applies commits (parents first) in batched
 // transactions. With replace, existing rows of each commit are replaced (the
 // re-derivation of degraded commits); otherwise a derived commit is left as is.
-func (rh *repoHandler) deriveCommits(ctx context.Context, d *deriver, order []*commitMeta, replace bool) error {
+func (rh *Repo) deriveCommits(ctx context.Context, d *deriver, order []*commitMeta, replace bool) error {
 	for i := 0; i < len(order); i += PathChangeBatch {
 		chunk := order[i:min(i+PathChangeBatch, len(order))]
 		prepared := make([]*preparedCommit, len(chunk))
@@ -349,7 +350,7 @@ func (rh *repoHandler) deriveCommits(ctx context.Context, d *deriver, order []*c
 				return err
 			}
 		}
-		bctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
+		bctx, tx, own, err := sqlite.BeginTxIfNeeded(ctx, rh.db)
 		if err != nil {
 			return fmt.Errorf("path changes: begin: %w", err)
 		}
@@ -380,8 +381,8 @@ func (rh *repoHandler) deriveCommits(ctx context.Context, d *deriver, order []*c
 // around a missing object — so a boundary or a content_unavailable revision
 // is repaired once the object is back (:rebuild). A commit whose object is
 // still missing stays degraded.
-func (rh *repoHandler) rederiveDegraded(ctx context.Context) (int, error) {
-	rows, err := conn(ctx, rh.db).QueryContext(ctx, `SELECT commit_hash FROM `+ActiveTables.FP+` WHERE degraded > 0`)
+func (rh *Repo) rederiveDegraded(ctx context.Context) (int, error) {
+	rows, err := sqlite.Conn(ctx, rh.db).QueryContext(ctx, `SELECT commit_hash FROM `+ActiveTables.FP+` WHERE degraded > 0`)
 	if err != nil {
 		return 0, fmt.Errorf("path changes: degraded: %w", err)
 	}
@@ -484,7 +485,7 @@ func commitNode(c *object.Commit) (plumbing.Hash, []plumbing.Hash) { return c.Ha
 // the life of one populate or pass. prepare reads git; apply writes SQL on
 // the transaction it is handed and may not read git.
 type deriver struct {
-	rh       *repoHandler
+	rh       *Repo
 	t        ChangeTables
 	applying bool
 	// keepChanges hands each prepared commit's tree diff to indexing
@@ -511,7 +512,7 @@ func metaOf(c *object.Commit) *commitMeta {
 	return &commitMeta{Hash: c.Hash, Tree: c.TreeHash, Parents: c.ParentHashes, AuthorAt: c.Author.When.Unix(), Msg: FirstLine(c.Message)}
 }
 
-func newDeriver(rh *repoHandler, t ChangeTables) *deriver {
+func newDeriver(rh *Repo, t ChangeTables) *deriver {
 	d := &deriver{rh: rh, t: t}
 	d.dropCaches()
 	return d
@@ -519,7 +520,7 @@ func newDeriver(rh *repoHandler, t ChangeTables) *deriver {
 
 // newIndexingDeriver is a deriver whose commits are recorded next: it keeps
 // their tree diffs for commit_log (keepChanges).
-func newIndexingDeriver(rh *repoHandler) *deriver {
+func newIndexingDeriver(rh *Repo) *deriver {
 	d := newDeriver(rh, ActiveTables)
 	d.keepChanges = true
 	return d
@@ -885,7 +886,7 @@ func (d *deriver) prepare(ctx context.Context, c *commitMeta) (*preparedCommit, 
 			// A tree needed for the diff is missing: take the changed paths
 			// commit_log recorded when git still had it.
 			pc.degraded = max(pc.degraded, degradedContent)
-			rows, err := conn(ctx, d.rh.db).QueryContext(ctx, `SELECT path, action FROM commit_log WHERE commit_hash = ?`, c.Hash.String())
+			rows, err := sqlite.Conn(ctx, d.rh.db).QueryContext(ctx, `SELECT path, action FROM commit_log WHERE commit_hash = ?`, c.Hash.String())
 			if err != nil {
 				return nil, fmt.Errorf("path changes: recorded diff: %w", err)
 			}

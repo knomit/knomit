@@ -99,6 +99,13 @@ var sameLayerEdges = map[string]bool{
 	// sqlite): the pipeline watermarks live in the MAIN db and are read
 	// through the ctx-carried tx helper (sqlite.Conn).
 	"store/internal/sessions -> store/internal/sqlite": true,
+	// The vcs child (the git layer: branches, commits, locks, signing, commit
+	// log, path history) sits on the git storer and directly above sqlite in
+	// the store's child order (proposal 4.3); every higher cluster reaches up
+	// to it, never the reverse. It reads and writes its tables through the
+	// ctx-carried tx helpers (sqlite.Conn, sqlite.BeginTxIfNeeded).
+	"store/internal/vcs -> store/git":             true,
+	"store/internal/vcs -> store/internal/sqlite": true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

@@ -10,6 +10,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // newBatchTestService opens a fresh initialised store for the batch tests.
@@ -163,9 +165,9 @@ func commitBrokenSubtree(t *testing.T, svc *Service, branch, dir, name string) s
 	require.NoError(t, err)
 
 	missing := plumbing.NewHash("1111111111111111111111111111111111111111")
-	subHash, err := UpsertEntry(rh.Storer(), sub, object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: missing})
+	subHash, err := vcs.UpsertEntry(rh.Storer(), sub, object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: missing})
 	require.NoError(t, err)
-	rootHash, err := UpsertEntry(rh.Storer(), root, object.TreeEntry{Name: dir, Mode: filemode.Dir, Hash: subHash})
+	rootHash, err := vcs.UpsertEntry(rh.Storer(), root, object.TreeEntry{Name: dir, Mode: filemode.Dir, Hash: subHash})
 	require.NoError(t, err)
 
 	c := &object.Commit{Author: tip.Author, Committer: tip.Committer, Message: "broken subtree",

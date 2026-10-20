@@ -21,6 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 )
 
 func namedSigner(t *testing.T, name string) ssh.Signer {
@@ -49,7 +50,7 @@ func signed(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig, err := SignCommit(s, payload)
+	sig, err := vcs.SignCommit(s, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,24 +125,24 @@ func signWithNamespace(t *testing.T, signer ssh.Signer, payload []byte, namespac
 	t.Helper()
 	h := sha512.Sum512(payload)
 	var signedData []byte
-	signedData = append(signedData, SSHSigMagic...)
-	signedData = AppendSSHString(signedData, []byte(namespace))
-	signedData = AppendSSHString(signedData, nil)
-	signedData = AppendSSHString(signedData, []byte(SSHSigHashAlgo))
-	signedData = AppendSSHString(signedData, h[:])
+	signedData = append(signedData, vcs.SSHSigMagic...)
+	signedData = vcs.AppendSSHString(signedData, []byte(namespace))
+	signedData = vcs.AppendSSHString(signedData, nil)
+	signedData = vcs.AppendSSHString(signedData, []byte(vcs.SSHSigHashAlgo))
+	signedData = vcs.AppendSSHString(signedData, h[:])
 	sig, err := signer.Sign(rand.Reader, signedData)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var env []byte
-	env = append(env, SSHSigMagic...)
+	env = append(env, vcs.SSHSigMagic...)
 	env = append(env, 0, 0, 0, 1)
-	env = AppendSSHString(env, signer.PublicKey().Marshal())
-	env = AppendSSHString(env, []byte(namespace))
-	env = AppendSSHString(env, nil)
-	env = AppendSSHString(env, []byte(SSHSigHashAlgo))
-	env = AppendSSHString(env, ssh.Marshal(sig))
-	return Armor(env)
+	env = vcs.AppendSSHString(env, signer.PublicKey().Marshal())
+	env = vcs.AppendSSHString(env, []byte(namespace))
+	env = vcs.AppendSSHString(env, nil)
+	env = vcs.AppendSSHString(env, []byte(vcs.SSHSigHashAlgo))
+	env = vcs.AppendSSHString(env, ssh.Marshal(sig))
+	return vcs.Armor(env)
 }
 
 // TestVerifyCommitSignature_StockGitSSHSignature: an operator signs hand

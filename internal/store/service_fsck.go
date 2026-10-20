@@ -7,6 +7,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // DeleteObjectForTest removes a git object (blob, tree, or commit) from the
@@ -130,11 +132,11 @@ func (s *Service) rawEntryForTest(ctx context.Context, branch, path, content, me
 	if err != nil {
 		return "", err
 	}
-	blob, err := WriteBlobToStore(rh.Storer(), []byte(target))
+	blob, err := vcs.WriteBlobToStore(rh.Storer(), []byte(target))
 	if err != nil {
 		return "", err
 	}
-	rootHash, err := BuildTreeMode(rh.Storer(), root, path, mode, blob)
+	rootHash, err := vcs.BuildTreeMode(rh.Storer(), root, path, mode, blob)
 	if err != nil {
 		return "", err
 	}

@@ -4,6 +4,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // CommitExists reports whether this repository's object store holds commit h.
@@ -21,7 +23,7 @@ func (s *Service) CommitAgent(h plumbing.Hash) string {
 	if err != nil {
 		return ""
 	}
-	return AgentIDOfAuthor(c.Author.Email)
+	return vcs.AgentIDOfAuthor(c.Author.Email)
 }
 
 // SetAcceptList installs the accept list, bound to this repository. Like

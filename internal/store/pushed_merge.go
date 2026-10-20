@@ -16,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // ErrBranchMoved: the pushed branch no longer points at the commit the caller
@@ -103,14 +104,14 @@ func (e *BranchMovedError) Is(target error) bool { return target == ErrBranchMov
 // rule must not stand in for it (each is pinned by its own test).
 func (rh *repoHandler) onlyMergeCommits(src, dst plumbing.Hash) (bool, error) {
 	inDst := map[plumbing.Hash]bool{}
-	if err := WalkHistory(rh.Storer(), dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
 		return false, err
 	}
 	if inDst[src] {
 		return false, nil
 	}
 	only, n := true, 0
-	if err := WalkHistory(rh.Storer(), src, inDst, func(c *object.Commit) {
+	if err := vcs.WalkHistory(rh.Storer(), src, inDst, func(c *object.Commit) {
 		n++
 		if len(c.ParentHashes) < 2 {
 			only = false

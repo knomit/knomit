@@ -31,6 +31,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 )
 
 // TriggerFireRetention is how many fire-log rows a repo keeps: the newest
@@ -686,7 +687,7 @@ func (rh *repoHandler) UpstreamTip(ctx context.Context, upstream string) (plumbi
 // did that, and reachability from main IS acceptance.
 func (rh *repoHandler) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error) {
 	set := map[plumbing.Hash]bool{}
-	if err := WalkHistory(rh.Storer(), tip, nil, func(c *object.Commit) { set[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), tip, nil, func(c *object.Commit) { set[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("triggers: walk from %s: %w", tip, err)
 	}
 	return set, nil

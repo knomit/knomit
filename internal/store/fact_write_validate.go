@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // ErrFactInvalid matches *FactInvalidError with errors.Is.
@@ -90,7 +91,7 @@ func (rh *repoHandler) validateWrite(head plumbing.Hash, files map[string]string
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
-	raw, err := TreeOntology(c)
+	raw, err := vcs.TreeOntology(c)
 	if err != nil {
 		return fmt.Errorf("validate: the ontology at %s: %w", head, err)
 	}

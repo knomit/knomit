@@ -1,8 +1,8 @@
-// Commit signature helpers and commit-notification glue on repoHandler.
+// Commit signature helpers and commit-notification glue on Repo.
 // These were previously on factIndex but moved here because they are shared
 // between factIndex writes and remoteIndex.Sync, and reaching SIDEWAYS through
 // a sibling subsystem is not allowed.
-package store
+package vcs
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 // the branch it lands on: this instance's persisted agent id (SetAgentID),
 // for an agent branch and for an experiment forked from it alike (#394). It
 // is never derived from the branch name (D18).
-func (rh *repoHandler) CommitSigs(ctx context.Context, branch, operation string) (author, committer object.Signature, err error) {
+func (rh *Repo) CommitSigs(ctx context.Context, branch, operation string) (author, committer object.Signature, err error) {
 	agentID, err := rh.commitAgentID(ctx, branch)
 	if err != nil {
 		return object.Signature{}, object.Signature{}, err
@@ -58,7 +58,7 @@ func (rh *repoHandler) CommitSigs(ctx context.Context, branch, operation string)
 //
 // The id itself is OwnAgentID: the persisted id this store was given, never
 // a parse of either branch name.
-func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string, error) {
+func (rh *Repo) commitAgentID(ctx context.Context, branch string) (string, error) {
 	name, isExp := ExperimentNameOf(branch)
 	if !isExp {
 		return rh.OwnAgentID(branch)
@@ -114,7 +114,7 @@ func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string
 // it: we are inside the branch lock, so returning early would not release
 // anything sooner, and callers that want to stop a long run still observe
 // their own ctx between operations.
-func (rh *repoHandler) NotifyCommit(ctx context.Context, branch string, hash plumbing.Hash) error {
+func (rh *Repo) NotifyCommit(ctx context.Context, branch string, hash plumbing.Hash) error {
 	ctx = context.WithoutCancel(ctx)
 	if err := rh.AppendCommitLog(ctx, branch, hash.String()); err != nil {
 		return fmt.Errorf("notifyCommit: AppendCommitLog(%s): %w", branch, err)
@@ -139,13 +139,13 @@ func (rh *repoHandler) NotifyCommit(ctx context.Context, branch string, hash plu
 }
 
 // RootCommit walks first-parent ancestry from branch's head to the root commit
-// — the repo's stable identity. Lives on repoHandler because repoHandler owns
+// — the repo's stable identity. Lives on Repo because Repo owns
 // git reads; Service.RootCommit and searchIndex.localRepoID both delegate here
 // rather than opening a second handle.
 //
 // First-parent (never wall-clock, never a merge parent) so a repo with a
 // grafted or merged history still resolves deterministically.
-func (rh *repoHandler) RootCommit(ctx context.Context, branch string) (string, error) {
+func (rh *Repo) RootCommit(ctx context.Context, branch string) (string, error) {
 	head, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("rootCommit: resolve %q: %w", branch, err)

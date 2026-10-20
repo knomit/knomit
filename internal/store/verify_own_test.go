@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // ownHost is a fleet repository on a knomit host whose own agent branch
@@ -51,7 +52,7 @@ func (h *pushHost) rawCommit(branch, agent string, s ssh.Signer, kv ...string) p
 		TreeHash:     repoOn(h.t, h.svc.rh.Storer()).tree(with(h.branchFiles(branch), kv...)),
 		ParentHashes: []plumbing.Hash{parent.Hash},
 	}
-	hash, err := StoreCommit(h.svc.rh.Storer(), s, c)
+	hash, err := vcs.StoreCommit(h.svc.rh.Storer(), s, c)
 	require.NoError(h.t, err)
 	require.NoError(h.t, h.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), hash)))
 	return hash

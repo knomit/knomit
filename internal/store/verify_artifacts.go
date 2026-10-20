@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 )
 
 // artifactRules is R7: the artifacts section of the JUDGED repository's
@@ -63,7 +64,7 @@ func (j judge) artifactRules(c *object.Commit) (Refusal, bool) {
 	if err != nil {
 		return refuse(RuleArtifactRules, fmt.Sprintf("the commit's tree cannot be read: %v", err))
 	}
-	parents, err := ParentTrees(c)
+	parents, err := vcs.ParentTrees(c)
 	if err != nil {
 		return refuse(RuleArtifactRules, fmt.Sprintf("a parent's tree cannot be read: %v", err))
 	}

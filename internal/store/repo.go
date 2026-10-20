@@ -21,6 +21,8 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // ErrEmptyRemote is returned by CloneFrom when the remote repository exists
@@ -80,7 +82,7 @@ func (s *Service) OpenRepo() error {
 	// Order no longer matters for history derivation (it reads parents from
 	// git objects); it is kept first so RevisionsBefore and the graph
 	// resolvers see a complete parent graph as early as possible.
-	if err := BackfillCommitParents(context.Background(), s.rh); err != nil {
+	if err := vcs.BackfillCommitParents(context.Background(), s.rh.Repo); err != nil {
 		log.Warn().Err(err).Msg("commit_parents: backfill failed")
 	}
 	// History is derived before the repo serves anything (OpenHistory); a
@@ -134,13 +136,13 @@ func (s *Service) InitRepoWithUpstream(ctx context.Context, initFiles map[string
 	// for why two machines can silently diverge and why a real fix needs
 	// init-time cross-machine coordination rather than weakening the nonce.
 	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
-	lastCommit, _, err := WriteFileToStore(s.rh.Storer(), nil, plumbing.ZeroHash, "README.md", rootManifest, initMsg, initSig, initSig)
+	lastCommit, _, err := vcs.WriteFileToStore(s.rh.Storer(), nil, plumbing.ZeroHash, "README.md", rootManifest, initMsg, initSig, initSig)
 	if err != nil {
 		return fmt.Errorf("InitRepo: initial commit: %w", err)
 	}
 
 	for path, content := range initFiles {
-		lastCommit, _, err = WriteFileToStore(s.rh.Storer(), nil, lastCommit, path, content, "init: "+path, initSig, initSig)
+		lastCommit, _, err = vcs.WriteFileToStore(s.rh.Storer(), nil, lastCommit, path, content, "init: "+path, initSig, initSig)
 		if err != nil {
 			return fmt.Errorf("InitRepo: write %s: %w", path, err)
 		}
@@ -343,7 +345,7 @@ func OwnBranchesOnly() InitOption { return func(o *initOptions) { o.ownBranchesO
 // wildcard).
 func ownBranchesRefspecs(ctx context.Context, originURL string, auth transport.AuthMethod, own string, timeout time.Duration) ([]gogitconfig.RefSpec, error) {
 	rem := gogit.NewRemote(memory.NewStorage(), &gogitconfig.RemoteConfig{Name: "origin", URLs: []string{originURL}})
-	lctx, cancel := NetCtxWith(ctx, timeout)
+	lctx, cancel := vcs.NetCtxWith(ctx, timeout)
 	defer cancel()
 	refs, err := rem.ListContext(lctx, &gogit.ListOptions{Auth: auth})
 	if err != nil {
@@ -729,7 +731,7 @@ func detectRemoteUpstream(ctx context.Context, repo *gogit.Repository, auth tran
 // at (an agent-branch HEAD is skipped), and it reports what it resolved.
 
 func detectFromRemote(ctx context.Context, remote *gogit.Remote, auth transport.AuthMethod, timeout time.Duration) string {
-	ctx, cancel := NetCtxWith(ctx, timeout)
+	ctx, cancel := vcs.NetCtxWith(ctx, timeout)
 	defer cancel()
 	refs, err := remote.ListContext(ctx, &gogit.ListOptions{Auth: auth})
 	if err != nil {
@@ -778,12 +780,12 @@ func (s *Service) initFromEmptyRemote(ctx context.Context, repo *gogit.Repositor
 	// first-writer-wins lock on origin), NOT automatic reconciliation after the
 	// fact.
 	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
-	lastCommit, _, writeErr := WriteFileToStore(s.rh.Storer(), nil, plumbing.ZeroHash, "README.md", rootManifest, initMsg, initSig, initSig)
+	lastCommit, _, writeErr := vcs.WriteFileToStore(s.rh.Storer(), nil, plumbing.ZeroHash, "README.md", rootManifest, initMsg, initSig, initSig)
 	if writeErr != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
 	}
 	for path, content := range initFiles {
-		lastCommit, _, writeErr = WriteFileToStore(s.rh.Storer(), nil, lastCommit, path, content, "init: "+path, initSig, initSig)
+		lastCommit, _, writeErr = vcs.WriteFileToStore(s.rh.Storer(), nil, lastCommit, path, content, "init: "+path, initSig, initSig)
 		if writeErr != nil {
 			return "", fmt.Errorf("InitFromRemote: empty remote write %s: %w", path, writeErr)
 		}

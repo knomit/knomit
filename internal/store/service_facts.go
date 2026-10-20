@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 	"strings"
 	"testing"
 
@@ -90,7 +91,7 @@ func (s *Service) TestingCommitFiles(branch string, files map[string]string, mes
 		TreeHash:     root,
 		ParentHashes: []plumbing.Hash{parent},
 	}
-	h, err := StoreCommit(rh.Storer(), signer, c)
+	h, err := vcs.StoreCommit(rh.Storer(), signer, c)
 	if err != nil {
 		return "", err
 	}

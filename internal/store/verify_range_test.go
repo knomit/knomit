@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // rangeFixture is a knowledge base and a fleet repository, both bare git
@@ -339,10 +340,10 @@ func TestCheckRange_ExitCodes(t *testing.T) {
 }
 
 func TestAgentIDOfAuthor(t *testing.T) {
-	require.Equal(t, "research-box", AgentIDOfAuthor("research-box+learn@agents.knomit.io"))
-	require.Equal(t, "mindev-local-8ef0cd32", AgentIDOfAuthor("mindev-local-8ef0cd32@agents.knomit.io"))
-	require.Equal(t, "", AgentIDOfAuthor("someone@example.com"))
-	require.False(t, strings.Contains(AgentIDOfAuthor("a+b+c@agents.knomit.io"), "+"))
+	require.Equal(t, "research-box", vcs.AgentIDOfAuthor("research-box+learn@agents.knomit.io"))
+	require.Equal(t, "mindev-local-8ef0cd32", vcs.AgentIDOfAuthor("mindev-local-8ef0cd32@agents.knomit.io"))
+	require.Equal(t, "", vcs.AgentIDOfAuthor("someone@example.com"))
+	require.False(t, strings.Contains(vcs.AgentIDOfAuthor("a+b+c@agents.knomit.io"), "+"))
 }
 
 // R5-G1: an unsigned merge that adds content beyond its parents fails M3 and

@@ -2,7 +2,7 @@
 // creation. These helpers are used by the higher-level read/write/sync operations.
 //
 // All functions are unexported and take *storegit.Storer parameters.
-package store
+package vcs
 
 import (
 	_ "embed"

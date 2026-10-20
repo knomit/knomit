@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -297,7 +298,7 @@ func (rh *repoHandler) verifyModeAt(ctx context.Context, branch string) (mode st
 	if err != nil {
 		return "", nil, err
 	}
-	raw, err := TreeOntology(c)
+	raw, err := vcs.TreeOntology(c)
 	if err != nil {
 		return "", nil, err
 	}

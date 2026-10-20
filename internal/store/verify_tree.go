@@ -5,6 +5,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // commitTreeShape is CheckTreeShape over a commit's tree and every parent's
@@ -29,7 +31,7 @@ func commitTreeShape(c *object.Commit, ok map[plumbing.Hash]bool) error {
 	if err != nil {
 		return fmt.Errorf("tree %s: %w", c.TreeHash, err)
 	}
-	if err := CheckTreeShape(tree, ok); err != nil {
+	if err := vcs.CheckTreeShape(tree, ok); err != nil {
 		return err
 	}
 	for i, ph := range c.ParentHashes {
@@ -41,7 +43,7 @@ func commitTreeShape(c *object.Commit, ok map[plumbing.Hash]bool) error {
 		if err != nil {
 			return fmt.Errorf("parent %s: tree %s: %w", ph, p.TreeHash, err)
 		}
-		if err := CheckTreeShape(pt, ok); err != nil {
+		if err := vcs.CheckTreeShape(pt, ok); err != nil {
 			return fmt.Errorf("parent %s: %w", ph, err)
 		}
 	}

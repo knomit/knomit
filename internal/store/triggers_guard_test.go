@@ -24,7 +24,7 @@ var triggersAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// git reads
 		"?.CommitObject", "c.Tree", "cur.NumParents", "tree.FindEntry", "tree.TreeEntryFile", "tree.File",
-		"f.Contents", "WalkHistory", "?.Reference", "ref.Hash", "?.String",
+		"f.Contents", "vcs.WalkHistory", "?.Reference", "ref.Hash", "?.String",
 		// the tree-entry mode test every .knomit/ reader shares (a symlink is
 		// never a file), and the named error for a symlinked ontology: pure
 		"isSystemFileMode", "fact.SymlinkNotFollowed",
@@ -51,7 +51,7 @@ var triggersAllowedCalls = map[string][]string{
 		"boolInt", "UTCStamp", "time.Now", "time.Unix", "?.UTC", "?.Unix", "?.Format", "ctx.Err", "errors.Is", "errors.New", "fmt.Errorf", "sort.Strings",
 		"append", "len", "make", "min",
 	},
-	"trailers.go": {
+	"internal/vcs/trailers.go": {
 		// the reader, and the ctx transport of the trailer set (WithTrailers is
 		// read by the three fact builders in fact_write.go, never here)
 		"strings.TrimRight", "strings.LastIndex", "strings.Split", "strings.Cut", "strings.EqualFold", "strings.TrimSpace",

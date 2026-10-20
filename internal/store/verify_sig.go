@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 )
 
 // Reasons a commit's signature does not verify. Each is a distinct error so a
@@ -63,11 +64,11 @@ func verifyCommitSignature(c *object.Commit) (CommitSigner, error) {
 	if err != nil {
 		return CommitSigner{}, fmt.Errorf("%w: base64: %v", ErrMalformedSig, err)
 	}
-	if !bytes.HasPrefix(env, []byte(SSHSigMagic)) || len(env) < len(SSHSigMagic)+4 {
+	if !bytes.HasPrefix(env, []byte(vcs.SSHSigMagic)) || len(env) < len(vcs.SSHSigMagic)+4 {
 		return CommitSigner{}, fmt.Errorf("%w: no SSHSIG magic", ErrMalformedSig)
 	}
-	rest := env[len(SSHSigMagic):]
-	if binary.BigEndian.Uint32(rest) != SSHSigVersion {
+	rest := env[len(vcs.SSHSigMagic):]
+	if binary.BigEndian.Uint32(rest) != vcs.SSHSigVersion {
 		return CommitSigner{}, fmt.Errorf("%w: version", ErrMalformedSig)
 	}
 	rest = rest[4:]
@@ -80,10 +81,10 @@ func verifyCommitSignature(c *object.Commit) (CommitSigner, error) {
 		fields[i], rest = f, r
 	}
 	pubBlob, namespace, hashAlgo, sigBlob := fields[0], fields[1], fields[3], fields[4]
-	if string(namespace) != SSHSigNamespace {
+	if string(namespace) != vcs.SSHSigNamespace {
 		return CommitSigner{}, ErrWrongNamespace
 	}
-	if string(hashAlgo) != SSHSigHashAlgo {
+	if string(hashAlgo) != vcs.SSHSigHashAlgo {
 		return CommitSigner{}, ErrWrongHashAlgo
 	}
 	pub, err := ssh.ParsePublicKey(pubBlob)
@@ -109,11 +110,11 @@ func verifyCommitSignature(c *object.Commit) (CommitSigner, error) {
 	}
 	h := sha512.Sum512(payload)
 	var signed []byte
-	signed = append(signed, SSHSigMagic...)
-	signed = AppendSSHString(signed, []byte(SSHSigNamespace))
-	signed = AppendSSHString(signed, nil)
-	signed = AppendSSHString(signed, []byte(SSHSigHashAlgo))
-	signed = AppendSSHString(signed, h[:])
+	signed = append(signed, vcs.SSHSigMagic...)
+	signed = vcs.AppendSSHString(signed, []byte(vcs.SSHSigNamespace))
+	signed = vcs.AppendSSHString(signed, nil)
+	signed = vcs.AppendSSHString(signed, []byte(vcs.SSHSigHashAlgo))
+	signed = vcs.AppendSSHString(signed, h[:])
 	if err := pub.Verify(signed, &sig); err != nil {
 		return CommitSigner{}, ErrBadSignature
 	}

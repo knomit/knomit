@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // D18/P1b: an authored commit names the PERSISTED agent id the store was given
@@ -55,7 +57,7 @@ func TestCommitAuthor_NoAgentIDRefuses(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 	svc.SetSigner(newTestSigner(t))
-	prev := TestFallbackAgentForTest()
+	prev := vcs.TestFallbackAgentForTest()
 	SetTestFallbackAgentID(nil)
 	t.Cleanup(func() {
 		if prev != nil {

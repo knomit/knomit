@@ -18,7 +18,7 @@
 // is not reported — for a reader of state (a task pool, an inbox) that is the
 // right answer, because the thing is no longer there. Per-event history is the
 // commit list's job, not this one's.
-package store
+package vcs
 
 import (
 	"context"
@@ -136,7 +136,7 @@ func NormalizeChangesPrefix(ontologyRoot, prefix string) (string, error) {
 //   - only .md paths, and never a path with a private segment below the prefix;
 //   - rows sorted bytewise by path; a rename is "deleted" + "added" (no rename
 //     detection).
-func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error) {
+func (rh *Repo) ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error) {
 	base, err := NormalizeChangesPrefix(rh.OntologyRoot(), q.Prefix)
 	if err != nil {
 		return ChangesResult{}, err
@@ -237,7 +237,7 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 // meaningful, and refusing them would silently lose the fires. ChangesUnder
 // keeps its check: its `since` is a client's bookmark, where a sideways diff
 // fabricates deletions. A ZeroHash `from` is the empty tree.
-func (rh *repoHandler) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]PathChange, error) {
+func (rh *Repo) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]PathChange, error) {
 	base := rh.OntologyRoot()
 	var fromTree *object.Tree
 	if from != plumbing.ZeroHash {
@@ -285,7 +285,7 @@ func subtreeOrEmpty(c *object.Commit, base string) (*object.Tree, error) {
 
 // diffSubtrees diffs two folder trees (nil = empty) and returns repo-relative
 // paths sorted bytewise, keeping only those isFact admits. The caller passes
-// repoHandler.IsFactPath — the indexer's own membership rule (under the
+// Repo.IsFactPath — the indexer's own membership rule (under the
 // ontology root, .md, not private) — so changes and the index agree on what a
 // fact is, with one copy of the rule.
 func diffSubtrees(from, to *object.Tree, base string, isFact func(string) bool) ([]PathChange, error) {

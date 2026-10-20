@@ -16,6 +16,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // reconcileAgentMerge merges local upstreamMain into agentBranch. Holds
@@ -46,7 +48,7 @@ func (rh *repoHandler) reconcileAgentMerge(ctx context.Context, agentBranch, ups
 		Str("branch", agentBranch).
 		Str("upstream", upstreamMain).
 		Str("mode", string(res.Mode)).
-		Str("new_tip", ShortRefHash(plumbing.NewHash(res.NewTip))).
+		Str("new_tip", vcs.ShortRefHash(plumbing.NewHash(res.NewTip))).
 		Msg("reconcileAgentMerge: complete")
 	return res, nil
 }

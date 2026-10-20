@@ -14,6 +14,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 const scrubbedPath = "kb/secret.md"
@@ -64,7 +66,7 @@ func expRwRewind(t *testing.T, svc *Service, parent plumbing.Hash, path string) 
 func reaches(t *testing.T, svc *Service, branch string, h plumbing.Hash) bool {
 	t.Helper()
 	found := false
-	require.NoError(t, WalkHistory(svc.rh.Storer(), mustHeadHash(t, svc, branch), nil, func(c *object.Commit) {
+	require.NoError(t, vcs.WalkHistory(svc.rh.Storer(), mustHeadHash(t, svc, branch), nil, func(c *object.Commit) {
 		if c.Hash == h {
 			found = true
 		}

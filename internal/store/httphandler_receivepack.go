@@ -21,6 +21,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/platform/version"
+	"knomit/internal/store/internal/vcs"
 )
 
 // PushPolicy is what the HTTP edge knows about ONE receive-pack request and
@@ -262,7 +263,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		agent := ""
 		if c, err := object.GetCommit(q, cmd.New); err == nil {
-			agent = AgentIDOfAuthor(c.Author.Email)
+			agent = vcs.AgentIDOfAuthor(c.Author.Email)
 		}
 		pol.Judged(branch, cmd.New.String(), agent, refusal)
 	}
@@ -289,7 +290,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	judged("")
 
-	ev := lg.Info().Str("old", ShortRefHash(cmd.Old)).Str("new", ShortRefHash(cmd.New)).
+	ev := lg.Info().Str("old", vcs.ShortRefHash(cmd.Old)).Str("new", vcs.ShortRefHash(cmd.New)).
 		Int("commits", len(commits)).Int("objects", len(objs))
 	switch {
 	case seeded:
@@ -301,7 +302,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		// peer whose commits are on it; commits the host had not merged yet
 		// disappear from this branch until someone pushes them again. Worth
 		// one line above INFO, naming the pusher (on lg).
-		lg.Warn().Str("old", ShortRefHash(cmd.Old)).Str("new", ShortRefHash(cmd.New)).
+		lg.Warn().Str("old", vcs.ShortRefHash(cmd.Old)).Str("new", vcs.ShortRefHash(cmd.New)).
 			Int("commits", len(commits)).Int("objects", len(objs)).
 			Msg("receive-pack: force-updated (not a descendant of the previous tip)")
 	default:
@@ -523,7 +524,7 @@ func (rh *repoHandler) heldAdmitted(ctx context.Context, upstream string) func(p
 				if reach[head] {
 					continue
 				}
-				if err := WalkHistory(rh.Storer(), head, reach, func(c *object.Commit) { reach[c.Hash] = true }); err != nil {
+				if err := vcs.WalkHistory(rh.Storer(), head, reach, func(c *object.Commit) { reach[c.Hash] = true }); err != nil {
 					return false, err
 				}
 			}

@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // ── CRUD operations ───────────────────────────────────────────────────────────
@@ -95,7 +96,7 @@ func (si *searchIndex) embedRecord(ctx context.Context, rec FactRecord) ([]byte,
 	var data []byte
 	if err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT data FROM objects WHERE hash = ? AND type = ?`,
-		rec.BlobHash, BlobObjectType,
+		rec.BlobHash, vcs.BlobObjectType,
 	).Scan(&data); err != nil {
 		return nil, fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
 	}
@@ -540,7 +541,7 @@ func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactW
 		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 		 LEFT JOIN commit_log cl ON cl.commit_hash = bf.commit_hash AND cl.path = bf.path
-		 WHERE bf.branch_id = ? AND bf.path = ?`, BlobObjectType, branchID, path,
+		 WHERE bf.branch_id = ? AND bf.path = ?`, vcs.BlobObjectType, branchID, path,
 	)
 	return scanFactWithBody(row)
 }

@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
+	"knomit/internal/store/internal/vcs"
 
 	"github.com/rs/zerolog/log"
 )
@@ -40,7 +41,7 @@ type RecentFactEntry struct {
 // NULL otherwise.
 var contextBlobColumn = fmt.Sprintf(
 	`(SELECT o2.data FROM objects o2 WHERE o2.hash = f.blob_hash AND o2.type = %d AND EXISTS (SELECT 1 FROM fact_context fc WHERE fc.fact_id = f.id))`,
-	BlobObjectType)
+	vcs.BlobObjectType)
 
 // RecentFacts returns facts on the given branch ordered by most recent commit,
 // paginated by opts.Offset/opts.Limit. If opts.Text is non-empty, it performs
@@ -900,7 +901,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
-		args := append(append([]any{BlobObjectType, branchID}, flt.args...), limit)
+		args := append(append([]any{vcs.BlobObjectType, branchID}, flt.args...), limit)
 		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 			        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''),
@@ -1137,7 +1138,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	// ── Phase 2: fetch bodies for the top-limit facts only ────────────────
 	bodyPH := strings.Repeat("?,", len(candidates))
 	bodyArgs := make([]any, 0, len(candidates)+1)
-	bodyArgs = append(bodyArgs, BlobObjectType)
+	bodyArgs = append(bodyArgs, vcs.BlobObjectType)
 	for _, c := range candidates {
 		bodyArgs = append(bodyArgs, c.rec.BlobHash)
 	}

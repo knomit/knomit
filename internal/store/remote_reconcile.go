@@ -21,6 +21,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // rewindClassification distinguishes three outcomes when reconcileMain
@@ -128,7 +130,7 @@ func (rh *repoHandler) seedMissingWatermark(agentBranch string, lastOrigin plumb
 	if err := rh.writeAgentBase(agentBranch, lastOrigin); err != nil {
 		return fmt.Errorf("write watermark: %w", err)
 	}
-	log.Info().Str("branch", agentBranch).Str("base", ShortRefHash(lastOrigin)).
+	log.Info().Str("branch", agentBranch).Str("base", vcs.ShortRefHash(lastOrigin)).
 		Msg("seedMissingWatermark: no watermark; using where the origin was at the last fetch")
 	return nil
 }

@@ -8,6 +8,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // m3Verdict is merge rule M3's answer for one merge commit: whether its tree
@@ -68,7 +70,7 @@ func checkM3(merge *object.Commit) (m3Verdict, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := CheckTreeShape(tree, nil); err != nil {
+		if err := vcs.CheckTreeShape(tree, nil); err != nil {
 			return nil, err
 		}
 		out := map[string]pathEntry{}

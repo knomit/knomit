@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // RuleValidation: a fact a branch's NET change ADDS OR CHANGES (branchFactsValid
@@ -38,7 +39,7 @@ const RuleMergeConflict = "merge-conflict"
 // Artifacts live beside the root, never under it, so they are never facts.
 func isFactPathUnder(root, p string) bool {
 	if root == "" {
-		root = DefaultOntologyRoot
+		root = vcs.DefaultOntologyRoot
 	}
 	return strings.HasPrefix(p, root+"/") && fact.IsMarkdownPath(p) && !fact.IsPrivatePath(p)
 }
@@ -100,7 +101,7 @@ func validateNewFacts(ont *fact.Ontology, root string, froms []*object.Tree, to 
 // path ("" when none).
 func firstInvalidFact(ont *fact.Ontology, root string, froms []*object.Tree, to *object.Tree) (string, string, error) {
 	if root == "" {
-		root = DefaultOntologyRoot
+		root = vcs.DefaultOntologyRoot
 	}
 	paths, err := newFactPaths(root, froms, to)
 	if err != nil {
@@ -319,7 +320,7 @@ func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string)
 		}
 	}
 	if root == "" {
-		root = DefaultOntologyRoot
+		root = vcs.DefaultOntologyRoot
 	}
 	p, reason, err := invalidAmong(ont, root, paths, tree)
 	if err != nil {
@@ -333,7 +334,7 @@ func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string)
 
 // ontologyOf parses the ontology in c's tree: (nil, nil) when it holds none.
 func ontologyOf(c *object.Commit) (*fact.Ontology, error) {
-	raw, err := TreeOntology(c)
+	raw, err := vcs.TreeOntology(c)
 	if err != nil || raw == nil {
 		return nil, err
 	}

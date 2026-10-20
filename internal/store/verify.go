@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -421,7 +422,7 @@ func (s *integrity) indexedBranches(ctx context.Context) (map[string]bool, error
 func (s *integrity) reportUnindexedBranches(skipped []string) []IntegrityIssue {
 	var issues []IntegrityIssue
 	for _, br := range skipped {
-		if !IsGeneratedRef(br) {
+		if !vcs.IsGeneratedRef(br) {
 			continue
 		}
 		issues = append(issues, IntegrityIssue{
@@ -466,7 +467,7 @@ func (s *integrity) PruneGeneratedRefs(ctx context.Context) (PruneResult, error)
 	}
 	var targets []plumbing.ReferenceName
 	if err := iter.ForEach(func(ref *plumbing.Reference) error {
-		if name, ok := strings.CutPrefix(ref.Name().String(), "refs/heads/"); ok && IsGeneratedRef(name) {
+		if name, ok := strings.CutPrefix(ref.Name().String(), "refs/heads/"); ok && vcs.IsGeneratedRef(name) {
 			targets = append(targets, ref.Name())
 		}
 		return nil

@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"strings"
@@ -12,8 +12,8 @@ import (
 const DefaultOntologyRoot = "kb"
 
 // OntologyRoot returns the root every fact path lives under, defaulting for a
-// bare repoHandler that was never configured (tests, ad-hoc tooling).
-func (rh *repoHandler) OntologyRoot() string {
+// bare Repo that was never configured (tests, ad-hoc tooling).
+func (rh *Repo) OntologyRoot() string {
 	if rh.factRoot == "" {
 		return DefaultOntologyRoot
 	}
@@ -42,7 +42,7 @@ func (rh *repoHandler) OntologyRoot() string {
 // This is the same LOCATION rule, applied one level finer: a well-formed fact
 // hand-placed at kb/.drafts/x.md is deliberately not indexed, so the directory
 // works as a private stash.
-func (rh *repoHandler) IsFactPath(path string) bool {
+func (rh *Repo) IsFactPath(path string) bool {
 	return strings.HasPrefix(path, rh.OntologyRoot()+"/") &&
 		strings.HasSuffix(path, ".md") &&
 		!fact.IsPrivatePath(path)

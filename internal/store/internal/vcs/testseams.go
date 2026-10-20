@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"context"
@@ -12,26 +12,31 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
-// Test seams for the store's white-box tests, which drive the derivation and
-// commit-log internals through a full Service. Each panics outside a test
-// binary (testing.Testing), like the fallback-signer hook, so production cannot
-// lean on them. They add no behaviour: each is a one-line view of an internal.
+// Test seams for the parent store's white-box tests, which drive the
+// derivation and commit-log internals through a full Service and so cannot
+// live in this package. Each panics outside a test binary (testing.Testing),
+// like the fallback-signer hook, so production cannot lean on them; the Go
+// internal rule already keeps them out of reach of anything outside
+// internal/store. They add no behaviour: each is a one-line view of an
+// internal. The exported test hooks and counters (DeriveObjectHook, SwapHook,
+// BranchTipHook, OpenHistoryHook, CommitDiffs, PayloadsComputed,
+// LastSwapDuration) stay beside the code that reads them.
 
 func mustBeTest() {
 	if !testing.Testing() {
-		panic("store: test seam called outside a test binary")
+		panic("vcs: test seam called outside a test binary")
 	}
 }
 
 // IsDerivedForTest reports whether hash has derived path-change rows.
-func (rh *repoHandler) IsDerivedForTest(ctx context.Context, hash string) (bool, error) {
+func (rh *Repo) IsDerivedForTest(ctx context.Context, hash string) (bool, error) {
 	mustBeTest()
 	return newDeriver(rh, ActiveTables).isDerived(ctx, rh.db, hash)
 }
 
 // DeriveReadWhileApplyingForTest reads commit h through a deriver that is
 // applying, which must fail with ErrReadInApply.
-func (rh *repoHandler) DeriveReadWhileApplyingForTest(h plumbing.Hash) error {
+func (rh *Repo) DeriveReadWhileApplyingForTest(h plumbing.Hash) error {
 	mustBeTest()
 	d := newDeriver(rh, ActiveTables)
 	d.applying = true
@@ -41,33 +46,33 @@ func (rh *repoHandler) DeriveReadWhileApplyingForTest(h plumbing.Hash) error {
 
 // DeriveHookForTest is the commit-log Derive hook of a fresh deriver for
 // hashes, with nothing prepared.
-func (rh *repoHandler) DeriveHookForTest(hashes []string) func(ctx context.Context, tx *sql.Tx, i int) error {
+func (rh *Repo) DeriveHookForTest(hashes []string) func(ctx context.Context, tx *sql.Tx, i int) error {
 	mustBeTest()
 	return newDeriver(rh, ActiveTables).hook(hashes, nil)
 }
 
 // IndexItemsForTest builds the commit-log items of commits with a fresh
 // deriver.
-func (rh *repoHandler) IndexItemsForTest(ctx context.Context, commits []*object.Commit, all bool) ([]storegit.CommitLogItem, error) {
+func (rh *Repo) IndexItemsForTest(ctx context.Context, commits []*object.Commit, all bool) ([]storegit.CommitLogItem, error) {
 	mustBeTest()
 	return rh.indexItems(ctx, newDeriver(rh, ActiveTables), commits, all)
 }
 
 // CommitChangesForTest is a fresh deriver's tree diff of c.
-func (rh *repoHandler) CommitChangesForTest(c *object.Commit) ([]storegit.CommitLogEntry, error) {
+func (rh *Repo) CommitChangesForTest(c *object.Commit) ([]storegit.CommitLogEntry, error) {
 	mustBeTest()
 	return newDeriver(rh, ActiveTables).commitChanges(c)
 }
 
 // RederiveDegradedForTest runs rederiveDegraded.
-func (rh *repoHandler) RederiveDegradedForTest(ctx context.Context) (int, error) {
+func (rh *Repo) RederiveDegradedForTest(ctx context.Context) (int, error) {
 	mustBeTest()
 	return rh.rederiveDegraded(ctx)
 }
 
 // ChangeListsForTest returns how many commits' tree diffs are held for
 // indexing, and their total entry count.
-func (rh *repoHandler) ChangeListsForTest() (commits, entries int) {
+func (rh *Repo) ChangeListsForTest() (commits, entries int) {
 	mustBeTest()
 	rh.changes.mu.Lock()
 	defer rh.changes.mu.Unlock()
@@ -75,7 +80,7 @@ func (rh *repoHandler) ChangeListsForTest() (commits, entries int) {
 }
 
 // ResetChangeListsForTest drops every held tree diff.
-func (rh *repoHandler) ResetChangeListsForTest() {
+func (rh *Repo) ResetChangeListsForTest() {
 	mustBeTest()
 	rh.changes.mu.Lock()
 	rh.changes.m, rh.changes.n = nil, 0
@@ -83,7 +88,7 @@ func (rh *repoHandler) ResetChangeListsForTest() {
 }
 
 // BranchLockForTest returns branch's write lock, if one was ever taken.
-func (rh *repoHandler) BranchLockForTest(branch string) (*sync.RWMutex, bool) {
+func (rh *Repo) BranchLockForTest(branch string) (*sync.RWMutex, bool) {
 	mustBeTest()
 	v, ok := rh.branchMu.Load(branch)
 	if !ok {
@@ -94,14 +99,14 @@ func (rh *repoHandler) BranchLockForTest(branch string) (*sync.RWMutex, bool) {
 
 // LockConfigForTest takes the remote-config WRITE lock, as ConfigureRemote
 // does across a refspec rewrite, and returns its unlock.
-func (rh *repoHandler) LockConfigForTest() func() {
+func (rh *Repo) LockConfigForTest() func() {
 	mustBeTest()
 	rh.configMu.Lock()
 	return rh.configMu.Unlock
 }
 
 // ForgetBranchIDForTest drops name from the branch-id cache.
-func (rh *repoHandler) ForgetBranchIDForTest(name string) {
+func (rh *Repo) ForgetBranchIDForTest(name string) {
 	mustBeTest()
 	rh.cache.remove(name)
 }

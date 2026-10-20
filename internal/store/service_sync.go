@@ -9,6 +9,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // DropUnpublishedCommit is the operator's way out of a refusal by the judge
@@ -79,11 +81,11 @@ func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumb
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", upstream, err)
 	}
 	onUp := map[plumbing.Hash]bool{}
-	if err := WalkHistory(rh.Storer(), upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
 	unpublished := map[plumbing.Hash]bool{}
-	if err := WalkHistory(rh.Storer(), localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
 	if !unpublished[drop] {
@@ -156,7 +158,7 @@ func (s *Service) MainHistory(ctx context.Context) (*MainHistory, error) {
 		return nil, fmt.Errorf("MainHistory: %s: %w", upstream, err)
 	}
 	onMain := map[plumbing.Hash]bool{}
-	if err := WalkHistory(s.rh.Storer(), uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(s.rh.Storer(), uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("MainHistory: %w", err)
 	}
 	return &MainHistory{tip: uh, onMain: onMain}, nil
@@ -213,7 +215,7 @@ func (s *Service) JudgePeerBranch(ctx context.Context, branch, own string, tip p
 		}
 	}
 	var commits []*object.Commit
-	if err := WalkHistory(rh.Storer(), tip, main.onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), tip, main.onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return "", fmt.Errorf("JudgePeerBranch: %w", err)
 	}
 	if msg := rh.privatePathClosure(ctx, rh.Storer(), upstream, commits); msg != "" {

@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // The conflict record's trailer keys. They share the last paragraph of a merge
@@ -448,7 +449,7 @@ func (rh *repoHandler) conflictsStrategy(ctx context.Context, branch string) (Co
 		log.Warn().Err(err).Str("branch", branch).Msg("conflicts: cannot read the consensus tip; read as off")
 		return "", false
 	}
-	data, err := TreeOntology(c)
+	data, err := vcs.TreeOntology(c)
 	if err != nil {
 		// A symlinked (fact.ErrSymlinkNotFollowed) or unreadable ontology:
 		// off, like its neighbours, but never without a log line.
@@ -491,7 +492,7 @@ func appendTrailerLines(message string, lines []string) string {
 		last = msg[i+2:]
 	}
 	sep := "\n\n"
-	if last != msg && IsTrailerParagraph(last) {
+	if last != msg && vcs.IsTrailerParagraph(last) {
 		sep = "\n"
 	}
 	return msg + sep + strings.Join(sorted, "\n") + "\n"

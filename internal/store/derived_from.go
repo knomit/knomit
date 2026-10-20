@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // resolveTargetCommit walks first-parent ancestry of sourceCommit on the
@@ -137,7 +138,7 @@ func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 	}
 
 	var action string
-	err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx, FirstParentChainCTE+`
+	err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx, vcs.FirstParentChainCTE+`
 		SELECT cl.action
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash

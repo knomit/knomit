@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"crypto/sha256"

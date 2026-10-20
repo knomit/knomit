@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"knomit/internal/store/internal/sqlite"
 )
 
 // ExperimentPrefix is the ref namespace every experiment branch lives under.
@@ -73,13 +75,13 @@ func ExperimentNameOf(branch string) (string, bool) {
 // GetExperiment reads one record. The bool distinguishes "no such experiment"
 // from an error, so eligibility can answer "not writable" without treating a
 // DB failure as an answer.
-func (rh *repoHandler) GetExperiment(ctx context.Context, name string) (Experiment, bool, error) {
+func (rh *Repo) GetExperiment(ctx context.Context, name string) (Experiment, bool, error) {
 	var (
 		e          Experiment
 		created    int64
 		lastActive int64
 	)
-	err := conn(ctx, rh.db).QueryRowContext(ctx, `
+	err := sqlite.Conn(ctx, rh.db).QueryRowContext(ctx, `
 		SELECT name, description, parent_branch, fork_commit, created_at, last_activity_at
 		FROM experiments WHERE name = ?`, name,
 	).Scan(&e.Name, &e.Description, &e.Parent, &e.ForkCommit, &created, &lastActive)
@@ -110,7 +112,7 @@ func (rh *repoHandler) GetExperiment(ctx context.Context, name string) (Experime
 // never completed a boot, reports "" — and reading it as "no previous branch"
 // would refuse every commit on such a database. Same guard verify.go applies
 // to the same value. So the check bites only on a KNOWN, different owner.
-func (rh *repoHandler) CheckExperimentParentCurrent(ctx context.Context, exp Experiment) error {
+func (rh *Repo) CheckExperimentParentCurrent(ctx context.Context, exp Experiment) error {
 	owner, err := rh.AgentBranchOwner(ctx)
 	if err != nil {
 		return fmt.Errorf("experiment %q: read agent branch owner: %w", exp.Name, err)
@@ -132,12 +134,12 @@ func (rh *repoHandler) CheckExperimentParentCurrent(ctx context.Context, exp Exp
 // costs a prefix compare; only an experiment branch reaches SQL. A branch with
 // no row updates nothing, which is the correct answer for a hand-made `exp/…`
 // ref nobody opened.
-func (rh *repoHandler) touchExperimentActivity(ctx context.Context, branch string) error {
+func (rh *Repo) touchExperimentActivity(ctx context.Context, branch string) error {
 	if !IsExperimentBranch(branch) {
 		return nil
 	}
 	name, _ := ExperimentNameOf(branch)
-	if _, err := conn(ctx, rh.db).ExecContext(ctx,
+	if _, err := sqlite.Conn(ctx, rh.db).ExecContext(ctx,
 		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`,
 		time.Now().Unix(), name); err != nil {
 		return fmt.Errorf("touch experiment %q: %w", name, err)

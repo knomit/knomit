@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // The malformed-tree rows: a directory entry (mode 040000) naming a blob, and
@@ -140,7 +141,7 @@ func TestCheckTreeShape(t *testing.T) {
 		th := graftTree(t, r.st, good, row.dir, row.entry)
 		tree, err := object.GetTree(r.st, th)
 		require.NoError(t, err)
-		err = CheckTreeShape(tree, map[plumbing.Hash]bool{})
+		err = vcs.CheckTreeShape(tree, map[plumbing.Hash]bool{})
 		if row.want == "" {
 			require.NoError(t, err, row.name)
 		} else {
@@ -162,8 +163,8 @@ func TestCheckTreeShape(t *testing.T) {
 		require.NoError(t, err)
 		return tree
 	}
-	require.NoError(t, CheckTreeShape(chain(MaxShapeDepth), nil))
-	err := CheckTreeShape(chain(MaxShapeDepth+2), nil)
+	require.NoError(t, vcs.CheckTreeShape(chain(vcs.MaxShapeDepth), nil))
+	err := vcs.CheckTreeShape(chain(vcs.MaxShapeDepth+2), nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "deeper than")
 }
@@ -411,7 +412,7 @@ func requireWellFormed(t *testing.T, c *object.Commit) {
 	t.Helper()
 	tree, err := c.Tree()
 	require.NoError(t, err)
-	require.NoError(t, CheckTreeShape(tree, nil), "the judged commit's own tree is well formed")
+	require.NoError(t, vcs.CheckTreeShape(tree, nil), "the judged commit's own tree is well formed")
 }
 
 // CheckRange: main's tip P, below the range, holds the malformed tree. boss's
