@@ -52,12 +52,12 @@ func TestGraphBuildSimilarityEdges_SkipsNeighborWithNullDistance(t *testing.T) {
 	writeSrcFact(t, svc, branch, "kb/x/src.md", "normal content body", nil, nil)
 
 	var blobHash string
-	require.NoError(t, svc.si.rh.DB().QueryRow(
+	require.NoError(t, svc.si.RepoForTest().DB().QueryRow(
 		`SELECT blob_hash FROM facts WHERE path = ?`, "kb/x/src.md").Scan(&blobHash))
 
 	// Before the fix this returns:
 	//   "scan knn row: sql: Scan error ... converting NULL to float64 is unsupported"
-	err = svc.si.graphBuildSimilarityEdges(ctx, "kb/x/src.md", blobHash)
+	err = svc.si.GraphBuildSimilarityEdgesForTest(ctx, "kb/x/src.md", blobHash)
 	require.NoError(t, err, "NULL-distance neighbors must be skipped, not fail the edge build")
 }
 

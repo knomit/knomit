@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -38,7 +38,7 @@ type SubjectLabelDF struct {
 // subject token lives in internal/fact and must stay single: a SQL
 // reimplementation would be a second definition of the same rule, free to
 // drift from the one the write path enforces.
-func (gs *graphStore) SubjectLabelDF(ctx context.Context, branch string) (SubjectLabelDF, error) {
+func (gs *GraphStore) SubjectLabelDF(ctx context.Context, branch string) (SubjectLabelDF, error) {
 	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return SubjectLabelDF{}, fmt.Errorf("SubjectLabelDF: branchID: %w", err)
@@ -70,7 +70,7 @@ func (gs *graphStore) SubjectLabelDF(ctx context.Context, branch string) (Subjec
 }
 
 // livePathsByFactID returns fact_id → path for every fact live on the branch.
-func (gs *graphStore) livePathsByFactID(ctx context.Context, branchID int64) (map[int64]string, error) {
+func (gs *GraphStore) livePathsByFactID(ctx context.Context, branchID int64) (map[int64]string, error) {
 	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx,
 		`SELECT bf.fact_id, bf.path FROM branch_facts bf WHERE bf.branch_id = ?`, branchID)
 	if err != nil {
@@ -91,7 +91,7 @@ func (gs *graphStore) livePathsByFactID(ctx context.Context, branchID int64) (ma
 
 // labelsByFact reads one label junction table into fact_id → labels, restricted
 // to facts live on the branch.
-func (gs *graphStore) labelsByFact(ctx context.Context, branchID int64, table, col string) (map[int64][]string, error) {
+func (gs *GraphStore) labelsByFact(ctx context.Context, branchID int64, table, col string) (map[int64][]string, error) {
 	q := fmt.Sprintf(
 		`SELECT bf.fact_id, j.%s
 		   FROM branch_facts bf

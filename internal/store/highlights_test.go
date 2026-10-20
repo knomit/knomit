@@ -308,16 +308,16 @@ func TestHighlights_ImpactCountsDistinctTargetsNotEdgeRows(t *testing.T) {
 	// graph primitives — the same pattern
 	// TestGraphSetEdgeProps_WritesAndReadsText (edge_props_test.go) uses.
 	si := svc.si
-	srcID, err := si.graphNodeIDByBlob(ctx, "kb/s/big.md", srcRes.BlobHash)
+	srcID, err := si.GraphNodeIDByBlobForTest(ctx, "kb/s/big.md", srcRes.BlobHash)
 	require.NoError(t, err)
 	require.NotZero(t, srcID)
 	for _, p := range refPaths {
-		tgtID, err := si.graphNodeIDByBlob(ctx, p, refBlobs[p])
+		tgtID, err := si.GraphNodeIDByBlobForTest(ctx, p, refBlobs[p])
 		require.NoError(t, err)
 		require.NotZero(t, tgtID)
-		edgeID, err := si.graphInsertEdgeReturningID(ctx, srcID, tgtID, EdgeDerivedFrom)
+		edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, srcID, tgtID, EdgeDerivedFrom)
 		require.NoError(t, err)
-		require.NoError(t, si.graphSetEdgeProps(ctx, edgeID, map[string]string{
+		require.NoError(t, si.GraphSetEdgePropsForTest(ctx, edgeID, map[string]string{
 			"source_commit": "fake-second-source-commit",
 			"target_commit": "fake-second-target-commit",
 		}))

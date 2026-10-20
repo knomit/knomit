@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -46,7 +46,7 @@ import (
 // targets it's O(commits-since-last-touch). An in-process cache keyed by
 // (refPath, sourceCommit) per ingest call is a possible optimisation if
 // this becomes hot.
-func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePath, refPath, sourceCommit string) (string, bool, error) {
+func (si *Index) resolveTargetCommit(ctx context.Context, branch, sourcePath, refPath, sourceCommit string) (string, bool, error) {
 	cur := sourceCommit
 	// Self-ref ("this fact derives from the previous version of this path"):
 	// the source commit is where the current version is being written, so it
@@ -71,7 +71,7 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 // the user can navigate to via fallback-before. A target retracted long
 // before the source's commit still has a navigable last-valid blob, so
 // the ref is not broken from the user's perspective.
-func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
+func (fq *FactQuery) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
 	// Fact paths are lowercase-canonical, but both branches below compare
 	// case-sensitively: branch_facts.path is plain TEXT (no COLLATE NOCASE), and
 	// the commit-anchored walk matches commit_log paths literally. Normalize
@@ -132,7 +132,7 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 //
 // Returns false (not an error) when the path was never written in the
 // ancestry of `commit`. Errors propagate.
-func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error) {
+func (fq *FactQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error) {
 	if commit == "" {
 		return false, nil
 	}
@@ -177,7 +177,7 @@ func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 // search_crud.go). The tx parameter remains unused for the same reason; it is
 // retained in the signature for symmetry with graphSyncFactTx and for the
 // move-into-tx follow-up.
-func (si *searchIndex) graphAddDerivedFromAtCommitTx(
+func (si *Index) graphAddDerivedFromAtCommitTx(
 	ctx context.Context,
 	tx storegit.CtxExecer,
 	branch, sourcePath, sourceBlobHash, sourceCommit string,
@@ -262,7 +262,7 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 // already exists. Used by graphAddDerivedFromAtCommitTx as a dedup guard to
 // prevent duplicate edges when the two-pass sync retries edge writes for
 // refs that were already successfully wired in pass 1.
-func (si *searchIndex) graphDerivedFromEdgeExists(ctx context.Context, srcID, tgtID int64, sourceCommit, targetCommit string) (bool, error) {
+func (si *Index) graphDerivedFromEdgeExists(ctx context.Context, srcID, tgtID int64, sourceCommit, targetCommit string) (bool, error) {
 	var n int
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
 		SELECT COUNT(*)
@@ -284,7 +284,7 @@ func (si *searchIndex) graphDerivedFromEdgeExists(ctx context.Context, srcID, tg
 // graphNodeIDByBlob looks up the Fact node id for (path, blob_hash). Both
 // must match because Fact identity is per-version. Returns 0 if no such
 // node exists (caller decides whether that's an error).
-func (si *searchIndex) graphNodeIDByBlob(ctx context.Context, path, blobHash string) (int64, error) {
+func (si *Index) graphNodeIDByBlob(ctx context.Context, path, blobHash string) (int64, error) {
 	var nodeID int64
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
 		SELECT npp.node_id

@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -72,7 +72,7 @@ func CanonicalizeTag(s string) string { return canonicalizeDomain(s) }
 // canonicalisation logic on every rebuild (historical fact rows keep stable
 // rowids, so they receive no CASCADE cleanup of their own). Rows are collected
 // before writing so the read cursor is closed first (single-connection safety).
-func (si *searchIndex) repopulateDomainTokens(ctx context.Context) error {
+func (si *Index) repopulateDomainTokens(ctx context.Context) error {
 	db := conn(ctx, si.rh.DB())
 	if _, err := db.ExecContext(ctx, `DELETE FROM fact_domain_tokens`); err != nil {
 		return fmt.Errorf("repopulateDomainTokens: clear: %w", err)

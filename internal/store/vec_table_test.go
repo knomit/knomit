@@ -22,17 +22,17 @@ func makeVec(dim int) []float32 {
 func seedEmbedIdentity(t *testing.T, si *searchIndex, modelID string, dim int) {
 	t.Helper()
 	ctx := context.Background()
-	_, err := si.rh.DB().ExecContext(ctx,
+	_, err := si.RepoForTest().DB().ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES ('embed_model_id', ?)`, modelID)
 	require.NoError(t, err)
-	_, err = si.rh.DB().ExecContext(ctx,
+	_, err = si.RepoForTest().DB().ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES ('embed_dim', ?)`, dim)
 	require.NoError(t, err)
 }
 
 func insertVec(t *testing.T, si *searchIndex, rowid int64, vec []float32) error {
 	t.Helper()
-	_, err := si.rh.DB().ExecContext(context.Background(),
+	_, err := si.RepoForTest().DB().ExecContext(context.Background(),
 		`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`, rowid, float32SliceToBytes(vec))
 	return err
 }
@@ -40,7 +40,7 @@ func insertVec(t *testing.T, si *searchIndex, rowid int64, vec []float32) error 
 func vecRowCount(t *testing.T, si *searchIndex) int {
 	t.Helper()
 	var n int
-	require.NoError(t, si.rh.DB().QueryRowContext(context.Background(),
+	require.NoError(t, si.RepoForTest().DB().QueryRowContext(context.Background(),
 		`SELECT count(*) FROM facts_vec`).Scan(&n))
 	return n
 }
@@ -64,9 +64,9 @@ func TestEnsureFactsVecCreatesAtDim(t *testing.T) {
 	si := openSI(t)
 
 	// Open created facts_vec at the default dim; recreate at 1024.
-	require.NoError(t, si.ensureFactsVec(ctx, "m", 1024))
+	require.NoError(t, si.EnsureFactsVecForTest(ctx, "m", 1024))
 
-	exists, err := si.vecTableExists(ctx, factsVecTable)
+	exists, err := si.VecTableExistsForTest(ctx, factsVecTable)
 	require.NoError(t, err)
 	require.True(t, exists, "facts_vec must exist after ensureFactsVec")
 
@@ -87,13 +87,13 @@ func TestEnsureFactsVecIdempotent(t *testing.T) {
 	si := openSI(t)
 
 	seedEmbedIdentity(t, si, "m", 768)
-	require.NoError(t, si.ensureFactsVec(ctx, "m", 768))
+	require.NoError(t, si.EnsureFactsVecForTest(ctx, "m", 768))
 
 	require.NoError(t, insertVec(t, si, 42, makeVec(768)))
 	require.Equal(t, 1, vecRowCount(t, si))
 
 	// Second call with identical identity must not recreate the table.
-	require.NoError(t, si.ensureFactsVec(ctx, "m", 768))
+	require.NoError(t, si.EnsureFactsVecForTest(ctx, "m", 768))
 	require.Equal(t, 1, vecRowCount(t, si),
 		"idempotent ensureFactsVec must not drop the table or lose rows")
 }
@@ -105,12 +105,12 @@ func TestEnsureFactsVecRecreatesOnModelChange(t *testing.T) {
 	si := openSI(t)
 
 	seedEmbedIdentity(t, si, "nomic", 768)
-	require.NoError(t, si.ensureFactsVec(ctx, "nomic", 768))
+	require.NoError(t, si.EnsureFactsVecForTest(ctx, "nomic", 768))
 	require.NoError(t, insertVec(t, si, 7, makeVec(768)))
 	require.Equal(t, 1, vecRowCount(t, si))
 
 	// Same dim, different model → table recreated empty.
-	require.NoError(t, si.ensureFactsVec(ctx, "embeddinggemma", 768))
+	require.NoError(t, si.EnsureFactsVecForTest(ctx, "embeddinggemma", 768))
 	require.Equal(t, 0, vecRowCount(t, si),
 		"model-id change must recreate facts_vec empty")
 }
@@ -122,12 +122,12 @@ func TestEnsureFactsVecRecreatesOnDimChange(t *testing.T) {
 	si := openSI(t)
 
 	seedEmbedIdentity(t, si, "nomic", 768)
-	require.NoError(t, si.ensureFactsVec(ctx, "nomic", 768))
+	require.NoError(t, si.EnsureFactsVecForTest(ctx, "nomic", 768))
 	require.NoError(t, insertVec(t, si, 9, makeVec(768)))
 	require.Equal(t, 1, vecRowCount(t, si))
 
 	// Dim 768 → 1024 → table recreated empty and now accepts 1024-dim vectors.
-	require.NoError(t, si.ensureFactsVec(ctx, "nomic", 1024))
+	require.NoError(t, si.EnsureFactsVecForTest(ctx, "nomic", 1024))
 	require.Equal(t, 0, vecRowCount(t, si),
 		"dim change must recreate facts_vec empty")
 	require.NoError(t, insertVec(t, si, 10, makeVec(1024)),

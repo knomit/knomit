@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -162,7 +162,7 @@ func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 // merge with mounts that do have one. Only the caller assembling the union
 // knows that, so it needs to be told which lists are fallbacks — see
 // handleHALLensStats.
-func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix, axis string) ([]Highlight, bool, error) {
+func (fq *FactQuery) highlights(ctx context.Context, branchID int64, pathPrefix, axis string) ([]Highlight, bool, error) {
 	out, err := fq.highlightRows(ctx, branchID, pathPrefix, axis, true)
 	if err != nil {
 		return nil, false, err
@@ -184,7 +184,7 @@ func (fq *factQuery) highlights(ctx context.Context, branchID int64, pathPrefix,
 // highlightRows runs the ranked top-N query, optionally applying the type
 // exclusion. Same ORDER BY either way, so a fallback list is ranked by the
 // requested axis rather than arriving in whatever order the rows came back.
-func (fq *factQuery) highlightRows(ctx context.Context, branchID int64, pathPrefix, axis string, exclude bool) ([]Highlight, error) {
+func (fq *FactQuery) highlightRows(ctx context.Context, branchID int64, pathPrefix, axis string, exclude bool) ([]Highlight, error) {
 	out := make([]Highlight, 0, MaxHighlights)
 
 	var order string
@@ -297,7 +297,7 @@ func AxisFromSeparation(topFacts, topEdges, obsFacts, obsEdges int) string {
 // samples (core ranges 42x to 143x to undefined across its top-level folders)
 // and a folder dipping below the threshold would flip the control while the
 // user navigates.
-func (fq *factQuery) separationCounts(ctx context.Context, branchID int64) (topFacts, topEdges, obsFacts, obsEdges int, err error) {
+func (fq *FactQuery) separationCounts(ctx context.Context, branchID int64) (topFacts, topEdges, obsFacts, obsEdges int, err error) {
 	excluded := excludedTypePlaceholders()
 	q := `
 		SELECT
@@ -334,7 +334,7 @@ func (fq *factQuery) separationCounts(ctx context.Context, branchID int64) (topF
 // Uses the same conditional-AND path-scoping idiom as the pre-existing Stats
 // aggregates (index.go) rather than a `(? = "" OR ...)` inline form — see the
 // liveFactNodeCTE doc comment for why the two idioms coexist in this file.
-func (fq *factQuery) typeCounts(ctx context.Context, branchID int64, pathPrefix string) (map[string]int, error) {
+func (fq *FactQuery) typeCounts(ctx context.Context, branchID int64, pathPrefix string) (map[string]int, error) {
 	res := make(map[string]int)
 	q := `SELECT f.type, COUNT(*)
 	        FROM branch_facts bf

@@ -79,8 +79,8 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	// below. Scoped to THIS target instance and restored on return — callers that
 	// set SkipIndexSync own the follow-up Rebuild. See ReplayConfig.SkipIndexSync.
 	if cfg.SkipIndexSync {
-		target.si.syncSuspended.Store(true)
-		defer target.si.syncSuspended.Store(false)
+		target.si.SetSyncSuspended(true)
+		defer target.si.SetSyncSuspended(false)
 	}
 
 	// 2. Collect all facts from the iterator for progress reporting.

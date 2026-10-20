@@ -363,13 +363,13 @@ func TestOutgoingAtCommit_FiltersStaleSelfLoop(t *testing.T) {
 	si := svc.si
 
 	// Bypass the write-path fix to inject a stale self-loop edge directly.
-	nodeID, err := si.graphNodeIDByBlob(ctx, "kb/x.md", xRes.BlobHash)
+	nodeID, err := si.GraphNodeIDByBlobForTest(ctx, "kb/x.md", xRes.BlobHash)
 	require.NoError(t, err)
 	require.NotZero(t, nodeID, "graph node for the written fact must exist")
 
-	edgeID, err := si.graphInsertEdgeReturningID(ctx, nodeID, nodeID, EdgeDerivedFrom)
+	edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, nodeID, nodeID, EdgeDerivedFrom)
 	require.NoError(t, err)
-	require.NoError(t, si.graphSetEdgeProps(ctx, edgeID, map[string]string{
+	require.NoError(t, si.GraphSetEdgePropsForTest(ctx, edgeID, map[string]string{
 		"source_commit": xRes.CommitHash,
 		"target_commit": xRes.CommitHash,
 	}))

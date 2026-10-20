@@ -19,6 +19,7 @@ import (
 
 	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/index"
 	"knomit/internal/store/internal/sessions"
 	"knomit/internal/store/migrate"
 )
@@ -129,7 +130,7 @@ func Open(path string) (*Service, error) {
 	rh := newRepoHandler(db, gits)
 	// Derive repo name from dbPath: /path/to/core.db → "core"
 	rh.SetName(strings.TrimSuffix(filepath.Base(path), ".db"))
-	si := &searchIndex{rh: rh}
+	si := index.New(rh.Repo)
 
 	// facts_vec is code-managed (migration 000009 drops the old static
 	// FLOAT[768] table). Recreate it at the default dimension now so the
@@ -137,7 +138,7 @@ func Open(path string) (*Service, error) {
 	// embedder is configured (or when embeddings are disabled entirely). Once
 	// an embedder is set, Rebuild's ensureFactsVec recreates it at the real
 	// model dim and the model-change self-heal re-embeds the corpus.
-	if err := si.ensureFactsVecDefault(context.Background()); err != nil {
+	if err := si.EnsureFactsVecDefault(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store.Open: ensure facts_vec: %w", err)
 	}
@@ -146,13 +147,13 @@ func Open(path string) (*Service, error) {
 	rh.SetIndexManager(si) // notifyCommit delegates to im.Sync after every commit.
 	fi := facts.NewIndex(rh.factsRepo)
 	ri := &remoteIndex{rh: rh}
-	fq := &factQuery{rh: rh}
-	gq := &graphStore{rh: rh}
-	hq := &historyQuery{rh: rh}
-	mq := &methodologyMatcher{rh: rh}
+	fq := index.NewFactQuery(rh.Repo)
+	gq := index.NewGraphStore(rh.Repo)
+	hq := index.NewHistoryQuery(rh.Repo)
+	mq := index.NewMethodologyMatcher(rh.Repo)
 	ax := &abstractionIndex{rh: rh}
 	mo := &motifIndex{rh: rh}
-	search := &searchFacade{factQuery: fq, graphStore: gq, historyQuery: hq, methodologyMatcher: mq}
+	search := index.NewFacade(fq, gq, hq, mq)
 	canonPath := canonicalizePath(path)
 
 	// Open the ephemeral session DB (separate file, stock driver). This is

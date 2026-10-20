@@ -134,7 +134,7 @@ func TestMotifAliases_MN3_RebuildIsReproducibleAndTouchesNoFact(t *testing.T) {
 		blobsBefore[p] = rec.BlobHash
 	}
 
-	_, err = svc.si.rh.DB().ExecContext(ctx, `DELETE FROM motif_aliases`)
+	_, err = svc.si.RepoForTest().DB().ExecContext(ctx, `DELETE FROM motif_aliases`)
 	require.NoError(t, err)
 	empty, err := svc.Motifs().AliasTable(ctx, branch)
 	require.NoError(t, err)
@@ -298,7 +298,7 @@ func TestMotifAliases_MN3_RebuildsIdenticallyAtEveryStage(t *testing.T) {
 
 		// Destroy the derived layer entirely. What remains is the facts and the
 		// recorded decisions — the two inputs MN3 says it is a function of.
-		_, err = svc.si.rh.DB().ExecContext(ctx, `DELETE FROM motif_aliases`)
+		_, err = svc.si.RepoForTest().DB().ExecContext(ctx, `DELETE FROM motif_aliases`)
 		require.NoError(t, err)
 		empty, err := svc.Motifs().AliasRows(ctx, branch)
 		require.NoError(t, err)

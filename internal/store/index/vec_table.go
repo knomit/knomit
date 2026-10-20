@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -36,7 +36,7 @@ const (
 // 000009 migration drops the old static table), independent of whether an
 // embedder is ever configured. A no-op when the table already exists, so it
 // never clobbers a table that ensureFactsVec created at a real model dim.
-func (si *searchIndex) ensureFactsVecDefault(ctx context.Context) error {
+func (si *Index) ensureFactsVecDefault(ctx context.Context) error {
 	for _, table := range []string{factsVecTable, titlesVecTable} {
 		exists, err := si.vecTableExists(ctx, table)
 		if err != nil {
@@ -58,7 +58,7 @@ func (si *searchIndex) ensureFactsVecDefault(ctx context.Context) error {
 // between the create-on-Open and recreate-on-rebuild paths. `table` is one of
 // the constants above and `dim` comes from the trusted model registry (or
 // defaultVecDim), so formatting both into DDL is safe.
-func (si *searchIndex) createVecTable(ctx context.Context, table string, dim int) error {
+func (si *Index) createVecTable(ctx context.Context, table string, dim int) error {
 	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		fmt.Sprintf(`CREATE VIRTUAL TABLE %s USING vec0(embedding FLOAT[%d] distance_metric=cosine)`, table, dim),
 	); err != nil {
@@ -73,7 +73,7 @@ func (si *searchIndex) createVecTable(ctx context.Context, table string, dim int
 // subsequent rebuild re-embeds the whole corpus. `dim` comes from the trusted
 // model registry, so formatting it into DDL is safe. Meta identity
 // (embed_model_id/embed_dim) is persisted by Rebuild on success, not here.
-func (si *searchIndex) ensureFactsVec(ctx context.Context, modelID string, dim int) error {
+func (si *Index) ensureFactsVec(ctx context.Context, modelID string, dim int) error {
 	curID, err := si.persistedEmbedModelID(ctx)
 	if err != nil {
 		return err
@@ -128,7 +128,7 @@ func (si *searchIndex) ensureFactsVec(ctx context.Context, modelID string, dim i
 // evidence about pairs the new model may never propose. The schema says an
 // empty verdict window is safe — it reads as "optimistic", the cold-start
 // posture — so the honest move on a model change is to start over.
-func (si *searchIndex) clearRestatementState(ctx context.Context) error {
+func (si *Index) clearRestatementState(ctx context.Context) error {
 	for _, table := range []string{
 		"restatement_pairs",
 		"restatement_cache_state",
@@ -144,7 +144,7 @@ func (si *searchIndex) clearRestatementState(ctx context.Context) error {
 
 // vecTableHasDim reports whether table exists AND was created at exactly dim,
 // read back from its stored DDL.
-func (si *searchIndex) vecTableHasDim(ctx context.Context, table string, dim int) (bool, error) {
+func (si *Index) vecTableHasDim(ctx context.Context, table string, dim int) (bool, error) {
 	var ddl sql.NullString
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT sql FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&ddl)
@@ -158,7 +158,7 @@ func (si *searchIndex) vecTableHasDim(ctx context.Context, table string, dim int
 }
 
 // recreateVecTable drops table if present and creates it empty at dim.
-func (si *searchIndex) recreateVecTable(ctx context.Context, table string, dim int) error {
+func (si *Index) recreateVecTable(ctx context.Context, table string, dim int) error {
 	exists, err := si.vecTableExists(ctx, table)
 	if err != nil {
 		return err
@@ -171,20 +171,20 @@ func (si *searchIndex) recreateVecTable(ctx context.Context, table string, dim i
 	return si.createVecTable(ctx, table, dim)
 }
 
-func (si *searchIndex) vecTableExists(ctx context.Context, table string) (bool, error) {
+func (si *Index) vecTableExists(ctx context.Context, table string) (bool, error) {
 	var n int
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&n)
 	return n > 0, err
 }
 
-func (si *searchIndex) dropVecTable(ctx context.Context, table string) error {
+func (si *Index) dropVecTable(ctx context.Context, table string) error {
 	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `DROP TABLE IF EXISTS `+table)
 	return err
 }
 
 // persistedEmbedModelID returns meta.embed_model_id ("" if unset).
-func (si *searchIndex) persistedEmbedModelID(ctx context.Context) (string, error) {
+func (si *Index) persistedEmbedModelID(ctx context.Context) (string, error) {
 	var v string
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT value FROM meta WHERE key = 'embed_model_id'`).Scan(&v)
@@ -195,7 +195,7 @@ func (si *searchIndex) persistedEmbedModelID(ctx context.Context) (string, error
 }
 
 // persistedEmbedDim returns meta.embed_dim (0 if unset).
-func (si *searchIndex) persistedEmbedDim(ctx context.Context) (int, error) {
+func (si *Index) persistedEmbedDim(ctx context.Context) (int, error) {
 	var v int
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT value FROM meta WHERE key = 'embed_dim'`).Scan(&v)

@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/internal/vcs"
 
 	"github.com/rs/zerolog/log"
@@ -49,7 +50,7 @@ var contextBlobColumn = fmt.Sprintf(
 // (Path, IncludeKinds/ExcludeKinds, IncludeTypes/ExcludeTypes, Domain,
 // Entities, EpisodeOps) are applied; vector-search-only fields (QueryVec,
 // QueryByPath, MinSimilarity) are inert here.
-func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
+func (fq *FactQuery) RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
 	if opts.Text != "" {
 		return fq.recentFactsSearch(ctx, branch, opts)
 	}
@@ -127,7 +128,7 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 
 // recentFactsSearch uses semantic search to find matching facts, then returns
 // them ordered by committed_at with pagination.
-func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
+func (fq *FactQuery) recentFactsSearch(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
@@ -220,7 +221,7 @@ func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 // LastCommitForPath returns the commit hash of the most recent commit_log
 // entry for the given path, provided that entry's action is not 'deleted'.
 // Returns ("", false) if the path is not found or its latest action is deleted.
-func (fq *factQuery) LastCommitForPath(ctx context.Context, branch, path string) (string, bool) {
+func (fq *FactQuery) LastCommitForPath(ctx context.Context, branch, path string) (string, bool) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", false
@@ -378,7 +379,7 @@ var AllMotifMatchTiers = []MotifMatchTier{
 
 // SearchResult is a FactWithBody paired with a relevance score in [0, 100].
 type SearchResult struct {
-	FactWithBody
+	facts.FactWithBody
 	Score float64 `json:"score"`
 }
 
@@ -590,7 +591,7 @@ func (f *factFilter) addMotifClause(q SearchOptions) {
 // small (one row per distinct spelling), and this is where the tokenizer and
 // the alias table already live. The alternative — a motif-token junction —
 // would be a second normalization of strings MN3 says are stored as written.
-func (fq *factQuery) expandMotifQuery(ctx context.Context, branchID int64, q SearchOptions) ([]string, error) {
+func (fq *FactQuery) expandMotifQuery(ctx context.Context, branchID int64, q SearchOptions) ([]string, error) {
 	if len(q.Motifs) == 0 {
 		return nil, nil
 	}
@@ -736,7 +737,7 @@ func (fq *factQuery) expandMotifQuery(ctx context.Context, branchID int64, q Sea
 	return out, nil
 }
 
-func (fq *factQuery) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
+func (fq *FactQuery) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
 	if len(ops) == 0 || len(results) == 0 {
 		return results, nil
 	}
@@ -811,7 +812,7 @@ func (fq *factQuery) filterByEpisodeOps(ctx context.Context, results []SearchRes
 // from branch_facts (UNIQUE(branch_id, path) => one row per live path per
 // branch), exactly as TokenDF and SubjectLabelDF do, so this and the df values
 // a caller compares against it are counted over the same population.
-func (fq *factQuery) LiveFactCount(ctx context.Context, branch string) (int, error) {
+func (fq *FactQuery) LiveFactCount(ctx context.Context, branch string) (int, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("LiveFactCount: %w", err)
@@ -883,7 +884,7 @@ func CutoffNotice(text bool, minSimilarity float64, diags ...SearchDiag) string 
 		minSimilarity, best)
 }
 
-func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
+func (fq *FactQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
@@ -935,12 +936,12 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 
 	// ── Vector (embedding) search ─────────────────────────────────────────
 	type candidate struct {
-		rec   FactWithBody
+		rec   facts.FactWithBody
 		score float64
 	}
 
 	// Model-dependent cosine cutoffs (rerank tiers + recall floor below).
-	th := EmbedderThresholds(fq.rh.Embedder())
+	th := vcs.EmbedderThresholds(fq.rh.Embedder())
 
 	vecSimByPath := make(map[string]float64)
 	kLimit := limit * 5

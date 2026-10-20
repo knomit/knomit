@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -40,7 +40,7 @@ type MethodologyMatch struct {
 // Callers operating over multiple source facts invoke this once per fact
 // and merge the results (keeping the highest score per methodology path).
 // No body concatenation, no re-embedding, no truncation.
-func (mm *methodologyMatcher) RelevantMethodologyForFact(
+func (mm *MethodologyMatcher) RelevantMethodologyForFact(
 	ctx context.Context,
 	branch string,
 	factPath string,
@@ -295,7 +295,7 @@ func intersectExcludingMarkers(candidateDomains []string, srcSet map[string]stru
 
 // readFactBodyByBlobHash reads the markdown body for a fact identified by
 // its blob_hash via the git object store.
-func (mm *methodologyMatcher) readFactBodyByBlobHash(ctx context.Context, blobHash string) (string, error) {
+func (mm *MethodologyMatcher) readFactBodyByBlobHash(ctx context.Context, blobHash string) (string, error) {
 	var raw []byte
 	err := conn(ctx, mm.rh.DB()).QueryRowContext(ctx,
 		`SELECT data FROM objects WHERE hash = ? AND type = ?`,

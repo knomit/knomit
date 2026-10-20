@@ -359,7 +359,7 @@ var mechanicsPaths = map[string][]string{
 	// None of these entries licenses motifs reaching the SCORING or KNN paths.
 	// Those decide ranking rather than answering a caller's question, and a
 	// motif term arriving there is an MN6 violation this list does not cover.
-	"internal/store/search_query.go": {
+	"internal/store/index/search_query.go": {
 		"RecentFacts", "recentFactsSearch", "Search",
 		"newFactFilter", "addMotifClause", "expandMotifQuery",
 	},

@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -10,7 +10,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // ── Explain ───────────────────────────────────────────────────────────────────
@@ -35,7 +37,7 @@ type ExplainResult struct {
 // HEAD by resolving the path's HEAD-active commit and delegating to the
 // commit-anchored methods. This unifies the HEAD and commit-anchored read
 // paths on a single underlying query.
-func (gs *graphStore) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
+func (gs *GraphStore) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
 	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("ExplainFact: branchID: %w", err)
@@ -107,7 +109,7 @@ const (
 //  3. MERGE Entity nodes + TAGGED edges
 //  4. MERGE Domain hierarchy + IN_DOMAIN edges
 //  5. MERGE OntologyNode hierarchy + UNDER edge
-func (si *searchIndex) graphSyncFact(ctx context.Context, rec FactRecord) error {
+func (si *Index) graphSyncFact(ctx context.Context, rec facts.FactRecord) error {
 	return si.graphSyncFactTx(ctx, si.rh.DB(), rec)
 }
 
@@ -116,7 +118,7 @@ func (si *searchIndex) graphSyncFact(ctx context.Context, rec FactRecord) error 
 // Direct SQL over the EAV tables (see graph_sql.go). Properties are stored as
 // TEXT: confidence/sources are never read back by any graph query, and the one
 // predicate that reads `deleted` compares it against 'true'/'false'.
-func (si *searchIndex) graphSyncFactTx(ctx context.Context, tx storegit.CtxExecer, rec FactRecord) error {
+func (si *Index) graphSyncFactTx(ctx context.Context, tx storegit.CtxExecer, rec facts.FactRecord) error {
 	// 1. MERGE Fact node keyed by {path, blob_hash} — each fact version gets
 	// its own graph node (immutable once created) — then set its properties.
 	factID, err := graphMergeNode(ctx, tx, NodeFact, map[string]string{
@@ -174,7 +176,7 @@ func (si *searchIndex) graphSyncFactTx(ctx context.Context, tx storegit.CtxExece
 // linking each segment to its parent with childOfEdge, and returns the leaf
 // node id. Shared by the Domain and OntologyNode hierarchies, which differ
 // only in node label and child-of edge type.
-func (si *searchIndex) graphMergeHierarchy(ctx context.Context, tx storegit.CtxExecer, label, childOfEdge string, parts []string) (int64, error) {
+func (si *Index) graphMergeHierarchy(ctx context.Context, tx storegit.CtxExecer, label, childOfEdge string, parts []string) (int64, error) {
 	var leafID int64
 	var parentID int64
 	for i := range parts {
@@ -196,7 +198,7 @@ func (si *searchIndex) graphMergeHierarchy(ctx context.Context, tx storegit.CtxE
 
 // graphMergeDomainHierarchy creates the full domain ancestor chain and links
 // the fact to the leaf domain via IN_DOMAIN.
-func (si *searchIndex) graphMergeDomainHierarchy(ctx context.Context, tx storegit.CtxExecer, factID int64, domain string) error {
+func (si *Index) graphMergeDomainHierarchy(ctx context.Context, tx storegit.CtxExecer, factID int64, domain string) error {
 	leafID, err := si.graphMergeHierarchy(ctx, tx, NodeDomain, EdgeDomainChildOf, strings.Split(domain, "/"))
 	if err != nil {
 		return err
@@ -209,7 +211,7 @@ func (si *searchIndex) graphMergeDomainHierarchy(ctx context.Context, tx storegi
 
 // graphMergeOntologyHierarchy creates OntologyNode chain from the fact's file
 // path and links the fact to the leaf via UNDER.
-func (si *searchIndex) graphMergeOntologyHierarchy(ctx context.Context, tx storegit.CtxExecer, factID int64, factPath string) error {
+func (si *Index) graphMergeOntologyHierarchy(ctx context.Context, tx storegit.CtxExecer, factID int64, factPath string) error {
 	parts := strings.Split(factPath, "/")
 	if len(parts) < 2 {
 		return nil
@@ -228,7 +230,7 @@ func (si *searchIndex) graphMergeOntologyHierarchy(ctx context.Context, tx store
 
 // graphDeleteFact marks a Fact node as deleted and removes its outgoing edges
 // (except incoming DERIVED_FROM, which preserves lineage).
-func (si *searchIndex) graphDeleteFact(ctx context.Context, path, blobHash string) error {
+func (si *Index) graphDeleteFact(ctx context.Context, path, blobHash string) error {
 	return si.graphDeleteFactTx(ctx, si.rh.DB(), path, blobHash)
 }
 
@@ -245,7 +247,7 @@ func (si *searchIndex) graphDeleteFact(ctx context.Context, path, blobHash strin
 // ever indexed retains a node forever, so historical DERIVED_FROM edges
 // can be walked end-to-end. Without it, lineage queries silently break
 // at GC'd boundaries.
-func (si *searchIndex) graphSyncHistoricalFactTx(ctx context.Context, tx storegit.CtxExecer, rec FactRecord) error {
+func (si *Index) graphSyncHistoricalFactTx(ctx context.Context, tx storegit.CtxExecer, rec facts.FactRecord) error {
 	// MERGE the node keyed by (path, blob_hash) and set its frozen-in-time
 	// properties + deleted=true. If the node already exists (e.g. from a
 	// prior live indexing of this blob version that was later soft-deleted),
@@ -271,7 +273,7 @@ func (si *searchIndex) graphSyncHistoricalFactTx(ctx context.Context, tx storegi
 	return nil
 }
 
-func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx storegit.CtxExecer, path, blobHash string) error {
+func (si *Index) graphDeleteFactTx(ctx context.Context, tx storegit.CtxExecer, path, blobHash string) error {
 	factID, err := graphNodeIDByProps(ctx, tx, NodeFact, map[string]string{
 		"path":      path,
 		"blob_hash": blobHash,
@@ -323,7 +325,7 @@ const knnK = 10 // top-K nearest neighbors per fact
 // It opens its own transaction for the edge rewrite once the KNN read is done.
 // Given an ambient tx it joins that one instead and leaves the commit to the
 // owner, so a caller that does hold a tx still gets a single atomic rewrite.
-func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blobHash string) error {
+func (si *Index) graphBuildSimilarityEdges(ctx context.Context, path, blobHash string) error {
 	emb, err := si.getEmbeddingByFact(ctx, path, blobHash)
 	if err != nil || emb == nil {
 		return nil
@@ -376,7 +378,7 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	}
 	rows.Close()
 
-	simFloor := EmbedderThresholds(si.rh.Embedder()).SimilarTo
+	simFloor := vcs.EmbedderThresholds(si.rh.Embedder()).SimilarTo
 
 	// Replace this version's outgoing SIMILAR_TO edges atomically. The delete
 	// and the re-merge must land in one transaction: run bare, a concurrent
@@ -448,7 +450,7 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 
 // graphNodeIDByProp returns the node ID for a node with the given label, where
 // the property named propKey equals propVal. Returns 0 if not found.
-func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
+func (si *Index) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
 	var nodeID int64
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
 		SELECT np.node_id
@@ -469,7 +471,7 @@ func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, pr
 //
 // Test-only: it plants a specific edge topology directly, rather than going
 // through a fact sync and getting whatever edges that implies.
-func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
+func (si *Index) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
 	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		`INSERT OR IGNORE INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,
 		sourceID, targetID, edgeType,

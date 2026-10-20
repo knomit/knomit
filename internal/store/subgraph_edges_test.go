@@ -7,20 +7,22 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/index"
 )
 
 // mergeFactNode creates a bare Fact node with the given path/blob_hash.
 func mergeFactNode(t *testing.T, si *searchIndex, path, bh string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	id, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
+	id, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
 		map[string]string{"path": path, "blob_hash": bh})
 	require.NoError(t, err)
 	require.NotZero(t, id)
 	// graphSyncFact always sets deleted=false on live nodes; mirror that so the
 	// "deleted != 'true'" filter sees these fixtures as live, exactly like
 	// production-indexed facts.
-	require.NoError(t, graphSetNodeProps(ctx, si.rh.DB(), id,
+	require.NoError(t, graphSetNodeProps(ctx, si.RepoForTest().DB(), id,
 		map[string]string{"deleted": "false"}))
 	return id
 }
@@ -61,9 +63,9 @@ func TestSubgraphEdges_ReturnsSimilarToAmongPaths(t *testing.T) {
 	outside := mergeFactNode(t, si, "kb/outside.md", "eeee")
 
 	// SIMILAR_TO: a-b and b-c inside the set; c-outside leaves the set.
-	require.NoError(t, si.graphInsertEdge(ctx, a, b, EdgeSimilarTo))
-	require.NoError(t, si.graphInsertEdge(ctx, b, c, EdgeSimilarTo))
-	require.NoError(t, si.graphInsertEdge(ctx, c, outside, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, b, c, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, c, outside, EdgeSimilarTo))
 
 	paths := []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/lonely.md"}
 	edges, err := svc.gq.SubgraphEdges(ctx, paths)
@@ -80,9 +82,8 @@ func TestSubgraphEdges_ReturnsSimilarToAmongPaths(t *testing.T) {
 // failure: a single OR-chain over hundreds of paths blew SQLite's expression
 // depth limit, so the query must be split into bounded chunks.
 func TestSubgraphEdges_ChunksLargePathSets(t *testing.T) {
-	orig := subgraphEdgeChunkSize
-	subgraphEdgeChunkSize = 2
-	defer func() { subgraphEdgeChunkSize = orig }()
+	orig := index.SetSubgraphEdgeChunkSizeForTest(2)
+	defer index.SetSubgraphEdgeChunkSizeForTest(orig)
 
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -100,9 +101,9 @@ func TestSubgraphEdges_ChunksLargePathSets(t *testing.T) {
 
 	// A chain a–b–c–d; with chunk size 2 the path set [a,b,c,d] spans two
 	// chunks, and b–c is the cross-chunk edge.
-	require.NoError(t, si.graphInsertEdge(ctx, a, b, EdgeSimilarTo))
-	require.NoError(t, si.graphInsertEdge(ctx, b, c, EdgeSimilarTo))
-	require.NoError(t, si.graphInsertEdge(ctx, c, d, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, b, c, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, c, d, EdgeSimilarTo))
 
 	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md"})
 	require.NoError(t, err)
@@ -130,7 +131,7 @@ func TestSubgraphEdges_QuoteInPathDoesNotInject(t *testing.T) {
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
-	require.NoError(t, si.graphInsertEdge(ctx, a, b, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
 
 	// Injection-shaped paths: a single-quote attempt to break the SQL literal and
 	// force a tautology, and a double-quote attempt to break the Cypher literal.
@@ -160,10 +161,10 @@ func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
-	require.NoError(t, si.graphInsertEdge(ctx, a, b, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
 
 	// Soft-delete b.
-	require.NoError(t, graphSetNodeProps(ctx, si.rh.DB(), b,
+	require.NoError(t, graphSetNodeProps(ctx, si.RepoForTest().DB(), b,
 		map[string]string{"deleted": "true"}))
 
 	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md"})

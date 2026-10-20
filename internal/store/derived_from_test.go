@@ -39,13 +39,13 @@ func TestResolveTargetCommit(t *testing.T) {
 	si := svc.si
 
 	// (1) D's ref to E at c2: most recent ancestor touching E is c1 (added) → target_commit = c1.
-	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/d.md", "kb/e.md", c2)
+	got, ok, err := si.ResolveTargetCommitForTest(ctx, branch, "kb/d.md", "kb/e.md", c2)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, c1, got)
 
 	// (2) Forward-broken: no ancestor touches kb/z.md.
-	_, ok, err = si.resolveTargetCommit(ctx, branch, "kb/d.md", "kb/z.md", c2)
+	_, ok, err = si.ResolveTargetCommitForTest(ctx, branch, "kb/d.md", "kb/z.md", c2)
 	require.NoError(t, err)
 	require.False(t, ok, "no ancestor touches kb/z.md → not ok")
 
@@ -64,7 +64,7 @@ func TestResolveTargetCommit(t *testing.T) {
 	c4 := c4Res.CommitHash
 	require.NotEmpty(t, c3)
 
-	got, ok, err = si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c4)
+	got, ok, err = si.ResolveTargetCommitForTest(ctx, branch, "kb/f.md", "kb/e.md", c4)
 	require.NoError(t, err)
 	require.True(t, ok, "deletion is a write event — walk past it to the last valid version")
 	require.Equal(t, c1, got, "must resolve to the commit where kb/e.md was added (c1), not stop at the retraction")
@@ -111,7 +111,7 @@ func TestResolveTargetCommit_WalksPastMultipleRetractions(t *testing.T) {
 	si := svc.si
 
 	// Walk past the c4 retraction → land at c3 (the most recent add).
-	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c5)
+	got, ok, err := si.ResolveTargetCommitForTest(ctx, branch, "kb/f.md", "kb/e.md", c5)
 	require.NoError(t, err)
 	require.True(t, ok, "two retractions must not block resolution — walk past both")
 	require.Equal(t, c3, got, "must resolve to the most recent ADD (c3), skipping the c4 retraction")
@@ -148,7 +148,7 @@ func TestResolveTargetCommit_SelfRef_ResolvesToPriorVersion(t *testing.T) {
 
 	si := svc.si
 
-	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/x.md", "kb/x.md", c2)
+	got, ok, err := si.ResolveTargetCommitForTest(ctx, branch, "kb/x.md", "kb/x.md", c2)
 	require.NoError(t, err)
 	require.True(t, ok, "self-ref with a prior version must resolve")
 	require.Equal(t, c1, got, "self-ref must resolve to the previous version's commit, not the source commit")
@@ -174,7 +174,7 @@ func TestResolveTargetCommit_SelfRef_FirstCreation_ReturnsNotOk(t *testing.T) {
 
 	si := svc.si
 
-	_, ok, err := si.resolveTargetCommit(ctx, branch, "kb/x.md", "kb/x.md", c1)
+	_, ok, err := si.ResolveTargetCommitForTest(ctx, branch, "kb/x.md", "kb/x.md", c1)
 	require.NoError(t, err)
 	require.False(t, ok, "self-ref with no prior version must drop the edge")
 }
@@ -303,22 +303,22 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
 	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
 	// the auto-wired edges interfering with the assertions below.
-	_, err = si.rh.DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
+	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
 	require.NoError(t, err)
-	_, err = si.rh.DB().Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
+	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
 	require.NoError(t, err)
 
 	// Manually invoke the helper to write the edge with both commits. It is
-	// driven directly against si.rh.db (autocommit), exactly as production calls
+	// driven directly against si.RepoForTest().db (autocommit), exactly as production calls
 	// it post-commit via writePostCommitDerivedFrom — NOT wrapped in an explicit
 	// transaction. Its tx parameter is inert (it writes via conn(ctx)); wrapping
 	// it in a held BEGIN IMMEDIATE would deadlock its own bare-db writes against
 	// the write lock that wrapper holds.
-	require.NoError(t, si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, "kb/d.md", dBlobHash, c2, []string{"kb/e.md"}))
+	require.NoError(t, si.GraphAddDerivedFromAtCommitTxForTest(ctx, si.RepoForTest().DB(), branch, "kb/d.md", dBlobHash, c2, []string{"kb/e.md"}))
 
 	// Read back from the EAV tables: expect exactly one edge from D to E with
 	// both commit properties.
-	rows, err := si.rh.DB().QueryContext(ctx, `
+	rows, err := si.RepoForTest().DB().QueryContext(ctx, `
 		SELECT sp.value, sc.value, tc.value
 		FROM edges e
 		JOIN node_props_text tp ON tp.node_id = e.target_id
@@ -372,7 +372,7 @@ func TestUpsert_WritesDerivedFromEdges_PostCommit(t *testing.T) {
 
 	si := svc.si
 	var count int
-	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
+	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
 	require.Equal(t, 1, count, "WriteFact should produce one DERIVED_FROM edge for D→E without needing Rebuild")
 }
@@ -400,19 +400,19 @@ func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {
 	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
 	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
 	// the auto-wired edges interfering with the assertions below.
-	_, err = si.rh.DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
+	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
 	require.NoError(t, err)
-	_, err = si.rh.DB().Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
+	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
 	require.NoError(t, err)
 
-	tx, err := si.rh.DB().BeginTx(ctx, nil)
+	tx, err := si.RepoForTest().DB().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
-	require.NoError(t, si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, "kb/d.md", dBlobHash, c, []string{"kb/never.md"}))
+	require.NoError(t, si.GraphAddDerivedFromAtCommitTxForTest(ctx, tx, branch, "kb/d.md", dBlobHash, c, []string{"kb/never.md"}))
 	require.NoError(t, tx.Commit())
 
 	var count int
-	require.NoError(t, si.rh.DB().QueryRow(`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
+	require.NoError(t, si.RepoForTest().DB().QueryRow(`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
 	require.Zero(t, count, "forward-broken ref must not produce any DERIVED_FROM edge")
 }
 
@@ -448,7 +448,7 @@ func TestResolveActiveCommitForPath_DepthRegression(t *testing.T) {
 	}
 
 	si := svc.si
-	got, ok, err := si.rh.ResolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+	got, ok, err := si.RepoForTest().ResolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
 	require.NoError(t, err)
 	require.True(t, ok, "must resolve target through 20 unrelated commits")
 	require.Equal(t, c1, got, "must resolve to the original add commit")
@@ -494,7 +494,7 @@ func TestResolveActiveCommitForPath_ConcurrentNoDeadlock(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			got, ok, rerr := si.rh.ResolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+			got, ok, rerr := si.RepoForTest().ResolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
 			if rerr != nil {
 				errs <- fmt.Errorf("resolveActiveCommitForPath: %w", rerr)
 				return

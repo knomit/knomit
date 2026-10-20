@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -59,8 +59,8 @@ import (
 // pre-F22 parser dropped.
 const GraphSchemaVersion = "7"
 
-type searchIndex struct {
-	rh *repoHandler
+type Index struct {
+	rh *vcs.Repo
 
 	// This repo's 12-hex identity (root-commit prefix), resolved once and
 	// cached — it is immutable for the life of the repo. Used to tell a
@@ -132,7 +132,7 @@ const (
 func schemaVersionKey(branch string) string { return "graph_schema_version:" + branch }
 
 // schemaVersionState reads meta.graph_schema_version:<branch> and classifies it.
-func (si *searchIndex) schemaVersionState(ctx context.Context, branch string) (schemaState, error) {
+func (si *Index) schemaVersionState(ctx context.Context, branch string) (schemaState, error) {
 	var persistedVer string
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT value FROM meta WHERE key = ?`, schemaVersionKey(branch),
@@ -166,7 +166,7 @@ func (si *searchIndex) schemaVersionState(ctx context.Context, branch string) (s
 //
 // The context is detached: the common failure IS cancellation at shutdown, and
 // clearing the row is exactly what must survive it.
-func (si *searchIndex) clearSchemaVersion(ctx context.Context, branch string) {
+func (si *Index) clearSchemaVersion(ctx context.Context, branch string) {
 	ctx = context.WithoutCancel(ctx)
 	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		`DELETE FROM meta WHERE key = ?`, schemaVersionKey(branch),
@@ -181,7 +181,7 @@ func (si *searchIndex) clearSchemaVersion(ctx context.Context, branch string) {
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
 // but only if it currently equals prev. Returns true if the update succeeded.
-func (si *searchIndex) casLastCommit(ctx context.Context, branch, prev, next string) (bool, error) {
+func (si *Index) casLastCommit(ctx context.Context, branch, prev, next string) (bool, error) {
 	key := "last_commit:" + branch
 	db := conn(ctx, si.rh.DB())
 
@@ -207,7 +207,7 @@ func (si *searchIndex) casLastCommit(ctx context.Context, branch, prev, next str
 
 // setLastCommit stores the last processed commit hash in the meta table,
 // scoped to the given branch.
-func (si *searchIndex) setLastCommit(ctx context.Context, branch, hash string) error {
+func (si *Index) setLastCommit(ctx context.Context, branch, hash string) error {
 	key := "last_commit:" + branch
 	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
@@ -218,7 +218,7 @@ func (si *searchIndex) setLastCommit(ctx context.Context, branch, hash string) e
 
 // SyncWatermark returns the last processed commit hash for the given branch,
 // or "" if not set.
-func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string, error) {
+func (si *Index) SyncWatermark(ctx context.Context, branch string) (string, error) {
 	key := "last_commit:" + branch
 	var hash string
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `SELECT value FROM meta WHERE key=?`, key).Scan(&hash)
@@ -256,7 +256,7 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 // whole corpus. Rebuild's clearSchemaVersion is what keeps the version gate
 // honest here: a branch that failed has no row, so it reports stale on the row
 // alone and never reaches the embedding check.
-func (si *searchIndex) NeedsRebuild(ctx context.Context, branch string) (bool, error) {
+func (si *Index) NeedsRebuild(ctx context.Context, branch string) (bool, error) {
 	state, err := si.schemaVersionState(ctx, branch)
 	if err != nil {
 		return false, err
@@ -292,7 +292,7 @@ func (si *searchIndex) NeedsRebuild(ctx context.Context, branch string) (bool, e
 //  3. If last_commit == HEAD → no-op.
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
-func (si *searchIndex) Sync(ctx context.Context, branch string) error {
+func (si *Index) Sync(ctx context.Context, branch string) error {
 	// Suspended: the caller (a bulk Replay into a transient store) will run a
 	// single Rebuild afterward, so per-commit maintenance here is wasted work.
 	// NotifyCommit still appends to commit_log before reaching us, so history
@@ -346,7 +346,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	// can be wired. Pass 1 commits all nodes; pass 2 retries all edges (with
 	// the dedup guard in graphAddDerivedFromAtCommitTx preventing duplicates
 	// for refs that were already wired successfully in pass 1).
-	var indexed []FactRecord
+	var indexed []facts.FactRecord
 
 	if last == "" {
 		// Full rebuild: no previous commit recorded, so index every file.
@@ -450,7 +450,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 // mutation is mutually exclusive with both inline writes and a concurrent
 // Rebuild on the same branch. Calling bare Sync out-of-band races the
 // watermark and branch_facts/facts_vec rows (see Rebuild's self-lock).
-func (si *searchIndex) SyncLocked(ctx context.Context, branch string) error {
+func (si *Index) SyncLocked(ctx context.Context, branch string) error {
 	defer si.rh.LockBranch(branch)()
 	return si.Sync(ctx, branch)
 }
@@ -467,7 +467,7 @@ func (si *searchIndex) SyncLocked(ctx context.Context, branch string) error {
 // corrupt branch_facts (the PR #82 background-index race). No current caller
 // holds LockBranch before calling Rebuild, so self-locking cannot deadlock;
 // normal reads don't take branchMu, so they remain non-blocking.
-func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) (err error) {
+func (si *Index) Rebuild(ctx context.Context, branch string, progress vcs.RebuildProgress) (err error) {
 	defer si.rh.LockBranch(branch)()
 
 	// Any failure below leaves this branch half-rebuilt — last_commit is cleared
@@ -592,7 +592,7 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 // Returns the FactRecord that was upserted, or nil if the file was skipped
 // (not a fact file). The commit stored in FactRecord.SourceCommit is the
 // resolved per-path commit, NOT the fallback passed in.
-func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash string) (*FactRecord, error) {
+func (si *Index) indexFile(ctx context.Context, branch, path, commitHash string) (*facts.FactRecord, error) {
 	content, blobHash, err := si.rh.ReadFileWithHash(ctx, branch, path)
 	if err != nil {
 		return nil, fmt.Errorf("indexFile: read %s: %w", path, err)
@@ -618,7 +618,7 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 // GC removes orphaned data: facts not referenced by any branch, their graph
 // nodes, orphaned Entity/Domain/OntologyNode graph nodes, and commit_log
 // entries for deleted branches.
-func (si *searchIndex) GC(ctx context.Context) error {
+func (si *Index) GC(ctx context.Context) error {
 	// 1. Collect orphaned facts before deleting (needed for graph cleanup).
 	type orphanFact struct {
 		id       int64
@@ -694,7 +694,7 @@ func (si *searchIndex) GC(ctx context.Context) error {
 // projected n.path and skipped rows where it was empty, so Entity orphans —
 // which are keyed by `name`, and therefore have no `path` — were never
 // actually collected.
-func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) error {
+func (si *Index) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) error {
 	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `
 		DELETE FROM nodes
 		WHERE id IN (
@@ -719,7 +719,7 @@ func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType
 
 // rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact(),
 // then populates branch_facts for the given branch.
-func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, progress RebuildProgress) (int, error) {
+func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress vcs.RebuildProgress) (int, error) {
 	branchID, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: ensure branch: %w", err)
@@ -1016,13 +1016,13 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 // Raising it is therefore safe for INFERENCE memory specifically. It is not
 // free: raw bodies, the tokenized rows encodeAll retains, and the result slice
 // all scale linearly with it. It stays at 32 until a raise is measured.
-func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
+func (si *Index) rebuildEmbeddings(ctx context.Context, progress vcs.RebuildProgress) (int, error) {
 	emb := si.rh.Embedder()
 	if emb == nil {
 		return 0, nil
 	}
 
-	batcher, hasBatch := emb.(BatchEmbedder)
+	batcher, hasBatch := emb.(vcs.BatchEmbedder)
 
 	var total int
 	if err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `SELECT COUNT(*) FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`).Scan(&total); err != nil {
@@ -1188,7 +1188,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
-func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress RebuildProgress) (int, error) {
+func (si *Index) rebuildGraph(ctx context.Context, branch string, progress vcs.RebuildProgress) (int, error) {
 	// P2 git-read dedupe: Phase A.5 (historical Fact-node restore) and Phase B
 	// (DERIVED_FROM edges) both walk the identical commit_log ref-event list,
 	// and each historically re-read every (commit, path) from git
@@ -1227,7 +1227,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// once. ok=true means all three succeeded — the gate both phases need.
 	type commitFact struct {
 		blobHash string
-		rec      FactRecord
+		rec      facts.FactRecord
 		ok       bool
 	}
 	factAtCommit := make(map[string]commitFact, len(events))
@@ -1295,9 +1295,9 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		return 0, fmt.Errorf("rebuildGraph: query facts: %w", err)
 	}
 
-	var facts []FactRecord
+	var recs []facts.FactRecord
 	for rows.Next() {
-		var rec FactRecord
+		var rec facts.FactRecord
 		var domainJSON, entitiesJSON, refsJSON string
 		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
 			&domainJSON, &entitiesJSON, &rec.Confidence, &rec.Sources,
@@ -1308,21 +1308,21 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		json.Unmarshal([]byte(domainJSON), &rec.Domain)
 		json.Unmarshal([]byte(entitiesJSON), &rec.Entities)
 		json.Unmarshal([]byte(refsJSON), &rec.Refs)
-		facts = append(facts, rec)
+		recs = append(recs, rec)
 	}
 	rows.Close()
 
-	total := len(facts)
+	total := len(recs)
 	if progress != nil {
 		progress("graph", 0, total)
 	}
 
-	currentSet := make(map[string]struct{}, len(facts))
-	for _, f := range facts {
+	currentSet := make(map[string]struct{}, len(recs))
+	for _, f := range recs {
 		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
 	}
 
-	for i, rec := range facts {
+	for i, rec := range recs {
 		if err := si.graphSyncFactTx(ctx, tx, rec); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("rebuildGraph: sync failed, skipping")
 			continue
@@ -1437,9 +1437,9 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	if si.rh.Embedder() != nil {
 		type simEdge struct{ fromPath, fromBH, toPath, toBH string }
 		var edges []simEdge
-		simFloor := EmbedderThresholds(si.rh.Embedder()).SimilarTo
+		simFloor := vcs.EmbedderThresholds(si.rh.Embedder()).SimilarTo
 
-		for _, rec := range facts {
+		for _, rec := range recs {
 			emb, err := si.getEmbeddingByFact(ctx, rec.Path, rec.BlobHash)
 			if err != nil || emb == nil {
 				continue
@@ -1545,8 +1545,8 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		// (1) sources this pass rewrites — every enumerated fact version, not
 		// just those that produced edges, so a fact whose neighbours all fell
 		// below the floor still sheds its old ones.
-		rewritten := make([]int64, 0, len(facts))
-		for _, rec := range facts {
+		rewritten := make([]int64, 0, len(recs))
+		for _, rec := range recs {
 			id, err := resolve(rec.Path, rec.BlobHash)
 			if err != nil {
 				return total, fmt.Errorf("rebuildGraph: resolve %s: %w", rec.Path, err)
@@ -1638,7 +1638,7 @@ func localFactRefs(refs []string, localRepoID string) []string {
 // The sync.Once keeps the cost to one walk per searchIndex, not one per ref.
 // The branch argument is therefore only read on the first call — safe because
 // every branch of a repo shares the same root commit (see RootCommit).
-func (si *searchIndex) localRepoID(ctx context.Context, branch string) string {
+func (si *Index) localRepoID(ctx context.Context, branch string) string {
 	si.repoIDOnce.Do(func() {
 		root, err := si.rh.RootCommit(ctx, branch)
 		if err != nil {

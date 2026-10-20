@@ -66,12 +66,12 @@ func TestRebuildGraph_RestoresHistoricalFactNodes(t *testing.T) {
 	//    test-only hard-delete + a raw SQL DELETE on facts to engineer
 	//    the broken state.
 	require.NoError(t, svc.deleteGraphFactNodeForTest("kb/a.md", blobA1))
-	_, err = si.rh.DB().ExecContext(ctx,
+	_, err = si.RepoForTest().DB().ExecContext(ctx,
 		`DELETE FROM facts WHERE path = ? AND blob_hash = ?`, "kb/a.md", blobA1)
 	require.NoError(t, err)
 
 	// Confirm the corruption: no graph node for (kb/a.md, blobA1).
-	id, err := si.graphNodeIDByBlob(ctx, "kb/a.md", blobA1)
+	id, err := si.GraphNodeIDByBlobForTest(ctx, "kb/a.md", blobA1)
 	require.NoError(t, err)
 	require.Zero(t, id, "test setup: v1 node must be missing before Rebuild")
 
@@ -81,7 +81,7 @@ func TestRebuildGraph_RestoresHistoricalFactNodes(t *testing.T) {
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
 	// 6) The v1 Fact node now exists in the graph again.
-	restoredID, err := si.graphNodeIDByBlob(ctx, "kb/a.md", blobA1)
+	restoredID, err := si.GraphNodeIDByBlobForTest(ctx, "kb/a.md", blobA1)
 	require.NoError(t, err)
 	require.NotZero(t, restoredID, "Rebuild must restore the orphaned historical Fact node")
 
@@ -89,7 +89,7 @@ func TestRebuildGraph_RestoresHistoricalFactNodes(t *testing.T) {
 	//    Phase B's edge write would have failed (with the warn the user
 	//    saw) if the source node hadn't been restored.
 	var edgeCount int
-	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
+	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&edgeCount))
 	require.GreaterOrEqual(t, edgeCount, 1,
 		"Phase B must succeed in writing at least the B → A_v1 historical edge")

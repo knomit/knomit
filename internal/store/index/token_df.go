@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -41,7 +41,7 @@ import (
 //
 // Liveness + branch scoping come from branch_facts (UNIQUE(branch_id, path) =>
 // one row per live path per branch), exactly as BlastRadius does.
-func (gs *graphStore) TokenDF(ctx context.Context, branch, token, kind string) (int, error) {
+func (gs *GraphStore) TokenDF(ctx context.Context, branch, token, kind string) (int, error) {
 	var table, col string
 	switch kind {
 	case "domain":
