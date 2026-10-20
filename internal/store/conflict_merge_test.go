@@ -14,6 +14,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/merge"
+	storesync "knomit/internal/store/sync"
 )
 
 // cmFact is a fact version for the conflict-merge tests.
@@ -181,7 +182,7 @@ func TestPeerSync_MergeFacts_NonMainConsensus(t *testing.T) {
 	r, base, consensusTip, agentTip := peerFork(t, cmOntology("merge"), "")
 	const agent = "agent/peer-abcd1234"
 
-	res, err := r.svc.Remote().(*remoteIndex).reconcileNow(context.Background(), agent, "master")
+	res, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Agent.Mode)
 
@@ -214,7 +215,7 @@ func TestPeerSync_SettingOnAgentBranchOnly_IsToday(t *testing.T) {
 	r, base, consensusTip, agentTip := peerFork(t, "", cmOntology("merge"))
 	const agent = "agent/peer-abcd1234"
 
-	res, err := r.svc.Remote().(*remoteIndex).reconcileNow(context.Background(), agent, "master")
+	res, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Agent.Mode)
 
@@ -265,7 +266,7 @@ func TestPeerSync_MergeFacts_FallbackAndRetraction(t *testing.T) {
 	r.setOriginTip(consensus)
 	agentBefore := r.tip(agent)
 
-	_, err := r.svc.Remote().(*remoteIndex).reconcileNow(context.Background(), agent, consensus)
+	_, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, consensus)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 
@@ -403,13 +404,13 @@ func TestReplay_MergeFacts(t *testing.T) {
 	r.branch(agent, "main")
 	seed := r.write(agent, "kb/notes/f.md", cmFact(t, "base", 0.7))
 	require.NoError(t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
-	require.NoError(t, r.svc.rh.writeAgentBase(agent, seed))
+	require.NoError(t, r.svc.rh.WriteAgentBase(agent, seed))
 	ctx := WithTrailers(context.Background(), Trailers{Trace: "t-123"})
 	_, err := r.svc.Facts().WriteFact(ctx, agent, "kb/notes/f.md", cmFact(t, "agent body", 0.9), "learn: f", "learn")
 	require.NoError(t, err)
 	onto := r.write("main", "kb/notes/f.md", cmFact(t, "main body", 0.5, "MainAdded"))
 
-	res, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratMerge, true)
+	res, err := r.svc.rh.ReconcileAgentForTest(context.Background(), agent, "main", stratMerge, true)
 	require.NoError(t, err)
 	require.Equal(t, ModeRebase, res.Mode)
 	tip := r.tip(agent)
@@ -436,7 +437,7 @@ func replayFork(t *testing.T) (*cmRepo, string, plumbing.Hash) {
 	r.write(agent, "notes.txt", "base\n")
 	seed := r.write(agent, "kb/notes/f.md", cmFact(t, "base", 0.7))
 	require.NoError(t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
-	require.NoError(t, r.svc.rh.writeAgentBase(agent, seed))
+	require.NoError(t, r.svc.rh.WriteAgentBase(agent, seed))
 	_, err := r.svc.Facts().WriteFact(context.Background(), agent, "kb/notes/f.md", cmFact(t, "agent body", 0.9), "learn: f", "learn")
 	require.NoError(t, err)
 	r.write("main", "kb/notes/f.md", cmFact(t, "main body", 0.5))
@@ -450,7 +451,7 @@ func replayFork(t *testing.T) (*cmRepo, string, plumbing.Hash) {
 // the agent's body → red.
 func TestReplay_MergeConsensus_OntoIsConsensus(t *testing.T) {
 	r, agent, _ := replayFork(t)
-	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratMergeConsensus, true)
+	_, err := r.svc.rh.ReconcileAgentForTest(context.Background(), agent, "main", stratMergeConsensus, true)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	_, out := r.blob(tip, "kb/notes/f.md")
@@ -469,7 +470,7 @@ func TestReplay_MergeFacts_FallbackAgentWins(t *testing.T) {
 	r, agent, _ := replayFork(t)
 	r.write("main", "notes.txt", "main\n")
 	r.write(agent, "notes.txt", "agent\n")
-	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratMerge, true)
+	_, err := r.svc.rh.ReconcileAgentForTest(context.Background(), agent, "main", stratMerge, true)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	_, notes := r.blob(tip, "notes.txt")
@@ -497,7 +498,7 @@ func TestPeerSync_Off_RecordsEverySidePick(t *testing.T) {
 	r.write(agent, "x.txt", "agent\n")
 	r.setOriginTip(consensus)
 
-	_, err := r.svc.Remote().(*remoteIndex).reconcileNow(context.Background(), agent, consensus)
+	_, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, consensus)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	lines := TrailerValues(tip.Message, TrailerConflict)

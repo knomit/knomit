@@ -36,7 +36,7 @@ func sideStore(t *testing.T) (*Service, plumbing.Hash) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
-	require.NoError(t, svc.rh.writeAgentBase("agent/test", c1))
+	require.NoError(t, svc.rh.WriteAgentBase("agent/test", c1))
 	return svc, c1
 }
 
@@ -62,7 +62,7 @@ func rewindTo(t *testing.T, svc *Service, parent plumbing.Hash) AgentReconcileRe
 	t.Helper()
 	u := upstreamCommit(t, svc, parent, "kb/u.md", obsFact("U"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
-	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", "main", StrategyLocalWins)
+	res, err := svc.rh.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/u.md"), "the branch is on the new upstream")
 	return res
@@ -90,7 +90,7 @@ func TestReconcileAgentRebase_ExperimentMergeSurvivesALaterWriteAndARewind(t *te
 	writeMergeFact(t, svc, "exp/e", "kb/exp.md", "Exp", "experiment knowledge")
 	m1 := upstreamCommit(t, svc, c1, "kb/m1.md", obsFact("M1"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
-	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
+	r, err := svc.rh.ReconcileAgentMergeForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode, "setup: the agent branch fast-forwards onto main")
 	cr, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
@@ -307,7 +307,7 @@ func TestReconcileAgentRebase_AResolvedMergeOnlyDivergenceKeepsTheResolution(t *
 	writeMergeFact(t, svc, "exp/e", "kb/other.md", "O", "exp other")
 	m1 := upstreamCommit(t, svc, c1, "kb/p.md", "---\ntype: observation\n---\n# P\n\nMAINV\n")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
-	r0, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
+	r0, err := svc.rh.ReconcileAgentMergeForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r0.Mode, "setup: the agent fast-forwards onto m1")
 	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
@@ -361,7 +361,7 @@ func TestReconcileAgentRebase_ScrubbedOwnCommitBehindAnExperimentStaysScrubbed(t
 	require.NoError(t, err)
 	y := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/y.md", "Y", "consumed with it"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), y)))
-	require.NoError(t, svc.rh.writeAgentBase("agent/test", y))
+	require.NoError(t, svc.rh.WriteAgentBase("agent/test", y))
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	cr, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
@@ -396,7 +396,7 @@ func scrubbedOwnCommitBehindAMixedMerge(t *testing.T) {
 	s2, _, err := vcs.WriteFileToStore(svc.rh.Storer(), own, s, "kb/s2.md", obsFact("S2"), "own, consumed", sig, sig)
 	require.NoError(t, err)
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s2)))
-	require.NoError(t, svc.rh.writeAgentBase("agent/test", s2))
+	require.NoError(t, svc.rh.WriteAgentBase("agent/test", s2))
 	f, _, err := vcs.WriteFileToStore(svc.rh.Storer(), foreign, s, "kb/member.md", obsFact("Member"), "member write", sig, sig)
 	require.NoError(t, err)
 	ownMerge(t, svc, "agent/test", f)

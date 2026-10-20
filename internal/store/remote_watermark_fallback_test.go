@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"knomit/internal/platform/fileuri"
+	storesync "knomit/internal/store/sync"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,7 @@ func wmFixture(t *testing.T) (*Service, string, plumbing.Hash) {
 // wmSync runs one Sync and returns its agent result.
 func wmSync(t *testing.T, svc *Service) SyncResult {
 	t.Helper()
-	res, err := svc.Remote().(*remoteIndex).Sync(context.Background(), "agent/test", nil)
+	res, err := svc.Remote().(*storesync.Index).Sync(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 	return res
 }
@@ -48,7 +49,7 @@ func wmSync(t *testing.T, svc *Service) SyncResult {
 // wmPush pushes the agent branch to the bare remote.
 func wmPush(t *testing.T, svc *Service) {
 	t.Helper()
-	_, err := svc.Remote().(*remoteIndex).Push(context.Background(), "agent/test", nil)
+	_, err := svc.Remote().(*storesync.Index).Push(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 }
 
@@ -62,8 +63,8 @@ func wmSetOriginMain(t *testing.T, bare string, h plumbing.Hash) {
 // looks like one made before the watermark existed.
 func wmDropWatermark(t *testing.T, svc *Service) {
 	t.Helper()
-	require.NoError(t, svc.rh.Storer().RemoveReference(agentBaseRefName("agent/test")))
-	_, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, svc.rh.Storer().RemoveReference(storesync.AgentBaseRefNameForTest("agent/test")))
+	_, err := svc.rh.ReadAgentBaseForTest("agent/test")
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "setup: no watermark")
 }
 
@@ -108,7 +109,7 @@ func TestSync_NoWatermarkResetToAnAncestorDoesNotKeepTheRemovedCommit(t *testing
 		require.Equal(t, ModeRewound, res.Main.Mode)
 		require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"), "the removed file stays removed")
 		require.False(t, reachableFrom(t, svc, "agent/test", s), "the removed commit is not on the branch")
-		base, err := svc.rh.readAgentBase("agent/test")
+		base, err := svc.rh.ReadAgentBaseForTest("agent/test")
 		require.NoError(t, err)
 		require.Equal(t, r, base, "the watermark is written, so the fallback is used once")
 
@@ -147,7 +148,7 @@ func TestSync_ExistingWatermarkIsNotOverwritten(t *testing.T) {
 	wmPush(t, svc)
 	wmSetOriginMain(t, bare, s)
 	wmSync(t, svc)
-	base, err := svc.rh.readAgentBase("agent/test")
+	base, err := svc.rh.ReadAgentBaseForTest("agent/test")
 	require.NoError(t, err)
 	require.Equal(t, s, base, "setup: the watermark is s")
 
@@ -199,7 +200,7 @@ func TestSync_FirstSyncEverKeepsTheMergeBaseFallback(t *testing.T) {
 	require.Equal(t, ModeRewound, res.Main.Mode)
 	require.Equal(t, ModeNoop, res.Agent.Mode, "unchanged: the merge-base fallback reads the branch as ahead")
 	require.Equal(t, s, mustHeadHash(t, svc, "agent/test"))
-	base, err := svc.rh.readAgentBase("agent/test")
+	base, err := svc.rh.ReadAgentBaseForTest("agent/test")
 	require.NoError(t, err)
 	require.Equal(t, r, base, "the reconcile still writes the watermark afterwards")
 }

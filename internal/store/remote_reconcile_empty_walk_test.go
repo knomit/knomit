@@ -40,7 +40,7 @@ func reachableFrom(t *testing.T, svc *Service, branch string, h plumbing.Hash) b
 func rewindToCommit(t *testing.T, svc *Service, target plumbing.Hash) AgentReconcileResult {
 	t.Helper()
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), target)))
-	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", "main", StrategyLocalWins)
+	res, err := svc.rh.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	return res
 }
@@ -55,7 +55,7 @@ func TestReconcileAgentRebase_EmptyWalkDoesNotKeepAScrubbedCommit(t *testing.T) 
 	svc, c1 := sideStore(t)
 	s := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "Secret", "scrub me"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
-	require.NoError(t, svc.rh.writeAgentBase("agent/test", s))
+	require.NoError(t, svc.rh.WriteAgentBase("agent/test", s))
 
 	res := rewindTo(t, svc, c1)
 	require.Equal(t, ModeRebase, res.Mode)
@@ -78,7 +78,7 @@ func TestReconcileAgentRebase_RewindToAnAncestorDoesNotKeepAScrubbedCommit(t *te
 		svc, c1 := sideStore(t)
 		s := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "Secret", "scrub me"))
 		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
-		require.NoError(t, svc.rh.writeAgentBase("agent/test", s))
+		require.NoError(t, svc.rh.WriteAgentBase("agent/test", s))
 
 		res := rewindToCommit(t, svc, c1)
 		require.Equal(t, ModeRebase, res.Mode)
@@ -90,7 +90,7 @@ func TestReconcileAgentRebase_RewindToAnAncestorDoesNotKeepAScrubbedCommit(t *te
 		svc, c1 := sideStore(t)
 		s := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "Secret", "scrub me"))
 		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
-		require.NoError(t, svc.rh.writeAgentBase("agent/test", s))
+		require.NoError(t, svc.rh.WriteAgentBase("agent/test", s))
 		writeMergeFact(t, svc, "agent/test", "kb/later.md", "Later", "after the push")
 
 		res := rewindToCommit(t, svc, c1)
@@ -120,7 +120,7 @@ func TestReconcileAgentRebase_RewindToAnAncestorDoesNotKeepAScrubbedCommit(t *te
 		svc, c1 := sideStore(t)
 		w1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/w1.md", "W1", "first"))
 		w2 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/w2.md", "W2", "second"))
-		base, err := svc.rh.readAgentBase("agent/test")
+		base, err := svc.rh.ReadAgentBaseForTest("agent/test")
 		require.NoError(t, err)
 		require.Equal(t, c1, base, "setup: the watermark is c1, below w1")
 		res := rewindToCommit(t, svc, w1)
@@ -138,7 +138,7 @@ func TestReconcileAgentRebase_EmptyBranchTakesTheNewUpstream(t *testing.T) {
 	svc, c1 := sideStore(t)
 	m1 := upstreamCommit(t, svc, c1, "kb/m1.md", obsFact("M1"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
-	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
+	r, err := svc.rh.ReconcileAgentMergeForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode, "setup: the agent branch fast-forwards onto m1")
 
@@ -186,7 +186,7 @@ func TestReconcileAgentRebase_OwnExperimentMergeOnlySurvivesTheRebuild(t *testin
 	writeMergeFact(t, svc, "exp/e", "kb/exp.md", "Exp", "experiment knowledge")
 	m1 := upstreamCommit(t, svc, c1, "kb/m1.md", obsFact("M1"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
-	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
+	r, err := svc.rh.ReconcileAgentMergeForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode)
 	cr, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
@@ -234,7 +234,7 @@ func TestReconcileAgentRebase_FleetMemberAfterAFallbackPushesNoMasterCommit(t *t
 		TreeHash: mustCommit(t, svc, both).TreeHash, ParentHashes: []plumbing.Hash{h, x}})
 	require.NoError(t, err)
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m)))
-	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
+	r, err := svc.rh.ReconcileAgentMergeForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode, "setup: the member fast-forwards onto the master's merge")
 

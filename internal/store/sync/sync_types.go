@@ -1,15 +1,17 @@
-package store
+package sync
 
 import (
 	"errors"
+
+	"knomit/internal/store/merge"
 )
 
 // SyncResult is the bundled outcome of a sync tick — one reconcile cycle
 // that brings local main to origin/main (Main) and reconciles the agent
 // branch (Agent) via merge or rebase fallback.
 type SyncResult struct {
-	Main  MainReconcileResult  `json:"main"`
-	Agent AgentReconcileResult `json:"agent"`
+	Main  MainReconcileResult        `json:"main"`
+	Agent merge.AgentReconcileResult `json:"agent"`
 }
 
 // PushResult is returned by Push to report what happened.

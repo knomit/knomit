@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	storesync "knomit/internal/store/sync"
 )
 
 // peerForkAgentConfident is the peer-sync shape where the confidence rule and
@@ -39,7 +40,7 @@ func peerForkAgentConfident(t *testing.T, conflicts string) (*cmRepo, *object.Co
 func (r *cmRepo) peerSync() *object.Commit {
 	r.t.Helper()
 	const agent = "agent/peer-abcd1234"
-	_, err := r.svc.Remote().(*remoteIndex).reconcileNow(context.Background(), agent, "master")
+	_, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
 	require.NoError(r.t, err)
 	return r.tip(agent)
 }
@@ -318,7 +319,7 @@ func TestReplay_FactsConsensus_OntoWins(t *testing.T) {
 	ontoCommit, err := object.GetCommit(r.svc.rh.Storer(), onto)
 	require.NoError(t, err)
 	_, ontoF := r.blob(ontoCommit, "kb/notes/f.md")
-	_, err = r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratConsensus, true)
+	_, err = r.svc.rh.ReconcileAgentForTest(context.Background(), agent, "main", stratConsensus, true)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	_, out := r.blob(tip, "kb/notes/f.md")
@@ -333,7 +334,7 @@ func TestReplay_StateConsensus_OntoWins(t *testing.T) {
 	r, agent, _ := replayFork(t)
 	r.write("main", "notes.txt", "main\n")
 	r.write(agent, "notes.txt", "agent\n")
-	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratMergeState, true)
+	_, err := r.svc.rh.ReconcileAgentForTest(context.Background(), agent, "main", stratMergeState, true)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	_, notes := r.blob(tip, "notes.txt")

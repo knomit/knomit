@@ -53,7 +53,7 @@ func TestReconcileAgentRebase_ExperimentMergeSurvivesARewind(t *testing.T) {
 	// branch onto it and sets the watermark.
 	m1 := upstreamCommit(t, svc, c1, "kb/m1.md", "---\ntype: observation\n---\n# M1\n\nm1\n")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
-	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
+	r, err := svc.rh.ReconcileAgentMergeForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode, "setup: the agent branch fast-forwards onto main")
 
@@ -66,7 +66,7 @@ func TestReconcileAgentRebase_ExperimentMergeSurvivesARewind(t *testing.T) {
 	// The rewind: origin main is force-pushed to u, on c1, lacking m1.
 	u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nu\n")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
-	_, err = svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
+	_, err = svc.rh.ReconcileAgentRebaseForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/exp.md"), "the experiment's committed knowledge must survive the rewind")
 }
@@ -102,7 +102,7 @@ func TestReconcileAgentRebase_DropsCommitsThatChangeOnlySkippedPaths(t *testing.
 	// Only the marker commit beyond the new upstream: nothing to replay.
 	u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
-	res, err := svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
+	res, err := svc.rh.ReconcileAgentRebaseForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, 0, res.NumReplayed)
 	require.False(t, hasFileAt(t, svc, "agent/test", "artifacts/fleet/master"), "the marker-only commit is dropped")
@@ -115,7 +115,7 @@ func TestReconcileAgentRebase_DropsCommitsThatChangeOnlySkippedPaths(t *testing.
 	// A rewind: upstream moves to a sibling of what local holds.
 	u3 := upstreamCommit(t, svc, u, "kb/u3.md", "---\ntype: observation\n---\n# U3\n\nu3\n")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u3)))
-	res, err = svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
+	res, err = svc.rh.ReconcileAgentRebaseForTest(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.NumReplayed, "only kb/own.md is replayed")
 	require.False(t, hasFileAt(t, svc, "agent/test", "artifacts/fleet/master"))
@@ -149,7 +149,7 @@ func replaysMixedWholeAndUnsetNothing(t *testing.T) {
 		require.NoError(t, err)
 		u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
 		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
-		res, err := svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
+		res, err := svc.rh.ReconcileAgentRebaseForTest(ctx, "agent/test", "main", StrategyLocalWins)
 		require.NoError(t, err)
 		require.Equal(t, 1, res.NumReplayed, "skip=%v", skip)
 		require.True(t, hasFileAt(t, svc, "agent/test", "artifacts/fleet/master"), "the commit is replayed (skip=%v)", skip)

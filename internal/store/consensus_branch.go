@@ -66,11 +66,11 @@ func (s *Service) UpstreamBranch() string {
 // (a store not yet initialised); several candidates are warned about once and
 // the first by name is used, unrecorded.
 func (s *Service) localConsensusBranch() string {
-	if b := s.ri.getConsensus(); b != "" {
+	if b := s.ri.Consensus(); b != "" {
 		return b
 	}
 	if b := s.recordedConsensusBranch(); b != "" {
-		s.ri.setConsensus(b)
+		s.ri.SetConsensus(b)
 		return b
 	}
 	cands := s.consensusCandidates()
@@ -81,7 +81,7 @@ func (s *Service) localConsensusBranch() string {
 		s.recordConsensusBranch(cands[0])
 		return cands[0]
 	default:
-		s.ri.warnAmbiguousOnce.Do(func() {
+		s.ri.WarnAmbiguousOnce(func() {
 			log.Warn().Strs("branches", cands).Str("using", cands[0]).
 				Msg("consensus branch: none recorded and the repo has no origin; several candidate branches, using the first")
 		})
@@ -108,7 +108,7 @@ func (s *Service) recordConsensusBranch(name string) {
 	if name == "" {
 		return
 	}
-	s.ri.setConsensus(name)
+	s.ri.SetConsensus(name)
 	if s.rh == nil || s.rh.DB() == nil {
 		return
 	}

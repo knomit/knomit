@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"knomit/internal/platform/fileuri"
+	storesync "knomit/internal/store/sync"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,7 @@ func swPoint(t *testing.T, svc *Service, url string) {
 }
 
 func swTrySync(svc *Service) (SyncResult, error) {
-	return svc.Remote().(*remoteIndex).Sync(context.Background(), "agent/test", nil)
+	return svc.Remote().(*storesync.Index).Sync(context.Background(), "agent/test", nil)
 }
 
 // A switch to an origin whose main is BEHIND local main: nothing is dropped
@@ -108,9 +109,9 @@ func TestSync_SwitchToAnOriginBehindDropsNothing(t *testing.T) {
 			wmPush(t, svc)
 			require.True(t, swBareHolds(t, b, "agent/test", f), "f reaches B")
 			require.True(t, swBareHolds(t, b, "agent/test", w), "w reaches B")
-			id, err := svc.rh.readOriginIdentity()
+			id, err := svc.rh.ReadOriginIdentityForTest()
 			require.NoError(t, err)
-			require.Equal(t, originIdentity(fileuri.New(b)), id, "B's identity is recorded")
+			require.Equal(t, storesync.OriginIdentityForTest(fileuri.New(b)), id, "B's identity is recorded")
 		})
 	}
 }
@@ -184,9 +185,9 @@ func TestSync_FailedFirstRoundWithANewOriginIsStillASwitch(t *testing.T) {
 	swPoint(t, svc, fileuri.New(b))
 	_, err := swTrySync(svc)
 	require.ErrorIs(t, err, failed)
-	id, err := svc.rh.readOriginIdentity()
+	id, err := svc.rh.ReadOriginIdentityForTest()
 	require.NoError(t, err)
-	require.Equal(t, originIdentity(fileuri.New(a)), id, "a failed round records nothing")
+	require.Equal(t, storesync.OriginIdentityForTest(fileuri.New(a)), id, "a failed round records nothing")
 
 	wmSync(t, svc)
 	require.True(t, reachableFrom(t, svc, "agent/test", f), "f is kept")
@@ -233,7 +234,7 @@ func TestSync_AnotherSpellingOrCredentialIsNotASwitch(t *testing.T) {
 			wmSetOriginMain(t, a, r)
 			wmSync(t, svc)
 			require.False(t, reachableFrom(t, svc, "agent/test", f), "the same origin's scrub still holds")
-			id, err := svc.rh.readOriginIdentity()
+			id, err := svc.rh.ReadOriginIdentityForTest()
 			require.NoError(t, err)
 			require.NotContains(t, id, "s3cret", "no credential is recorded")
 			require.NotContains(t, id, "user", "no user info is recorded")
@@ -255,58 +256,8 @@ func TestSync_SwitchPushesTheBranchTheNewOriginLacks(t *testing.T) {
 	wmSync(t, svc)
 	_, err := svc.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", "agent/test"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "the tracking ref mirrors B, which has no agent branch")
-	pres, err := svc.Remote().(*remoteIndex).Push(context.Background(), "agent/test", nil)
+	pres, err := svc.Remote().(*storesync.Index).Push(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 	require.True(t, pres.Pushed)
 	require.True(t, swBareHasFile(t, b, "agent/test", "kb/own.md"))
-}
-
-// What counts as the same origin, and that no credential survives.
-// SABOTAGE: compare the raw URL / no path cleaning / scp not mapped /
-// credentials kept in an unparseable URL -> red.
-func TestOriginIdentity(t *testing.T) {
-	same := [][2]string{
-		{"https://forge.example/team/kb.git", "https://user:new-token@forge.example/team/kb.git"},
-		{"https://forge.example/team/kb.git", "HTTPS://Forge.Example:443/team/kb.git/"},
-		{"http://forge.example/kb", "http://forge.example:80/kb"},
-		{"/srv/kb.git", "/srv/kb.git/"},
-		{"https://forge.example/team/kb", "https://forge.example/team/kb.git"},
-		{"https://forge.example/team/kb", "https://forge.example/team/./kb"},
-		{"https://forge.example/team/kb", "https://forge.example/team/x/../kb/"},
-		{"https://forge.example/team/kb", "https://forge.example//team/kb"},
-		{"git@forge.example:team/kb.git", "ssh://git@forge.example/team/kb"},
-		{"git@forge.example:team/kb", "ssh://forge.example:22/team/kb.git"},
-		{"/srv/kb", "file:///srv/kb"},
-		{"/srv/./kb", "file:///srv/kb.git"},
-	}
-	for _, p := range same {
-		require.Equal(t, originIdentity(p[0]), originIdentity(p[1]), "%q vs %q", p[0], p[1])
-	}
-	// Still a change (accepted as known).
-	differ := [][2]string{
-		{"https://forge.example/team/kb.git", "https://forge.example/team/fork.git"},
-		{"https://forge.example/kb", "https://other.example/kb"},
-		{"https://forge.example:8443/kb", "https://forge.example/kb"},
-		{"https://forge.example/kb", "ssh://forge.example/kb"},
-		{"https://forge.example/Team/kb", "https://forge.example/team/kb"},
-		{"http://forge.example/kb", "https://forge.example/kb"},
-		{"git@forge.example:team/kb", "git@other.example:team/kb"},
-		{"/srv/kb", "/srv/kb2"},
-	}
-	for _, p := range differ {
-		require.NotEqual(t, originIdentity(p[0]), originIdentity(p[1]), "%q vs %q", p[0], p[1])
-	}
-	// No credential survives, parseable or not.
-	for _, raw := range []string{
-		"https://user:s3cret@forge.example/kb",
-		"https://user:se%zzs3cret@forge.example/kb",
-		"https://s3cret@forge.example:99999x/kb",
-		"user:s3cret@forge.example:team/kb",
-		"https://user:s3cret/x@forge.example/kb",
-		"https://user:s3cret#x@forge.example/kb",
-		"https://user:s3cret?x@forge.example/kb",
-		"https://user:p@s3cret@forge.example/kb",
-	} {
-		require.NotContains(t, originIdentity(raw), "s3cret", raw)
-	}
 }

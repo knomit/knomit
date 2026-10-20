@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"knomit/internal/platform/fileuri"
+	storesync "knomit/internal/store/sync"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -55,10 +56,10 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*remoteIndex)
+	ri := svc.Remote().(*storesync.Index)
 
 	// Simulate ConfigureRemote mid-rewrite by holding the write lock.
-	unlockConfig := ri.rh.LockConfigForTest()
+	unlockConfig := svc.rh.LockConfigForTest()
 
 	done := make(chan struct{})
 	go func() {
@@ -133,7 +134,7 @@ func TestReconcileMain_UsesConfiguredUpstream(t *testing.T) {
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "master"), plumbing.NewHash(newMasterCommit)),
 	))
 
-	res, err := svc.rh.reconcileMain(context.Background(), "master")
+	res, err := svc.rh.ReconcileMainForTest(context.Background(), "master")
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, res.Mode)
 	require.Equal(t, plumbing.NewHash(newMasterCommit), mustHeadHash(t, svc, "master"))

@@ -3,7 +3,7 @@
 // Push force-pushes the agent branch — safe because only this machine
 // writes its own agent branch, and Sync has already reconciled any
 // upstream drift onto the local replayed history.
-package store
+package sync
 
 import (
 	"bytes"
@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 )
 
 // errNoOriginRemote signals (within Sync) that no "origin" git remote is
@@ -30,7 +31,7 @@ import (
 // origin-existence check and the fetch can share one configMu read-lock scope.
 var errNoOriginRemote = errors.New("no origin git remote configured")
 
-// fetchOrigin fetches from origin using the configured refspecs. If origin
+// FetchOrigin fetches from origin using the configured refspecs. If origin
 // does not have the agent branch yet (e.g. on first connect, before this
 // machine has ever pushed), go-git returns NoMatchingRefSpecError. That is
 // expected — fall back to fetching just refs/heads/<upstreamMain> so the
@@ -53,7 +54,7 @@ var errNoOriginRemote = errors.New("no origin git remote configured")
 // calculateRefs runs before the prune and fails with NoMatchingRefSpecError
 // otherwise), so those refs exist on the origin and are never pruned. The
 // fallback attempt (the own branch absent on the origin) does not prune.
-func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string, timeout time.Duration, extra ...gogitconfig.RefSpec) error {
+func FetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string, timeout time.Duration, extra ...gogitconfig.RefSpec) error {
 	opts := &gogit.FetchOptions{RemoteName: "origin", Auth: auth}
 	if len(extra) > 0 {
 		rem, err := repo.Remote("origin")
@@ -160,7 +161,7 @@ func abandonedByCaller(ctx context.Context, retErr error) bool {
 // replayOntoUpstream) and scrubbed files drop correctly.
 //
 // Safe to call repeatedly; each step is a no-op when there's nothing to do.
-func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {
+func (ri *Index) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {
 	return ri.sync(ctx, agentBranch, auth)
 }
 
@@ -176,11 +177,11 @@ const peerRefspec = gogitconfig.RefSpec("+refs/heads/agent/*:refs/remotes/origin
 // is never written to the git config, so a member's remote never has it, and
 // an instance that gains or loses the fleet root key changes what it fetches
 // on its next round, without a restart.
-func (ri *remoteIndex) SyncWithPeers(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {
+func (ri *Index) SyncWithPeers(ctx context.Context, agentBranch string, auth transport.AuthMethod) (SyncResult, error) {
 	return ri.sync(ctx, agentBranch, auth, peerRefspec)
 }
 
-func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transport.AuthMethod, extra ...gogitconfig.RefSpec) (res SyncResult, retErr error) {
+func (ri *Index) sync(ctx context.Context, agentBranch string, auth transport.AuthMethod, extra ...gogitconfig.RefSpec) (res SyncResult, retErr error) {
 	remote, err := ri.GetRemote("origin")
 	if err != nil || remote == nil {
 		log.Debug().Msg("Sync: no origin remote configured, skipping")
@@ -208,11 +209,11 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 
 	// The origin's branch is the consensus branch. An origin without one names
 	// nothing to reconcile against, and is reported rather than guessed at: this
-	// is the one entry that reads it, so fetchOrigin, reconcileNow and the
+	// is the one entry that reads it, so FetchOrigin, reconcileNow and the
 	// reconcile steps below never see an empty name.
 	upstreamMain := remote.Branch
 	if upstreamMain == "" {
-		return SyncResult{}, fmt.Errorf("Sync: the origin has no branch: %w", ErrNoConsensusBranch)
+		return SyncResult{}, fmt.Errorf("Sync: the origin has no branch: %w", vcs.ErrNoConsensusBranch)
 	}
 
 	// Hold the config READ lock across the origin existence check and the fetch.
@@ -224,7 +225,7 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	// "no origin" / stale-refspec fetch). The lock is released before
 	// reconcileNow, which works off the freshly-written remote-tracking refs.
 	//
-	// fetchOrigin tolerates a missing agent ref on origin (expected when the
+	// FetchOrigin tolerates a missing agent ref on origin (expected when the
 	// agent branch has not yet been pushed) by falling back to fetching only
 	// origin/<upstreamMain>.
 	//
@@ -241,7 +242,7 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 		if ref, err := ri.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain)); err == nil {
 			lastOrigin = ref.Hash()
 		}
-		return fetchOrigin(ctx, ri.rh.Repository(), auth, upstreamMain, ri.rh.NetTimeout(), extra...)
+		return FetchOrigin(ctx, ri.rh.Repository(), auth, upstreamMain, ri.rh.NetTimeout(), extra...)
 	}()
 	if fetchErr == errNoOriginRemote {
 		log.Debug().Msg("Sync: no origin git remote configured, skipping")
@@ -298,7 +299,7 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 //
 // upstreamMain is the consensus branch name; Sync, the only production
 // caller, refuses an empty one before getting here.
-func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMain string) (SyncResult, error) {
+func (ri *Index) reconcileNow(ctx context.Context, agentBranch, upstreamMain string) (SyncResult, error) {
 	return ri.reconcileNowSwitched(ctx, agentBranch, upstreamMain, false)
 }
 
@@ -306,7 +307,7 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 // a different origin (switched): then the agent is reconciled by the ordinary
 // merge path even when the main reconcile rewound, unless the branch and the
 // new main share no history at all (unrelated: the existing rules).
-func (ri *remoteIndex) reconcileNowSwitched(ctx context.Context, agentBranch, upstreamMain string, switched bool) (SyncResult, error) {
+func (ri *Index) reconcileNowSwitched(ctx context.Context, agentBranch, upstreamMain string, switched bool) (SyncResult, error) {
 
 	// Degenerate config: the configured consensus branch IS this machine's
 	// own agent branch (e.g. a clone whose remote HEAD was an agent branch,
@@ -350,11 +351,11 @@ func (ri *remoteIndex) reconcileNowSwitched(ctx context.Context, agentBranch, up
 	// value at its own): set → each key as it says, the incoming consensus
 	// branch (src) being the consensus side and a key set to off still going
 	// LocalWins; both keys off → LocalWins, as always.
-	strategy := StrategyLocalWins
+	strategy := merge.StrategyLocalWins
 	if s, on := ri.rh.ConflictsStrategy(ctx, upstreamMain); on {
 		strategy = s
 	}
-	rewound := mainRes.Mode == ModeRewound
+	rewound := mainRes.Mode == merge.ModeRewound
 	if rewound && switched {
 		related, rerr := ri.rh.branchSharesHistory(agentBranch, upstreamMain)
 		if rerr != nil {
@@ -408,7 +409,7 @@ func (ri *remoteIndex) reconcileNowSwitched(ctx context.Context, agentBranch, up
 // An empty branch is refused with ErrNoAgentBranch, but that is a BACKSTOP:
 // the reconcile loop gates on repos.pushAllowed and never calls this for a
 // subscription in the first place.
-func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
+func (ri *Index) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
 	if branch == "" {
 		return PushResult{}, ErrNoAgentBranch
 	}
@@ -513,14 +514,14 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 // from's write lock, and records nothing in the remotes table: the caller
 // reports the outcome. Pushed is false when the origin's main already is the
 // tip.
-func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error) {
+func (ri *Index) PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error) {
 	remote, err := ri.GetRemote("origin")
 	if err != nil || remote == nil {
 		return PushResult{}, fmt.Errorf("PublishUpstream: no origin: %v", err)
 	}
 	upstream := remote.Branch
 	if upstream == "" {
-		return PushResult{}, fmt.Errorf("PublishUpstream: the origin has no branch: %w", ErrNoConsensusBranch)
+		return PushResult{}, fmt.Errorf("PublishUpstream: the origin has no branch: %w", vcs.ErrNoConsensusBranch)
 	}
 	if from == "" || from == upstream {
 		return PushResult{}, fmt.Errorf("PublishUpstream: %q is not a branch to publish to %q", from, upstream)
@@ -541,9 +542,9 @@ func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth tr
 		return PushResult{}, fmt.Errorf("PublishUpstream: tip %s is unreadable: %w", tip, err)
 	}
 	// The commits the publish adds to the origin's main are judged first
-	// (judgeOwnRange): tip ∖ the main this copy last fetched from the origin
+	// (JudgeOwnRange): tip ∖ the main this copy last fetched from the origin
 	// (its local main when it has no tracking ref yet).
-	if err := ri.rh.judgeOwnRange(upstream, ri.publishBase(upstream), tip, ri.ownID(from), tip); err != nil {
+	if err := ri.rh.JudgeOwnRange(upstream, ri.publishBase(upstream), tip, ri.ownID(from), tip); err != nil {
 		return PushResult{}, fmt.Errorf("PublishUpstream: %w", err)
 	}
 	refspec := fmt.Sprintf("%s:refs/heads/%s", tip, upstream)
@@ -577,7 +578,7 @@ func (ri *remoteIndex) PublishUpstream(ctx context.Context, from string, auth tr
 // origin (repos.Manager.moveFleetToForge): the origin round that the attach
 // starts then fetches a main equal to the tip, and never rewinds local main
 // to an older forge main (kb/decisions/fleet/trust-the-forge-main).
-func (ri *remoteIndex) PublishTo(ctx context.Context, gitURL, from, upstream string, auth transport.AuthMethod) error {
+func (ri *Index) PublishTo(ctx context.Context, gitURL, from, upstream string, auth transport.AuthMethod) error {
 	if from == "" || upstream == "" || from == upstream {
 		return fmt.Errorf("PublishTo: %q is not a branch to publish to %q", from, upstream)
 	}
@@ -597,13 +598,13 @@ func (ri *remoteIndex) PublishTo(ctx context.Context, gitURL, from, upstream str
 	if _, err := ri.rh.Repository().CommitObject(tip); err != nil {
 		return fmt.Errorf("PublishTo: tip %s is unreadable: %w", tip, err)
 	}
-	// The seed becomes the forge's main: judged first (judgeOwnRange), tip ∖
+	// The seed becomes the forge's main: judged first (JudgeOwnRange), tip ∖
 	// this copy's own main.
 	base := plumbing.ZeroHash
 	if ref, err := ri.rh.Storer().Reference(plumbing.NewBranchReferenceName(upstream)); err == nil {
 		base = ref.Hash()
 	}
-	if err := ri.rh.judgeOwnRange(upstream, base, tip, ri.ownID(from), tip); err != nil {
+	if err := ri.rh.JudgeOwnRange(upstream, base, tip, ri.ownID(from), tip); err != nil {
 		return fmt.Errorf("PublishTo: %w", err)
 	}
 	rem := gogit.NewRemote(ri.rh.Repository().Storer, &gogitconfig.RemoteConfig{Name: "publish-to", URLs: []string{gitURL}})
@@ -649,7 +650,7 @@ func (ri *remoteIndex) PublishTo(ctx context.Context, gitURL, from, upstream str
 // A branch that is already absent on the origin is not an error. When the
 // origin has the branch but this instance has no tracking ref for it, this
 // instance never pushed it: nothing is deleted, and the call fails.
-func (ri *remoteIndex) RetractPushedBranch(ctx context.Context, branch string, auth transport.AuthMethod) error {
+func (ri *Index) RetractPushedBranch(ctx context.Context, branch string, auth transport.AuthMethod) error {
 	if branch == "" {
 		return ErrNoAgentBranch
 	}
@@ -785,14 +786,14 @@ var ErrUpstreamMoved = errors.New("the origin's upstream moved: the change is no
 // It is the fleet's way to publish the master marker on a forge (claim,
 // stand-down, decommission: repos claimFleetMaster and friends): git decides
 // a race between two claims, the first publish wins.
-func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, from, path string, content *string, message string, auth transport.AuthMethod) (plumbing.Hash, error) {
+func (ri *Index) PublishUpstreamChange(ctx context.Context, from, path string, content *string, message string, auth transport.AuthMethod) (plumbing.Hash, error) {
 	remote, err := ri.GetRemote("origin")
 	if err != nil || remote == nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: no origin: %v", err)
 	}
 	upstream := remote.Branch
 	if upstream == "" {
-		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: the origin has no branch: %w", ErrNoConsensusBranch)
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: the origin has no branch: %w", vcs.ErrNoConsensusBranch)
 	}
 	rh := ri.rh
 	signer, err := rh.CommitSigner()
@@ -848,8 +849,8 @@ func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, from, path str
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
 	// The one commit this publishes onto main is judged first
-	// (judgeOwnRange); a refused one is left unreachable and nothing moves.
-	if err := rh.judgeOwnRange(upstream, parent, h, ri.ownID(upstream), ri.branchTip(from)); err != nil {
+	// (JudgeOwnRange); a refused one is left unreachable and nothing moves.
+	if err := rh.JudgeOwnRange(upstream, parent, h, ri.ownID(upstream), ri.branchTip(from)); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
 	pushCtx, cancel := rh.NetCtx(ctx)
@@ -867,7 +868,7 @@ func (ri *remoteIndex) PublishUpstreamChange(ctx context.Context, from, path str
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w%s", err, remoteSays(srv.String()))
 	}
 	unlock := rh.LockBranch(upstream)
-	_, _, err = rh.advanceBranchTo(context.WithoutCancel(ctx), upstream, h)
+	_, _, err = rh.AdvanceBranchTo(context.WithoutCancel(ctx), upstream, h)
 	unlock()
 	if err != nil {
 		log.Warn().Err(err).Str("upstream", upstream).Msg("PublishUpstreamChange: pushed; the local upstream did not follow yet (the next fetch moves it)")

@@ -1,4 +1,4 @@
-package store
+package sync
 
 import (
 	"database/sql"
@@ -10,12 +10,12 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 )
 
-// remoteIndex owns remote configuration and git sync/push operations.
+// Index owns remote configuration and git sync/push operations.
 // All git-level plumbing (signer, authorSig, committerSig, NotifyCommit,
-// PopulateCommitLog) lives on repoHandler; remoteIndex reaches UP via ri.rh.*
+// PopulateCommitLog) lives on repoHandler; Index reaches UP via ri.rh.*
 // and never through a sibling subsystem.
-type remoteIndex struct {
-	rh *repoHandler
+type Index struct {
+	rh *Repo
 
 	// originMu guards origin. Service.SetOrigin re-points a running repo's
 	// origin (the HAL PUT/DELETE handlers do this on a live repo) while
@@ -30,27 +30,39 @@ type remoteIndex struct {
 	warnAmbiguousOnce sync.Once
 }
 
-func (ri *remoteIndex) setConsensus(b string) {
+// NewIndex builds the remote index over rh. The parent's constructor calls it
+// once per Service.
+func NewIndex(rh *Repo) *Index { return &Index{rh: rh} }
+
+// WarnAmbiguousOnce runs f the first time it is called on this index and
+// never again: the consensus-branch resolution warns once per repo that an
+// unrecorded repository has several candidate branches.
+func (ri *Index) WarnAmbiguousOnce(f func()) { ri.warnAmbiguousOnce.Do(f) }
+
+// SetConsensus caches the recorded consensus branch (consensus_branch.go in
+// the parent decides it), under originMu.
+func (ri *Index) SetConsensus(b string) {
 	ri.originMu.Lock()
 	ri.consensus = b
 	ri.originMu.Unlock()
 }
 
-func (ri *remoteIndex) getConsensus() string {
+// Consensus returns the cached consensus branch ("" until one is cached).
+func (ri *Index) Consensus() string {
 	ri.originMu.RLock()
 	defer ri.originMu.RUnlock()
 	return ri.consensus
 }
 
-// setOrigin stores the injected origin under a write lock. See originMu.
-func (ri *remoteIndex) setOrigin(o *Origin) {
+// SetOrigin stores the injected origin under a write lock. See originMu.
+func (ri *Index) SetOrigin(o *Origin) {
 	ri.originMu.Lock()
 	ri.origin = o
 	ri.originMu.Unlock()
 }
 
 // getOrigin reads the injected origin under a read lock. See originMu.
-func (ri *remoteIndex) getOrigin() *Origin {
+func (ri *Index) getOrigin() *Origin {
 	ri.originMu.RLock()
 	defer ri.originMu.RUnlock()
 	return ri.origin
@@ -96,7 +108,7 @@ type Remote struct {
 // origin would otherwise inherit the previous one's last_sync_at/last_error and
 // report them as its own. A missing row and a missing git remote are both
 // tolerated, so the call is idempotent.
-func (ri *remoteIndex) DeleteRemote(name string) error {
+func (ri *Index) DeleteRemote(name string) error {
 	if _, err := ri.rh.DB().Exec(`DELETE FROM remotes WHERE name = ?`, name); err != nil {
 		return fmt.Errorf("delete remote row: %w", err)
 	}
@@ -120,7 +132,7 @@ func (ri *remoteIndex) DeleteRemote(name string) error {
 // There is no longer a fallback to the repo's own columns — migration 000017
 // dropped them, so an uninjected origin is the WHOLE answer, not a hint to look
 // elsewhere.
-func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
+func (ri *Index) GetRemote(name string) (*Remote, error) {
 	origin := ri.getOrigin()
 	if origin == nil {
 		return nil, nil
@@ -158,7 +170,7 @@ const defaultSyncInterval = 300
 // creating the status row if this is the first sync. The row is no longer
 // guaranteed to exist: connection config lives in control.db now, so nothing
 // inserts it ahead of time.
-func (ri *remoteIndex) updateRemoteStatus(name, status string, syncErr *string) error {
+func (ri *Index) updateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := ri.rh.DB().Exec(
 		`INSERT INTO remotes (name, interval, push_interval, last_sync_at, last_status, last_error)
@@ -178,20 +190,20 @@ func (ri *remoteIndex) updateRemoteStatus(name, status string, syncErr *string) 
 // be resolved never reaches Sync(), so its error would otherwise not be
 // recorded on the remote record. Mirrors the error path Sync() itself takes
 // via updateRemoteStatus, so the visible status is identical to a fetch error.
-func (ri *remoteIndex) RecordSyncError(name, msg string) error {
+func (ri *Index) RecordSyncError(name, msg string) error {
 	return ri.updateRemoteStatus(name, "error", &msg)
 }
 
 // RecordPushError persists a push failure (last_push_status="error",
 // last_push_error=msg) on the named remote: the fleet master's refused
 // PublishUpstream, which records nothing itself.
-func (ri *remoteIndex) RecordPushError(name, msg string) error {
+func (ri *Index) RecordPushError(name, msg string) error {
 	return ri.updateRemotePushStatus(name, "error", &msg)
 }
 
 // updateRemotePushStatus updates the push status fields for a remote, creating
 // the status row if absent. See updateRemoteStatus.
-func (ri *remoteIndex) updateRemotePushStatus(name, status string, pushErr *string) error {
+func (ri *Index) updateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := ri.rh.DB().Exec(
 		`INSERT INTO remotes (name, interval, push_interval, last_push_at, last_push_status, last_push_error)

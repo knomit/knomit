@@ -192,7 +192,7 @@ type RemoteIndex interface {
 	// commit to the origin's upstream WITHOUT force; the agent branch is not
 	// touched, and the local upstream follows only a push the origin took.
 	// from is this instance's agent branch: on the fleet repository the
-	// commit is judged before the push (judgeOwnRange), and from's tip is
+	// commit is judged before the push (JudgeOwnRange), and from's tip is
 	// the state that vouches for its author when main does not yet.
 	PublishUpstreamChange(ctx context.Context, from, path string, content *string, message string, auth transport.AuthMethod) (plumbing.Hash, error)
 	// PublishTo pushes from's tip to gitURL, which need not be the origin:

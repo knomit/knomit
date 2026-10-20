@@ -11,7 +11,7 @@ import (
 // *vcs.Repo (and verify for the merge-time validation); the callers that
 // drive it stay in this package: Service.MergePushed / MergeConsensus
 // (service_merge.go, which hold the dst lock and pick the host's strategy),
-// the reconcile and sync paths (remote_reconcile*.go, remote_sync.go) and the
+// the reconcile and sync paths (internal/store/sync) and the
 // receive-pack handler.
 //
 // repoHandler embeds *merge.Repo next to *vcs.Repo and *facts.Repo (see

@@ -176,7 +176,7 @@ func TestRefMoves_DeriveBeforeTheRef(t *testing.T) {
 			tip := mustHeadHash(t, svc, agent)
 			u := writeRawCommit(t, svc, []string{tip.String()}, map[string]string{"kb/u.md": testFactBody("u", 0.5, nil)}, t0, "upstream")
 			return agent, func() error {
-				_, err := svc.rh.replayOntoUpstream(context.Background(), agent, plumbing.NewHash(u), plumbing.ZeroHash, StrategyLocalWins)
+				_, err := svc.rh.ReplayOntoUpstreamForTest(context.Background(), agent, plumbing.NewHash(u), plumbing.ZeroHash, StrategyLocalWins)
 				return err
 			}
 		},
@@ -186,7 +186,7 @@ func TestRefMoves_DeriveBeforeTheRef(t *testing.T) {
 			base := mustHeadHash(t, svc, "main")
 			u := writeRawCommit(t, svc, []string{base.String()}, map[string]string{"kb/u.md": testFactBody("u", 0.5, nil)}, t0, "upstream")
 			return agent, func() error {
-				_, err := svc.rh.replayOntoUpstream(context.Background(), agent, plumbing.NewHash(u), plumbing.ZeroHash, StrategyLocalWins)
+				_, err := svc.rh.ReplayOntoUpstreamForTest(context.Background(), agent, plumbing.NewHash(u), plumbing.ZeroHash, StrategyLocalWins)
 				return err
 			}
 		},
@@ -194,7 +194,7 @@ func TestRefMoves_DeriveBeforeTheRef(t *testing.T) {
 			writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 			root := writeRawCommit(t, svc, nil, map[string]string{"kb/r.md": testFactBody("r", 0.5, nil)}, t0, "disjoint")
 			return "main", func() error {
-				_, _, err := svc.rh.advanceBranchTo(context.Background(), "main", plumbing.NewHash(root))
+				_, _, err := svc.rh.AdvanceBranchTo(context.Background(), "main", plumbing.NewHash(root))
 				return err
 			}
 		},
@@ -259,7 +259,7 @@ func TestPathHistory_SwapIsProportional(t *testing.T) {
 	require.NoError(t, svc.rh.RebuildCommitLog(ctx, "main"))
 	require.Equal(t, 0, changes(), "a rebuild of an unchanged branch rewrites no branch_commits row")
 
-	_, _, err := svc.rh.advanceBranchTo(ctx, "main", plumbing.NewHash(c[34]))
+	_, _, err := svc.rh.AdvanceBranchTo(ctx, "main", plumbing.NewHash(c[34]))
 	require.NoError(t, err)
 	require.Equal(t, 5, changes(), "a rewind by 5 commits deletes 5 rows")
 }

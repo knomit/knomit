@@ -33,7 +33,7 @@ func TestReplayCommit_NoSignerLeavesNoObjects(t *testing.T) {
 	t.Cleanup(func() { SetTestFallbackSigner(fallbackTestSigner()) })
 	svc.SetSigner(nil)
 
-	_, err = svc.rh.reconcileAgent(context.Background(), "agent/test", "main", StrategyLocalWins, true)
+	_, err = svc.rh.ReconcileAgentForTest(context.Background(), "agent/test", "main", StrategyLocalWins, true)
 	require.True(t, errors.Is(err, ErrNoSigner), "a signer-less replay must be ErrNoSigner, got %v", err)
 	after, err := svc.Verify(context.Background(), VerifyOpts{})
 	require.NoError(t, err)
