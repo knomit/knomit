@@ -193,7 +193,7 @@ func TestExperimentCommits_NoOwnerNoWrite(t *testing.T) {
 		writeMergeFact(t, svc, testAgentBranch, "kb/moved.md", "moved", "body")
 		before, err := svc.Branches().HeadCommit(ctx, "exp/ghost")
 		require.NoError(t, err)
-		_, err = svc.rh.mergeIntoBranch(ctx, testAgentBranch, "exp/ghost", StrategyRemoteWins)
+		_, err = svc.rh.MergeIntoBranchForTest(ctx, testAgentBranch, "exp/ghost", StrategyRemoteWins)
 		require.ErrorIs(t, err, ErrOrphanExperimentRef)
 		after, err := svc.Branches().HeadCommit(ctx, "exp/ghost")
 		require.NoError(t, err)

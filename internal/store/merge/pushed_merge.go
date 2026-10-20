@@ -3,7 +3,7 @@
 // here it is merged into the host's own agent branch — by the operator from
 // the web UI, or by the consensus merger under `consensus: auto` — and the
 // upstream follows that branch.
-package store
+package merge
 
 import (
 	"errors"
@@ -57,7 +57,7 @@ func (e *PrivatePathMergeError) Is(target error) bool { return target == ErrPriv
 
 // privatePathsChanged lists, sorted, the private paths whose content differs
 // between two trees.
-func (rh *repoHandler) privatePathsChanged(from, to plumbing.Hash) ([]string, error) {
+func (rh *Repo) privatePathsChanged(from, to plumbing.Hash) ([]string, error) {
 	ft, err := object.GetTree(rh.Storer(), from)
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (e *BranchMovedError) Is(target error) bool { return target == ErrBranchMov
 // and every such commit has two or more parents. A src already in dst brings
 // none and answers false: that case is the reachable-tip no-op's, and this
 // rule must not stand in for it (each is pinned by its own test).
-func (rh *repoHandler) onlyMergeCommits(src, dst plumbing.Hash) (bool, error) {
+func (rh *Repo) onlyMergeCommits(src, dst plumbing.Hash) (bool, error) {
 	inDst := map[plumbing.Hash]bool{}
 	if err := vcs.WalkHistory(rh.Storer(), dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
 		return false, err

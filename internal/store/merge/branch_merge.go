@@ -2,7 +2,7 @@
 // helper shared with remoteIndex.Sync. Lives on repoHandler because all the
 // inputs (git storer, repo, signer, branch lock, commit-log plumbing) are
 // rooted there.
-package store
+package merge
 
 import (
 	"context"
@@ -24,16 +24,16 @@ import (
 // MergeBranch merges src into dst using the given conflict strategy.
 // Thin wrapper around mergeIntoBranch that discards the structured result;
 // preserves the public BranchIndex interface for existing callers.
-func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string, strategy ConflictStrategy) error {
+func (rh *Repo) MergeBranch(ctx context.Context, src, dst string, strategy ConflictStrategy) error {
 	_, err := rh.mergeIntoBranch(ctx, src, dst, strategy)
 	return err
 }
 
 // mergeIntoBranch acquires rh.LockBranch(dst) and calls
-// mergeIntoBranchLocked. Callers that already hold the lock (e.g.
+// MergeIntoBranchLocked. Callers that already hold the lock (e.g.
 // reconcileAgentMerge, which holds it for the watermark write) should
-// call mergeIntoBranchLocked directly.
-func (rh *repoHandler) mergeIntoBranch(
+// call MergeIntoBranchLocked directly.
+func (rh *Repo) mergeIntoBranch(
 	ctx context.Context,
 	src, dst string,
 	strategy ConflictStrategy,
@@ -47,7 +47,7 @@ func (rh *repoHandler) mergeIntoBranch(
 //
 // It takes the DST lock, like mergeIntoBranch, and carries it through
 // NotifyCommit (invariants/store/branch-lock-spans-notify).
-func (rh *repoHandler) mergeIntoBranchResolved(
+func (rh *Repo) mergeIntoBranchResolved(
 	ctx context.Context,
 	src, dst string,
 	strategy ConflictStrategy,
@@ -58,7 +58,7 @@ func (rh *repoHandler) mergeIntoBranchResolved(
 	return rh.mergeIntoBranchLockedResolved(ctx, src, dst, strategy, resolutions)
 }
 
-// mergeIntoBranchLocked merges src into dst using the given conflict strategy
+// MergeIntoBranchLocked merges src into dst using the given conflict strategy
 // and returns a structured AgentReconcileResult describing what happened.
 // Caller must hold rh.LockBranch(dst).
 //
@@ -67,7 +67,7 @@ func (rh *repoHandler) mergeIntoBranchResolved(
 //   - ModeFF:    dst is ancestor of src; dst fast-forwarded to src.
 //   - ModeMerge: divergent histories; one merge commit synthesized whose
 //     first parent is the previous dst tip and second parent is
-//     src. The merged tree is produced by mergeTreesWithStrategy
+//     src. The merged tree is produced by MergeTreesWithStrategy
 //     with the given conflict strategy.
 //
 // When the three-way merge produces a tree identical to dst's tree (every
@@ -76,12 +76,12 @@ func (rh *repoHandler) mergeIntoBranchResolved(
 // a sync that changes nothing leaves no trace. (It is not needed for
 // commit-log parity: checkCommitLogParity compares against branch_commits
 // visibility and accepts no-op commits. The peer merge's `record` option
-// writes such a commit on purpose — mergeOpts.)
+// writes such a commit on purpose — MergeOpts.)
 //
 // Errors if dst/src refs cannot be resolved or if histories are disjoint
 // (no common ancestor — the caller is responsible for routing to the
 // rebase fallback in that case).
-func (rh *repoHandler) mergeIntoBranchLocked(
+func (rh *Repo) MergeIntoBranchLocked(
 	ctx context.Context,
 	src, dst string,
 	strategy ConflictStrategy,
@@ -89,49 +89,49 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 	return rh.mergeIntoBranchLockedResolved(ctx, src, dst, strategy, nil)
 }
 
-func (rh *repoHandler) mergeIntoBranchLockedResolved(
+func (rh *Repo) mergeIntoBranchLockedResolved(
 	ctx context.Context,
 	src, dst string,
 	strategy ConflictStrategy,
 	resolutions map[string]Resolution,
 ) (AgentReconcileResult, error) {
-	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, resolutions, mergeOpts{})
+	return rh.MergeIntoBranchLockedOpts(ctx, src, dst, strategy, resolutions, MergeOpts{})
 }
 
-// mergeOpts are the peer-merge caller's options (F11 UI merge). The zero value
+// MergeOpts are the peer-merge caller's options (F11 UI merge). The zero value
 // is the merge every other caller has always had.
-type mergeOpts struct {
+type MergeOpts struct {
 	// srcTip, when set, is the src commit the caller confirmed: the merge
 	// refuses with *BranchMovedError if src no longer points there, and
 	// otherwise merges exactly that commit.
-	srcTip plumbing.Hash
+	SrcTip plumbing.Hash
 	// record always writes a merge commit [dst, src]: never a fast-forward and
 	// never a tree-identical no-op. Only "src is already in dst" is a no-op.
-	record bool
+	Record bool
 	// skipMergeOnly (with record) adds ONE no-op: the merge would leave
 	// dst's tree unchanged AND every commit src brings is itself a merge
 	// commit — src only merged dst's own history back in. The consensus
 	// merger needs it: a peer whose sync always writes a merge commit (never
 	// fast-forwards) would otherwise get a new host merge commit to merge
 	// back on every round, forever.
-	skipMergeOnly bool
+	SkipMergeOnly bool
 	// side, when set, settles EVERY conflicting path with that side, detected
 	// under the dst lock (the whole-set choice of the UI merge dialog).
-	side ResolutionSide
+	Side ResolutionSide
 	// factConsensus and factFallback say how a `conflicts` strategy runs at
 	// this site: which side is the consensus side, and the side-picking
 	// strategy a key set to off gets. The zero values are the peer sync's:
 	// the consensus branch is src (merged INTO the agent branch), and an off
 	// key is LocalWins, as always.
-	factConsensus fact.MergeSide
-	factFallback  ConflictStrategy
+	FactConsensus fact.MergeSide
+	FactFallback  ConflictStrategy
 	// trace, when set, is stamped on the merge commit (joined to its trailer
 	// paragraph). ONLY an experiment's own merges set it — CommitExperiment
 	// and SyncExperiment, from the agent `trace` of the knomit_experiment
 	// call — so every other merge (agent sync, reconcile, the peer merge)
 	// stays a transport commit with no trace, as before. A fast-forward or a
 	// no-op writes no commit and so stamps nothing.
-	trace Trailers
+	Trace vcs.Trailers
 	// overlayResolutions lets a `conflicts` strategy take the caller's
 	// resolutions as well: each path the caller named takes the caller's
 	// resolution, and the setting settles every other conflicting path. ONLY
@@ -142,40 +142,40 @@ type mergeOpts struct {
 	// followed a refusal's instructions: the refusal lists only what the
 	// setting left, so a retry naming just those paths would turn the setting
 	// off and be refused again for paths it had already settled.
-	overlayResolutions bool
+	OverlayResolutions bool
 	// guardPrivate refuses the merge (*PrivatePathMergeError) when its RESULT
 	// would change any private path (fact.IsPrivatePath) of dst. ONLY the two
 	// routes from a pushed branch into the host's agent branch set it —
 	// MergePushed and MergeConsensus — which makes them, not receive-pack,
 	// the authority for "a peer never changes the host's .knomit/".
-	guardPrivate bool
-	// validateFacts refuses the merge (*ValidationRefusedError) when a fact
+	GuardPrivate bool
+	// validateFacts refuses the merge (*verify.ValidationRefusedError) when a fact
 	// its RESULT adds or changes against dst fails the validations of the
 	// ontology at dst's tip (the merge commit's first parent): RuleValidation
 	// on the merge into the host's agent branch. Set by the same two routes
 	// as guardPrivate, and judged the same way: the state the merge would
 	// produce, so a branch that wrote an invalid fact and then fixed it
 	// passes, and a fact the merge does not touch is never judged.
-	validateFacts bool
+	ValidateFacts bool
 }
 
-func (o mergeOpts) factMerge(p conflictsPolicy) factMerge {
-	fm := factMerge{policy: p, consensus: o.factConsensus, fallback: o.factFallback}
-	if fm.consensus == "" {
-		fm.consensus = fact.MergeSrc
+func (o MergeOpts) factMerge(p ConflictsPolicy) FactMerge {
+	fm := FactMerge{Policy: p, Consensus: o.FactConsensus, Fallback: o.FactFallback}
+	if fm.Consensus == "" {
+		fm.Consensus = fact.MergeSrc
 	}
-	if fm.fallback == "" {
-		fm.fallback = StrategyLocalWins
+	if fm.Fallback == "" {
+		fm.Fallback = StrategyLocalWins
 	}
 	return fm
 }
 
-func (rh *repoHandler) mergeIntoBranchLockedOpts(
+func (rh *Repo) MergeIntoBranchLockedOpts(
 	ctx context.Context,
 	src, dst string,
 	strategy ConflictStrategy,
 	resolutions map[string]Resolution,
-	o mergeOpts,
+	o MergeOpts,
 ) (AgentReconcileResult, error) {
 	if strategy == "" {
 		strategy = StrategyLocalWins
@@ -201,8 +201,8 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	}
 	srcHash := srcRef.Hash()
 	dstHash := dstRef.Hash()
-	if !o.srcTip.IsZero() && srcHash != o.srcTip {
-		return AgentReconcileResult{}, &BranchMovedError{Branch: src, Expected: o.srcTip.String(), Actual: srcHash.String()}
+	if !o.SrcTip.IsZero() && srcHash != o.SrcTip {
+		return AgentReconcileResult{}, &BranchMovedError{Branch: src, Expected: o.SrcTip.String(), Actual: srcHash.String()}
 	}
 
 	if srcHash == dstHash {
@@ -241,7 +241,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: check dst ancestor: %w", err)
 	}
-	if isDstAncestor && !o.record {
+	if isDstAncestor && !o.Record {
 		// A fast-forward takes src wholesale: nothing conflicted, so a
 		// resolution here adjudicated nothing. Checked BEFORE the ref moves —
 		// a rejected call must leave the branch exactly where it was.
@@ -277,23 +277,23 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	}
 	baseCommit := bases[0]
 
-	policy, mergeFacts := conflictsPolicyOf(strategy)
-	if mergeFacts && ((len(resolutions) > 0 && !o.overlayResolutions) || o.side != "") {
+	policy, mergeFacts := ConflictsPolicyOf(strategy)
+	if mergeFacts && ((len(resolutions) > 0 && !o.OverlayResolutions) || o.Side != "") {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %s computes its own resolutions; none may be given", strategy)
 	}
 
 	// trailers is the merge commit's record of every conflict it settles.
 	var trailers []string
-	if o.side != "" && len(resolutions) == 0 {
+	if o.Side != "" && len(resolutions) == 0 {
 		detected, derr := rh.detectConflicts(ctx, baseCommit, srcCommit, dstCommit)
 		if derr != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: detect conflicts: %w", derr)
 		}
 		resolutions = make(map[string]Resolution, len(detected))
 		for p := range detected {
-			resolutions[p] = Resolution{Side: o.side}
+			resolutions[p] = Resolution{Side: o.Side}
 		}
-		if trailers, derr = sideResolutionLines(baseCommit, srcCommit, dstCommit, detected, o.side); derr != nil {
+		if trailers, derr = sideResolutionLines(baseCommit, srcCommit, dstCommit, detected, o.Side); derr != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: record side: %w", derr)
 		}
 	}
@@ -332,11 +332,11 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	// (its site falls back to Refuse) is refused exactly as before.
 	walk := strategy
 	if mergeFacts {
-		res, lines, ferr := rh.factMergeResolutions(ctx, baseCommit, srcCommit, dstCommit, o.factMerge(policy))
+		res, lines, ferr := rh.FactMergeResolutions(ctx, baseCommit, srcCommit, dstCommit, o.factMerge(policy))
 		if ferr != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge facts: %w", ferr)
 		}
-		if o.overlayResolutions && len(resolutions) > 0 {
+		if o.OverlayResolutions && len(resolutions) > 0 {
 			// The caller's map was already checked against the real conflict
 			// set above (noLeftoverResolutions), so every entry names a path
 			// the setting just decided; the caller's decision replaces it.
@@ -347,7 +347,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		resolutions, trailers, walk = res, lines, StrategyRefuse
 	}
 
-	mergedTreeHash, walkTrailers, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, walk, resolutions)
+	mergedTreeHash, walkTrailers, err := rh.MergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, walk, resolutions)
 	trailers = append(trailers, walkTrailers...)
 	settled := settledFrom(trailers)
 	if err != nil {
@@ -371,7 +371,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: three-way merge: %w", err)
 	}
 
-	if o.guardPrivate && mergedTreeHash != dstCommit.TreeHash {
+	if o.GuardPrivate && mergedTreeHash != dstCommit.TreeHash {
 		paths, perr := rh.privatePathsChanged(dstCommit.TreeHash, mergedTreeHash)
 		if perr != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: private paths: %w", perr)
@@ -383,7 +383,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		}
 	}
 
-	if o.validateFacts && mergedTreeHash != dstCommit.TreeHash {
+	if o.ValidateFacts && mergedTreeHash != dstCommit.TreeHash {
 		reason, verr := rh.mergeFactsInvalid(dstCommit, mergedTreeHash)
 		if verr != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: validations: %w", verr)
@@ -391,11 +391,11 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		if reason != "" {
 			log.Info().Str("src", src).Str("dst", dst).Str("src_tip", srcHash.String()).
 				Str("reason", reason).Msg("mergeIntoBranch: refused (a fact the merge brings fails the ontology's validations)")
-			return AgentReconcileResult{}, &ValidationRefusedError{Src: src, Dst: dst, SrcTip: srcHash.String(), Reason: reason}
+			return AgentReconcileResult{}, &verify.ValidationRefusedError{Src: src, Dst: dst, SrcTip: srcHash.String(), Reason: reason}
 		}
 	}
 
-	if mergedTreeHash == dstCommit.TreeHash && !o.record {
+	if mergedTreeHash == dstCommit.TreeHash && !o.Record {
 		log.Info().
 			Str("src", src).Str("dst", dst).
 			Str("strategy", string(strategy)).
@@ -405,7 +405,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		// and the caller must be able to say so.
 		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String(), Settled: settled}, nil
 	}
-	if mergedTreeHash == dstCommit.TreeHash && o.skipMergeOnly {
+	if mergedTreeHash == dstCommit.TreeHash && o.SkipMergeOnly {
 		only, err := rh.onlyMergeCommits(srcHash, dstHash)
 		if err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
@@ -420,7 +420,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	mc := &object.Commit{
 		Author:       author,
 		Committer:    committer,
-		Message:      vcs.AppendTrailersToParagraph(appendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.trace),
+		Message:      vcs.AppendTrailersToParagraph(AppendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.Trace),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},
 	}
@@ -455,7 +455,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	return AgentReconcileResult{Mode: ModeMerge, NewTip: mergeHash.String(), Settled: settled}, nil
 }
 
-// mergeTreesWithStrategy performs a three-way tree merge anchored on
+// MergeTreesWithStrategy performs a three-way tree merge anchored on
 // baseCommit, applying changes from srcCommit to dstCommit's tree. The
 // strategy determines conflict resolution when both src and dst modified
 // the same path relative to base:
@@ -482,7 +482,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 // didn't modify the file.
 //
 // Returns the hash of the merged tree.
-func (rh *repoHandler) mergeTreesWithStrategy(
+func (rh *Repo) MergeTreesWithStrategy(
 	ctx context.Context,
 	baseCommit, srcCommit, dstCommit *object.Commit,
 	strategy ConflictStrategy,
@@ -719,11 +719,11 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 // detectConflicts runs the refusing walk with NO resolutions to learn which
 // paths actually conflict. It writes nothing: the tree it builds is discarded,
 // exactly as a refused merge discards its own.
-func (rh *repoHandler) detectConflicts(
+func (rh *Repo) detectConflicts(
 	ctx context.Context,
 	baseCommit, srcCommit, dstCommit *object.Commit,
 ) (map[string]bool, error) {
-	_, _, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, StrategyRefuse, nil)
+	_, _, err := rh.MergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, StrategyRefuse, nil)
 	if err == nil {
 		return map[string]bool{}, nil // clean merge: nothing conflicts
 	}
@@ -767,7 +767,7 @@ func noLeftoverResolutions(resolutions map[string]Resolution, conflicts map[stri
 // An empty Resolution is an ERROR, never a default. A caller that names a path
 // without naming an answer has not adjudicated it, and picking a side for them
 // is precisely the silent resolution StrategyRefuse exists to prevent.
-func (rh *repoHandler) applyResolution(
+func (rh *Repo) applyResolution(
 	currentTree *object.Tree,
 	path string,
 	res Resolution,
@@ -803,7 +803,7 @@ func (rh *repoHandler) applyResolution(
 }
 
 // setPath puts blobHash at path in the tree and reloads it.
-func (rh *repoHandler) setPath(currentTree *object.Tree, path string, blobHash plumbing.Hash) (*object.Tree, error) {
+func (rh *Repo) setPath(currentTree *object.Tree, path string, blobHash plumbing.Hash) (*object.Tree, error) {
 	newRoot, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
 	if err != nil {
 		return nil, fmt.Errorf("apply resolution %q: %w", path, err)
@@ -824,7 +824,7 @@ func treeBlobHash(tree *object.Tree, path string) (plumbing.Hash, bool) {
 // mergeFactsInvalid is RuleValidation on a merge into dst: the facts the
 // merged tree adds or changes against dst's tree, against the ontology at
 // dst's tip. Returns the refusal reason, or "".
-func (rh *repoHandler) mergeFactsInvalid(dstCommit *object.Commit, merged plumbing.Hash) (string, error) {
+func (rh *Repo) mergeFactsInvalid(dstCommit *object.Commit, merged plumbing.Hash) (string, error) {
 	ont, err := verify.OntologyOf(dstCommit)
 	if err != nil {
 		return "", fmt.Errorf("the ontology at %s: %w", dstCommit.Hash, err)

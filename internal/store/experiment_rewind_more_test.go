@@ -6,6 +6,7 @@ package store
 
 import (
 	"context"
+	"knomit/internal/store/merge"
 	"strings"
 	"testing"
 	"time"
@@ -155,7 +156,7 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 
 	done := make(chan error, 1)
 	hooked := false
-	testHookOpenExperimentForked = func() {
+	merge.SetOpenExperimentForkedHookForTest(func() {
 		hooked = true
 		// The rewind starts now, between the fork and the row. Give it the
 		// time to finish if nothing holds it back.
@@ -168,11 +169,11 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 			done <- err
 		case <-time.After(300 * time.Millisecond):
 		}
-	}
-	t.Cleanup(func() { testHookOpenExperimentForked = nil })
+	})
+	t.Cleanup(func() { merge.SetOpenExperimentForkedHookForTest(nil) })
 	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
-	testHookOpenExperimentForked = nil
+	merge.SetOpenExperimentForkedHookForTest(nil)
 	require.True(t, hooked, "OpenExperiment must run the hook between the fork and the row")
 	select {
 	case err := <-done:
@@ -196,11 +197,11 @@ func TestExperimentAcrossARewind_OpenClearsAStaleRecord(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	stale := upstreamCommit(t, svc, c1, "kb/stale.md", "---\ntype: observation\n---\n# S\n\ns\n")
-	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(experimentRewoundRefName("e"), stale)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(merge.ExperimentRewoundRefNameForTest("e"), stale)))
 
 	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
-	_, err = svc.rh.Storer().Reference(experimentRewoundRefName("e"))
+	_, err = svc.rh.Storer().Reference(merge.ExperimentRewoundRefNameForTest("e"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound)
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")

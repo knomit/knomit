@@ -11,7 +11,7 @@
 // branch holds a role only when an explicit record says so
 // (kb/invariants/store/branch-roles); write eligibility one layer up reads
 // that row, not the ref name.
-package store
+package merge
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/sqlite"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -179,32 +180,32 @@ var testHookOpenExperimentForked func()
 // do by omission.
 //
 // A name whose ref exists with NO row is neither: it is refused with
-// ErrOrphanExperimentRef. "Resume" means resuming a recorded experiment, and
+// vcs.ErrOrphanExperimentRef. "Resume" means resuming a recorded experiment, and
 // a ref without a record is precisely the case where we cannot say what we
 // would be resuming.
-func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, parent string) (Experiment, error) {
+func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent string) (vcs.Experiment, error) {
 	if err := validateExperimentName(name); err != nil {
-		return Experiment{}, err
+		return vcs.Experiment{}, err
 	}
 	if parent == "" {
-		return Experiment{}, fmt.Errorf("OpenExperiment %q: parent branch is required", name)
+		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: parent branch is required", name)
 	}
 
 	if existing, ok, err := rh.GetExperiment(ctx, name); err != nil {
-		return Experiment{}, err
+		return vcs.Experiment{}, err
 	} else if ok {
 		if description == "" || description == existing.Description {
 			return existing, nil
 		}
-		if _, err := conn(ctx, rh.DB()).ExecContext(ctx,
+		if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx,
 			`UPDATE experiments SET description = ? WHERE name = ?`, description, name); err != nil {
-			return Experiment{}, fmt.Errorf("OpenExperiment %q: update description: %w", name, err)
+			return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: update description: %w", name, err)
 		}
 		existing.Description = description
 		return existing, nil
 	}
 
-	branch := ExperimentBranch(name)
+	branch := vcs.ExperimentBranch(name)
 	// REFUSE an orphan ref rather than adopt it. We are past the resume path,
 	// so there is no record for this name — and CreateBranch NO-OPS when the
 	// ref already exists, which would leave the caller holding a branch that
@@ -213,24 +214,24 @@ func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, pa
 	// CreateBranch and the INSERT, and a hand-made ref. Both want a human,
 	// not a silent adoption.
 	if existing, err := rh.HeadCommit(ctx, branch); err == nil && existing != "" {
-		return Experiment{}, fmt.Errorf("%w: %q already exists at %s with no experiments row; "+
+		return vcs.Experiment{}, fmt.Errorf("%w: %q already exists at %s with no experiments row; "+
 			"roll back %q and open it again, or pick another name",
-			ErrOrphanExperimentRef, branch, shortHash(existing), name)
+			vcs.ErrOrphanExperimentRef, branch, shortHash(existing), name)
 	}
 	// A rewind record left by an experiment of the same name (a drop that
 	// failed after its branch went) must not make the new one look rewound.
 	if err := rh.clearExperimentRewound(name); err != nil {
-		return Experiment{}, fmt.Errorf("OpenExperiment %q: clear stale rewind record: %w", name, err)
+		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: clear stale rewind record: %w", name, err)
 	}
 	// The PARENT'S LOCK is held from the fork to the experiments row. A rewind
-	// records the experiments it finds as ROWS (markExperimentsRewound, under
+	// records the experiments it finds as ROWS (MarkExperimentsRewound, under
 	// the same lock), so without it a rewind could run between the fork (at
 	// the pre-rewind tip) and the row: an experiment holding the scrubbed
 	// commits with no record, whose commit would bring them back.
 	unlockParent := rh.LockBranch(parent)
 	defer unlockParent()
 	if err := rh.CreateBranch(ctx, branch, parent); err != nil {
-		return Experiment{}, fmt.Errorf("OpenExperiment %q: %w", name, err)
+		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: %w", name, err)
 	}
 	if testHookOpenExperimentForked != nil {
 		testHookOpenExperimentForked()
@@ -241,29 +242,29 @@ func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, pa
 	// starts.
 	forkCommit, err := rh.HeadCommit(ctx, branch)
 	if err != nil {
-		return Experiment{}, fmt.Errorf("OpenExperiment %q: resolve new branch %q: %w", name, branch, err)
+		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: resolve new branch %q: %w", name, branch, err)
 	}
 	// Inherit every tool's watermark, not just review's: hypothesize keys its
 	// own row under the same branch and would otherwise full-scan too.
-	if _, err := conn(ctx, rh.DB()).ExecContext(ctx, `
+	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx, `
 		INSERT OR IGNORE INTO pipeline_watermarks (tool, branch, commit_hash)
 		SELECT tool, ?, commit_hash FROM pipeline_watermarks WHERE branch = ?`,
 		branch, parent); err != nil {
-		return Experiment{}, fmt.Errorf("OpenExperiment %q: inherit pipeline watermarks: %w", name, err)
+		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: inherit pipeline watermarks: %w", name, err)
 	}
 
 	now := time.Now()
-	if _, err := conn(ctx, rh.DB()).ExecContext(ctx, `
+	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx, `
 		INSERT INTO experiments (name, description, parent_branch, fork_commit, created_at, last_activity_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		name, description, parent, forkCommit, now.Unix(), now.Unix()); err != nil {
-		return Experiment{}, fmt.Errorf("OpenExperiment %q: record experiment: %w", name, err)
+		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: record experiment: %w", name, err)
 	}
 
 	log.Info().Str("experiment", name).Str("parent", parent).
 		Str("fork", shortHash(forkCommit)).Msg("experiment opened")
 
-	return Experiment{
+	return vcs.Experiment{
 		Name:           name,
 		Description:    description,
 		Parent:         parent,
@@ -275,8 +276,8 @@ func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, pa
 
 // ListExperiments returns every experiment in this repo, ordered by name so
 // the listing is stable for a UI and for a test.
-func (rh *repoHandler) ListExperiments(ctx context.Context) ([]Experiment, error) {
-	rows, err := conn(ctx, rh.DB()).QueryContext(ctx, `
+func (rh *Repo) ListExperiments(ctx context.Context) ([]vcs.Experiment, error) {
+	rows, err := sqlite.Conn(ctx, rh.DB()).QueryContext(ctx, `
 		SELECT name, description, parent_branch, fork_commit, created_at, last_activity_at
 		FROM experiments ORDER BY name`)
 	if err != nil {
@@ -284,10 +285,10 @@ func (rh *repoHandler) ListExperiments(ctx context.Context) ([]Experiment, error
 	}
 	defer rows.Close()
 
-	var out []Experiment
+	var out []vcs.Experiment
 	for rows.Next() {
 		var (
-			e          Experiment
+			e          vcs.Experiment
 			created    int64
 			lastActive int64
 		)
@@ -319,7 +320,7 @@ func (rh *repoHandler) ListExperiments(ctx context.Context) ([]Experiment, error
 // refuse strategy collects the paths inside the tree merge, which runs before
 // any ref write. The only two exits from that state are SyncExperiment and
 // RollbackExperiment.
-func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolutions map[string]Resolution) (AgentReconcileResult, error) {
+func (rh *Repo) CommitExperiment(ctx context.Context, name string, resolutions map[string]Resolution) (AgentReconcileResult, error) {
 	exp, ok, err := rh.GetExperiment(ctx, name)
 	if err != nil {
 		return AgentReconcileResult{}, err
@@ -334,7 +335,7 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	// The parent's lock (the merge's DST) serialises this against a concurrent
 	// fact write on the agent branch and against a rewind of it, and is held
 	// through NotifyCommit. An experiment's own merges (commit and sync) are
-	// the only merges that stamp the call's agent trace (opts.trace).
+	// the only merges that stamp the call's agent trace (opts.Trace).
 	// STILL ONE MERGE. Resolutions are an input to it, not a second pass over
 	// the tree afterwards: a path the caller adjudicated is decided inside the
 	// same three-way walk that would otherwise have refused it, so everything
@@ -357,11 +358,11 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	// field-merges by default. The caller's resolutions are laid over the
 	// setting per path (overlayResolutions), so following a refusal never
 	// switches the setting off for the paths it already settled.
-	strategy, opts := StrategyRefuse, mergeOpts{}
+	strategy, opts := StrategyRefuse, MergeOpts{}
 	if consensusBranch := rh.ConsensusBranchFunc(); consensusBranch != nil {
-		if s, on := rh.conflictsStrategy(ctx, consensusBranch()); on {
+		if s, on := rh.ConflictsStrategy(ctx, consensusBranch()); on {
 			strategy = s
-			opts = mergeOpts{factConsensus: fact.MergeDst, factFallback: StrategyRefuse, overlayResolutions: true}
+			opts = MergeOpts{FactConsensus: fact.MergeDst, FactFallback: StrategyRefuse, OverlayResolutions: true}
 		}
 	}
 	//
@@ -369,7 +370,7 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	// (rebuildRewoundExperiment), under both locks, so a commit never merges
 	// back what the rewind scrubbed. The rebuild consumes the resolutions; the
 	// merge after it is then a fast-forward.
-	opts.trace = vcs.TrailersFromContext(ctx)
+	opts.Trace = vcs.TrailersFromContext(ctx)
 	unlockParent := rh.LockBranch(exp.Parent)
 	unlockExp := rh.LockBranch(exp.Branch())
 	rebuilt, _, settled, err := rh.rebuildRewoundExperiment(ctx, exp, strategy, resolutions, opts)
@@ -381,7 +382,7 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	if rebuilt {
 		resolutions = nil
 	}
-	res, err := rh.mergeIntoBranchLockedOpts(ctx, exp.Branch(), exp.Parent, strategy, resolutions, opts)
+	res, err := rh.MergeIntoBranchLockedOpts(ctx, exp.Branch(), exp.Parent, strategy, resolutions, opts)
 	unlockParent()
 	if err != nil {
 		return AgentReconcileResult{}, err
@@ -405,7 +406,7 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 // Getting it backwards would silently keep the experiment's version of exactly
 // the path the sync exists to resolve, and the following commit would be
 // refused again with no visible reason.
-func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentReconcileResult, error) {
+func (rh *Repo) SyncExperiment(ctx context.Context, name string) (AgentReconcileResult, error) {
 	exp, ok, err := rh.GetExperiment(ctx, name)
 	if err != nil {
 		return AgentReconcileResult{}, err
@@ -430,7 +431,7 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 	// keeps the scrubbed content in the experiment, but the record stays and
 	// the next commit or sync rebuilds from it (its base is still where the
 	// experiment met the old branch), so nothing leaks.
-	o := mergeOpts{trace: vcs.TrailersFromContext(ctx)}
+	o := MergeOpts{Trace: vcs.TrailersFromContext(ctx)}
 	recorded := false
 	if _, err := rh.Storer().Reference(experimentRewoundRefName(exp.Name)); err == nil {
 		recorded = true
@@ -458,7 +459,7 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 			Int("squashed", squashed).Msg("experiment rebuilt on its parent after a rewind")
 		return AgentReconcileResult{Mode: ModeRebase, NumReplayed: squashed, NewTip: tip, Settled: settled}, nil
 	}
-	res, err := rh.mergeIntoBranchLockedOpts(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins, nil, o)
+	res, err := rh.MergeIntoBranchLockedOpts(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins, nil, o)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: %w", name, err)
 	}
@@ -481,7 +482,7 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 // Genuinely absent — no ref AND no row — is still ErrNoSuchExperiment. The
 // orphan path must not turn "there was never anything here" into a silent
 // success.
-func (rh *repoHandler) RollbackExperiment(ctx context.Context, name string) error {
+func (rh *Repo) RollbackExperiment(ctx context.Context, name string) error {
 	exp, ok, err := rh.GetExperiment(ctx, name)
 	if err != nil {
 		return err
@@ -501,14 +502,14 @@ func (rh *repoHandler) RollbackExperiment(ctx context.Context, name string) erro
 	if err := validateExperimentName(name); err != nil {
 		return err
 	}
-	branch := ExperimentBranch(name)
+	branch := vcs.ExperimentBranch(name)
 	head, herr := rh.HeadCommit(ctx, branch)
 	if herr != nil || head == "" {
 		return fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
 	}
 	// Same teardown as a recorded experiment — the leftovers are the same
 	// leftovers, and the delete of the (absent) experiments row is a no-op.
-	if err := rh.dropExperiment(ctx, Experiment{Name: name}); err != nil {
+	if err := rh.dropExperiment(ctx, vcs.Experiment{Name: name}); err != nil {
 		return fmt.Errorf("RollbackExperiment %q: clean orphan ref: %w", name, err)
 	}
 	log.Info().Str("experiment", name).Str("was_at", shortHash(head)).
@@ -525,7 +526,7 @@ func (rh *repoHandler) RollbackExperiment(ctx context.Context, name string) erro
 // and must not stop the sweeper. The per-experiment failures are joined into
 // the returned error for the caller to log; the names actually dropped come
 // back regardless.
-func (rh *repoHandler) ExpireExperiments(ctx context.Context, cutoff time.Time) ([]string, error) {
+func (rh *Repo) ExpireExperiments(ctx context.Context, cutoff time.Time) ([]string, error) {
 	all, err := rh.ListExperiments(ctx)
 	if err != nil {
 		return nil, err
@@ -564,16 +565,16 @@ func (rh *repoHandler) ExpireExperiments(ctx context.Context, cutoff time.Time) 
 // so this teardown owns them. Leaving them behind is not inert: a later
 // experiment reusing the name inherits a watermark pointing at a commit its
 // branch has never contained, and its first review seeds nothing at all.
-func (rh *repoHandler) dropExperiment(ctx context.Context, exp Experiment) error {
+func (rh *Repo) dropExperiment(ctx context.Context, exp vcs.Experiment) error {
 	branch := exp.Branch()
 	if err := rh.DropBranch(ctx, branch); err != nil {
 		return fmt.Errorf("drop experiment branch: %w", err)
 	}
-	if _, err := conn(ctx, rh.DB()).ExecContext(ctx,
+	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx,
 		`DELETE FROM pipeline_watermarks WHERE branch = ?`, branch); err != nil {
 		return fmt.Errorf("drop experiment watermarks: %w", err)
 	}
-	if _, err := conn(ctx, rh.DB()).ExecContext(ctx,
+	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx,
 		`DELETE FROM meta WHERE key = ? OR key = ?`,
 		"last_commit:"+branch, "graph_schema_version:"+branch); err != nil {
 		return fmt.Errorf("drop experiment meta keys: %w", err)
@@ -581,7 +582,7 @@ func (rh *repoHandler) dropExperiment(ctx context.Context, exp Experiment) error
 	if err := rh.clearExperimentRewound(exp.Name); err != nil {
 		return fmt.Errorf("drop experiment rewind record: %w", err)
 	}
-	if _, err := conn(ctx, rh.DB()).ExecContext(ctx,
+	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx,
 		`DELETE FROM experiments WHERE name = ?`, exp.Name); err != nil {
 		return fmt.Errorf("drop experiment row: %w", err)
 	}

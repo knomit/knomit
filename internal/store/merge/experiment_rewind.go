@@ -43,7 +43,7 @@
 // NOT COVERED: an experiment open across a rewind that ran before this record
 // existed (before #538) has no record and merges as before; the pre-rewind
 // tip is gone, so nothing can tell its own work from what was scrubbed.
-package store
+package merge
 
 import (
 	"context"
@@ -54,6 +54,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/store/internal/sqlite"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -64,7 +65,7 @@ func experimentRewoundRefName(name string) plumbing.ReferenceName {
 	return plumbing.ReferenceName("refs/knomit/experiment-rewound/" + name)
 }
 
-// markExperimentsRewound records oldTip for every experiment of agentBranch
+// MarkExperimentsRewound records oldTip for every experiment of agentBranch
 // that has no record yet. It runs BEFORE the rewind moves the branch, so a
 // failure after the move cannot leave an experiment unrecorded; a record
 // written for a rewind that then moves nothing is harmless (the next commit or
@@ -77,7 +78,7 @@ func experimentRewoundRefName(name string) plumbing.ReferenceName {
 // tip does not.
 //
 // Caller holds LockBranch(agentBranch).
-func (rh *repoHandler) markExperimentsRewound(ctx context.Context, agentBranch string, oldTip plumbing.Hash) error {
+func (rh *Repo) MarkExperimentsRewound(ctx context.Context, agentBranch string, oldTip plumbing.Hash) error {
 	if rh.DB() == nil {
 		return nil
 	}
@@ -105,7 +106,7 @@ func (rh *repoHandler) markExperimentsRewound(ctx context.Context, agentBranch s
 }
 
 // clearExperimentRewound removes the record (absent is fine).
-func (rh *repoHandler) clearExperimentRewound(name string) error {
+func (rh *Repo) clearExperimentRewound(name string) error {
 	err := rh.Storer().RemoveReference(experimentRewoundRefName(name))
 	if err != nil && !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return err
@@ -125,7 +126,7 @@ func (rh *repoHandler) clearExperimentRewound(name string) error {
 // for a plain merge.
 //
 // Caller holds LockBranch(exp.Parent) and LockBranch(exp.Branch()).
-func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experiment, strategy ConflictStrategy, resolutions map[string]Resolution, o mergeOpts) (rebuilt bool, squashed int, settled []SettledPath, err error) {
+func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment, strategy ConflictStrategy, resolutions map[string]Resolution, o MergeOpts) (rebuilt bool, squashed int, settled []SettledPath, err error) {
 	rec, err := rh.Storer().Reference(experimentRewoundRefName(exp.Name))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, 0, nil, nil
@@ -219,9 +220,9 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 	}
 	baseCommit := bases[0]
 
-	// From here on, the three-way merge mergeIntoBranchLockedOpts makes, with
+	// From here on, the three-way merge MergeIntoBranchLockedOpts makes, with
 	// this base, written as a single-parent commit.
-	policy, mergeFacts := conflictsPolicyOf(strategy)
+	policy, mergeFacts := ConflictsPolicyOf(strategy)
 	if len(resolutions) > 0 {
 		detected, err := rh.detectConflicts(ctx, baseCommit, srcCommit, dstCommit)
 		if err != nil {
@@ -242,18 +243,18 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 	var trailers []string
 	res := resolutions
 	if mergeFacts {
-		fr, lines, err := rh.factMergeResolutions(ctx, baseCommit, srcCommit, dstCommit, o.factMerge(policy))
+		fr, lines, err := rh.FactMergeResolutions(ctx, baseCommit, srcCommit, dstCommit, o.factMerge(policy))
 		if err != nil {
 			return false, 0, nil, fmt.Errorf("merge facts: %w", err)
 		}
-		if o.overlayResolutions && len(resolutions) > 0 {
+		if o.OverlayResolutions && len(resolutions) > 0 {
 			if fr, lines, err = overlayCallerResolutions(fr, lines, resolutions, baseCommit, srcCommit, dstCommit); err != nil {
 				return false, 0, nil, fmt.Errorf("overlay resolutions: %w", err)
 			}
 		}
 		res, trailers = fr, lines
 	}
-	tree, walkLines, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, StrategyRefuse, res)
+	tree, walkLines, err := rh.MergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, StrategyRefuse, res)
 	if err != nil {
 		var conflict *MergeConflictError
 		if errors.As(err, &conflict) {
@@ -281,7 +282,7 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 		nc := &object.Commit{
 			Author:       author,
 			Committer:    committer,
-			Message:      vcs.AppendTrailersToParagraph(appendTrailerLines(msg, trailers), o.trace),
+			Message:      vcs.AppendTrailersToParagraph(AppendTrailerLines(msg, trailers), o.Trace),
 			TreeHash:     tree,
 			ParentHashes: []plumbing.Hash{parentTip},
 		}
@@ -304,7 +305,7 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 	}
 	// The fork point moves to where the experiment now starts: "changed since
 	// the fork" is its own work, not the scrubbed content it no longer holds.
-	if _, err := conn(ctx, rh.DB()).ExecContext(ctx,
+	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx,
 		`UPDATE experiments SET fork_commit = ? WHERE name = ?`, parentTip.String(), exp.Name); err != nil {
 		return false, 0, nil, fmt.Errorf("record new fork point: %w", err)
 	}
@@ -313,7 +314,7 @@ func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experim
 	// chain and moves to the new fork point, so the next run reviews the whole
 	// rebuilt delta rather than diffing from a commit that still holds what
 	// the rewind removed.
-	if _, err := conn(ctx, rh.DB()).ExecContext(ctx, `
+	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx, `
 		UPDATE pipeline_watermarks
 		SET commit_hash = CASE WHEN commit_hash = ? THEN ? ELSE ? END
 		WHERE branch = ?`,

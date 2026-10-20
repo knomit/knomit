@@ -266,7 +266,7 @@ func TestPathHistory_DiffBaseIsTheEditedFromContent(t *testing.T) {
 	require.NoError(t, err)
 	y, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody("B edited", 0.5, nil), "Y: body", "")
 	require.NoError(t, err)
-	_, err = svc.rh.mergeIntoBranchResolved(ctx, "side", "main", StrategyRefuse, map[string]Resolution{
+	_, err = svc.rh.MergeIntoBranchResolvedForTest(ctx, "side", "main", StrategyRefuse, map[string]Resolution{
 		p: {Body: []byte(testFactBody("B edited", 0.7, nil))},
 	})
 	require.NoError(t, err)

@@ -2,7 +2,7 @@
 // the repo's `conflicts` attribute (an object: facts, state) says to settle it
 // rather than pick a side, and the record every merge commit now carries of
 // each conflict it settled (merged or side-picked).
-package store
+package merge
 
 import (
 	"context"
@@ -52,51 +52,51 @@ const recordConsensus ConflictStrategy = "consensus"
 // `conflicts` policy: "conflicts:<facts>/<state>".
 const conflictsStrategyPrefix = "conflicts:"
 
-// conflictsPolicy is the `conflicts` setting as a merge site runs it: the two
+// ConflictsPolicy is the `conflicts` setting as a merge site runs it: the two
 // keys' values (fact.Conflicts*). It travels as a ConflictStrategy value, so
 // every site's signature stays the one it had, and the merge commit's subject
 // names it.
-type conflictsPolicy struct {
+type ConflictsPolicy struct {
 	facts string // off | merge | merge:consensus | consensus
 	state string // off | consensus
 }
 
-func (p conflictsPolicy) strategy() ConflictStrategy {
+func (p ConflictsPolicy) strategy() ConflictStrategy {
 	return ConflictStrategy(conflictsStrategyPrefix + p.facts + "/" + p.state)
 }
 
-// conflictsPolicyOf is the policy a strategy carries; ok is false for a
+// ConflictsPolicyOf is the policy a strategy carries; ok is false for a
 // strategy that picks sides (or refuses) and for a malformed value.
-func conflictsPolicyOf(s ConflictStrategy) (conflictsPolicy, bool) {
+func ConflictsPolicyOf(s ConflictStrategy) (ConflictsPolicy, bool) {
 	rest, ok := strings.CutPrefix(string(s), conflictsStrategyPrefix)
 	if !ok {
-		return conflictsPolicy{}, false
+		return ConflictsPolicy{}, false
 	}
 	i := strings.LastIndex(rest, "/")
 	if i < 0 {
-		return conflictsPolicy{}, false
+		return ConflictsPolicy{}, false
 	}
-	p := conflictsPolicy{facts: rest[:i], state: rest[i+1:]}
+	p := ConflictsPolicy{facts: rest[:i], state: rest[i+1:]}
 	switch p.facts {
 	case fact.ConflictsOff, fact.ConflictsMerge, fact.ConflictsMergeConsensus, fact.ConflictsConsensus:
 	default:
-		return conflictsPolicy{}, false
+		return ConflictsPolicy{}, false
 	}
 	switch p.state {
 	case fact.ConflictsOff, fact.ConflictsConsensus:
 	default:
-		return conflictsPolicy{}, false
+		return ConflictsPolicy{}, false
 	}
 	return p, true
 }
 
-// factMerge is how one merge site runs a `conflicts` policy: which side is the
+// FactMerge is how one merge site runs a `conflicts` policy: which side is the
 // consensus side, and what a key set to off gets — the site's own
 // side-picking strategy, unchanged.
-type factMerge struct {
-	policy    conflictsPolicy
-	consensus fact.MergeSide   // the side that is on, or will reach, the consensus branch
-	fallback  ConflictStrategy // StrategyLocalWins, StrategyRemoteWins or StrategyRefuse
+type FactMerge struct {
+	Policy    ConflictsPolicy
+	Consensus fact.MergeSide   // the side that is on, or will reach, the consensus branch
+	Fallback  ConflictStrategy // StrategyLocalWins, StrategyRemoteWins or StrategyRefuse
 }
 
 // conflictShape is one conflicting path's three versions; a zero hash is an
@@ -151,7 +151,7 @@ func conflictLine(c conflictShape, kept ResolutionSide, strategy ConflictStrateg
 	return line
 }
 
-// factMergeResolutions settles every path the merge of src into dst conflicts
+// FactMergeResolutions settles every path the merge of src into dst conflicts
 // on, for a `conflicts` policy, as the per-path resolutions the REFUSING walk
 // applies (a Body can only set a path, so a deletion is a Side):
 //
@@ -174,10 +174,10 @@ func conflictLine(c conflictShape, kept ResolutionSide, strategy ConflictStrateg
 // unresolved so the merge is refused as it always was.
 //
 // It returns the trailer lines for every path it settled.
-func (rh *repoHandler) factMergeResolutions(
+func (rh *Repo) FactMergeResolutions(
 	ctx context.Context,
 	baseCommit, srcCommit, dstCommit *object.Commit,
-	fm factMerge,
+	fm FactMerge,
 ) (map[string]Resolution, []string, error) {
 	detected, err := rh.detectConflicts(ctx, baseCommit, srcCommit, dstCommit)
 	if err != nil {
@@ -205,16 +205,16 @@ func (rh *repoHandler) factMergeResolutions(
 	sort.Strings(paths)
 
 	consensusSide := ResolveDst
-	if fm.consensus == fact.MergeSrc {
+	if fm.Consensus == fact.MergeSrc {
 		consensusSide = ResolveSrc
 	}
-	rule, fieldMerge := fact.ConflictsFactsRule(fm.policy.facts)
-	strategy := fact.MergeStrategy{Rule: rule, Consensus: fm.consensus}
+	rule, fieldMerge := fact.ConflictsFactsRule(fm.Policy.facts)
+	strategy := fact.MergeStrategy{Rule: rule, Consensus: fm.Consensus}
 	res := make(map[string]Resolution, len(paths))
 	var lines []string
 	sitePick := func(c conflictShape, reason string) {
 		var kept ResolutionSide
-		switch fm.fallback {
+		switch fm.Fallback {
 		case StrategyLocalWins:
 			kept = ResolveDst
 			if c.base.IsZero() {
@@ -226,14 +226,14 @@ func (rh *repoHandler) factMergeResolutions(
 			return // Refuse: left unresolved, so the merge is refused
 		}
 		res[c.path] = Resolution{Side: kept}
-		lines = append(lines, conflictLine(c, kept, fm.fallback, reason))
+		lines = append(lines, conflictLine(c, kept, fm.Fallback, reason))
 	}
 	takeConsensus := func(c conflictShape, reason string) {
 		res[c.path] = Resolution{Side: consensusSide}
 		lines = append(lines, conflictLine(c, consensusSide, recordConsensus, reason))
 	}
 	stateRule := func(c conflictShape, reason string) {
-		if fm.policy.state == fact.ConflictsConsensus {
+		if fm.Policy.state == fact.ConflictsConsensus {
 			takeConsensus(c, reason)
 			return
 		}
@@ -246,7 +246,7 @@ func (rh *repoHandler) factMergeResolutions(
 			res[p] = Resolution{Side: ResolveDst}
 		case !rh.IsFactPath(p):
 			stateRule(c, "not-a-fact")
-		case fm.policy.facts == fact.ConflictsConsensus:
+		case fm.Policy.facts == fact.ConflictsConsensus:
 			takeConsensus(c, "")
 		case !fieldMerge:
 			sitePick(c, "") // facts: off
@@ -316,7 +316,7 @@ func sideResolutionLines(baseCommit, srcCommit, dstCommit *object.Commit, detect
 }
 
 // overlayCallerResolutions lays the caller's own resolutions over what a
-// `conflicts` setting decided (mergeOpts.overlayResolutions, the experiment
+// `conflicts` setting decided (MergeOpts.OverlayResolutions, the experiment
 // commit only): each path the caller named takes the caller's resolution, and
 // the setting's record line for it is replaced. A side resolution is recorded
 // as a whole-set choice is, `reason=chosen`; a body resolution records no line,
@@ -413,7 +413,7 @@ func settledFrom(lines []string) []SettledPath {
 	return out
 }
 
-func (rh *repoHandler) blobBytes(h plumbing.Hash) ([]byte, error) {
+func (rh *Repo) blobBytes(h plumbing.Hash) ([]byte, error) {
 	blob, err := object.GetBlob(rh.Storer(), h)
 	if err != nil {
 		return nil, fmt.Errorf("blob %s: %w", h, err)
@@ -431,15 +431,15 @@ func (rh *repoHandler) blobBytes(h plumbing.Hash) ([]byte, error) {
 var conflictsLogged sync.Map
 
 // conflictsStrategy is the `conflicts` strategy the ontology at branch's tip
-// names (conflictsPolicy.strategy), or ok=false when both keys read off there:
+// names (ConflictsPolicy.strategy), or ok=false when both keys read off there:
 // absent without `consensus: auto`, explicit off, a value this build does not
 // know, no ontology, no such branch. The repo's owner decides it where every
 // instance reads it — the tip of the CONSENSUS branch — so the caller passes
 // that branch, never a hardcoded name.
-func (rh *repoHandler) conflictsStrategy(ctx context.Context, branch string) (ConflictStrategy, bool) {
+func (rh *Repo) ConflictsStrategy(ctx context.Context, branch string) (ConflictStrategy, bool) {
 	h, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
-		if !errors.Is(err, ErrBranchNotFound) {
+		if !errors.Is(err, vcs.ErrBranchNotFound) {
 			log.Warn().Err(err).Str("branch", branch).Msg("conflicts: cannot resolve the consensus branch; read as off")
 		}
 		return "", false
@@ -473,14 +473,14 @@ func (rh *repoHandler) conflictsStrategy(ctx context.Context, branch string) (Co
 	if !cs.On() {
 		return "", false
 	}
-	return conflictsPolicy{facts: cs.Facts, state: cs.State}.strategy(), true
+	return ConflictsPolicy{facts: cs.Facts, state: cs.State}.strategy(), true
 }
 
-// appendTrailerLines adds lines to message's trailer paragraph: the last
+// AppendTrailerLines adds lines to message's trailer paragraph: the last
 // paragraph when it already is one (every line `Key: value`), so a replayed
 // commit's Knomit-Trace stays readable, else a new last paragraph. Nil lines
 // return message unchanged.
-func appendTrailerLines(message string, lines []string) string {
+func AppendTrailerLines(message string, lines []string) string {
 	if len(lines) == 0 {
 		return message
 	}

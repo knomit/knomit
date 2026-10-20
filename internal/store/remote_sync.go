@@ -351,7 +351,7 @@ func (ri *remoteIndex) reconcileNowSwitched(ctx context.Context, agentBranch, up
 	// branch (src) being the consensus side and a key set to off still going
 	// LocalWins; both keys off → LocalWins, as always.
 	strategy := StrategyLocalWins
-	if s, on := ri.rh.conflictsStrategy(ctx, upstreamMain); on {
+	if s, on := ri.rh.ConflictsStrategy(ctx, upstreamMain); on {
 		strategy = s
 	}
 	rewound := mainRes.Mode == ModeRewound
