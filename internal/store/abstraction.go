@@ -50,6 +50,11 @@ func idPlaceholders(ids []int64) (string, []any) {
 // another sub-service (invariants/store/sub-index-up-not-sideways).
 type abstractionIndex struct{ rh *repoHandler }
 
+// Compile-time guard. Kept here, not in interface_guards.go, because the
+// review-pipeline-only conformance scan permits abstraction.go to name
+// AbstractionIndex and does not permit interface_guards.go.
+var _ AbstractionIndex = (*abstractionIndex)(nil)
+
 // epistemicLiveJoin is the join every query here shares: the version of each
 // path that `branch` currently sees, epistemic facts only.
 //
