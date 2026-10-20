@@ -110,7 +110,7 @@ func (rh *Repo) GetExperiment(ctx context.Context, name string) (Experiment, boo
 // An EMPTY owner is UNKNOWN, not a mismatch. AgentBranchOwner's contract says
 // so explicitly — a database created before the key existed, or one that has
 // never completed a boot, reports "" — and reading it as "no previous branch"
-// would refuse every commit on such a database. Same guard verify.go applies
+// would refuse every commit on such a database. Same guard fsck/integrity.go applies
 // to the same value. So the check bites only on a KNOWN, different owner.
 func (rh *Repo) CheckExperimentParentCurrent(ctx context.Context, exp Experiment) error {
 	owner, err := rh.AgentBranchOwner(ctx)

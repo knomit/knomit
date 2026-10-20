@@ -8,6 +8,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	"knomit/internal/store/fsck"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -208,10 +209,10 @@ func (s *Service) deleteGraphFactNodeForTest(path, blobHash string) error {
 }
 
 // integrity returns the integrity checker over this Service's repository
-// handler and indices (verify.go). The checks take these three pieces rather
+// handler and indices (fsck/integrity.go). The checks take these three pieces rather
 // than the Service so the checker does not depend on the facade.
-func (s *Service) integrity() *integrity {
-	return &integrity{rh: s.rh, fi: s.fi, si: s.si}
+func (s *Service) integrity() *fsck.Checker {
+	return fsck.NewChecker(s.rh.Repo, s.fi, s.si)
 }
 
 // Verify walks the store and returns an integrity report. See integrity.Verify.

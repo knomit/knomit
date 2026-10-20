@@ -686,7 +686,7 @@ func TestCommitExperiment_OwnerMatchesIsAllowed(t *testing.T) {
 // TestCommitExperiment_UnrecordedOwnerIsAllowed: AgentBranchOwner's contract
 // says an empty value means UNKNOWN — a database created before the key
 // existed, or one that has never completed a boot — and that callers must not
-// read it as "no previous branch" (the same guard verify.go applies). Treating
+// read it as "no previous branch" (the same guard fsck/integrity.go applies). Treating
 // unknown as a mismatch would refuse every commit on such a database, so the
 // check bites only on a KNOWN different owner.
 func TestCommitExperiment_UnrecordedOwnerIsAllowed(t *testing.T) {

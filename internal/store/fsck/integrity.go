@@ -25,7 +25,8 @@
 // concurrent index Rebuild (which takes the write side of the same per-branch
 // RWMutex) blocks Verify. It is not a cheap probe to fire at a live agent —
 // budget for it, or take the repo offline.
-package store
+
+package fsck
 
 import (
 	"context"
@@ -38,6 +39,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/index"
 	"knomit/internal/store/internal/vcs"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -209,7 +211,7 @@ func (r IntegrityReport) Format(maxIssues int) string {
 }
 
 // Verify walks the store and returns an integrity report. See package doc.
-func (s *integrity) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport, error) {
+func (s *Checker) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport, error) {
 	report := IntegrityReport{CheckedAt: time.Now()}
 
 	// Enumerate branches via git refs (storer-level), since the branches
@@ -367,7 +369,7 @@ func sortIssues(issues []IntegrityIssue) {
 // What the union deliberately does NOT include: any other refs/heads/* ref.
 // Another machine's agent branch arriving by fetch has a `branches` row and no
 // index, so the `branches` table is not usable as a fourth source.
-func (s *integrity) indexedBranches(ctx context.Context) (map[string]bool, error) {
+func (s *Checker) indexedBranches(ctx context.Context) (map[string]bool, error) {
 	const prefix = "last_commit:"
 	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT key FROM meta WHERE key LIKE ? || '%'`, prefix)
@@ -420,7 +422,7 @@ func (s *integrity) indexedBranches(ctx context.Context) (map[string]bool, error
 // Generated okf/* refs are different in kind: residue from the server-side OKF
 // export removed in bf9becbe, which nothing creates any more and which has an
 // actual repair. Those get a warning naming it.
-func (s *integrity) reportUnindexedBranches(skipped []string) []IntegrityIssue {
+func (s *Checker) reportUnindexedBranches(skipped []string) []IntegrityIssue {
 	var issues []IntegrityIssue
 	for _, br := range skipped {
 		if !vcs.IsGeneratedRef(br) {
@@ -459,7 +461,7 @@ func (p PruneResult) Empty() bool { return len(p.Refs) == 0 && p.Markers == 0 }
 //
 // Scope is exactly the refs IsGeneratedRef matches under refs/heads/*, so it
 // cannot touch a real branch, and cannot touch refs/knomit-okf/source/*.
-func (s *integrity) PruneGeneratedRefs(ctx context.Context) (PruneResult, error) {
+func (s *Checker) PruneGeneratedRefs(ctx context.Context) (PruneResult, error) {
 	var out PruneResult
 
 	iter, err := s.rh.Storer().IterReferences()
@@ -513,7 +515,7 @@ func (s *integrity) PruneGeneratedRefs(ctx context.Context) (PruneResult, error)
 // listBranchRefsForVerify enumerates refs/heads/* directly from the storer.
 // We deliberately bypass the branches SQLite cache so the branches-table check
 // can compare cache vs. truth.
-func (s *integrity) listBranchRefsForVerify(_ context.Context) ([]string, error) {
+func (s *Checker) listBranchRefsForVerify(_ context.Context) ([]string, error) {
 	iter, err := s.rh.Storer().IterReferences()
 	if err != nil {
 		return nil, err
@@ -533,7 +535,7 @@ func (s *integrity) listBranchRefsForVerify(_ context.Context) ([]string, error)
 // every tree entry resolves to an existing blob or subtree. Reports any
 // missing object as a git-reachability Error naming the offending hash and
 // (when known) the path that referenced it.
-func (s *integrity) checkGitReachability(_ context.Context, branch string) []IntegrityIssue {
+func (s *Checker) checkGitReachability(_ context.Context, branch string) []IntegrityIssue {
 	var issues []IntegrityIssue
 	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
@@ -583,7 +585,7 @@ func (s *integrity) checkGitReachability(_ context.Context, branch string) []Int
 
 // walkTreeReachable recursively walks a tree and reports any unreachable
 // blobs or subtrees. pathPrefix is the path accumulated so far; "" at root.
-func (s *integrity) walkTreeReachable(branch, commit string, treeHash plumbing.Hash, pathPrefix string) []IntegrityIssue {
+func (s *Checker) walkTreeReachable(branch, commit string, treeHash plumbing.Hash, pathPrefix string) []IntegrityIssue {
 	tree, err := object.GetTree(s.rh.Storer(), treeHash)
 	if err != nil {
 		return []IntegrityIssue{{
@@ -619,7 +621,7 @@ func (s *integrity) walkTreeReachable(branch, commit string, treeHash plumbing.H
 // are exactly the set of commits reachable from the branch head. Reports gaps
 // (commits in git but not in commit_log) and orphans (commit_log rows for
 // commits not on this branch's chain, via branch_commits).
-func (s *integrity) checkCommitLogParity(ctx context.Context, branch string) []IntegrityIssue {
+func (s *Checker) checkCommitLogParity(ctx context.Context, branch string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	// 1. Collect every commit reachable on the branch chain. Merge
@@ -721,7 +723,7 @@ func (s *integrity) checkCommitLogParity(ctx context.Context, branch string) []I
 //
 // Repo-global, not per branch: commit_log is keyed by (commit_hash, path) with
 // no branch dimension.
-func (s *integrity) checkCommitLogOrphans(ctx context.Context) []IntegrityIssue {
+func (s *Checker) checkCommitLogOrphans(ctx context.Context) []IntegrityIssue {
 	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT DISTINCT commit_hash FROM commit_log`)
 	if err != nil {
@@ -769,7 +771,7 @@ func (s *integrity) checkCommitLogOrphans(ctx context.Context) []IntegrityIssue 
 // branch_facts row linking to a facts row whose path matches and whose
 // blob_hash equals the tree's blob for that path. For every branch_facts row
 // on this branch, the referenced facts row must exist and its path must match.
-func (s *integrity) checkFactsCoherence(ctx context.Context, branch string) []IntegrityIssue {
+func (s *Checker) checkFactsCoherence(ctx context.Context, branch string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	// Tree contents at HEAD (path -> blob_hash).
@@ -877,7 +879,7 @@ func (s *integrity) checkFactsCoherence(ctx context.Context, branch string) []In
 // This check is not branch-scoped — facts_vec is keyed by facts.id which is
 // branch-agnostic under knomit's COW fact model. It is called once per
 // Verify run, not per branch.
-func (s *integrity) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue {
+func (s *Checker) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue {
 	if s.rh.Embedder() == nil {
 		return nil
 	}
@@ -953,7 +955,7 @@ func (s *integrity) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssu
 // rows and so cannot see this: every facts row can have a facts_vec row and
 // every vector still be from the wrong model, which makes similarity search
 // quietly meaningless rather than broken.
-func (s *integrity) checkEmbeddingIdentity(ctx context.Context) []IntegrityIssue {
+func (s *Checker) checkEmbeddingIdentity(ctx context.Context) []IntegrityIssue {
 	emb := s.rh.Embedder()
 	if emb == nil {
 		return nil
@@ -1004,7 +1006,7 @@ func (s *integrity) checkEmbeddingIdentity(ctx context.Context) []IntegrityIssue
 // (per-path) and branch_commits (visibility) are checked elsewhere;
 // commit_parents holds the DAG edges, and drift there is invisible to both —
 // history walks silently take the wrong shape.
-func (s *integrity) checkCommitParents(ctx context.Context, branch string, stored map[string][]string) []IntegrityIssue {
+func (s *Checker) checkCommitParents(ctx context.Context, branch string, stored map[string][]string) []IntegrityIssue {
 	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return nil // git-reachability already reported it
@@ -1055,7 +1057,7 @@ func (s *integrity) checkCommitParents(ctx context.Context, branch string, store
 // table is small (two hashes and an int per parent edge) and the walk visits
 // most of it anyway, so reading it whole is cheaper in both time and lock-hold
 // than querying per commit, and it is shared across branches.
-func (s *integrity) loadCommitParents(ctx context.Context) (map[string][]string, error) {
+func (s *Checker) loadCommitParents(ctx context.Context) (map[string][]string, error) {
 	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT commit_hash, parent_hash FROM commit_parents ORDER BY commit_hash, parent_order`)
 	if err != nil {
@@ -1088,7 +1090,7 @@ func (s *integrity) loadCommitParents(ctx context.Context) (map[string][]string,
 // the token side was ever repopulated. Comparing the strings and calling the
 // difference corruption reports healthy repos as broken — which is the exact
 // bug this whole pass exists to remove.
-func (s *integrity) checkDerivedTables(ctx context.Context) []IntegrityIssue {
+func (s *Checker) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	orphans := []struct{ table, col string }{
@@ -1209,7 +1211,7 @@ func (s *integrity) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 // checkDatabase runs SQLite's own structural checks. Every parity check in this
 // file assumes the pages underneath are readable and the declared foreign keys
 // hold; this is the check that stops that assumption being silent.
-func (s *integrity) checkDatabase(ctx context.Context) []IntegrityIssue {
+func (s *Checker) checkDatabase(ctx context.Context) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	rows, err := s.rh.Storer().DB().QueryContext(ctx, `PRAGMA quick_check`)
@@ -1292,7 +1294,7 @@ func (s *integrity) checkDatabase(ctx context.Context) []IntegrityIssue {
 // dirty=1 before applying a step and clears it after; a dirty row means a
 // migration died part-way and every check above is reading a schema that is
 // neither the old shape nor the new one.
-func (s *integrity) checkSchemaVersion(ctx context.Context) []IntegrityIssue {
+func (s *Checker) checkSchemaVersion(ctx context.Context) []IntegrityIssue {
 	var version int64
 	var dirty bool
 	err := s.rh.Storer().DB().QueryRowContext(ctx,
@@ -1338,7 +1340,7 @@ func (s *integrity) checkSchemaVersion(ctx context.Context) []IntegrityIssue {
 // Note for callers: knomit has no git-object GC, so a count here is currently
 // informational only. PruneGeneratedRefs makes it RISE, because the export
 // commits its refs held become unreachable the moment the refs go.
-func (s *integrity) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
+func (s *Checker) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
 	reachable := map[string]bool{}
 
 	iter, err := s.rh.Storer().IterReferences()
@@ -1452,7 +1454,7 @@ func (s *integrity) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
 // check unable to see the rows it is most needed for.
 //
 // Called once per Verify, not per branch.
-func (s *integrity) checkBranchesTable(ctx context.Context, checked, allBranches []string) []IntegrityIssue {
+func (s *Checker) checkBranchesTable(ctx context.Context, checked, allBranches []string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	rows, err := s.rh.Storer().DB().QueryContext(ctx, `SELECT name, git_ref FROM branches`)
@@ -1524,7 +1526,7 @@ func (s *integrity) checkBranchesTable(ctx context.Context, checked, allBranches
 // via fact.ParseFact. Files that fail to parse produce Warning-severity
 // issues — they represent data problems (bad YAML, missing title), not
 // structural corruption. Only runs when opts.Deep is true.
-func (s *integrity) checkFactFormat(ctx context.Context, branch string) []IntegrityIssue {
+func (s *Checker) checkFactFormat(ctx context.Context, branch string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	treePaths, _, err := s.rh.ListAllWithHash(ctx, branch)
@@ -1573,7 +1575,7 @@ func (s *integrity) checkFactFormat(ctx context.Context, branch string) []Integr
 //
 // TODO(verify): extend to Entity, Domain, OntologyNode parity once the
 // basic Fact-node check is stable.
-func (s *integrity) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
+func (s *Checker) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	// 1. Collect all facts from the relational table.
@@ -1616,7 +1618,7 @@ func (s *integrity) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 		JOIN property_keys kb ON kb.id = b.key_id AND kb.key = 'blob_hash'
 		LEFT JOIN property_keys kd ON kd.key = 'deleted'
 		LEFT JOIN node_props_text d ON d.node_id = nl.node_id AND d.key_id = kd.id
-		WHERE nl.label = ? AND (d.value IS NULL OR d.value != 'true')`, NodeFact)
+		WHERE nl.label = ? AND (d.value IS NULL OR d.value != 'true')`, index.NodeFact)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryGraphCoherence,
@@ -1685,8 +1687,14 @@ func (s *integrity) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 // Service.PruneGeneratedRefs. It holds only what the checks read: the
 // repository handler and the two sub-indices. Service.integrity builds one per
 // call.
-type integrity struct {
-	rh *repoHandler
+type Checker struct {
+	rh *vcs.Repo
 	fi *facts.Index
-	si *searchIndex
+	si *index.Index
+}
+
+// NewChecker builds the integrity checker over rh and the two sub-indices the
+// checks read. Service.integrity builds one per call.
+func NewChecker(rh *vcs.Repo, fi *facts.Index, si *index.Index) *Checker {
+	return &Checker{rh: rh, fi: fi, si: si}
 }
