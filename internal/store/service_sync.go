@@ -11,10 +11,11 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/remotesync"
 )
 
 // DropUnpublishedCommit is the operator's way out of a refusal by the judge
-// of this instance's own commits (judgeOwnRange): the refused commit stays
+// of this instance's own commits (JudgeOwnRange): the refused commit stays
 // on the agent branch, so every later move of main is refused too, and
 // knomit never rewinds a branch by itself. It rebuilds branch on the
 // consensus branch's tip, replaying in order every commit of branch ∖ main
@@ -40,7 +41,7 @@ import (
 // commits were replayed and how many merges were unfolded.
 func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop plumbing.Hash, ownOnly bool) (replayed, mergesDropped int, err error) {
 	out, err := s.dropUnpublished(ctx, branch, drop, ownOnly, false, nil)
-	return out.replayed, out.unfolded, err
+	return out.Replayed, out.Unfolded, err
 }
 
 // DropUnpublishedCommitLeavingOutMerges is the CONFIRMED fallback (#533
@@ -61,74 +62,15 @@ func (s *Service) DropUnpublishedCommit(ctx context.Context, branch string, drop
 // answer is a *LeaveOutChangedError carrying the new list to confirm.
 func (s *Service) DropUnpublishedCommitLeavingOutMerges(ctx context.Context, branch string, drop plumbing.Hash, confirmed []string) (replayed int, leftOut []LostCommit, err error) {
 	out, err := s.dropUnpublished(ctx, branch, drop, false, true, confirmed)
-	return out.replayed, out.leftOut, err
+	return out.Replayed, out.LeftOut, err
 }
 
-func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumbing.Hash, ownOnly, leaveOut bool, confirmed []string) (dropOutcome, error) {
-	rh := s.rh
+func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumbing.Hash, ownOnly, leaveOut bool, confirmed []string) (remotesync.DropOutcome, error) {
 	upstream := s.UpstreamBranch()
 	if upstream == "" || branch == "" || branch == upstream {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %q is not a branch to rebuild on %q", branch, upstream)
+		return remotesync.DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %q is not a branch to rebuild on %q", branch, upstream)
 	}
-	unlock := rh.LockBranch(branch)
-	defer unlock()
-	localRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
-	if err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", branch, err)
-	}
-	upRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(upstream))
-	if err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", upstream, err)
-	}
-	onUp := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
-	}
-	unpublished := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
-	}
-	if !unpublished[drop] {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s on %s: %w", drop, branch, ErrNotUnpublished)
-	}
-	line, unfolded, leftOut, err := rh.dropPlan(branch, localRef.Hash(), onUp, drop, ownOnly, leaveOut)
-	if err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
-	}
-	if leaveOut && !sameCommits(leftOut, confirmed) {
-		return dropOutcome{}, &LeaveOutChangedError{LeaveOut: leftOut}
-	}
-	tempRef := plumbing.NewBranchReferenceName(branch + "-dropping")
-	defer func() { _ = rh.Storer().RemoveReference(tempRef) }()
-	current := upRef.Hash()
-	for _, st := range line {
-		var others []plumbing.Hash
-		if st.asMerge {
-			others = st.c.ParentHashes[1:]
-		}
-		if current, err = rh.replayCommit(ctx, st.c, current, StrategyLocalWins, others...); err != nil {
-			return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", st.c.Hash, err)
-		}
-		if err := rh.Storer().SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {
-			return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
-		}
-	}
-	ctx = context.WithoutCancel(ctx)
-	if err := rh.DeriveBeforeAdvance(ctx, current); err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
-	}
-	if err := rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), current)); err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
-	}
-	if err := rh.RepopulateBranch(ctx, branch); err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: repopulate: %w", err)
-	}
-	if err := rh.NotifyCommit(ctx, branch, current); err != nil {
-		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: notify: %w", err)
-	}
-	log.Warn().Str("branch", branch).Str("dropped", drop.String()).Int("replayed", len(line)).Int("merges_unfolded", unfolded).Int("left_out", len(leftOut)).
-		Msg("DropUnpublishedCommit: the branch was rebuilt on its upstream without the dropped commit")
-	return dropOutcome{replayed: len(line), unfolded: unfolded, leftOut: leftOut}, nil
+	return s.rh.DropUnpublished(ctx, upstream, branch, drop, ownOnly, leaveOut, confirmed)
 }
 
 // SetReplaySkipPaths names the paths a rewind replay never carries: a
@@ -161,7 +103,7 @@ func (s *Service) MainHistory(ctx context.Context) (*MainHistory, error) {
 	if err := vcs.WalkHistory(s.rh.Storer(), uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("MainHistory: %w", err)
 	}
-	return &MainHistory{tip: uh, onMain: onMain}, nil
+	return remotesync.NewMainHistory(uh, onMain), nil
 }
 
 // AdmitPeerBranch is where a fetched member branch enters this repository.
@@ -182,7 +124,7 @@ func (s *Service) AdmitPeerBranch(ctx context.Context, branch, own string, tip p
 	if err != nil || refusal != "" {
 		return refusal, err
 	}
-	return "", s.rh.promotePeer(ctx, branch, s.UpstreamBranch(), tip)
+	return "", s.rh.PromotePeer(ctx, branch, s.UpstreamBranch(), tip)
 }
 
 // JudgePeerBranch judges a member branch's tip without moving anything: the
@@ -215,7 +157,7 @@ func (s *Service) JudgePeerBranch(ctx context.Context, branch, own string, tip p
 		}
 	}
 	var commits []*object.Commit
-	if err := vcs.WalkHistory(rh.Storer(), tip, main.onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+	if err := vcs.WalkHistory(rh.Storer(), tip, main.OnMain(), func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return "", fmt.Errorf("JudgePeerBranch: %w", err)
 	}
 	if msg := rh.privatePathClosure(ctx, rh.Storer(), upstream, commits); msg != "" {
@@ -360,10 +302,10 @@ func (s *Service) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstrea
 		return MainReconcileResult{Mode: ModeNoop}, nil
 	}
 	// The fleet repository's own commits are judged before its main moves
-	// (judgeOwnRange; every other repository returns at once). A refusal
+	// (JudgeOwnRange; every other repository returns at once). A refusal
 	// leaves main where it is.
 	own, _ := rh.OwnAgentID(agentBranch)
-	if err := rh.judgeOwnRange(upstream, upRef.Hash(), agentRef.Hash(), own, agentRef.Hash()); err != nil {
+	if err := rh.JudgeOwnRange(upstream, upRef.Hash(), agentRef.Hash(), own, agentRef.Hash()); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %w", err)
 	}
 	if _, err := rh.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {

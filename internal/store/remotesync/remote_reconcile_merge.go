@@ -8,7 +8,7 @@
 //
 // Conflict resolution is StrategyLocalWins for steady-state sync: the
 // agent's local edits win overlapping paths against main.
-package store
+package remotesync
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 )
 
 // reconcileAgentMerge merges local upstreamMain into agentBranch. Holds
@@ -27,7 +28,7 @@ import (
 //
 // upstreamMain is the consensus branch name to merge from (never empty here,
 // see Sync).
-func (rh *repoHandler) reconcileAgentMerge(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy) (AgentReconcileResult, error) {
+func (rh *Repo) reconcileAgentMerge(ctx context.Context, agentBranch, upstreamMain string, strategy merge.ConflictStrategy) (merge.AgentReconcileResult, error) {
 	unlock := rh.LockBranch(agentBranch)
 	defer unlock()
 
@@ -40,7 +41,7 @@ func (rh *repoHandler) reconcileAgentMerge(ctx context.Context, agentBranch, ups
 	if err != nil {
 		return res, fmt.Errorf("reconcileAgentMerge: read local %s for watermark: %w", upstreamMain, err)
 	}
-	if err := rh.writeAgentBase(agentBranch, mainRef.Hash()); err != nil {
+	if err := rh.WriteAgentBase(agentBranch, mainRef.Hash()); err != nil {
 		return res, fmt.Errorf("reconcileAgentMerge: write watermark: %w", err)
 	}
 

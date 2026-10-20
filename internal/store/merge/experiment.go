@@ -133,7 +133,7 @@ func (e *MergeConflictError) Error() string {
 // merging INTO — and for an experiment commit those are opposite sides. The
 // translation happens once, at the tool boundary where the asker is known,
 // and everything below here says src and dst, which cannot be read two ways.
-// This is the same trap conventions/store/sync/strategy-local-wins records for
+// This is the same trap conventions/store/remotesync/strategy-local-wins records for
 // RemoteWins ("src wins", not "the remote wins").
 type ResolutionSide string
 
@@ -402,7 +402,7 @@ func (rh *Repo) CommitExperiment(ctx context.Context, name string, resolutions m
 //
 // Parent-wins is StrategyRemoteWins here and that is not a typo: the strategy
 // names which SIDE of the merge wins, and src is the parent on this direction
-// (kb/conventions/store/sync/strategy-local-wins — "RemoteWins: src wins").
+// (kb/conventions/store/remotesync/strategy-local-wins — "RemoteWins: src wins").
 // Getting it backwards would silently keep the experiment's version of exactly
 // the path the sync exists to resolve, and the following commit would be
 // refused again with no visible reason.

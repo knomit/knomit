@@ -163,6 +163,22 @@ var sameLayerEdges = map[string]bool{
 	// tx helpers; the facade reaches up to it, never the reverse.
 	"store/vocab -> store/internal/sqlite": true,
 	"store/vocab -> store/internal/vcs":    true,
+	// The remotesync child (the origin remote and its status row, the fetch, the
+	// reconcile of the consensus branch and of the agent branch with the
+	// rewind replay and its watermark, push and publish, the origin identity,
+	// peer admission, the publish-time judge of this instance's own commits
+	// and the unpublished-commit drop) sits above vcs, verify and merge in
+	// the store's child order (proposal 4.3: remotesync -> vcs, verify, merge). It
+	// reads a store through the merge handle (which wraps the one *vcs.Repo),
+	// judges with verify, reads the fleet's records through fleetrec (the
+	// own-range judge) and uses the git storer directly for the empty tree
+	// the rewind replay builds on. gitserve and fsck reach up to remotesync, never
+	// the reverse.
+	"store/remotesync -> store/fleetrec":     true,
+	"store/remotesync -> store/git":          true,
+	"store/remotesync -> store/internal/vcs": true,
+	"store/remotesync -> store/merge":        true,
+	"store/remotesync -> store/verify":       true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

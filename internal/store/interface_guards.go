@@ -3,6 +3,7 @@ package store
 import (
 	"knomit/internal/store/facts"
 	"knomit/internal/store/internal/sessions"
+	"knomit/internal/store/remotesync"
 )
 
 // Compile-time interface guards. The published interfaces (interfaces.go)
@@ -19,7 +20,7 @@ var _ BranchIndex = (*repoHandler)(nil)
 var _ ExperimentIndex = (*repoHandler)(nil)
 var _ FactIndex = (*facts.Index)(nil)
 var _ PipelineIndex = (*sessions.PipelineIndex)(nil)
-var _ RemoteIndex = (*remoteIndex)(nil)
+var _ RemoteIndex = (*remotesync.Index)(nil)
 var _ ToolSessionIndex = (*sessions.ToolIndex)(nil)
 
 var (

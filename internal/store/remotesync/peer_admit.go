@@ -6,7 +6,7 @@
 // becomes a local refs/heads/agent/<x> — the same shape a push leaves on a
 // knomit host, so the consensus merger and everything after it is unchanged.
 // A refused tip stays a remote-tracking ref nothing reads: "left behind".
-package store
+package remotesync
 
 import (
 	"context"
@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
+
+	"knomit/internal/store/merge"
 )
 
 const peerTrackingPrefix = "refs/remotes/origin/agent/"
@@ -22,7 +24,7 @@ const peerTrackingPrefix = "refs/remotes/origin/agent/"
 // PeerTips lists the fetched agent/* branches (refs/remotes/origin/agent/*),
 // by local branch name ("agent/<x>"), except own (this instance's agent
 // branch, which the ordinary reconcile owns).
-func (ri *remoteIndex) PeerTips(own string) (map[string]plumbing.Hash, error) {
+func (ri *Index) PeerTips(own string) (map[string]plumbing.Hash, error) {
 	iter, err := ri.rh.Storer().IterReferences()
 	if err != nil {
 		return nil, fmt.Errorf("PeerTips: %w", err)
@@ -56,13 +58,22 @@ type MainHistory struct {
 	onMain map[plumbing.Hash]bool
 }
 
+// NewMainHistory builds the history of the consensus branch at tip; onMain
+// holds every commit reachable from it.
+func NewMainHistory(tip plumbing.Hash, onMain map[plumbing.Hash]bool) *MainHistory {
+	return &MainHistory{tip: tip, onMain: onMain}
+}
+
+// OnMain is the set of commits reachable from the tip. Callers only read it.
+func (h *MainHistory) OnMain() map[plumbing.Hash]bool { return h.onMain }
+
 // Tip is the consensus branch's tip this history was read at.
 func (h *MainHistory) Tip() plumbing.Hash { return h.tip }
 
-// promotePeer sets refs/heads/<branch> to tip, as receivePack.register does
+// PromotePeer sets refs/heads/<branch> to tip, as receivePack.register does
 // for a push, minus the objects (a fetch already stored them) and the
 // old-hash check (nothing advertised a value to compare).
-func (rh *repoHandler) promotePeer(ctx context.Context, branch, upstream string, tip plumbing.Hash) error {
+func (rh *Repo) PromotePeer(ctx context.Context, branch, upstream string, tip plumbing.Hash) error {
 	defer rh.LockBranch(branch)()
 	ctx = context.WithoutCancel(ctx)
 	seeded := false
@@ -74,11 +85,11 @@ func (rh *repoHandler) promotePeer(ctx context.Context, branch, upstream string,
 	} else if err != nil {
 		return fmt.Errorf("AdmitPeerBranch: read %s: %w", branch, err)
 	}
-	res, _, err := rh.advanceBranchTo(ctx, branch, tip)
+	res, _, err := rh.AdvanceBranchTo(ctx, branch, tip)
 	if err != nil {
 		return fmt.Errorf("AdmitPeerBranch: %w", err)
 	}
-	if seeded && res.Mode == ModeNoop {
+	if seeded && res.Mode == merge.ModeNoop {
 		return rh.NotifyCommit(ctx, branch, tip)
 	}
 	return nil

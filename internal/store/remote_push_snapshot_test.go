@@ -3,6 +3,9 @@ package store
 import (
 	"context"
 	"fmt"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/stretchr/testify/require"
 	"io"
 	"net"
 	"path/filepath"
@@ -11,9 +14,7 @@ import (
 	"testing"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/remotesync"
 )
 
 // F21 S1: the snapshot ("bookmark") push. Push reads the branch tip under the
@@ -23,16 +24,16 @@ import (
 
 const snapBranch = "agent/test"
 
+// storeHooks mirrors the child's two test seams; setStoreHooks installs them
+// through the child's test door and removes them at cleanup.
+type storeHooks struct {
+	afterSnapshot func(branch string, snap plumbing.Hash)
+	afterFetch    func() error
+}
+
 func setStoreHooks(t *testing.T, h storeHooks) {
 	t.Helper()
-	storeHooksMu.Lock()
-	storeTestHooks = h
-	storeHooksMu.Unlock()
-	t.Cleanup(func() {
-		storeHooksMu.Lock()
-		storeTestHooks = storeHooks{}
-		storeHooksMu.Unlock()
-	})
+	t.Cleanup(remotesync.SetStoreHooksForTest(h.afterSnapshot, h.afterFetch))
 }
 
 // parkFirst parks the FIRST push that reaches afterSnapshot until release;

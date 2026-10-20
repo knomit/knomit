@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/remotesync"
 )
 
 // ErrEmptyRemote is returned by CloneFrom when the remote repository exists
@@ -174,7 +175,7 @@ func (s *Service) InitRepoWithUpstream(ctx context.Context, initFiles map[string
 	// Seed the per-agent watermark to the initial commit (which is exactly
 	// the local-upstream hash at this point). On the next reconcileAgent the
 	// walk will use this as its stop point.
-	if err := s.rh.writeAgentBase(agentBranch, lastCommit); err != nil {
+	if err := s.rh.WriteAgentBase(agentBranch, lastCommit); err != nil {
 		return fmt.Errorf("InitRepo: seed agent watermark: %w", err)
 	}
 
@@ -456,9 +457,9 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 	// Re-fetch with the proper refspec so origin/<upstreamMain> and
 	// origin/agent/<host> are both tracked consistently. (The initial
 	// wildcard fetch already pulled objects; this just establishes the
-	// remote-tracking refs under the new refspec shape.) Use fetchOrigin so
+	// remote-tracking refs under the new refspec shape.) Use FetchOrigin so
 	// the agent ref's absence on origin (typical first connect) is tolerated.
-	if err := fetchOrigin(ctx, repo, auth, upstreamMain, s.rh.NetTimeout()); err != nil {
+	if err := remotesync.FetchOrigin(ctx, repo, auth, upstreamMain, s.rh.NetTimeout()); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
@@ -554,7 +555,7 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 		return "", false, fmt.Errorf("InitFromRemote: set HEAD: %w", err)
 	}
 
-	if err := s.rh.writeAgentBase(agentBranch, watermarkHash); err != nil {
+	if err := s.rh.WriteAgentBase(agentBranch, watermarkHash); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: seed agent watermark: %w", err)
 	}
 
@@ -674,7 +675,7 @@ func (s *Service) InitSubscription(ctx context.Context, originURL string, auth t
 	if err := s.rh.ConfigureRemote(originURL, upstreamMain, ""); err != nil {
 		return "", fmt.Errorf("InitSubscription: configure remote: %w", err)
 	}
-	if err := fetchOrigin(ctx, repo, auth, upstreamMain, s.rh.NetTimeout()); err != nil {
+	if err := remotesync.FetchOrigin(ctx, repo, auth, upstreamMain, s.rh.NetTimeout()); err != nil {
 		return "", fmt.Errorf("InitSubscription: re-fetch: %w", err)
 	}
 
@@ -769,7 +770,7 @@ func (s *Service) initFromEmptyRemote(ctx context.Context, repo *gogit.Repositor
 	// this fallback, each mints a distinct nonce → distinct root commit → distinct
 	// repo identity. Binding.ByID then treats them as two repos even though the
 	// user believes they are one. There is no push-time signal that detects this:
-	// Push force-pushes only the per-host agent ref (agent/<host>, remote_sync.go),
+	// Push force-pushes only the per-host agent ref (agent/<host>, sync/remote_sync.go),
 	// so the second machine writes a DIFFERENT ref name — no collision, no
 	// non-fast-forward reject, the divergence is silent. Agents never push the
 	// consensus branch, so there is no main-ref collision to catch either. We do
@@ -804,7 +805,7 @@ func (s *Service) initFromEmptyRemote(ctx context.Context, repo *gogit.Repositor
 		return "", fmt.Errorf("InitFromRemote: empty remote set %s: %w", upstreamMain, writeErr)
 	}
 	// Seed the watermark — same shape as the non-empty remote bootstrap.
-	if writeErr = s.rh.writeAgentBase(agentBranch, lastCommit); writeErr != nil {
+	if writeErr = s.rh.WriteAgentBase(agentBranch, lastCommit); writeErr != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote seed agent watermark: %w", writeErr)
 	}
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")

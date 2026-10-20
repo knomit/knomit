@@ -5,7 +5,7 @@
 // leaves, CRL, revocations, host record, master marker, its own record, the
 // merges of members' branches — reached main without one. Now every store
 // path that moves or publishes the fleet's main from this instance runs
-// judgeOwnRange over the commits it adds, BEFORE main moves:
+// JudgeOwnRange over the commits it adds, BEFORE main moves:
 //
 //   - AdvanceLocalUpstream (the hub's local reconcile, create, Host here, a
 //     hub claim and stand-down, and local main following a forge publish);
@@ -16,7 +16,7 @@
 //
 // A refusal moves nothing and is an *OwnCommitRefusedError; the repos layer
 // records it as the fleet's last error (GET /fleet last_error).
-package store
+package remotesync
 
 import (
 	"errors"
@@ -42,10 +42,10 @@ const OwnCommitRefusedText = "was not moved: commit"
 // ErrOwnCommitRefused matches *OwnCommitRefusedError with errors.Is.
 var ErrOwnCommitRefused = errors.New("main was not moved: a commit of this instance's own branch is refused")
 
-// OwnCommitRefusedError: judgeOwnRange refused a commit this instance was
+// OwnCommitRefusedError: JudgeOwnRange refused a commit this instance was
 // about to put on its main. Nothing moved. Text names the commit, the rule
 // and the reason in the shape a member's refusal has ("commit <hash> refused
-// by verify_signatures=enforce: <rule>: <reason>", or CommitRefusedByValidation).
+// by verify_signatures=enforce: <rule>: <reason>", or verify.CommitRefusedByValidation).
 type OwnCommitRefusedError struct {
 	Upstream string
 	Commit   string
@@ -59,7 +59,7 @@ func (e *OwnCommitRefusedError) Error() string {
 
 func (e *OwnCommitRefusedError) Is(target error) bool { return target == ErrOwnCommitRefused }
 
-// judgeOwnRange judges the commits of tip ∖ the history of base (the
+// JudgeOwnRange judges the commits of tip ∖ the history of base (the
 // consensus branch's tip; zero when there is none yet) that this instance is
 // about to put on main. own is the agent id this instance authors as.
 //
@@ -96,7 +96,7 @@ func (e *OwnCommitRefusedError) Is(target error) bool { return target == ErrOwnC
 //
 // verify_signatures at the judged ontology decides 2 and 3 as everywhere:
 // enforce refuses, log logs, off checks nothing.
-func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, own string, vouch plumbing.Hash) error {
+func (rh *Repo) JudgeOwnRange(upstream string, base, tip plumbing.Hash, own string, vouch plumbing.Hash) error {
 	tipC, err := object.GetCommit(rh.Storer(), tip)
 	if err != nil {
 		return fmt.Errorf("judge own commits: %s: %w", tip, err)
@@ -144,7 +144,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	root := rh.OntologyRoot()
 	if r, ok := verify.BranchFactsValid(tipC, baseC, ont, root); !ok {
 		return &OwnCommitRefusedError{Upstream: upstream, Commit: r.Commit, Rule: r.Rule,
-			Text: fmt.Sprintf("commit %s %s: %s: %s", r.Commit, CommitRefusedByValidation, r.Rule, r.Reason)}
+			Text: fmt.Sprintf("commit %s %s: %s: %s", r.Commit, verify.CommitRefusedByValidation, r.Rule, r.Reason)}
 	}
 	vs, err := fact.ReadVerifySettings(raw)
 	if err != nil {
@@ -153,13 +153,13 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	if !vs.Valid {
 		return errors.New("judge own commits: verify_signatures has an unknown value")
 	}
-	if vs.Mode == VerifyOff {
+	if vs.Mode == verify.VerifyOff {
 		return nil
 	}
 	// The members' commits are judged against the fleet at base (main), as
 	// at their entry; while base holds no fleet ontology or no root (create),
 	// at tip.
-	var fleet Fleet
+	var fleet fleetrec.Fleet
 	if ontC == baseC {
 		if fleet, err = fleetrec.LoadFleetAtCommit("own", baseC, root); err != nil {
 			return fmt.Errorf("judge own commits: the fleet at %s: %w", base, err)
@@ -207,7 +207,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	mineVouched.OwnOntology = true
 	for _, c := range commits {
 		id := vcs.AgentIDOfAuthor(c.Author.Email)
-		var r Refusal
+		var r verify.Refusal
 		var ok bool
 		if id != own || own == "" {
 			r, ok = member.JudgeCommit(c)
@@ -227,9 +227,9 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 		if ok {
 			continue
 		}
-		if vs.Mode == VerifyEnforce {
+		if vs.Mode == verify.VerifyEnforce {
 			return &OwnCommitRefusedError{Upstream: upstream, Commit: c.Hash.String(), Rule: r.Rule,
-				Text: fmt.Sprintf("commit %s %s: %s: %s", c.Hash, CommitRefusedByJudge, r.Rule, r.Reason)}
+				Text: fmt.Sprintf("commit %s %s: %s: %s", c.Hash, verify.CommitRefusedByJudge, r.Rule, r.Reason)}
 		}
 		log.Warn().Str("repo", rh.Name()).Str("commit", c.Hash.String()).Str("rule", r.Rule).Str("reason", r.Reason).
 			Msg("judge own commits: commit would be refused (verify_signatures=log)")
@@ -238,7 +238,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 }
 
 // ownHostRecord is the host-record rule for this instance's OWN commits
-// (judgeOwnRange). A member's branch may never change artifacts/fleet/host
+// (JudgeOwnRange). A member's branch may never change artifacts/fleet/host
 // or artifacts/fleet/master (hostRecord); the master writes both, so for a
 // commit authored by own (signed by own's key: verify.SignerIsPusher ran first) the
 // rule admits exactly the master's legitimate writes and refuses anything
@@ -255,16 +255,16 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 //
 // When main names own, or nobody (create, a candidate's claim, a fleet from
 // before the marker), the host record is own's to write.
-func ownHostRecord(c *object.Commit, own, onMain string) (Refusal, bool) {
-	refuse := func(reason string) (Refusal, bool) {
-		return Refusal{Commit: c.Hash.String(), Rule: RuleHostRecord, Reason: reason}, false
+func ownHostRecord(c *object.Commit, own, onMain string) (verify.Refusal, bool) {
+	refuse := func(reason string) (verify.Refusal, bool) {
+		return verify.Refusal{Commit: c.Hash.String(), Rule: verify.RuleHostRecord, Reason: reason}, false
 	}
 	host, marker, err := changesHostRecord(c)
 	if err != nil {
 		return refuse(err.Error())
 	}
 	if !host && !marker {
-		return Refusal{}, true
+		return verify.Refusal{}, true
 	}
 	after, err := markerIn(c)
 	if err != nil {
@@ -276,7 +276,7 @@ func ownHostRecord(c *object.Commit, own, onMain string) (Refusal, bool) {
 	if onMain != "" && onMain != own && after != own {
 		return refuse(fmt.Sprintf("agent %q changes the fleet's host record or master marker while main names %q as the acting master", own, onMain))
 	}
-	return Refusal{}, true
+	return verify.Refusal{}, true
 }
 
 // changesHostRecord reports whether c changes, against ANY parent and in any
@@ -328,9 +328,9 @@ func markerIn(c *object.Commit) (string, error) {
 }
 
 // publishBase is what a publish of upstream to the origin is judged against
-// (judgeOwnRange's base): the origin's main as this copy last fetched it
+// (JudgeOwnRange's base): the origin's main as this copy last fetched it
 // (refs/remotes/origin/<upstream>), else the local upstream, else nothing.
-func (ri *remoteIndex) publishBase(upstream string) plumbing.Hash {
+func (ri *Index) publishBase(upstream string) plumbing.Hash {
 	for _, name := range []plumbing.ReferenceName{plumbing.NewRemoteReferenceName("origin", upstream), plumbing.NewBranchReferenceName(upstream)} {
 		if ref, err := ri.rh.Storer().Reference(name); err == nil {
 			return ref.Hash()
@@ -342,13 +342,13 @@ func (ri *remoteIndex) publishBase(upstream string) plumbing.Hash {
 // ownID is the agent id this instance authors commits on branch as ("" when
 // it has none: then no commit is its own, and every one is judged as a
 // member's).
-func (ri *remoteIndex) ownID(branch string) string {
+func (ri *Index) ownID(branch string) string {
 	id, _ := ri.rh.OwnAgentID(branch)
 	return id
 }
 
 // branchTip is branch's tip, zero when there is none.
-func (ri *remoteIndex) branchTip(branch string) plumbing.Hash {
+func (ri *Index) branchTip(branch string) plumbing.Hash {
 	if branch == "" {
 		return plumbing.ZeroHash
 	}
@@ -434,11 +434,6 @@ func sameCommits(lost []LostCommit, confirmed []string) bool {
 	return true
 }
 
-type dropOutcome struct {
-	replayed, unfolded int
-	leftOut            []LostCommit
-}
-
 // dropStep is one replay of a drop's rebuild.
 type dropStep struct {
 	c       *object.Commit
@@ -456,7 +451,7 @@ func lostCommit(c *object.Commit) LostCommit {
 // answers what is left out. Without it a merge target is a *DropMergeError
 // and, with ownOnly, a foreign side commit a *DropForeignError, each
 // carrying the fallback's left-out list.
-func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumbing.Hash]bool, drop plumbing.Hash, ownOnly, leaveOut bool) (line []dropStep, unfolded int, leftOut []LostCommit, err error) {
+func (rh *Repo) dropPlan(branch string, tip plumbing.Hash, onUp map[plumbing.Hash]bool, drop plumbing.Hash, ownOnly, leaveOut bool) (line []dropStep, unfolded int, leftOut []LostCommit, err error) {
 	dropC, err := object.GetCommit(rh.Storer(), drop)
 	if err != nil {
 		return nil, 0, nil, err

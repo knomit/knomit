@@ -96,7 +96,7 @@ const errNoPushPolicy = "knomit: pushing is not available here: no verified push
 //  4. under the branch lock, on a context that cannot be cancelled: the
 //     old-hash check, ONE transaction promoting the new objects, then the
 //     branch seeded from the upstream (first push) and moved through
-//     advanceBranchTo, which ends in NotifyCommit.
+//     AdvanceBranchTo, which ends in NotifyCommit.
 //
 // Nothing before 4 writes to the host; nothing in 4 may be abandoned by a
 // client that disconnects, because the ref moves before the SQL that
@@ -416,7 +416,7 @@ func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, co
 // under the lock (the old hash), else the move's result.
 //
 // Everything from the promote on runs on a context that cannot be cancelled
-// (F11 review M1): CreateBranch and advanceBranchTo both move the ref BEFORE
+// (F11 review M1): CreateBranch and AdvanceBranchTo both move the ref BEFORE
 // the context-bound SQL that describes it, and a request context is
 // cancelled whenever the client goes away.
 func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []plumbing.EncodedObject) (res MainReconcileResult, seeded bool, refusal string, err error) {
@@ -450,7 +450,7 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 		}
 		seeded = true
 	}
-	res, _, err = rp.rh.advanceBranchTo(ctx, branch, cmd.New)
+	res, _, err = rp.rh.AdvanceBranchTo(ctx, branch, cmd.New)
 	if err != nil {
 		return res, seeded, "", err
 	}
@@ -470,7 +470,7 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 // the fleet repository, where a held commit ends it only when it is reachable
 // from the consensus branch or from a local refs/heads/agent/* branch. Those
 // refs are admitted by construction: receive-pack's register and the fleet
-// master's promotePeer create them only after the judge, and this host's own
+// master's PromotePeer create them only after the judge, and this host's own
 // agent branch is written only by this host. Remote-tracking refs are not
 // admitted: a fetch stores whatever the origin had.
 //

@@ -22,6 +22,7 @@ import (
 	"knomit/internal/store/index"
 	"knomit/internal/store/internal/sessions"
 	"knomit/internal/store/migrate"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/store/vocab"
 )
 
@@ -55,7 +56,7 @@ type Service struct {
 	search *searchFacade
 	pi     *sessions.PipelineIndex
 	ti     *sessions.ToolIndex
-	ri     *remoteIndex
+	ri     *remotesync.Index
 	dbPath string
 
 	// sessionDB is a separate, ephemeral SQLite file holding all in-flight
@@ -147,7 +148,7 @@ func Open(path string) (*Service, error) {
 	rh.SetOnDrop(si.GC)
 	rh.SetIndexManager(si) // notifyCommit delegates to im.Sync after every commit.
 	fi := facts.NewIndex(rh.factsRepo)
-	ri := &remoteIndex{rh: rh}
+	ri := remotesync.NewIndex(rh.syncRepo)
 	fq := index.NewFactQuery(rh.Repo)
 	gq := index.NewGraphStore(rh.Repo)
 	hq := index.NewHistoryQuery(rh.Repo)
@@ -210,13 +211,13 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 // Safe to call on a running repo: the origin HAL handlers re-point a live
 // repo's origin while the background reconcile loop concurrently calls
 // GetRemote, so the write goes through remoteIndex's originMu rather than a
-// bare field assignment (see remoteIndex.setOrigin).
+// bare field assignment (see Index.SetOrigin).
 //
 // A non-nil origin with a branch also RECORDS that branch as the repo's
 // consensus branch (consensus_branch.go), so removing the origin later
 // (SetOrigin(nil)) leaves the repo on the branch it had, never on a default.
 func (s *Service) SetOrigin(o *Origin) {
-	s.ri.setOrigin(o)
+	s.ri.SetOrigin(o)
 	if o != nil && o.Branch != "" {
 		s.recordConsensusBranch(o.Branch)
 	}

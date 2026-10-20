@@ -52,7 +52,7 @@ func TestConsensusBranch_RecordedNotDefaulted(t *testing.T) {
 		// peer branch and an experiment, which are never candidates.
 		_, err = svc.rh.DB().Exec(`DELETE FROM meta WHERE key = ?`, consensusBranchKey)
 		require.NoError(t, err)
-		svc.ri.setConsensus("")
+		svc.ri.SetConsensus("")
 		tip, err := svc.Branches().HeadCommit(ctx, "agent/host-1")
 		require.NoError(t, err)
 		for _, b := range []string{"agent/peer-abcd1234", "exp/try"} {

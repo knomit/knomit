@@ -17,7 +17,7 @@ import (
 // gate (CheckRange), the audit, the incoming-push judge and the own-lineage
 // check. The child reads a store only through *vcs.Repo and the fleet
 // records through fleetrec; the writers that call it (receive-pack, the
-// reconcile/sync paths, the own-range judge in verify_own.go) stay in this
+// reconcile/sync paths, the own-range judge in the remotesync child) stay in this
 // package. The names callers outside store use are re-exported below
 // unchanged, so the public surface of package store does not move.
 
