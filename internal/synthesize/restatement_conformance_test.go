@@ -143,8 +143,10 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 			rel, err := filepath.Rel(pkg, path)
 			require.NoError(t, err)
 			if pkg == "../store" {
+				// internal/vcs/branch.go follows #550's move of branch.go out of
+				// the store root; the exemption covers the same code as before.
 				switch filepath.ToSlash(rel) {
-				case "abstraction.go", "interfaces.go", "vec_table.go", "branch.go", "service.go":
+				case "abstraction.go", "interfaces.go", "vec_table.go", "internal/vcs/branch.go", "service.go":
 					continue
 				}
 			}
