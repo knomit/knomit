@@ -64,7 +64,13 @@ func TestFallbackAgentIDOnlyInstalledFromTests(t *testing.T) {
 // appear THERE, or a rename would leave this test passing on nothing.
 func TestFastDurabilityOnlyReferencedFromTests(t *testing.T) {
 	needles := []string{"SetTestFastDurability", "testFastDurability"}
-	def := filepath.Join("internal", "store", "test_durability.go")
+	// The switch lives in the store's sqlite child (the atomic is unexported
+	// there, so nothing else in package store can reach it); the parent only
+	// forwards the setter under its public name for the test packages that call
+	// store.SetTestFastDurability. Both files may name it; every needle must
+	// appear in the definition, and the forwarder must still name the setter.
+	def := filepath.Join("internal", "store", "internal", "sqlite", "test_durability.go")
+	fwd := filepath.Join("internal", "store", "sqlite_conn.go")
 	src, err := os.ReadFile(filepath.Join("..", "..", def))
 	if err != nil {
 		t.Fatalf("read the switch's definition file: %v", err)
@@ -74,7 +80,14 @@ func TestFastDurabilityOnlyReferencedFromTests(t *testing.T) {
 			t.Fatalf("%s no longer contains %q: the switch was renamed or moved, so this guard checks nothing — update its needles", def, n)
 		}
 	}
-	offenders := productionSourceNaming(t, needles, def)
+	fsrc, err := os.ReadFile(filepath.Join("..", "..", fwd))
+	if err != nil {
+		t.Fatalf("read the switch's forwarder file: %v", err)
+	}
+	if !strings.Contains(string(fsrc), "SetTestFastDurability") {
+		t.Fatalf("%s no longer forwards SetTestFastDurability: the switch's public name moved, so this guard's allowlist is stale", fwd)
+	}
+	offenders := productionSourceNaming(t, needles, def, fwd)
 	if len(offenders) > 0 {
 		t.Fatalf("production source must not reference the test durability switch:\n  %s", strings.Join(offenders, "\n  "))
 	}

@@ -1,7 +1,8 @@
 // Vector embedding utilities: binary encoding/decoding of float32 vectors,
 // pairwise cosine distance computation via sqlite-vec, and one-time
 // registration of the sqlite-vec extension.
-package store
+
+package sqlite
 
 import (
 	"database/sql"
@@ -16,10 +17,10 @@ import (
 
 var vecOnce sync.Once
 
-// registerVec loads the sqlite-vec extension exactly once per process and
+// Register loads the sqlite-vec extension exactly once per process and
 // registers a custom "sqlite3_knomit" driver carrying knomit's SQL functions
 // and per-connection pragmas.
-func registerVec() {
+func Register() {
 	vecOnce.Do(func() {
 		sqlite_vec.Auto()
 		sql.Register("sqlite3_knomit", &sqlite3.SQLiteDriver{
@@ -55,9 +56,9 @@ func registerVec() {
 	})
 }
 
-// float32SliceToBytes encodes a []float32 as little-endian bytes
+// Float32SliceToBytes encodes a []float32 as little-endian bytes
 // (4 bytes per element), the format expected by sqlite-vec.
-func float32SliceToBytes(v []float32) []byte {
+func Float32SliceToBytes(v []float32) []byte {
 	buf := make([]byte, len(v)*4)
 	for i, f := range v {
 		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
@@ -65,7 +66,7 @@ func float32SliceToBytes(v []float32) []byte {
 	return buf
 }
 
-// usableKNNSimilarity unwraps a similarity/distance column from a KNN row that
+// UsableKNNSimilarity unwraps a similarity/distance column from a KNN row that
 // may be NULL. sqlite-vec returns a NULL distance — hence a NULL similarity —
 // for a neighbor with a degenerate, zero-norm embedding, which has no
 // meaningful similarity to anything. Because NULL sorts FIRST under
@@ -73,12 +74,12 @@ func float32SliceToBytes(v []float32) []byte {
 // `break` (which would drop every remaining valid hit). Centralizing the
 // invariant here keeps all KNN scan sites consistent. Returns the value and
 // whether it is usable.
-func usableKNNSimilarity(sim sql.NullFloat64) (float64, bool) {
+func UsableKNNSimilarity(sim sql.NullFloat64) (float64, bool) {
 	return sim.Float64, sim.Valid
 }
 
-// bytesToFloat32Slice decodes little-endian bytes back into a []float32.
-func bytesToFloat32Slice(b []byte) ([]float32, error) {
+// BytesToFloat32Slice decodes little-endian bytes back into a []float32.
+func BytesToFloat32Slice(b []byte) ([]float32, error) {
 	if len(b)%4 != 0 {
 		return nil, fmt.Errorf("embedding blob length %d is not a multiple of 4", len(b))
 	}

@@ -1,6 +1,7 @@
 // Custom SQLite functions registered via ConnectHook. These run inside the
 // database engine and are used by bulk SQL statements (e.g. fast rebuild).
-package store
+
+package sqlite
 
 import (
 	"encoding/json"
@@ -24,7 +25,7 @@ func registerSQLFuncs(conn *sqlite3.SQLiteConn) error {
 	}
 	// knomit_canon_domain canonicalises a domain tag (NFC + fold + de-hyphenize)
 	// so the bulk rebuild SQL can store canonical fact_domains values.
-	if err := conn.RegisterFunc("knomit_canon_domain", canonicalizeDomain, true); err != nil {
+	if err := conn.RegisterFunc("knomit_canon_domain", textnorm.Canonicalize, true); err != nil {
 		return err
 	}
 	// knomit_motif_key computes a motif's mechanical cluster key, so SQL that
@@ -35,7 +36,7 @@ func registerSQLFuncs(conn *sqlite3.SQLiteConn) error {
 	// cluster. Without it, the aggregate readers returned nothing while the
 	// point readers returned singletons, so one corpus reported two different
 	// vocabularies depending on which API you asked.
-	return conn.RegisterFunc("knomit_motif_key", groupingKey, true)
+	return conn.RegisterFunc("knomit_motif_key", GroupingKey, true)
 }
 
 // parsedFact is the JSON structure returned by knomit_parse_fact.
@@ -115,11 +116,11 @@ func sqlParseFact(data []byte) interface{} {
 // Both inputs must be little-endian float32 arrays of equal length.
 // Returns a REAL in [-1, 1] or NULL on invalid input.
 func sqlCosineSim(a, b []byte) interface{} {
-	va, err := bytesToFloat32Slice(a)
+	va, err := BytesToFloat32Slice(a)
 	if err != nil || len(va) == 0 {
 		return nil
 	}
-	vb, err := bytesToFloat32Slice(b)
+	vb, err := BytesToFloat32Slice(b)
 	if err != nil || len(vb) != len(va) {
 		return nil
 	}
@@ -133,7 +134,7 @@ func sqlCosineSim(a, b []byte) interface{} {
 	return sim
 }
 
-// groupingKey is the mechanical cluster key for a motif spelling: its
+// GroupingKey is the mechanical cluster key for a motif spelling: its
 // canonicalized tokens, stemmed, SORTED and rejoined.
 //
 // Sorted, so the key is a token MULTISET and word order cannot split a
@@ -150,7 +151,7 @@ func sqlCosineSim(a, b []byte) interface{} {
 // badly ("fallback-silent"), and the id is shown to readers in the §6 explain
 // surface and to an LLM in the backfill prompt. The id is a real member
 // spelling; see RebuildAliases.
-func groupingKey(motif string) string {
+func GroupingKey(motif string) string {
 	toks := textnorm.Tokens(textnorm.Canonicalize(motif))
 	stemmed := make([]string, 0, len(toks))
 	for _, t := range toks {
@@ -163,12 +164,12 @@ func groupingKey(motif string) string {
 	return strings.Join(stemmed, "-")
 }
 
-// motifClusterKeyExpr renders the ONE SQL expression that keys a motif
+// MotifClusterKeyExpr renders the ONE SQL expression that keys a motif
 // spelling to its cluster, for the readers that must agree with each other.
 //
 // Three steps, and each is a posture decision rather than defensiveness:
 //   - the STORED key, when the vocabulary has been resolved;
-//   - else the key a rebuild WOULD compute (knomit_motif_key is groupingKey),
+//   - else the key a rebuild WOULD compute (knomit_motif_key is GroupingKey),
 //     so a corpus with facts written since the last rebuild reads the way it
 //     will read a moment later rather than a different way in the meantime;
 //   - else the spelling itself, for a motif whose every token normalizes away.
@@ -179,6 +180,6 @@ func groupingKey(motif string) string {
 // Shared as TEXT because the alternative is three hand-written COALESCEs that
 // agree until one of them is edited. The caller supplies the motif column
 // (queries name it differently) and must alias motif_aliases as `a`.
-func motifClusterKeyExpr(motifCol string) string {
+func MotifClusterKeyExpr(motifCol string) string {
 	return `COALESCE(NULLIF(a.cluster_key, ''), NULLIF(knomit_motif_key(` + motifCol + `), ''), ` + motifCol + `)`
 }
