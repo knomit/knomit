@@ -2,7 +2,7 @@
 --
 -- This file is NOT a versioned migration. The session DB is a separate,
 -- disposable SQLite file recreated empty on every Service.Open (see
--- initSessionSchema in service.go), so there is no prior data to migrate and no
+-- initSchema in db.go), so there is no prior data to migrate and no
 -- version history to honor — the whole file is exec'd wholesale against the
 -- fresh DB. Schema changes are plain edits here; they take effect on next start.
 --
