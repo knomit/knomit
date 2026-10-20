@@ -13,6 +13,11 @@ import (
 // exactly what it did before F09 (signing only).
 func TestVerifyIsNeverInTheWritePath(t *testing.T) {
 	forbidden := regexp.MustCompile(`\b(CheckRange|Audit|LoadFleet|LoadFleetAt|FleetMembersAt|FleetPKIAt|FleetAt|loadMembers|LoadMembers|LoadMembersOfTree|LoadFleetAtCommit|loadFleetPKI|newJudge|verifyCommitSignature|checkM3|checkOwnLineage|judgeCommit)\(`)
+	// The name list above is bound to spellings: after the fleet read moved
+	// into internal/store/fleetrec, fleetrec.At( reached the same read under
+	// a name the list does not hold. Reject ANY package-qualified call into
+	// the fleetrec package, so a new export cannot slip past the list.
+	pkgCall := regexp.MustCompile(`\bfleetrec\.\w+\(`)
 	for _, f := range []string{"fact_write.go", "internal/vcs/sign.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -20,6 +25,9 @@ func TestVerifyIsNeverInTheWritePath(t *testing.T) {
 		}
 		if m := forbidden.FindAll(src, -1); len(m) > 0 {
 			t.Errorf("%s calls verification in the write path: %q", f, m)
+		}
+		if m := pkgCall.FindAll(src, -1); len(m) > 0 {
+			t.Errorf("%s calls into the fleetrec package from the write path: %q", f, m)
 		}
 	}
 }
