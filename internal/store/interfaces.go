@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+
+	"knomit/internal/store/vocab"
 )
 
 // FactIndex is the interface for fact storage. Implemented by *facts.Index.
@@ -541,6 +543,21 @@ type AbstractionIndex interface {
 	ProbeSessionsWaited(ctx context.Context, branch string) (int, error)
 	SetProbeSessionsWaited(ctx context.Context, branch string, n int) error
 }
+
+// The implementation lives in the vocab child (internal/store/vocab,
+// abstraction.go). Its alias, its compile-time guard and the shortlist types
+// whose names carry the axis' vocabulary are declared HERE, not in
+// vocab_seam.go or interface_guards.go, because internal/synthesize
+// TestConformance_ReviewPipelineOnly lets only interfaces.go, service.go and
+// vocab/abstraction.go name them.
+type (
+	abstractionIndex     = vocab.AbstractionIndex
+	RestatementPair      = vocab.RestatementPair
+	RestatementPairStats = vocab.RestatementPairStats
+	RestatementVerdict   = vocab.RestatementVerdict
+)
+
+var _ AbstractionIndex = (*abstractionIndex)(nil)
 
 // Restatement pair match kinds — how a standing pair was found.
 const (

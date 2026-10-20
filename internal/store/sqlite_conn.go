@@ -26,10 +26,7 @@ func beginTxIfNeeded(ctx context.Context, db *sql.DB) (context.Context, *sql.Tx,
 var (
 	registerVec         = sqlite.Register
 	float32SliceToBytes = sqlite.Float32SliceToBytes
-	bytesToFloat32Slice = sqlite.BytesToFloat32Slice
-	usableKNNSimilarity = sqlite.UsableKNNSimilarity
 	groupingKey         = sqlite.GroupingKey
-	motifClusterKeyExpr = sqlite.MotifClusterKeyExpr
 )
 
 // Crypt provides AES-256-GCM encryption for credential storage (see the

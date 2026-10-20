@@ -155,6 +155,14 @@ var sameLayerEdges = map[string]bool{
 	"store/index -> store/git":             true,
 	"store/index -> store/internal/sqlite": true,
 	"store/index -> store/internal/vcs":    true,
+	// The vocab child (motif alias resolution and definitions, the
+	// title-embedding axis and its shortlist: review-time derived state) sits
+	// above sqlite and vcs in the store's child order. The proposal's arrow
+	// also lists index; nothing in the moved files needs it, so it is not
+	// imported. It reads a store only through *vcs.Repo and the ctx-carried
+	// tx helpers; the facade reaches up to it, never the reverse.
+	"store/vocab -> store/internal/sqlite": true,
+	"store/vocab -> store/internal/vcs":    true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

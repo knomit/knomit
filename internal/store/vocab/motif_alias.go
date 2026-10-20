@@ -1,4 +1,4 @@
-package store
+package vocab
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // Alias resolution, mechanical half (blueprint §3.1 step 1).
@@ -29,8 +31,12 @@ const (
 	aliasMethodJudge = "judge"
 )
 
-// motifIndex implements MotifIndex.
-type motifIndex struct{ rh *repoHandler }
+// MotifIndex implements store.MotifIndex.
+type MotifIndex struct{ rh *vcs.Repo }
+
+// NewMotifIndex returns motif alias resolution over rh, the SAME *vcs.Repo the
+// parent's repoHandler embeds.
+func NewMotifIndex(rh *vcs.Repo) *MotifIndex { return &MotifIndex{rh: rh} }
 
 // spelling is one distinct motif string in the corpus, with its live df.
 type spelling struct {
@@ -81,7 +87,7 @@ func electCanonical(members []spelling) string {
 // decisions), both of which are inspectable; a judge decision is a DECISION,
 // the same shape as Phase 0's restatement_verdicts, not a derivation. Dropping
 // motif_judge_merges costs re-judging and nothing else.
-func (mi *motifIndex) RebuildAliases(ctx context.Context, branch string) error {
+func (mi *MotifIndex) RebuildAliases(ctx context.Context, branch string) error {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("RebuildAliases: %w", err)
@@ -218,7 +224,7 @@ func (mi *motifIndex) RebuildAliases(ctx context.Context, branch string) error {
 // is its own cluster", which is the correct degenerate reading and spares
 // every consumer — df, matching, the read surfaces — a special case for a
 // corpus whose vocabulary has not been resolved yet.
-func (mi *motifIndex) CanonicalID(ctx context.Context, branch, motif string) (string, error) {
+func (mi *MotifIndex) CanonicalID(ctx context.Context, branch, motif string) (string, error) {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("CanonicalID: %w", err)
@@ -238,7 +244,7 @@ func (mi *motifIndex) CanonicalID(ctx context.Context, branch, motif string) (st
 // AliasTable returns the whole spelling → canonical id mapping for branch.
 // Used by the health metrics, the backfill hint generator, and the MN3
 // rebuild-reproducibility test.
-func (mi *motifIndex) AliasTable(ctx context.Context, branch string) (map[string]string, error) {
+func (mi *MotifIndex) AliasTable(ctx context.Context, branch string) (map[string]string, error) {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("AliasTable: %w", err)
@@ -271,7 +277,7 @@ func (mi *motifIndex) AliasTable(ctx context.Context, branch string) (map[string
 // An unresolved spelling returns its own mechanical grouping key, which is
 // what it would be assigned by a rebuild — so a corpus whose aliases have not
 // been built yet still produces stable, correct keys.
-func (mi *motifIndex) ClusterKey(ctx context.Context, branch, motif string) (string, error) {
+func (mi *MotifIndex) ClusterKey(ctx context.Context, branch, motif string) (string, error) {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("ClusterKey: %w", err)
@@ -291,7 +297,7 @@ func (mi *motifIndex) ClusterKey(ctx context.Context, branch, motif string) (str
 type judgeMergePair struct{ a, b, rationale string }
 
 // judgeMerges reads this branch's recorded judge decisions.
-func (mi *motifIndex) judgeMerges(ctx context.Context, branchID int64) ([]judgeMergePair, error) {
+func (mi *MotifIndex) judgeMerges(ctx context.Context, branchID int64) ([]judgeMergePair, error) {
 	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx,
 		`SELECT key_a, key_b, rationale FROM motif_judge_verdicts
 		  WHERE branch_id = ? AND merged = 1`, branchID)
@@ -448,7 +454,7 @@ func pairKey(a, b string) string {
 // and asking again is correct rather than wasteful. Structural expiry, with
 // nothing to invalidate and no cleanup job: the same reasoning as Phase 0
 // keying its verdicts on content-addressed fact ids.
-func (mi *motifIndex) clusterMembership(ctx context.Context, branchID int64) (map[string]string, error) {
+func (mi *MotifIndex) clusterMembership(ctx context.Context, branchID int64) (map[string]string, error) {
 	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx,
 		`SELECT cluster_key, motif FROM motif_aliases WHERE branch_id = ?`, branchID)
 	if err != nil {
@@ -475,7 +481,7 @@ func (mi *motifIndex) clusterMembership(ctx context.Context, branchID int64) (ma
 }
 
 // AliasRows returns the full alias table with its audit columns.
-func (mi *motifIndex) AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error) {
+func (mi *MotifIndex) AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error) {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("AliasRows: %w", err)
@@ -506,7 +512,7 @@ func (mi *motifIndex) AliasRows(ctx context.Context, branch string) (map[string]
 // A verdict whose membership has moved is simply absent, which re-eligibilizes
 // the pair without deleting anything: the record stays as history, it just
 // stops binding.
-func (mi *motifIndex) AnsweredPairs(ctx context.Context, branch string) (map[string]struct{}, error) {
+func (mi *MotifIndex) AnsweredPairs(ctx context.Context, branch string) (map[string]struct{}, error) {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("AnsweredPairs: %w", err)
@@ -548,7 +554,7 @@ func (mi *motifIndex) AnsweredPairs(ctx context.Context, branch string) (map[str
 // mechanical layer and the overlay are applied together so their result is one
 // deterministic function of (facts, decisions) rather than an accumulation of
 // partial edits.
-func (mi *motifIndex) RecordJudgeMerge(ctx context.Context, branch, motifA, motifB, rationale string) error {
+func (mi *MotifIndex) RecordJudgeMerge(ctx context.Context, branch, motifA, motifB, rationale string) error {
 	if strings.TrimSpace(rationale) == "" {
 		// Enforced here, not asked for in the prompt and hoped for: a rule the
 		// caller can decline to follow is a convention, not a guard. A merge
@@ -566,11 +572,11 @@ func (mi *motifIndex) RecordJudgeMerge(ctx context.Context, branch, motifA, moti
 // Without it, merges are cheap but rejections are re-litigated every session,
 // and a stable corpus spends its whole slot budget re-asking answered
 // questions.
-func (mi *motifIndex) RecordJudgeDecline(ctx context.Context, branch, motifA, motifB string) error {
+func (mi *MotifIndex) RecordJudgeDecline(ctx context.Context, branch, motifA, motifB string) error {
 	return mi.recordVerdict(ctx, branch, motifA, motifB, false, "")
 }
 
-func (mi *motifIndex) recordVerdict(ctx context.Context, branch, motifA, motifB string, merged bool, rationale string) error {
+func (mi *MotifIndex) recordVerdict(ctx context.Context, branch, motifA, motifB string, merged bool, rationale string) error {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("recordVerdict: %w", err)
@@ -632,7 +638,7 @@ type MotifCluster struct {
 //
 // One row per CLUSTER, not per spelling: the vocabulary a reader or a judge
 // deals in is mechanisms, and two spellings of one mechanism are one entry.
-func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifCluster, error) {
+func (mi *MotifIndex) Clusters(ctx context.Context, branch string) ([]MotifCluster, error) {
 	return mi.ClustersUnder(ctx, branch, "")
 }
 
@@ -648,7 +654,7 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 // then disagree with the row that opened it. So both are computed exactly as
 // the unscoped call computes them, and the prefix decides only which clusters
 // survive and what number each shows.
-func (mi *motifIndex) ClustersUnder(ctx context.Context, branch, pathPrefix string) ([]MotifCluster, error) {
+func (mi *MotifIndex) ClustersUnder(ctx context.Context, branch, pathPrefix string) ([]MotifCluster, error) {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("Clusters: %w", err)
@@ -797,7 +803,7 @@ func (mi *motifIndex) ClustersUnder(ctx context.Context, branch, pathPrefix stri
 // least representative carriers whenever their titles sorted early. This
 // documented most-recent-first and ordered by title, which is the kind of
 // mismatch that reads as correct in both the doc and the code.
-func (mi *motifIndex) CarrierTitles(ctx context.Context, branch, clusterKey string, limit int) ([]string, error) {
+func (mi *MotifIndex) CarrierTitles(ctx context.Context, branch, clusterKey string, limit int) ([]string, error) {
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("CarrierTitles: %w", err)

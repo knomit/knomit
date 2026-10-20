@@ -1,4 +1,4 @@
-package store
+package vocab
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // sqlIDChunk is a SQL PARAMETER BUDGET: how many ids are bound into one
@@ -38,22 +40,21 @@ func idPlaceholders(ids []int64) (string, []any) {
 	return strings.TrimSuffix(strings.Repeat("?,", len(ids)), ","), args
 }
 
-// abstractionIndex implements AbstractionIndex: the title-embedding axis and
-// the restatement shortlist built on it.
+// AbstractionIndex implements store.AbstractionIndex: the title-embedding axis
+// and the restatement shortlist built on it.
 //
 // Both are derived state consumed EXCLUSIVELY by the review pipeline. Nothing
 // on the runtime paths (query / explain / learn) may reach them, which is why
 // this sub-service is exposed on its own accessor rather than folded into the
 // SearchIndex composite that mcp and web depend on.
 //
-// Like its siblings it holds only *repoHandler and never reaches sideways to
+// Like its siblings it holds only the *vcs.Repo and never reaches sideways to
 // another sub-service (invariants/store/sub-index-up-not-sideways).
-type abstractionIndex struct{ rh *repoHandler }
+type AbstractionIndex struct{ rh *vcs.Repo }
 
-// Compile-time guard. Kept here, not in interface_guards.go, because the
-// review-pipeline-only conformance scan permits abstraction.go to name
-// AbstractionIndex and does not permit interface_guards.go.
-var _ AbstractionIndex = (*abstractionIndex)(nil)
+// NewAbstractionIndex returns the axis over rh, the SAME *vcs.Repo the parent's
+// repoHandler embeds.
+func NewAbstractionIndex(rh *vcs.Repo) *AbstractionIndex { return &AbstractionIndex{rh: rh} }
 
 // epistemicLiveJoin is the join every query here shares: the version of each
 // path that `branch` currently sees, epistemic facts only.
@@ -75,7 +76,7 @@ const epistemicLiveJoin = `
 //
 // "Rows lacking a vector" IS the backfill delta: facts rows are content-
 // addressed, so editing a fact produces a new row that no vector points at.
-func (ax *abstractionIndex) LiveFactsMissingTitleVector(ctx context.Context, branch string, limit int) ([]TitleTarget, error) {
+func (ax *AbstractionIndex) LiveFactsMissingTitleVector(ctx context.Context, branch string, limit int) ([]TitleTarget, error) {
 	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT f.id, f.path, f.title`+epistemicLiveJoin+`
 		   AND NOT EXISTS (SELECT 1 FROM fact_titles_vec tv WHERE tv.rowid = f.id)
@@ -99,7 +100,7 @@ func (ax *abstractionIndex) LiveFactsMissingTitleVector(ctx context.Context, bra
 
 // PutTitleVectors stores title vectors by fact id. Delete-then-insert because
 // vec0 has no upsert.
-func (ax *abstractionIndex) PutTitleVectors(ctx context.Context, vecs []TitleVector) error {
+func (ax *AbstractionIndex) PutTitleVectors(ctx context.Context, vecs []TitleVector) error {
 	if len(vecs) == 0 {
 		return nil
 	}
@@ -135,7 +136,7 @@ func (ax *abstractionIndex) PutTitleVectors(ctx context.Context, vecs []TitleVec
 // axis. Surfaced in review health output, because a time-budgeted backfill can
 // legitimately leave the axis partial for several sessions and silence would
 // read as "nothing to find".
-func (ax *abstractionIndex) TitleVectorCoverage(ctx context.Context, branch string) (int, int, error) {
+func (ax *AbstractionIndex) TitleVectorCoverage(ctx context.Context, branch string) (int, int, error) {
 	var have, total int
 	err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT
@@ -154,7 +155,7 @@ func (ax *abstractionIndex) TitleVectorCoverage(ctx context.Context, branch stri
 // It carries paths as well as ids because a candidate pair is keyed by path —
 // that is what a prune work item talks in — and resolving them one id at a time
 // afterwards would be a query per changed fact.
-func (ax *abstractionIndex) LiveEpistemicFacts(ctx context.Context, branch string) (map[int64]string, error) {
+func (ax *AbstractionIndex) LiveEpistemicFacts(ctx context.Context, branch string) (map[int64]string, error) {
 	return ax.liveEpistemicFacts(ctx, branch, false)
 }
 
@@ -166,11 +167,11 @@ func (ax *abstractionIndex) LiveEpistemicFacts(ctx context.Context, branch strin
 // done in the cache state and its KNN would never run — permanently, because
 // the cache state is exactly what says "already covered". The refresh therefore
 // diffs against THIS set and leaves un-embedded facts for a later session.
-func (ax *abstractionIndex) LiveEpistemicFactsOnAxis(ctx context.Context, branch string) (map[int64]string, error) {
+func (ax *AbstractionIndex) LiveEpistemicFactsOnAxis(ctx context.Context, branch string) (map[int64]string, error) {
 	return ax.liveEpistemicFacts(ctx, branch, true)
 }
 
-func (ax *abstractionIndex) liveEpistemicFacts(ctx context.Context, branch string, onAxisOnly bool) (map[int64]string, error) {
+func (ax *AbstractionIndex) liveEpistemicFacts(ctx context.Context, branch string, onAxisOnly bool) (map[int64]string, error) {
 	query := `SELECT f.id, f.path` + epistemicLiveJoin
 	if onAxisOnly {
 		query += ` AND EXISTS (SELECT 1 FROM fact_titles_vec tv WHERE tv.rowid = f.id)`
@@ -208,7 +209,7 @@ const titleKNNOverfetch = 4
 //
 // A fact with no title vector yet returns nothing rather than an error: during
 // a partial backfill that is the common case, not a fault.
-func (ax *abstractionIndex) TopTitleNeighbours(ctx context.Context, branch string, factID int64, k int) ([]TitleNeighbour, error) {
+func (ax *AbstractionIndex) TopTitleNeighbours(ctx context.Context, branch string, factID int64, k int) ([]TitleNeighbour, error) {
 	if k <= 0 {
 		return nil, nil
 	}
@@ -271,7 +272,7 @@ func (ax *abstractionIndex) TopTitleNeighbours(ctx context.Context, branch strin
 // detection pass finds pairs that no KNN returned, so it has no similarity
 // score in hand and must read the two vectors it already has rather than
 // re-embed anything.
-func (ax *abstractionIndex) TitleVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error) {
+func (ax *AbstractionIndex) TitleVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error) {
 	out := make(map[int64][]float32, len(ids))
 	if len(ids) == 0 {
 		return out, nil
@@ -306,7 +307,7 @@ func (ax *abstractionIndex) TitleVectorsByFactID(ctx context.Context, ids []int6
 	return out, nil
 }
 
-func (ax *abstractionIndex) BodyVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error) {
+func (ax *AbstractionIndex) BodyVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error) {
 	out := make(map[int64][]float32, len(ids))
 	if len(ids) == 0 {
 		return out, nil
@@ -351,7 +352,7 @@ func (ax *abstractionIndex) BodyVectorsByFactID(ctx context.Context, ids []int64
 
 // CachedPairFactIDs returns the fact ids the pair cache was last built over.
 // Diffed against LiveEpistemicFactIDs, this IS the delta — no watermark.
-func (ax *abstractionIndex) CachedPairFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error) {
+func (ax *AbstractionIndex) CachedPairFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error) {
 	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT s.fact_id
 		   FROM restatement_cache_state s
@@ -378,7 +379,7 @@ func (ax *abstractionIndex) CachedPairFactIDs(ctx context.Context, branch string
 // Two paths, not the corpus: verdict attribution needs the ids of exactly the
 // pair it is recording, and scanning every live fact to find two of them is a
 // full table read on every judged item.
-func (ax *abstractionIndex) FactIDsByPath(ctx context.Context, branch string, paths []string) (map[string]int64, error) {
+func (ax *AbstractionIndex) FactIDsByPath(ctx context.Context, branch string, paths []string) (map[string]int64, error) {
 	out := make(map[string]int64, len(paths))
 	if len(paths) == 0 {
 		return out, nil
@@ -423,7 +424,7 @@ func (ax *abstractionIndex) FactIDsByPath(ctx context.Context, branch string, pa
 // therefore destroys pairs that nothing will rediscover. Requeuing the
 // surviving partners restores them, at a bounded cost of at most K partners per
 // dropped fact.
-func (ax *abstractionIndex) PartnersOfFacts(ctx context.Context, branch string, factIDs []int64) (map[int64]struct{}, error) {
+func (ax *AbstractionIndex) PartnersOfFacts(ctx context.Context, branch string, factIDs []int64) (map[int64]struct{}, error) {
 	out := map[int64]struct{}{}
 	if len(factIDs) == 0 {
 		return out, nil
@@ -478,7 +479,7 @@ func (ax *abstractionIndex) PartnersOfFacts(ctx context.Context, branch string, 
 // after session, saturating the selection window until nothing else could ever
 // be offered. An edit to either fact re-mints the pair through the ordinary KNN
 // path, which is the behaviour we want — the judge has not seen that version.
-func (ax *abstractionIndex) DeleteRestatementPair(ctx context.Context, branch string, aFactID, bFactID int64) error {
+func (ax *AbstractionIndex) DeleteRestatementPair(ctx context.Context, branch string, aFactID, bFactID int64) error {
 	branchID, err := ax.branchID(ctx, branch)
 	if err != nil {
 		return err
@@ -500,7 +501,7 @@ func (ax *abstractionIndex) DeleteRestatementPair(ctx context.Context, branch st
 // One transaction because a half-applied delta is worse than a stale cache: a
 // cache that lost its pairs but kept its state rows would never rebuild them,
 // since the state rows are what says "already covered".
-func (ax *abstractionIndex) ReplaceRestatementPairs(ctx context.Context, branch string, dropFactIDs []int64, add []RestatementPair, coveredNow []int64) error {
+func (ax *AbstractionIndex) ReplaceRestatementPairs(ctx context.Context, branch string, dropFactIDs []int64, add []RestatementPair, coveredNow []int64) error {
 	if len(dropFactIDs) == 0 && len(add) == 0 && len(coveredNow) == 0 {
 		return nil
 	}
@@ -570,7 +571,7 @@ func (ax *abstractionIndex) ReplaceRestatementPairs(ctx context.Context, branch 
 // Ranking is the whole selection mechanism: the "operating point" is whatever
 // absolute cosine the last selected pair happens to sit at IN THIS REPO, which
 // is why no cosine threshold appears anywhere in this file.
-func (ax *abstractionIndex) RestatementPairsByRank(ctx context.Context, branch string, limit int) ([]RestatementPair, error) {
+func (ax *AbstractionIndex) RestatementPairsByRank(ctx context.Context, branch string, limit int) ([]RestatementPair, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -593,7 +594,7 @@ func (ax *abstractionIndex) RestatementPairsByRank(ctx context.Context, branch s
 // The cosine ordering is kept inside the population rather than dropped: it
 // still orders structural matches sensibly against each other, it just no
 // longer decides whether they are reachable at all.
-func (ax *abstractionIndex) RestatementPairsByMatchKind(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error) {
+func (ax *AbstractionIndex) RestatementPairsByMatchKind(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error) {
 	if limit <= 0 || len(kinds) == 0 {
 		return nil, nil
 	}
@@ -635,7 +636,7 @@ func (ax *abstractionIndex) RestatementPairsByMatchKind(ctx context.Context, bra
 //
 // Ties are broken on the paths, so two runs over one corpus agree even if the
 // rowids ever collide.
-func (ax *abstractionIndex) RestatementPairsByMatchKindOldest(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error) {
+func (ax *AbstractionIndex) RestatementPairsByMatchKindOldest(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error) {
 	if limit <= 0 || len(kinds) == 0 {
 		return nil, nil
 	}
@@ -674,7 +675,7 @@ func scanRestatementPairs(rows *sql.Rows) ([]RestatementPair, error) {
 
 // LiveEpistemicFactTitles is the structural detection pass's input: what each
 // live fact SAYS IT IS, rather than where it sits in the vector space.
-func (ax *abstractionIndex) LiveEpistemicFactTitles(ctx context.Context, branch string) (map[int64]LiveFactTitle, error) {
+func (ax *AbstractionIndex) LiveEpistemicFactTitles(ctx context.Context, branch string) (map[int64]LiveFactTitle, error) {
 	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT f.id, f.path, f.title`+epistemicLiveJoin, branch)
 	if err != nil {
@@ -698,7 +699,7 @@ func (ax *abstractionIndex) LiveEpistemicFactTitles(ctx context.Context, branch 
 // OBSERVABILITY: reported in review health output, read by no branch. They are
 // descriptors of a corpus, and a corpus descriptor that decided anything would
 // be the corpus-property constant this design exists without.
-func (ax *abstractionIndex) RestatementPairStats(ctx context.Context, branch string) (RestatementPairStats, error) {
+func (ax *AbstractionIndex) RestatementPairStats(ctx context.Context, branch string) (RestatementPairStats, error) {
 	var st RestatementPairStats
 	if err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT COUNT(*)
@@ -730,7 +731,7 @@ func (ax *abstractionIndex) RestatementPairStats(ctx context.Context, branch str
 // pairQuantile reads the title cosine at the given upper quantile by offsetting
 // into the descending ranking — cheap on the (branch_id, title_cos DESC) index
 // and exact, where a sampled estimate would wobble between sessions.
-func (ax *abstractionIndex) pairQuantile(ctx context.Context, branch string, count int, q float64) (float64, error) {
+func (ax *AbstractionIndex) pairQuantile(ctx context.Context, branch string, count int, q float64) (float64, error) {
 	offset := int(float64(count) * (1 - q))
 	if offset >= count {
 		offset = count - 1
@@ -752,7 +753,7 @@ func (ax *abstractionIndex) pairQuantile(ctx context.Context, branch string, cou
 // branchID resolves a branch name to its row id through repoHandler's cached
 // resolver, so this sub-service shares the cache and returns the same
 // ErrBranchNotFound every other caller matches on.
-func (ax *abstractionIndex) branchID(ctx context.Context, branch string) (int64, error) {
+func (ax *AbstractionIndex) branchID(ctx context.Context, branch string) (int64, error) {
 	id, err := ax.rh.BranchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("abstraction: %w", err)
@@ -768,7 +769,7 @@ func (ax *abstractionIndex) branchID(ctx context.Context, branch string) (int64,
 // funded slots session after session.
 
 // RecordRestatementVerdict records what the judge did with one shortlist pair.
-func (ax *abstractionIndex) RecordRestatementVerdict(ctx context.Context, branch string, v RestatementVerdict) error {
+func (ax *AbstractionIndex) RecordRestatementVerdict(ctx context.Context, branch string, v RestatementVerdict) error {
 	branchID, err := ax.branchID(ctx, branch)
 	if err != nil {
 		return err
@@ -789,7 +790,7 @@ func (ax *abstractionIndex) RecordRestatementVerdict(ctx context.Context, branch
 }
 
 // RecentRestatementVerdicts returns the last `window` verdicts, newest first.
-func (ax *abstractionIndex) RecentRestatementVerdicts(ctx context.Context, branch string, window int) ([]RestatementVerdict, error) {
+func (ax *AbstractionIndex) RecentRestatementVerdicts(ctx context.Context, branch string, window int) ([]RestatementVerdict, error) {
 	if window <= 0 {
 		return nil, nil
 	}
@@ -831,7 +832,7 @@ func (ax *abstractionIndex) RecentRestatementVerdicts(ctx context.Context, branc
 // content-addressed, so "the judge looked at this and kept both" expires
 // structurally the moment either fact is edited, with no staleness rule to get
 // wrong.
-func (ax *abstractionIndex) KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error) {
+func (ax *AbstractionIndex) KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error) {
 	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT v.a_fact_id, v.b_fact_id
 		   FROM restatement_verdicts v
@@ -865,7 +866,7 @@ func FactIDPairKey(a, b int64) string {
 
 // ProbeSessionsWaited returns how many sessions this branch has waited since it
 // last spent a probe slot. Zero for a branch that has never been defunded.
-func (ax *abstractionIndex) ProbeSessionsWaited(ctx context.Context, branch string) (int, error) {
+func (ax *AbstractionIndex) ProbeSessionsWaited(ctx context.Context, branch string) (int, error) {
 	var n int
 	err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT s.sessions_since_probe
@@ -882,7 +883,7 @@ func (ax *abstractionIndex) ProbeSessionsWaited(ctx context.Context, branch stri
 }
 
 // SetProbeSessionsWaited records the probe counter for this branch.
-func (ax *abstractionIndex) SetProbeSessionsWaited(ctx context.Context, branch string, n int) error {
+func (ax *AbstractionIndex) SetProbeSessionsWaited(ctx context.Context, branch string, n int) error {
 	branchID, err := ax.branchID(ctx, branch)
 	if err != nil {
 		return err
