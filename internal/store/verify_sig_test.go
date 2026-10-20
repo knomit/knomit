@@ -49,7 +49,7 @@ func signed(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig, err := signCommit(s, payload)
+	sig, err := SignCommit(s, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,24 +124,24 @@ func signWithNamespace(t *testing.T, signer ssh.Signer, payload []byte, namespac
 	t.Helper()
 	h := sha512.Sum512(payload)
 	var signedData []byte
-	signedData = append(signedData, sshsigMagic...)
-	signedData = appendSSHString(signedData, []byte(namespace))
-	signedData = appendSSHString(signedData, nil)
-	signedData = appendSSHString(signedData, []byte(sshsigHashAlgo))
-	signedData = appendSSHString(signedData, h[:])
+	signedData = append(signedData, SSHSigMagic...)
+	signedData = AppendSSHString(signedData, []byte(namespace))
+	signedData = AppendSSHString(signedData, nil)
+	signedData = AppendSSHString(signedData, []byte(SSHSigHashAlgo))
+	signedData = AppendSSHString(signedData, h[:])
 	sig, err := signer.Sign(rand.Reader, signedData)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var env []byte
-	env = append(env, sshsigMagic...)
+	env = append(env, SSHSigMagic...)
 	env = append(env, 0, 0, 0, 1)
-	env = appendSSHString(env, signer.PublicKey().Marshal())
-	env = appendSSHString(env, []byte(namespace))
-	env = appendSSHString(env, nil)
-	env = appendSSHString(env, []byte(sshsigHashAlgo))
-	env = appendSSHString(env, ssh.Marshal(sig))
-	return armor(env)
+	env = AppendSSHString(env, signer.PublicKey().Marshal())
+	env = AppendSSHString(env, []byte(namespace))
+	env = AppendSSHString(env, nil)
+	env = AppendSSHString(env, []byte(SSHSigHashAlgo))
+	env = AppendSSHString(env, ssh.Marshal(sig))
+	return Armor(env)
 }
 
 // TestVerifyCommitSignature_StockGitSSHSignature: an operator signs hand
@@ -214,7 +214,7 @@ func TestVerifyCommitSignature_KnomitWritePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(res.CommitHash))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(res.CommitHash))
 	if err != nil {
 		t.Fatal(err)
 	}

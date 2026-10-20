@@ -110,7 +110,7 @@ func (rh *repoHandler) GetExperiment(ctx context.Context, name string) (Experime
 // never completed a boot, reports "" — and reading it as "no previous branch"
 // would refuse every commit on such a database. Same guard verify.go applies
 // to the same value. So the check bites only on a KNOWN, different owner.
-func (rh *repoHandler) checkExperimentParentCurrent(ctx context.Context, exp Experiment) error {
+func (rh *repoHandler) CheckExperimentParentCurrent(ctx context.Context, exp Experiment) error {
 	owner, err := rh.AgentBranchOwner(ctx)
 	if err != nil {
 		return fmt.Errorf("experiment %q: read agent branch owner: %w", exp.Name, err)

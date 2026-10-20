@@ -13,14 +13,14 @@ import (
 func mergeFactNode(t *testing.T, si *searchIndex, path, bh string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	id, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+	id, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
 		map[string]string{"path": path, "blob_hash": bh})
 	require.NoError(t, err)
 	require.NotZero(t, id)
 	// graphSyncFact always sets deleted=false on live nodes; mirror that so the
 	// "deleted != 'true'" filter sees these fixtures as live, exactly like
 	// production-indexed facts.
-	require.NoError(t, graphSetNodeProps(ctx, si.rh.db, id,
+	require.NoError(t, graphSetNodeProps(ctx, si.rh.DB(), id,
 		map[string]string{"deleted": "false"}))
 	return id
 }
@@ -163,7 +163,7 @@ func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
 	require.NoError(t, si.graphInsertEdge(ctx, a, b, EdgeSimilarTo))
 
 	// Soft-delete b.
-	require.NoError(t, graphSetNodeProps(ctx, si.rh.db, b,
+	require.NoError(t, graphSetNodeProps(ctx, si.rh.DB(), b,
 		map[string]string{"deleted": "true"}))
 
 	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md"})

@@ -315,7 +315,7 @@ func TestHost_StateConsensus_NotRefused(t *testing.T) {
 // agent's bytes → red.
 func TestReplay_FactsConsensus_OntoWins(t *testing.T) {
 	r, agent, onto := replayFork(t)
-	ontoCommit, err := object.GetCommit(r.svc.rh.gits, onto)
+	ontoCommit, err := object.GetCommit(r.svc.rh.Storer(), onto)
 	require.NoError(t, err)
 	_, ontoF := r.blob(ontoCommit, "kb/notes/f.md")
 	_, err = r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratConsensus, true)

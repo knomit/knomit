@@ -118,7 +118,7 @@ func TestGetRemote_StatusRowAloneIsNotAnOrigin(t *testing.T) {
 func TestRemotesTable_HasNoConnectionColumns(t *testing.T) {
 	svc := openOriginTestService(t)
 
-	rows, err := svc.rh.db.Query(`SELECT name FROM pragma_table_info('remotes')`)
+	rows, err := svc.rh.DB().Query(`SELECT name FROM pragma_table_info('remotes')`)
 	require.NoError(t, err)
 	defer rows.Close()
 

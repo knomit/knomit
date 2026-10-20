@@ -25,7 +25,7 @@ func (f *rangeFixture) judgeEntry(c *object.Commit) (Refusal, bool) {
 	require.NoError(f.t, err)
 	mainC, err := object.GetCommit(f.fleet.Storer, ref.Hash())
 	require.NoError(f.t, err)
-	raw, err := treeOntology(mainC)
+	raw, err := TreeOntology(mainC)
 	require.NoError(f.t, err)
 	ont, err := fact.ParseOntology(raw)
 	require.NoError(f.t, err)

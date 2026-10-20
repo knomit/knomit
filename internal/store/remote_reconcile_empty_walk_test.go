@@ -37,7 +37,7 @@ func reachableFrom(t *testing.T, svc *Service, branch string, h plumbing.Hash) b
 // rewind reconcile.
 func rewindToCommit(t *testing.T, svc *Service, target plumbing.Hash) AgentReconcileResult {
 	t.Helper()
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), target)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), target)))
 	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	return res
@@ -52,7 +52,7 @@ func rewindToCommit(t *testing.T, svc *Service, target plumbing.Hash) AgentRecon
 func TestReconcileAgentRebase_EmptyWalkDoesNotKeepAScrubbedCommit(t *testing.T) {
 	svc, c1 := sideStore(t)
 	s := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "Secret", "scrub me"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
 	require.NoError(t, svc.rh.writeAgentBase("agent/test", s))
 
 	res := rewindTo(t, svc, c1)
@@ -75,7 +75,7 @@ func TestReconcileAgentRebase_RewindToAnAncestorDoesNotKeepAScrubbedCommit(t *te
 	t.Run("nothing else", func(t *testing.T) {
 		svc, c1 := sideStore(t)
 		s := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "Secret", "scrub me"))
-		require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
+		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
 		require.NoError(t, svc.rh.writeAgentBase("agent/test", s))
 
 		res := rewindToCommit(t, svc, c1)
@@ -87,7 +87,7 @@ func TestReconcileAgentRebase_RewindToAnAncestorDoesNotKeepAScrubbedCommit(t *te
 	t.Run("an own write on top", func(t *testing.T) {
 		svc, c1 := sideStore(t)
 		s := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/secret.md", "Secret", "scrub me"))
-		require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
+		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), s)))
 		require.NoError(t, svc.rh.writeAgentBase("agent/test", s))
 		writeMergeFact(t, svc, "agent/test", "kb/later.md", "Later", "after the push")
 
@@ -135,7 +135,7 @@ func TestReconcileAgentRebase_EmptyBranchTakesTheNewUpstream(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := sideStore(t)
 	m1 := upstreamCommit(t, svc, c1, "kb/m1.md", obsFact("M1"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
 	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode, "setup: the agent branch fast-forwards onto m1")
@@ -159,7 +159,7 @@ func TestReconcileAgentRebase_MergesOnlyDivergenceIsNotPushedAsItStands(t *testi
 	foreign, err := ssh.NewSignerFromKey(priv)
 	require.NoError(t, err)
 	sig := object.Signature{Name: "member", Email: "m@m", When: time.Now()}
-	f, _, err := writeFileToStore(svc.rh.gits, foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
+	f, _, err := WriteFileToStore(svc.rh.Storer(), foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
 	require.NoError(t, err)
 	m := ownMerge(t, svc, "agent/test", f)
 
@@ -183,7 +183,7 @@ func TestReconcileAgentRebase_OwnExperimentMergeOnlySurvivesTheRebuild(t *testin
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/exp.md", "Exp", "experiment knowledge")
 	m1 := upstreamCommit(t, svc, c1, "kb/m1.md", obsFact("M1"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
 	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode)
@@ -213,7 +213,7 @@ func TestReconcileAgentRebase_OwnExperimentMergeOnlySurvivesTheRebuild(t *testin
 func TestReconcileAgentRebase_FleetMemberAfterAFallbackPushesNoMasterCommit(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := sideStore(t)
-	own, err := svc.rh.commitSigner()
+	own, err := svc.rh.CommitSigner()
 	require.NoError(t, err)
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -221,17 +221,17 @@ func TestReconcileAgentRebase_FleetMemberAfterAFallbackPushesNoMasterCommit(t *t
 	require.NoError(t, err)
 	sig := object.Signature{Name: "x", Email: "x@x", When: time.Now()}
 
-	x, _, err := writeFileToStore(svc.rh.gits, own, c1, "kb/x.md", obsFact("X"), "member write", sig, sig)
+	x, _, err := WriteFileToStore(svc.rh.Storer(), own, c1, "kb/x.md", obsFact("X"), "member write", sig, sig)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("agent/test"), x)))
-	h, _, err := writeFileToStore(svc.rh.gits, master, c1, "kb/host.md", obsFact("Host"), "host record", sig, sig)
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("agent/test"), x)))
+	h, _, err := WriteFileToStore(svc.rh.Storer(), master, c1, "kb/host.md", obsFact("Host"), "host record", sig, sig)
 	require.NoError(t, err)
-	both, _, err := writeFileToStore(svc.rh.gits, master, h, "kb/x.md", obsFact("X"), "tree of the merge", sig, sig)
+	both, _, err := WriteFileToStore(svc.rh.Storer(), master, h, "kb/x.md", obsFact("X"), "tree of the merge", sig, sig)
 	require.NoError(t, err)
-	m, err := storeCommit(svc.rh.gits, master, &object.Commit{Author: sig, Committer: sig, Message: "consensus merge",
+	m, err := StoreCommit(svc.rh.Storer(), master, &object.Commit{Author: sig, Committer: sig, Message: "consensus merge",
 		TreeHash: mustCommit(t, svc, both).TreeHash, ParentHashes: []plumbing.Hash{h, x}})
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m)))
 	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode, "setup: the member fast-forwards onto the master's merge")

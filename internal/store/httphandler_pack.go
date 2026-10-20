@@ -159,7 +159,7 @@ func parentsTransferred(rh *repoHandler, h plumbing.Hash, set map[plumbing.Hash]
 	if _, ok := set[h]; !ok {
 		return false
 	}
-	c, err := rh.repo.CommitObject(h)
+	c, err := rh.Repository().CommitObject(h)
 	if err != nil {
 		return false
 	}
@@ -196,7 +196,7 @@ func walkCommits(rh *repoHandler, starts []plumbing.Hash, depth int, stop map[pl
 		if _, done := visited[it.h]; done {
 			continue
 		}
-		c, err := rh.repo.CommitObject(it.h)
+		c, err := rh.Repository().CommitObject(it.h)
 		if err != nil {
 			return nil, nil, fmt.Errorf("walk: commit %s: %w", it.h, err)
 		}
@@ -230,7 +230,7 @@ func walkCommits(rh *repoHandler, starts []plumbing.Hash, depth int, stop map[pl
 // it does catch is ErrMaxTreeDepth and the invalid-tree-path errors, which
 // arrive distinguishable.
 func addTreeObjects(rh *repoHandler, commit plumbing.Hash, out map[plumbing.Hash]struct{}) error {
-	c, err := rh.repo.CommitObject(commit)
+	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return err
 	}
@@ -258,7 +258,7 @@ func addTreeObjects(rh *repoHandler, commit plumbing.Hash, out map[plumbing.Hash
 func presentOnly(rh *repoHandler, haves []plumbing.Hash) []plumbing.Hash {
 	var out []plumbing.Hash
 	for _, h := range haves {
-		if rh.gits.HasEncodedObject(h) == nil {
+		if rh.Storer().HasEncodedObject(h) == nil {
 			out = append(out, h)
 		}
 	}

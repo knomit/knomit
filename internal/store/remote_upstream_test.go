@@ -58,7 +58,7 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	ri := svc.Remote().(*remoteIndex)
 
 	// Simulate configureRemote mid-rewrite by holding the write lock.
-	ri.rh.configMu.Lock()
+	unlockConfig := ri.rh.LockConfigForTest()
 
 	done := make(chan struct{})
 	go func() {
@@ -68,13 +68,13 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 
 	select {
 	case <-done:
-		ri.rh.configMu.Unlock()
+		unlockConfig()
 		t.Fatal("Sync reached the fetch while a config rewrite held configMu — the fetch is not guarded")
 	case <-time.After(200 * time.Millisecond):
 		// Good: Sync is parked waiting for the read lock.
 	}
 
-	ri.rh.configMu.Unlock()
+	unlockConfig()
 	select {
 	case <-done: // resumes; the bogus fetch then fails harmlessly
 	case <-time.After(5 * time.Second):
@@ -92,9 +92,9 @@ func TestConfigureRemote_RefspecUsesConfiguredUpstream(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "master", "agent/test"))
+	require.NoError(t, svc.rh.ConfigureRemote("https://example.com/repo.git", "master", "agent/test"))
 
-	cfg, err := svc.rh.repo.Config()
+	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	rc, ok := cfg.Remotes["origin"]
 	require.True(t, ok, "origin remote must be configured")
@@ -124,12 +124,12 @@ func TestReconcileMain_UsesConfiguredUpstream(t *testing.T) {
 
 	// Move master back to parent so reconcile has work to do.
 	newMasterCommit := writeMergeFact(t, svc, "master", "kb/m.md", "M", "v1")
-	parent, err := svc.rh.repo.CommitObject(plumbing.NewHash(newMasterCommit))
+	parent, err := svc.rh.Repository().CommitObject(plumbing.NewHash(newMasterCommit))
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("master"), parent.ParentHashes[0]),
 	))
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "master"), plumbing.NewHash(newMasterCommit)),
 	))
 
@@ -172,12 +172,12 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 	require.Equal(t, "master", upstream, "InitFromRemote must return the branch it resolved")
 	require.False(t, wasEmpty, "a remote with refs must be reported as the CLONE path, not the empty one")
 
-	got, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("master"))
+	got, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("master"))
 	require.NoError(t, err, "local master must exist after InitFromRemote detection")
 	require.NotEqual(t, plumbing.ZeroHash, got.Hash())
 
 	// Local "main" must NOT have been created.
-	_, mainErr := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	_, mainErr := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("main"))
 	require.ErrorIs(t, mainErr, plumbing.ErrReferenceNotFound,
 		"local main must not be created when upstream is master")
 }
@@ -224,11 +224,11 @@ func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	require.False(t, wasEmpty, "a remote with refs must be reported as the CLONE path, not the empty one")
 
 	// Local "main" must have been created as the upstream.
-	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("main"))
 	require.NoError(t, err, "InitFromRemote must adopt main as upstream when the remote has it")
 
 	// The configured fetch refspec must reference main, not the agent branch.
-	cfg, err := svc.rh.repo.Config()
+	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	rc := cfg.Remotes["origin"]
 	got := make(map[string]bool, len(rc.Fetch))
@@ -284,19 +284,19 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 	require.Equal(t, "main", upstream)
 
 	// Local main exists and equals origin/main.
-	local, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	local, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("main"))
 	require.NoError(t, err)
-	remote, err := svc.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", "main"))
+	remote, err := svc.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", "main"))
 	require.NoError(t, err)
 	require.Equal(t, remote.Hash(), local.Hash())
 
 	// HEAD points at main.
-	head, err := svc.rh.gits.Reference(plumbing.HEAD)
+	head, err := svc.rh.Storer().Reference(plumbing.HEAD)
 	require.NoError(t, err)
 	require.Equal(t, plumbing.NewBranchReferenceName("main"), head.Target())
 
 	// No agent ref and no watermark of any kind.
-	iter, err := svc.rh.gits.IterReferences()
+	iter, err := svc.rh.Storer().IterReferences()
 	require.NoError(t, err)
 	require.NoError(t, iter.ForEach(func(r *plumbing.Reference) error {
 		n := r.Name().String()
@@ -306,7 +306,7 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 	}))
 
 	// One fetch refspec.
-	cfg, err := svc.rh.repo.Config()
+	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	require.Equal(t, []gogitconfig.RefSpec{"+refs/heads/main:refs/remotes/origin/main"}, cfg.Remotes["origin"].Fetch)
 
@@ -321,19 +321,19 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 	// subscription whose commit log never populated would still look healthy.
 	ctx := context.Background()
 	var branchID int64
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT id FROM branches WHERE name = ?`, "main").Scan(&branchID))
 
 	seed := local.Hash().String()
 	var onBranch int
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT count(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
 		branchID, seed).Scan(&onBranch))
 	require.Equal(t, 1, onBranch, "the seed commit must be mapped onto the followed branch")
 
 	// commit_log is keyed (commit_hash, path), not by branch, so name the commit.
 	var logged int
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT count(*) FROM commit_log WHERE commit_hash = ?`, seed).Scan(&logged))
 	require.Greater(t, logged, 0, "the seed commit must be in commit_log")
 }
@@ -374,6 +374,6 @@ func TestInitSubscription_ResolvesRemoteHEADWhenNoMain(t *testing.T) {
 	upstream, err := svc.InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "master", upstream)
-	_, mainErr := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	_, mainErr := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("main"))
 	require.ErrorIs(t, mainErr, plumbing.ErrReferenceNotFound)
 }

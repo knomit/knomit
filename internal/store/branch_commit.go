@@ -22,7 +22,7 @@ import (
 // the branch it lands on: this instance's persisted agent id (SetAgentID),
 // for an agent branch and for an experiment forked from it alike (#394). It
 // is never derived from the branch name (D18).
-func (rh *repoHandler) commitSigs(ctx context.Context, branch, operation string) (author, committer object.Signature, err error) {
+func (rh *repoHandler) CommitSigs(ctx context.Context, branch, operation string) (author, committer object.Signature, err error) {
 	agentID, err := rh.commitAgentID(ctx, branch)
 	if err != nil {
 		return object.Signature{}, object.Signature{}, err
@@ -61,7 +61,7 @@ func (rh *repoHandler) commitSigs(ctx context.Context, branch, operation string)
 func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string, error) {
 	name, isExp := ExperimentNameOf(branch)
 	if !isExp {
-		return rh.ownAgentID(branch)
+		return rh.OwnAgentID(branch)
 	}
 	exp, ok, err := rh.GetExperiment(ctx, name)
 	if err != nil {
@@ -73,10 +73,10 @@ func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string
 	if exp.Parent == "" || IsExperimentBranch(exp.Parent) {
 		return "", fmt.Errorf("author of %s: recorded parent %q is not an agent branch", branch, exp.Parent)
 	}
-	if err := rh.checkExperimentParentCurrent(ctx, exp); err != nil {
+	if err := rh.CheckExperimentParentCurrent(ctx, exp); err != nil {
 		return "", fmt.Errorf("author of %s: %w", branch, err)
 	}
-	return rh.ownAgentID(exp.Parent)
+	return rh.OwnAgentID(exp.Parent)
 }
 
 // notifyCommit runs the post-commit side effects for a new commit on branch:
@@ -114,7 +114,7 @@ func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string
 // it: we are inside the branch lock, so returning early would not release
 // anything sooner, and callers that want to stop a long run still observe
 // their own ctx between operations.
-func (rh *repoHandler) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) error {
+func (rh *repoHandler) NotifyCommit(ctx context.Context, branch string, hash plumbing.Hash) error {
 	ctx = context.WithoutCancel(ctx)
 	if err := rh.AppendCommitLog(ctx, branch, hash.String()); err != nil {
 		return fmt.Errorf("notifyCommit: AppendCommitLog(%s): %w", branch, err)
@@ -145,8 +145,8 @@ func (rh *repoHandler) notifyCommit(ctx context.Context, branch string, hash plu
 //
 // First-parent (never wall-clock, never a merge parent) so a repo with a
 // grafted or merged history still resolves deterministically.
-func (rh *repoHandler) rootCommit(ctx context.Context, branch string) (string, error) {
-	head, err := rh.resolveRef(ctx, branch)
+func (rh *repoHandler) RootCommit(ctx context.Context, branch string) (string, error) {
+	head, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("rootCommit: resolve %q: %w", branch, err)
 	}

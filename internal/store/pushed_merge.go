@@ -57,11 +57,11 @@ func (e *PrivatePathMergeError) Is(target error) bool { return target == ErrPriv
 // privatePathsChanged lists, sorted, the private paths whose content differs
 // between two trees.
 func (rh *repoHandler) privatePathsChanged(from, to plumbing.Hash) ([]string, error) {
-	ft, err := object.GetTree(rh.gits, from)
+	ft, err := object.GetTree(rh.Storer(), from)
 	if err != nil {
 		return nil, err
 	}
-	tt, err := object.GetTree(rh.gits, to)
+	tt, err := object.GetTree(rh.Storer(), to)
 	if err != nil {
 		return nil, err
 	}
@@ -103,14 +103,14 @@ func (e *BranchMovedError) Is(target error) bool { return target == ErrBranchMov
 // rule must not stand in for it (each is pinned by its own test).
 func (rh *repoHandler) onlyMergeCommits(src, dst plumbing.Hash) (bool, error) {
 	inDst := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
+	if err := WalkHistory(rh.Storer(), dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
 		return false, err
 	}
 	if inDst[src] {
 		return false, nil
 	}
 	only, n := true, 0
-	if err := walkHistory(rh.gits, src, inDst, func(c *object.Commit) {
+	if err := WalkHistory(rh.Storer(), src, inDst, func(c *object.Commit) {
 		n++
 		if len(c.ParentHashes) < 2 {
 			only = false

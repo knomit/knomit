@@ -334,7 +334,7 @@ var _ TriggerIndex = (*repoHandler)(nil)
 // shadowing directory cannot fall through (the same rule as verify_fold's
 // settingsAt).
 func (rh *repoHandler) OntologyAtCommit(ctx context.Context, commit plumbing.Hash) (string, string, []byte, error) {
-	c, err := rh.repo.CommitObject(commit)
+	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("triggers: ontology at %s: %w", commit, err)
 	}
@@ -392,7 +392,7 @@ func (rh *repoHandler) GuidanceAt(ctx context.Context, commit plumbing.Hash, fil
 	if !strings.HasPrefix(file, fact.GuidanceDir+"/") || path.Clean(file) != file || slices.Contains(strings.Split(file, "/"), "..") {
 		return "", nil, fmt.Errorf("%w: %q is not under %s/", ErrGuidanceUnusable, file, fact.GuidanceDir)
 	}
-	c, err := rh.repo.CommitObject(commit)
+	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return "", nil, fmt.Errorf("guidance: commit %s: %w", commit, err)
 	}
@@ -435,7 +435,7 @@ func (rh *repoHandler) GuidanceAt(ctx context.Context, commit plumbing.Hash, fil
 // name; user ruling 2026-10-08). A directory, a submodule or an unreadable
 // blob is an error, never "absent". An executable (+x) file is a file.
 func (rh *repoHandler) privateFileAt(commit plumbing.Hash, what, p string, notFound error) (string, []byte, error) {
-	c, err := rh.repo.CommitObject(commit)
+	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return "", nil, fmt.Errorf("triggers: %s at %s: %w", what, commit, err)
 	}
@@ -494,7 +494,7 @@ func (tt *triggerTrees) commit(h plumbing.Hash) (*object.Commit, error) {
 	if c, ok := tt.commits[h]; ok {
 		return c, nil
 	}
-	c, err := tt.rh.repo.CommitObject(h)
+	c, err := tt.rh.Repository().CommitObject(h)
 	if err != nil {
 		return nil, fmt.Errorf("triggers: commit %s: %w", h, err)
 	}
@@ -623,7 +623,7 @@ func (rh *repoHandler) Toucher(ctx context.Context, head plumbing.Hash, path str
 
 // CommitInfo implements TriggerIndex.
 func (rh *repoHandler) CommitInfo(ctx context.Context, hash plumbing.Hash) (CommitInfo, error) {
-	c, err := rh.repo.CommitObject(hash)
+	c, err := rh.Repository().CommitObject(hash)
 	if err != nil {
 		return CommitInfo{}, fmt.Errorf("triggers: commit %s: %w", hash, err)
 	}
@@ -638,7 +638,7 @@ func (rh *repoHandler) CommitInfo(ctx context.Context, hash plumbing.Hash) (Comm
 
 // CommitSignerOf implements TriggerIndex.
 func (rh *repoHandler) CommitSignerOf(ctx context.Context, hash plumbing.Hash) (CommitSigner, error) {
-	c, err := rh.repo.CommitObject(hash)
+	c, err := rh.Repository().CommitObject(hash)
 	if err != nil {
 		return CommitSigner{}, fmt.Errorf("triggers: commit %s: %w", hash, err)
 	}
@@ -658,11 +658,11 @@ func (rh *repoHandler) IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool
 	if a == plumbing.ZeroHash || b == plumbing.ZeroHash {
 		return false, nil
 	}
-	ac, err := object.GetCommit(rh.gits, a)
+	ac, err := object.GetCommit(rh.Storer(), a)
 	if err != nil {
 		return false, fmt.Errorf("triggers: commit %s: %w", a, err)
 	}
-	bc, err := object.GetCommit(rh.gits, b)
+	bc, err := object.GetCommit(rh.Storer(), b)
 	if err != nil {
 		return false, fmt.Errorf("triggers: commit %s: %w", b, err)
 	}
@@ -671,7 +671,7 @@ func (rh *repoHandler) IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool
 
 // UpstreamTip implements TriggerIndex.
 func (rh *repoHandler) UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash, error) {
-	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(upstream))
+	ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(upstream))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return plumbing.ZeroHash, nil
 	}
@@ -686,7 +686,7 @@ func (rh *repoHandler) UpstreamTip(ctx context.Context, upstream string) (plumbi
 // did that, and reachability from main IS acceptance.
 func (rh *repoHandler) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error) {
 	set := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, tip, nil, func(c *object.Commit) { set[c.Hash] = true }); err != nil {
+	if err := WalkHistory(rh.Storer(), tip, nil, func(c *object.Commit) { set[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("triggers: walk from %s: %w", tip, err)
 	}
 	return set, nil
@@ -694,7 +694,7 @@ func (rh *repoHandler) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[
 
 // TriggerWatermarks implements TriggerIndex.
 func (rh *repoHandler) TriggerWatermarks(ctx context.Context, branch string) (map[string]string, error) {
-	rows, err := conn(ctx, rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, rh.DB()).QueryContext(ctx,
 		`SELECT trigger, commit_hash FROM trigger_watermarks WHERE branch = ?`, branch)
 	if err != nil {
 		return nil, fmt.Errorf("TriggerWatermarks: %w", err)
@@ -740,7 +740,7 @@ func (rh *repoHandler) RecordTriggerRun(ctx context.Context, run TriggerRun) (in
 // process-wide write lock (_txlock=immediate) is taken once, for a few
 // multi-row inserts, never across `if` or emit.
 func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, error) {
-	tx, err := rh.db.BeginTx(ctx, nil)
+	tx, err := rh.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("RecordTriggerRun: begin: %w", err)
 	}
@@ -798,7 +798,7 @@ func (rh *repoHandler) RecordTriggerResults(ctx context.Context, rows []TriggerF
 	if len(rows) == 0 {
 		return nil
 	}
-	tx, err := rh.db.BeginTx(ctx, nil)
+	tx, err := rh.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("RecordTriggerResults: begin: %w", err)
 	}
@@ -842,7 +842,7 @@ func boolInt(b bool) int {
 
 // AdvanceTriggerWatermarks implements TriggerIndex (tx2).
 func (rh *repoHandler) AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error {
-	tx, err := rh.db.BeginTx(ctx, nil)
+	tx, err := rh.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("AdvanceTriggerWatermarks: begin: %w", err)
 	}
@@ -942,7 +942,7 @@ func (rh *repoHandler) TriggerFiresByRun(ctx context.Context, branch, id string)
 }
 
 func (rh *repoHandler) queryTriggerFires(ctx context.Context, who, query string, args ...any) ([]TriggerFire, error) {
-	rows, err := conn(ctx, rh.db).QueryContext(ctx, query, args...)
+	rows, err := conn(ctx, rh.DB()).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", who, err)
 	}
@@ -981,7 +981,7 @@ func UTCStamp(unix int64) string {
 // with none due, ~5 ms with 5,000, ~22 ms with 25,000 (proposal, Apple
 // M-series). Rows are ordered by path so a run's work is deterministic.
 func (rh *repoHandler) DueCandidates(ctx context.Context, branch string, nowUnix int64) ([]DueCandidate, error) {
-	branchID, err := rh.branchID(ctx, branch)
+	branchID, err := rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DueCandidates: %w", err)
 	}
@@ -992,7 +992,7 @@ func (rh *repoHandler) DueCandidates(ctx context.Context, branch string, nowUnix
 	// (measured: ~0.5 ms per 10,000 live facts). Driven from the covering
 	// index fact_expires_at the query is linear in the PAST-DATED rows only,
 	// and an idle sweep is microseconds.
-	rows, err := conn(ctx, rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, rh.DB()).QueryContext(ctx,
 		`SELECT bf.path, fe.expires_at
 		   FROM fact_expires fe
 		   CROSS JOIN branch_facts bf ON bf.fact_id = fe.fact_id
@@ -1016,7 +1016,7 @@ func (rh *repoHandler) DueCandidates(ctx context.Context, branch string, nowUnix
 
 // DueMarks implements TriggerIndex.
 func (rh *repoHandler) DueMarks(ctx context.Context, branch string) (map[DueKey]int64, error) {
-	rows, err := conn(ctx, rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, rh.DB()).QueryContext(ctx,
 		`SELECT trigger, path, expires_at FROM trigger_due_fires WHERE branch = ?`, branch)
 	if err != nil {
 		return nil, fmt.Errorf("DueMarks: %w", err)
@@ -1039,7 +1039,7 @@ func (rh *repoHandler) DueMarks(ctx context.Context, branch string) (map[DueKey]
 // fallback), or "" when it has none. `change.source` is `local` exactly when
 // the firing commit's verified signer carries this fingerprint.
 func (rh *repoHandler) signerFingerprint() string {
-	signer, err := rh.commitSigner()
+	signer, err := rh.CommitSigner()
 	if err != nil {
 		return ""
 	}

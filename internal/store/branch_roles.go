@@ -17,7 +17,7 @@ const generatedRefPrefix = "okf/"
 
 // isGeneratedRef reports whether a BRANCH NAME (no refs/heads/ prefix) is
 // export residue.
-func isGeneratedRef(branch string) bool {
+func IsGeneratedRef(branch string) bool {
 	return strings.HasPrefix(branch, generatedRefPrefix)
 }
 
@@ -31,7 +31,7 @@ var ErrNoConsensusBranch = errors.New("no consensus branch: none was named and n
 // generated okf branch. Such a branch is never adopted as a consensus branch
 // on its own authority, whatever a remote's HEAD says.
 func IsRoleBranch(branch string) bool {
-	return strings.HasPrefix(branch, "agent/") || strings.HasPrefix(branch, "exp/") || isGeneratedRef(branch)
+	return strings.HasPrefix(branch, "agent/") || strings.HasPrefix(branch, "exp/") || IsGeneratedRef(branch)
 }
 
 // ChooseConsensusBranch is the consensus-branch rule for a repository that has

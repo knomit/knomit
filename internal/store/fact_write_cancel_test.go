@@ -40,7 +40,7 @@ func TestWriteFact_CancelledContext_KeepsGitAndIndexConsistent(t *testing.T) {
 	require.NotEmpty(t, got.Content)
 
 	var n int
-	require.NoError(t, svc.rh.db.QueryRowContext(context.Background(),
+	require.NoError(t, svc.rh.DB().QueryRowContext(context.Background(),
 		`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ?`, res.CommitHash).Scan(&n))
 	require.Equal(t, 1, n, "commit %s advanced the git ref but never reached commit_log", res.CommitHash)
 }

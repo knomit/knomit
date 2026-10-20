@@ -29,7 +29,7 @@ func newGraphTestIndex(t *testing.T) (*searchIndex, context.Context) {
 func countNodesWithLabel(t *testing.T, si *searchIndex, ctx context.Context, label string) int {
 	t.Helper()
 	var n int
-	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM node_labels WHERE label = ?`, label).Scan(&n))
 	return n
 }
@@ -37,7 +37,7 @@ func countNodesWithLabel(t *testing.T, si *searchIndex, ctx context.Context, lab
 func countEdgesOfType(t *testing.T, si *searchIndex, ctx context.Context, edgeType string) int {
 	t.Helper()
 	var n int
-	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, edgeType).Scan(&n))
 	return n
 }
@@ -47,7 +47,7 @@ func countEdgesOfType(t *testing.T, si *searchIndex, ctx context.Context, edgeTy
 // create exactly one node — otherwise every Rebuild duplicates the graph.
 func TestGraphMergeNode_IsIdempotentByIdentity(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	id1, err := graphMergeNode(ctx, db, NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "deadbeef"})
@@ -80,7 +80,7 @@ func TestGraphMergeNode_IsIdempotentByIdentity(t *testing.T) {
 func TestGraphMergeNode_IdentityPropsAreReadable(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 
-	id, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+	id, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "deadbeef"})
 	require.NoError(t, err)
 
@@ -91,7 +91,7 @@ func TestGraphMergeNode_IdentityPropsAreReadable(t *testing.T) {
 
 func TestGraphSetNodeProps_InsertsAndOverwrites(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	id, err := graphMergeNode(ctx, db, NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "deadbeef"})
@@ -125,7 +125,7 @@ func TestGraphSetNodeProps_InsertsAndOverwrites(t *testing.T) {
 
 func TestGraphMergeEdge_IsIdempotent(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestGraphMergeEdge_IsIdempotent(t *testing.T) {
 // the race is gone.
 func TestGraphMergeEdge_IsAtomicUnderConcurrency(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
@@ -191,7 +191,7 @@ func TestGraphMergeEdge_IsAtomicUnderConcurrency(t *testing.T) {
 
 func TestGraphDeleteEdges_ByDirectionAndType(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestGraphDeleteEdges_ByDirectionAndType(t *testing.T) {
 // edges in both directions.
 func TestGraphDetachDeleteNode_CascadesEdgesAndProps(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
@@ -263,16 +263,16 @@ func TestGraphSimilarToNeighbours_ReadsBothOrientations(t *testing.T) {
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
 
 	// One DIRECTED edge, a → b. Nothing points back at a.
-	require.NoError(t, graphMergeEdge(ctx, si.rh.db, a, b, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, si.rh.DB(), a, b, EdgeSimilarTo))
 
 	// Forward: anchored on the SOURCE. A directed-only reader also passes this.
-	fwd, err := graphSimilarToNeighbours(ctx, si.rh.db, []string{"kb/a.md"}, false)
+	fwd, err := graphSimilarToNeighbours(ctx, si.rh.DB(), []string{"kb/a.md"}, false)
 	require.NoError(t, err)
 	require.Equal(t, [][2]string{{"kb/a.md", "kb/b.md"}}, fwd)
 
 	// Reverse: anchored on the TARGET only. This is the assertion that fails
 	// if the reader stops unioning both orientations.
-	rev, err := graphSimilarToNeighbours(ctx, si.rh.db, []string{"kb/b.md"}, false)
+	rev, err := graphSimilarToNeighbours(ctx, si.rh.DB(), []string{"kb/b.md"}, false)
 	require.NoError(t, err)
 	require.Equal(t, [][2]string{{"kb/b.md", "kb/a.md"}}, rev,
 		"a SIMILAR_TO edge must be visible from its target, not just its source")
@@ -288,12 +288,12 @@ func TestGraphSimilarToNeighbours_FiltersDeletedEndpoints(t *testing.T) {
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
-	require.NoError(t, graphMergeEdge(ctx, si.rh.db, a, b, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, si.rh.DB(), a, b, EdgeSimilarTo))
 
 	// Soft-delete the FAR endpoint (b), anchored on a. Excluded either way.
-	require.NoError(t, graphSetNodeProps(ctx, si.rh.db, b, map[string]string{"deleted": "true"}))
+	require.NoError(t, graphSetNodeProps(ctx, si.rh.DB(), b, map[string]string{"deleted": "true"}))
 	for _, requireAnchorLive := range []bool{false, true} {
-		got, err := graphSimilarToNeighbours(ctx, si.rh.db, []string{"kb/a.md"}, requireAnchorLive)
+		got, err := graphSimilarToNeighbours(ctx, si.rh.DB(), []string{"kb/a.md"}, requireAnchorLive)
 		require.NoError(t, err)
 		require.Empty(t, got, "a soft-deleted far endpoint is always excluded")
 	}
@@ -301,15 +301,15 @@ func TestGraphSimilarToNeighbours_FiltersDeletedEndpoints(t *testing.T) {
 	// Now the mirror: b live again, a soft-deleted, and anchor on a — so the
 	// deleted node is the ANCHOR and the live one is the far endpoint. This is
 	// the only configuration where requireAnchorLive changes the answer.
-	require.NoError(t, graphSetNodeProps(ctx, si.rh.db, b, map[string]string{"deleted": "false"}))
-	require.NoError(t, graphSetNodeProps(ctx, si.rh.db, a, map[string]string{"deleted": "true"}))
+	require.NoError(t, graphSetNodeProps(ctx, si.rh.DB(), b, map[string]string{"deleted": "false"}))
+	require.NoError(t, graphSetNodeProps(ctx, si.rh.DB(), a, map[string]string{"deleted": "true"}))
 
-	kept, err := graphSimilarToNeighbours(ctx, si.rh.db, []string{"kb/a.md"}, false)
+	kept, err := graphSimilarToNeighbours(ctx, si.rh.DB(), []string{"kb/a.md"}, false)
 	require.NoError(t, err)
 	require.Equal(t, [][2]string{{"kb/a.md", "kb/b.md"}}, kept,
 		"requireAnchorLive=false must not filter a soft-deleted anchor (the cohesion reader)")
 
-	dropped, err := graphSimilarToNeighbours(ctx, si.rh.db, []string{"kb/a.md"}, true)
+	dropped, err := graphSimilarToNeighbours(ctx, si.rh.DB(), []string{"kb/a.md"}, true)
 	require.NoError(t, err)
 	require.Empty(t, dropped,
 		"requireAnchorLive=true excludes a soft-deleted anchor (SubgraphEdges)")
@@ -322,15 +322,15 @@ func TestGraphSimilarToNeighbours_TreatsMissingDeletedPropAsLive(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 
 	// No `deleted` property on either node.
-	a, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+	a, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "aaaa"})
 	require.NoError(t, err)
-	b, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+	b, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
 		map[string]string{"path": "kb/b.md", "blob_hash": "bbbb"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, si.rh.db, a, b, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, si.rh.DB(), a, b, EdgeSimilarTo))
 
-	got, err := graphSimilarToNeighbours(ctx, si.rh.db, []string{"kb/a.md"}, true)
+	got, err := graphSimilarToNeighbours(ctx, si.rh.DB(), []string{"kb/a.md"}, true)
 	require.NoError(t, err)
 	require.Equal(t, [][2]string{{"kb/a.md", "kb/b.md"}}, got,
 		"an absent `deleted` property means live")
@@ -345,7 +345,7 @@ func TestGraphSimilarToNeighbours_TreatsMissingDeletedPropAsLive(t *testing.T) {
 // means GC starts deleting rows it previously left behind: worth pinning.
 func TestGCOrphanedGraphNodes_CollectsEntityOrphans(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	fact := mergeFactNode(t, si, "kb/a.md", "aaaa")
 
@@ -381,7 +381,7 @@ func TestGCOrphanedGraphNodes_CollectsEntityOrphans(t *testing.T) {
 // not a Fact does not save an orphan.
 func TestGCOrphanedGraphNodes_RequiresIncomingEdgeFromFact(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	// A Domain node pointed at by another Domain, not by a Fact.
 	parent, err := graphMergeNode(ctx, db, NodeDomain, map[string]string{"path": "tech"})
@@ -401,7 +401,7 @@ func TestGCOrphanedGraphNodes_RequiresIncomingEdgeFromFact(t *testing.T) {
 // with a real IN_DOMAIN edge from a Fact survives GC.
 func TestGCOrphanedGraphNodes_KeepsReferencedDomain(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	fact := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	dom, err := graphMergeNode(ctx, db, NodeDomain, map[string]string{"path": "tech/go"})
@@ -417,7 +417,7 @@ func TestGCOrphanedGraphNodes_KeepsReferencedDomain(t *testing.T) {
 // over-reach: with every node referenced, GC must delete nothing at all.
 func TestGCOrphanedGraphNodes_NoOrphansIsANoOp(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	fact := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	ent, err := graphMergeNode(ctx, db, NodeEntity, map[string]string{"name": "kept"})
@@ -438,7 +438,7 @@ func TestGCOrphanedGraphNodes_NoOrphansIsANoOp(t *testing.T) {
 // a deliberate multi-edge, one row per ref-event.
 func TestEdges_MergeIdentityIndexIsEnforced(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.db
+	db := si.rh.DB()
 
 	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)

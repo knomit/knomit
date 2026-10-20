@@ -47,7 +47,7 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 		return AgentReconcileResult{}, fmt.Errorf("MergePushed: unknown side %q", side)
 	}
 	rh := s.rh
-	unlock := rh.lockBranch(dst)
+	unlock := rh.LockBranch(dst)
 	defer unlock()
 	o := mergeOpts{srcTip: srcTip, record: true, side: side, guardPrivate: true, validateFacts: true}
 	strategy := StrategyRefuse
@@ -97,7 +97,7 @@ func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip pl
 		return AgentReconcileResult{}, fmt.Errorf("MergeConsensus: the tip of %s is required", src)
 	}
 	rh := s.rh
-	unlock := rh.lockBranch(dst)
+	unlock := rh.LockBranch(dst)
 	defer unlock()
 	o := mergeOpts{srcTip: srcTip, record: true, skipMergeOnly: true, guardPrivate: true, validateFacts: true}
 	strategy := s.hostConflictStrategy(ctx, &o)
@@ -120,15 +120,15 @@ func (s *Service) OntologyAt(ctx context.Context, branch string) ([]byte, error)
 // tip has none). The repo's open (repos.loadOntology) and its create-time
 // check (branchHasOntology) read the ontology through it.
 func (s *Service) OntologyFileAt(ctx context.Context, branch string) (string, []byte, error) {
-	h, err := s.rh.resolveRef(ctx, branch)
+	h, err := s.rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", nil, err
 	}
-	c, err := object.GetCommit(s.rh.gits, h)
+	c, err := object.GetCommit(s.rh.Storer(), h)
 	if err != nil {
 		return "", nil, fmt.Errorf("OntologyAt %s: %w", branch, err)
 	}
-	return treeOntologyFile(c)
+	return TreeOntologyFile(c)
 }
 
 // PushedBranches reports each named branch against agentBranch. The caller
@@ -136,16 +136,16 @@ func (s *Service) OntologyFileAt(ctx context.Context, branch string) (string, []
 // this only reads. The agent branch's history is walked once for all of them.
 func (s *Service) PushedBranches(ctx context.Context, names []string, agentBranch, ontologyRoot string) ([]PushedBranchInfo, error) {
 	rh := s.rh
-	agentRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(agentBranch))
+	agentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch))
 	if err != nil {
 		return nil, fmt.Errorf("pushed branches: agent branch %q: %w", agentBranch, err)
 	}
-	agentCommit, err := object.GetCommit(rh.gits, agentRef.Hash())
+	agentCommit, err := object.GetCommit(rh.Storer(), agentRef.Hash())
 	if err != nil {
 		return nil, fmt.Errorf("pushed branches: agent tip: %w", err)
 	}
 	inAgent := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, agentRef.Hash(), nil, func(c *object.Commit) { inAgent[c.Hash] = true }); err != nil {
+	if err := WalkHistory(rh.Storer(), agentRef.Hash(), nil, func(c *object.Commit) { inAgent[c.Hash] = true }); err != nil {
 		return nil, err
 	}
 	prefix := strings.TrimSuffix(ontologyRoot, "/") + "/"
@@ -155,11 +155,11 @@ func (s *Service) PushedBranches(ctx context.Context, names []string, agentBranc
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(name))
+		ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(name))
 		if err != nil {
 			return nil, fmt.Errorf("pushed branches: %q: %w", name, err)
 		}
-		tip, err := object.GetCommit(rh.gits, ref.Hash())
+		tip, err := object.GetCommit(rh.Storer(), ref.Hash())
 		if err != nil {
 			return nil, fmt.Errorf("pushed branches: %q tip: %w", name, err)
 		}
@@ -168,7 +168,7 @@ func (s *Service) PushedBranches(ctx context.Context, names []string, agentBranc
 			TipTime: tip.Committer.When, TipAuthor: tip.Author.Name,
 		}
 		if !inAgent[tip.Hash] {
-			if err := walkHistory(rh.gits, tip.Hash, inAgent, func(*object.Commit) { info.ToMerge++ }); err != nil {
+			if err := WalkHistory(rh.Storer(), tip.Hash, inAgent, func(*object.Commit) { info.ToMerge++ }); err != nil {
 				return nil, err
 			}
 		}
@@ -216,7 +216,7 @@ func (s *Service) Experiments() ExperimentIndex { return s.rh }
 // notifyCommit, which is what keeps "activity" meaning exactly "a commit
 // landed here".
 func (s *Service) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
-	res, err := conn(ctx, s.rh.db).ExecContext(ctx,
+	res, err := conn(ctx, s.rh.DB()).ExecContext(ctx,
 		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`, when.Unix(), name)
 	if err != nil {
 		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)

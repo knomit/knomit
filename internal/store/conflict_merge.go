@@ -243,7 +243,7 @@ func (rh *repoHandler) factMergeResolutions(
 		switch {
 		case c.src == c.dst:
 			res[p] = Resolution{Side: ResolveDst}
-		case !rh.isFactPath(p):
+		case !rh.IsFactPath(p):
 			stateRule(c, "not-a-fact")
 		case fm.policy.facts == fact.ConflictsConsensus:
 			takeConsensus(c, "")
@@ -413,7 +413,7 @@ func settledFrom(lines []string) []SettledPath {
 }
 
 func (rh *repoHandler) blobBytes(h plumbing.Hash) ([]byte, error) {
-	blob, err := object.GetBlob(rh.gits, h)
+	blob, err := object.GetBlob(rh.Storer(), h)
 	if err != nil {
 		return nil, fmt.Errorf("blob %s: %w", h, err)
 	}
@@ -436,19 +436,19 @@ var conflictsLogged sync.Map
 // instance reads it — the tip of the CONSENSUS branch — so the caller passes
 // that branch, never a hardcoded name.
 func (rh *repoHandler) conflictsStrategy(ctx context.Context, branch string) (ConflictStrategy, bool) {
-	h, err := rh.resolveRef(ctx, branch)
+	h, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		if !errors.Is(err, ErrBranchNotFound) {
 			log.Warn().Err(err).Str("branch", branch).Msg("conflicts: cannot resolve the consensus branch; read as off")
 		}
 		return "", false
 	}
-	c, err := object.GetCommit(rh.gits, h)
+	c, err := object.GetCommit(rh.Storer(), h)
 	if err != nil {
 		log.Warn().Err(err).Str("branch", branch).Msg("conflicts: cannot read the consensus tip; read as off")
 		return "", false
 	}
-	data, err := treeOntology(c)
+	data, err := TreeOntology(c)
 	if err != nil {
 		// A symlinked (fact.ErrSymlinkNotFollowed) or unreadable ontology:
 		// off, like its neighbours, but never without a log line.
@@ -491,7 +491,7 @@ func appendTrailerLines(message string, lines []string) string {
 		last = msg[i+2:]
 	}
 	sep := "\n\n"
-	if last != msg && isTrailerParagraph(last) {
+	if last != msg && IsTrailerParagraph(last) {
 		sep = "\n"
 	}
 	return msg + sep + strings.Join(sorted, "\n") + "\n"

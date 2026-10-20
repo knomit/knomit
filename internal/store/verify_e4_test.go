@@ -92,7 +92,7 @@ func (o *e4Origin) cloneErr(agentBranch string, signer ssh.Signer, ownKeys []ssh
 func requireNoLocalBranches(t *testing.T, svc *Service, names ...string) {
 	t.Helper()
 	for _, n := range names {
-		_, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(n))
+		_, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(n))
 		require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "a refused create must not create %s", n)
 	}
 }
@@ -131,7 +131,7 @@ func TestE4(t *testing.T) {
 			svc, err := o.cloneErr(branch, s, nil)
 			if c.adopt {
 				require.NoError(t, err)
-				ref, rerr := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+				ref, rerr := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 				require.NoError(t, rerr)
 				require.Equal(t, own.Hash, ref.Hash(), "the own-signed branch must be adopted")
 				return

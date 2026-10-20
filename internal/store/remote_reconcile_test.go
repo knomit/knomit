@@ -18,9 +18,9 @@ func TestConfigureRemote_WritesTwoRefspecs(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
+	require.NoError(t, svc.rh.ConfigureRemote("https://example.com/repo.git", "main", "agent/test"))
 
-	cfg, err := svc.rh.repo.Config()
+	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	rc, ok := cfg.Remotes["origin"]
 	require.True(t, ok, "origin remote must be configured")
@@ -44,10 +44,10 @@ func TestConfigureRemote_IsIdempotent(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
+	require.NoError(t, svc.rh.ConfigureRemote("https://example.com/repo.git", "main", "agent/test"))
+	require.NoError(t, svc.rh.ConfigureRemote("https://example.com/repo.git", "main", "agent/test"))
 
-	cfg, err := svc.rh.repo.Config()
+	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	rc, ok := cfg.Remotes["origin"]
 	require.True(t, ok, "origin remote must be configured")
@@ -69,7 +69,7 @@ func TestReadAgentBase_MissingIsReferenceNotFound(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// InitRepo seeds the watermark; clear it to model the missing case.
-	require.NoError(t, svc.rh.gits.RemoveReference(agentBaseRefName("agent/test")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(agentBaseRefName("agent/test")))
 
 	_, err = svc.rh.readAgentBase("agent/test")
 	require.Error(t, err)
@@ -107,7 +107,7 @@ func TestInitRepo_SeedsAgentWatermark(t *testing.T) {
 
 func mustHeadHash(t *testing.T, svc *Service, branch string) plumbing.Hash {
 	t.Helper()
-	ref, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	require.NoError(t, err)
 	return ref.Hash()
 }
@@ -222,7 +222,7 @@ func TestUnpushedCommits_SkipsMergeCommits(t *testing.T) {
 	mergeHash := plumbing.NewHash(mergeRes.NewTip)
 
 	// Sanity: the merge commit has two parents (agent prior, main).
-	mergeCommit, err := svc.rh.repo.CommitObject(mergeHash)
+	mergeCommit, err := svc.rh.Repository().CommitObject(mergeHash)
 	require.NoError(t, err)
 	require.Equal(t, 2, mergeCommit.NumParents(), "merge commit must have two parents")
 	require.Equal(t, preMergeAgent, mergeCommit.ParentHashes[0])
@@ -253,8 +253,8 @@ func TestUnpushedCommits_SkipsMergeCommits(t *testing.T) {
 // root, so MergeBase against it returns empty.
 func makeDisjointRoot(t *testing.T, svc *Service, path, content string) plumbing.Hash {
 	t.Helper()
-	hash, _, err := writeFileToStore(
-		svc.rh.gits, nil, plumbing.ZeroHash, path, content,
+	hash, _, err := WriteFileToStore(
+		svc.rh.Storer(), nil, plumbing.ZeroHash, path, content,
 		"disjoint root",
 		object.Signature{Name: "test", Email: "t@t"},
 		object.Signature{Name: "test", Email: "t@t"},
@@ -271,18 +271,18 @@ func TestReplayCommit_PreservesAuthorAndMessage(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	c1Hash := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
-	c1, err := svc.rh.repo.CommitObject(plumbing.NewHash(c1Hash))
+	c1, err := svc.rh.Repository().CommitObject(plumbing.NewHash(c1Hash))
 	require.NoError(t, err)
 
 	// Create a "new base" — an unrelated commit on main with a different file.
 	c2Hash := writeMergeFact(t, svc, "main", "kb/other.md", "Other", "ov1")
-	c2, err := svc.rh.repo.CommitObject(plumbing.NewHash(c2Hash))
+	c2, err := svc.rh.Repository().CommitObject(plumbing.NewHash(c2Hash))
 	require.NoError(t, err)
 
 	newHash, err := svc.rh.replayCommit(context.Background(), c1, c2.Hash, StrategyLocalWins)
 	require.NoError(t, err)
 
-	newCommit, err := svc.rh.repo.CommitObject(newHash)
+	newCommit, err := svc.rh.Repository().CommitObject(newHash)
 	require.NoError(t, err)
 
 	require.Equal(t, c1.Author.Name, newCommit.Author.Name, "author preserved")
@@ -320,13 +320,13 @@ func TestReplayCommit_LocalWinsOnConflict(t *testing.T) {
 	baseHash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "base-version")
 
 	// 2. Reset main to that commit so both branches share the seed.
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(baseHash)),
 	))
 
 	// 3. Agent modifies kb/shared.md (Modify on agent side).
 	c1Hash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "agent-version")
-	c1, err := svc.rh.repo.CommitObject(plumbing.NewHash(c1Hash))
+	c1, err := svc.rh.Repository().CommitObject(plumbing.NewHash(c1Hash))
 	require.NoError(t, err)
 	// Sanity-check: c1's parent is the seed commit.
 	require.Equal(t, plumbing.NewHash(baseHash), c1.ParentHashes[0], "c1 must parent the seed")
@@ -337,7 +337,7 @@ func TestReplayCommit_LocalWinsOnConflict(t *testing.T) {
 	// 5. Replay with LocalWins (agent's perspective: agent should win).
 	newHash, err := svc.rh.replayCommit(context.Background(), c1, plumbing.NewHash(mainHash), StrategyLocalWins)
 	require.NoError(t, err)
-	newCommit, err := svc.rh.repo.CommitObject(newHash)
+	newCommit, err := svc.rh.Repository().CommitObject(newHash)
 	require.NoError(t, err)
 
 	tree, err := newCommit.Tree()
@@ -360,17 +360,17 @@ func TestReplayCommit_RemoteWinsOnConflict(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	baseHash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "base-version")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(baseHash)),
 	))
 	c1Hash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "agent-version")
-	c1, err := svc.rh.repo.CommitObject(plumbing.NewHash(c1Hash))
+	c1, err := svc.rh.Repository().CommitObject(plumbing.NewHash(c1Hash))
 	require.NoError(t, err)
 	mainHash := writeMergeFact(t, svc, "main", "kb/shared.md", "Shared", "main-version")
 
 	newHash, err := svc.rh.replayCommit(context.Background(), c1, plumbing.NewHash(mainHash), StrategyRemoteWins)
 	require.NoError(t, err)
-	newCommit, err := svc.rh.repo.CommitObject(newHash)
+	newCommit, err := svc.rh.Repository().CommitObject(newHash)
 	require.NoError(t, err)
 	tree, err := newCommit.Tree()
 	require.NoError(t, err)
@@ -439,7 +439,7 @@ func TestReplayOntoUpstream_ReplaysAllUnpushedCommits(t *testing.T) {
 	newTip := mustHeadHash(t, svc, "agent/test")
 	require.NotEqual(t, plumbing.NewHash(upstreamHash), newTip)
 
-	tip, err := svc.rh.repo.CommitObject(newTip)
+	tip, err := svc.rh.Repository().CommitObject(newTip)
 	require.NoError(t, err)
 	require.Equal(t, 1, tip.NumParents(), "linear")
 	// Walk back: tip → mid → upstream.
@@ -490,7 +490,7 @@ func TestReplayOntoUpstream_HonoursContextCancellation(t *testing.T) {
 		"agent ref unchanged when replay is cancelled mid-loop")
 
 	tempRefName := plumbing.NewBranchReferenceName("agent/test-replaying")
-	_, refErr := svc.rh.gits.Reference(tempRefName)
+	_, refErr := svc.rh.Storer().Reference(tempRefName)
 	require.ErrorIs(t, refErr, plumbing.ErrReferenceNotFound,
 		"temp ref cleaned up after cancellation")
 }
@@ -518,7 +518,7 @@ func TestReplayOntoUpstream_FailureLeavesAgentRefUntouched(t *testing.T) {
 	// temp ref is created, so the assertion documents the invariant
 	// rather than directly exercising the deferred cleanup path.
 	tempRefName := plumbing.NewBranchReferenceName("agent/test-replaying")
-	_, refErr := svc.rh.gits.Reference(tempRefName)
+	_, refErr := svc.rh.Storer().Reference(tempRefName)
 	require.ErrorIs(t, refErr, plumbing.ErrReferenceNotFound,
 		"temp ref must be removed on failure too")
 }
@@ -533,13 +533,13 @@ func TestReconcileMain_FastForwardsWhenOriginAhead(t *testing.T) {
 	// origin/main is a descendant of local main (new commit on it).
 	newMainCommit := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 	// Move main back to its parent to simulate "we're behind origin/main".
-	parent, err := svc.rh.repo.CommitObject(plumbing.NewHash(newMainCommit))
+	parent, err := svc.rh.Repository().CommitObject(plumbing.NewHash(newMainCommit))
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), parent.ParentHashes[0]),
 	))
 	// origin/main points at the newer commit.
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(newMainCommit)),
 	))
 
@@ -557,7 +557,7 @@ func TestReconcileMain_NoOpWhenAlreadyAtOrigin(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	mainHash := mustHeadHash(t, svc, "main")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), mainHash),
 	))
 
@@ -591,19 +591,19 @@ func TestReconcileMain_HealsMissingBranchesRow(t *testing.T) {
 	// Local main and origin/main both at the same commit (the steady-state
 	// Noop case after fetch).
 	mainHash := mustHeadHash(t, svc, "main")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), mainHash),
 	))
 
 	// Simulate the corruption: drop the SQL row for "main" while leaving
 	// the git ref in place. Also drop the cache entry so the next branchID
 	// call re-reads from the DB (otherwise the test passes spuriously).
-	_, err = svc.rh.db.ExecContext(context.Background(), `DELETE FROM branches WHERE name = ?`, "main")
+	_, err = svc.rh.DB().ExecContext(context.Background(), `DELETE FROM branches WHERE name = ?`, "main")
 	require.NoError(t, err)
-	svc.rh.cache.remove("main")
+	svc.rh.ForgetBranchIDForTest("main")
 
 	// Pre-condition: branches.main is missing, so a lookup must fail.
-	_, beforeErr := svc.rh.branchID(context.Background(), "main")
+	_, beforeErr := svc.rh.BranchID(context.Background(), "main")
 	require.Error(t, beforeErr, "test setup: branches row for 'main' must be absent")
 
 	// Reconcile — should heal the SQL row even on the Noop path.
@@ -612,7 +612,7 @@ func TestReconcileMain_HealsMissingBranchesRow(t *testing.T) {
 	require.Equal(t, ModeNoop, res.Mode, "ref already at origin: Noop path")
 
 	// Post-condition: branchID must now succeed.
-	id, afterErr := svc.rh.branchID(context.Background(), "main")
+	id, afterErr := svc.rh.BranchID(context.Background(), "main")
 	require.NoError(t, afterErr, "reconcileMain must EnsureBranch on every success path")
 	require.NotZero(t, id)
 }
@@ -627,7 +627,7 @@ func TestReconcileMain_DetectsRewind(t *testing.T) {
 	// Local main has a commit; origin/main is a disjoint commit.
 	writeMergeFact(t, svc, "main", "kb/local.md", "L", "v1")
 	disjointHash := makeDisjointRoot(t, svc, "kb/origin.md", "origin content")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), disjointHash),
 	))
 
@@ -656,11 +656,11 @@ func TestReconcileMain_CreatesLocalMainWhenMissing(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Drop local main so reconcileMain has to create it.
-	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewBranchReferenceName("main")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(plumbing.NewBranchReferenceName("main")))
 
 	// Set origin/main to some content.
 	originHash := writeMergeFact(t, svc, "agent/test", "kb/o.md", "O", "v1")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(originHash)),
 	))
 
@@ -694,7 +694,7 @@ func TestReconcileAgent_ReplaysLocalCommitsOntoLocalMain(t *testing.T) {
 
 	// Tree at new tip has both files.
 	newTip := mustHeadHash(t, svc, "agent/test")
-	commit, err := svc.rh.repo.CommitObject(newTip)
+	commit, err := svc.rh.Repository().CommitObject(newTip)
 	require.NoError(t, err)
 	tree, err := commit.Tree()
 	require.NoError(t, err)
@@ -759,7 +759,7 @@ func TestReconcileAgent_ReplaysLocalCommitsOntoUpdatedMain(t *testing.T) {
 	require.Equal(t, ModeMerge, res.Mode)
 
 	newTip := mustHeadHash(t, svc, "agent/test")
-	commit, err := svc.rh.repo.CommitObject(newTip)
+	commit, err := svc.rh.Repository().CommitObject(newTip)
 	require.NoError(t, err)
 	tree, err := commit.Tree()
 	require.NoError(t, err)
@@ -812,7 +812,7 @@ func TestReconcileAgent_WatermarkPreservedAcrossTicks(t *testing.T) {
 
 	// Final tree has every file.
 	newTip := mustHeadHash(t, svc, "agent/test")
-	commit, err := svc.rh.repo.CommitObject(newTip)
+	commit, err := svc.rh.Repository().CommitObject(newTip)
 	require.NoError(t, err)
 	tree, err := commit.Tree()
 	require.NoError(t, err)
@@ -837,7 +837,7 @@ func TestReconcileAgentRebase_FallsBackToMergeBaseWhenWatermarkMissing(t *testin
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// Drop the watermark to model the legacy/corruption case.
-	require.NoError(t, svc.rh.gits.RemoveReference(agentBaseRefName("agent/test")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(agentBaseRefName("agent/test")))
 
 	// Standard "agent has local, main has advanced" setup.
 	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
@@ -880,7 +880,7 @@ func TestReconcileAgent_SteadyStateUsesMerge(t *testing.T) {
 	require.NotEmpty(t, res.NewTip)
 
 	// New tip is a real merge commit with two parents: previous agent first, main second.
-	newTip, err := svc.rh.repo.CommitObject(plumbing.NewHash(res.NewTip))
+	newTip, err := svc.rh.Repository().CommitObject(plumbing.NewHash(res.NewTip))
 	require.NoError(t, err)
 	require.Equal(t, 2, newTip.NumParents())
 	require.Equal(t, preAgent, newTip.ParentHashes[0])
@@ -909,7 +909,7 @@ func TestReconcileAgent_RewindUsesRebase(t *testing.T) {
 
 	// Simulate a force-rewind: local main is now at a disjoint root commit.
 	disjoint := makeDisjointRoot(t, svc, "kb/rewind.md", "disjoint root")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), disjoint),
 	))
 
@@ -934,13 +934,13 @@ func TestSync_OrchestratesMainAndAgent(t *testing.T) {
 
 	// Pretend a fetch happened: write origin/main ref directly.
 	originMain := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(originMain)),
 	))
 	// Move local main back to its parent so reconcileMain has work to do.
-	originMainCommit, err := svc.rh.repo.CommitObject(plumbing.NewHash(originMain))
+	originMainCommit, err := svc.rh.Repository().CommitObject(plumbing.NewHash(originMain))
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), originMainCommit.ParentHashes[0]),
 	))
 	// One unpushed commit on agent.
@@ -974,9 +974,9 @@ func TestReconcileNow_UpstreamEqualsAgentIsPushOnly(t *testing.T) {
 	// Simulate origin/agent BEHIND local (the state right after a write): the
 	// old code, treating the agent branch as "main", force-reset local down to
 	// this ref and destroyed the fact commit.
-	localCommit, err := svc.rh.repo.CommitObject(localBefore)
+	localCommit, err := svc.rh.Repository().CommitObject(localBefore)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "agent/test"), localCommit.ParentHashes[0]),
 	))
 
@@ -1025,9 +1025,9 @@ func TestClassifyMainRewind_DistinguishesSharedAndDisjoint(t *testing.T) {
 	sideA := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 	sideB := writeMergeFact(t, svc, "main", "kb/b.md", "B", "v1")
 
-	commitA, err := svc.rh.repo.CommitObject(plumbing.NewHash(sideA))
+	commitA, err := svc.rh.Repository().CommitObject(plumbing.NewHash(sideA))
 	require.NoError(t, err)
-	commitB, err := svc.rh.repo.CommitObject(plumbing.NewHash(sideB))
+	commitB, err := svc.rh.Repository().CommitObject(plumbing.NewHash(sideB))
 	require.NoError(t, err)
 
 	sharedClass := classifyMainRewind(commitA, commitB)
@@ -1038,7 +1038,7 @@ func TestClassifyMainRewind_DistinguishesSharedAndDisjoint(t *testing.T) {
 
 	// Disjoint history: a wholly unrelated root in the same object store.
 	disjointHash := makeDisjointRoot(t, svc, "disjoint/root.md", "unrelated content")
-	disjointCommit, err := svc.rh.repo.CommitObject(disjointHash)
+	disjointCommit, err := svc.rh.Repository().CommitObject(disjointHash)
 	require.NoError(t, err)
 
 	disjointClass := classifyMainRewind(commitA, disjointCommit)
@@ -1085,17 +1085,17 @@ func TestConfigureRemote_EmptyAgentBranchWritesOneRefspec(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", ""))
+	require.NoError(t, svc.rh.ConfigureRemote("https://example.com/repo.git", "main", ""))
 
-	cfg, err := svc.rh.repo.Config()
+	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	rc, ok := cfg.Remotes["origin"]
 	require.True(t, ok)
 	require.Equal(t, []gogitconfig.RefSpec{"+refs/heads/main:refs/remotes/origin/main"}, rc.Fetch)
 
 	// Idempotent in the one-refspec shape too.
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", ""))
-	cfg, err = svc.rh.repo.Config()
+	require.NoError(t, svc.rh.ConfigureRemote("https://example.com/repo.git", "main", ""))
+	cfg, err = svc.rh.Repository().Config()
 	require.NoError(t, err)
 	require.Len(t, cfg.Remotes["origin"].Fetch, 1)
 }
@@ -1111,14 +1111,14 @@ func TestReconcileNow_NoAgentBranchReconcilesMainOnly(t *testing.T) {
 
 	// origin/main is one commit ahead of local main.
 	ahead := writeMergeFact(t, svc, "main", "kb/a.md", "A", "v1")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(ahead))))
 	// Rewind local main one commit behind so there is something to fast-forward.
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(ahead))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(ahead))
 	require.NoError(t, err)
 	parent, err := c.Parent(0)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), parent.Hash)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), parent.Hash)))
 
 	res, err := svc.ri.reconcileNow(context.Background(), "", "main")
 	require.NoError(t, err)
@@ -1133,7 +1133,7 @@ func TestReconcileNow_NoAgentBranchReconcilesMainOnly(t *testing.T) {
 func upstreamCommit(t *testing.T, svc *Service, parent plumbing.Hash, path, content string) plumbing.Hash {
 	t.Helper()
 	sig := object.Signature{Name: "upstream", Email: "u@u"}
-	h, _, err := writeFileToStore(svc.rh.gits, nil, parent, path, content, "upstream: "+path, sig, sig)
+	h, _, err := WriteFileToStore(svc.rh.Storer(), nil, parent, path, content, "upstream: "+path, sig, sig)
 	require.NoError(t, err)
 	return h
 }
@@ -1166,13 +1166,13 @@ func TestReconcileAgentRebase_NeverReplaysWhatUpstreamHolds(t *testing.T) {
 	require.Equal(t, seed, wm, "setup: the watermark is still the InitRepo seed")
 
 	// reconcileMain's force-update, as on the old hub's first rewind.
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
 	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeRebase, res.Mode)
 	require.Equal(t, 1, res.NumReplayed, "only c2 (%s) is replayed: c1 is upstream", c2[:8])
 
-	tip, err := svc.rh.repo.CommitObject(mustHeadHash(t, svc, "agent/test"))
+	tip, err := svc.rh.Repository().CommitObject(mustHeadHash(t, svc, "agent/test"))
 	require.NoError(t, err)
 	require.Equal(t, []plumbing.Hash{u}, tip.ParentHashes, "the one replayed commit sits on the new main")
 	tree, err := tip.Tree()
@@ -1213,9 +1213,9 @@ func TestReconcileAgentRebase_UpstreamHoldsThroughASecondParent(t *testing.T) {
 	// then one more of its own. c1 is on the upstream only through the
 	// merge's second parent.
 	m0 := upstreamCommit(t, svc, seed, "kb/m0.md", "---\ntype: observation\n---\n# M0\n\nmaster\n")
-	m0c, err := svc.rh.repo.CommitObject(m0)
+	m0c, err := svc.rh.Repository().CommitObject(m0)
 	require.NoError(t, err)
-	c1c, err := svc.rh.repo.CommitObject(c1)
+	c1c, err := svc.rh.Repository().CommitObject(c1)
 	require.NoError(t, err)
 	// The merge's tree: m0's tree plus kb/a.md from c1, built by writing
 	// c1's file on top of m0 and taking that commit's tree.
@@ -1224,23 +1224,23 @@ func TestReconcileAgentRebase_UpstreamHoldsThroughASecondParent(t *testing.T) {
 	aBody, err := aFile.Contents()
 	require.NoError(t, err)
 	treeOf := upstreamCommit(t, svc, m0c.Hash, "kb/a.md", aBody)
-	tc, err := svc.rh.repo.CommitObject(treeOf)
+	tc, err := svc.rh.Repository().CommitObject(treeOf)
 	require.NoError(t, err)
 	sig := object.Signature{Name: "master", Email: "m@m"}
 	merge := &object.Commit{Author: sig, Committer: sig, Message: "merge agent/test", TreeHash: tc.TreeHash,
 		ParentHashes: []plumbing.Hash{m0, c1}}
-	obj := svc.rh.repo.Storer.NewEncodedObject()
+	obj := svc.rh.Repository().Storer.NewEncodedObject()
 	require.NoError(t, merge.Encode(obj))
-	mh, err := svc.rh.repo.Storer.SetEncodedObject(obj)
+	mh, err := svc.rh.Repository().Storer.SetEncodedObject(obj)
 	require.NoError(t, err)
 	u := upstreamCommit(t, svc, mh, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
 
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
 	res, err := svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeRebase, res.Mode)
 	require.Equal(t, 1, res.NumReplayed, "only c2 (%s) is replayed: c1 is upstream through the merge's second parent", c2[:8])
-	tip, err := svc.rh.repo.CommitObject(mustHeadHash(t, svc, "agent/test"))
+	tip, err := svc.rh.Repository().CommitObject(mustHeadHash(t, svc, "agent/test"))
 	require.NoError(t, err)
 	require.Equal(t, []plumbing.Hash{u}, tip.ParentHashes, "the one replayed commit sits on the new main")
 }

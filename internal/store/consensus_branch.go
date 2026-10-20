@@ -90,11 +90,11 @@ func (s *Service) localConsensusBranch() string {
 }
 
 func (s *Service) recordedConsensusBranch() string {
-	if s.rh == nil || s.rh.db == nil {
+	if s.rh == nil || s.rh.DB() == nil {
 		return ""
 	}
 	var b string
-	err := s.rh.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, consensusBranchKey).Scan(&b)
+	err := s.rh.DB().QueryRow(`SELECT value FROM meta WHERE key = ?`, consensusBranchKey).Scan(&b)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Warn().Err(err).Msg("consensus branch: meta read failed")
 	}
@@ -109,10 +109,10 @@ func (s *Service) recordConsensusBranch(name string) {
 		return
 	}
 	s.ri.setConsensus(name)
-	if s.rh == nil || s.rh.db == nil {
+	if s.rh == nil || s.rh.DB() == nil {
 		return
 	}
-	if _, err := s.rh.db.ExecContext(context.Background(),
+	if _, err := s.rh.DB().ExecContext(context.Background(),
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, consensusBranchKey, name); err != nil {
 		log.Warn().Err(err).Str("branch", name).Msg("consensus branch: record failed")
 	}
@@ -123,10 +123,10 @@ func (s *Service) recordConsensusBranch(name string) {
 // agent branches (this machine's and pushed peers'), experiments and
 // generated branches.
 func (s *Service) consensusCandidates() []string {
-	if s.rh == nil || s.rh.gits == nil {
+	if s.rh == nil || s.rh.Storer() == nil {
 		return nil
 	}
-	iter, err := s.rh.gits.IterReferences()
+	iter, err := s.rh.Storer().IterReferences()
 	if err != nil {
 		return nil
 	}

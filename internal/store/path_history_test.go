@@ -63,11 +63,11 @@ func reversed(in []string) []string {
 
 func blobOf(t *testing.T, svc *Service, commit, path string) string {
 	t.Helper()
-	co, err := svc.rh.repo.CommitObject(plumbing.NewHash(commit))
+	co, err := svc.rh.Repository().CommitObject(plumbing.NewHash(commit))
 	require.NoError(t, err)
 	tree, err := co.Tree()
 	require.NoError(t, err)
-	e, err := treeEntryInsensitive(svc.rh.repo, tree, path)
+	e, err := TreeEntryInsensitive(svc.rh.Repository(), tree, path)
 	require.NoError(t, err)
 	return e.Hash.String()
 }
@@ -79,7 +79,7 @@ func rawCommit(t *testing.T, svc *Service, branch string, parents []string, file
 	t.Helper()
 	h := writeRawCommit(t, svc, parents, files, author, msg)
 	moveBranch(t, svc, branch, h)
-	require.NoError(t, svc.rh.populateCommitLog(context.Background(), branch))
+	require.NoError(t, svc.rh.PopulateCommitLog(context.Background(), branch))
 	return h
 }
 
@@ -88,14 +88,14 @@ func moveBranch(t testing.TB, svc *Service, branch, h string) {
 	t.Helper()
 	_, err := svc.rh.EnsureBranch(context.Background(), branch, "refs/heads/"+branch)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), plumbing.NewHash(h))))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), plumbing.NewHash(h))))
 }
 
 // writeRawCommit writes a commit object whose tree is exactly files (path
 // case preserved) and returns its hash. It indexes nothing and moves no ref.
 func writeRawCommit(t testing.TB, svc *Service, parents []string, files map[string]string, author time.Time, msg string) string {
 	t.Helper()
-	st := svc.rh.repo.Storer
+	st := svc.rh.Repository().Storer
 	type dir struct {
 		files map[string]plumbing.Hash
 		dirs  map[string]*dir
@@ -183,7 +183,7 @@ func TestPathHistory_MergeDeliveredWrites(t *testing.T) {
 		require.NoError(t, svc.Branches().MergeBranch(ctx, "agent", "main", StrategyLocalWins))
 		tip, err := svc.Branches().HeadCommit(ctx, "main")
 		require.NoError(t, err)
-		mc, err := svc.rh.repo.CommitObject(plumbing.NewHash(tip))
+		mc, err := svc.rh.Repository().CommitObject(plumbing.NewHash(tip))
 		require.NoError(t, err)
 		require.Len(t, mc.ParentHashes, 2, "setup must produce a two-parent PR merge")
 		merges = append(merges, tip)
@@ -404,13 +404,13 @@ func TestPathHistory_ContinuationAfterPurgeIsHistoryChanged(t *testing.T) {
 
 	// A purge of the branch's visibility (what a rewind in progress looked
 	// like before the swap became one transaction).
-	_, err = svc.rh.db.ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = (SELECT id FROM branches WHERE name = 'main')`)
+	_, err = svc.rh.DB().ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = (SELECT id FROM branches WHERE name = 'main')`)
 	require.NoError(t, err)
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", last, cur, 2)
 	require.ErrorIs(t, err, ErrHistoryChanged)
 
 	// Healed (repopulated): the same position continues correctly.
-	require.NoError(t, svc.rh.populateCommitLog(ctx, "main"))
+	require.NoError(t, svc.rh.PopulateCommitLog(ctx, "main"))
 	page, _, err := svc.Search().PathHistory(ctx, "main", "kb/t.md", last, cur, 2)
 	require.NoError(t, err)
 	require.Len(t, page, 2)
@@ -440,11 +440,11 @@ func TestPathHistory_RebuildAndVersionResetAreConsistent(t *testing.T) {
 	before := historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip))
 	require.Len(t, before, 6)
 
-	require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+	require.NoError(t, svc.rh.RebuildCommitLog(ctx, "main"))
 	require.Equal(t, before, historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip)))
 
-	_, err = svc.rh.db.ExecContext(ctx, `UPDATE meta SET value = 'stale' WHERE key = ?`, pathChangesVersionKey)
+	_, err = svc.rh.DB().ExecContext(ctx, `UPDATE meta SET value = 'stale' WHERE key = ?`, PathChangesVersionKey)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.openHistory(ctx))
+	require.NoError(t, svc.rh.OpenHistory(ctx))
 	require.Equal(t, before, historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip)))
 }

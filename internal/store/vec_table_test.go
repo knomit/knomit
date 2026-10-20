@@ -22,17 +22,17 @@ func makeVec(dim int) []float32 {
 func seedEmbedIdentity(t *testing.T, si *searchIndex, modelID string, dim int) {
 	t.Helper()
 	ctx := context.Background()
-	_, err := si.rh.db.ExecContext(ctx,
+	_, err := si.rh.DB().ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES ('embed_model_id', ?)`, modelID)
 	require.NoError(t, err)
-	_, err = si.rh.db.ExecContext(ctx,
+	_, err = si.rh.DB().ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES ('embed_dim', ?)`, dim)
 	require.NoError(t, err)
 }
 
 func insertVec(t *testing.T, si *searchIndex, rowid int64, vec []float32) error {
 	t.Helper()
-	_, err := si.rh.db.ExecContext(context.Background(),
+	_, err := si.rh.DB().ExecContext(context.Background(),
 		`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`, rowid, float32SliceToBytes(vec))
 	return err
 }
@@ -40,7 +40,7 @@ func insertVec(t *testing.T, si *searchIndex, rowid int64, vec []float32) error 
 func vecRowCount(t *testing.T, si *searchIndex) int {
 	t.Helper()
 	var n int
-	require.NoError(t, si.rh.db.QueryRowContext(context.Background(),
+	require.NoError(t, si.rh.DB().QueryRowContext(context.Background(),
 		`SELECT count(*) FROM facts_vec`).Scan(&n))
 	return n
 }

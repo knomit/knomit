@@ -38,7 +38,7 @@ const RuleMergeConflict = "merge-conflict"
 // Artifacts live beside the root, never under it, so they are never facts.
 func isFactPathUnder(root, p string) bool {
 	if root == "" {
-		root = defaultOntologyRoot
+		root = DefaultOntologyRoot
 	}
 	return strings.HasPrefix(p, root+"/") && fact.IsMarkdownPath(p) && !fact.IsPrivatePath(p)
 }
@@ -100,7 +100,7 @@ func validateNewFacts(ont *fact.Ontology, root string, froms []*object.Tree, to 
 // path ("" when none).
 func firstInvalidFact(ont *fact.Ontology, root string, froms []*object.Tree, to *object.Tree) (string, string, error) {
 	if root == "" {
-		root = defaultOntologyRoot
+		root = DefaultOntologyRoot
 	}
 	paths, err := newFactPaths(root, froms, to)
 	if err != nil {
@@ -319,7 +319,7 @@ func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string)
 		}
 	}
 	if root == "" {
-		root = defaultOntologyRoot
+		root = DefaultOntologyRoot
 	}
 	p, reason, err := invalidAmong(ont, root, paths, tree)
 	if err != nil {
@@ -333,7 +333,7 @@ func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string)
 
 // ontologyOf parses the ontology in c's tree: (nil, nil) when it holds none.
 func ontologyOf(c *object.Commit) (*fact.Ontology, error) {
-	raw, err := treeOntology(c)
+	raw, err := TreeOntology(c)
 	if err != nil || raw == nil {
 		return nil, err
 	}

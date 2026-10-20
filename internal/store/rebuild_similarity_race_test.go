@@ -12,7 +12,7 @@ import (
 func similarToOutDegree(t *testing.T, svc *Service, ctx context.Context, path, blobHash string) int {
 	t.Helper()
 	var n int
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx, `
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM edges e
 		 WHERE e.type = ?
 		   AND e.source_id = (
@@ -62,7 +62,7 @@ func TestRebuild_DoesNotDestroyConcurrentCrossBranchSimilarityEdges(t *testing.T
 	// Precondition: the layer is non-empty, so the assertions below cannot pass
 	// vacuously on an empty graph.
 	var baseline int
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeSimilarTo).Scan(&baseline))
 	require.Greater(t, baseline, 0, "similarity layer must be populated for this test to mean anything")
 
@@ -82,7 +82,7 @@ func TestRebuild_DoesNotDestroyConcurrentCrossBranchSimilarityEdges(t *testing.T
 		_, werr := svc.Facts().WriteFact(ctx, "feature", racePath,
 			testFactBody("shared subject matter for knn raced", 0.9, nil), "raced write", "")
 		require.NoError(t, werr)
-		require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+		require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 			`SELECT blob_hash FROM facts WHERE path = ?`, racePath).Scan(&racedBlob))
 	}
 	defer func() { svc.si.beforeSimTx = nil }()
@@ -120,19 +120,19 @@ func TestRebuild_StillPrunesSupersededVersionEdges(t *testing.T) {
 	// An orphan version: a node with no `facts` row, carrying an outgoing edge.
 	// This is the shape a superseded version leaves behind, and no per-source
 	// prune driven by the current fact set would ever visit it.
-	ghost, err := graphMergeNode(ctx, svc.rh.db, NodeFact,
+	ghost, err := graphMergeNode(ctx, svc.rh.DB(), NodeFact,
 		map[string]string{"path": "kb/p.md", "blob_hash": "supersededblob"})
 	require.NoError(t, err)
-	live, err := graphNodeIDByProps(ctx, svc.rh.db, NodeFact, map[string]string{
+	live, err := graphNodeIDByProps(ctx, svc.rh.DB(), NodeFact, map[string]string{
 		"path": "kb/q.md", "blob_hash": mustBlob(t, svc, ctx, "kb/q.md")})
 	require.NoError(t, err)
 	require.NotZero(t, live)
-	require.NoError(t, graphMergeEdge(ctx, svc.rh.db, ghost, live, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, svc.rh.DB(), ghost, live, EdgeSimilarTo))
 
 	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))
 
 	var left int
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ? AND source_id = ?`,
 		EdgeSimilarTo, ghost).Scan(&left))
 	require.Zero(t, left, "edges of a superseded version must still be pruned")
@@ -141,7 +141,7 @@ func TestRebuild_StillPrunesSupersededVersionEdges(t *testing.T) {
 func mustBlob(t *testing.T, svc *Service, ctx context.Context, path string) string {
 	t.Helper()
 	var bh string
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT blob_hash FROM facts WHERE path = ?`, path).Scan(&bh))
 	return bh
 }

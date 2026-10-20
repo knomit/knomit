@@ -82,14 +82,14 @@ func electCanonical(members []spelling) string {
 // the same shape as Phase 0's restatement_verdicts, not a derivation. Dropping
 // motif_judge_merges costs re-judging and nothing else.
 func (mi *motifIndex) RebuildAliases(ctx context.Context, branch string) error {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("RebuildAliases: %w", err)
 	}
 
 	// df per spelling over LIVE facts only, so the representative below is the
 	// spelling the corpus actually uses today.
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx, `
 		SELECT m.motif, COUNT(DISTINCT bf.path) AS df
 		  FROM branch_facts bf
 		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
@@ -165,19 +165,19 @@ func (mi *motifIndex) RebuildAliases(ctx context.Context, branch string) error {
 		}
 	}
 
-	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, mi.rh.db)
+	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, mi.rh.DB())
 	if err != nil {
 		return fmt.Errorf("RebuildAliases: begin: %w", err)
 	}
 	if ownTx {
 		defer tx.Rollback()
 	}
-	if _, err := conn(ctx, mi.rh.db).ExecContext(ctx,
+	if _, err := conn(ctx, mi.rh.DB()).ExecContext(ctx,
 		`DELETE FROM motif_aliases WHERE branch_id = ?`, branchID); err != nil {
 		return fmt.Errorf("RebuildAliases: clear: %w", err)
 	}
 	for motif, a := range assignments {
-		if _, err := conn(ctx, mi.rh.db).ExecContext(ctx,
+		if _, err := conn(ctx, mi.rh.DB()).ExecContext(ctx,
 			`INSERT INTO motif_aliases(branch_id, motif, canonical_id, cluster_key, method, rationale)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
 			branchID, motif, a.canonical, a.clusterKey,
@@ -194,7 +194,7 @@ func (mi *motifIndex) RebuildAliases(ctx context.Context, branch string) error {
 	// The SURVIVOR's definition is deliberately kept: it is the interim the
 	// designer ruled for, still approximately right for the union, and
 	// ClustersNeedingDefinition queues its refresh.
-	if _, err := conn(ctx, mi.rh.db).ExecContext(ctx, `
+	if _, err := conn(ctx, mi.rh.DB()).ExecContext(ctx, `
 		DELETE FROM motif_definitions
 		 WHERE branch_id = ?
 		   AND cluster_key NOT IN (
@@ -219,12 +219,12 @@ func (mi *motifIndex) RebuildAliases(ctx context.Context, branch string) error {
 // every consumer — df, matching, the read surfaces — a special case for a
 // corpus whose vocabulary has not been resolved yet.
 func (mi *motifIndex) CanonicalID(ctx context.Context, branch, motif string) (string, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("CanonicalID: %w", err)
 	}
 	var id string
-	err = conn(ctx, mi.rh.db).QueryRowContext(ctx,
+	err = conn(ctx, mi.rh.DB()).QueryRowContext(ctx,
 		`SELECT canonical_id FROM motif_aliases WHERE branch_id = ? AND motif = ?`,
 		branchID, motif,
 	).Scan(&id)
@@ -239,11 +239,11 @@ func (mi *motifIndex) CanonicalID(ctx context.Context, branch, motif string) (st
 // Used by the health metrics, the backfill hint generator, and the MN3
 // rebuild-reproducibility test.
 func (mi *motifIndex) AliasTable(ctx context.Context, branch string) (map[string]string, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("AliasTable: %w", err)
 	}
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx,
 		`SELECT motif, canonical_id FROM motif_aliases WHERE branch_id = ?`, branchID)
 	if err != nil {
 		return nil, fmt.Errorf("AliasTable: %w", err)
@@ -272,12 +272,12 @@ func (mi *motifIndex) AliasTable(ctx context.Context, branch string) (map[string
 // what it would be assigned by a rebuild — so a corpus whose aliases have not
 // been built yet still produces stable, correct keys.
 func (mi *motifIndex) ClusterKey(ctx context.Context, branch, motif string) (string, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("ClusterKey: %w", err)
 	}
 	var key string
-	err = conn(ctx, mi.rh.db).QueryRowContext(ctx,
+	err = conn(ctx, mi.rh.DB()).QueryRowContext(ctx,
 		`SELECT cluster_key FROM motif_aliases WHERE branch_id = ? AND motif = ?`,
 		branchID, motif,
 	).Scan(&key)
@@ -292,7 +292,7 @@ type judgeMergePair struct{ a, b, rationale string }
 
 // judgeMerges reads this branch's recorded judge decisions.
 func (mi *motifIndex) judgeMerges(ctx context.Context, branchID int64) ([]judgeMergePair, error) {
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx,
 		`SELECT key_a, key_b, rationale FROM motif_judge_verdicts
 		  WHERE branch_id = ? AND merged = 1`, branchID)
 	if err != nil {
@@ -449,7 +449,7 @@ func pairKey(a, b string) string {
 // nothing to invalidate and no cleanup job: the same reasoning as Phase 0
 // keying its verdicts on content-addressed fact ids.
 func (mi *motifIndex) clusterMembership(ctx context.Context, branchID int64) (map[string]string, error) {
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx,
 		`SELECT cluster_key, motif FROM motif_aliases WHERE branch_id = ?`, branchID)
 	if err != nil {
 		return nil, fmt.Errorf("clusterMembership: %w", err)
@@ -476,11 +476,11 @@ func (mi *motifIndex) clusterMembership(ctx context.Context, branchID int64) (ma
 
 // AliasRows returns the full alias table with its audit columns.
 func (mi *motifIndex) AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("AliasRows: %w", err)
 	}
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx,
 		`SELECT motif, canonical_id, cluster_key, method, rationale
 		   FROM motif_aliases WHERE branch_id = ?`, branchID)
 	if err != nil {
@@ -507,7 +507,7 @@ func (mi *motifIndex) AliasRows(ctx context.Context, branch string) (map[string]
 // the pair without deleting anything: the record stays as history, it just
 // stops binding.
 func (mi *motifIndex) AnsweredPairs(ctx context.Context, branch string) (map[string]struct{}, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("AnsweredPairs: %w", err)
 	}
@@ -515,7 +515,7 @@ func (mi *motifIndex) AnsweredPairs(ctx context.Context, branch string) (map[str
 	if err != nil {
 		return nil, err
 	}
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx,
 		`SELECT key_a, key_b, members_a, members_b
 		   FROM motif_judge_verdicts WHERE branch_id = ?`, branchID)
 	if err != nil {
@@ -571,7 +571,7 @@ func (mi *motifIndex) RecordJudgeDecline(ctx context.Context, branch, motifA, mo
 }
 
 func (mi *motifIndex) recordVerdict(ctx context.Context, branch, motifA, motifB string, merged bool, rationale string) error {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("recordVerdict: %w", err)
 	}
@@ -595,7 +595,7 @@ func (mi *motifIndex) recordVerdict(ctx context.Context, branch, motifA, motifB 
 		keyA, keyB = keyB, keyA
 		memA, memB = memB, memA
 	}
-	if _, err := conn(ctx, mi.rh.db).ExecContext(ctx,
+	if _, err := conn(ctx, mi.rh.DB()).ExecContext(ctx,
 		`INSERT INTO motif_judge_verdicts
 		     (branch_id, key_a, key_b, judged_at, merged, rationale, members_a, members_b)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -649,7 +649,7 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 // the unscoped call computes them, and the prefix decides only which clusters
 // survive and what number each shows.
 func (mi *motifIndex) ClustersUnder(ctx context.Context, branch, pathPrefix string) ([]MotifCluster, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("Clusters: %w", err)
 	}
@@ -696,7 +696,7 @@ func (mi *motifIndex) ClustersUnder(ctx context.Context, branch, pathPrefix stri
 		inScope = "path LIKE ?"
 		args = append(args, pathPrefix+"%")
 	}
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx, `
 		WITH resolved AS (
 		  SELECT bf.path AS path,
 		         m.motif AS motif,
@@ -798,11 +798,11 @@ func (mi *motifIndex) ClustersUnder(ctx context.Context, branch, pathPrefix stri
 // documented most-recent-first and ordered by title, which is the kind of
 // mismatch that reads as correct in both the doc and the code.
 func (mi *motifIndex) CarrierTitles(ctx context.Context, branch, clusterKey string, limit int) ([]string, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("CarrierTitles: %w", err)
 	}
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx, `
 		SELECT f.title,
 		       MAX(COALESCE(cl.committed_at, 0)) AS cl_committed_at,
 		       MAX(f.id) AS newest_id

@@ -18,7 +18,7 @@ func TestResolveRef_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
-	_, err = svc.rh.resolveRef(context.Background(), "does-not-exist")
+	_, err = svc.rh.ResolveRef(context.Background(), "does-not-exist")
 	if err == nil {
 		t.Fatalf("expected error for missing ref, got nil")
 	}
@@ -38,7 +38,7 @@ func TestBranchID_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
-	_, err = svc.rh.branchID(context.Background(), "does-not-exist")
+	_, err = svc.rh.BranchID(context.Background(), "does-not-exist")
 	if err == nil {
 		t.Fatalf("expected error for missing branch, got nil")
 	}
@@ -57,14 +57,14 @@ func TestLockBranch_DeferReleasesOnPanic(t *testing.T) {
 
 	func() {
 		defer func() { _ = recover() }()
-		defer rh.lockBranch("main")()
+		defer rh.LockBranch("main")()
 		panic("simulated reconcileMain panic")
 	}()
 
 	// If the deferred unlock did not fire, the second acquire blocks forever.
 	done := make(chan struct{})
 	go func() {
-		defer rh.lockBranch("main")()
+		defer rh.LockBranch("main")()
 		close(done)
 	}()
 	select {

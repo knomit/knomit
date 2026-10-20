@@ -52,14 +52,14 @@ func (f *pushedFixture) onHost(path, body string) plumbing.Hash {
 
 func (f *pushedFixture) tip(branch string) plumbing.Hash {
 	f.t.Helper()
-	ref, err := f.svc.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := f.svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	require.NoError(f.t, err)
 	return ref.Hash()
 }
 
 func (f *pushedFixture) commit(h plumbing.Hash) *object.Commit {
 	f.t.Helper()
-	c, err := object.GetCommit(f.svc.rh.gits, h)
+	c, err := object.GetCommit(f.svc.rh.Storer(), h)
 	require.NoError(f.t, err)
 	return c
 }
@@ -270,10 +270,10 @@ func (f *pushedFixture) noFFMerge(other plumbing.Hash, tree plumbing.Hash) plumb
 		Message:   "merge: main into " + pmPeer, TreeHash: tree,
 		ParentHashes: []plumbing.Hash{parent, other},
 	}
-	h, err := storeCommit(f.svc.rh.gits, f.peer, c)
+	h, err := StoreCommit(f.svc.rh.Storer(), f.peer, c)
 	require.NoError(f.t, err)
-	require.NoError(f.t, f.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(pmPeer), h)))
-	require.NoError(f.t, f.svc.rh.populateCommitLog(context.Background(), pmPeer))
+	require.NoError(f.t, f.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(pmPeer), h)))
+	require.NoError(f.t, f.svc.rh.PopulateCommitLog(context.Background(), pmPeer))
 	return h
 }
 

@@ -23,7 +23,7 @@ const commitParentsBackfillKey = "commit_parents_backfilled"
 // recursive-CTE walk in resolveActiveCommitForPath would short-circuit at
 // depth 1 without this. New commits are appended in-line by CommitLogApply;
 // only the historical backfill needs this one-off pass.
-func backfillCommitParents(ctx context.Context, rh *repoHandler) error {
+func BackfillCommitParents(ctx context.Context, rh *repoHandler) error {
 	db := rh.db
 	var done string
 	err := db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, commitParentsBackfillKey).Scan(&done)

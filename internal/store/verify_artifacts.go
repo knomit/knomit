@@ -63,7 +63,7 @@ func (j judge) artifactRules(c *object.Commit) (Refusal, bool) {
 	if err != nil {
 		return refuse(RuleArtifactRules, fmt.Sprintf("the commit's tree cannot be read: %v", err))
 	}
-	parents, err := parentTrees(c)
+	parents, err := ParentTrees(c)
 	if err != nil {
 		return refuse(RuleArtifactRules, fmt.Sprintf("a parent's tree cannot be read: %v", err))
 	}

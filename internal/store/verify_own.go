@@ -94,30 +94,30 @@ func (e *OwnCommitRefusedError) Is(target error) bool { return target == ErrOwnC
 // verify_signatures at the judged ontology decides 2 and 3 as everywhere:
 // enforce refuses, log logs, off checks nothing.
 func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, own string, vouch plumbing.Hash) error {
-	tipC, err := object.GetCommit(rh.gits, tip)
+	tipC, err := object.GetCommit(rh.Storer(), tip)
 	if err != nil {
 		return fmt.Errorf("judge own commits: %s: %w", tip, err)
 	}
 	var baseC *object.Commit
 	onBase := map[plumbing.Hash]bool{}
 	if !base.IsZero() {
-		if baseC, err = object.GetCommit(rh.gits, base); err != nil {
+		if baseC, err = object.GetCommit(rh.Storer(), base); err != nil {
 			return fmt.Errorf("judge own commits: %s: %w", base, err)
 		}
-		if err := walkHistory(rh.gits, base, nil, func(c *object.Commit) { onBase[c.Hash] = true }); err != nil {
+		if err := WalkHistory(rh.Storer(), base, nil, func(c *object.Commit) { onBase[c.Hash] = true }); err != nil {
 			return fmt.Errorf("judge own commits: %w", err)
 		}
 	}
 	ontC := baseC
 	raw := []byte(nil)
 	if baseC != nil {
-		if raw, err = treeOntology(baseC); err != nil {
+		if raw, err = TreeOntology(baseC); err != nil {
 			return fmt.Errorf("judge own commits: the ontology at %s: %w", base, err)
 		}
 	}
 	if raw == nil {
 		ontC = tipC
-		if raw, err = treeOntology(tipC); err != nil {
+		if raw, err = TreeOntology(tipC); err != nil {
 			return fmt.Errorf("judge own commits: the ontology at %s: %w", tip, err)
 		}
 	}
@@ -132,13 +132,13 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 		return nil
 	}
 	var commits []*object.Commit
-	if err := walkHistory(rh.gits, tip, onBase, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+	if err := WalkHistory(rh.Storer(), tip, onBase, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return fmt.Errorf("judge own commits: %w", err)
 	}
 	if len(commits) == 0 {
 		return nil
 	}
-	root := rh.ontologyRoot()
+	root := rh.OntologyRoot()
 	if r, ok := branchFactsValid(tipC, baseC, ont, root); !ok {
 		return &OwnCommitRefusedError{Upstream: upstream, Commit: r.Commit, Rule: r.Rule,
 			Text: fmt.Sprintf("commit %s %s: %s: %s", r.Commit, CommitRefusedByValidation, r.Rule, r.Reason)}
@@ -176,7 +176,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	if vouch.IsZero() {
 		vouch = tip
 	}
-	vouchC, err := object.GetCommit(rh.gits, vouch)
+	vouchC, err := object.GetCommit(rh.Storer(), vouch)
 	if err != nil {
 		return fmt.Errorf("judge own commits: %s: %w", vouch, err)
 	}
@@ -191,7 +191,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 		}
 	}
 	selfFP := ""
-	if s, err := rh.commitSigner(); err == nil {
+	if s, err := rh.CommitSigner(); err == nil {
 		if fp, err := keyFingerprint(s.PublicKey()); err == nil {
 			selfFP = fp
 		}
@@ -203,7 +203,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	mineVouched := newJudge(vouched, root, ont, root)
 	mineVouched.ownOntology = true
 	for _, c := range commits {
-		id := agentIDOfAuthor(c.Author.Email)
+		id := AgentIDOfAuthor(c.Author.Email)
 		var r Refusal
 		var ok bool
 		if id != own || own == "" {
@@ -228,7 +228,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 			return &OwnCommitRefusedError{Upstream: upstream, Commit: c.Hash.String(), Rule: r.Rule,
 				Text: fmt.Sprintf("commit %s %s: %s: %s", c.Hash, CommitRefusedByJudge, r.Rule, r.Reason)}
 		}
-		log.Warn().Str("repo", rh.name).Str("commit", c.Hash.String()).Str("rule", r.Rule).Str("reason", r.Reason).
+		log.Warn().Str("repo", rh.Name()).Str("commit", c.Hash.String()).Str("rule", r.Rule).Str("reason", r.Reason).
 			Msg("judge own commits: commit would be refused (verify_signatures=log)")
 	}
 	return nil
@@ -284,7 +284,7 @@ func changesHostRecord(c *object.Commit) (host, marker bool, err error) {
 	if err != nil {
 		return false, false, fmt.Errorf("the commit's tree cannot be read: %v", err)
 	}
-	parents, err := parentTrees(c)
+	parents, err := ParentTrees(c)
 	if err != nil {
 		return false, false, fmt.Errorf("a parent's tree cannot be read: %v", err)
 	}
@@ -329,7 +329,7 @@ func markerIn(c *object.Commit) (string, error) {
 // (refs/remotes/origin/<upstream>), else the local upstream, else nothing.
 func (ri *remoteIndex) publishBase(upstream string) plumbing.Hash {
 	for _, name := range []plumbing.ReferenceName{plumbing.NewRemoteReferenceName("origin", upstream), plumbing.NewBranchReferenceName(upstream)} {
-		if ref, err := ri.rh.gits.Reference(name); err == nil {
+		if ref, err := ri.rh.Storer().Reference(name); err == nil {
 			return ref.Hash()
 		}
 	}
@@ -340,7 +340,7 @@ func (ri *remoteIndex) publishBase(upstream string) plumbing.Hash {
 // it has none: then no commit is its own, and every one is judged as a
 // member's).
 func (ri *remoteIndex) ownID(branch string) string {
-	id, _ := ri.rh.ownAgentID(branch)
+	id, _ := ri.rh.OwnAgentID(branch)
 	return id
 }
 
@@ -349,7 +349,7 @@ func (ri *remoteIndex) branchTip(branch string) plumbing.Hash {
 	if branch == "" {
 		return plumbing.ZeroHash
 	}
-	ref, err := ri.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := ri.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return plumbing.ZeroHash
 	}
@@ -444,7 +444,7 @@ type dropStep struct {
 
 func lostCommit(c *object.Commit) LostCommit {
 	subject, _, _ := strings.Cut(strings.TrimSpace(c.Message), "\n")
-	return LostCommit{Commit: c.Hash.String(), Agent: agentIDOfAuthor(c.Author.Email), Author: c.Author.Name, Subject: subject}
+	return LostCommit{Commit: c.Hash.String(), Agent: AgentIDOfAuthor(c.Author.Email), Author: c.Author.Name, Subject: subject}
 }
 
 // dropPlan walks branch's first-parent line from tip down to the upstream
@@ -454,7 +454,7 @@ func lostCommit(c *object.Commit) LostCommit {
 // and, with ownOnly, a foreign side commit a *DropForeignError, each
 // carrying the fallback's left-out list.
 func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumbing.Hash]bool, drop plumbing.Hash, ownOnly, leaveOut bool) (line []dropStep, unfolded int, leftOut []LostCommit, err error) {
-	dropC, err := object.GetCommit(rh.gits, drop)
+	dropC, err := object.GetCommit(rh.Storer(), drop)
 	if err != nil {
 		return nil, 0, nil, err
 	}
@@ -468,17 +468,17 @@ func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumb
 	if dropC.NumParents() > 1 && !leaveOut {
 		return nil, 0, nil, &DropMergeError{Commit: drop.String(), LeaveOut: fallback()}
 	}
-	own, _ := rh.ownAgentID(branch)
+	own, _ := rh.OwnAgentID(branch)
 	// groups in tip -> base order; each group's steps in replay order.
 	var groups [][]dropStep
-	cur, err := object.GetCommit(rh.gits, tip)
+	cur, err := object.GetCommit(rh.Storer(), tip)
 	if err != nil {
 		return nil, 0, nil, err
 	}
 	reaches := func(from []plumbing.Hash, target plumbing.Hash) (bool, error) {
 		found := false
 		for _, p := range from {
-			if err := walkHistory(rh.gits, p, onUp, func(c *object.Commit) {
+			if err := WalkHistory(rh.Storer(), p, onUp, func(c *object.Commit) {
 				if c.Hash == target {
 					found = true
 				}
@@ -495,11 +495,11 @@ func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumb
 		for h := range onUp {
 			first[h] = true
 		}
-		if err := walkHistory(rh.gits, m.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
+		if err := WalkHistory(rh.Storer(), m.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
 			return err
 		}
 		for _, p := range m.ParentHashes[1:] {
-			if err := walkHistory(rh.gits, p, first, func(c *object.Commit) {
+			if err := WalkHistory(rh.Storer(), p, first, func(c *object.Commit) {
 				first[c.Hash] = true // a commit two parents share once
 				visit(c)
 			}); err != nil {
@@ -546,7 +546,7 @@ func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumb
 				// instance. Where signatures are judged (the fleet), another
 				// agent's commit cannot be: refuse instead of losing it.
 				if ownOnly && werr == nil {
-					if id := agentIDOfAuthor(c.Author.Email); id != own {
+					if id := AgentIDOfAuthor(c.Author.Email); id != own {
 						werr = &DropForeignError{Commit: c.Hash.String(), Agent: id, Merge: cur.Hash.String()}
 					}
 				}

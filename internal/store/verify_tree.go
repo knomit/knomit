@@ -29,7 +29,7 @@ func commitTreeShape(c *object.Commit, ok map[plumbing.Hash]bool) error {
 	if err != nil {
 		return fmt.Errorf("tree %s: %w", c.TreeHash, err)
 	}
-	if err := checkTreeShape(tree, ok); err != nil {
+	if err := CheckTreeShape(tree, ok); err != nil {
 		return err
 	}
 	for i, ph := range c.ParentHashes {
@@ -41,7 +41,7 @@ func commitTreeShape(c *object.Commit, ok map[plumbing.Hash]bool) error {
 		if err != nil {
 			return fmt.Errorf("parent %s: tree %s: %w", ph, p.TreeHash, err)
 		}
-		if err := checkTreeShape(pt, ok); err != nil {
+		if err := CheckTreeShape(pt, ok); err != nil {
 			return fmt.Errorf("parent %s: %w", ph, err)
 		}
 	}

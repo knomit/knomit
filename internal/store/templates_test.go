@@ -22,7 +22,7 @@ func TestTrailers_TemplateOnlySetIsStamped(t *testing.T) {
 		require.False(t, set.IsZero(), "%+v must not be zero", set)
 	}
 	set := Trailers{Template: "mission", TemplateSource: "kb://034f37d5b4a5@" + strings.Repeat("a", 40), Run: "run-x"}
-	got := appendTrailers("init: x", set)
+	got := AppendTrailers("init: x", set)
 	require.Equal(t, "init: x\n\nKnomit-Run: run-x\nKnomit-Template: mission\nKnomit-Template-Source: kb://034f37d5b4a5@"+strings.Repeat("a", 40)+"\n", got)
 	require.Equal(t, "mission", TrailerValue(got, TrailerTemplate))
 

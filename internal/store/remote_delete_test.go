@@ -35,7 +35,7 @@ func TestDeleteRemote_RemovesStatusRowGitRemoteAndIsIdempotent(t *testing.T) {
 	require.NotNil(t, got, "precondition: an injected origin must surface")
 	require.NotNil(t, got.LastError, "precondition: a status row must exist")
 
-	cfg, err := svc.rh.repo.Config()
+	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	_, ok := cfg.Remotes["origin"]
 	require.True(t, ok, "precondition: git remote must be configured")
@@ -43,7 +43,7 @@ func TestDeleteRemote_RemovesStatusRowGitRemoteAndIsIdempotent(t *testing.T) {
 	require.NoError(t, svc.Remote().DeleteRemote("origin"))
 
 	var n int
-	require.NoError(t, svc.rh.db.QueryRow(
+	require.NoError(t, svc.rh.DB().QueryRow(
 		`SELECT COUNT(*) FROM remotes WHERE name = 'origin'`).Scan(&n))
 	require.Zero(t, n, "the status row must be gone after DeleteRemote")
 
@@ -55,7 +55,7 @@ func TestDeleteRemote_RemovesStatusRowGitRemoteAndIsIdempotent(t *testing.T) {
 	require.Nil(t, got.LastError, "stale sync status must not survive DeleteRemote")
 	require.Nil(t, got.LastStatus, "stale sync status must not survive DeleteRemote")
 
-	cfg, err = svc.rh.repo.Config()
+	cfg, err = svc.rh.Repository().Config()
 	require.NoError(t, err)
 	_, ok = cfg.Remotes["origin"]
 	require.False(t, ok, "git remote must be removed after DeleteRemote")

@@ -277,7 +277,7 @@ func TestOutgoingAtCommit_DropsMissingCommitLog(t *testing.T) {
 	require.NotZero(t, got[0].CommittedAt)
 
 	// Remove the target's commit_log row to simulate a missing entry.
-	_, err = svc.rh.db.ExecContext(ctx,
+	_, err = svc.rh.DB().ExecContext(ctx,
 		`DELETE FROM commit_log WHERE commit_hash = ?`, c0Res.CommitHash)
 	require.NoError(t, err)
 

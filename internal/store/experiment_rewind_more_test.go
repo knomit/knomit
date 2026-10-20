@@ -16,7 +16,7 @@ import (
 
 func expRwRead(t *testing.T, svc *Service, branch, path string) string {
 	t.Helper()
-	c, err := svc.rh.repo.CommitObject(mustHeadHash(t, svc, branch))
+	c, err := svc.rh.Repository().CommitObject(mustHeadHash(t, svc, branch))
 	require.NoError(t, err)
 	f, err := c.File(path)
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestExperimentAcrossARewind_RebuildIsOneSquashedCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ModeRebase, r.Mode)
 	require.Equal(t, 2, r.NumReplayed)
-	tip, err := svc.rh.repo.CommitObject(mustHeadHash(t, svc, "exp/e"))
+	tip, err := svc.rh.Repository().CommitObject(mustHeadHash(t, svc, "exp/e"))
 	require.NoError(t, err)
 	require.Equal(t, []plumbing.Hash{parentTip}, tip.ParentHashes)
 	require.Contains(t, tip.Message, "squashed")
@@ -151,7 +151,7 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 	x := expRwPushSecret(t, svc)
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nu\n")
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
 
 	done := make(chan error, 1)
 	hooked := false
@@ -196,11 +196,11 @@ func TestExperimentAcrossARewind_OpenClearsAStaleRecord(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	stale := upstreamCommit(t, svc, c1, "kb/stale.md", "---\ntype: observation\n---\n# S\n\ns\n")
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(experimentRewoundRefName("e"), stale)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(experimentRewoundRefName("e"), stale)))
 
 	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
-	_, err = svc.rh.gits.Reference(experimentRewoundRefName("e"))
+	_, err = svc.rh.Storer().Reference(experimentRewoundRefName("e"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound)
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")

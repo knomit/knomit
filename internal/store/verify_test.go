@@ -79,7 +79,7 @@ func TestVerify_DetectsCommitLogGap(t *testing.T) {
 	require.NoError(t, err)
 	_ = r1
 
-	_, err = svc.rh.gits.DB().Exec(
+	_, err = svc.rh.Storer().DB().Exec(
 		`DELETE FROM branch_commits
 		 WHERE commit_hash = ?
 		   AND branch_id = (SELECT id FROM branches WHERE name = 'agent/test')`,
@@ -144,7 +144,7 @@ func TestVerify_DetectsBranchFactsBlobMismatch(t *testing.T) {
 
 	// Look up the facts row for this path and tamper with its blob_hash.
 	var factID int64
-	err = svc.rh.gits.DB().QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/x.md").Scan(&factID)
+	err = svc.rh.Storer().DB().QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/x.md").Scan(&factID)
 	require.NoError(t, err)
 	require.NoError(t, svc.corruptFactsBlobHashForTest(factID, "0000000000000000000000000000000000000000"))
 
@@ -214,7 +214,7 @@ func TestVerify_DetectsMissingEmbedding(t *testing.T) {
 
 	// Look up the facts row and delete its embedding.
 	var factID int64
-	err = svc.rh.gits.DB().QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/x.md").Scan(&factID)
+	err = svc.rh.Storer().DB().QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/x.md").Scan(&factID)
 	require.NoError(t, err)
 	require.NoError(t, svc.deleteEmbeddingForTest(factID))
 
@@ -245,9 +245,9 @@ func TestVerify_DetectsMissingBranchesTableRow(t *testing.T) {
 
 	// branch_facts references branches(id) without CASCADE, so remove dependent
 	// rows before deleting the branch row to avoid a FK constraint failure.
-	_, err = svc.rh.gits.DB().Exec(`DELETE FROM branch_facts WHERE branch_id = (SELECT id FROM branches WHERE name = 'agent/test')`)
+	_, err = svc.rh.Storer().DB().Exec(`DELETE FROM branch_facts WHERE branch_id = (SELECT id FROM branches WHERE name = 'agent/test')`)
 	require.NoError(t, err)
-	_, err = svc.rh.gits.DB().Exec(`DELETE FROM branches WHERE name = 'agent/test'`)
+	_, err = svc.rh.Storer().DB().Exec(`DELETE FROM branches WHERE name = 'agent/test'`)
 	require.NoError(t, err)
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{})
@@ -274,7 +274,7 @@ func TestVerify_DetectsBranchesTableRefMismatch(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	_, err = svc.rh.gits.DB().Exec(`UPDATE branches SET git_ref = 'refs/heads/wrong' WHERE name = 'agent/test'`)
+	_, err = svc.rh.Storer().DB().Exec(`UPDATE branches SET git_ref = 'refs/heads/wrong' WHERE name = 'agent/test'`)
 	require.NoError(t, err)
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{})
@@ -376,7 +376,7 @@ func TestVerify_DetectsMissingGraphFactNode(t *testing.T) {
 
 	// Look up facts row to get the blob hash, then delete its graph node.
 	var blobHash string
-	err = svc.rh.gits.DB().QueryRow(`SELECT blob_hash FROM facts WHERE path = ?`, "kb/x.md").Scan(&blobHash)
+	err = svc.rh.Storer().DB().QueryRow(`SELECT blob_hash FROM facts WHERE path = ?`, "kb/x.md").Scan(&blobHash)
 	require.NoError(t, err)
 	require.NoError(t, svc.deleteGraphFactNodeForTest("kb/x.md", blobHash))
 

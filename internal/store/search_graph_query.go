@@ -31,7 +31,7 @@ import (
 // merge-carry-forward that TestGraphAtCommit_ResolvesThroughMergeCommit pins,
 // where the edge's target_commit likewise differs from the resolved anchor.
 func (gs *graphStore) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
-	branchID, err := gs.rh.branchID(ctx, branch)
+	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: branchID: %w", err)
 	}
@@ -41,7 +41,7 @@ func (gs *graphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 	// target path's effective write-commit ≤ commitHash. Without this, queries
 	// at any commit other than the exact write-commit return 0. See the
 	// historical-graph-invariant note.
-	effectiveCommit, ok, err := gs.rh.resolveActiveCommitForPath(ctx, branch, path, commitHash)
+	effectiveCommit, ok, err := gs.rh.ResolveActiveCommitForPath(ctx, branch, path, commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: resolve effective commit: %w", err)
 	}
@@ -56,7 +56,7 @@ func (gs *graphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 	// lands on the merge) but carries the same blob forward without re-anchoring
 	// the edges, so a target_commit == effectiveCommit filter drops every
 	// incoming edge at a merge-resolved anchor.
-	blobHash, err := gs.rh.readBlobHashAtCommit(ctx, path, effectiveCommit)
+	blobHash, err := gs.rh.ReadBlobHashAtCommit(ctx, path, effectiveCommit)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: blob at %s: %w", effectiveCommit, err)
 	}
@@ -68,7 +68,7 @@ func (gs *graphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 	// Retracted sources are returned with deleted=true so the UI can render
 	// them with the retracted treatment instead of hiding the edge entirely
 	// (mirrors how OutgoingAtCommit exposes retracted targets).
-	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.db), path, blobHash, true)
+	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.DB()), path, blobHash, true)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: read edges: %w", err)
 	}
@@ -95,7 +95,7 @@ func (gs *graphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 		args = append(args, c.Commit)
 		placeholders = append(placeholders, "?")
 	}
-	bcRows, err := conn(ctx, gs.rh.db).QueryContext(ctx,
+	bcRows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx,
 		`SELECT bc.commit_hash, COALESCE(cl.committed_at, 0)
 		   FROM branch_commits bc
 		   LEFT JOIN commit_log cl ON cl.commit_hash = bc.commit_hash
@@ -149,7 +149,7 @@ func (gs *graphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 	// source path's effective write-commit ≤ commitHash. Without this, queries
 	// at any commit other than the exact write-commit return 0. See the
 	// historical-graph-invariant note.
-	effectiveCommit, ok, err := gs.rh.resolveActiveCommitForPath(ctx, branch, path, commitHash)
+	effectiveCommit, ok, err := gs.rh.ResolveActiveCommitForPath(ctx, branch, path, commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: resolve effective commit: %w", err)
 	}
@@ -167,14 +167,14 @@ func (gs *graphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 	// that resolves to a merge (i.e. at HEAD after a merge-back). The Fact node
 	// is keyed by (path, blob_hash) and the blob is stable across the merge, so
 	// matching the node finds the edges regardless of which commit anchored them.
-	blobHash, err := gs.rh.readBlobHashAtCommit(ctx, path, effectiveCommit)
+	blobHash, err := gs.rh.ReadBlobHashAtCommit(ctx, path, effectiveCommit)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: blob at %s: %w", effectiveCommit, err)
 	}
 	if blobHash == "" {
 		return nil, nil
 	}
-	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.db), path, blobHash, false)
+	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.DB()), path, blobHash, false)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: read edges: %w", err)
 	}
@@ -198,7 +198,7 @@ func (gs *graphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 		args = append(args, c.Commit)
 		placeholders = append(placeholders, "?")
 	}
-	clRows, err := conn(ctx, gs.rh.db).QueryContext(ctx,
+	clRows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx,
 		`SELECT cl.commit_hash, COALESCE(cl.committed_at, 0)
 		   FROM commit_log cl
 		  WHERE cl.commit_hash IN (`+strings.Join(placeholders, ",")+`)`,

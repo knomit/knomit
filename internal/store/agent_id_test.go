@@ -55,7 +55,7 @@ func TestCommitAuthor_NoAgentIDRefuses(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 	svc.SetSigner(newTestSigner(t))
-	prev := testFallbackAgent.Load()
+	prev := TestFallbackAgentForTest()
 	SetTestFallbackAgentID(nil)
 	t.Cleanup(func() {
 		if prev != nil {
@@ -63,11 +63,11 @@ func TestCommitAuthor_NoAgentIDRefuses(t *testing.T) {
 		}
 	})
 	var objs int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&objs))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&objs))
 	_, err := svc.Facts().WriteFact(ctx, testAgentBranch, "kb/a.md", "---\ntype: observation\n---\n# a\n\nbody\n", "learn: a", "learn")
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNoAgentID), "err = %v", err)
 	var after int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&after))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&after))
 	require.Equal(t, objs, after, "a refused write leaves no object")
 }

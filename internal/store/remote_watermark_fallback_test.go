@@ -62,7 +62,7 @@ func wmSetOriginMain(t *testing.T, bare string, h plumbing.Hash) {
 // looks like one made before the watermark existed.
 func wmDropWatermark(t *testing.T, svc *Service) {
 	t.Helper()
-	require.NoError(t, svc.rh.gits.RemoveReference(agentBaseRefName("agent/test")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(agentBaseRefName("agent/test")))
 	_, err := svc.rh.readAgentBase("agent/test")
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "setup: no watermark")
 }
@@ -152,7 +152,7 @@ func TestSync_ExistingWatermarkIsNotOverwritten(t *testing.T) {
 	require.Equal(t, s, base, "setup: the watermark is s")
 
 	x := upstreamCommit(t, svc, s, "kb/x.md", obsFact("X"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), x)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), x)))
 	writeMergeFact(t, svc, "agent/test", "kb/b.md", "B", "own, not synced yet")
 
 	wmSetOriginMain(t, bare, r)
@@ -174,7 +174,7 @@ func TestSync_NoWatermarkGenuinelyAheadDropsNothing(t *testing.T) {
 	svc, _, r := wmFixture(t)
 	w := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "not synced yet"))
 	local := upstreamCommit(t, svc, r, "kb/local-main.md", obsFact("Local main"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), local)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), local)))
 	wmDropWatermark(t, svc)
 
 	res := wmSync(t, svc)
@@ -192,7 +192,7 @@ func TestSync_NoWatermarkGenuinelyAheadDropsNothing(t *testing.T) {
 func TestSync_FirstSyncEverKeepsTheMergeBaseFallback(t *testing.T) {
 	svc, bare, r := wmFixture(t)
 	s := wmConsumeSecret(t, svc, bare)
-	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewRemoteReferenceName("origin", "main")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(plumbing.NewRemoteReferenceName("origin", "main")))
 
 	wmSetOriginMain(t, bare, r)
 	res := wmSync(t, svc)

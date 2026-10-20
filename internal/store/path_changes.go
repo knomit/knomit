@@ -60,9 +60,9 @@ import (
 // pathChangesVersion is the version of the derivation below. A stored value
 // that differs (or none) makes the next OPEN re-derive every branch's history
 // in place (openHistory), before the repo serves anything.
-const pathChangesVersion = "1"
+const PathChangesVersion = "1"
 
-const pathChangesVersionKey = "path_changes_version"
+const PathChangesVersionKey = "path_changes_version"
 
 // pathChangeBatch is how many commits one transaction derives or records
 // where live writers can contend for the write lock (a write's derivation, a
@@ -70,7 +70,7 @@ const pathChangesVersionKey = "path_changes_version"
 // transaction would cost one WAL commit each; more per batch holds the lock
 // longer (a 1000-commit batch held it ~1 s). The open-time pass is NOT
 // batched: nothing else writes while a repo opens.
-const pathChangeBatch = 250
+const PathChangeBatch = 250
 
 // Degradation marks on commit_fp.degraded.
 const (
@@ -91,24 +91,24 @@ var errParentUnderived = errors.New("parent commit is not derived yet")
 
 // errNotDerived is returned by the recording hook for a commit whose rows are
 // not derived: recording it would make it visible without its history.
-var errNotDerived = errors.New("commit is not derived")
+var ErrNotDerived = errors.New("commit is not derived")
 
 // errReadInApply guards apply's contract: SQL only, never a git read (a
 // write transaction waiting for a pool connection starves other writers).
-var errReadInApply = errors.New("git object read inside apply")
+var ErrReadInApply = errors.New("git object read inside apply")
 
 // deriveObjectHook, when set (tests only), runs before every git object read
 // of the derivation; a non-nil error is returned as that read's error.
-var deriveObjectHook func(kind string, h plumbing.Hash) error
+var DeriveObjectHook func(kind string, h plumbing.Hash) error
 
 // branchTipHook, when set (tests only), runs before the open-time pass
 // resolves a branch's ref; a non-nil error is that resolve's error.
-var branchTipHook func(branch string) error
+var BranchTipHook func(branch string) error
 
 // pcTables names the derived tables.
-type pcTables struct{ changes, links, fp string }
+type ChangeTables struct{ Changes, Links, FP string }
 
-var activeTables = pcTables{"path_changes", "path_change_links", "commit_fp"}
+var ActiveTables = ChangeTables{"path_changes", "path_change_links", "commit_fp"}
 
 func metaGet(ctx context.Context, q storegit.CtxExecer, key string) (string, error) {
 	var v string
@@ -136,22 +136,22 @@ func metaGet(ctx context.Context, q storegit.CtxExecer, key string) (string, err
 // and logged; nothing is derived for it. The pass also clears
 // commit_log_stage: rows left there belong to a rebuild that died before its
 // swap.
-func (rh *repoHandler) openHistory(ctx context.Context) error {
+func (rh *repoHandler) OpenHistory(ctx context.Context) error {
 	if rh.repo == nil || !rh.gits.CommitLogAvailable() {
 		return nil
 	}
 	start := time.Now()
 	q := conn(ctx, rh.db)
-	v, err := metaGet(ctx, q, pathChangesVersionKey)
+	v, err := metaGet(ctx, q, PathChangesVersionKey)
 	if err != nil {
 		return fmt.Errorf("path changes: version: %w", err)
 	}
-	reset := v != pathChangesVersion
+	reset := v != PathChangesVersion
 	tips, err := rh.branchTips(ctx)
 	if err != nil {
 		return err
 	}
-	d := newDeriver(rh, activeTables)
+	d := newDeriver(rh, ActiveTables)
 	var pending []*commitMeta
 	seen := map[plumbing.Hash]bool{}
 	stack := tips
@@ -203,7 +203,7 @@ func (rh *repoHandler) openHistory(ctx context.Context) error {
 	}
 	stmts := []string{`DELETE FROM commit_log_stage`}
 	if reset {
-		stmts = append(stmts, `DELETE FROM `+activeTables.changes, `DELETE FROM `+activeTables.links, `DELETE FROM `+activeTables.fp)
+		stmts = append(stmts, `DELETE FROM `+ActiveTables.Changes, `DELETE FROM `+ActiveTables.Links, `DELETE FROM `+ActiveTables.FP)
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -215,12 +215,12 @@ func (rh *repoHandler) openHistory(ctx context.Context) error {
 			return err
 		}
 	}
-	if openHistoryHook != nil {
-		if err := openHistoryHook(); err != nil {
+	if OpenHistoryHook != nil {
+		if err := OpenHistoryHook(); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, pathChangesVersionKey, pathChangesVersion); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, PathChangesVersionKey, PathChangesVersion); err != nil {
 		return fmt.Errorf("path changes: open: %w", err)
 	}
 	if own {
@@ -237,7 +237,7 @@ func (rh *repoHandler) openHistory(ctx context.Context) error {
 // openHistoryHook, when set (tests only), runs inside the open-time pass's
 // transaction after every row is applied and before the version key is
 // written; a non-nil error fails the pass there.
-var openHistoryHook func() error
+var OpenHistoryHook func() error
 
 // branchTips resolves every registered branch's tip. A branch with no ref has
 // no history to derive; one whose ref fails to resolve for another reason is
@@ -264,11 +264,11 @@ func (rh *repoHandler) branchTips(ctx context.Context) ([]plumbing.Hash, error) 
 	for _, n := range names {
 		var h plumbing.Hash
 		err := error(nil)
-		if branchTipHook != nil {
-			err = branchTipHook(n)
+		if BranchTipHook != nil {
+			err = BranchTipHook(n)
 		}
 		if err == nil {
-			h, err = rh.resolveRef(ctx, n)
+			h, err = rh.ResolveRef(ctx, n)
 		}
 		if err != nil {
 			if !errors.Is(err, plumbing.ErrReferenceNotFound) {
@@ -289,7 +289,7 @@ func (rh *repoHandler) branchTips(ctx context.Context) ([]plumbing.Hash, error) 
 // Caller cancellation is dropped, as in notifyCommit: a write that has built
 // its commit completes (fact_write_cancel_test.go); honouring cancellation
 // here would fail it for no reason the store can act on.
-func (rh *repoHandler) deriveBeforeAdvance(ctx context.Context, hash plumbing.Hash) error {
+func (rh *repoHandler) DeriveBeforeAdvance(ctx context.Context, hash plumbing.Hash) error {
 	if rh.repo == nil || !rh.gits.CommitLogAvailable() {
 		return nil
 	}
@@ -340,8 +340,8 @@ func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []p
 // transactions. With replace, existing rows of each commit are replaced (the
 // re-derivation of degraded commits); otherwise a derived commit is left as is.
 func (rh *repoHandler) deriveCommits(ctx context.Context, d *deriver, order []*commitMeta, replace bool) error {
-	for i := 0; i < len(order); i += pathChangeBatch {
-		chunk := order[i:min(i+pathChangeBatch, len(order))]
+	for i := 0; i < len(order); i += PathChangeBatch {
+		chunk := order[i:min(i+PathChangeBatch, len(order))]
 		prepared := make([]*preparedCommit, len(chunk))
 		for j, c := range chunk {
 			var err error
@@ -381,7 +381,7 @@ func (rh *repoHandler) deriveCommits(ctx context.Context, d *deriver, order []*c
 // is repaired once the object is back (:rebuild). A commit whose object is
 // still missing stays degraded.
 func (rh *repoHandler) rederiveDegraded(ctx context.Context) (int, error) {
-	rows, err := conn(ctx, rh.db).QueryContext(ctx, `SELECT commit_hash FROM `+activeTables.fp+` WHERE degraded > 0`)
+	rows, err := conn(ctx, rh.db).QueryContext(ctx, `SELECT commit_hash FROM `+ActiveTables.FP+` WHERE degraded > 0`)
 	if err != nil {
 		return 0, fmt.Errorf("path changes: degraded: %w", err)
 	}
@@ -398,7 +398,7 @@ func (rh *repoHandler) rederiveDegraded(ctx context.Context) (int, error) {
 	if err := rows.Err(); err != nil || len(hashes) == 0 {
 		return 0, err
 	}
-	d := newDeriver(rh, activeTables)
+	d := newDeriver(rh, ActiveTables)
 	var commits []*commitMeta
 	for _, h := range hashes {
 		c, err := d.commit(plumbing.NewHash(h))
@@ -485,7 +485,7 @@ func commitNode(c *object.Commit) (plumbing.Hash, []plumbing.Hash) { return c.Ha
 // the transaction it is handed and may not read git.
 type deriver struct {
 	rh       *repoHandler
-	t        pcTables
+	t        ChangeTables
 	applying bool
 	// keepChanges hands each prepared commit's tree diff to indexing
 	// (rh.changes). Only a deriver whose commits are indexed next sets it:
@@ -508,10 +508,10 @@ type commitMeta struct {
 }
 
 func metaOf(c *object.Commit) *commitMeta {
-	return &commitMeta{Hash: c.Hash, Tree: c.TreeHash, Parents: c.ParentHashes, AuthorAt: c.Author.When.Unix(), Msg: firstLine(c.Message)}
+	return &commitMeta{Hash: c.Hash, Tree: c.TreeHash, Parents: c.ParentHashes, AuthorAt: c.Author.When.Unix(), Msg: FirstLine(c.Message)}
 }
 
-func newDeriver(rh *repoHandler, t pcTables) *deriver {
+func newDeriver(rh *repoHandler, t ChangeTables) *deriver {
 	d := &deriver{rh: rh, t: t}
 	d.dropCaches()
 	return d
@@ -520,7 +520,7 @@ func newDeriver(rh *repoHandler, t pcTables) *deriver {
 // newIndexingDeriver is a deriver whose commits are recorded next: it keeps
 // their tree diffs for commit_log (keepChanges).
 func newIndexingDeriver(rh *repoHandler) *deriver {
-	d := newDeriver(rh, activeTables)
+	d := newDeriver(rh, ActiveTables)
 	d.keepChanges = true
 	return d
 }
@@ -533,17 +533,17 @@ func (d *deriver) dropCaches() {
 
 func (d *deriver) readGuard(kind string, h plumbing.Hash) error {
 	if d.applying {
-		return fmt.Errorf("%w: %s %s", errReadInApply, kind, h)
+		return fmt.Errorf("%w: %s %s", ErrReadInApply, kind, h)
 	}
-	if deriveObjectHook != nil {
-		return deriveObjectHook(kind, h)
+	if DeriveObjectHook != nil {
+		return DeriveObjectHook(kind, h)
 	}
 	return nil
 }
 
 func (d *deriver) isDerived(ctx context.Context, q storegit.CtxExecer, hash string) (bool, error) {
 	var n int
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+d.t.fp+` WHERE commit_hash = ?`, hash).Scan(&n); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+d.t.FP+` WHERE commit_hash = ?`, hash).Scan(&n); err != nil {
 		return false, fmt.Errorf("path changes: mark: %w", err)
 	}
 	return n > 0, nil
@@ -553,7 +553,7 @@ func (d *deriver) isDerived(ctx context.Context, q storegit.CtxExecer, hash stri
 // plumbing.ErrObjectNotFound.
 func (d *deriver) commit(h plumbing.Hash) (*commitMeta, error) {
 	if d.applying {
-		return nil, fmt.Errorf("%w: commit %s", errReadInApply, h)
+		return nil, fmt.Errorf("%w: commit %s", ErrReadInApply, h)
 	}
 	if c, ok := d.commits[h]; ok {
 		return c, nil
@@ -577,7 +577,7 @@ func (d *deriver) commit(h plumbing.Hash) (*commitMeta, error) {
 // plumbing.ErrObjectNotFound.
 func (d *deriver) tree(h plumbing.Hash) (*object.Tree, error) {
 	if d.applying {
-		return nil, fmt.Errorf("%w: tree %s", errReadInApply, h)
+		return nil, fmt.Errorf("%w: tree %s", ErrReadInApply, h)
 	}
 	if t, ok := d.trees[h]; ok {
 		return t, nil
@@ -600,7 +600,7 @@ func (d *deriver) tree(h plumbing.Hash) (*object.Tree, error) {
 // content is not a fact. missing reports a blob absent from the store.
 func (d *deriver) parsed(path string, h plumbing.Hash) (f *fact.Fact, missing bool, err error) {
 	if d.applying {
-		return nil, false, fmt.Errorf("%w: blob %s", errReadInApply, h)
+		return nil, false, fmt.Errorf("%w: blob %s", ErrReadInApply, h)
 	}
 	if f, ok := d.facts[h]; ok {
 		return f, false, nil
@@ -759,7 +759,7 @@ func (d *deriver) diffTrees(from, to plumbing.Hash, prefix string, out *[]storeg
 
 // commitDiffs counts tree diffs of a commit against its first parent, by
 // derivation or for commit_log (tests: a write diffs its commit once).
-var commitDiffs atomic.Int64
+var CommitDiffs atomic.Int64
 
 // changeListsMax bounds the entries changeLists holds; past it the lists are
 // dropped (a later index diffs again).
@@ -812,7 +812,7 @@ func (d *deriver) commitChanges(c *object.Commit) ([]storegit.CommitLogEntry, er
 		}
 		from = p.Tree
 	}
-	commitDiffs.Add(1)
+	CommitDiffs.Add(1)
 	var entries []storegit.CommitLogEntry
 	incomplete, err := d.diffTrees(from, c.TreeHash, "", &entries)
 	if err != nil {
@@ -871,7 +871,7 @@ func (d *deriver) prepare(ctx context.Context, c *commitMeta) (*preparedCommit, 
 		if len(parentTrees) > 0 {
 			from = parentTrees[0]
 		}
-		commitDiffs.Add(1)
+		CommitDiffs.Add(1)
 		incomplete, err := d.diffTrees(from, c.Tree, "", &entries)
 		if err != nil {
 			return nil, err
@@ -990,9 +990,9 @@ func firstWithPath(has []bool) int {
 // tx, together with the apply that replaces them.
 func (d *deriver) clear(ctx context.Context, tx *sql.Tx, hash string) error {
 	for _, stmt := range []string{
-		`DELETE FROM ` + d.t.changes + ` WHERE commit_hash = ?`,
-		`DELETE FROM ` + d.t.links + ` WHERE commit_hash = ?`,
-		`DELETE FROM ` + d.t.fp + ` WHERE commit_hash = ?`,
+		`DELETE FROM ` + d.t.Changes + ` WHERE commit_hash = ?`,
+		`DELETE FROM ` + d.t.Links + ` WHERE commit_hash = ?`,
+		`DELETE FROM ` + d.t.FP + ` WHERE commit_hash = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, hash); err != nil {
 			return fmt.Errorf("path changes: clear: %w", err)
@@ -1021,7 +1021,7 @@ func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) err
 			continue
 		}
 		var pdeg int
-		err := tx.QueryRowContext(ctx, `SELECT depth, degraded FROM `+d.t.fp+` WHERE commit_hash = ?`, p.String()).Scan(&depths[i], &pdeg)
+		err := tx.QueryRowContext(ctx, `SELECT depth, degraded FROM `+d.t.FP+` WHERE commit_hash = ?`, p.String()).Scan(&depths[i], &pdeg)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: %s (parent of %s)", errParentUnderived, p, hash)
 		}
@@ -1052,7 +1052,7 @@ func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) err
 			anc = next
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO `+d.t.fp+` (commit_hash, depth, ups, degraded) VALUES (?, ?, ?, ?)`, hash, depth, ups, degraded); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO `+d.t.FP+` (commit_hash, depth, ups, degraded) VALUES (?, ?, ?, ?)`, hash, depth, ups, degraded); err != nil {
 		return fmt.Errorf("path changes: mark: %w", err)
 	}
 	msg := c.Msg
@@ -1068,12 +1068,12 @@ func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *commitMeta, hash
 	path := pp.path
 	if pp.sameAs >= 0 {
 		// A carry: the commit took this content from parent sameAs.
-		from, _, err := liveChange(ctx, tx, d.t, path, c.Parents[pp.sameAs].String(), 0)
+		from, _, err := LiveChange(ctx, tx, d.t, path, c.Parents[pp.sameAs].String(), 0)
 		if err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `
-			INSERT OR REPLACE INTO `+d.t.changes+` (path, commit_hash, entry, resolves_to, blob, message, fp_depth)
+			INSERT OR REPLACE INTO `+d.t.Changes+` (path, commit_hash, entry, resolves_to, blob, message, fp_depth)
 			VALUES (?, ?, 0, ?, ?, ?, ?)`, path, hash, from, pp.to.String(), msg, depth)
 		return err
 	}
@@ -1085,14 +1085,14 @@ func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *commitMeta, hash
 			continue
 		}
 		action = "modified"
-		from, _, err := liveChange(ctx, tx, d.t, path, c.Parents[i].String(), 0)
+		from, _, err := LiveChange(ctx, tx, d.t, path, c.Parents[i].String(), 0)
 		if err != nil {
 			return err
 		}
 		if from != "" {
 			var fo int64
 			var fg int
-			err := tx.QueryRowContext(ctx, `SELECT order_at, gen FROM `+d.t.changes+` WHERE path = ? AND commit_hash = ?`, path, from).Scan(&fo, &fg)
+			err := tx.QueryRowContext(ctx, `SELECT order_at, gen FROM `+d.t.Changes+` WHERE path = ? AND commit_hash = ?`, path, from).Scan(&fo, &fg)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("path changes: link key: %w", err)
 			}
@@ -1104,7 +1104,7 @@ func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *commitMeta, hash
 			fromBlob = pp.blobs[i].String()
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT OR REPLACE INTO `+d.t.links+` (path, commit_hash, parent_order, from_commit, from_blob)
+			INSERT OR REPLACE INTO `+d.t.Links+` (path, commit_hash, parent_order, from_commit, from_blob)
 			VALUES (?, ?, ?, ?, ?)`, path, hash, i, from, fromBlob); err != nil {
 			return fmt.Errorf("path changes: link: %w", err)
 		}
@@ -1119,7 +1119,7 @@ func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *commitMeta, hash
 		unavailable, diff = 1, ""
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT OR REPLACE INTO `+d.t.changes+` (path, commit_hash, entry, resolves_to, blob, action, author_at, order_at, gen, message, diff, fp_depth, content_unavailable)
+		INSERT OR REPLACE INTO `+d.t.Changes+` (path, commit_hash, entry, resolves_to, blob, action, author_at, order_at, gen, message, diff, fp_depth, content_unavailable)
 		VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, path, hash, hash, blob, action, author, orderAt, gen, msg, diff, depth, unavailable)
 	return err
 }
@@ -1139,7 +1139,7 @@ func (d *deriver) hook(hashes []string, prepared []*preparedCommit) func(ctx con
 			return err
 		}
 		if !derived {
-			return fmt.Errorf("%w: %s", errNotDerived, hashes[i])
+			return fmt.Errorf("%w: %s", ErrNotDerived, hashes[i])
 		}
 		return nil
 	}
@@ -1153,9 +1153,9 @@ func (d *deriver) hook(hashes []string, prepared []*preparedCommit) func(ctx con
 // No walk: candidate rows are scanned newest first by first-parent depth, in
 // keyset pages, and "is R on X's first-parent line" is answered with the
 // commit_fp jump pointers in O(log depth) lookups. X must be derived.
-func liveChange(ctx context.Context, q storegit.CtxExecer, t pcTables, path, x string, branchID int64) (resolvesTo, row string, err error) {
+func LiveChange(ctx context.Context, q storegit.CtxExecer, t ChangeTables, path, x string, branchID int64) (resolvesTo, row string, err error) {
 	var xDepth int
-	err = q.QueryRowContext(ctx, `SELECT depth FROM `+t.fp+` WHERE commit_hash = ?`, x).Scan(&xDepth)
+	err = q.QueryRowContext(ctx, `SELECT depth FROM `+t.FP+` WHERE commit_hash = ?`, x).Scan(&xDepth)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", nil
 	}
@@ -1166,7 +1166,7 @@ func liveChange(ctx context.Context, q storegit.CtxExecer, t pcTables, path, x s
 	if branchID != 0 {
 		join = ` JOIN branch_commits bc ON bc.commit_hash = pc.commit_hash AND bc.branch_id = ` + fmt.Sprint(branchID)
 	}
-	query := `SELECT pc.commit_hash, pc.resolves_to, pc.fp_depth FROM ` + t.changes + ` pc` + join + `
+	query := `SELECT pc.commit_hash, pc.resolves_to, pc.fp_depth FROM ` + t.Changes + ` pc` + join + `
 		 WHERE pc.path = ? AND (pc.fp_depth < ? OR (pc.fp_depth = ? AND pc.commit_hash < ?))
 		 ORDER BY pc.fp_depth DESC, pc.commit_hash DESC LIMIT 16`
 	type cand struct {
@@ -1211,7 +1211,7 @@ func liveChange(ctx context.Context, q storegit.CtxExecer, t pcTables, path, x s
 
 // onFirstParentLine reports whether r (at depth rDepth) is x or one of x's
 // first-parent ancestors, by jumping x down xDepth-rDepth steps.
-func onFirstParentLine(ctx context.Context, q storegit.CtxExecer, t pcTables, r string, rDepth int, x string, xDepth int) (bool, error) {
+func onFirstParentLine(ctx context.Context, q storegit.CtxExecer, t ChangeTables, r string, rDepth int, x string, xDepth int) (bool, error) {
 	steps := xDepth - rDepth
 	for level := 0; steps > 0; level++ {
 		if steps&1 == 1 {
@@ -1228,9 +1228,9 @@ func onFirstParentLine(ctx context.Context, q storegit.CtxExecer, t pcTables, r 
 
 // jumpFrom returns the commit 2^level first-parent steps below commit, from
 // its jump pointers. ok is false past the root (or a boundary).
-func jumpFrom(ctx context.Context, q storegit.CtxExecer, t pcTables, commit string, level int) (plumbing.Hash, bool, error) {
+func jumpFrom(ctx context.Context, q storegit.CtxExecer, t ChangeTables, commit string, level int) (plumbing.Hash, bool, error) {
 	var ups []byte
-	err := q.QueryRowContext(ctx, `SELECT ups FROM `+t.fp+` WHERE commit_hash = ?`, commit).Scan(&ups)
+	err := q.QueryRowContext(ctx, `SELECT ups FROM `+t.FP+` WHERE commit_hash = ?`, commit).Scan(&ups)
 	if errors.Is(err, sql.ErrNoRows) {
 		return plumbing.ZeroHash, false, nil
 	}

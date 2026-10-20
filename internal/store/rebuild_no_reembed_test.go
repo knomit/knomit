@@ -51,7 +51,7 @@ func TestRebuild_PreservesRowidsAndDoesNotReEmbed(t *testing.T) {
 	si := svc.si
 	rowids := func() map[string]int64 {
 		m := map[string]int64{}
-		rows, err := si.rh.db.QueryContext(ctx, `SELECT path, id FROM facts`)
+		rows, err := si.rh.DB().QueryContext(ctx, `SELECT path, id FROM facts`)
 		require.NoError(t, err)
 		defer rows.Close()
 		for rows.Next() {
@@ -64,7 +64,7 @@ func TestRebuild_PreservesRowidsAndDoesNotReEmbed(t *testing.T) {
 	}
 	vecCount := func() int {
 		var n int
-		require.NoError(t, si.rh.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM facts_vec`).Scan(&n))
+		require.NoError(t, si.rh.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM facts_vec`).Scan(&n))
 		return n
 	}
 
@@ -112,7 +112,7 @@ func TestNeedsRebuild_TrueWhenVersionStale(t *testing.T) {
 	si := svc.si
 
 	// Simulate an older deployment: stamp a prior schema version.
-	_, err = si.rh.db.ExecContext(ctx,
+	_, err = si.rh.DB().ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, '2')`, schemaVersionKey("main"))
 	require.NoError(t, err)
 
@@ -198,7 +198,7 @@ func TestRebuild_FailureClearsVersion_NotMaskedByGlobalEmbedIdentity(t *testing.
 	// Both branches were last rebuilt by THIS binary — the schema is not what
 	// makes them stale.
 	for _, branch := range []string{"main", phantom} {
-		_, err = svc.si.rh.db.ExecContext(ctx,
+		_, err = svc.si.rh.DB().ExecContext(ctx,
 			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey(branch), GraphSchemaVersion)
 		require.NoError(t, err)
 	}
@@ -222,7 +222,7 @@ func TestRebuild_FailureClearsVersion_NotMaskedByGlobalEmbedIdentity(t *testing.
 	// The global gate is now satisfied for everyone, so only the version row can
 	// still speak for the branch that failed. It must have been cleared.
 	var count int
-	require.NoError(t, svc.si.rh.db.QueryRow(
+	require.NoError(t, svc.si.rh.DB().QueryRow(
 		`SELECT count(*) FROM meta WHERE key = ?`, schemaVersionKey(phantom)).Scan(&count))
 	require.Zero(t, count, "a failed rebuild must drop the branch's version row")
 

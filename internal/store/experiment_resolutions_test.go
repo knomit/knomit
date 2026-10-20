@@ -210,9 +210,9 @@ func mergeBaseOf(t *testing.T, svc *Service, a, b string) string {
 	require.NoError(t, err)
 	bHead, err := svc.Branches().HeadCommit(ctx, b)
 	require.NoError(t, err)
-	ac, err := svc.rh.repo.CommitObject(plumbing.NewHash(aHead))
+	ac, err := svc.rh.Repository().CommitObject(plumbing.NewHash(aHead))
 	require.NoError(t, err)
-	bc, err := svc.rh.repo.CommitObject(plumbing.NewHash(bHead))
+	bc, err := svc.rh.Repository().CommitObject(plumbing.NewHash(bHead))
 	require.NoError(t, err)
 	bases, err := bc.MergeBase(ac)
 	require.NoError(t, err)
@@ -511,7 +511,7 @@ func TestResolvedCommit_IsSigned(t *testing.T) {
 	svc.SetSigner(newTestSigner(t))
 
 	guardHash := writeMergeFact(t, svc, testAgentBranch, "kb/guard.md", "guard", "body")
-	guard, err := svc.rh.repo.CommitObject(plumbing.NewHash(guardHash))
+	guard, err := svc.rh.Repository().CommitObject(plumbing.NewHash(guardHash))
 	require.NoError(t, err)
 	require.NotEmpty(t, guard.PGPSignature, "precondition: the test signer is installed and live")
 
@@ -530,7 +530,7 @@ func TestResolvedCommit_IsSigned(t *testing.T) {
 
 	hash, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
-	commit, err := svc.rh.repo.CommitObject(plumbing.NewHash(hash))
+	commit, err := svc.rh.Repository().CommitObject(plumbing.NewHash(hash))
 	require.NoError(t, err)
 	require.NotEmpty(t, commit.PGPSignature, "the merge commit a resolution produces must be signed")
 }

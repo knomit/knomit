@@ -53,7 +53,7 @@ func (gs *graphStore) TokenDF(ctx context.Context, branch, token, kind string) (
 	default:
 		return 0, fmt.Errorf("TokenDF: invalid kind %q: must be \"domain\", \"entity\" or \"motif\"", kind)
 	}
-	branchID, err := gs.rh.branchID(ctx, branch)
+	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("TokenDF: branchID: %w", err)
 	}
@@ -118,7 +118,7 @@ func (gs *graphStore) TokenDF(ctx context.Context, branch, token, kind string) (
 		args = []any{branchID, token, token, token}
 	}
 	var n int
-	err = conn(ctx, gs.rh.db).QueryRowContext(ctx, q, args...).Scan(&n)
+	err = conn(ctx, gs.rh.DB()).QueryRowContext(ctx, q, args...).Scan(&n)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}

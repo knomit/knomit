@@ -36,7 +36,7 @@ type ExplainResult struct {
 // commit-anchored methods. This unifies the HEAD and commit-anchored read
 // paths on a single underlying query.
 func (gs *graphStore) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
-	branchID, err := gs.rh.branchID(ctx, branch)
+	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("ExplainFact: branchID: %w", err)
 	}
@@ -47,7 +47,7 @@ func (gs *graphStore) ExplainFact(ctx context.Context, branch, path string) (Exp
 	// handlers can map it to 404. Older versions may still be reachable via
 	// commit-anchored endpoints; that's outside ExplainFact's HEAD-only scope.
 	var activeCommit string
-	err = conn(ctx, gs.rh.db).QueryRowContext(ctx,
+	err = conn(ctx, gs.rh.DB()).QueryRowContext(ctx,
 		`SELECT commit_hash FROM branch_facts WHERE branch_id = ? AND path = ?`,
 		branchID, path,
 	).Scan(&activeCommit)
@@ -108,7 +108,7 @@ const (
 //  4. MERGE Domain hierarchy + IN_DOMAIN edges
 //  5. MERGE OntologyNode hierarchy + UNDER edge
 func (si *searchIndex) graphSyncFact(ctx context.Context, rec FactRecord) error {
-	return si.graphSyncFactTx(ctx, si.rh.db, rec)
+	return si.graphSyncFactTx(ctx, si.rh.DB(), rec)
 }
 
 // graphSyncFactTx is the transactional version of graphSyncFact.
@@ -229,7 +229,7 @@ func (si *searchIndex) graphMergeOntologyHierarchy(ctx context.Context, tx store
 // graphDeleteFact marks a Fact node as deleted and removes its outgoing edges
 // (except incoming DERIVED_FROM, which preserves lineage).
 func (si *searchIndex) graphDeleteFact(ctx context.Context, path, blobHash string) error {
-	return si.graphDeleteFactTx(ctx, si.rh.db, path, blobHash)
+	return si.graphDeleteFactTx(ctx, si.rh.DB(), path, blobHash)
 }
 
 // graphSyncHistoricalFactTx MERGEs a Fact node for an orphaned historical
@@ -339,7 +339,7 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 		blobHash   string
 		similarity float64
 	}
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx,
 		`SELECT f.path, f.blob_hash, (1.0 - fv.distance) as similarity
 		 FROM facts_vec fv
 		 JOIN facts f ON f.id = fv.rowid
@@ -376,7 +376,7 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	}
 	rows.Close()
 
-	simFloor := EmbedderThresholds(si.rh.getEmbedder()).SimilarTo
+	simFloor := EmbedderThresholds(si.rh.Embedder()).SimilarTo
 
 	// Replace this version's outgoing SIMILAR_TO edges atomically. The delete
 	// and the re-merge must land in one transaction: run bare, a concurrent
@@ -391,14 +391,14 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 	// The tx opens here, AFTER the KNN read above, so the embedding lookup and
 	// the vec query stay outside the write lock — under _txlock=immediate an
 	// open tx is a process-wide write lock.
-	ctx, tx, owned, err := beginTxIfNeeded(ctx, si.rh.db)
+	ctx, tx, owned, err := beginTxIfNeeded(ctx, si.rh.DB())
 	if err != nil {
 		return fmt.Errorf("SIMILAR_TO: begin tx: %w", err)
 	}
 	if owned {
 		defer tx.Rollback()
 	}
-	db := conn(ctx, si.rh.db)
+	db := conn(ctx, si.rh.DB())
 
 	srcID, err := graphNodeIDByProps(ctx, db, NodeFact, map[string]string{
 		"path":      path,
@@ -450,7 +450,7 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 // the property named propKey equals propVal. Returns 0 if not found.
 func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
 	var nodeID int64
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
 		SELECT np.node_id
 		FROM node_props_text np
 		JOIN property_keys pk ON pk.id = np.key_id
@@ -470,7 +470,7 @@ func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, pr
 // Test-only: it plants a specific edge topology directly, rather than going
 // through a fact sync and getting whatever edges that implies.
 func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
-	_, err := conn(ctx, si.rh.db).ExecContext(ctx,
+	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		`INSERT OR IGNORE INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,
 		sourceID, targetID, edgeType,
 	)

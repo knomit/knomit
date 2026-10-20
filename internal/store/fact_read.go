@@ -18,7 +18,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 	// "Before" is exclusive: start the walk from the first parent so a version
 	// added exactly at beforeCommit isn't returned (matches the retract use
 	// case — read the version that existed before the retract commit).
-	parent, err := fi.rh.firstParentCommit(ctx, beforeCommitHash)
+	parent, err := fi.rh.FirstParentCommit(ctx, beforeCommitHash)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
@@ -33,7 +33,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 	// the edges and honors the first-parent-not-wall-clock invariant. A more
 	// recent deletion is stepped over; only a path never added in the ancestry
 	// yields not-found.
-	hash, ok, err := fi.rh.resolveActiveCommitForPath(ctx, branch, path, parent)
+	hash, ok, err := fi.rh.ResolveActiveCommitForPath(ctx, branch, path, parent)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
@@ -41,7 +41,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, ErrPathNotFound)
 	}
 
-	content, err = fi.rh.readFileAtCommit(ctx, path, hash)
+	content, err = fi.rh.ReadFileAtCommit(ctx, path, hash)
 	return content, hash, err
 }
 
@@ -55,12 +55,12 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 // fix for external ones (knomit_update, knomit_retract).
 func (fi *factIndex) fileExists(ctx context.Context, branch, path string) (bool, error) {
 	path = strings.ToLower(path)
-	headHash, err := fi.rh.resolveRef(ctx, branch)
+	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: ref: %w", err)
 	}
 
-	commit, err := fi.rh.repo.CommitObject(headHash)
+	commit, err := fi.rh.Repository().CommitObject(headHash)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: commit: %w", err)
 	}
@@ -93,19 +93,19 @@ func (fi *factIndex) ReadFact(ctx context.Context, branch, path string, opts *Re
 		}
 		return ReadFactResult{Content: content, FromCommit: fromCommit}, nil
 	case opts.AtCommit != "":
-		content, err := fi.rh.readFileAtCommit(ctx, path, opts.AtCommit)
+		content, err := fi.rh.ReadFileAtCommit(ctx, path, opts.AtCommit)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content}, nil
 	case opts.WithHash:
-		content, blobHash, err := fi.rh.readFileWithHash(ctx, branch, path)
+		content, blobHash, err := fi.rh.ReadFileWithHash(ctx, branch, path)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content, BlobHash: blobHash}, nil
 	default:
-		content, err := fi.rh.readFile(ctx, branch, path)
+		content, err := fi.rh.ReadFile(ctx, branch, path)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
@@ -122,12 +122,12 @@ func (fi *factIndex) FactExists(ctx context.Context, branch, path string) (bool,
 // Subdirectories have IsDir=true, .md files have IsDir=false.
 func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEntry, error) {
 	path = strings.ToLower(path)
-	headHash, err := fi.rh.resolveRef(ctx, branch)
+	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: ref: %w", err)
 	}
 
-	commit, err := fi.rh.repo.CommitObject(headHash)
+	commit, err := fi.rh.Repository().CommitObject(headHash)
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: commit: %w", err)
 	}

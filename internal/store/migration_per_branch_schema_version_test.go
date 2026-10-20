@@ -38,16 +38,16 @@ func twoBranchStore(t *testing.T) *Service {
 // global version row, no per-branch rows.
 func simulatePre16(t *testing.T, svc *Service, version string) {
 	t.Helper()
-	_, err := svc.si.rh.db.Exec(`DELETE FROM meta WHERE key GLOB 'graph_schema_version:*'`)
+	_, err := svc.si.rh.DB().Exec(`DELETE FROM meta WHERE key GLOB 'graph_schema_version:*'`)
 	require.NoError(t, err)
-	_, err = svc.si.rh.db.Exec(
+	_, err = svc.si.rh.DB().Exec(
 		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`, version)
 	require.NoError(t, err)
 }
 
 func metaValue(t *testing.T, svc *Service, key string) (string, bool) {
 	t.Helper()
-	rows, err := svc.si.rh.db.Query(`SELECT value FROM meta WHERE key = ?`, key)
+	rows, err := svc.si.rh.DB().Query(`SELECT value FROM meta WHERE key = ?`, key)
 	require.NoError(t, err)
 	defer rows.Close()
 	if !rows.Next() {
@@ -68,7 +68,7 @@ func TestMigration016_CarriesGlobalVersionOntoEveryKnownBranch(t *testing.T) {
 	ctx := context.Background()
 	simulatePre16(t, svc, GraphSchemaVersion)
 
-	_, err := svc.si.rh.db.Exec(migrationSQL(t, "000016_per_branch_graph_schema_version.up.sql"))
+	_, err := svc.si.rh.DB().Exec(migrationSQL(t, "000016_per_branch_graph_schema_version.up.sql"))
 	require.NoError(t, err)
 
 	_, ok := metaValue(t, svc, "graph_schema_version")
@@ -95,7 +95,7 @@ func TestMigration016_CarriesStaleVersionThrough(t *testing.T) {
 	ctx := context.Background()
 	simulatePre16(t, svc, "2")
 
-	_, err := svc.si.rh.db.Exec(migrationSQL(t, "000016_per_branch_graph_schema_version.up.sql"))
+	_, err := svc.si.rh.DB().Exec(migrationSQL(t, "000016_per_branch_graph_schema_version.up.sql"))
 	require.NoError(t, err)
 
 	for _, branch := range []string{"main", "agent/x"} {
@@ -115,13 +115,13 @@ func TestMigration016_DownCollapsesOnlyWhenBranchesAgree(t *testing.T) {
 	t.Run("agree", func(t *testing.T) {
 		svc := twoBranchStore(t)
 		for _, branch := range []string{"main", "agent/x"} {
-			_, err := svc.si.rh.db.Exec(
+			_, err := svc.si.rh.DB().Exec(
 				`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
 				schemaVersionKey(branch), GraphSchemaVersion)
 			require.NoError(t, err)
 		}
 
-		_, err := svc.si.rh.db.Exec(down)
+		_, err := svc.si.rh.DB().Exec(down)
 		require.NoError(t, err)
 
 		v, ok := metaValue(t, svc, "graph_schema_version")
@@ -131,15 +131,15 @@ func TestMigration016_DownCollapsesOnlyWhenBranchesAgree(t *testing.T) {
 
 	t.Run("disagree", func(t *testing.T) {
 		svc := twoBranchStore(t)
-		_, err := svc.si.rh.db.Exec(
+		_, err := svc.si.rh.DB().Exec(
 			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
 			schemaVersionKey("main"), GraphSchemaVersion)
 		require.NoError(t, err)
-		_, err = svc.si.rh.db.Exec(
+		_, err = svc.si.rh.DB().Exec(
 			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, '2')`, schemaVersionKey("agent/x"))
 		require.NoError(t, err)
 
-		_, err = svc.si.rh.db.Exec(down)
+		_, err = svc.si.rh.DB().Exec(down)
 		require.NoError(t, err)
 
 		_, ok := metaValue(t, svc, "graph_schema_version")
@@ -148,11 +148,11 @@ func TestMigration016_DownCollapsesOnlyWhenBranchesAgree(t *testing.T) {
 
 	// Either way the per-branch rows are gone.
 	svc := twoBranchStore(t)
-	_, err := svc.si.rh.db.Exec(
+	_, err := svc.si.rh.DB().Exec(
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
 		schemaVersionKey("main"), GraphSchemaVersion)
 	require.NoError(t, err)
-	_, err = svc.si.rh.db.Exec(down)
+	_, err = svc.si.rh.DB().Exec(down)
 	require.NoError(t, err)
 	_, ok := metaValue(t, svc, schemaVersionKey("main"))
 	require.False(t, ok, "per-branch rows must not survive the rollback")

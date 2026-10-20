@@ -47,7 +47,7 @@ func TestRebuildGraph_RestoresHistoricalFactNodes(t *testing.T) {
 	// Capture A_v1's blob_hash before we update it (so we can verify the
 	// historical version's graph node restoration later).
 	var blobA1 string
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT blob_hash FROM facts WHERE path = ?`, "kb/a.md").Scan(&blobA1))
 	require.NotEmpty(t, blobA1)
 
@@ -66,7 +66,7 @@ func TestRebuildGraph_RestoresHistoricalFactNodes(t *testing.T) {
 	//    test-only hard-delete + a raw SQL DELETE on facts to engineer
 	//    the broken state.
 	require.NoError(t, svc.deleteGraphFactNodeForTest("kb/a.md", blobA1))
-	_, err = si.rh.db.ExecContext(ctx,
+	_, err = si.rh.DB().ExecContext(ctx,
 		`DELETE FROM facts WHERE path = ? AND blob_hash = ?`, "kb/a.md", blobA1)
 	require.NoError(t, err)
 
@@ -89,7 +89,7 @@ func TestRebuildGraph_RestoresHistoricalFactNodes(t *testing.T) {
 	//    Phase B's edge write would have failed (with the warn the user
 	//    saw) if the source node hadn't been restored.
 	var edgeCount int
-	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&edgeCount))
 	require.GreaterOrEqual(t, edgeCount, 1,
 		"Phase B must succeed in writing at least the B → A_v1 historical edge")

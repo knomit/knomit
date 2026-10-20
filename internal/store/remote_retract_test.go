@@ -23,7 +23,7 @@ func TestRetractPushedBranch_DeletesWhatThisInstancePushed(t *testing.T) {
 
 	require.NoError(t, svc.Remote().RetractPushedBranch(ctx, snapBranch, nil))
 	require.True(t, originTip(t, bare).IsZero(), "the origin's branch is deleted")
-	_, err = svc.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", snapBranch))
+	_, err = svc.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", snapBranch))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "the tracking ref is gone")
 
 	writeTestFact(t, svc, "kb/notes/later.md", "later", "later")
@@ -61,7 +61,7 @@ func TestRetractPushedBranch_LeavesAForeignTipAlone(t *testing.T) {
 	require.ErrorContains(t, err, foreign.String())
 	require.ErrorContains(t, err, pushed.String())
 	require.Equal(t, foreign, originTip(t, bare), "the foreign tip is untouched")
-	_, err = svc.rh.repo.Remote("origin")
+	_, err = svc.rh.Repository().Remote("origin")
 	require.NoError(t, err, "the origin remote is kept for a retry")
 }
 
@@ -76,7 +76,7 @@ func TestRetractPushedBranch_NeverPushedIsLeftAlone(t *testing.T) {
 	svc, bare := newSnapshotPushFixture(t)
 	_, err := svc.Remote().Push(ctx, snapBranch, nil)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewRemoteReferenceName("origin", snapBranch)))
+	require.NoError(t, svc.rh.Storer().RemoveReference(plumbing.NewRemoteReferenceName("origin", snapBranch)))
 	err = svc.Remote().RetractPushedBranch(ctx, snapBranch, nil)
 	require.ErrorContains(t, err, "never pushed it")
 	require.False(t, originTip(t, bare).IsZero(), "the branch is still on the origin")

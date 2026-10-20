@@ -144,7 +144,7 @@ func WithAgentTrace(ctx context.Context, t Trailers) (context.Context, error) {
 }
 
 // trailersFromContext is the read side of WithTrailers; a zero set when none.
-func trailersFromContext(ctx context.Context) Trailers {
+func TrailersFromContext(ctx context.Context) Trailers {
 	t, _ := ctx.Value(trailersCtxKey{}).(Trailers)
 	return t
 }
@@ -157,7 +157,7 @@ func trailersFromContext(ctx context.Context) Trailers {
 // TemplateSource, then the Extra
 // entries sorted by key. A zero set returns message unchanged; a key with an
 // empty value is omitted.
-func appendTrailers(message string, t Trailers) string {
+func AppendTrailers(message string, t Trailers) string {
 	if t.IsZero() {
 		return message
 	}
@@ -206,18 +206,18 @@ func (t Trailers) lines() string {
 //
 // Used only by an experiment's own merges (CommitExperiment, SyncExperiment),
 // which opt in through mergeOpts.trace; every other merge stays unstamped.
-func appendTrailersToParagraph(message string, t Trailers) string {
+func AppendTrailersToParagraph(message string, t Trailers) string {
 	if t.IsZero() {
 		return message
 	}
 	msg := strings.TrimRight(message, "\n")
-	if i := strings.LastIndex(msg, "\n\n"); i >= 0 && isTrailerParagraph(msg[i+2:]) {
+	if i := strings.LastIndex(msg, "\n\n"); i >= 0 && IsTrailerParagraph(msg[i+2:]) {
 		return msg + "\n" + t.lines()
 	}
-	return appendTrailers(message, t)
+	return AppendTrailers(message, t)
 }
 
-func isTrailerParagraph(p string) bool {
+func IsTrailerParagraph(p string) bool {
 	for _, line := range strings.Split(p, "\n") {
 		k, _, ok := strings.Cut(line, ": ")
 		if !ok || k == "" || strings.ContainsAny(k, " \t") {

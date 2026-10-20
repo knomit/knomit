@@ -90,9 +90,9 @@ func keyFingerprint(pk ssh.PublicKey) (string, error) {
 // acceptedCommit reports whether h is on this instance's accept list, which
 // waives E4 for that one commit.
 func (rh *repoHandler) acceptedCommit(h plumbing.Hash) bool {
-	if rh.acceptList == nil {
+	if rh.AcceptList() == nil {
 		return false
 	}
-	_, ok := rh.acceptList.Lookup(h)
+	_, ok := rh.AcceptList().Lookup(h)
 	return ok
 }

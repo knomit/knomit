@@ -23,7 +23,7 @@ const peerTrackingPrefix = "refs/remotes/origin/agent/"
 // by local branch name ("agent/<x>"), except own (this instance's agent
 // branch, which the ordinary reconcile owns).
 func (ri *remoteIndex) PeerTips(own string) (map[string]plumbing.Hash, error) {
-	iter, err := ri.rh.gits.IterReferences()
+	iter, err := ri.rh.Storer().IterReferences()
 	if err != nil {
 		return nil, fmt.Errorf("PeerTips: %w", err)
 	}
@@ -63,10 +63,10 @@ func (h *MainHistory) Tip() plumbing.Hash { return h.tip }
 // for a push, minus the objects (a fetch already stored them) and the
 // old-hash check (nothing advertised a value to compare).
 func (rh *repoHandler) promotePeer(ctx context.Context, branch, upstream string, tip plumbing.Hash) error {
-	defer rh.lockBranch(branch)()
+	defer rh.LockBranch(branch)()
 	ctx = context.WithoutCancel(ctx)
 	seeded := false
-	if _, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch)); errors.Is(err, plumbing.ErrReferenceNotFound) {
+	if _, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch)); errors.Is(err, plumbing.ErrReferenceNotFound) {
 		if err := rh.CreateBranch(ctx, branch, upstream); err != nil {
 			return fmt.Errorf("AdmitPeerBranch: seed %s: %w", branch, err)
 		}
@@ -79,7 +79,7 @@ func (rh *repoHandler) promotePeer(ctx context.Context, branch, upstream string,
 		return fmt.Errorf("AdmitPeerBranch: %w", err)
 	}
 	if seeded && res.Mode == ModeNoop {
-		return rh.notifyCommit(ctx, branch, tip)
+		return rh.NotifyCommit(ctx, branch, tip)
 	}
 	return nil
 }

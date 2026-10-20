@@ -70,7 +70,7 @@ func TestToucher_SamePathTwiceInOneMerge(t *testing.T) {
 	deleteF(t, svc, "peer", "kb/tasks/a/y.md")                        // D
 	require.NoError(t, svc.Branches().MergeBranch(ctx, "peer", "agent/a", StrategyRemoteWins))
 	head := mustHeadHash(t, svc, "agent/a")
-	merge, err := svc.rh.repo.CommitObject(head)
+	merge, err := svc.rh.Repository().CommitObject(head)
 	require.NoError(t, err)
 	require.Equal(t, 2, merge.NumParents(), "fixture: the merge must be a real merge commit")
 	require.NotEqual(t, plumbing.NewHash(base), head)
@@ -98,7 +98,7 @@ func TestToucher_BotMergeNotAuthor(t *testing.T) {
 	restampAs(t, svc, "agent/a", nil, fixedTime(1), "Merge pull request #1 from peer")
 	head2 := mustHeadHash(t, svc, "agent/a")
 	require.NotEqual(t, head, head2)
-	bot, err := svc.rh.repo.CommitObject(head2)
+	bot, err := svc.rh.Repository().CommitObject(head2)
 	require.NoError(t, err)
 	require.Equal(t, 2, bot.NumParents())
 
@@ -120,13 +120,13 @@ func TestToucher_MergeWithNoSameBlobParentIsTheToucher(t *testing.T) {
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "third", "main"))
 	r, err := svc.Facts().WriteFact(ctx, "third", "kb/tasks/a/x.md", testFactBody("x v3", 0.5, nil), "v3", "update")
 	require.NoError(t, err)
-	third, err := svc.rh.repo.CommitObject(plumbing.NewHash(r.CommitHash))
+	third, err := svc.rh.Repository().CommitObject(plumbing.NewHash(r.CommitHash))
 	require.NoError(t, err)
 	sig := object.Signature{Name: "m", Email: "m@example.com", When: fixedTime(9)}
 	m := &object.Commit{Author: sig, Committer: sig, Message: "manual merge", TreeHash: third.TreeHash, ParentHashes: []plumbing.Hash{c1, c2}}
-	obj := svc.rh.repo.Storer.NewEncodedObject()
+	obj := svc.rh.Repository().Storer.NewEncodedObject()
 	require.NoError(t, m.Encode(obj))
-	mh, err := svc.rh.repo.Storer.SetEncodedObject(obj)
+	mh, err := svc.rh.Repository().Storer.SetEncodedObject(obj)
 	require.NoError(t, err)
 
 	res := toucher(t, svc, mh, "kb/tasks/a/x.md")
@@ -204,7 +204,7 @@ func fireRows(n int, prefix string) []TriggerFire {
 
 func countFires(t *testing.T, svc *Service) (total, runs int, minID, maxID int64) {
 	t.Helper()
-	db := svc.rh.db
+	db := svc.rh.DB()
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*), COALESCE(MIN(id),0), COALESCE(MAX(id),0) FROM trigger_fires`).Scan(&total, &minID, &maxID))
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM trigger_fires WHERE outcome = 'run'`).Scan(&runs))
 	return
@@ -217,7 +217,7 @@ func TestMigration000029_TablesExist(t *testing.T) {
 	svc := newChangesService(t)
 	for _, table := range []string{"trigger_watermarks", "trigger_fires"} {
 		var n int
-		require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n))
+		require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n))
 		require.Equal(t, 1, n, "table %s", table)
 	}
 }
@@ -242,7 +242,7 @@ func TestRecordTriggerRun_Tx1Bounded(t *testing.T) {
 	require.Equal(t, 12000, recent[0].Fires, "the run row counts every fire")
 	require.Equal(t, rows[11999].Path, recent[1].Path, "the newest path is kept")
 	var first string
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT path FROM trigger_fires WHERE trigger = 't' ORDER BY id ASC LIMIT 1`).Scan(&first))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT path FROM trigger_fires WHERE trigger = 't' ORDER BY id ASC LIMIT 1`).Scan(&first))
 	require.Equal(t, rows[2000].Path, first, "the oldest 2000 are the ones dropped")
 }
 
@@ -327,7 +327,7 @@ func TestOntologyAtCommit_ReadsTheHeadsFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ".knomit/ontology.yaml", path)
 	require.Equal(t, yaml, string(data))
-	want, err := svc.rh.readBlobHashAtCommit(ctx, ".knomit/ontology.yaml", r.CommitHash)
+	want, err := svc.rh.ReadBlobHashAtCommit(ctx, ".knomit/ontology.yaml", r.CommitHash)
 	require.NoError(t, err)
 	require.Equal(t, want, blob, "the blob is the git blob hash of the file at that commit")
 

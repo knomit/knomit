@@ -137,12 +137,12 @@ func NormalizeChangesPrefix(ontologyRoot, prefix string) (string, error) {
 //   - rows sorted bytewise by path; a rename is "deleted" + "added" (no rename
 //     detection).
 func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error) {
-	base, err := NormalizeChangesPrefix(rh.ontologyRoot(), q.Prefix)
+	base, err := NormalizeChangesPrefix(rh.OntologyRoot(), q.Prefix)
 	if err != nil {
 		return ChangesResult{}, err
 	}
 
-	tip, err := rh.resolveRef(ctx, branch)
+	tip, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return ChangesResult{}, err
 	}
@@ -207,7 +207,7 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 		return ChangesResult{}, err
 	}
 
-	rows, err := diffSubtrees(fromTree, toTree, base, rh.isFactPath)
+	rows, err := diffSubtrees(fromTree, toTree, base, rh.IsFactPath)
 	if err != nil {
 		return ChangesResult{}, err
 	}
@@ -238,7 +238,7 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 // keeps its check: its `since` is a client's bookmark, where a sideways diff
 // fabricates deletions. A ZeroHash `from` is the empty tree.
 func (rh *repoHandler) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]PathChange, error) {
-	base := rh.ontologyRoot()
+	base := rh.OntologyRoot()
 	var fromTree *object.Tree
 	if from != plumbing.ZeroHash {
 		fc, err := rh.repo.CommitObject(from)
@@ -257,7 +257,7 @@ func (rh *repoHandler) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([
 	if err != nil {
 		return nil, err
 	}
-	return diffSubtrees(fromTree, toTree, base, rh.isFactPath)
+	return diffSubtrees(fromTree, toTree, base, rh.IsFactPath)
 }
 
 // subtreeOrEmpty returns the tree at base in c, or nil (the empty tree) when

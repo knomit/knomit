@@ -23,7 +23,7 @@ func TestReplayCommit_NoSignerLeavesNoObjects(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
 	disjoint := makeDisjointRoot(t, svc, "kb/rewind.md", "disjoint root")
-	require.NoError(t, svc.rh.gits.SetReference(
+	require.NoError(t, svc.rh.Storer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), disjoint)))
 	before, err := svc.Verify(context.Background(), VerifyOpts{})
 	require.NoError(t, err)

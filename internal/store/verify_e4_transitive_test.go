@@ -66,7 +66,7 @@ func TestE4_TransitiveTrust(t *testing.T) {
 
 		svc, err := o.cloneErr(branch, me, nil)
 		require.NoError(t, err, "every peer commit is reachable from the own merge's second parent")
-		ref, rerr := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+		ref, rerr := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 		require.NoError(t, rerr)
 		require.Equal(t, merged.Hash, ref.Hash())
 	})

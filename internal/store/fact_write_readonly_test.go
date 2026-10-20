@@ -68,7 +68,7 @@ func TestReadOnlyStore_RefusesBeforeTakingTheBranchLock(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	svc.SetReadOnly(true)
 
-	unlock := svc.rh.lockBranch("main")
+	unlock := svc.rh.LockBranch("main")
 	defer unlock()
 
 	done := make(chan error, 1)

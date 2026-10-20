@@ -34,7 +34,7 @@ func TestReplay_MergeFacts_ContextPerKeyTrailerNamesKeysOnly(t *testing.T) {
 	const agent = "agent/replay-abcd1234"
 	r.branch(agent, "main")
 	seed := r.write(agent, "kb/notes/f.md", cmContextFact(t, "base", 0.7, map[string]any{"task": "t-1", "verdict": "unsure"}))
-	require.NoError(t, r.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
+	require.NoError(t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
 	require.NoError(t, r.svc.rh.writeAgentBase(agent, seed))
 	// The agent (more confident) changes verdict; main changes verdict
 	// differently AND changes task alone.

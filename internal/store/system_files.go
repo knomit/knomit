@@ -77,7 +77,7 @@ func (rh *repoHandler) SystemFileAt(ctx context.Context, branch, commit, path st
 	if !plumbing.IsHash(commit) {
 		return SystemFile{}, false, fmt.Errorf("%w: system file: %q is not a full 40-hex commit hash", ErrInvalidPath, commit)
 	}
-	c, err := rh.repo.CommitObject(plumbing.NewHash(commit))
+	c, err := rh.Repository().CommitObject(plumbing.NewHash(commit))
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
 		// No such commit here: nothing to read, which is "not found", not a
 		// failure of the store.

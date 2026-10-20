@@ -153,9 +153,9 @@ func TestBatchWriteFacts_DeleteFailureCommitsNothing(t *testing.T) {
 func commitBrokenSubtree(t *testing.T, svc *Service, branch, dir, name string) string {
 	t.Helper()
 	rh := svc.rh
-	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	require.NoError(t, err)
-	tip, err := rh.repo.CommitObject(ref.Hash())
+	tip, err := rh.Repository().CommitObject(ref.Hash())
 	require.NoError(t, err)
 	root, err := tip.Tree()
 	require.NoError(t, err)
@@ -163,17 +163,17 @@ func commitBrokenSubtree(t *testing.T, svc *Service, branch, dir, name string) s
 	require.NoError(t, err)
 
 	missing := plumbing.NewHash("1111111111111111111111111111111111111111")
-	subHash, err := upsertEntry(rh.gits, sub, object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: missing})
+	subHash, err := UpsertEntry(rh.Storer(), sub, object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: missing})
 	require.NoError(t, err)
-	rootHash, err := upsertEntry(rh.gits, root, object.TreeEntry{Name: dir, Mode: filemode.Dir, Hash: subHash})
+	rootHash, err := UpsertEntry(rh.Storer(), root, object.TreeEntry{Name: dir, Mode: filemode.Dir, Hash: subHash})
 	require.NoError(t, err)
 
 	c := &object.Commit{Author: tip.Author, Committer: tip.Committer, Message: "broken subtree",
 		TreeHash: rootHash, ParentHashes: []plumbing.Hash{tip.Hash}}
-	obj := rh.gits.NewEncodedObject()
+	obj := rh.Storer().NewEncodedObject()
 	require.NoError(t, c.Encode(obj))
-	h, err := rh.gits.SetEncodedObject(obj)
+	h, err := rh.Storer().SetEncodedObject(obj)
 	require.NoError(t, err)
-	require.NoError(t, rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)))
+	require.NoError(t, rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)))
 	return h.String()
 }

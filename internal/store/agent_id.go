@@ -19,7 +19,7 @@ var ErrNoAgentID = errors.New("store has no agent id: refusing to author a commi
 // branch, else ErrNoAgentID. branch is the AGENT branch the commit is
 // authored as (for an experiment, its recorded parent); production never
 // looks at it.
-func (rh *repoHandler) ownAgentID(branch string) (string, error) {
+func (rh *repoHandler) OwnAgentID(branch string) (string, error) {
 	if rh.agentID != "" {
 		return rh.agentID, nil
 	}

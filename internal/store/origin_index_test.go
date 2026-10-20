@@ -52,7 +52,7 @@ func TestFactsOriginColumnBackfill(t *testing.T) {
 		testFactBody("O", 0.9, nil), "add obs", "")
 	require.NoError(t, err)
 
-	db := svc.rh.db
+	db := svc.rh.DB()
 	var got string
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT origin FROM facts WHERE path = ?`, synthPath).Scan(&got))
 	require.Equal(t, "distilled", got, "synthesis origin must surface as distilled")

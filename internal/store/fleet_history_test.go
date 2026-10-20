@@ -17,7 +17,7 @@ func (h *pushHost) mainWrite(p, content string) time.Time {
 	h.t.Helper()
 	_, _, err := h.svc.Facts().(*factIndex).writeFileExact(context.Background(), "main", p, content, "write "+p, "edit", "")
 	require.NoError(h.t, err)
-	c, err := object.GetCommit(h.svc.rh.gits, h.ref("main"))
+	c, err := object.GetCommit(h.svc.rh.Storer(), h.ref("main"))
 	require.NoError(h.t, err)
 	return c.Committer.When.UTC()
 }

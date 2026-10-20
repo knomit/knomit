@@ -50,7 +50,7 @@ func validateDonatedVec(emb Embedder, path string, vec []float32) ([]byte, error
 // "indexed" costs an in-tx embed on the miss path, a false "not indexed" costs
 // a wasted embedding that the COW-hit path discards.
 func (si *searchIndex) cowProbe(ctx context.Context, rec FactRecord) (bool, error) {
-	db := conn(ctx, si.rh.db)
+	db := conn(ctx, si.rh.DB())
 
 	var factID int64
 	err := db.QueryRowContext(ctx,
@@ -91,11 +91,11 @@ func (si *searchIndex) cowProbe(ctx context.Context, rec FactRecord) (bool, erro
 // seconds and _txlock=immediate means an open tx holds SQLite's process-wide
 // write lock for the duration.
 func (si *searchIndex) embedRecord(ctx context.Context, rec FactRecord) ([]byte, error) {
-	emb := si.rh.getEmbedder()
+	emb := si.rh.Embedder()
 	var data []byte
-	if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	if err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT data FROM objects WHERE hash = ? AND type = ?`,
-		rec.BlobHash, blobObjectType,
+		rec.BlobHash, BlobObjectType,
 	).Scan(&data); err != nil {
 		return nil, fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
 	}
@@ -179,7 +179,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// has always been — that keeps a malformed donation from failing an upsert
 	// that would have taken the COW-hit path and never looked at it.
 	var vecData []byte
-	if _, donated := donatedVec(ctx, rec.Path); !donated && si.rh.getEmbedder() != nil {
+	if _, donated := donatedVec(ctx, rec.Path); !donated && si.rh.Embedder() != nil {
 		indexed, err := si.cowProbe(ctx, rec)
 		if err != nil {
 			return err
@@ -192,12 +192,12 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	}
 
 	// Begin transaction for atomic COW check + insert.
-	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
+	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.DB())
 	if err != nil {
 		return fmt.Errorf("upsert begin tx: %w", err)
 	}
 	defer tx.Rollback()
-	db := conn(ctx, si.rh.db)
+	db := conn(ctx, si.rh.DB())
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
 	_, err = db.ExecContext(ctx,
@@ -302,7 +302,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// would be invisible to vector search and corrupt the corpus's retrieval
 	// guarantees.
 	if vecData == nil {
-		emb := si.rh.getEmbedder()
+		emb := si.rh.Embedder()
 		if vec, ok := donatedVec(ctx, rec.Path); ok {
 			if vecData, err = validateDonatedVec(emb, rec.Path, vec); err != nil {
 				return err
@@ -424,7 +424,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// commit because it queries facts_vec rows that must be visible outside
 	// the tx; a failure here is non-fatal because similarity edges are not
 	// covered by Verify.
-	if si.rh.getEmbedder() != nil {
+	if si.rh.Embedder() != nil {
 		if err := si.graphBuildSimilarityEdges(ctx, rec.Path, rec.BlobHash); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("graph similarity edges failed")
 		}
@@ -442,7 +442,7 @@ func (si *searchIndex) writePostCommitDerivedFrom(ctx context.Context, branch, p
 	if len(localRefs) == 0 {
 		return
 	}
-	if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, path, blobHash, commitHash, localRefs); err != nil {
+	if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, path, blobHash, commitHash, localRefs); err != nil {
 		log.Warn().Err(err).Str("path", path).Str("commit", commitHash).Msg("post-commit DERIVED_FROM edge write failed")
 	}
 }
@@ -460,17 +460,17 @@ func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) 
 // delete removes a fact from the given branch. If no other branch references
 // the fact, the underlying facts row (and its vec/graph data) is also deleted.
 func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
-	branchID, err := si.rh.branchID(ctx, branch)
+	branchID, err := si.rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 
-	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
+	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.DB())
 	if err != nil {
 		return fmt.Errorf("delete begin tx: %w", err)
 	}
 	defer tx.Rollback()
-	db := conn(ctx, si.rh.db)
+	db := conn(ctx, si.rh.DB())
 
 	// Look up fact_id + blob_hash in one query.
 	var factID int64
@@ -527,11 +527,11 @@ func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
 // GetByPath retrieves a FactWithBody by its path on the given branch,
 // hydrating the body from the objects table. Returns nil, nil if not found.
 func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error) {
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("getByPath: %w", err)
 	}
-	row := conn(ctx, fq.rh.db).QueryRowContext(ctx,
+	row := conn(ctx, fq.rh.DB()).QueryRowContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 		        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''),
 		        bf.commit_hash, o.data, cl.committed_at
@@ -540,7 +540,7 @@ func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactW
 		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 		 LEFT JOIN commit_log cl ON cl.commit_hash = bf.commit_hash AND cl.path = bf.path
-		 WHERE bf.branch_id = ? AND bf.path = ?`, blobObjectType, branchID, path,
+		 WHERE bf.branch_id = ? AND bf.path = ?`, BlobObjectType, branchID, path,
 	)
 	return scanFactWithBody(row)
 }
@@ -550,7 +550,7 @@ func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactW
 // Used internally by graph similarity edge computation.
 func (si *searchIndex) getEmbeddingByFact(ctx context.Context, path, blobHash string) ([]float32, error) {
 	var blob []byte
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT fv.embedding
 		 FROM facts f
 		 JOIN facts_vec fv ON fv.rowid = f.id

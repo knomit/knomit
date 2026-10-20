@@ -222,7 +222,7 @@ func (fq *factQuery) highlightRows(ctx context.Context, branchID int64, pathPref
 
 	args = append(args, MaxHighlights)
 
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, q, args...)
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("highlights: %w", err)
 	}
@@ -319,7 +319,7 @@ func (fq *factQuery) separationCounts(ctx context.Context, branchID int64) (topF
 		args = append(args, t)
 	}
 	args = append(args, string(fact.Observation), string(fact.Observation))
-	err = conn(ctx, fq.rh.db).QueryRowContext(ctx, cte+q, args...).
+	err = conn(ctx, fq.rh.DB()).QueryRowContext(ctx, cte+q, args...).
 		Scan(&topFacts, &topEdges, &obsFacts, &obsEdges)
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("separationCounts: %w", err)
@@ -346,7 +346,7 @@ func (fq *factQuery) typeCounts(ctx context.Context, branchID int64, pathPrefix 
 		args = append(args, pathPrefix+"%")
 	}
 	q += ` GROUP BY f.type`
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, q, args...)
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("typeCounts: %w", err)
 	}

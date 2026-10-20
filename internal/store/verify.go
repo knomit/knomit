@@ -252,7 +252,7 @@ func (s *integrity) Verify(ctx context.Context, opts VerifyOpts) (IntegrityRepor
 	// below, and locking it would extend the writer stall to refs this run
 	// never looks at.
 	for _, br := range checked {
-		unlock := s.rh.lockBranchRead(br)
+		unlock := s.rh.LockBranchRead(br)
 		defer unlock()
 	}
 
@@ -367,7 +367,7 @@ func sortIssues(issues []IntegrityIssue) {
 // index, so the `branches` table is not usable as a fourth source.
 func (s *integrity) indexedBranches(ctx context.Context) (map[string]bool, error) {
 	const prefix = "last_commit:"
-	rows, err := s.rh.gits.DB().QueryContext(ctx,
+	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT key FROM meta WHERE key LIKE ? || '%'`, prefix)
 	if err != nil {
 		return nil, err
@@ -421,7 +421,7 @@ func (s *integrity) indexedBranches(ctx context.Context) (map[string]bool, error
 func (s *integrity) reportUnindexedBranches(skipped []string) []IntegrityIssue {
 	var issues []IntegrityIssue
 	for _, br := range skipped {
-		if !isGeneratedRef(br) {
+		if !IsGeneratedRef(br) {
 			continue
 		}
 		issues = append(issues, IntegrityIssue{
@@ -460,13 +460,13 @@ func (p PruneResult) Empty() bool { return len(p.Refs) == 0 && p.Markers == 0 }
 func (s *integrity) PruneGeneratedRefs(ctx context.Context) (PruneResult, error) {
 	var out PruneResult
 
-	iter, err := s.rh.gits.IterReferences()
+	iter, err := s.rh.Storer().IterReferences()
 	if err != nil {
 		return out, fmt.Errorf("prune: iterate refs: %w", err)
 	}
 	var targets []plumbing.ReferenceName
 	if err := iter.ForEach(func(ref *plumbing.Reference) error {
-		if name, ok := strings.CutPrefix(ref.Name().String(), "refs/heads/"); ok && isGeneratedRef(name) {
+		if name, ok := strings.CutPrefix(ref.Name().String(), "refs/heads/"); ok && IsGeneratedRef(name) {
 			targets = append(targets, ref.Name())
 		}
 		return nil
@@ -478,8 +478,8 @@ func (s *integrity) PruneGeneratedRefs(ctx context.Context) (PruneResult, error)
 		// Under the same per-branch write lock a normal ref update takes, so a
 		// concurrent read of that branch cannot see it half-removed.
 		branch, _ := strings.CutPrefix(ref.String(), "refs/heads/")
-		unlock := s.rh.lockBranch(branch)
-		err := s.rh.gits.RemoveReference(ref)
+		unlock := s.rh.LockBranch(branch)
+		err := s.rh.Storer().RemoveReference(ref)
 		unlock()
 		if err != nil {
 			// Refs is what was ACTUALLY deleted, never what was merely found.
@@ -497,7 +497,7 @@ func (s *integrity) PruneGeneratedRefs(ctx context.Context) (PruneResult, error)
 	// outlive the refs, so this runs even when no ref matched. The row count is
 	// returned rather than swallowed: a prune that quietly deleted rows in a
 	// repo it reported nothing about is an invisible write.
-	res, err := s.rh.gits.DB().ExecContext(ctx,
+	res, err := s.rh.Storer().DB().ExecContext(ctx,
 		`DELETE FROM kv WHERE key LIKE 'okf:marker:%'`)
 	if err != nil {
 		return out, fmt.Errorf("prune: delete okf markers: %w", err)
@@ -512,7 +512,7 @@ func (s *integrity) PruneGeneratedRefs(ctx context.Context) (PruneResult, error)
 // We deliberately bypass the branches SQLite cache so the branches-table check
 // can compare cache vs. truth.
 func (s *integrity) listBranchRefsForVerify(_ context.Context) ([]string, error) {
-	iter, err := s.rh.gits.IterReferences()
+	iter, err := s.rh.Storer().IterReferences()
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +533,7 @@ func (s *integrity) listBranchRefsForVerify(_ context.Context) ([]string, error)
 // (when known) the path that referenced it.
 func (s *integrity) checkGitReachability(_ context.Context, branch string) []IntegrityIssue {
 	var issues []IntegrityIssue
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryGitReachability, Branch: branch,
@@ -550,7 +550,7 @@ func (s *integrity) checkGitReachability(_ context.Context, branch string) []Int
 		}
 		visited[cur.String()] = true
 
-		commit, err := object.GetCommit(s.rh.gits, cur)
+		commit, err := object.GetCommit(s.rh.Storer(), cur)
 		if err != nil {
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryGitReachability, Branch: branch, Commit: cur.String(),
@@ -582,7 +582,7 @@ func (s *integrity) checkGitReachability(_ context.Context, branch string) []Int
 // walkTreeReachable recursively walks a tree and reports any unreachable
 // blobs or subtrees. pathPrefix is the path accumulated so far; "" at root.
 func (s *integrity) walkTreeReachable(branch, commit string, treeHash plumbing.Hash, pathPrefix string) []IntegrityIssue {
-	tree, err := object.GetTree(s.rh.gits, treeHash)
+	tree, err := object.GetTree(s.rh.Storer(), treeHash)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryGitReachability, Branch: branch, Commit: commit, Path: pathPrefix,
@@ -601,7 +601,7 @@ func (s *integrity) walkTreeReachable(branch, commit string, treeHash plumbing.H
 		default:
 			// Verify the blob object exists. HasEncodedObject is a COUNT(*)
 			// query — much cheaper than EncodedObject which loads blob data.
-			if err := s.rh.gits.HasEncodedObject(e.Hash); err != nil {
+			if err := s.rh.Storer().HasEncodedObject(e.Hash); err != nil {
 				issues = append(issues, IntegrityIssue{
 					Severity: SeverityError, Category: CategoryGitReachability,
 					Branch: branch, Commit: commit, Path: childPath,
@@ -625,7 +625,7 @@ func (s *integrity) checkCommitLogParity(ctx context.Context, branch string) []I
 	// visibility via every edge, so a first-parent-only walk would
 	// flag the non-first-parent side as "unreachable" even though
 	// it's genuinely in the ancestry. Walk the full parent DAG.
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return nil // git-reachability already reported it
 	}
@@ -638,7 +638,7 @@ func (s *integrity) checkCommitLogParity(ctx context.Context, branch string) []I
 			continue
 		}
 		gitCommits[cur.String()] = true
-		commit, err := object.GetCommit(s.rh.gits, cur)
+		commit, err := object.GetCommit(s.rh.Storer(), cur)
 		if err != nil {
 			continue
 		}
@@ -655,7 +655,7 @@ func (s *integrity) checkCommitLogParity(ctx context.Context, branch string) []I
 	// authoritative invariant — every reachable commit must have a
 	// branch_commits row — and commit_log is a path-indexed projection
 	// that legitimately has no rows for no-op commits.
-	rows, err := s.rh.gits.DB().QueryContext(ctx,
+	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT bc.commit_hash FROM branch_commits bc
 		 JOIN branches b ON b.id = bc.branch_id
 		 WHERE b.name = ?`, branch)
@@ -720,7 +720,7 @@ func (s *integrity) checkCommitLogParity(ctx context.Context, branch string) []I
 // Repo-global, not per branch: commit_log is keyed by (commit_hash, path) with
 // no branch dimension.
 func (s *integrity) checkCommitLogOrphans(ctx context.Context) []IntegrityIssue {
-	rows, err := s.rh.gits.DB().QueryContext(ctx,
+	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT DISTINCT commit_hash FROM commit_log`)
 	if err != nil {
 		return []IntegrityIssue{{
@@ -749,7 +749,7 @@ func (s *integrity) checkCommitLogOrphans(ctx context.Context) []IntegrityIssue 
 
 	var issues []IntegrityIssue
 	for _, h := range hashes {
-		if _, err := object.GetCommit(s.rh.gits, plumbing.NewHash(h)); err != nil {
+		if _, err := object.GetCommit(s.rh.Storer(), plumbing.NewHash(h)); err != nil {
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryCommitLog, Commit: h,
 				Detail: "commit_log rows reference a commit that is not in the object store",
@@ -780,14 +780,14 @@ func (s *integrity) checkFactsCoherence(ctx context.Context, branch string) []In
 		// Same predicate the indexer admits paths by, so "what Verify expects"
 		// and "what the index holds" cannot drift — and a custom ontology_root
 		// is honoured by both rather than only by the writer.
-		if !s.rh.isFactPath(p) {
+		if !s.rh.IsFactPath(p) {
 			continue
 		}
 		treeMap[p] = treeBlobs[i]
 	}
 
 	// branch_facts rows for this branch joined against facts.
-	rows, err := s.rh.gits.DB().QueryContext(ctx,
+	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT bf.path, bf.fact_id, f.path, f.blob_hash
 		 FROM branch_facts bf
 		 LEFT JOIN facts f ON f.id = bf.fact_id
@@ -876,13 +876,13 @@ func (s *integrity) checkFactsCoherence(ctx context.Context, branch string) []In
 // branch-agnostic under knomit's COW fact model. It is called once per
 // Verify run, not per branch.
 func (s *integrity) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue {
-	if s.rh.getEmbedder() == nil {
+	if s.rh.Embedder() == nil {
 		return nil
 	}
 	var issues []IntegrityIssue
 
 	// Direction 1: facts rows without facts_vec rows.
-	rows, err := s.rh.gits.DB().QueryContext(ctx,
+	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT f.id, f.path FROM facts f
 		 WHERE f.id NOT IN (SELECT rowid FROM facts_vec)`)
 	if err != nil {
@@ -914,7 +914,7 @@ func (s *integrity) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssu
 	}
 
 	// Direction 2: facts_vec rows without facts rows (trigger regression detection).
-	orphanRows, err := s.rh.gits.DB().QueryContext(ctx,
+	orphanRows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT rowid FROM facts_vec WHERE rowid NOT IN (SELECT id FROM facts)`)
 	if err != nil {
 		return append(issues, IntegrityIssue{
@@ -952,7 +952,7 @@ func (s *integrity) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssu
 // every vector still be from the wrong model, which makes similarity search
 // quietly meaningless rather than broken.
 func (s *integrity) checkEmbeddingIdentity(ctx context.Context) []IntegrityIssue {
-	emb := s.rh.getEmbedder()
+	emb := s.rh.Embedder()
 	if emb == nil {
 		return nil
 	}
@@ -1003,7 +1003,7 @@ func (s *integrity) checkEmbeddingIdentity(ctx context.Context) []IntegrityIssue
 // commit_parents holds the DAG edges, and drift there is invisible to both —
 // history walks silently take the wrong shape.
 func (s *integrity) checkCommitParents(ctx context.Context, branch string, stored map[string][]string) []IntegrityIssue {
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return nil // git-reachability already reported it
 	}
@@ -1018,7 +1018,7 @@ func (s *integrity) checkCommitParents(ctx context.Context, branch string, store
 			continue
 		}
 		seen[cur.String()] = true
-		commit, err := object.GetCommit(s.rh.gits, cur)
+		commit, err := object.GetCommit(s.rh.Storer(), cur)
 		if err != nil {
 			continue // git-reachability owns this
 		}
@@ -1054,7 +1054,7 @@ func (s *integrity) checkCommitParents(ctx context.Context, branch string, store
 // most of it anyway, so reading it whole is cheaper in both time and lock-hold
 // than querying per commit, and it is shared across branches.
 func (s *integrity) loadCommitParents(ctx context.Context) (map[string][]string, error) {
-	rows, err := s.rh.gits.DB().QueryContext(ctx,
+	rows, err := s.rh.Storer().DB().QueryContext(ctx,
 		`SELECT commit_hash, parent_hash FROM commit_parents ORDER BY commit_hash, parent_order`)
 	if err != nil {
 		return nil, err
@@ -1097,7 +1097,7 @@ func (s *integrity) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 	}
 	for _, o := range orphans {
 		var n int
-		if err := s.rh.gits.DB().QueryRowContext(ctx, fmt.Sprintf(
+		if err := s.rh.Storer().DB().QueryRowContext(ctx, fmt.Sprintf(
 			`SELECT COUNT(*) FROM %s WHERE %s NOT IN (SELECT id FROM facts)`, o.table, o.col),
 		).Scan(&n); err != nil {
 			issues = append(issues, IntegrityIssue{
@@ -1122,7 +1122,7 @@ func (s *integrity) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 		{"fact_domain_tokens", "fact_domains"},
 	} {
 		var n int
-		if err := s.rh.gits.DB().QueryRowContext(ctx, fmt.Sprintf(
+		if err := s.rh.Storer().DB().QueryRowContext(ctx, fmt.Sprintf(
 			`SELECT COUNT(*) FROM (SELECT DISTINCT fact_id FROM %s
 			  WHERE fact_id NOT IN (SELECT fact_id FROM %s))`, d.have, d.missing),
 		).Scan(&n); err != nil {
@@ -1162,7 +1162,7 @@ func (s *integrity) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 			 WHERE j.value IS NOT NULL AND j.value != ''`},
 	} {
 		var n int
-		if err := s.rh.gits.DB().QueryRowContext(ctx,
+		if err := s.rh.Storer().DB().QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM (`+d.query+`)`).Scan(&n); err != nil {
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryDerivedTables,
@@ -1182,7 +1182,7 @@ func (s *integrity) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 	}
 
 	var skew int
-	if err := s.rh.gits.DB().QueryRowContext(ctx,
+	if err := s.rh.Storer().DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM (
 		   SELECT fact_id, domain FROM fact_domains
 		   EXCEPT
@@ -1210,7 +1210,7 @@ func (s *integrity) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 func (s *integrity) checkDatabase(ctx context.Context) []IntegrityIssue {
 	var issues []IntegrityIssue
 
-	rows, err := s.rh.gits.DB().QueryContext(ctx, `PRAGMA quick_check`)
+	rows, err := s.rh.Storer().DB().QueryContext(ctx, `PRAGMA quick_check`)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryDatabase,
@@ -1249,7 +1249,7 @@ func (s *integrity) checkDatabase(ctx context.Context) []IntegrityIssue {
 	// foreign_key_check reports violations even when PRAGMA foreign_keys is
 	// OFF for the connection — which is the case that matters, since a cascade
 	// that never ran is exactly how orphan rows survive.
-	fkRows, err := s.rh.gits.DB().QueryContext(ctx, `PRAGMA foreign_key_check`)
+	fkRows, err := s.rh.Storer().DB().QueryContext(ctx, `PRAGMA foreign_key_check`)
 	if err != nil {
 		return append(issues, IntegrityIssue{
 			Severity: SeverityError, Category: CategoryDatabase,
@@ -1293,7 +1293,7 @@ func (s *integrity) checkDatabase(ctx context.Context) []IntegrityIssue {
 func (s *integrity) checkSchemaVersion(ctx context.Context) []IntegrityIssue {
 	var version int64
 	var dirty bool
-	err := s.rh.gits.DB().QueryRowContext(ctx,
+	err := s.rh.Storer().DB().QueryRowContext(ctx,
 		`SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty)
 	if err == sql.ErrNoRows {
 		return []IntegrityIssue{{
@@ -1339,7 +1339,7 @@ func (s *integrity) checkSchemaVersion(ctx context.Context) []IntegrityIssue {
 func (s *integrity) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
 	reachable := map[string]bool{}
 
-	iter, err := s.rh.gits.IterReferences()
+	iter, err := s.rh.Storer().IterReferences()
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryOrphanObjects,
@@ -1365,7 +1365,7 @@ func (s *integrity) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
 			return
 		}
 		reachable[h.String()] = true
-		tree, err := object.GetTree(s.rh.gits, h)
+		tree, err := object.GetTree(s.rh.Storer(), h)
 		if err != nil {
 			return
 		}
@@ -1385,7 +1385,7 @@ func (s *integrity) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
 		if cur.IsZero() || reachable[cur.String()] {
 			continue
 		}
-		commit, err := object.GetCommit(s.rh.gits, cur)
+		commit, err := object.GetCommit(s.rh.Storer(), cur)
 		if err != nil {
 			// Not a commit (an annotated tag or a ref straight at a tree/blob).
 			// Mark it reachable so it is never counted as an orphan, and move on.
@@ -1397,7 +1397,7 @@ func (s *integrity) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
 		stack = append(stack, commit.ParentHashes...)
 	}
 
-	rows, err := s.rh.gits.DB().QueryContext(ctx, `SELECT DISTINCT hash FROM objects`)
+	rows, err := s.rh.Storer().DB().QueryContext(ctx, `SELECT DISTINCT hash FROM objects`)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryOrphanObjects,
@@ -1453,7 +1453,7 @@ func (s *integrity) checkOrphanObjects(ctx context.Context) []IntegrityIssue {
 func (s *integrity) checkBranchesTable(ctx context.Context, checked, allBranches []string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
-	rows, err := s.rh.gits.DB().QueryContext(ctx, `SELECT name, git_ref FROM branches`)
+	rows, err := s.rh.Storer().DB().QueryContext(ctx, `SELECT name, git_ref FROM branches`)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryBranchesTable,
@@ -1531,10 +1531,10 @@ func (s *integrity) checkFactFormat(ctx context.Context, branch string) []Integr
 	}
 
 	for _, p := range treePaths {
-		if !s.rh.isFactPath(p) {
+		if !s.rh.IsFactPath(p) {
 			continue
 		}
-		content, err := s.rh.readFile(ctx, branch, p)
+		content, err := s.rh.ReadFile(ctx, branch, p)
 		if err != nil {
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityWarning, Category: CategoryFactFormat, Branch: branch, Path: p,
@@ -1575,7 +1575,7 @@ func (s *integrity) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 	var issues []IntegrityIssue
 
 	// 1. Collect all facts from the relational table.
-	sqlRows, err := s.rh.gits.DB().QueryContext(ctx, `SELECT path, blob_hash FROM facts`)
+	sqlRows, err := s.rh.Storer().DB().QueryContext(ctx, `SELECT path, blob_hash FROM facts`)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryGraphCoherence,
@@ -1605,7 +1605,7 @@ func (s *integrity) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 	// tables. `deleted` is now plain TEXT ('true'/'false'), so the comparison
 	// is a direct one; a node with no `deleted` property at all counts as live,
 	// matching the property's false default.
-	graphRows, err := s.rh.gits.DB().QueryContext(ctx, `
+	graphRows, err := s.rh.Storer().DB().QueryContext(ctx, `
 		SELECT p.value, b.value
 		FROM node_labels nl
 		JOIN node_props_text p ON p.node_id = nl.node_id

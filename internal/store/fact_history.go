@@ -25,7 +25,7 @@ func parseOperation(email string) string {
 }
 
 // firstLine returns the first line of s.
-func firstLine(s string) string {
+func FirstLine(s string) string {
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
 		return s[:idx]
 	}
@@ -33,16 +33,16 @@ func firstLine(s string) string {
 }
 
 // changedFileEntry represents a file changed in a commit (internal to commitlog).
-type changedFileEntry struct {
-	path   string
-	action string // "added", "modified", "deleted"
+type ChangedFileEntry struct {
+	Path   string
+	Action string // "added", "modified", "deleted"
 }
 
 // commitEntries converts changedFileEntry results from a commit into CommitLogEntry structs.
-func commitEntries(c *object.Commit, files []changedFileEntry) []storegit.CommitLogEntry {
+func commitEntries(c *object.Commit, files []ChangedFileEntry) []storegit.CommitLogEntry {
 	hashStr := c.Hash.String()
 	ts := c.Committer.When.Unix()
-	msg := firstLine(c.Message)
+	msg := FirstLine(c.Message)
 	authorName := c.Author.Name
 	authorEmail := c.Author.Email
 	op := parseOperation(authorEmail)
@@ -51,12 +51,12 @@ func commitEntries(c *object.Commit, files []changedFileEntry) []storegit.Commit
 	for _, f := range files {
 		entries = append(entries, storegit.CommitLogEntry{
 			Hash:        hashStr,
-			Path:        f.path,
+			Path:        f.Path,
 			Message:     msg,
 			Operation:   op,
 			AuthorName:  authorName,
 			AuthorEmail: authorEmail,
-			Action:      f.action,
+			Action:      f.Action,
 			CommittedAt: ts,
 		})
 	}
@@ -70,7 +70,7 @@ func commitEntries(c *object.Commit, files []changedFileEntry) []storegit.Commit
 // parity check (Task 1.3) requires every reachable commit to have at least
 // one commit_log row, so the filter was removed in 2026-04-08. Callers
 // that need a .md-only view must filter themselves.
-func changedFilesInCommit(c *object.Commit) ([]changedFileEntry, error) {
+func ChangedFilesInCommit(c *object.Commit) ([]ChangedFileEntry, error) {
 	toTree, err := c.Tree()
 	if err != nil {
 		return nil, fmt.Errorf("changedFilesInCommit: tree: %w", err)
@@ -92,12 +92,12 @@ func changedFilesInCommit(c *object.Commit) ([]changedFileEntry, error) {
 // changedFilesBetween returns every file added/modified/deleted from fromTree
 // (nil: an empty tree) to toTree — changedFilesInCommit's diff, for callers
 // that load the trees themselves.
-func changedFilesBetween(fromTree, toTree *object.Tree) ([]changedFileEntry, error) {
+func changedFilesBetween(fromTree, toTree *object.Tree) ([]ChangedFileEntry, error) {
 	changes, err := object.DiffTree(fromTree, toTree)
 	if err != nil {
 		return nil, fmt.Errorf("changedFilesInCommit: diff: %w", err)
 	}
-	var files []changedFileEntry
+	var files []ChangedFileEntry
 	for _, ch := range changes {
 		var path, action string
 		switch {
@@ -108,12 +108,12 @@ func changedFilesBetween(fromTree, toTree *object.Tree) ([]changedFileEntry, err
 		default:
 			path, action = ch.To.Name, "modified"
 		}
-		files = append(files, changedFileEntry{path: strings.ToLower(path), action: action})
+		files = append(files, ChangedFileEntry{Path: strings.ToLower(path), Action: action})
 	}
 	return files, nil
 }
 
 // commitLogAge returns a Unix timestamp for `days` days ago.
-func commitLogAge(days int) int64 {
+func CommitLogAge(days int) int64 {
 	return time.Now().Unix() - int64(days)*86400
 }

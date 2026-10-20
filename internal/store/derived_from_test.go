@@ -303,9 +303,9 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
 	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
 	// the auto-wired edges interfering with the assertions below.
-	_, err = si.rh.db.Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
+	_, err = si.rh.DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
 	require.NoError(t, err)
-	_, err = si.rh.db.Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
+	_, err = si.rh.DB().Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
 	require.NoError(t, err)
 
 	// Manually invoke the helper to write the edge with both commits. It is
@@ -314,11 +314,11 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 	// transaction. Its tx parameter is inert (it writes via conn(ctx)); wrapping
 	// it in a held BEGIN IMMEDIATE would deadlock its own bare-db writes against
 	// the write lock that wrapper holds.
-	require.NoError(t, si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, "kb/d.md", dBlobHash, c2, []string{"kb/e.md"}))
+	require.NoError(t, si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, "kb/d.md", dBlobHash, c2, []string{"kb/e.md"}))
 
 	// Read back from the EAV tables: expect exactly one edge from D to E with
 	// both commit properties.
-	rows, err := si.rh.db.QueryContext(ctx, `
+	rows, err := si.rh.DB().QueryContext(ctx, `
 		SELECT sp.value, sc.value, tc.value
 		FROM edges e
 		JOIN node_props_text tp ON tp.node_id = e.target_id
@@ -372,7 +372,7 @@ func TestUpsert_WritesDerivedFromEdges_PostCommit(t *testing.T) {
 
 	si := svc.si
 	var count int
-	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
 	require.Equal(t, 1, count, "WriteFact should produce one DERIVED_FROM edge for D→E without needing Rebuild")
 }
@@ -400,19 +400,19 @@ func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {
 	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
 	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
 	// the auto-wired edges interfering with the assertions below.
-	_, err = si.rh.db.Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
+	_, err = si.rh.DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
 	require.NoError(t, err)
-	_, err = si.rh.db.Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
+	_, err = si.rh.DB().Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
 	require.NoError(t, err)
 
-	tx, err := si.rh.db.BeginTx(ctx, nil)
+	tx, err := si.rh.DB().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
 	require.NoError(t, si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, "kb/d.md", dBlobHash, c, []string{"kb/never.md"}))
 	require.NoError(t, tx.Commit())
 
 	var count int
-	require.NoError(t, si.rh.db.QueryRow(`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
+	require.NoError(t, si.rh.DB().QueryRow(`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
 	require.Zero(t, count, "forward-broken ref must not produce any DERIVED_FROM edge")
 }
 
@@ -448,7 +448,7 @@ func TestResolveActiveCommitForPath_DepthRegression(t *testing.T) {
 	}
 
 	si := svc.si
-	got, ok, err := si.rh.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+	got, ok, err := si.rh.ResolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
 	require.NoError(t, err)
 	require.True(t, ok, "must resolve target through 20 unrelated commits")
 	require.Equal(t, c1, got, "must resolve to the original add commit")
@@ -494,7 +494,7 @@ func TestResolveActiveCommitForPath_ConcurrentNoDeadlock(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			got, ok, rerr := si.rh.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+			got, ok, rerr := si.rh.ResolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
 			if rerr != nil {
 				errs <- fmt.Errorf("resolveActiveCommitForPath: %w", rerr)
 				return

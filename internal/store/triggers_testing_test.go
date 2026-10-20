@@ -24,9 +24,9 @@ func TestTestingCommitFiles_TreeMatchesPerPathBuild(t *testing.T) {
 		_, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody(p, 0.5, nil), "seed", "")
 		require.NoError(t, err)
 	}
-	parent, err := svc.rh.resolveRef(ctx, "main")
+	parent, err := svc.rh.ResolveRef(ctx, "main")
 	require.NoError(t, err)
-	parentCommit, err := svc.rh.repo.CommitObject(parent)
+	parentCommit, err := svc.rh.Repository().CommitObject(parent)
 	require.NoError(t, err)
 	parentTree, err := parentCommit.Tree()
 	require.NoError(t, err)
@@ -45,17 +45,17 @@ func TestTestingCommitFiles_TreeMatchesPerPathBuild(t *testing.T) {
 	sort.Strings(paths)
 	want, tree := parentTree.Hash, parentTree
 	for _, p := range paths {
-		blob, err := writeBlobToStore(svc.rh.gits, []byte(files[p]))
+		blob, err := WriteBlobToStore(svc.rh.Storer(), []byte(files[p]))
 		require.NoError(t, err)
-		want, err = buildTree(svc.rh.gits, tree, p, blob)
+		want, err = BuildTree(svc.rh.Storer(), tree, p, blob)
 		require.NoError(t, err)
-		tree, err = object.GetTree(svc.rh.gits, want)
+		tree, err = object.GetTree(svc.rh.Storer(), want)
 		require.NoError(t, err)
 	}
 
 	h, err := svc.TestingCommitFiles("main", files, "batch")
 	require.NoError(t, err)
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(h))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
 	require.NoError(t, err)
 	require.Equal(t, []plumbing.Hash{parent}, c.ParentHashes)
 	require.NotEqual(t, parentTree.Hash, c.TreeHash, "reached: the batch changed the tree")

@@ -65,7 +65,7 @@ func (d *testingDir) write(s *storegit.Storer, existing *object.Tree) (plumbing.
 		}
 	}
 	for name, content := range d.files {
-		h, err := writeBlobToStore(s, []byte(content))
+		h, err := WriteBlobToStore(s, []byte(content))
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}

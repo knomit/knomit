@@ -21,11 +21,11 @@ func TestGraphSetEdgeProps_WritesAndReadsText(t *testing.T) {
 	ctx := context.Background()
 
 	// Two Fact nodes, distinct (path, blob_hash).
-	srcID, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+	srcID, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "aaaa"})
 	require.NoError(t, err)
 	require.NotZero(t, srcID)
-	tgtID, err := graphMergeNode(ctx, si.rh.db, NodeFact,
+	tgtID, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
 		map[string]string{"path": "kb/b.md", "blob_hash": "bbbb"})
 	require.NoError(t, err)
 	require.NotZero(t, tgtID)
@@ -40,7 +40,7 @@ func TestGraphSetEdgeProps_WritesAndReadsText(t *testing.T) {
 	}))
 
 	// Read back from the EAV tables and verify both properties round-trip.
-	rows, err := si.rh.db.QueryContext(ctx, `
+	rows, err := si.rh.DB().QueryContext(ctx, `
 		SELECT sc.value, tc.value
 		FROM edges e
 		JOIN edge_props_text sc ON sc.edge_id = e.id

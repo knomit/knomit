@@ -28,7 +28,7 @@ func TestRebuild_RepopulatesCommitLogAuthorFromGit(t *testing.T) {
 
 	// Simulate the pre-column state: every commit_log row has lost its author
 	// name. A plain re-walk would skip these (dedup), so they must be cleared.
-	_, err = svc.rh.db.Exec(`UPDATE commit_log SET author_name = ''`)
+	_, err = svc.rh.DB().Exec(`UPDATE commit_log SET author_name = ''`)
 	require.NoError(t, err)
 
 	pre, _, _, err := svc.Search().LogPaginated(ctx, "main", "kb/a.md", 10, "", "", "")

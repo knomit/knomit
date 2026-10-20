@@ -63,7 +63,7 @@ func TestRebuildEmbeddings_DoesNotHoldWriteLockDuringEmbed(t *testing.T) {
 	}
 
 	si := svc.si
-	_, err = si.rh.db.ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
+	_, err = si.rh.DB().ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
 	require.NoError(t, err)
 
 	rebuildDone := make(chan error, 1)
@@ -81,7 +81,7 @@ func TestRebuildEmbeddings_DoesNotHoldWriteLockDuringEmbed(t *testing.T) {
 	// than blocking for the entire embed. Before the fix this timed out.
 	wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	wtx, err := si.rh.db.BeginTx(wctx, nil)
+	wtx, err := si.rh.DB().BeginTx(wctx, nil)
 	require.NoError(t, err, "write lock must be free during embedding (embed runs outside the tx)")
 	require.NoError(t, wtx.Rollback())
 
@@ -130,7 +130,7 @@ func TestRebuildEmbeddings_RejectsBatchLengthMismatch(t *testing.T) {
 	}
 
 	si := svc.si
-	_, err = si.rh.db.ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
+	_, err = si.rh.DB().ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
 	require.NoError(t, err)
 
 	err = svc.IndexManager().Rebuild(ctx, branch, nil)
@@ -177,7 +177,7 @@ func TestRebuild_SerializedWithConcurrentSyncLocked(t *testing.T) {
 	}
 
 	si := svc.si
-	_, err = si.rh.db.ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
+	_, err = si.rh.DB().ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
 	require.NoError(t, err)
 
 	// Start a Rebuild; it parks inside EmbedDocuments while holding lockBranch.

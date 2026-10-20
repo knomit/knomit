@@ -72,7 +72,7 @@ type repoHandler struct {
 	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer ssh.Signer        // SSH signer for commit signing (shared)
 	// writeOnt caches the ontology validateWrite last parsed.
-	writeOnt ontCache
+	writeOnt OntCache
 	// agentID is this instance's persisted agent id (SetAgentID), named by
 	// every authored commit. Never derived from a branch name.
 	agentID string
@@ -153,7 +153,7 @@ type repoHandler struct {
 
 // gitTreeReadCount returns the number of commit-tree reads performed so far.
 // Test-only observability into rebuild/graph I/O; see repoHandler.gitTreeReads.
-func (rh *repoHandler) gitTreeReadCount() int64 { return rh.gitTreeReads.Load() }
+func (rh *repoHandler) GitTreeReadCount() int64 { return rh.gitTreeReads.Load() }
 
 // lockBranch acquires the per-branch write lock and returns an unlock function.
 // Used by factIndex, remoteIndex, and MergeBranch to serialize writes on a
@@ -162,7 +162,7 @@ func (rh *repoHandler) gitTreeReadCount() int64 { return rh.gitTreeReads.Load() 
 // initial ref resolution through SetReference AND notifyCommit's index sync —
 // so no reader can observe the window between "git HEAD advanced" and "SQL
 // branch_facts / graph updated".
-func (rh *repoHandler) lockBranch(branch string) func() {
+func (rh *repoHandler) LockBranch(branch string) func() {
 	v, _ := rh.branchMu.LoadOrStore(branch, &sync.RWMutex{})
 	mu := v.(*sync.RWMutex)
 	mu.Lock()
@@ -172,7 +172,7 @@ func (rh *repoHandler) lockBranch(branch string) func() {
 // lockPush acquires the per-branch push mutex (see remoteIndex.Push) and
 // returns its unlock. It is held for a whole push, network included, which is
 // why it must never be the write lock.
-func (rh *repoHandler) lockPush(branch string) func() {
+func (rh *repoHandler) LockPush(branch string) func() {
 	v, _ := rh.pushMu.LoadOrStore(branch, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	mu.Lock()
@@ -183,7 +183,7 @@ func (rh *repoHandler) lockPush(branch string) func() {
 // it concurrently, but no writer can proceed while any reader holds it. Used
 // by Verify to take a consistent snapshot of a branch's git tree + SQL index
 // state without blocking parallel read-only operations.
-func (rh *repoHandler) lockBranchRead(branch string) func() {
+func (rh *repoHandler) LockBranchRead(branch string) func() {
 	v, _ := rh.branchMu.LoadOrStore(branch, &sync.RWMutex{})
 	mu := v.(*sync.RWMutex)
 	mu.RLock()
@@ -195,14 +195,14 @@ func (rh *repoHandler) lockBranchRead(branch string) func() {
 // (no bound — legacy hang-forever behavior) with a no-op cancel. Callers MUST
 // always defer the returned cancel. Pass context.Background() at call sites that
 // have no inbound context (CloneFrom/InitFromRemote/detect*).
-func (rh *repoHandler) netCtx(parent context.Context) (context.Context, context.CancelFunc) {
-	return netCtxWith(parent, rh.netTimeout)
+func (rh *repoHandler) NetCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	return NetCtxWith(parent, rh.netTimeout)
 }
 
 // netCtxWith is the free-function form of netCtx for call sites (e.g. the
 // package-level fetchOrigin helper) that hold a timeout value but no
 // repoHandler. timeout<=0 returns parent unchanged with a no-op cancel.
-func netCtxWith(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+func NetCtxWith(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
 		return parent, func() {}
 	}
@@ -210,14 +210,14 @@ func netCtxWith(parent context.Context, timeout time.Duration) (context.Context,
 }
 
 // setEmbedder attaches an Embedder. Called once during service construction.
-func (rh *repoHandler) setEmbedder(e Embedder) {
+func (rh *repoHandler) SetEmbedder(e Embedder) {
 	rh.embedMu.Lock()
 	defer rh.embedMu.Unlock()
 	rh.embedder = e
 }
 
 // getEmbedder returns the current Embedder under a read lock.
-func (rh *repoHandler) getEmbedder() Embedder {
+func (rh *repoHandler) Embedder() Embedder {
 	rh.embedMu.RLock()
 	defer rh.embedMu.RUnlock()
 	return rh.embedder
@@ -253,7 +253,7 @@ func (rh *repoHandler) EnsureBranch(ctx context.Context, name, gitRef string) (i
 
 // branchID returns the ID for a branch name, using the cache when possible.
 // Returns an error if the branch does not exist.
-func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error) {
+func (rh *repoHandler) BranchID(ctx context.Context, name string) (int64, error) {
 	if id, ok := rh.cache.get(name); ok {
 		return id, nil
 	}
@@ -281,21 +281,21 @@ func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error)
 // in the object store (shared via COW — other branches may still reach
 // them). Verify's branches-table check catches any residue.
 func (rh *repoHandler) DropBranch(ctx context.Context, name string) error {
-	id, err := rh.branchID(ctx, name)
+	id, err := rh.BranchID(ctx, name)
 	if err != nil {
 		return fmt.Errorf("drop branch: %w", err)
 	}
 
 	// Acquire the per-branch write lock so concurrent writes can't race
 	// the deletion. Released when the function returns.
-	unlock := rh.lockBranch(name)
+	unlock := rh.LockBranch(name)
 	defer unlock()
-	return rh.dropBranchLocked(ctx, name, id)
+	return rh.DropBranchLocked(ctx, name, id)
 }
 
 // dropBranchLocked is DropBranch's body, for a caller that already holds
 // name's write lock (demotePeer decides under it whether to drop).
-func (rh *repoHandler) dropBranchLocked(ctx context.Context, name string, id int64) error {
+func (rh *repoHandler) DropBranchLocked(ctx context.Context, name string, id int64) error {
 	// 1. Delete the git ref first. If this fails, we leave the SQLite
 	// state untouched so the operation is retryable — better than a
 	// half-removed state where the ref is gone but rows remain.
@@ -363,14 +363,14 @@ func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch stri
 	if _, err := rh.gits.Reference(newRefName); err == nil {
 		return nil // already exists
 	}
-	fromHash, err := rh.resolveRef(ctx, fromBranch)
+	fromHash, err := rh.ResolveRef(ctx, fromBranch)
 	if err != nil {
 		return fmt.Errorf("CreateBranch: resolve source %q: %w", fromBranch, err)
 	}
 	// The copied visibility below must only name derived commits: the
 	// source's commits are (indexing derives them), so this is a lookup —
 	// unless the source predates path_changes, when it derives them now.
-	if err := rh.deriveBeforeAdvance(ctx, fromHash); err != nil {
+	if err := rh.DeriveBeforeAdvance(ctx, fromHash); err != nil {
 		return fmt.Errorf("CreateBranch: %w", err)
 	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
@@ -497,7 +497,7 @@ func (rh *repoHandler) SetAgentBranchOwner(ctx context.Context, branch string) e
 // Interpolating an empty name would otherwise produce "+refs/heads/:refs/
 // remotes/origin/", which git accepts into the config and which then makes
 // every fetch fail.
-func (rh *repoHandler) configureRemote(url, upstreamMain, agentBranch string) error {
+func (rh *repoHandler) ConfigureRemote(url, upstreamMain, agentBranch string) error {
 	rh.configMu.Lock()
 	defer rh.configMu.Unlock()
 
@@ -544,7 +544,7 @@ func sameRefspecs(a, b []gogitconfig.RefSpec) bool {
 // ── git read methods ──────────────────────────────────────────────────────────
 
 // resolveRef returns the commit hash at the tip of branch.
-func (rh *repoHandler) resolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
+func (rh *repoHandler) ResolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
 	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
@@ -559,7 +559,7 @@ func (rh *repoHandler) resolveRef(ctx context.Context, branch string) (plumbing.
 // If the exact path is not found, it falls back to a case-insensitive tree
 // walk so that normalised (lowercase) index paths resolve correctly against
 // pre-normalisation commits that stored paths with mixed case.
-func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash string) (string, error) {
+func (rh *repoHandler) ReadFileAtCommit(ctx context.Context, path, commitHash string) (string, error) {
 	rh.gitTreeReads.Add(1)
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
@@ -591,7 +591,7 @@ func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash st
 // which is what the time-aware DERIVED_FROM resolver needs to find the
 // "active version of path P at commit C on branch B" without being
 // confused by versions merged in from sibling branches.
-func (rh *repoHandler) firstParentCommit(ctx context.Context, commitHash string) (string, error) {
+func (rh *repoHandler) FirstParentCommit(ctx context.Context, commitHash string) (string, error) {
 	commit, err := rh.repo.CommitObject(plumbing.NewHash(commitHash))
 	if err != nil {
 		return "", fmt.Errorf("firstParentCommit: %s: %w", commitHash, err)
@@ -610,7 +610,7 @@ func (rh *repoHandler) firstParentCommit(ctx context.Context, commitHash string)
 // is known-good (returned by resolveTargetCommit), so an exact lookup is
 // sufficient. Compare with readFileAtCommit above which falls back for
 // pre-normalisation legacy paths.
-func (rh *repoHandler) readBlobHashAtCommit(ctx context.Context, path, commitHash string) (string, error) {
+func (rh *repoHandler) ReadBlobHashAtCommit(ctx context.Context, path, commitHash string) (string, error) {
 	rh.gitTreeReads.Add(1)
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
@@ -641,7 +641,7 @@ func (rh *repoHandler) HeadCommit(ctx context.Context, branch string) (string, e
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
-	hash, err := rh.resolveRef(ctx, branch)
+	hash, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
@@ -652,7 +652,7 @@ func (rh *repoHandler) HeadCommit(ctx context.Context, branch string) (string, e
 // timestamp. Used by the cluster-cache background checker to detect "activity
 // has settled for N seconds" before triggering a recompute.
 func (rh *repoHandler) HeadCommitInfo(ctx context.Context, branch string) (string, time.Time, error) {
-	hash, err := rh.resolveRef(ctx, branch)
+	hash, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("HeadCommitInfo: %w", err)
 	}
@@ -665,7 +665,7 @@ func (rh *repoHandler) HeadCommitInfo(ctx context.Context, branch string) (strin
 
 // blobAtCommit returns the blob hash of path in commit's tree, or "" when the
 // path is absent there.
-func (rh *repoHandler) blobAtCommit(commitHash plumbing.Hash, path string) (string, error) {
+func (rh *repoHandler) BlobAtCommit(commitHash plumbing.Hash, path string) (string, error) {
 	commit, err := rh.repo.CommitObject(commitHash)
 	if err != nil {
 		return "", fmt.Errorf("blobAtCommit: commit: %w", err)
@@ -685,8 +685,8 @@ func (rh *repoHandler) blobAtCommit(commitHash plumbing.Hash, path string) (stri
 }
 
 // readFileWithHash returns both the file content and the blob hash for the given path.
-func (rh *repoHandler) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
-	headHash, err := rh.resolveRef(ctx, branch)
+func (rh *repoHandler) ReadFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
+	headHash, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: ref: %w", err)
 	}
@@ -722,8 +722,8 @@ func (rh *repoHandler) readFileWithHash(ctx context.Context, branch, path string
 }
 
 // readFile reads the content of path from the tip of branch.
-func (rh *repoHandler) readFile(ctx context.Context, branch, path string) (string, error) {
-	content, _, err := rh.readFileWithHash(ctx, branch, path)
+func (rh *repoHandler) ReadFile(ctx context.Context, branch, path string) (string, error) {
+	content, _, err := rh.ReadFileWithHash(ctx, branch, path)
 	return content, err
 }
 
@@ -740,7 +740,7 @@ func (ps pathHashSorter) Swap(i, j int) {
 // ListAllWithHash returns all .md files at the tip of branch with their blob hashes.
 // Single tree walk — no per-file I/O.
 func (rh *repoHandler) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
-	headHash, err := rh.resolveRef(ctx, branch)
+	headHash, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ListAllWithHash: ref: %w", err)
 	}
@@ -782,7 +782,7 @@ func (rh *repoHandler) ListAll(ctx context.Context, branch string) ([]string, er
 // that touched path. Merges are skipped because they duplicate authoring
 // commits from the merged branch.
 func (rh *repoHandler) LastCommitForPath(ctx context.Context, branch, path string) (string, error) {
-	headHash, err := rh.resolveRef(ctx, branch)
+	headHash, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("LastCommitForPath: ref: %w", err)
 	}
@@ -812,7 +812,7 @@ func (rh *repoHandler) LastCommitForPath(ctx context.Context, branch, path strin
 // DiffFiles returns paths added/modified/deleted between fromCommit and the tip of branch.
 // Only .md files are returned. If fromCommit is empty, diffs from empty tree.
 func (rh *repoHandler) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
-	headHash, err := rh.resolveRef(ctx, branch)
+	headHash, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("DiffFiles: ref: %w", err)
 	}
@@ -913,8 +913,8 @@ func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []
 
 // commitLogQuery resolves branch to its numeric ID and delegates to
 // storegit.CommitLogQuery, hiding cursor construction from callers.
-func (rh *repoHandler) commitLogQuery(ctx context.Context, branch, path, after, from, before string, limit int) ([]storegit.CommitLogRow, bool, error) {
-	branchID, _ := rh.branchID(ctx, branch) // 0 on error → no filter
+func (rh *repoHandler) CommitLogQuery(ctx context.Context, branch, path, after, from, before string, limit int) ([]storegit.CommitLogRow, bool, error) {
+	branchID, _ := rh.BranchID(ctx, branch) // 0 on error → no filter
 	var cursor storegit.CommitLogCursor
 	switch {
 	case before != "":
@@ -929,13 +929,13 @@ func (rh *repoHandler) commitLogQuery(ctx context.Context, branch, path, after, 
 
 // commitLogActivity resolves branch to its numeric ID and delegates to
 // storegit.CommitLogActivity.
-func (rh *repoHandler) commitLogActivity(ctx context.Context, branch, path string, cutoff7, cutoff30, cutoff90 int64) (storegit.CommitLogActivityResult, error) {
-	branchID, _ := rh.branchID(ctx, branch)
+func (rh *repoHandler) CommitLogActivity(ctx context.Context, branch, path string, cutoff7, cutoff30, cutoff90 int64) (storegit.CommitLogActivityResult, error) {
+	branchID, _ := rh.BranchID(ctx, branch)
 	return rh.gits.CommitLogActivity(branchID, path, cutoff7, cutoff30, cutoff90)
 }
 
 // commitLogFileCounts delegates to storegit.CommitLogFileCounts.
 // No branch filter needed — commit hashes already identify the branch.
-func (rh *repoHandler) commitLogFileCounts(hashes []string) (map[string]map[string]int, error) {
+func (rh *repoHandler) CommitLogFileCounts(hashes []string) (map[string]map[string]int, error) {
 	return rh.gits.CommitLogFileCounts(hashes)
 }

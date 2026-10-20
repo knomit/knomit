@@ -46,7 +46,7 @@ func TestE4_TipAlreadyOnUpstream(t *testing.T) {
 		t.Helper()
 		svc, err := o.cloneErr(branch, namedSigner(t, "me"), nil)
 		require.NoError(t, err, "an agent tip already on origin's main holds nothing beyond it")
-		ref, rerr := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+		ref, rerr := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 		require.NoError(t, rerr)
 		require.Equal(t, want, ref.Hash(), "origin's agent branch is adopted as is")
 	}
@@ -80,8 +80,8 @@ func TestWalkHistory_StartInStop(t *testing.T) {
 	root := o.commit(o.files, nil)
 	tip := o.commit(with(o.files, "kb/a.md", "a"), nil, root)
 	n := 0
-	require.NoError(t, walkHistory(o.repo.Storer, tip.Hash, map[plumbing.Hash]bool{tip.Hash: true}, func(*object.Commit) { n++ }))
+	require.NoError(t, WalkHistory(o.repo.Storer, tip.Hash, map[plumbing.Hash]bool{tip.Hash: true}, func(*object.Commit) { n++ }))
 	require.Zero(t, n, "a start in the stop set is visited by nobody")
-	require.NoError(t, walkHistory(o.repo.Storer, tip.Hash, map[plumbing.Hash]bool{root.Hash: true}, func(*object.Commit) { n++ }))
+	require.NoError(t, WalkHistory(o.repo.Storer, tip.Hash, map[plumbing.Hash]bool{root.Hash: true}, func(*object.Commit) { n++ }))
 	require.Equal(t, 1, n, "a stop below start still lets start be visited")
 }

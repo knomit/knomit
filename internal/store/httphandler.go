@@ -46,7 +46,7 @@ const packProgressWindow = 1 << 20
 // origin (and with it a configured Remote.Branch) after the handler is built,
 // and the advertisement must follow.
 func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
-	sto := rh.gits
+	sto := rh.Storer()
 	mux := http.NewServeMux()
 	// One cache per handler, shared by both endpoints: the advertisement is
 	// built on every request, and the first-parent walk to the root commit is

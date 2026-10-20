@@ -68,7 +68,7 @@ func TestResolveUpstream_HeadNotMainByName(t *testing.T) {
 	assertTrunk := func(t *testing.T, svc *Service, upstream string) {
 		t.Helper()
 		require.Equal(t, "trunk", upstream)
-		ref, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("trunk"))
+		ref, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("trunk"))
 		require.NoError(t, err)
 		require.NotEqual(t, plumbing.ZeroHash, ref.Hash())
 		require.Equal(t, "trunk", svc.UpstreamBranch())
@@ -157,7 +157,7 @@ func TestSyncEntries_RefuseAnEmptyConsensusBranch(t *testing.T) {
 
 	err = svc.ConfigureRemote("https://example.invalid/kb.git", "", "agent/test")
 	require.ErrorIs(t, err, ErrNoConsensusBranch)
-	cfg, err := svc.rh.repo.Config()
+	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	require.NotContains(t, cfg.Remotes, "origin", "nothing is configured for a refused branch")
 
@@ -189,11 +189,11 @@ func TestReplay_UnsetDefaultBranchIsTheTargetsHead(t *testing.T) {
 	// A "main" that is NOT the remote's default, at a different commit.
 	_, err = target.Facts().WriteFact(ctx, "agent/other", "kb/x.md", testFactBody("X", 0.9, nil), "x", "")
 	require.NoError(t, err)
-	other, err := target.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/other"))
+	other, err := target.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/other"))
 	require.NoError(t, err)
-	require.NoError(t, target.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), other.Hash())))
+	require.NoError(t, target.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), other.Hash())))
 	require.NoError(t, target.Branches().SetDefaultBranch("trunk"), "a clone's HEAD is the remote's default branch")
-	trunk, err := target.rh.gits.Reference(plumbing.NewBranchReferenceName("trunk"))
+	trunk, err := target.rh.Storer().Reference(plumbing.NewBranchReferenceName("trunk"))
 	require.NoError(t, err)
 
 	iter, err := local.Search().FactsIter(ctx, agent)
@@ -201,9 +201,9 @@ func TestReplay_UnsetDefaultBranchIsTheTargetsHead(t *testing.T) {
 	_, err = Replay(ctx, local, agent, iter, target, ReplayConfig{Strategy: StrategyLocalWins, AgentBranch: agent, SkipIndexSync: true})
 	require.NoError(t, err)
 
-	repo, err := gogit.Open(target.rh.gits, nil)
+	repo, err := gogit.Open(target.rh.Storer(), nil)
 	require.NoError(t, err)
-	tip, err := target.rh.gits.Reference(plumbing.NewBranchReferenceName(agent))
+	tip, err := target.rh.Storer().Reference(plumbing.NewBranchReferenceName(agent))
 	require.NoError(t, err)
 	isAncestor := func(anc plumbing.Hash) bool {
 		c, err := repo.CommitObject(tip.Hash())

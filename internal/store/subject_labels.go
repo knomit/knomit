@@ -39,7 +39,7 @@ type SubjectLabelDF struct {
 // reimplementation would be a second definition of the same rule, free to
 // drift from the one the write path enforces.
 func (gs *graphStore) SubjectLabelDF(ctx context.Context, branch string) (SubjectLabelDF, error) {
-	branchID, err := gs.rh.branchID(ctx, branch)
+	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return SubjectLabelDF{}, fmt.Errorf("SubjectLabelDF: branchID: %w", err)
 	}
@@ -71,7 +71,7 @@ func (gs *graphStore) SubjectLabelDF(ctx context.Context, branch string) (Subjec
 
 // livePathsByFactID returns fact_id → path for every fact live on the branch.
 func (gs *graphStore) livePathsByFactID(ctx context.Context, branchID int64) (map[int64]string, error) {
-	rows, err := conn(ctx, gs.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx,
 		`SELECT bf.fact_id, bf.path FROM branch_facts bf WHERE bf.branch_id = ?`, branchID)
 	if err != nil {
 		return nil, fmt.Errorf("SubjectLabelDF: paths: %w", err)
@@ -97,7 +97,7 @@ func (gs *graphStore) labelsByFact(ctx context.Context, branchID int64, table, c
 		   FROM branch_facts bf
 		   JOIN %s j ON j.fact_id = bf.fact_id
 		  WHERE bf.branch_id = ?`, col, table)
-	rows, err := conn(ctx, gs.rh.db).QueryContext(ctx, q, branchID)
+	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx, q, branchID)
 	if err != nil {
 		return nil, fmt.Errorf("SubjectLabelDF: %s: %w", table, err)
 	}

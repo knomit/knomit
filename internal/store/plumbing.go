@@ -25,7 +25,7 @@ import (
 // Split out of writeFileToStore because a merge resolution needs the BLOB
 // only: the tree is being assembled entry by entry by the merge itself, and
 // there is no commit until every path has been decided.
-func writeBlobToStore(s *storegit.Storer, content []byte) (plumbing.Hash, error) {
+func WriteBlobToStore(s *storegit.Storer, content []byte) (plumbing.Hash, error) {
 	obj := s.NewEncodedObject()
 	obj.SetType(plumbing.BlobObject)
 	w, err := obj.Writer()
@@ -49,7 +49,7 @@ func writeBlobToStore(s *storegit.Storer, content []byte) (plumbing.Hash, error)
 // signer signs the commit before it is stored (storeCommit); nil stores it
 // unsigned, which only the init commits of a new repository do.
 // Returns (commitHash, blobHash, error).
-func writeFileToStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash plumbing.Hash, path, content, message string, author, committer object.Signature) (plumbing.Hash, plumbing.Hash, error) {
+func WriteFileToStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash plumbing.Hash, path, content, message string, author, committer object.Signature) (plumbing.Hash, plumbing.Hash, error) {
 	// 1. Create blob.
 	blobObj := s.NewEncodedObject()
 	blobObj.SetType(plumbing.BlobObject)
@@ -81,7 +81,7 @@ func writeFileToStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash pl
 	}
 
 	// 3. Build new root tree with path added/replaced.
-	newRootHash, err := buildTree(s, existingTree, path, blobHash)
+	newRootHash, err := BuildTree(s, existingTree, path, blobHash)
 	if err != nil {
 		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: build tree: %w", err)
 	}
@@ -97,7 +97,7 @@ func writeFileToStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash pl
 		commit.ParentHashes = []plumbing.Hash{parentCommitHash}
 	}
 
-	commitHash, err := storeCommit(s, signer, commit)
+	commitHash, err := StoreCommit(s, signer, commit)
 	if err != nil {
 		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: %w", err)
 	}
@@ -109,18 +109,18 @@ func writeFileToStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash pl
 // nested, e.g. "general/technology/go/abc123.md") with blobHash. existing may be nil for an
 // empty tree. The function recurses through path segments, creating or updating
 // subtrees as needed.
-func buildTree(s *storegit.Storer, existing *object.Tree, path string, blobHash plumbing.Hash) (plumbing.Hash, error) {
-	return buildTreeMode(s, existing, path, filemode.Regular, blobHash)
+func BuildTree(s *storegit.Storer, existing *object.Tree, path string, blobHash plumbing.Hash) (plumbing.Hash, error) {
+	return BuildTreeMode(s, existing, path, filemode.Regular, blobHash)
 }
 
 // buildTreeMode is buildTree with the leaf entry's mode chosen by the caller.
-func buildTreeMode(s *storegit.Storer, existing *object.Tree, path string, mode filemode.FileMode, blobHash plumbing.Hash) (plumbing.Hash, error) {
+func BuildTreeMode(s *storegit.Storer, existing *object.Tree, path string, mode filemode.FileMode, blobHash plumbing.Hash) (plumbing.Hash, error) {
 	parts := strings.SplitN(path, "/", 2)
 	name := parts[0]
 
 	if len(parts) == 1 {
 		// Leaf: insert/replace the file entry in this tree.
-		return upsertEntry(s, existing, object.TreeEntry{
+		return UpsertEntry(s, existing, object.TreeEntry{
 			Name: name,
 			Mode: mode,
 			Hash: blobHash,
@@ -143,12 +143,12 @@ func buildTreeMode(s *storegit.Storer, existing *object.Tree, path string, mode 
 		}
 	}
 
-	subHash, err := buildTreeMode(s, subtree, rest, mode, blobHash)
+	subHash, err := BuildTreeMode(s, subtree, rest, mode, blobHash)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
 
-	return upsertEntry(s, existing, object.TreeEntry{
+	return UpsertEntry(s, existing, object.TreeEntry{
 		Name: name,
 		Mode: filemode.Dir,
 		Hash: subHash,
@@ -157,7 +157,7 @@ func buildTreeMode(s *storegit.Storer, existing *object.Tree, path string, mode 
 
 // upsertEntry adds or replaces entry in a copy of existing (nil means empty tree),
 // encodes the resulting tree, stores it, and returns its hash.
-func upsertEntry(s *storegit.Storer, existing *object.Tree, entry object.TreeEntry) (plumbing.Hash, error) {
+func UpsertEntry(s *storegit.Storer, existing *object.Tree, entry object.TreeEntry) (plumbing.Hash, error) {
 	var entries []object.TreeEntry
 
 	if existing != nil {
@@ -186,7 +186,7 @@ func upsertEntry(s *storegit.Storer, existing *object.Tree, entry object.TreeEnt
 
 // deleteFileFromStore creates a commit that removes path from the tree rooted
 // at parentCommitHash, signed by signer before it is stored.
-func deleteFileFromStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash plumbing.Hash, path, message string, author, committer object.Signature) (plumbing.Hash, error) {
+func DeleteFileFromStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash plumbing.Hash, path, message string, author, committer object.Signature) (plumbing.Hash, error) {
 	parentCommit, err := object.GetCommit(s, parentCommitHash)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: get parent commit: %w", err)
@@ -196,7 +196,7 @@ func deleteFileFromStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash
 		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: get parent tree: %w", err)
 	}
 
-	newRootHash, err := deleteFromTree(s, existingTree, path)
+	newRootHash, err := DeleteFromTree(s, existingTree, path)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: delete from tree: %w", err)
 	}
@@ -209,7 +209,7 @@ func deleteFileFromStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash
 		ParentHashes: []plumbing.Hash{parentCommitHash},
 	}
 
-	commitHash, err := storeCommit(s, signer, commit)
+	commitHash, err := StoreCommit(s, signer, commit)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: %w", err)
 	}
@@ -234,7 +234,7 @@ func deleteFileFromStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash
 //
 // A dropped folder's empty tree is never stored: it would be unreachable the
 // moment the parent drops its entry, and Verify reports such orphans.
-func deleteFromTree(s *storegit.Storer, existing *object.Tree, path string) (plumbing.Hash, error) {
+func DeleteFromTree(s *storegit.Storer, existing *object.Tree, path string) (plumbing.Hash, error) {
 	hash, empty, err := deletePath(s, existing, path)
 	if err != nil {
 		return plumbing.ZeroHash, err
@@ -280,7 +280,7 @@ func deletePath(s *storegit.Storer, existing *object.Tree, path string) (hash pl
 	if subEmpty {
 		return storeUnlessEmpty(s, removeEntry(existing, name))
 	}
-	hash, err = upsertEntry(s, existing, object.TreeEntry{
+	hash, err = UpsertEntry(s, existing, object.TreeEntry{
 		Name: name,
 		Mode: filemode.Dir,
 		Hash: subHash,
@@ -330,7 +330,7 @@ func storeTree(s *storegit.Storer, entries []object.TreeEntry) (plumbing.Hash, e
 // treeFileInsensitive walks a git tree matching each path component
 // case-insensitively and returns the file contents.
 func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string) (string, error) {
-	entry, err := treeEntryInsensitive(repo, tree, path)
+	entry, err := TreeEntryInsensitive(repo, tree, path)
 	if err != nil {
 		return "", err
 	}
@@ -382,9 +382,9 @@ func treeEntryInsensitiveVia(load func(plumbing.Hash) (*object.Tree, error), tre
 // treeEntryInsensitive walks a git tree matching each path component
 // case-insensitively and returns the entry at path. A missing component is
 // ErrPathNotFound.
-func treeEntryInsensitive(repo *gogit.Repository, tree *object.Tree, path string) (*object.TreeEntry, error) {
+func TreeEntryInsensitive(repo *gogit.Repository, tree *object.Tree, path string) (*object.TreeEntry, error) {
 	return treeEntryInsensitiveVia(repo.TreeObject, tree, path)
 }
 
 // blobObjectType is the go-git integer for plumbing.BlobObject.
-const blobObjectType = 3
+const BlobObjectType = 3

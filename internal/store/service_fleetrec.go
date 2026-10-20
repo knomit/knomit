@@ -33,26 +33,26 @@ func (s *Service) FleetPKIAt(branch string) (*FleetPKI, error) {
 // records and the certificate artifacts. Reading them separately could pair
 // the records of one revision with the CRL of another.
 func (s *Service) FleetAt(branch string) (Fleet, error) {
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return Fleet{}, fmt.Errorf("fleet: %s: %w", branch, err)
 	}
-	c, err := object.GetCommit(s.rh.gits, ref.Hash())
+	c, err := object.GetCommit(s.rh.Storer(), ref.Hash())
 	if err != nil {
 		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
-	return loadFleetAt("mounted", c, s.rh.factRoot)
+	return loadFleetAt("mounted", c, s.rh.FactRoot())
 }
 
 // FileAt reads the regular file p (a repo-root path) at branch's tip in THIS
 // store: ok is false when there is none (a symlink counts as none). A blob
 // larger than limit is an error and is not read.
 func (s *Service) FileAt(branch, p string, limit int64) ([]byte, bool, error) {
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return nil, false, fmt.Errorf("%s: %w", branch, err)
 	}
-	c, err := object.GetCommit(s.rh.gits, ref.Hash())
+	c, err := object.GetCommit(s.rh.Storer(), ref.Hash())
 	if err != nil {
 		return nil, false, err
 	}
@@ -68,17 +68,17 @@ func (s *Service) FileAt(branch, p string, limit int64) ([]byte, bool, error) {
 // VERSIONS, which is where an agent's key history lives. Malformed versions
 // are skipped.
 func (s *Service) FleetKeysOf(branch, agentID string) ([]ssh.PublicKey, error) {
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return nil, fmt.Errorf("fleet: %s: %w", branch, err)
 	}
-	root := s.rh.factRoot
+	root := s.rh.FactRoot()
 	if root == "" {
 		root = "kb"
 	}
 	var keys []ssh.PublicKey
 	seen := map[string]bool{}
-	err = walkHistory(s.rh.gits, ref.Hash(), nil, func(c *object.Commit) {
+	err = WalkHistory(s.rh.Storer(), ref.Hash(), nil, func(c *object.Commit) {
 		ms, lerr := loadMembers("mounted", c, root)
 		if lerr != nil {
 			return
@@ -139,11 +139,11 @@ func (s *Service) FleetSince(branch string, paths []string, maxCommits int) (map
 // walkFirstParent visits branch's tip and its first parents, newest first,
 // at most max commits, each with its first parent (nil for a root commit).
 func (s *Service) walkFirstParent(branch string, max int, visit func(c, parent *object.Commit) error) error {
-	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := s.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return fmt.Errorf("fleet: %s: %w", branch, err)
 	}
-	c, err := object.GetCommit(s.rh.gits, ref.Hash())
+	c, err := object.GetCommit(s.rh.Storer(), ref.Hash())
 	if err != nil {
 		return err
 	}
@@ -172,20 +172,20 @@ func (s *Service) walkFirstParent(branch string, max int, visit func(c, parent *
 // once maxEntries are found: the walk is newest first, so a caller that
 // shows only the newest n events needs no more than n entries.
 func (s *Service) FleetMainLog(branch, rootCert string, maxCommits, maxEntries int) ([]FleetMainCommit, error) {
-	root := s.rh.factRoot
+	root := s.rh.FactRoot()
 	if root == "" {
 		root = "kb"
 	}
 	members := path.Join(root, fact.MembersTopic)
 	var out []FleetMainCommit
 	err := s.walkFirstParent(branch, maxCommits, func(c *object.Commit, parent *object.Commit) error {
-		mc := FleetMainCommit{Hash: c.Hash.String(), At: c.Committer.When.UTC(), Author: agentIDOfAuthor(c.Author.Email)}
+		mc := FleetMainCommit{Hash: c.Hash.String(), At: c.Committer.When.UTC(), Author: AgentIDOfAuthor(c.Author.Email)}
 		if c.NumParents() >= 2 {
 			p2, err := c.Parent(1)
 			if err != nil {
 				return err
 			}
-			mc.MergedTip, mc.MergedBy = p2.Hash.String(), agentIDOfAuthor(p2.Author.Email)
+			mc.MergedTip, mc.MergedBy = p2.Hash.String(), AgentIDOfAuthor(p2.Author.Email)
 		}
 		tree, err := c.Tree()
 		if err != nil {

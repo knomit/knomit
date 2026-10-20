@@ -26,13 +26,13 @@ func TestDropBranch_RemovesGitRef(t *testing.T) {
 	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "feature", "main"))
 
 	// Confirm the ref exists before the drop.
-	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("feature"))
+	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("feature"))
 	require.NoError(t, err, "feature ref should exist after CreateBranch")
 
 	require.NoError(t, svc.Branches().DropBranch(context.Background(), "feature"))
 
 	// After the drop, the ref must be gone.
-	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("feature"))
+	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("feature"))
 	require.Error(t, err, "feature ref should be gone after DropBranch")
 
 	// And Verify must stay clean — this is the end-to-end assertion.

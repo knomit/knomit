@@ -140,7 +140,7 @@ func TestCheckTreeShape(t *testing.T) {
 		th := graftTree(t, r.st, good, row.dir, row.entry)
 		tree, err := object.GetTree(r.st, th)
 		require.NoError(t, err)
-		err = checkTreeShape(tree, map[plumbing.Hash]bool{})
+		err = CheckTreeShape(tree, map[plumbing.Hash]bool{})
 		if row.want == "" {
 			require.NoError(t, err, row.name)
 		} else {
@@ -162,8 +162,8 @@ func TestCheckTreeShape(t *testing.T) {
 		require.NoError(t, err)
 		return tree
 	}
-	require.NoError(t, checkTreeShape(chain(maxShapeDepth), nil))
-	err := checkTreeShape(chain(maxShapeDepth+2), nil)
+	require.NoError(t, CheckTreeShape(chain(MaxShapeDepth), nil))
+	err := CheckTreeShape(chain(MaxShapeDepth+2), nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "deeper than")
 }
@@ -294,7 +294,7 @@ func pushNew(t *testing.T, h *pushHost, pe *peer, c *object.Commit, branch strin
 	it, err := pe.repo.Storer.IterEncodedObjects(plumbing.AnyObject)
 	require.NoError(t, err)
 	require.NoError(t, it.ForEach(func(o plumbing.EncodedObject) error {
-		if h.svc.rh.gits.HasEncodedObject(o.Hash()) != nil {
+		if h.svc.rh.Storer().HasEncodedObject(o.Hash()) != nil {
 			hs = append(hs, o.Hash())
 		}
 		return nil
@@ -411,7 +411,7 @@ func requireWellFormed(t *testing.T, c *object.Commit) {
 	t.Helper()
 	tree, err := c.Tree()
 	require.NoError(t, err)
-	require.NoError(t, checkTreeShape(tree, nil), "the judged commit's own tree is well formed")
+	require.NoError(t, CheckTreeShape(tree, nil), "the judged commit's own tree is well formed")
 }
 
 // CheckRange: main's tip P, below the range, holds the malformed tree. boss's
@@ -461,15 +461,15 @@ func TestReceivePack_MalformedUpstreamTipRefused(t *testing.T) {
 	require.NoError(t, err)
 	copied := 0
 	require.NoError(t, it.ForEach(func(o plumbing.EncodedObject) error {
-		if h.svc.rh.gits.HasEncodedObject(o.Hash()) == nil {
+		if h.svc.rh.Storer().HasEncodedObject(o.Hash()) == nil {
 			return nil
 		}
 		copied++
-		_, err := h.svc.rh.gits.SetEncodedObject(o)
+		_, err := h.svc.rh.Storer().SetEncodedObject(o)
 		return err
 	}))
 	require.Positive(t, copied)
-	require.NoError(t, h.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), p.Hash)))
+	require.NoError(t, h.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), p.Hash)))
 
 	c := pe.commitAs("peer-abcd1234", []*object.Commit{p}, nil,
 		with(pe.files(pe.head()), "kb/zzz-victim.md", "victim v2"))

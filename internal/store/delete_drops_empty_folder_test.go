@@ -18,7 +18,7 @@ func treeOf(t *testing.T, svc *Service, branch string) string {
 	t.Helper()
 	head, err := svc.Branches().HeadCommit(context.Background(), branch)
 	require.NoError(t, err)
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(head))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(head))
 	require.NoError(t, err)
 	return c.TreeHash.String()
 }

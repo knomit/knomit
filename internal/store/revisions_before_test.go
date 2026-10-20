@@ -162,7 +162,7 @@ func TestRevisionsBefore_MergeAnomalyPicksFirstParent(t *testing.T) {
 	tip, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
-	mergeCommit, err := svc.rh.repo.CommitObject(plumbing.NewHash(tip))
+	mergeCommit, err := svc.rh.Repository().CommitObject(plumbing.NewHash(tip))
 	require.NoError(t, err)
 	require.Len(t, mergeCommit.ParentHashes, 2, "setup must actually produce a two-parent merge commit, or this test proves nothing")
 

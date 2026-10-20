@@ -47,7 +47,7 @@ func (mm *methodologyMatcher) RelevantMethodologyForFact(
 	k int,
 	minScore float64,
 ) ([]MethodologyMatch, error) {
-	branchID, err := mm.rh.branchID(ctx, branch)
+	branchID, err := mm.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("RelevantMethodologyForFact: branchID: %w", err)
 	}
@@ -57,7 +57,7 @@ func (mm *methodologyMatcher) RelevantMethodologyForFact(
 	// time when the fact was written. If the row is absent (fact not yet
 	// indexed, or no embedding produced), fall through to tag-only.
 	var srcVec []byte
-	err = conn(ctx, mm.rh.db).QueryRowContext(ctx, `
+	err = conn(ctx, mm.rh.DB()).QueryRowContext(ctx, `
 		SELECT fv.embedding
 		FROM facts_vec fv
 		JOIN branch_facts bf ON bf.fact_id = fv.rowid
@@ -93,7 +93,7 @@ func (mm *methodologyMatcher) RelevantMethodologyForFact(
 	// top-k slot before being dropped. The KNN query below is deliberately left
 	// alone — it only populates similarity scores keyed by fact id, and an
 	// entry for a fact absent from cands is never read.
-	rows, err := conn(ctx, mm.rh.db).QueryContext(ctx, `
+	rows, err := conn(ctx, mm.rh.DB()).QueryContext(ctx, `
 		SELECT f.path, f.title, f.id, f.blob_hash, f.domain, f.entities
 		FROM facts f
 		JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
@@ -154,7 +154,7 @@ func (mm *methodologyMatcher) RelevantMethodologyForFact(
 	simByID := make(map[int64]float64, len(cands))
 	if len(srcVec) > 0 {
 		var totalFacts int64
-		if err := conn(ctx, mm.rh.db).QueryRowContext(ctx,
+		if err := conn(ctx, mm.rh.DB()).QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM facts_vec`,
 		).Scan(&totalFacts); err != nil {
 			log.Warn().Err(err).Msg("RelevantMethodologyForFact: facts_vec count failed; falling back to tag-only ranking")
@@ -165,7 +165,7 @@ func (mm *methodologyMatcher) RelevantMethodologyForFact(
 			if minVec < 0 {
 				minVec = 0
 			}
-			knnRows, qErr := conn(ctx, mm.rh.db).QueryContext(ctx,
+			knnRows, qErr := conn(ctx, mm.rh.DB()).QueryContext(ctx,
 				`SELECT f.id, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
@@ -295,9 +295,9 @@ func intersectExcludingMarkers(candidateDomains []string, srcSet map[string]stru
 // its blob_hash via the git object store.
 func (mm *methodologyMatcher) readFactBodyByBlobHash(ctx context.Context, blobHash string) (string, error) {
 	var raw []byte
-	err := conn(ctx, mm.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, mm.rh.DB()).QueryRowContext(ctx,
 		`SELECT data FROM objects WHERE hash = ? AND type = ?`,
-		blobHash, blobObjectType,
+		blobHash, BlobObjectType,
 	).Scan(&raw)
 	if err != nil {
 		return "", fmt.Errorf("readFactBodyByBlobHash: %w", err)

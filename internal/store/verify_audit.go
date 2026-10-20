@@ -73,7 +73,7 @@ func Audit(in AuditInput) (AuditReport, error) {
 	if err != nil {
 		return AuditReport{}, fmt.Errorf("audit: fleet: %w", err)
 	}
-	if raw, err := treeOntology(tip); err != nil {
+	if raw, err := TreeOntology(tip); err != nil {
 		// A symlinked (fact.ErrSymlinkNotFollowed) or unreadable ontology
 		// says so, like LoadFleet: it is not "not a fleet".
 		return AuditReport{}, fmt.Errorf("audit: fleet: ontology: %w", err)
@@ -86,7 +86,7 @@ func Audit(in AuditInput) (AuditReport, error) {
 	// of each agent (keys and states), per the fact-history ruling.
 	versions := map[string][]keyVersion{} // wire key -> versions
 	seenBlob := map[string]bool{}
-	err = walkHistory(fleet.Storer, tip.Hash, nil, func(c *object.Commit) {
+	err = WalkHistory(fleet.Storer, tip.Hash, nil, func(c *object.Commit) {
 		ms, lerr := loadMembers(in.FleetDir, c, root)
 		if lerr != nil {
 			return
@@ -116,7 +116,7 @@ func Audit(in AuditInput) (AuditReport, error) {
 	}
 	out := AuditReport{Findings: []Refusal{}}
 	want := strings.ToLower(strings.TrimSpace(in.Key))
-	err = walkHistory(kb.Storer, head.Hash, map[plumbing.Hash]bool{}, func(c *object.Commit) {
+	err = WalkHistory(kb.Storer, head.Hash, map[plumbing.Hash]bool{}, func(c *object.Commit) {
 		out.Commits++
 		h := c.Hash.String()
 		s, serr := verifyCommitSignature(c)
@@ -138,7 +138,7 @@ func Audit(in AuditInput) (AuditReport, error) {
 				Reason: "the signing key was never on a member record"})
 			return
 		}
-		id := agentIDOfAuthor(c.Author.Email)
+		id := AgentIDOfAuthor(c.Author.Email)
 		mine, revoked := false, false
 		for _, v := range vs {
 			if v.agent == id {

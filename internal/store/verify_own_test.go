@@ -41,19 +41,19 @@ func ownHost(t *testing.T, onMain string) (*pushHost, ssh.Signer, ssh.Signer) {
 // ref directly: a commit no write path of this instance made.
 func (h *pushHost) rawCommit(branch, agent string, s ssh.Signer, kv ...string) plumbing.Hash {
 	h.t.Helper()
-	parent, err := object.GetCommit(h.svc.rh.gits, h.ref(branch))
+	parent, err := object.GetCommit(h.svc.rh.Storer(), h.ref(branch))
 	require.NoError(h.t, err)
 	when := parent.Committer.When.Add(time.Minute)
 	c := &object.Commit{
 		Author:       object.Signature{Name: agent, Email: agent + "+learn@agents.knomit.io", When: when},
 		Committer:    object.Signature{Name: agent, Email: agent + "@agents.knomit.io", When: when},
 		Message:      "raw",
-		TreeHash:     repoOn(h.t, h.svc.rh.gits).tree(with(h.branchFiles(branch), kv...)),
+		TreeHash:     repoOn(h.t, h.svc.rh.Storer()).tree(with(h.branchFiles(branch), kv...)),
 		ParentHashes: []plumbing.Hash{parent.Hash},
 	}
-	hash, err := storeCommit(h.svc.rh.gits, s, c)
+	hash, err := StoreCommit(h.svc.rh.Storer(), s, c)
 	require.NoError(h.t, err)
-	require.NoError(h.t, h.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), hash)))
+	require.NoError(h.t, h.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), hash)))
 	return hash
 }
 

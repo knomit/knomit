@@ -31,7 +31,7 @@ var ErrNoSigner = errors.New("store has no commit signer: refusing to write an u
 // signer, else (inside a test binary only) the test fallback, else
 // ErrNoSigner. Callers ask for it BEFORE writing any object, so a refused write
 // leaves nothing behind in the object store.
-func (rh *repoHandler) commitSigner() (ssh.Signer, error) {
+func (rh *repoHandler) CommitSigner() (ssh.Signer, error) {
 	if rh.signer != nil {
 		return rh.signer, nil
 	}
@@ -47,7 +47,7 @@ func (rh *repoHandler) commitSigner() (ssh.Signer, error) {
 // unreachable in the store — the old sign-after-store path left one orphan per
 // write. A nil signer stores the commit unsigned: only the init commits of a
 // new repository do that (plumbing, repo.go), by design.
-func storeCommit(s *storegit.Storer, signer ssh.Signer, c *object.Commit) (plumbing.Hash, error) {
+func StoreCommit(s *storegit.Storer, signer ssh.Signer, c *object.Commit) (plumbing.Hash, error) {
 	if signer != nil {
 		payloadObj := s.NewEncodedObject()
 		if err := c.EncodeWithoutSignature(payloadObj); err != nil {
@@ -62,7 +62,7 @@ func storeCommit(s *storegit.Storer, signer ssh.Signer, c *object.Commit) (plumb
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("storeCommit: read payload: %w", err)
 		}
-		signature, err := signCommit(signer, payload)
+		signature, err := SignCommit(signer, payload)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("storeCommit: sign: %w", err)
 		}

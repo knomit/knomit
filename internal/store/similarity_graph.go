@@ -90,7 +90,7 @@ func (gs *graphStore) SimilarityAdjacency(ctx context.Context, paths []string) (
 	// them): a downstream cohesion scorer must be able to distinguish "no
 	// SIMILAR_TO edges" from "query failed", which would otherwise read as
 	// falsely-low cohesion.
-	pairs, err := graphSimilarToNeighbours(ctx, conn(ctx, gs.rh.db), paths, false)
+	pairs, err := graphSimilarToNeighbours(ctx, conn(ctx, gs.rh.DB()), paths, false)
 	if err != nil {
 		return SimilarityGraph{}, fmt.Errorf("SimilarityAdjacency: %w", err)
 	}

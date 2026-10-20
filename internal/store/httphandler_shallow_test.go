@@ -248,7 +248,7 @@ func TestGitHandler_RefusesWantOutsideAdvertisedTips(t *testing.T) {
 	tip, err := svc.Branches().HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
 	tipHash := plumbing.NewHash(tip)
-	c, err := svc.rh.repo.CommitObject(tipHash)
+	c, err := svc.rh.Repository().CommitObject(tipHash)
 	require.NoError(t, err)
 	parent, err := c.Parent(0)
 	require.NoError(t, err)

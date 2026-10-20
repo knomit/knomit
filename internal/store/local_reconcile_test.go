@@ -22,9 +22,9 @@ func TestEnsureLocalUpstream_CreatesMissingMainFromOrigin(t *testing.T) {
 
 	// A moved/legacy store: origin/main exists, local main does not. This is
 	// the shape a live instance was found in.
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(tip))))
-	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewBranchReferenceName("main")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(plumbing.NewBranchReferenceName("main")))
 
 	created, err := svc.EnsureLocalUpstream(ctx, "main")
 	require.NoError(t, err)
@@ -50,12 +50,12 @@ func TestEnsureLocalUpstream_NoopWithoutAnOriginRef(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "main", "agent/a"))
 	ctx := context.Background()
-	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewBranchReferenceName("main")))
+	require.NoError(t, svc.rh.Storer().RemoveReference(plumbing.NewBranchReferenceName("main")))
 
 	created, err := svc.EnsureLocalUpstream(ctx, "main")
 	require.NoError(t, err)
 	require.False(t, created)
-	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("main"))
 	require.Error(t, err, "no ref invented")
 }
 
@@ -76,7 +76,7 @@ func TestEnsureLocalUpstream_LeavesAnExistingUpstreamAlone(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, mainBefore, agentTip)
 
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(agentTip))))
 
 	created, err := svc.EnsureLocalUpstream(ctx, "main")

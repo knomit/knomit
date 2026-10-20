@@ -68,22 +68,22 @@ func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumb
 	if upstream == "" || branch == "" || branch == upstream {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %q is not a branch to rebuild on %q", branch, upstream)
 	}
-	unlock := rh.lockBranch(branch)
+	unlock := rh.LockBranch(branch)
 	defer unlock()
-	localRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	localRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", branch, err)
 	}
-	upRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(upstream))
+	upRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(upstream))
 	if err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", upstream, err)
 	}
 	onUp := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
+	if err := WalkHistory(rh.Storer(), upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
 	unpublished := map[plumbing.Hash]bool{}
-	if err := walkHistory(rh.gits, localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
+	if err := WalkHistory(rh.Storer(), localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
 	if !unpublished[drop] {
@@ -97,7 +97,7 @@ func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumb
 		return dropOutcome{}, &LeaveOutChangedError{LeaveOut: leftOut}
 	}
 	tempRef := plumbing.NewBranchReferenceName(branch + "-dropping")
-	defer func() { _ = rh.gits.RemoveReference(tempRef) }()
+	defer func() { _ = rh.Storer().RemoveReference(tempRef) }()
 	current := upRef.Hash()
 	for _, st := range line {
 		var others []plumbing.Hash
@@ -107,21 +107,21 @@ func (s *Service) dropUnpublished(ctx context.Context, branch string, drop plumb
 		if current, err = rh.replayCommit(ctx, st.c, current, StrategyLocalWins, others...); err != nil {
 			return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", st.c.Hash, err)
 		}
-		if err := rh.gits.SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {
+		if err := rh.Storer().SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {
 			return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 		}
 	}
 	ctx = context.WithoutCancel(ctx)
-	if err := rh.deriveBeforeAdvance(ctx, current); err != nil {
+	if err := rh.DeriveBeforeAdvance(ctx, current); err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
-	if err := rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), current)); err != nil {
+	if err := rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), current)); err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
-	if err := rh.repopulateBranch(ctx, branch); err != nil {
+	if err := rh.RepopulateBranch(ctx, branch); err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: repopulate: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, branch, current); err != nil {
+	if err := rh.NotifyCommit(ctx, branch, current); err != nil {
 		return dropOutcome{}, fmt.Errorf("DropUnpublishedCommit: notify: %w", err)
 	}
 	log.Warn().Str("branch", branch).Str("dropped", drop.String()).Int("replayed", len(line)).Int("merges_unfolded", unfolded).Int("left_out", len(leftOut)).
@@ -142,7 +142,7 @@ func (s *Service) SetReplaySkipPaths(paths ...string) {
 	for _, p := range paths {
 		set[p] = true
 	}
-	s.rh.replaySkip = set
+	s.rh.SetReplaySkip(set)
 }
 
 // MainHistory reads the consensus branch's tip and its history.
@@ -151,12 +151,12 @@ func (s *Service) MainHistory(ctx context.Context) (*MainHistory, error) {
 	if upstream == "" {
 		return nil, fmt.Errorf("MainHistory: %w", ErrNoConsensusBranch)
 	}
-	uh, err := s.rh.resolveRef(ctx, upstream)
+	uh, err := s.rh.ResolveRef(ctx, upstream)
 	if err != nil {
 		return nil, fmt.Errorf("MainHistory: %s: %w", upstream, err)
 	}
 	onMain := map[plumbing.Hash]bool{}
-	if err := walkHistory(s.rh.gits, uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
+	if err := WalkHistory(s.rh.Storer(), uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("MainHistory: %w", err)
 	}
 	return &MainHistory{tip: uh, onMain: onMain}, nil
@@ -213,13 +213,13 @@ func (s *Service) JudgePeerBranch(ctx context.Context, branch, own string, tip p
 		}
 	}
 	var commits []*object.Commit
-	if err := walkHistory(rh.gits, tip, main.onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+	if err := WalkHistory(rh.Storer(), tip, main.onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return "", fmt.Errorf("JudgePeerBranch: %w", err)
 	}
-	if msg := rh.privatePathClosure(ctx, rh.gits, upstream, commits); msg != "" {
+	if msg := rh.privatePathClosure(ctx, rh.Storer(), upstream, commits); msg != "" {
 		return msg, nil
 	}
-	lg := log.With().Str("repo", rh.name).Str("branch", branch).Logger()
+	lg := log.With().Str("repo", rh.Name()).Str("branch", branch).Logger()
 	self := func(context.Context) (Fleet, error) { return s.FleetAt(upstream) }
 	return rh.judgeIncoming(ctx, upstream, self, nil, tip, commits, lg), nil
 }
@@ -237,12 +237,12 @@ func (s *Service) DemotePeerBranch(ctx context.Context, branch, own string, tip 
 	if !strings.HasPrefix(branch, "agent/") || branch == upstream || branch == own {
 		return false, fmt.Errorf("DemotePeerBranch: %q is not a member's agent branch", branch)
 	}
-	id, err := rh.branchID(ctx, branch)
+	id, err := rh.BranchID(ctx, branch)
 	if err != nil {
 		return false, nil // not a registered branch: nothing to demote
 	}
-	defer rh.lockBranch(branch)()
-	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	defer rh.LockBranch(branch)()
+	ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, nil
 	}
@@ -252,7 +252,7 @@ func (s *Service) DemotePeerBranch(ctx context.Context, branch, own string, tip 
 	if ref.Hash() != tip {
 		return false, nil
 	}
-	if err := rh.dropBranchLocked(context.WithoutCancel(ctx), branch, id); err != nil {
+	if err := rh.DropBranchLocked(context.WithoutCancel(ctx), branch, id); err != nil {
 		return false, fmt.Errorf("DemotePeerBranch: %w", err)
 	}
 	return true, nil
@@ -275,30 +275,30 @@ func (s *Service) EnsureLocalUpstream(ctx context.Context, upstream string) (boo
 		return false, nil
 	}
 	rh := s.rh
-	unlock := rh.lockBranch(upstream)
+	unlock := rh.LockBranch(upstream)
 	defer unlock()
 
 	local := plumbing.NewBranchReferenceName(upstream)
-	if _, err := rh.gits.Reference(local); err == nil {
+	if _, err := rh.Storer().Reference(local); err == nil {
 		return false, nil
 	}
-	originRef, err := rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstream))
+	originRef, err := rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstream))
 	if err != nil {
 		return false, nil
 	}
-	if err := rh.deriveBeforeAdvance(ctx, originRef.Hash()); err != nil {
+	if err := rh.DeriveBeforeAdvance(ctx, originRef.Hash()); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: %w", err)
 	}
-	if err := rh.gits.SetReference(plumbing.NewHashReference(local, originRef.Hash())); err != nil {
+	if err := rh.Storer().SetReference(plumbing.NewHashReference(local, originRef.Hash())); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: create %s: %w", upstream, err)
 	}
 	if _, err := rh.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: ensure %s: %w", upstream, err)
 	}
-	if err := rh.populateCommitLog(ctx, upstream); err != nil {
+	if err := rh.PopulateCommitLog(ctx, upstream); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: populate commit_log: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, upstream, originRef.Hash()); err != nil {
+	if err := rh.NotifyCommit(ctx, upstream, originRef.Hash()); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: notify: %w", err)
 	}
 	log.Info().Str("upstream", upstream).Str("at", originRef.Hash().String()[:8]).
@@ -325,26 +325,26 @@ func (s *Service) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstrea
 	rh := s.rh
 	// Only the upstream is written; the agent branch is read. One lock, the
 	// same one reconcileMain runs under.
-	unlock := rh.lockBranch(upstream)
+	unlock := rh.LockBranch(upstream)
 	defer unlock()
 
-	agentRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(agentBranch))
+	agentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch))
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: read %s: %w", agentBranch, err)
 	}
 	upstreamName := plumbing.NewBranchReferenceName(upstream)
-	upRef, err := rh.gits.Reference(upstreamName)
+	upRef, err := rh.Storer().Reference(upstreamName)
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: read %s: %w", upstream, err)
 	}
 	if upRef.Hash() == agentRef.Hash() {
 		return MainReconcileResult{Mode: ModeNoop}, nil
 	}
-	upCommit, err := rh.repo.CommitObject(upRef.Hash())
+	upCommit, err := rh.Repository().CommitObject(upRef.Hash())
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %s commit: %w", upstream, err)
 	}
-	agentCommit, err := rh.repo.CommitObject(agentRef.Hash())
+	agentCommit, err := rh.Repository().CommitObject(agentRef.Hash())
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %s commit: %w", agentBranch, err)
 	}
@@ -360,23 +360,23 @@ func (s *Service) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstrea
 	// The fleet repository's own commits are judged before its main moves
 	// (judgeOwnRange; every other repository returns at once). A refusal
 	// leaves main where it is.
-	own, _ := rh.ownAgentID(agentBranch)
+	own, _ := rh.OwnAgentID(agentBranch)
 	if err := rh.judgeOwnRange(upstream, upRef.Hash(), agentRef.Hash(), own, agentRef.Hash()); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %w", err)
 	}
 	if _, err := rh.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: ensure %s: %w", upstream, err)
 	}
-	if err := rh.deriveBeforeAdvance(ctx, agentRef.Hash()); err != nil {
+	if err := rh.DeriveBeforeAdvance(ctx, agentRef.Hash()); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %w", err)
 	}
-	if err := rh.gits.SetReference(plumbing.NewHashReference(upstreamName, agentRef.Hash())); err != nil {
+	if err := rh.Storer().SetReference(plumbing.NewHashReference(upstreamName, agentRef.Hash())); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: fast-forward: %w", err)
 	}
-	if err := rh.populateCommitLog(ctx, upstream); err != nil {
+	if err := rh.PopulateCommitLog(ctx, upstream); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: populate commit_log after fast-forward: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, upstream, agentRef.Hash()); err != nil {
+	if err := rh.NotifyCommit(ctx, upstream, agentRef.Hash()); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: notify after fast-forward: %w", err)
 	}
 	log.Info().Str("upstream", upstream).Str("agent", agentBranch).

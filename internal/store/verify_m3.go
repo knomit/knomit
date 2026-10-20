@@ -68,7 +68,7 @@ func checkM3(merge *object.Commit) (m3Verdict, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := checkTreeShape(tree, nil); err != nil {
+		if err := CheckTreeShape(tree, nil); err != nil {
 			return nil, err
 		}
 		out := map[string]pathEntry{}

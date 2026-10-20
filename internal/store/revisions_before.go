@@ -13,7 +13,7 @@ import (
 // `SELECT … FROM fpc JOIN …`. First-parent (not wall-clock) ancestry is the
 // load-bearing semantic — see resolveTargetCommit's doc-comment for the
 // merge-branch rationale.
-const firstParentChainCTE = `
+const FirstParentChainCTE = `
 	WITH RECURSIVE fpc(commit_hash, depth) AS (
 	    SELECT ?, 0
 	    UNION ALL
@@ -58,13 +58,13 @@ type RevisionMeta struct {
 // callers — factIndex, searchIndex, factQuery and graphStore — share it directly —
 // factIndex's fallback-before read resolves the last-valid version through the
 // SAME index walk the graph resolver uses, instead of a divergent go-git walk.
-func (rh *repoHandler) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+func (rh *repoHandler) ResolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	if fromCommit == "" {
 		return "", false, nil
 	}
 
 	var hash string
-	err := conn(ctx, rh.db).QueryRowContext(ctx, firstParentChainCTE+`
+	err := conn(ctx, rh.db).QueryRowContext(ctx, FirstParentChainCTE+`
 		SELECT cl.commit_hash
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
