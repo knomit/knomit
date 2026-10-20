@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -21,7 +21,7 @@ import (
 // invariant means a retracted intermediate's node + edges persist; a
 // dependent declared against an older version of the target still transmits
 // reach.
-func (gs *graphStore) reverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
+func (gs *GraphStore) reverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
 	const q = `
 WITH RECURSIVE
   seed(node_id) AS (
@@ -71,7 +71,7 @@ SELECT DISTINCT np.value
 // of `path` (all historical versions are seeded), NOT liveness-filtered.
 // Membership among live members is the consumer's responsibility.
 // It is a thin exported wrapper over the private reverseDependentPaths.
-func (gs *graphStore) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
+func (gs *GraphStore) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
 	return gs.reverseDependentPaths(ctx, path)
 }
 
@@ -80,7 +80,7 @@ func (gs *graphStore) ReverseDependentPaths(ctx context.Context, path string) (m
 // metric: how much of the live corpus would be invalidated if `path` were
 // false. Returns 0 for a leaf fact (nothing depends on it), or for a path
 // whose dependents are all retracted at HEAD.
-func (gs *graphStore) BlastRadius(ctx context.Context, branch, path string) (int, error) {
+func (gs *GraphStore) BlastRadius(ctx context.Context, branch, path string) (int, error) {
 	deps, err := gs.reverseDependentPaths(ctx, path)
 	if err != nil {
 		return 0, err

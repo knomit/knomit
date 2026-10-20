@@ -41,15 +41,15 @@ func TestRebuild_GraphSnapshotDoesNotResurrectAConcurrentCrossBranchDelete(t *te
 	require.NoError(t, err)
 
 	fired := false
-	svc.si.beforeGraphTx = func() {
+	svc.si.SetBeforeGraphTxHookForTest(func() {
 		if fired {
 			return
 		}
 		fired = true
 		_, derr := svc.Facts().DeleteFact(ctx, "feature", racePath, "delete on feature")
 		require.NoError(t, derr)
-	}
-	defer func() { svc.si.beforeGraphTx = nil }()
+	})
+	defer svc.si.SetBeforeGraphTxHookForTest(nil)
 
 	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))
 	require.True(t, fired, "the hook must have run, else nothing was raced")

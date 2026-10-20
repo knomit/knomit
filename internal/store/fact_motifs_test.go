@@ -46,7 +46,7 @@ func writeMotifFact(t *testing.T, svc *Service, branch, path string, motifs []st
 // motifRows reads the junction rows for the LIVE revision of path on branch.
 func motifRows(t *testing.T, svc *Service, branch, path string) []string {
 	t.Helper()
-	rows, err := svc.si.rh.DB().QueryContext(context.Background(), `
+	rows, err := svc.si.RepoForTest().DB().QueryContext(context.Background(), `
 		SELECT m.motif
 		  FROM fact_motifs m
 		  JOIN branch_facts bf ON bf.fact_id = m.fact_id
@@ -104,7 +104,7 @@ func TestFactMotifs_RebuildRepopulatesJunction(t *testing.T) {
 	fromIncremental := motifRows(t, svc, branch, "kb/alpha/one.md")
 	require.Len(t, fromIncremental, 2, "fixture must have rows to lose")
 
-	_, err := svc.si.rh.DB().ExecContext(ctx, `DELETE FROM fact_motifs`)
+	_, err := svc.si.RepoForTest().DB().ExecContext(ctx, `DELETE FROM fact_motifs`)
 	require.NoError(t, err)
 	require.Empty(t, motifRows(t, svc, branch, "kb/alpha/one.md"),
 		"clearing must actually empty the junction, or the rebuild below proves nothing")
@@ -166,7 +166,7 @@ func TestMigration019_DownUpCycle(t *testing.T) {
 	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback"})
 	require.NotEmpty(t, motifRows(t, svc, branch, "kb/alpha/one.md"))
 
-	db := svc.si.rh.DB()
+	db := svc.si.RepoForTest().DB()
 	hasMotifsColumn := func() bool {
 		var n int
 		require.NoError(t, db.QueryRow(
@@ -207,7 +207,7 @@ func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
 
 	// Junction row lost while the column still lists it — what a rebuild that
 	// forgot to repopulate would leave behind.
-	_, err = svc.si.rh.DB().ExecContext(ctx,
+	_, err = svc.si.RepoForTest().DB().ExecContext(ctx,
 		`DELETE FROM fact_motifs WHERE motif = 'config-drift'`)
 	require.NoError(t, err)
 
@@ -218,7 +218,7 @@ func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
 	require.Contains(t, issues[0].Detail, "absent from fact_motifs")
 
 	// And the reverse: a junction row for a motif the column no longer lists.
-	_, err = svc.si.rh.DB().ExecContext(ctx,
+	_, err = svc.si.RepoForTest().DB().ExecContext(ctx,
 		`INSERT INTO fact_motifs(fact_id, motif) SELECT id, 'never-authored' FROM facts LIMIT 1`)
 	require.NoError(t, err)
 
@@ -243,7 +243,7 @@ func TestVerify_DetectsMotifOrphans(t *testing.T) {
 	// foreign_keys pragma is PER-CONNECTION and defaults OFF, so any tool that
 	// writes this DB without setting it can leave rows the schema would have
 	// refused. Reproducing that is the only honest way to test the check.
-	conn, err := svc.si.rh.DB().Conn(ctx)
+	conn, err := svc.si.RepoForTest().DB().Conn(ctx)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`)
 	require.NoError(t, err)

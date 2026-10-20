@@ -15,10 +15,10 @@ func countIndexedFacts(t *testing.T, svc *Service, branch string) int {
 	t.Helper()
 	ctx := context.Background()
 	si := svc.si
-	bid, err := si.rh.BranchID(ctx, branch)
+	bid, err := si.RepoForTest().BranchID(ctx, branch)
 	require.NoError(t, err)
 	var n int
-	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
+	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ?`, bid).Scan(&n))
 	return n
 }
@@ -130,17 +130,17 @@ func TestSchemaVersionState(t *testing.T) {
 	si := svc.si
 
 	setVersion := func(v string) {
-		_, err := si.rh.DB().ExecContext(ctx,
+		_, err := si.RepoForTest().DB().ExecContext(ctx,
 			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey("main"), v)
 		require.NoError(t, err)
 	}
 	clearVersion := func() {
-		_, err := si.rh.DB().ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, schemaVersionKey("main"))
+		_, err := si.RepoForTest().DB().ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, schemaVersionKey("main"))
 		require.NoError(t, err)
 	}
 
 	clearVersion()
-	st, err := si.schemaVersionState(ctx, "main")
+	st, err := si.SchemaVersionStateForTest(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, schemaMissing, st, "no row → missing (fresh DB), not stale")
 	nr, err := si.NeedsRebuild(ctx, "main")
@@ -148,7 +148,7 @@ func TestSchemaVersionState(t *testing.T) {
 	require.True(t, nr, "missing version must still require a rebuild (contract preserved)")
 
 	setVersion(GraphSchemaVersion)
-	st, err = si.schemaVersionState(ctx, "main")
+	st, err = si.SchemaVersionStateForTest(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, schemaCurrent, st)
 	nr, err = si.NeedsRebuild(ctx, "main")
@@ -156,7 +156,7 @@ func TestSchemaVersionState(t *testing.T) {
 	require.False(t, nr, "current version with no embedder must be clean")
 
 	setVersion("ancient")
-	st, err = si.schemaVersionState(ctx, "main")
+	st, err = si.SchemaVersionStateForTest(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, schemaStale, st, "present-but-different → stale (the real warning case)")
 	nr, err = si.NeedsRebuild(ctx, "main")
@@ -166,7 +166,7 @@ func TestSchemaVersionState(t *testing.T) {
 	// The key is per-branch, so a current "main" says nothing about a branch
 	// that has never been indexed.
 	setVersion(GraphSchemaVersion)
-	st, err = si.schemaVersionState(ctx, "agent/other")
+	st, err = si.SchemaVersionStateForTest(ctx, "agent/other")
 	require.NoError(t, err)
 	require.Equal(t, schemaMissing, st, "another branch's version must not answer for this one")
 }

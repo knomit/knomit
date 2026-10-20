@@ -29,7 +29,7 @@ func TestGraphSchema_OwnedByMigration(t *testing.T) {
 	ctx := context.Background()
 	exists := func(table string) bool {
 		var n int
-		require.NoError(t, svc.si.rh.DB().QueryRowContext(ctx,
+		require.NoError(t, svc.si.RepoForTest().DB().QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`,
 			table).Scan(&n))
 		return n > 0
@@ -59,7 +59,7 @@ func TestGraphSchema_OwnedByMigration(t *testing.T) {
 // connection actually enforces foreign keys (_foreign_keys=1 on the DSN).
 func TestGraphSchema_CascadesFromNodes(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
-	db := si.rh.DB()
+	db := si.RepoForTest().DB()
 
 	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)

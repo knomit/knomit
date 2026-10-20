@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 // Log returns up to 50 log entries for commits that modified path on branch.
 // Queries commit_log directly; branch is accepted for interface compatibility.
-func (hq *historyQuery) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
+func (hq *HistoryQuery) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
 	rows, _, err := hq.rh.CommitLogQuery(ctx, branch, path, "", "", "", 50)
 	if err != nil {
 		return nil, fmt.Errorf("Log: %w", err)
@@ -28,7 +28,7 @@ func (hq *historyQuery) Log(ctx context.Context, branch, path string) ([]LogEntr
 }
 
 // LogPaginated returns paginated log entries with file-count tags.
-func (hq *historyQuery) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
+func (hq *HistoryQuery) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
 	rows, hasMore, err := hq.rh.CommitLogQuery(ctx, branch, path, after, from, before, limit)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("LogPaginated: %w", err)
@@ -71,7 +71,7 @@ func (hq *historyQuery) LogPaginated(ctx context.Context, branch, path string, l
 }
 
 // enrichFileCounts batch-queries commit_log for A/M/D counts per commit.
-func (hq *historyQuery) enrichFileCounts(entries []LogEntryWithTags) {
+func (hq *HistoryQuery) enrichFileCounts(entries []LogEntryWithTags) {
 	hashes := make([]string, len(entries))
 	idx := make(map[string]int, len(entries))
 	for i, e := range entries {
@@ -98,7 +98,7 @@ func (hq *historyQuery) enrichFileCounts(entries []LogEntryWithTags) {
 // CommitDetail returns metadata and changed files for a specific commit,
 // queried from commit_log. When pathPrefix is non-empty, only files under
 // that directory are returned.
-func (hq *historyQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error) {
+func (hq *HistoryQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error) {
 	db := conn(ctx, hq.rh.DB())
 
 	var committedAt int64
@@ -151,7 +151,7 @@ func (hq *historyQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix
 }
 
 // Activity returns commit-activity metrics for path using SQL aggregates.
-func (hq *historyQuery) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
+func (hq *HistoryQuery) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
 	cutoff7 := vcs.CommitLogAge(7)
 	cutoff30 := vcs.CommitLogAge(30)
 	cutoff90 := vcs.CommitLogAge(90)
@@ -176,7 +176,7 @@ func (hq *historyQuery) Activity(ctx context.Context, branch, path string) (Acti
 
 // FactsIter opens a cursor over facts for the given branch ordered by fact_id DESC.
 // The caller must call Close() when done to release the underlying database cursor.
-func (fq *factQuery) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
+func (fq *FactQuery) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, err

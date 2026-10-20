@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"container/heap"
@@ -19,7 +19,7 @@ import (
 // commit_log add/modify row of a .md path — answered with jump pointers
 // instead of a first-parent walk; below a history boundary (a missing commit
 // object) it finds nothing. "" when there is none.
-func (hq *historyQuery) LiveRevision(ctx context.Context, branch, path, anchor string) (string, error) {
+func (hq *HistoryQuery) LiveRevision(ctx context.Context, branch, path, anchor string) (string, error) {
 	branchID, err := hq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("LiveRevision: branchID: %w", err)
@@ -42,7 +42,7 @@ type FactRevision struct {
 	// Diff is the change against FromBlob; nil when there is none to show (an
 	// addition, no tracked change, content that is not a fact, or content
 	// that is unavailable).
-	Diff *RevisionDiff
+	Diff *vcs.RevisionDiff
 	// ContentUnavailable: this revision's content, or the content it was
 	// edited from, is missing from the repository.
 	ContentUnavailable bool
@@ -66,7 +66,7 @@ type PathHistoryCursor struct {
 // it descends from (the precomputed order_at/gen key). ErrHistoryChanged
 // reports that a continuation's anchor left the branch, or that a change the
 // walk needs (the frontier, or a link from it) is not visible on the branch.
-func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *PathHistoryCursor, limit int) ([]FactRevision, *PathHistoryCursor, error) {
+func (hq *HistoryQuery) PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *PathHistoryCursor, limit int) ([]FactRevision, *PathHistoryCursor, error) {
 	if anchorCommit == "" || limit <= 0 {
 		return nil, nil, nil
 	}
@@ -120,7 +120,7 @@ func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 				return nil, nil, err
 			}
 			if !on {
-				return nil, nil, ErrHistoryChanged
+				return nil, nil, vcs.ErrHistoryChanged
 			}
 		}
 	}
@@ -133,7 +133,7 @@ func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 			return nil, nil, err
 		}
 		if !ok {
-			return nil, nil, ErrHistoryChanged
+			return nil, nil, vcs.ErrHistoryChanged
 		}
 		seen[f] = true
 		heap.Push(h, n)
@@ -154,7 +154,7 @@ func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 			if !ok {
 				// A change's ancestors are on every branch it is on; a link
 				// that is not visible means the branch moved under us.
-				return nil, nil, ErrHistoryChanged
+				return nil, nil, vcs.ErrHistoryChanged
 			}
 			seen[from] = true
 			heap.Push(h, m)
@@ -198,7 +198,7 @@ func loadChange(ctx context.Context, db storegit.CtxExecer, branchID int64, path
 	}
 	n.ContentUnavailable = unavailable != 0
 	if diff != "" {
-		n.Diff = &RevisionDiff{}
+		n.Diff = &vcs.RevisionDiff{}
 		if err := json.Unmarshal([]byte(diff), n.Diff); err != nil {
 			return n, false, fmt.Errorf("PathHistory: diff of %s: %w", commit, err)
 		}
@@ -265,7 +265,7 @@ func (h *changeHeap) Pop() any {
 // branch_commits on the resolved branch_id, so revisions reachable only via an
 // off-branch lineage never surface even when anchorCommit was committed
 // elsewhere.
-func (hq *historyQuery) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error) {
+func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]vcs.RevisionMeta, error) {
 	if anchorCommit == "" || limit <= 0 {
 		return nil, nil
 	}
@@ -287,9 +287,9 @@ func (hq *historyQuery) RevisionsBefore(ctx context.Context, branch, path, ancho
 	}
 	defer rows.Close()
 
-	var out []RevisionMeta
+	var out []vcs.RevisionMeta
 	for rows.Next() {
-		var rm RevisionMeta
+		var rm vcs.RevisionMeta
 		var msg string
 		if err := rows.Scan(&rm.Commit, &rm.CommittedAt, &msg, &rm.Action); err != nil {
 			return nil, fmt.Errorf("RevisionsBefore: scan: %w", err)

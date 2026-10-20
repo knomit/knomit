@@ -25,7 +25,7 @@ func TestReverseDependentPathsExported(t *testing.T) {
 	require.True(t, hasB, "ReverseDependentPaths must include dependent b: %v", deps)
 
 	// Wrapper must be behavior-preserving: output equals the private method.
-	private, err := svc.gq.reverseDependentPaths(ctx, "kb/t/a.md")
+	private, err := svc.gq.ReverseDependentPathsForTest(ctx, "kb/t/a.md")
 	require.NoError(t, err)
 	require.Equal(t, private, deps, "exported wrapper must equal private reverseDependentPaths")
 }

@@ -65,7 +65,7 @@ func TestRebuildGraph_ReadsEachCommitPathAtMostOnce(t *testing.T) {
 	// walk. This is the SAME query both phases run; computing it here keeps
 	// the bound honest instead of hard-coding a magic number.
 	var n int
-	require.NoError(t, si.rh.DB().QueryRowContext(ctx, `
+	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM commit_log cl
 		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
@@ -73,10 +73,10 @@ func TestRebuildGraph_ReadsEachCommitPathAtMostOnce(t *testing.T) {
 		  AND cl.action != 'deleted'`, branch).Scan(&n))
 	require.Greater(t, n, 0, "corpus must produce commit_log events")
 
-	before := si.rh.GitTreeReadCount()
-	_, err = si.rebuildGraph(ctx, branch, nil)
+	before := si.RepoForTest().GitTreeReadCount()
+	_, err = si.RebuildGraphForTest(ctx, branch, nil)
 	require.NoError(t, err)
-	delta := si.rh.GitTreeReadCount() - before
+	delta := si.RepoForTest().GitTreeReadCount() - before
 
 	// A single-walk rebuildGraph reads each unique (commit, path) at most
 	// once for its blob hash and once for its content: 2×N. The old

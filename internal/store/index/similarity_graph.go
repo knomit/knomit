@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -70,7 +70,7 @@ func NewSimilarityGraph(pairs [][2]string) SimilarityGraph {
 // given fact paths. Only edges where BOTH endpoints are in paths are kept.
 // Liveness is enforced via NOT n.deleted = true on the neighbor side.
 // An empty or single-element paths slice returns an empty graph.
-func (gs *graphStore) SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error) {
+func (gs *GraphStore) SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error) {
 	g := SimilarityGraph{adj: make(map[string]map[string]struct{})}
 	if len(paths) < 2 {
 		return g, nil

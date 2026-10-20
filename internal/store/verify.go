@@ -958,14 +958,14 @@ func (s *integrity) checkEmbeddingIdentity(ctx context.Context) []IntegrityIssue
 	if emb == nil {
 		return nil
 	}
-	storedID, err := s.si.persistedEmbedModelID(ctx)
+	storedID, err := s.si.PersistedEmbedModelID(ctx)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryEmbeddingIdentity,
 			Detail: fmt.Sprintf("read meta.embed_model_id: %v", err),
 		}}
 	}
-	storedDim, err := s.si.persistedEmbedDim(ctx)
+	storedDim, err := s.si.PersistedEmbedDim(ctx)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryEmbeddingIdentity,

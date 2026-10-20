@@ -1,7 +1,7 @@
 // Package store implements the knomit knowledge base backed by SQLite, sqlite-vec,
 // and a bare git repository. It provides vector similarity search and filtered
 // search over git-backed fact files.
-package store
+package index
 
 import (
 	"context"
@@ -26,7 +26,7 @@ func extractBody(raw []byte) string {
 // Completions returns autocomplete suggestions for a given filter category and prefix,
 // scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
-func (fq *factQuery) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
+func (fq *FactQuery) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
@@ -112,7 +112,7 @@ func (fq *factQuery) Completions(ctx context.Context, branch, category, prefix s
 }
 
 // queryDistinct executes a query and returns distinct non-empty string values.
-func (fq *factQuery) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
+func (fq *FactQuery) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
 	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -186,7 +186,7 @@ type StatsResult struct {
 // axis is used as given. Unlike Stats it does not fall back to this branch's
 // own DefaultAxis, because the whole point of the call is to pin a mount to an
 // axis it did not choose; NormalizeAxis is the caller's to apply.
-func (fq *factQuery) Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]Highlight, bool, error) {
+func (fq *FactQuery) Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]Highlight, bool, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, false, fmt.Errorf("highlights: %w", err)
@@ -198,7 +198,7 @@ func (fq *factQuery) Highlights(ctx context.Context, branch, pathPrefix, axis st
 // optionally filtered to those whose path starts with pathPrefix. axis
 // selects the Highlights ranking (see NormalizeAxis); it does not affect
 // DefaultAxis, which is the server's own recommendation.
-func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error) {
+func (fq *FactQuery) Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error) {
 	res := StatsResult{
 		Domains:    make(map[string]int),
 		Entities:   make(map[string]int),

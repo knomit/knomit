@@ -142,6 +142,19 @@ var sameLayerEdges = map[string]bool{
 	"store/merge -> store/internal/sqlite": true,
 	"store/merge -> store/internal/vcs":    true,
 	"store/merge -> store/verify":          true,
+	// The index child (the search index: the IndexManager lifecycle, the
+	// write/rebuild/graph-write path and the vec tables, plus the read-side
+	// query services FactQuery, GraphStore, HistoryQuery, MethodologyMatcher)
+	// sits above sqlite, vcs and facts in the store's child order (proposal
+	// 4.3: index -> sqlite, vcs, facts). Every one of its types reaches UP to
+	// the one *vcs.Repo; it imports facts only for the FactRecord /
+	// FactWithBody types and ParseFactRecord, and the git storer for the
+	// CtxExecer type the graph SQL takes and WithoutTx (the same edge vcs
+	// has). vocab and the facade reach up to index, never the reverse.
+	"store/index -> store/facts":           true,
+	"store/index -> store/git":             true,
+	"store/index -> store/internal/sqlite": true,
+	"store/index -> store/internal/vcs":    true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

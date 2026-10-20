@@ -96,7 +96,7 @@ func TestFactContext_FilterSeesOnlyLiveVersions(t *testing.T) {
 	require.Empty(t, searchPaths(t, svc, branch, ctxQ("kb/verdicts", "task", "t-17", "verdict", "disagree")),
 		"neither the retracted b nor a's superseded version")
 	var rows int
-	require.NoError(t, svc.si.rh.DB().QueryRowContext(ctx,
+	require.NoError(t, svc.si.RepoForTest().DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_context WHERE key = 'verdict' AND value = 'disagree'`).Scan(&rows))
 	require.GreaterOrEqual(t, rows, 2, "fixture: the stale rows DO stay in the table; only the join hides them")
 }
@@ -104,7 +104,7 @@ func TestFactContext_FilterSeesOnlyLiveVersions(t *testing.T) {
 func contextRowCount(t *testing.T, svc *Service) int {
 	t.Helper()
 	var n int
-	require.NoError(t, svc.si.rh.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM fact_context`).Scan(&n))
+	require.NoError(t, svc.si.RepoForTest().DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM fact_context`).Scan(&n))
 	return n
 }
 
@@ -121,11 +121,11 @@ func TestFactContext_UpgradeFromV6RebuildRepopulates(t *testing.T) {
 	require.Equal(t, 11, contextRowCount(t, svc), "4+2+2+2+1 rows")
 
 	// A pre-F22 index: no context rows, version 6.
-	_, err = svc.si.rh.DB().ExecContext(ctx, `DELETE FROM fact_context`)
+	_, err = svc.si.RepoForTest().DB().ExecContext(ctx, `DELETE FROM fact_context`)
 	require.NoError(t, err)
 	require.Empty(t, searchPaths(t, svc, branch, ctxQ("kb/verdicts", "task", "t-17")),
 		"clearing must empty the filter, or the rebuild below proves nothing")
-	res, err := svc.si.rh.DB().ExecContext(ctx, `UPDATE meta SET value = '6' WHERE key = ?`, schemaVersionKey(branch))
+	res, err := svc.si.RepoForTest().DB().ExecContext(ctx, `UPDATE meta SET value = '6' WHERE key = ?`, schemaVersionKey(branch))
 	require.NoError(t, err)
 	n, _ := res.RowsAffected()
 	require.EqualValues(t, 1, n)
@@ -138,7 +138,7 @@ func TestFactContext_UpgradeFromV6RebuildRepopulates(t *testing.T) {
 		searchPaths(t, svc, branch, ctxQ("kb/verdicts", "task", "t-17", "verdict", "disagree")))
 	require.Equal(t, 11, contextRowCount(t, svc))
 	var num float64
-	require.NoError(t, svc.si.rh.DB().QueryRowContext(ctx,
+	require.NoError(t, svc.si.RepoForTest().DB().QueryRowContext(ctx,
 		`SELECT num FROM fact_context WHERE key = 'score'`).Scan(&num))
 	require.Equal(t, 0.5, num, "the rebuild fills num for a number")
 }
@@ -180,10 +180,10 @@ func TestMigration000034_FactContextIdempotent(t *testing.T) {
 	svc, _ := motifEnv(t)
 	up, err := os.ReadFile(filepath.Join("migrate", "repo", "000034_fact_context.up.sql"))
 	require.NoError(t, err)
-	_, err = svc.si.rh.DB().Exec(string(up))
+	_, err = svc.si.RepoForTest().DB().Exec(string(up))
 	require.NoError(t, err)
 	var n int
-	require.NoError(t, svc.si.rh.DB().QueryRow(
+	require.NoError(t, svc.si.RepoForTest().DB().QueryRow(
 		`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('fact_context', 'fact_context_key_value')`).Scan(&n))
 	require.Equal(t, 2, n)
 }

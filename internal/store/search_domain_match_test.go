@@ -114,26 +114,26 @@ func TestRebuild_BackfillsTokensForHistoricalVersions(t *testing.T) {
 	si := svc.si
 	// The historical version: a facts row for kb/x.md not pointed to by branch_facts.
 	var histID int64
-	require.NoError(t, si.rh.DB().QueryRowContext(ctx, `
+	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx, `
 		SELECT f.id FROM facts f
 		WHERE f.path='kb/x.md'
 		  AND f.id NOT IN (SELECT fact_id FROM branch_facts)`).Scan(&histID),
 		"there must be a historical (non-branch) version of kb/x.md")
 
 	// Simulate a version indexed BEFORE the token table existed: drop its tokens.
-	_, err = si.rh.DB().ExecContext(ctx, `DELETE FROM fact_domain_tokens WHERE fact_id=?`, histID)
+	_, err = si.RepoForTest().DB().ExecContext(ctx, `DELETE FROM fact_domain_tokens WHERE fact_id=?`, histID)
 	require.NoError(t, err)
 
 	// A full rebuild must backfill the historical version's tokens.
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
 	var n int
-	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
+	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_domain_tokens WHERE fact_id=?`, histID).Scan(&n))
 	require.Positive(t, n, "rebuild must backfill tokens for the historical version")
 	// Tokens are the canonicalised authored domain ("AI-Governance" -> ai, governance).
 	var toks []string
-	rows, err := si.rh.DB().QueryContext(ctx, `SELECT token FROM fact_domain_tokens WHERE fact_id=? ORDER BY token`, histID)
+	rows, err := si.RepoForTest().DB().QueryContext(ctx, `SELECT token FROM fact_domain_tokens WHERE fact_id=? ORDER BY token`, histID)
 	require.NoError(t, err)
 	defer rows.Close()
 	for rows.Next() {

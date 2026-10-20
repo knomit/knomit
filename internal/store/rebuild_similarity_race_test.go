@@ -74,7 +74,7 @@ func TestRebuild_DoesNotDestroyConcurrentCrossBranchSimilarityEdges(t *testing.T
 
 	// The writer fires once, from inside the window.
 	fired := false
-	svc.si.beforeSimTx = func() {
+	svc.si.SetBeforeSimTxHookForTest(func() {
 		if fired {
 			return
 		}
@@ -84,8 +84,8 @@ func TestRebuild_DoesNotDestroyConcurrentCrossBranchSimilarityEdges(t *testing.T
 		require.NoError(t, werr)
 		require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 			`SELECT blob_hash FROM facts WHERE path = ?`, racePath).Scan(&racedBlob))
-	}
-	defer func() { svc.si.beforeSimTx = nil }()
+	})
+	defer svc.si.SetBeforeSimTxHookForTest(nil)
 
 	// Rebuild main. Its snapshot predates the raced write entirely.
 	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))

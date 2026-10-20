@@ -67,14 +67,14 @@ func TestGraphBuildSimilarityEdges_RewriteIsInvisibleUntilCommit(t *testing.T) {
 
 	var seenMidRewrite int
 	fired := false
-	svc.si.inSimEdgeTx = func() {
+	svc.si.SetInSimEdgeTxHookForTest(func() {
 		if fired {
 			return
 		}
 		fired = true
 		seenMidRewrite = countSimilarOn(t, obs, ctx)
-	}
-	defer func() { svc.si.inSimEdgeTx = nil }()
+	})
+	defer svc.si.SetInSimEdgeTxHookForTest(nil)
 
 	// Re-index one fact version, which rewrites its outgoing edges.
 	//
@@ -88,7 +88,7 @@ func TestGraphBuildSimilarityEdges_RewriteIsInvisibleUntilCommit(t *testing.T) {
 		`SELECT blob_hash FROM facts WHERE path = ?`, rewritten).Scan(&blob))
 	require.Greater(t, similarToOutDegree(t, svc, ctx, rewritten, blob), 0,
 		"the rewritten version must have edges, or the delete under test is a no-op")
-	require.NoError(t, svc.si.graphBuildSimilarityEdges(ctx, rewritten, blob))
+	require.NoError(t, svc.si.GraphBuildSimilarityEdgesForTest(ctx, rewritten, blob))
 
 	require.True(t, fired, "the in-transaction hook must have run, else nothing was observed")
 	require.Equal(t, baseline, seenMidRewrite,
@@ -124,14 +124,14 @@ func TestRebuildGraph_SimilarityPruneIsInvisibleUntilCommit(t *testing.T) {
 
 	var seenMidRebuild int
 	fired := false
-	svc.si.inSimTx = func() {
+	svc.si.SetInSimTxHookForTest(func() {
 		if fired {
 			return
 		}
 		fired = true
 		seenMidRebuild = countSimilarOn(t, obs, ctx)
-	}
-	defer func() { svc.si.inSimTx = nil }()
+	})
+	defer svc.si.SetInSimTxHookForTest(nil)
 
 	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))
 

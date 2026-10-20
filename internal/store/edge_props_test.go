@@ -21,26 +21,26 @@ func TestGraphSetEdgeProps_WritesAndReadsText(t *testing.T) {
 	ctx := context.Background()
 
 	// Two Fact nodes, distinct (path, blob_hash).
-	srcID, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
+	srcID, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "aaaa"})
 	require.NoError(t, err)
 	require.NotZero(t, srcID)
-	tgtID, err := graphMergeNode(ctx, si.rh.DB(), NodeFact,
+	tgtID, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
 		map[string]string{"path": "kb/b.md", "blob_hash": "bbbb"})
 	require.NoError(t, err)
 	require.NotZero(t, tgtID)
 
-	edgeID, err := si.graphInsertEdgeReturningID(ctx, srcID, tgtID, EdgeDerivedFrom)
+	edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, srcID, tgtID, EdgeDerivedFrom)
 	require.NoError(t, err)
 	require.NotZero(t, edgeID)
 
-	require.NoError(t, si.graphSetEdgeProps(ctx, edgeID, map[string]string{
+	require.NoError(t, si.GraphSetEdgePropsForTest(ctx, edgeID, map[string]string{
 		"source_commit": "1234abc",
 		"target_commit": "5678def",
 	}))
 
 	// Read back from the EAV tables and verify both properties round-trip.
-	rows, err := si.rh.DB().QueryContext(ctx, `
+	rows, err := si.RepoForTest().DB().QueryContext(ctx, `
 		SELECT sc.value, tc.value
 		FROM edges e
 		JOIN edge_props_text sc ON sc.edge_id = e.id

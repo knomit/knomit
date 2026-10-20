@@ -1,4 +1,4 @@
-package store
+package index
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
 )
@@ -29,7 +30,7 @@ func donatedVec(ctx context.Context, path string) ([]float32, bool) {
 // validateDonatedVec checks a caller-supplied embedding against the active
 // embedder's dimension and converts it to storage bytes. When no embedder is
 // configured we cannot know the expected dim, so the vector is stored as-is.
-func validateDonatedVec(emb Embedder, path string, vec []float32) ([]byte, error) {
+func validateDonatedVec(emb vcs.Embedder, path string, vec []float32) ([]byte, error) {
 	if emb != nil && len(vec) != emb.Dim() {
 		return nil, fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", path, len(vec), emb.Dim())
 	}
@@ -50,7 +51,7 @@ func validateDonatedVec(emb Embedder, path string, vec []float32) ([]byte, error
 // whether to pay for an embedding, and both wrong answers are safe: a false
 // "indexed" costs an in-tx embed on the miss path, a false "not indexed" costs
 // a wasted embedding that the COW-hit path discards.
-func (si *searchIndex) cowProbe(ctx context.Context, rec FactRecord) (bool, error) {
+func (si *Index) cowProbe(ctx context.Context, rec facts.FactRecord) (bool, error) {
 	db := conn(ctx, si.rh.DB())
 
 	var factID int64
@@ -91,7 +92,7 @@ func (si *searchIndex) cowProbe(ctx context.Context, rec FactRecord) (bool, erro
 // Call this OUTSIDE a write transaction whenever possible: inference takes
 // seconds and _txlock=immediate means an open tx holds SQLite's process-wide
 // write lock for the duration.
-func (si *searchIndex) embedRecord(ctx context.Context, rec FactRecord) ([]byte, error) {
+func (si *Index) embedRecord(ctx context.Context, rec facts.FactRecord) ([]byte, error) {
 	emb := si.rh.Embedder()
 	var data []byte
 	if err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
@@ -116,7 +117,7 @@ func (si *searchIndex) embedRecord(ctx context.Context, rec FactRecord) ([]byte,
 // upsert inserts or replaces a FactRecord on the given branch, keeping the
 // vec0 index in sync. COW dedup: if (path, blob_hash) already exists in the
 // facts table, only the branch_facts pointer is updated.
-func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, rec FactRecord) error {
+func (si *Index) upsert(ctx context.Context, branch, commitHash string, rec facts.FactRecord) error {
 	branchID, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return fmt.Errorf("upsert: %w", err)
@@ -438,7 +439,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 // given (path, blob_hash) at commitHash. Filters refs to local-only.
 // Logged on failure rather than returned: edges are recoverable via
 // rebuild and verify will flag any holes.
-func (si *searchIndex) writePostCommitDerivedFrom(ctx context.Context, branch, path, blobHash, commitHash string, refs []string) {
+func (si *Index) writePostCommitDerivedFrom(ctx context.Context, branch, path, blobHash, commitHash string, refs []string) {
 	localRefs := localFactRefs(refs, si.localRepoID(ctx, branch))
 	if len(localRefs) == 0 {
 		return
@@ -460,7 +461,7 @@ func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) 
 
 // delete removes a fact from the given branch. If no other branch references
 // the fact, the underlying facts row (and its vec/graph data) is also deleted.
-func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
+func (si *Index) delete(ctx context.Context, branch, path string) error {
 	branchID, err := si.rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
@@ -527,7 +528,7 @@ func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
 
 // GetByPath retrieves a FactWithBody by its path on the given branch,
 // hydrating the body from the objects table. Returns nil, nil if not found.
-func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error) {
+func (fq *FactQuery) GetByPath(ctx context.Context, branch, path string) (*facts.FactWithBody, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("getByPath: %w", err)
@@ -549,7 +550,7 @@ func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactW
 // getEmbeddingByFact returns the stored embedding vector for a specific fact
 // version identified by (path, blob_hash). No branch scoping.
 // Used internally by graph similarity edge computation.
-func (si *searchIndex) getEmbeddingByFact(ctx context.Context, path, blobHash string) ([]float32, error) {
+func (si *Index) getEmbeddingByFact(ctx context.Context, path, blobHash string) ([]float32, error) {
 	var blob []byte
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT fv.embedding
@@ -574,8 +575,8 @@ func (si *searchIndex) getEmbeddingByFact(ctx context.Context, path, blobHash st
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
 // motifs, confidence, sources, refs, evidence_weight, expires, commit_hash,
 // data, committed_at.
-func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
-	var f FactWithBody
+func scanFactWithBody(row *sql.Row) (*facts.FactWithBody, error) {
+	var f facts.FactWithBody
 	var domainJSON, entitiesJSON, refsJSON, motifsJSON string
 	var rawData []byte
 	var committedAt sql.NullInt64
@@ -606,8 +607,8 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
 // motifs, confidence, sources, refs, evidence_weight, expires, commit_hash,
 // committed_at.
-func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
-	var f FactWithBody
+func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*facts.FactWithBody, error) {
+	var f facts.FactWithBody
 	var domainJSON, entitiesJSON, refsJSON, motifsJSON string
 	err := rows.Scan(
 		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
@@ -628,8 +629,8 @@ func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
 // motifs, confidence, sources, refs, evidence_weight, expires, commit_hash,
 // data, committed_at.
-func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
-	var f FactWithBody
+func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*facts.FactWithBody, error) {
+	var f facts.FactWithBody
 	var domainJSON, entitiesJSON, refsJSON, motifsJSON string
 	var rawData []byte
 	err := rows.Scan(
