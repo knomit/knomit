@@ -14,24 +14,32 @@ import (
 // non-test source in the store may read or write it.
 func TestRepoVerifyAcceptedTableIsNeverUsed(t *testing.T) {
 	sqlUse := regexp.MustCompile(`(?i)(INTO|FROM|UPDATE|TABLE)\s+verify_accepted\b`)
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	// The store's children (internal/sqlite, internal/sessions, internal/vcs,
-	// where the accept list's type lives) are the store too.
-	children, err := filepath.Glob(filepath.Join("internal", "*", "*.go"))
+	// where the accept list's type lives, and the siblings of git and migrate
+	// such as fleetrec) are the store too. WALKED, not globbed: a glob at a
+	// fixed depth silently drops every new child that sits elsewhere.
+	var files []string
+	dirs := 0
+	err := filepath.WalkDir(".", func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			dirs++
+			return nil
+		}
+		if strings.HasSuffix(p, ".go") && !strings.HasSuffix(p, "_test.go") {
+			files = append(files, p)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(children) == 0 {
-		t.Fatal("no Go files under internal/*: the scan no longer reads the store's children")
+	if dirs < 5 || len(files) < 100 {
+		t.Fatalf("scanned %d directories and %d non-test Go files: the scan no longer reads the store and its children", dirs, len(files))
 	}
-	files = append(files, children...)
 	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") {
-			continue
-		}
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
