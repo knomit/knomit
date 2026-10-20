@@ -1,4 +1,4 @@
-package store
+package verify
 
 import (
 	"errors"
@@ -80,9 +80,9 @@ func Audit(in AuditInput) (AuditReport, error) {
 		// says so, like LoadFleet: it is not "not a fleet".
 		return AuditReport{}, fmt.Errorf("audit: fleet: ontology: %w", err)
 	} else if raw == nil {
-		return AuditReport{}, fmt.Errorf("audit: %w", ErrNotFleet)
+		return AuditReport{}, fmt.Errorf("audit: %w", fleetrec.ErrNotFleet)
 	} else if ont, err := fact.ParseOntology(raw); err != nil || !fact.IsFleetOntology(ont) {
-		return AuditReport{}, fmt.Errorf("audit: %w", ErrNotFleet)
+		return AuditReport{}, fmt.Errorf("audit: %w", fleetrec.ErrNotFleet)
 	}
 	// Every version of every record: the fleet's own history is the history
 	// of each agent (keys and states), per the fact-history ruling.
@@ -121,10 +121,10 @@ func Audit(in AuditInput) (AuditReport, error) {
 	err = vcs.WalkHistory(kb.Storer, head.Hash, map[plumbing.Hash]bool{}, func(c *object.Commit) {
 		out.Commits++
 		h := c.Hash.String()
-		s, serr := verifyCommitSignature(c)
+		s, serr := VerifyCommitSignature(c)
 		if serr != nil {
 			if (errors.Is(serr, ErrUnsigned) || errors.Is(serr, ErrNotSSHSIG)) && c.NumParents() >= 2 {
-				if v, err := checkM3(c); err == nil && v.OK {
+				if v, err := CheckM3(c); err == nil && v.OK {
 					return
 				}
 			}

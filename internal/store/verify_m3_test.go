@@ -12,6 +12,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/memory"
+
+	"knomit/internal/store/verify"
 )
 
 // memRepo builds commits from flat {path: content} maps in memory, so M3 can
@@ -126,9 +128,9 @@ func with(m map[string]string, kv ...string) map[string]string {
 	return out
 }
 
-func mustM3(t *testing.T, merge *object.Commit) m3Verdict {
+func mustM3(t *testing.T, merge *object.Commit) verify.M3Verdict {
 	t.Helper()
-	v, err := checkM3(merge)
+	v, err := verify.CheckM3(merge)
 	if err != nil {
 		t.Fatal(err)
 	}

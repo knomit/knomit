@@ -14,7 +14,7 @@ import (
 // bad note is followed by a good commit on another file; the refusal names
 // the bad commit.
 //
-// SABOTAGE: name the tip in branchFactsValid's refusal (as the first net
+// SABOTAGE: name the tip in verify.BranchFactsValid's refusal (as the first net
 // version did) -> the refusal names the good commit -> red.
 func TestValidation_TheRefusalNamesTheCommitThatWroteTheFact(t *testing.T) {
 	h := newPushHostWith(t, map[string]string{fact.OntologyFile: validatedOntology("")}, 0)

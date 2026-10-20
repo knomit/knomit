@@ -19,6 +19,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // The malformed-tree rows: a directory entry (mode 040000) naming a blob, and
@@ -174,7 +175,7 @@ func TestCheckTreeShape(t *testing.T) {
 // reviewer's scratch repro (an otherwise clean merge plus "kc" naming a blob
 // or a missing object, then "zz-evil.md") was {OK:true}.
 //
-// SABOTAGE: drop the CheckTreeShape call in checkM3's flat → OK → red.
+// SABOTAGE: drop the CheckTreeShape call in verify.CheckM3's flat → OK → red.
 func TestM3_AMalformedTreeIsAnError(t *testing.T) {
 	r := newMemRepo(t)
 	base := map[string]string{"kb/a.md": "a1", "kb/u.md": "u1"}
@@ -189,7 +190,7 @@ func TestM3_AMalformedTreeIsAnError(t *testing.T) {
 			object.TreeEntry{Name: "kc", Mode: filemode.Dir, Hash: b.hash},
 			object.TreeEntry{Name: "zz-evil.md", Mode: filemode.Regular, Hash: r.blob("injected content")})
 		mc := shapeCommit(t, r.st, th, "", nil, M, S)
-		v, err := checkM3(mc)
+		v, err := verify.CheckM3(mc)
 		require.Error(t, err, "%s: %+v", b.name, v)
 		require.False(t, v.OK, b.name)
 		require.Contains(t, err.Error(), "M3: merge tree: kc (mode", b.name)

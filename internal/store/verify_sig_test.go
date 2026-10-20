@@ -22,6 +22,7 @@ import (
 
 	"knomit/internal/pki"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 func namedSigner(t *testing.T, name string) ssh.Signer {
@@ -46,7 +47,7 @@ func testCommit() *object.Commit {
 
 func signed(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit {
 	t.Helper()
-	payload, err := commitPayload(c)
+	payload, err := verify.CommitPayload(c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func signed(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit {
 
 func TestVerifyCommitSignature_Valid(t *testing.T) {
 	s := namedSigner(t, "k")
-	got, err := verifyCommitSignature(signed(t, testCommit(), s))
+	got, err := verify.VerifyCommitSignature(signed(t, testCommit(), s))
 	if err != nil {
 		t.Fatalf("a commit signed by signCommit must verify: %v", err)
 	}
@@ -74,36 +75,36 @@ func TestVerifyCommitSignature_Refusals(t *testing.T) {
 	s := namedSigner(t, "k")
 
 	// Unsigned.
-	if _, err := verifyCommitSignature(testCommit()); !errors.Is(err, ErrUnsigned) {
+	if _, err := verify.VerifyCommitSignature(testCommit()); !errors.Is(err, ErrUnsigned) {
 		t.Errorf("unsigned: got %v", err)
 	}
 	// PGP (GitHub web-flow).
 	pgp := testCommit()
 	pgp.PGPSignature = "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQ\n-----END PGP SIGNATURE-----"
-	if _, err := verifyCommitSignature(pgp); !errors.Is(err, ErrNotSSHSIG) {
+	if _, err := verify.VerifyCommitSignature(pgp); !errors.Is(err, ErrNotSSHSIG) {
 		t.Errorf("pgp: got %v", err)
 	}
 	// Tampered payload: the signature covers the message.
 	tampered := signed(t, testCommit(), s)
 	tampered.Message = "learn: something else"
-	if _, err := verifyCommitSignature(tampered); !errors.Is(err, ErrBadSignature) {
+	if _, err := verify.VerifyCommitSignature(tampered); !errors.Is(err, ErrBadSignature) {
 		t.Errorf("tampered: got %v", err)
 	}
 	// A signature copied from another commit.
 	other := testCommit()
 	other.Message = "other"
 	other.PGPSignature = signed(t, testCommit(), s).PGPSignature
-	if _, err := verifyCommitSignature(other); !errors.Is(err, ErrBadSignature) {
+	if _, err := verify.VerifyCommitSignature(other); !errors.Is(err, ErrBadSignature) {
 		t.Errorf("transplanted: got %v", err)
 	}
 	// Garbage armor.
 	bad := testCommit()
 	bad.PGPSignature = "-----BEGIN SSH SIGNATURE-----\n!!!\n-----END SSH SIGNATURE-----"
-	if _, err := verifyCommitSignature(bad); !errors.Is(err, ErrMalformedSig) {
+	if _, err := verify.VerifyCommitSignature(bad); !errors.Is(err, ErrMalformedSig) {
 		t.Errorf("garbage: got %v", err)
 	}
 	// A different namespace (a valid SSHSIG for "file", not "git").
-	if _, err := verifyCommitSignature(wrongNamespace(t, testCommit(), s)); !errors.Is(err, ErrWrongNamespace) {
+	if _, err := verify.VerifyCommitSignature(wrongNamespace(t, testCommit(), s)); !errors.Is(err, ErrWrongNamespace) {
 		t.Errorf("namespace: got %v", err)
 	}
 }
@@ -111,7 +112,7 @@ func TestVerifyCommitSignature_Refusals(t *testing.T) {
 // wrongNamespace signs c exactly like SignCommit but with namespace "file".
 func wrongNamespace(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit {
 	t.Helper()
-	payload, err := commitPayload(c)
+	payload, err := verify.CommitPayload(c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestVerifyCommitSignature_StockGitSSHSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := verifyCommitSignature(c)
+	got, err := verify.VerifyCommitSignature(c)
 	if err != nil {
 		t.Fatalf("a stock git SSH-signed commit must verify: %v", err)
 	}
@@ -219,7 +220,7 @@ func TestVerifyCommitSignature_KnomitWritePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := verifyCommitSignature(c)
+	got, err := verify.VerifyCommitSignature(c)
 	if err != nil {
 		t.Fatal(err)
 	}

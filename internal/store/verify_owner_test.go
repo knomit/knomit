@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/verify"
 )
 
 // ownerFixture is the fleet repository judging itself (enforce, PKI) with two
@@ -199,7 +200,7 @@ func brokenSig(t *testing.T, repo *gogit.Repository, c *object.Commit) *object.C
 	require.NoError(t, err)
 	got, err := object.GetCommit(repo.Storer, h)
 	require.NoError(t, err)
-	_, serr := verifyCommitSignature(got)
+	_, serr := verify.VerifyCommitSignature(got)
 	require.ErrorIs(t, serr, ErrBadSignature, "fixture: the signature is present and does not verify")
 	return got
 }
@@ -350,7 +351,7 @@ func TestRecordOwner_OnlyDeclaredArtifactPathsAreExempt(t *testing.T) {
 // passes M3 is ADMITTED even when its signature is present but does not
 // verify, exactly like an unsigned clean merge. It carries no content beyond
 // its parents, and stripping the signature would give the same verdict. The
-// merge reaches the clean-merge branch (checkM3 is OK; the signature is
+// merge reaches the clean-merge branch (verify.CheckM3 is OK; the signature is
 // ErrBadSignature, not unsigned). Control: the same broken signature on a
 // merge that changes a file beyond its parents is refused signature.
 //
@@ -367,7 +368,7 @@ func TestM3_CleanMergeWithABadSignatureIsAdmitted(t *testing.T) {
 	merged := with(bossV2, own, base[own]+"\nv2\n")
 
 	clean := brokenSig(t, f.fleet, f.commit(f.fleet, merged, "agent-x", x, side, main2))
-	m3, err := checkM3(clean)
+	m3, err := verify.CheckM3(clean)
 	require.NoError(t, err)
 	require.True(t, m3.OK, "fixture: the merge is M3-clean")
 	f.ref(f.fleet, "cand", clean)

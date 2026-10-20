@@ -112,6 +112,14 @@ var sameLayerEdges = map[string]bool{
 	// the ontology at a commit and checks the tree shape through the vcs
 	// primitives. verify and the facade reach up to it, never the reverse.
 	"store/fleetrec -> store/internal/vcs": true,
+	// The verify child (the judge: signatures, tree shape, the acceptance
+	// range, M3/E4, validations, artifact rules, the incoming-push judge and
+	// the audit) sits above vcs and fleetrec in the store's child order
+	// (proposal 4.3: verify -> vcs, fleetrec). It reads a store only through
+	// *vcs.Repo and the fleet's records through fleetrec; the sync, gitserve
+	// and fsck clusters reach up to it, never the reverse.
+	"store/verify -> store/fleetrec":     true,
+	"store/verify -> store/internal/vcs": true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // pushedFixture is a host store with its agent branch and one pushed peer
@@ -76,9 +77,9 @@ func (f *pushedFixture) requireHostMerge(hostBefore, peerTip plumbing.Hash) *obj
 	f.t.Helper()
 	tip := f.commit(f.tip(pmAgent))
 	require.Equal(f.t, []plumbing.Hash{hostBefore, peerTip}, tip.ParentHashes, "parents are [host tip, peer tip]")
-	s, err := verifyCommitSignature(tip)
+	s, err := verify.VerifyCommitSignature(tip)
 	require.NoError(f.t, err, "the merge commit is signed")
-	hostFP, err := keyFingerprint(f.host.PublicKey())
+	hostFP, err := verify.KeyFingerprint(f.host.PublicKey())
 	require.NoError(f.t, err)
 	require.Equal(f.t, hostFP, s.Fingerprint, "the merge commit is signed by the HOST's key")
 	return tip

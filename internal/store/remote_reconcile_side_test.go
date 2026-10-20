@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // The rewind replay keeps a committed experiment's work behind a merge only
@@ -124,14 +125,14 @@ func TestReconcileAgentRebase_ForeignMergedCommitsStayOffTheReplay(t *testing.T)
 	sig := object.Signature{Name: "member", Email: "m@m", When: time.Now()}
 	f, _, err := vcs.WriteFileToStore(svc.rh.Storer(), foreign, c1, "kb/member.md", obsFact("Member"), "member write", sig, sig)
 	require.NoError(t, err)
-	s, err := verifyCommitSignature(mustCommit(t, svc, f))
+	s, err := verify.VerifyCommitSignature(mustCommit(t, svc, f))
 	require.NoError(t, err, "setup: the member commit is signed")
 	g := upstreamCommit(t, svc, f, "kb/member2.md", obsFact("Member2")) // unsigned
 	ownMerge(t, svc, "agent/test", g)
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/member.md"), "setup: the merge brought the member's content in")
 	own, err := svc.rh.CommitSigner()
 	require.NoError(t, err)
-	ownFP, err := keyFingerprint(own.PublicKey())
+	ownFP, err := verify.KeyFingerprint(own.PublicKey())
 	require.NoError(t, err)
 	require.NotEqual(t, ownFP, s.Fingerprint, "setup: the member commit is signed by another key")
 

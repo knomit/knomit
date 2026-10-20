@@ -32,6 +32,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/pki"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // TriggerFireRetention is how many fire-log rows a repo keeps: the newest
@@ -643,7 +644,7 @@ func (rh *repoHandler) CommitSignerOf(ctx context.Context, hash plumbing.Hash) (
 	if err != nil {
 		return CommitSigner{}, fmt.Errorf("triggers: commit %s: %w", hash, err)
 	}
-	return verifyCommitSignature(c)
+	return verify.VerifyCommitSignature(c)
 }
 
 // BlobAt implements TriggerIndex with a one-shot reader (see TriggerTrees).

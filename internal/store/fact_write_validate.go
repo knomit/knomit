@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // ErrFactInvalid matches *FactInvalidError with errors.Is.
@@ -61,7 +62,7 @@ func carriedOver(ctx context.Context) bool {
 // the fleet code, trigger scripts and the MCP tools all commit through
 // writeFileExact or batchWriteLocked, which call it under the branch lock
 // before any object is written. Each file in files that is a fact
-// (isFactPathUnder the fact root, not in deletes) and whose content differs
+// (verify.IsFactPathUnder the fact root, not in deletes) and whose content differs
 // from the blob at head is parsed and validated against the ontology at head,
 // on its topic path (as knomit_update derives it). So an edit of a legacy
 // fact that fails a rule must bring it into compliance, while a fact the
@@ -80,7 +81,7 @@ func (rh *repoHandler) validateWrite(head plumbing.Hash, files map[string]string
 		deleted[d] = true
 	}
 	for p := range files {
-		if isFactPathUnder(root, p) && !deleted[p] {
+		if verify.IsFactPathUnder(root, p) && !deleted[p] {
 			paths = append(paths, p)
 		}
 	}

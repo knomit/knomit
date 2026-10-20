@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // The causal-trace trailers (F07 PR 3), store half.
@@ -91,12 +92,12 @@ func TestWithTrailers_StampedAtThreeSitesInsideTheSignature(t *testing.T) {
 	// key; the same commit with one trailer character changed does not.
 	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(r.CommitHash))
 	require.NoError(t, err)
-	signer, err := verifyCommitSignature(c)
+	signer, err := verify.VerifyCommitSignature(c)
 	require.NoError(t, err)
 	require.Equal(t, svc.SignerFingerprint(), signer.Fingerprint)
 	altered := *c
 	altered.Message = strings.Replace(c.Message, "Knomit-Trace: t-1", "Knomit-Trace: t-2", 1)
-	_, err = verifyCommitSignature(&altered)
+	_, err = verify.VerifyCommitSignature(&altered)
 	require.Error(t, err, "a trailer cannot be altered without breaking the signature")
 }
 

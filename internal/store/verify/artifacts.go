@@ -1,4 +1,4 @@
-package store
+package verify
 
 import (
 	"crypto/ed25519"
@@ -53,7 +53,7 @@ import (
 //
 // An undeclared path has no rule; a path whose rules are ambiguous, or whose
 // blob cannot be read, is refused (RuleArtifactRules).
-func (j judge) artifactRules(c *object.Commit) (Refusal, bool) {
+func (j Judge) artifactRules(c *object.Commit) (Refusal, bool) {
 	if !j.ont.HasArtifactRules() {
 		return Refusal{}, true
 	}
@@ -92,7 +92,7 @@ func underArtifacts(p string) bool { return strings.HasPrefix(p, fact.ArtifactsR
 // artifactCheck judges the changes of one commit, reading its tree's PKI at
 // most once.
 type artifactCheck struct {
-	j    judge
+	j    Judge
 	tree *object.Tree
 	// parents are the commit's parents' trees (nil entries: the empty tree).
 	parents []*object.Tree

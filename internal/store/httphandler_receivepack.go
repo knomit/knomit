@@ -22,6 +22,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/version"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // PushPolicy is what the HTTP edge knows about ONE receive-pack request and
@@ -371,14 +372,14 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 // the refusal text, or "".
 //
 // Beyond judgeCommit (the rules CheckRange shares), a signed new commit must
-// be signed by the PUSHER (signerIsPusher): a member pushes only what its own
+// be signed by the PUSHER (verify.SignerIsPusher): a member pushes only what its own
 // key signed, never another active member's commits. The rule rides the mode
 // like every other judgement here: enforce refuses, log logs, off checks
 // nothing — under off and log an unsigned commit is accepted anyway, so a
 // signer rule there would stop nobody.
 func (rp *receivePack) verify(ctx context.Context, pol PushPolicy, tip plumbing.Hash, commits []*object.Commit, lg zerolog.Logger) string {
 	return rp.rh.judgeIncoming(ctx, rp.upstream(), pol.Fleet, func(c *object.Commit) (Refusal, bool) {
-		return signerIsPusher(c, pol.Pusher)
+		return verify.SignerIsPusher(c, pol.Pusher)
 	}, tip, commits, lg)
 }
 

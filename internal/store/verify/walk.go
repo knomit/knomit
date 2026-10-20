@@ -1,4 +1,4 @@
-package store
+package verify
 
 import (
 	"crypto/ed25519"
@@ -8,6 +8,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 )
 
 // Verification modes (the ontology's verify_signatures), ordered:
@@ -74,8 +75,8 @@ const (
 	RuleArtifactNotAFile   = "artifact-not-a-file"  // a tree, symlink or submodule at a declared path, or anything under a directory a pattern declares a file (fact.Ontology.ArtifactFileAt)
 )
 
-// keyFingerprint is pki.Fingerprint of an ssh-ed25519 public key.
-func keyFingerprint(pk ssh.PublicKey) (string, error) {
+// KeyFingerprint is pki.Fingerprint of an ssh-ed25519 public key.
+func KeyFingerprint(pk ssh.PublicKey) (string, error) {
 	cpk, ok := pk.(ssh.CryptoPublicKey)
 	if !ok {
 		return "", ErrNotEd25519Key
@@ -89,7 +90,7 @@ func keyFingerprint(pk ssh.PublicKey) (string, error) {
 
 // acceptedCommit reports whether h is on this instance's accept list, which
 // waives E4 for that one commit.
-func (rh *repoHandler) acceptedCommit(h plumbing.Hash) bool {
+func acceptedCommit(rh *vcs.Repo, h plumbing.Hash) bool {
 	if rh.AcceptList() == nil {
 		return false
 	}

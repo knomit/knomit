@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 const hostV1 = "# knomit fleet host v1\nurl: https://hub.example:7443/git/fleet\n"
@@ -30,9 +31,9 @@ func (f *rangeFixture) judgeEntry(c *object.Commit) (Refusal, bool) {
 	require.NoError(f.t, err)
 	ont, err := fact.ParseOntology(raw)
 	require.NoError(f.t, err)
-	gate := newJudge(fleet, "kb", ont, "")
-	gate.entry = true
-	return gate.judgeCommit(c)
+	gate := verify.NewJudge(fleet, "kb", ont, "")
+	gate.Entry = true
+	return gate.JudgeCommit(c)
 }
 
 // The host-record rule: on the fleet repository no commit of a member's
@@ -148,7 +149,7 @@ func TestHostRecord_AMemberMergesTheMastersChange(t *testing.T) {
 // same commit admits it, because the gate judges any range, the master's own
 // create commits included, and the rule is the member branch's.
 //
-// SABOTAGE: drop `gate.entry = true` from judgeIncoming -> the push is
+// SABOTAGE: drop `gate.Entry = true` from judgeIncoming -> the push is
 // admitted -> red.
 func TestHostRecord_ReceivePackRefusesCheckRangeAdmits(t *testing.T) {
 	p := newTestFleetPKI(t)

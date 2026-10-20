@@ -29,7 +29,7 @@ var triggersAllowedCalls = map[string][]string{
 		// never a file), and the named error for a symlinked ontology: pure
 		"isSystemFileMode", "fact.SymlinkNotFollowed",
 		"tt.commit", "tt.tree", "tt.blobHashAt", "rh.TreeReader", "?.Toucher", "?.BlobAt",
-		"object.GetCommit", "ac.IsAncestor", "plumbing.NewBranchReferenceName", "verifyCommitSignature",
+		"object.GetCommit", "ac.IsAncestor", "plumbing.NewBranchReferenceName", "verify.VerifyCommitSignature",
 		"fact.OntologyPathsNewestFirst", "fact.TriggerScriptPath",
 		// F07 PR 5: the recipe file at a commit (the dispatcher passes main's tip) and
 		// the shared tree-entry reader; the fire-log reader shared by the recent

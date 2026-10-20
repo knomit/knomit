@@ -1,4 +1,4 @@
-package store
+package verify
 
 import (
 	"bytes"
@@ -37,7 +37,7 @@ type CommitSigner struct {
 	Fingerprint string // pki.Fingerprint: hex(sha256(SSH wire key)), 64 hex
 }
 
-// verifyCommitSignature checks c's SSHSIG signature over the commit payload
+// VerifyCommitSignature checks c's SSHSIG signature over the commit payload
 // without its signature header, exactly as SignCommit (sshsig.go) produced it:
 // magic, namespace "git", sha512, an Ed25519 key. It returns the key the
 // signature was made with; WHETHER that key is admitted is the caller's
@@ -45,7 +45,7 @@ type CommitSigner struct {
 //
 // A PGP-armored signature (GitHub's web-flow merges) is ErrNotSSHSIG: F09
 // treats it as unsigned, and a merge then goes to merge rule M3.
-func verifyCommitSignature(c *object.Commit) (CommitSigner, error) {
+func VerifyCommitSignature(c *object.Commit) (CommitSigner, error) {
 	if strings.TrimSpace(c.PGPSignature) == "" {
 		return CommitSigner{}, ErrUnsigned
 	}
@@ -104,7 +104,7 @@ func verifyCommitSignature(c *object.Commit) (CommitSigner, error) {
 		return CommitSigner{}, fmt.Errorf("%w: signature blob: %v", ErrMalformedSig, err)
 	}
 
-	payload, err := commitPayload(c)
+	payload, err := CommitPayload(c)
 	if err != nil {
 		return CommitSigner{}, err
 	}
@@ -121,9 +121,9 @@ func verifyCommitSignature(c *object.Commit) (CommitSigner, error) {
 	return CommitSigner{Key: pub, Fingerprint: pki.Fingerprint(edPub)}, nil
 }
 
-// commitPayload is the byte string a commit's signature covers: the commit
+// CommitPayload is the byte string a commit's signature covers: the commit
 // encoded without its signature header.
-func commitPayload(c *object.Commit) ([]byte, error) {
+func CommitPayload(c *object.Commit) ([]byte, error) {
 	obj := &plumbing.MemoryObject{}
 	if err := c.EncodeWithoutSignature(obj); err != nil {
 		return nil, fmt.Errorf("%w: encode payload: %v", ErrMalformedSig, err)
