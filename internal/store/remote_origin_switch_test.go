@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"knomit/internal/platform/fileuri"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -78,7 +78,7 @@ func swPoint(t *testing.T, svc *Service, url string) {
 }
 
 func swTrySync(svc *Service) (SyncResult, error) {
-	return svc.Remote().(*storesync.Index).Sync(context.Background(), "agent/test", nil)
+	return svc.Remote().(*remotesync.Index).Sync(context.Background(), "agent/test", nil)
 }
 
 // A switch to an origin whose main is BEHIND local main: nothing is dropped
@@ -111,7 +111,7 @@ func TestSync_SwitchToAnOriginBehindDropsNothing(t *testing.T) {
 			require.True(t, swBareHolds(t, b, "agent/test", w), "w reaches B")
 			id, err := svc.rh.ReadOriginIdentityForTest()
 			require.NoError(t, err)
-			require.Equal(t, storesync.OriginIdentityForTest(fileuri.New(b)), id, "B's identity is recorded")
+			require.Equal(t, remotesync.OriginIdentityForTest(fileuri.New(b)), id, "B's identity is recorded")
 		})
 	}
 }
@@ -187,7 +187,7 @@ func TestSync_FailedFirstRoundWithANewOriginIsStillASwitch(t *testing.T) {
 	require.ErrorIs(t, err, failed)
 	id, err := svc.rh.ReadOriginIdentityForTest()
 	require.NoError(t, err)
-	require.Equal(t, storesync.OriginIdentityForTest(fileuri.New(a)), id, "a failed round records nothing")
+	require.Equal(t, remotesync.OriginIdentityForTest(fileuri.New(a)), id, "a failed round records nothing")
 
 	wmSync(t, svc)
 	require.True(t, reachableFrom(t, svc, "agent/test", f), "f is kept")
@@ -256,7 +256,7 @@ func TestSync_SwitchPushesTheBranchTheNewOriginLacks(t *testing.T) {
 	wmSync(t, svc)
 	_, err := svc.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", "agent/test"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "the tracking ref mirrors B, which has no agent branch")
-	pres, err := svc.Remote().(*storesync.Index).Push(context.Background(), "agent/test", nil)
+	pres, err := svc.Remote().(*remotesync.Index).Push(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 	require.True(t, pres.Pushed)
 	require.True(t, swBareHasFile(t, b, "agent/test", "kb/own.md"))

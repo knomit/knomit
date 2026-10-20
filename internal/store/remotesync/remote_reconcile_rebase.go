@@ -5,7 +5,7 @@
 // watermark) and replays them onto the new main using replayCommit. The
 // watermark stops the walk at the last-consumed main commit, so files
 // scrubbed by the rewind don't get resurrected.
-package sync
+package remotesync
 
 import (
 	"context"

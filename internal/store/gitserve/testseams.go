@@ -10,7 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 
 	"knomit/internal/store/internal/vcs"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 )
 
 // The parent's white-box tests reach three internals of the handler: the
@@ -61,7 +61,7 @@ func NewCommitsForTest(hostStore storer.EncodedObjectStorer, objs []plumbing.Enc
 
 // JudgeRequestForTest runs the whole-request rules (one ref, the upstream and
 // own-branch refusals, the agent/ prefix) of a receive-pack over r and sy.
-func JudgeRequestForTest(ctx context.Context, r *vcs.Repo, sy *storesync.Repo, upstream func() string, req *packp.ReferenceUpdateRequest) (*packp.Command, string) {
+func JudgeRequestForTest(ctx context.Context, r *vcs.Repo, sy *remotesync.Repo, upstream func() string, req *packp.ReferenceUpdateRequest) (*packp.Command, string) {
 	mustBeTest("JudgeRequestForTest")
 	rp := &receivePack{rh: &host{Repo: r, sy: sy}, upstream: upstream}
 	return rp.judgeRequest(ctx, req)

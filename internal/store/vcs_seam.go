@@ -9,7 +9,7 @@ import (
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/store/vocab"
 )
 
@@ -32,7 +32,7 @@ type repoHandler struct {
 	*vcs.Repo
 	*factsRepo // the facts child's methods on the same handle; see facts_seam.go
 	*mergeRepo // the merge child's methods on the same handle; see merge_seam.go
-	*syncRepo  // the sync child's methods on the same handle; see sync_seam.go
+	*syncRepo  // the remotesync child's methods on the same handle; see remoteremotesync_seam.go
 }
 
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
@@ -46,7 +46,7 @@ func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 		return vocab.DropBranchReviewState(ctx, db, branchID)
 	})
 	mr := merge.NewRepo(r)
-	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r), mergeRepo: mr, syncRepo: storesync.NewRepo(mr)}
+	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r), mergeRepo: mr, syncRepo: remotesync.NewRepo(mr)}
 }
 
 // Types.

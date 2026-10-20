@@ -21,13 +21,12 @@ func TestVerifyIsNeverInTheWritePath(t *testing.T) {
 	// Likewise for internal/store/verify: any verify.<Export>( call is
 	// verification, whether or not its name is in the list above.
 	verifyPkgCall := regexp.MustCompile(`\bverify\.\w+\(`)
-	// And for internal/store/sync, which holds the publish-time judge of this
-	// instance's own commits (JudgeOwnRange): any call qualified by the
+	// And for internal/store/remotesync, which holds the publish-time judge of
+	// this instance's own commits (JudgeOwnRange): any call qualified by the
 	// package is the reconcile/publish machinery, never the write path. The
-	// package is imported as storesync (sync collides with the standard
-	// library); neither spelling may be called from the guarded files, and
-	// neither file uses the standard library's sync calls.
-	syncPkgCall := regexp.MustCompile(`\b(storesync|sync)\.\w+\(`)
+	// package is named remotesync so the standard library's sync calls (for
+	// example sync.OnceFunc) are not mistaken for it.
+	syncPkgCall := regexp.MustCompile(`\bremotesync\.\w+\(`)
 	for _, f := range []string{"facts/fact_write.go", "internal/vcs/sign.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -43,7 +42,7 @@ func TestVerifyIsNeverInTheWritePath(t *testing.T) {
 			t.Errorf("%s calls into the verify package from the write path: %q", f, m)
 		}
 		if m := syncPkgCall.FindAll(src, -1); len(m) > 0 {
-			t.Errorf("%s calls into the sync package from the write path: %q", f, m)
+			t.Errorf("%s calls into the remotesync package from the write path: %q", f, m)
 		}
 	}
 }

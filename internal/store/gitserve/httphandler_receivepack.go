@@ -24,7 +24,7 @@ import (
 	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/store/verify"
 )
 
@@ -422,7 +422,7 @@ func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, co
 // (F11 review M1): CreateBranch and AdvanceBranchTo both move the ref BEFORE
 // the context-bound SQL that describes it, and a request context is
 // cancelled whenever the client goes away.
-func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []plumbing.EncodedObject) (res storesync.MainReconcileResult, seeded bool, refusal string, err error) {
+func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []plumbing.EncodedObject) (res remotesync.MainReconcileResult, seeded bool, refusal string, err error) {
 	branch := cmd.Name.Short()
 	defer rp.rh.LockBranch(branch)()
 

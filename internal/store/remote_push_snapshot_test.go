@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 )
 
 // F21 S1: the snapshot ("bookmark") push. Push reads the branch tip under the
@@ -33,7 +33,7 @@ type storeHooks struct {
 
 func setStoreHooks(t *testing.T, h storeHooks) {
 	t.Helper()
-	t.Cleanup(storesync.SetStoreHooksForTest(h.afterSnapshot, h.afterFetch))
+	t.Cleanup(remotesync.SetStoreHooksForTest(h.afterSnapshot, h.afterFetch))
 }
 
 // parkFirst parks the FIRST push that reaches afterSnapshot until release;

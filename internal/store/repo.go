@@ -23,7 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store/internal/vcs"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 )
 
 // ErrEmptyRemote is returned by CloneFrom when the remote repository exists
@@ -459,7 +459,7 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 	// wildcard fetch already pulled objects; this just establishes the
 	// remote-tracking refs under the new refspec shape.) Use FetchOrigin so
 	// the agent ref's absence on origin (typical first connect) is tolerated.
-	if err := storesync.FetchOrigin(ctx, repo, auth, upstreamMain, s.rh.NetTimeout()); err != nil {
+	if err := remotesync.FetchOrigin(ctx, repo, auth, upstreamMain, s.rh.NetTimeout()); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
@@ -675,7 +675,7 @@ func (s *Service) InitSubscription(ctx context.Context, originURL string, auth t
 	if err := s.rh.ConfigureRemote(originURL, upstreamMain, ""); err != nil {
 		return "", fmt.Errorf("InitSubscription: configure remote: %w", err)
 	}
-	if err := storesync.FetchOrigin(ctx, repo, auth, upstreamMain, s.rh.NetTimeout()); err != nil {
+	if err := remotesync.FetchOrigin(ctx, repo, auth, upstreamMain, s.rh.NetTimeout()); err != nil {
 		return "", fmt.Errorf("InitSubscription: re-fetch: %w", err)
 	}
 

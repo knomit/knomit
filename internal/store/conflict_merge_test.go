@@ -14,7 +14,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/merge"
-	storesync "knomit/internal/store/sync"
+	"knomit/internal/store/remotesync"
 )
 
 // cmFact is a fact version for the conflict-merge tests.
@@ -182,7 +182,7 @@ func TestPeerSync_MergeFacts_NonMainConsensus(t *testing.T) {
 	r, base, consensusTip, agentTip := peerFork(t, cmOntology("merge"), "")
 	const agent = "agent/peer-abcd1234"
 
-	res, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
+	res, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Agent.Mode)
 
@@ -215,7 +215,7 @@ func TestPeerSync_SettingOnAgentBranchOnly_IsToday(t *testing.T) {
 	r, base, consensusTip, agentTip := peerFork(t, "", cmOntology("merge"))
 	const agent = "agent/peer-abcd1234"
 
-	res, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
+	res, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Agent.Mode)
 
@@ -266,7 +266,7 @@ func TestPeerSync_MergeFacts_FallbackAndRetraction(t *testing.T) {
 	r.setOriginTip(consensus)
 	agentBefore := r.tip(agent)
 
-	_, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, consensus)
+	_, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, consensus)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 
@@ -498,7 +498,7 @@ func TestPeerSync_Off_RecordsEverySidePick(t *testing.T) {
 	r.write(agent, "x.txt", "agent\n")
 	r.setOriginTip(consensus)
 
-	_, err := r.svc.Remote().(*storesync.Index).ReconcileNowForTest(context.Background(), agent, consensus)
+	_, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, consensus)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	lines := TrailerValues(tip.Message, TrailerConflict)
