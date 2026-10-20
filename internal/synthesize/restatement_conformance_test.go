@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,9 +105,30 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 	// named five files and skipped any that had been renamed, so it would have
 	// gone quietly green on the very refactor most likely to break it.
 	scanned := 0
+	scannedDirs := map[string]bool{}
 	for _, pkg := range []string{"../mcp", "../web", "../store"} {
-		files, err := filepath.Glob(filepath.Join(pkg, "*.go"))
-		require.NoError(t, err)
+		// Recursive, not a flat glob: since the store was split into child
+		// packages (store/internal/sqlite, store/internal/sessions, ...) a flat
+		// glob of ../store/*.go left every child outside the scan, so a real use
+		// moved into one would have passed silently. WalkDir also covers any
+		// child added later without this test being touched.
+		var files []string
+		require.NoError(t, filepath.WalkDir(pkg, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				// testdata is not compiled into the package (go tool convention).
+				if d.Name() == "testdata" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(path, ".go") {
+				files = append(files, path)
+			}
+			return nil
+		}))
 		require.NotEmpty(t, files, "package %s has no Go files — the scan is not covering what it claims", pkg)
 
 		for _, path := range files {
@@ -115,10 +137,18 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 				continue
 			}
 			// The axis lives in the store, so its own implementation and the
-			// interface that declares it are the two legitimate mentions.
-			if pkg == "../store" && (base == "abstraction.go" || base == "interfaces.go" ||
-				base == "vec_table.go" || base == "branch.go" || base == "service.go") {
-				continue
+			// interface that declares it are the legitimate mentions. Matched by
+			// path RELATIVE to the store, so a same-named file in a child
+			// package (e.g. internal/sqlite/service.go) is NOT allowlisted.
+			rel, err := filepath.Rel(pkg, path)
+			require.NoError(t, err)
+			if pkg == "../store" {
+				// internal/vcs/branch.go follows #550's move of branch.go out of
+				// the store root; the exemption covers the same code as before.
+				switch filepath.ToSlash(rel) {
+				case "abstraction.go", "interfaces.go", "vec_table.go", "internal/vcs/branch.go", "service.go":
+					continue
+				}
 			}
 			// Parsed, not grepped over raw bytes. The property is
 			// REACHABILITY, and a violation is written as an identifier, a
@@ -137,8 +167,34 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 					"%s must not reach %s — it is review-time derived state", path, ref)
 			}
 			scanned++
+			scannedDirs[filepath.ToSlash(filepath.Dir(path))] = true
 		}
 	}
+	// Not vacuous: every store child package that exists on disk must have had
+	// at least one file scanned. The set of children comes from the tree, not
+	// from a list in this test, so a new child is held to the same check.
+	storeDirs := 0
+	require.NoError(t, filepath.WalkDir("../store", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || d.Name() == "testdata" {
+			return err
+		}
+		goFiles, gerr := filepath.Glob(filepath.Join(path, "*.go"))
+		require.NoError(t, gerr)
+		nonTest := 0
+		for _, f := range goFiles {
+			if !strings.HasSuffix(f, "_test.go") {
+				nonTest++
+			}
+		}
+		if nonTest == 0 {
+			return nil
+		}
+		storeDirs++
+		require.True(t, scannedDirs[filepath.ToSlash(path)] || path == "../store",
+			"store package directory %s has Go files but none were scanned", path)
+		return nil
+	}))
+	require.Greater(t, storeDirs, 1, "the store scan must see child packages as well as the store root")
 	require.Greater(t, scanned, 50, "the reachability scan must actually be reading files")
 }
 
