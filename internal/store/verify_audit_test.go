@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/verify"
 )
 
 // A1: the audit resolves signers against every VERSION of the member records.
@@ -30,7 +31,7 @@ func TestAudit_ResolvesAgainstRecordHistory(t *testing.T) {
 	s := f.commit(f.kb, with(base, "kb/notes/a.md", "a", "kb/notes/b.md", "b", "kb/notes/s.md", "s"), "agent-x", stranger, b)
 	f.ref(f.kb, "main", s)
 
-	oldFP, err := keyFingerprint(old.PublicKey())
+	oldFP, err := verify.KeyFingerprint(old.PublicKey())
 	require.NoError(t, err)
 	rep, err := Audit(AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main", Key: oldFP[:12]})
 	require.NoError(t, err)

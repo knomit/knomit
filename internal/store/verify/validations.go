@@ -1,4 +1,4 @@
-package store
+package verify
 
 import (
 	"errors"
@@ -14,7 +14,7 @@ import (
 	"knomit/internal/store/internal/vcs"
 )
 
-// RuleValidation: a fact a branch's NET change ADDS OR CHANGES (branchFactsValid
+// RuleValidation: a fact a branch's NET change ADDS OR CHANGES (BranchFactsValid
 // on the entry paths and the master's own publish; the merge result in the
 // pushed-branch merges; the written content in the store's writers) fails one
 // of the judged repository's ontology validations (fact.ValidateFact: the typed context
@@ -34,17 +34,17 @@ const RuleValidation = "validation"
 // what a hand resolution would land on main cannot be judged.
 const RuleMergeConflict = "merge-conflict"
 
-// isFactPathUnder is the fact index's location rule (repoHandler.IsFactPath)
+// IsFactPathUnder is the fact index's location rule (repoHandler.IsFactPath)
 // for an explicit root: a .md file under root with no dot-prefixed segment.
 // Artifacts live beside the root, never under it, so they are never facts.
-func isFactPathUnder(root, p string) bool {
+func IsFactPathUnder(root, p string) bool {
 	if root == "" {
 		root = vcs.DefaultOntologyRoot
 	}
 	return strings.HasPrefix(p, root+"/") && fact.IsMarkdownPath(p) && !fact.IsPrivatePath(p)
 }
 
-// newFactPaths lists, sorted, the fact paths (isFactPathUnder) whose content
+// newFactPaths lists, sorted, the fact paths (IsFactPathUnder) whose content
 // in to differs from EVERY tree in froms (nil is the empty tree): the facts a
 // commit with those parents ADDS OR CHANGES. A path that some parent already
 // holds with the same blob is not new here — it was judged when that parent
@@ -62,7 +62,7 @@ func newFactPaths(root string, froms []*object.Tree, to *object.Tree) ([]string,
 		}
 		here := map[string]bool{}
 		for _, ch := range changes {
-			if n := ch.To.Name; n != "" && isFactPathUnder(root, n) {
+			if n := ch.To.Name; n != "" && IsFactPathUnder(root, n) {
 				here[n] = true
 			}
 		}
@@ -84,7 +84,7 @@ func newFactPaths(root string, froms []*object.Tree, to *object.Tree) ([]string,
 	return out, nil
 }
 
-// validateNewFacts runs the ontology's validations on every fact newFactPaths
+// ValidateNewFacts runs the ontology's validations on every fact newFactPaths
 // lists, as the MCP write path runs them: the topic path is the fact's
 // directory under root (knomit_update derives it the same way), and the fact
 // is the file as parsed. A file there that does not parse as a fact is no
@@ -92,12 +92,12 @@ func newFactPaths(root string, froms []*object.Tree, to *object.Tree) ([]string,
 // reason, or "" when every new fact keeps every rule. A nil ontology has no
 // rules; the context gate still runs (a fact with context and no ontology is
 // refused, as on learn).
-func validateNewFacts(ont *fact.Ontology, root string, froms []*object.Tree, to *object.Tree) (string, error) {
+func ValidateNewFacts(ont *fact.Ontology, root string, froms []*object.Tree, to *object.Tree) (string, error) {
 	_, reason, err := firstInvalidFact(ont, root, froms, to)
 	return reason, err
 }
 
-// firstInvalidFact is validateNewFacts also answering the failing fact's
+// firstInvalidFact is ValidateNewFacts also answering the failing fact's
 // path ("" when none).
 func firstInvalidFact(ont *fact.Ontology, root string, froms []*object.Tree, to *object.Tree) (string, string, error) {
 	if root == "" {
@@ -110,7 +110,7 @@ func firstInvalidFact(ont *fact.Ontology, root string, froms []*object.Tree, to 
 	return invalidAmong(ont, root, paths, to)
 }
 
-// invalidAmong validates the facts at paths in to (as validateNewFacts does)
+// invalidAmong validates the facts at paths in to (as ValidateNewFacts does)
 // and answers the first that fails: its path and the reason.
 func invalidAmong(ont *fact.Ontology, root string, paths []string, to *object.Tree) (string, string, error) {
 	for _, p := range paths {
@@ -254,7 +254,7 @@ func introducedBy(tip, main *object.Commit, p string) plumbing.Hash {
 	return tip.Hash
 }
 
-// branchFactsValid is RuleValidation on a branch's NET change (#533 review
+// BranchFactsValid is RuleValidation on a branch's NET change (#533 review
 // B1, decided by the coordinator): every fact whose content at the branch's
 // tip differs from main AND from its content at ONE OR MORE of the branch's
 // merge bases with main (so: the branch changed it against some base, and
@@ -269,7 +269,7 @@ func introducedBy(tip, main *object.Commit, p string) plumbing.Hash {
 // commit. main nil (no consensus branch yet) judges every fact at the tip.
 // The refusal names the commit that wrote the failing content
 // (introducedBy), the one a fix or a drop has to deal with, not the tip.
-func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string) (Refusal, bool) {
+func BranchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string) (Refusal, bool) {
 	refuse := func(reason string) (Refusal, bool) {
 		return Refusal{Commit: tip.Hash.String(), Rule: RuleValidation, Reason: reason}, false
 	}
@@ -332,8 +332,8 @@ func branchFactsValid(tip, main *object.Commit, ont *fact.Ontology, root string)
 	return Refusal{}, true
 }
 
-// ontologyOf parses the ontology in c's tree: (nil, nil) when it holds none.
-func ontologyOf(c *object.Commit) (*fact.Ontology, error) {
+// OntologyOf parses the ontology in c's tree: (nil, nil) when it holds none.
+func OntologyOf(c *object.Commit) (*fact.Ontology, error) {
 	raw, err := vcs.TreeOntology(c)
 	if err != nil || raw == nil {
 		return nil, err

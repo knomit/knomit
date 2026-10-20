@@ -18,6 +18,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // MergeBranch merges src into dst using the given conflict strategy.
@@ -824,7 +825,7 @@ func treeBlobHash(tree *object.Tree, path string) (plumbing.Hash, bool) {
 // merged tree adds or changes against dst's tree, against the ontology at
 // dst's tip. Returns the refusal reason, or "".
 func (rh *repoHandler) mergeFactsInvalid(dstCommit *object.Commit, merged plumbing.Hash) (string, error) {
-	ont, err := ontologyOf(dstCommit)
+	ont, err := verify.OntologyOf(dstCommit)
 	if err != nil {
 		return "", fmt.Errorf("the ontology at %s: %w", dstCommit.Hash, err)
 	}
@@ -836,5 +837,5 @@ func (rh *repoHandler) mergeFactsInvalid(dstCommit *object.Commit, merged plumbi
 	if err != nil {
 		return "", err
 	}
-	return validateNewFacts(ont, rh.OntologyRoot(), []*object.Tree{dt}, mt)
+	return verify.ValidateNewFacts(ont, rh.OntologyRoot(), []*object.Tree{dt}, mt)
 }

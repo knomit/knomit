@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // forgeMerge stores a commit signed the way a forge's web merge is: a GPG
@@ -22,7 +23,7 @@ func (o *e4Origin) forgeMerge(files map[string]string, parents ...*object.Commit
 	require.NoError(o.t, err)
 	got, err := object.GetCommit(o.repo.Storer, h)
 	require.NoError(o.t, err)
-	_, serr := verifyCommitSignature(got)
+	_, serr := verify.VerifyCommitSignature(got)
 	require.ErrorIs(o.t, serr, ErrNotSSHSIG, "fixture: the forge merge must carry a non-SSH signature")
 	return got
 }

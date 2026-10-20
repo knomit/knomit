@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/verify"
 )
 
 // newFleetPushHost is a knomit host serving a FLEET repository under
@@ -61,7 +62,7 @@ var pushRuleRE = regexp.MustCompile(`refused by verify_signatures=enforce: ([a-z
 // a stranger is no-record; an active member writing boss's folder is
 // not-owner (the record-owner rule rides the same shared judge).
 //
-// SABOTAGE: give verify newJudge(fleet, "") (rule A off on the host) → the
+// SABOTAGE: give verify verify.NewJudge(fleet, "") (rule A off on the host) → the
 // joiner's push is refused no-record → red.
 func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 	p := newTestFleetPKI(t)
@@ -137,7 +138,7 @@ func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 // pushes two commits to its own folder and their clean merge. The merge's
 // signature is (a) present but does not verify → ADMITTED, like an unsigned
 // clean merge, because it carries nothing beyond its parents; (b) a VERIFYING
-// signature by boss, not the pusher → not-pusher (signerIsPusher still
+// signature by boss, not the pusher → not-pusher (verify.SignerIsPusher still
 // compares a signature that verifies). CheckRange agrees on (a) and admits
 // (b): it has no pusher.
 //
@@ -175,7 +176,7 @@ func TestReceivePack_CleanMergeSignatureStates(t *testing.T) {
 		if tc.broken {
 			m = brokenSig(t, peer.repo, m)
 		}
-		v3, err := checkM3(m)
+		v3, err := verify.CheckM3(m)
 		require.NoError(t, err)
 		require.True(t, v3.OK, "%s: fixture: the merge is M3-clean", tc.name)
 		peer.setBranch("work", m)

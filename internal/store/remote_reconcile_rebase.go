@@ -20,6 +20,7 @@ import (
 	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // unpushedCommits returns commits reachable from localTip but not from
@@ -749,12 +750,12 @@ type sideWalk struct {
 func (rh *repoHandler) newSideWalk(local *object.Commit, stopAt plumbing.Hash, onUpstream map[plumbing.Hash]bool) (*sideWalk, error) {
 	sw := &sideWalk{own: map[string]bool{}, held: map[plumbing.Hash]bool{}, stop: map[plumbing.Hash]bool{}}
 	if signer, err := rh.CommitSigner(); err == nil {
-		if fp, err := keyFingerprint(signer.PublicKey()); err == nil {
+		if fp, err := verify.KeyFingerprint(signer.PublicKey()); err == nil {
 			sw.own[fp] = true
 		}
 	}
 	for _, k := range rh.OwnKeys() {
-		if fp, err := keyFingerprint(k); err == nil {
+		if fp, err := verify.KeyFingerprint(k); err == nil {
 			sw.own[fp] = true
 		}
 	}
@@ -879,7 +880,7 @@ func (rh *repoHandler) sideOf(sw *sideWalk, merge *object.Commit) (sideResult, e
 		if c.NumParents() > 1 {
 			continue
 		}
-		s, serr := verifyCommitSignature(c)
+		s, serr := verify.VerifyCommitSignature(c)
 		if serr != nil || !sw.own[s.Fingerprint] {
 			res.foreign++
 			continue

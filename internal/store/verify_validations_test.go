@@ -327,7 +327,7 @@ func TestValidation_AFixedBranchIsAdmittedAfterMainTightensItsOntology(t *testin
 // base: the branch did not change it, so it is not judged, even when the old
 // version fails a rule main added since.
 //
-// SABOTAGE: leave the merge base out of branchFactsValid's comparison -> the
+// SABOTAGE: leave the merge base out of verify.BranchFactsValid's comparison -> the
 // untouched old version is judged and the push is refused -> red.
 func TestValidation_AStaleBranchIsNotJudgedForWhatMainChanged(t *testing.T) {
 	plain := "id: x\nname: X\ntopics:\n  notes:\n    description: d\n"

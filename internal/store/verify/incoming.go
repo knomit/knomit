@@ -1,4 +1,4 @@
-package store
+package verify
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
 	"strings"
 
@@ -34,7 +35,7 @@ const CommitRefusedByValidation = "refused by the ontology's validations"
 // incomingValid is RuleValidation on the NET change of the branch entering
 // this repository (judgeIncoming's first pass): the facts its tip holds that
 // differ from upstream's tip and from one or more merge bases
-// (branchFactsValid), with the ontology at upstream's tip, in every
+// (BranchFactsValid), with the ontology at upstream's tip, in every
 // verify_signatures mode and in every repository. A tip the host already
 // holds is judged too (it may be the invalid intermediate of a branch admitted
 // fixed). Returns the refusal text, or "".
@@ -47,7 +48,7 @@ const CommitRefusedByValidation = "refused by the ontology's validations"
 // at all. Before #533 an off-mode host read only verify_signatures and
 // admitted such pushes; the likely trigger is an older binary hosting an
 // ontology a newer one wrote (#533 review N3).
-func (rh *repoHandler) incomingValid(ctx context.Context, upstream string, tip plumbing.Hash, commits []*object.Commit) string {
+func incomingValid(ctx context.Context, rh *vcs.Repo, upstream string, tip plumbing.Hash, commits []*object.Commit) string {
 	var tipC *object.Commit
 	for _, c := range commits {
 		if c.Hash == tip {
@@ -73,11 +74,11 @@ func (rh *repoHandler) incomingValid(ctx context.Context, upstream string, tip p
 	if err != nil {
 		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
 	}
-	ont, err := ontologyOf(c)
+	ont, err := OntologyOf(c)
 	if err != nil {
 		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
 	}
-	if r, ok := branchFactsValid(tipC, c, ont, rh.OntologyRoot()); !ok {
+	if r, ok := BranchFactsValid(tipC, c, ont, rh.OntologyRoot()); !ok {
 		return fmt.Sprintf("knomit: commit %s %s: %s: %s", r.Commit, CommitRefusedByValidation, r.Rule, r.Reason)
 	}
 	return ""
@@ -88,22 +89,22 @@ func (rh *repoHandler) incomingValid(ctx context.Context, upstream string, tip p
 // fleet master's fetch (AdmitPeerBranch, a forge). It first runs the
 // ontology's validations on the branch's net change at tip (incomingValid,
 // every mode), then reads verify_signatures at upstream's tip,
-// loads the fleet from fleet, and judges every commit with judgeCommit;
-// signer, when not nil, is one more rule for a commit judgeCommit accepted
+// loads the fleet from fleet, and judges every commit with JudgeCommit;
+// signer, when not nil, is one more rule for a commit JudgeCommit accepted
 // (receive-pack's signer = pusher; a fetch has no pusher). Returns the
 // refusal text, or "".
-func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleetOf func(context.Context) (Fleet, error), signer func(*object.Commit) (Refusal, bool), tip plumbing.Hash, commits []*object.Commit, lg zerolog.Logger) string {
-	if msg := rh.incomingValid(ctx, upstream, tip, commits); msg != "" {
+func JudgeIncoming(ctx context.Context, rh *vcs.Repo, upstream string, fleetOf func(context.Context) (fleetrec.Fleet, error), signer func(*object.Commit) (Refusal, bool), tip plumbing.Hash, commits []*object.Commit, lg zerolog.Logger) string {
+	if msg := incomingValid(ctx, rh, upstream, tip, commits); msg != "" {
 		return msg
 	}
-	mode, ont, err := rh.verifyModeAt(ctx, upstream)
+	mode, ont, err := VerifyModeAt(ctx, rh, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: verify_signatures at %s could not be read: %v", upstream, err)
 	}
 	if mode == VerifyOff || len(commits) == 0 {
 		return ""
 	}
-	var fleet Fleet
+	var fleet fleetrec.Fleet
 	if fleetOf == nil {
 		err = ErrNoFleet
 	} else {
@@ -125,12 +126,12 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 			selfRoot = "kb"
 		}
 	}
-	gate := newJudge(fleet, selfRoot, ont, rh.FactRoot())
+	gate := NewJudge(fleet, selfRoot, ont, rh.FactRoot())
 	// A member's branch, never this instance's own: the host-record rule
 	// applies (hostRecord).
-	gate.entry = true
+	gate.Entry = true
 	for _, c := range commits {
-		ref, ok := gate.judgeCommit(c)
+		ref, ok := gate.JudgeCommit(c)
 		if ok && signer != nil {
 			ref, ok = signer(c)
 		}
@@ -146,8 +147,8 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 	return ""
 }
 
-// signerIsPusher refuses a signed commit whose SSHSIG key is not the pusher's
-// certificate key. Called only for a commit judgeCommit accepted, so a commit
+// SignerIsPusher refuses a signed commit whose SSHSIG key is not the pusher's
+// certificate key. Called only for a commit JudgeCommit accepted, so a commit
 // without a verifiable signature here is a two-parent merge that passed M3
 // (it adds nothing beyond its parents; unsigned, or a signature that does not
 // verify) and has no signer to compare. A merge that passed M3 with a
@@ -178,8 +179,8 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 // in depth, and "nobody pushes to a non-master". Every other repository keeps
 // "held = judged or written here", which holds because it never fetches
 // another agent's branch after its clone.
-func signerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
-	s, err := verifyCommitSignature(c)
+func SignerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
+	s, err := VerifyCommitSignature(c)
 	if err != nil {
 		return Refusal{}, true
 	}
@@ -192,7 +193,7 @@ func signerIsPusher(c *object.Commit, pusher string) (Refusal, bool) {
 
 // privatePathClosure is receivePack.privatePathClosure for any entry: st
 // holds the commits (a push's quarantine; the store itself for a fetch).
-func (rh *repoHandler) privatePathClosure(ctx context.Context, st storer.EncodedObjectStorer, upstream string, commits []*object.Commit) string {
+func PrivatePathClosure(ctx context.Context, rh *vcs.Repo, st storer.EncodedObjectStorer, upstream string, commits []*object.Commit) string {
 	if len(commits) == 0 {
 		return ""
 	}
@@ -289,7 +290,7 @@ func privateChangeFromBase(c, up *object.Commit) (string, error) {
 // that ontology: the judge reads from it whether this repository is the fleet
 // (rule A) and its artifact rules (R7). With verification on, an ontology
 // that does not parse is an error: its rules cannot be known.
-func (rh *repoHandler) verifyModeAt(ctx context.Context, branch string) (mode string, ont *fact.Ontology, err error) {
+func VerifyModeAt(ctx context.Context, rh *vcs.Repo, branch string) (mode string, ont *fact.Ontology, err error) {
 	h, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", nil, err

@@ -1,4 +1,4 @@
-package store
+package verify
 
 import (
 	"bytes"
@@ -78,7 +78,7 @@ func (v RangeVerdict) ExitCode() int {
 //     revision (malformed records skipped and logged). A missing or unreadable
 //     fleet, or one whose ontology is not the fleet ontology, is an error: the
 //     gate could not run. Missing artifacts are not an error: no PKI.
-//  3. Every commit in Candidate ∖ Main is judged by judgeCommit.
+//  3. Every commit in Candidate ∖ Main is judged by JudgeCommit.
 func CheckRange(in RangeInput) (RangeVerdict, error) {
 	kb, err := fleetrec.OpenGitDir(in.KBDir)
 	if err != nil {
@@ -125,7 +125,7 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
 	// RuleValidation first, in EVERY mode and every repository, on the
-	// candidate's NET change (branchFactsValid): a fact it adds or changes
+	// candidate's NET change (BranchFactsValid): a fact it adds or changes
 	// against main and one or more of their merge bases must keep the ontology's validations,
 	// as the MCP write path requires. The refusal names the commit that wrote the
 	// failing content (introducedBy).
@@ -134,7 +134,7 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 		kbRoot = in.FleetRoot
 	}
 	if len(commits) > 0 {
-		if r, ok := branchFactsValid(candC, mainC, ont, kbRoot); !ok {
+		if r, ok := BranchFactsValid(candC, mainC, ont, kbRoot); !ok {
 			out.Refused = append(out.Refused, r)
 		} else if r, ok, err := mergeResultValid(in.KBDir, kb, mainC, candC, ont, kbRoot); err != nil {
 			return RangeVerdict{}, fmt.Errorf("verify: %w", err)
@@ -154,7 +154,7 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	if rev == "" {
 		rev = "HEAD"
 	}
-	fleet, err := LoadFleetAt(in.FleetDir, rev, in.FleetRoot)
+	fleet, err := fleetrec.LoadFleetAt(in.FleetDir, rev, in.FleetRoot)
 	if err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
@@ -166,10 +166,10 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 			selfRoot = "kb"
 		}
 	}
-	gate := newJudge(fleet, selfRoot, ont, in.FleetRoot)
+	gate := NewJudge(fleet, selfRoot, ont, in.FleetRoot)
 	for _, c := range commits {
 		out.Checked++
-		if r, ok := gate.judgeCommit(c); !ok {
+		if r, ok := gate.JudgeCommit(c); !ok {
 			out.Refused = append(out.Refused, r)
 		}
 	}
@@ -188,7 +188,7 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 // ontology. A merge that does not come out clean is refused
 // (RuleMergeConflict): the gate cannot judge what a hand resolution would
 // land. Nothing to do when main is an ancestor of the candidate: the merge
-// is the candidate's tip, which branchFactsValid judged. Needs git 2.38 or
+// is the candidate's tip, which BranchFactsValid judged. Needs git 2.38 or
 // later; a git that cannot run the merge is an error (exit 2), never a pass.
 //
 // The merge reads its attributes (merge drivers such as merge=union) from
@@ -247,12 +247,12 @@ func mergeResultValid(kbDir string, kb *gogit.Repository, mainC, candC *object.C
 
 // memberIndex is the fleet's member records, by agent id and by current key.
 type memberIndex struct {
-	byAgent map[string][]FleetMember
-	byKey   map[string][]FleetMember // wire key -> records whose CURRENT key it is
+	byAgent map[string][]fleetrec.Member
+	byKey   map[string][]fleetrec.Member // wire key -> records whose CURRENT key it is
 }
 
-func indexMembers(ms []FleetMember) memberIndex {
-	idx := memberIndex{byAgent: map[string][]FleetMember{}, byKey: map[string][]FleetMember{}}
+func indexMembers(ms []fleetrec.Member) memberIndex {
+	idx := memberIndex{byAgent: map[string][]fleetrec.Member{}, byKey: map[string][]fleetrec.Member{}}
 	for _, m := range ms {
 		idx.byAgent[m.Agent] = append(idx.byAgent[m.Agent], m)
 		k := string(m.Key.Marshal())
@@ -261,13 +261,13 @@ func indexMembers(ms []FleetMember) memberIndex {
 	return idx
 }
 
-// judge is everything judgeCommit reads: the fleet at ONE revision (member
+// Judge is everything JudgeCommit reads: the fleet at ONE revision (member
 // records, certificate artifacts), where the judged repository's member
 // records live, and the judged repository's ontology at main (its artifact
 // rules).
-type judge struct {
+type Judge struct {
 	memberIndex
-	pki *FleetPKI // nil: the fleet revision declares or holds no root
+	pki *fleetrec.PKI // nil: the fleet revision declares or holds no root
 	// membersDir is "<root>/members/" of the JUDGED repository when that
 	// repository is the fleet repository itself, else "" (rule A off: there
 	// is nothing to self-register into).
@@ -282,20 +282,20 @@ type judge struct {
 	// shapeOK memoises the trees CheckTreeShape found well formed, across
 	// the commits this judge judges (they share most subtrees).
 	shapeOK map[plumbing.Hash]bool
-	// entry says the commits are a MEMBER's branch entering this repository
+	// Entry says the commits are a MEMBER's branch entering this repository
 	// (judgeIncoming: a push to a knomit host, the fleet master's judge of a
 	// fetched or local agent/* branch), never this instance's own: the
 	// host-record rule (hostRecord) runs only there. CheckRange judges any
 	// range, the master's own commits included, so it is false there.
-	entry bool
-	// ownOntology lets the record-owner rule admit a change of the
+	Entry bool
+	// OwnOntology lets the record-owner rule admit a change of the
 	// repository's ontology file (fact.OntologyPathsNewestFirst). Only
 	// judgeOwnRange sets it, for this instance's OWN commits: the fleet
 	// ontology is written by the instance that creates the fleet and
 	// refreshed by its master (refreshFleetOntology), never by a member
 	// (a pushed branch never changes a private path: privatePathClosure,
 	// guardPrivate).
-	ownOntology bool
+	OwnOntology bool
 }
 
 // isOntologyPath reports whether p is one of the ontology file's paths.
@@ -308,15 +308,15 @@ func isOntologyPath(p string) bool {
 	return false
 }
 
-// newJudge builds the judge for one fleet revision. selfRoot is the judged
+// NewJudge builds the judge for one fleet revision. selfRoot is the judged
 // repository's fact root when that repository is the fleet repository, and
 // "" when it is not (rule A off). ont is the judged repository's ontology at
 // main and kbRoot its fact root ("" = "kb").
-func newJudge(f Fleet, selfRoot string, ont *fact.Ontology, kbRoot string) judge {
+func NewJudge(f fleetrec.Fleet, selfRoot string, ont *fact.Ontology, kbRoot string) Judge {
 	if kbRoot == "" {
 		kbRoot = "kb"
 	}
-	j := judge{memberIndex: indexMembers(f.Members), pki: f.PKI, ont: ont, kbRoot: kbRoot, shapeOK: map[plumbing.Hash]bool{}}
+	j := Judge{memberIndex: indexMembers(f.Members), pki: f.PKI, ont: ont, kbRoot: kbRoot, shapeOK: map[plumbing.Hash]bool{}}
 	if selfRoot != "" {
 		j.membersDir = path.Join(selfRoot, fact.MembersTopic) + "/"
 	}
@@ -334,7 +334,7 @@ func newJudge(f Fleet, selfRoot string, ont *fact.Ontology, kbRoot string) judge
 // issued after the leave (selfRegistration) — that leaf is the approval.
 // MISREADING: this is not "any record's key" (that refuses every same-key
 // rejoin), and not "an active record's key" (that lets two ids share a key).
-func (j judge) mayRegister(id string, s CommitSigner) bool {
+func (j Judge) mayRegister(id string, s CommitSigner) bool {
 	for _, m := range j.byAgent[id] {
 		if m.State == fact.MemberActive {
 			return false
@@ -348,7 +348,7 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 	return true
 }
 
-// judgeCommit applies the gate's rules to one commit:
+// JudgeCommit applies the gate's rules to one commit:
 //   - FIRST, in every repository, the commit's tree and every parent's tree
 //     must be well formed (commitTreeShape, else RuleMalformedTree): every
 //     rule below walks those trees with go-git walkers that end silently at
@@ -387,7 +387,7 @@ func (j judge) mayRegister(id string, s CommitSigner) bool {
 // Nothing is derived from the id's text (D18): it is only the key under which
 // a record or a leaf file is looked up, and compared for equality with the
 // leaf's email SAN id.
-func (j judge) judgeCommit(c *object.Commit) (Refusal, bool) {
+func (j Judge) JudgeCommit(c *object.Commit) (Refusal, bool) {
 	if err := commitTreeShape(c, j.shapeOK); err != nil {
 		return Refusal{Commit: c.Hash.String(), Rule: RuleMalformedTree, Reason: err.Error()}, false
 	}
@@ -398,13 +398,13 @@ func (j judge) judgeCommit(c *object.Commit) (Refusal, bool) {
 	return j.artifactRules(c)
 }
 
-// judgeSigner is every rule of judgeCommit but the artifact rules.
-func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
+// judgeSigner is every rule of JudgeCommit but the artifact rules.
+func (j Judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 	h := c.Hash.String()
-	s, serr := verifyCommitSignature(c)
+	s, serr := VerifyCommitSignature(c)
 	unsigned := serr != nil && (errors.Is(serr, ErrUnsigned) || errors.Is(serr, ErrNotSSHSIG))
 	if c.NumParents() >= 2 {
-		v, err := checkM3(c)
+		v, err := CheckM3(c)
 		// DECISION (user ruling, PR #523 S2): a clean merge is admitted
 		// whatever its signature state: unsigned, a signature that verifies,
 		// or one that is present and does NOT verify. Its signature is not
@@ -447,7 +447,7 @@ func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 }
 
 // hostRecord is the host-record rule, on the fleet repository and for a
-// member's branch entering it only (j.entry: receive-pack and the master's
+// member's branch entering it only (j.Entry: receive-pack and the master's
 // peer judge, never CheckRange). Like the record-owner rule it is baked, not
 // declared: no commit of a member's branch may change artifacts/fleet/host
 // (fact.FleetHostPath) or artifacts/fleet/master (fact.FleetMasterPath, the
@@ -464,8 +464,8 @@ func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 // (M3) adds nothing and is admitted before it.
 // MISREADING: CheckRange (`knomit verify ci`) does not run it, so the
 // master's create commits, the host record included, pass that gate.
-func (j judge) hostRecord(c *object.Commit, id string) (Refusal, bool) {
-	if j.membersDir == "" || !j.entry {
+func (j Judge) hostRecord(c *object.Commit, id string) (Refusal, bool) {
+	if j.membersDir == "" || !j.Entry {
 		return Refusal{}, true
 	}
 	refuse := func(reason string) (Refusal, bool) {
@@ -500,7 +500,7 @@ func (j judge) hostRecord(c *object.Commit, id string) (Refusal, bool) {
 
 // judgeRecord is the record rules: exactly one record at id, whose current key
 // is the signing key and no other record's, in state active.
-func (j judge) judgeRecord(h, id string, s CommitSigner) (Refusal, bool) {
+func (j Judge) judgeRecord(h, id string, s CommitSigner) (Refusal, bool) {
 	fp := s.Fingerprint
 	recs := j.byAgent[id]
 	switch len(recs) {
@@ -537,7 +537,7 @@ func (j judge) judgeRecord(h, id string, s CommitSigner) (Refusal, bool) {
 // Failing open here would let a record keep signing after its key's leaf
 // was revoked, simply because the leaf at certs/<id>.pem names some other
 // key (or is gone).
-func (j judge) certified(h, id string, s CommitSigner) (Refusal, bool) {
+func (j Judge) certified(h, id string, s CommitSigner) (Refusal, bool) {
 	if j.pki == nil {
 		return Refusal{}, true
 	}
@@ -583,7 +583,7 @@ func (j judge) certified(h, id string, s CommitSigner) (Refusal, bool) {
 // with no leaf, one that does not chain, or one whose record does not match
 // keeps refusal's rule with the reason; a leaf for another key is
 // RuleKeyMismatch; a revoked leaf is RuleRevoked.
-func (j judge) selfRegistration(c *object.Commit, id string, s CommitSigner, refusal Refusal) (Refusal, bool) {
+func (j Judge) selfRegistration(c *object.Commit, id string, s CommitSigner, refusal Refusal) (Refusal, bool) {
 	dir := j.membersDir + id + "/"
 	if j.pki == nil || j.membersDir == "" {
 		return refusal, false
@@ -672,7 +672,7 @@ var errLeafOtherKey = errors.New("the certificate is for another key")
 // replay — and TLS already refuses an expired certificate on every
 // connection. The chain is therefore verified at a moment inside the leaf's
 // own validity, never at the current time.
-func (j judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
+func (j Judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
 	if j.pki == nil {
 		return nil, nil
 	}
@@ -739,7 +739,7 @@ var errLeafOtherID = errors.New("the certificate is not issued to this agent id"
 // A two-parent merge M3 admits never reaches this: against its main-side
 // parent it brings in other members' changes, yet adds nothing. A tree that
 // cannot be read is a refusal.
-func (j judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
+func (j Judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
 	if j.membersDir == "" {
 		return Refusal{}, true
 	}
@@ -762,7 +762,7 @@ func (j judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
 		}
 		for _, ch := range changes {
 			for _, name := range []string{ch.From.Name, ch.To.Name} {
-				if name != "" && !strings.HasPrefix(name, dir) && !j.declaredArtifact(name) && !(j.ownOntology && isOntologyPath(name)) {
+				if name != "" && !strings.HasPrefix(name, dir) && !j.declaredArtifact(name) && !(j.OwnOntology && isOntologyPath(name)) {
 					return refuse(fmt.Sprintf("agent %q changes %s: a member writes only under %s (and declared artifact paths)", id, name, dir))
 				}
 			}
@@ -787,7 +787,7 @@ func (j judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
 // artifacts/ and matched by a pattern of the judged repository's ontology. A
 // path whose rules are ambiguous counts as declared: artifactRules refuses it
 // (RuleArtifactRules) with the reason.
-func (j judge) declaredArtifact(repoPath string) bool {
+func (j Judge) declaredArtifact(repoPath string) bool {
 	if !underArtifacts(repoPath) {
 		return false
 	}

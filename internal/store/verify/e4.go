@@ -1,4 +1,4 @@
-package store
+package verify
 
 import (
 	"context"
@@ -54,12 +54,12 @@ func (e *ForeignLineageError) Is(target error) bool { return target == ErrForeig
 // commit (reachable from one of its non-first parents: the transitive trust
 // of a peer merge made in the web UI). A store that has no signer cannot know
 // its own key: every such commit is refused.
-func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
+func CheckOwnLineage(ctx context.Context, rh *vcs.Repo, branch string, agentTip, upstream plumbing.Hash) error {
 	// The own key is the key this store signs with (CommitSigner: the store's
 	// signer, or a test binary's fallback). No signer means no own key.
 	own := map[string]bool{}
 	if signer, err := rh.CommitSigner(); err == nil {
-		fp, err := keyFingerprint(signer.PublicKey())
+		fp, err := KeyFingerprint(signer.PublicKey())
 		if err != nil {
 			return fmt.Errorf("E4: own key: %w", err)
 		}
@@ -69,7 +69,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 	// held (its versions) is also its own, so a key rotation does not make the
 	// instance's earlier commits foreign.
 	for _, k := range rh.OwnKeys() {
-		if fp, err := keyFingerprint(k); err == nil {
+		if fp, err := KeyFingerprint(k); err == nil {
 			own[fp] = true
 		}
 	}
@@ -89,11 +89,11 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 	}
 	var order []seenCommit
 	err := vcs.WalkHistory(rh.Storer(), agentTip, below, func(c *object.Commit) {
-		if rh.acceptedCommit(c.Hash) {
+		if acceptedCommit(rh, c.Hash) {
 			order = append(order, seenCommit{c: c})
 			return
 		}
-		s, serr := verifyCommitSignature(c)
+		s, serr := VerifyCommitSignature(c)
 		reason := ""
 		switch {
 		case len(own) == 0:

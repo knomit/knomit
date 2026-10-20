@@ -85,7 +85,7 @@ func (h *pushHost) write(kv ...string) {
 // drop the commitFactsValid pass -> the invalid-record row moves main -> red;
 // make ownHostRecord return ok -> the marker-naming-another and the
 // host-record-under-another-master rows move main -> red; drop
-// signerIsPusher for own commits -> the rotated-key row moves main -> red;
+// verify.SignerIsPusher for own commits -> the rotated-key row moves main -> red;
 // judge own commits with entry set -> the master's own host record is
 // refused (control rows red); drop judge.ownOntology -> the ontology refresh
 // row is refused not-owner -> red.

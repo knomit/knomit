@@ -30,6 +30,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/verify"
 )
 
 // OwnCommitRefusedText is the part of every *OwnCommitRefusedError's text
@@ -70,7 +71,7 @@ func (e *OwnCommitRefusedError) Is(target error) bool { return target == ErrOwnC
 //
 // The rules, for every commit of the range:
 //  1. RuleValidation (every mode), on the range's NET change
-//     (branchFactsValid: tip against base and their merge base): each fact
+//     (verify.BranchFactsValid: tip against base and their merge base): each fact
 //     it adds or changes keeps the ontology's validations,
 //     members-are-policy included. A refusal names the commit that wrote the
 //     failing content (introducedBy), the one a Drop must name.
@@ -141,7 +142,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 		return nil
 	}
 	root := rh.OntologyRoot()
-	if r, ok := branchFactsValid(tipC, baseC, ont, root); !ok {
+	if r, ok := verify.BranchFactsValid(tipC, baseC, ont, root); !ok {
 		return &OwnCommitRefusedError{Upstream: upstream, Commit: r.Commit, Rule: r.Rule,
 			Text: fmt.Sprintf("commit %s %s: %s: %s", r.Commit, CommitRefusedByValidation, r.Rule, r.Reason)}
 	}
@@ -194,30 +195,30 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 	}
 	selfFP := ""
 	if s, err := rh.CommitSigner(); err == nil {
-		if fp, err := keyFingerprint(s.PublicKey()); err == nil {
+		if fp, err := verify.KeyFingerprint(s.PublicKey()); err == nil {
 			selfFP = fp
 		}
 	}
-	member := newJudge(fleet, root, ont, root)
-	member.entry = true
-	mine := newJudge(fleet, root, ont, root)
-	mine.ownOntology = true
-	mineVouched := newJudge(vouched, root, ont, root)
-	mineVouched.ownOntology = true
+	member := verify.NewJudge(fleet, root, ont, root)
+	member.Entry = true
+	mine := verify.NewJudge(fleet, root, ont, root)
+	mine.OwnOntology = true
+	mineVouched := verify.NewJudge(vouched, root, ont, root)
+	mineVouched.OwnOntology = true
 	for _, c := range commits {
 		id := vcs.AgentIDOfAuthor(c.Author.Email)
 		var r Refusal
 		var ok bool
 		if id != own || own == "" {
-			r, ok = member.judgeCommit(c)
+			r, ok = member.JudgeCommit(c)
 		} else {
-			if r, ok = mine.judgeCommit(c); !ok {
-				if rv, okv := mineVouched.judgeCommit(c); okv {
+			if r, ok = mine.JudgeCommit(c); !ok {
+				if rv, okv := mineVouched.JudgeCommit(c); okv {
 					r, ok = rv, okv
 				}
 			}
 			if ok {
-				r, ok = signerIsPusher(c, selfFP)
+				r, ok = verify.SignerIsPusher(c, selfFP)
 			}
 			if ok {
 				r, ok = ownHostRecord(c, own, onMain)
@@ -239,7 +240,7 @@ func (rh *repoHandler) judgeOwnRange(upstream string, base, tip plumbing.Hash, o
 // ownHostRecord is the host-record rule for this instance's OWN commits
 // (judgeOwnRange). A member's branch may never change artifacts/fleet/host
 // or artifacts/fleet/master (hostRecord); the master writes both, so for a
-// commit authored by own (signed by own's key: signerIsPusher ran first) the
+// commit authored by own (signed by own's key: verify.SignerIsPusher ran first) the
 // rule admits exactly the master's legitimate writes and refuses anything
 // else. With onMain the agent id main's marker names ("" for none):
 //   - a commit that changes neither path is not this rule's;
