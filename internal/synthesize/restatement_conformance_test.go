@@ -143,12 +143,15 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 			rel, err := filepath.Rel(pkg, path)
 			require.NoError(t, err)
 			if pkg == "../store" {
-				// internal/vcs/branch.go follows #550's move of branch.go out of
-				// the store root, and index/vec_table.go and vocab/abstraction.go
-				// follow the index and vocab children's moves of vec_table.go and
-				// abstraction.go; each exemption covers the same code as before.
+				// index/vec_table.go and vocab/abstraction.go follow the index
+				// and vocab children's moves of vec_table.go and abstraction.go;
+				// each exemption covers the same code as before. The git layer
+				// (internal/vcs/branch.go) is NOT exempt: a dropped branch's
+				// review-time rows are deleted by a hook the store registers
+				// (vocab.DropBranchReviewState via SetOnDropBranchRows), so vcs
+				// names none of these tables.
 				switch filepath.ToSlash(rel) {
-				case "vocab/abstraction.go", "interfaces.go", "index/vec_table.go", "internal/vcs/branch.go", "service.go":
+				case "vocab/abstraction.go", "interfaces.go", "index/vec_table.go", "service.go":
 					continue
 				}
 			}

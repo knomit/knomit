@@ -14,8 +14,10 @@
 // the single chokepoint after a ref moves: commit log, then the index
 // manager's Sync, then experiment activity, then the onCommit observer. The
 // parent wires the index manager and the observers in as values
-// (SetIndexManager, SetOnCommit, SetOnDrop, SetConsensusBranchFunc); this
-// package never calls up into the parent.
+// (SetIndexManager, SetOnCommit, SetOnDrop, SetOnDropBranchRows,
+// SetConsensusBranchFunc); this package never calls up into the parent, and
+// it names none of the review pipeline's tables (a dropped branch's rows in
+// those are deleted by the SetOnDropBranchRows hook).
 //
 // It must not import its parent package store. The parent embeds *Repo in its
 // repoHandler, so the sub-indices reach Repo's exported methods by promotion,

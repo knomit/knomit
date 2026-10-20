@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // TestAbstraction_TitleVectorLifecycle covers the whole of what makes the axis
@@ -204,6 +206,19 @@ func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
 	require.NoError(t, svc.Abstraction().RecordRestatementVerdict(ctx, "agent/doomed",
 		RestatementVerdict{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2}))
 	require.NoError(t, svc.Abstraction().SetProbeSessionsWaited(ctx, "agent/doomed", 3))
+	// The verdict retires the judged pair, so stand a second one up: every
+	// table must hold a row for the doomed branch before the drop, or the
+	// assertion after it proves nothing.
+	require.NoError(t, svc.Abstraction().ReplaceRestatementPairs(ctx, "agent/doomed", nil,
+		[]RestatementPair{{APath: "kb/a.md", BPath: "kb/c.md", AFactID: 1, BFactID: 3, TitleCos: 0.9}},
+		[]int64{1, 3}))
+
+	doomedID, err := svc.rh.BranchID(ctx, "agent/doomed")
+	require.NoError(t, err)
+	for _, table := range shortlistTables {
+		require.Positivef(t, shortlistRows(t, svc, table, doomedID),
+			"precondition: %s holds the doomed branch's state", table)
+	}
 
 	require.NoError(t, svc.Branches().DropBranch(ctx, "agent/doomed"),
 		"a branch carrying shortlist state must still drop cleanly")
@@ -213,6 +228,49 @@ func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
 	for _, b := range branches {
 		require.NotEqual(t, "agent/doomed", b.Name)
 	}
+	// The drop leaves none of the branch's review-time rows behind. These are
+	// deleted by the hook the store registers on its vcs.Repo
+	// (SetOnDropBranchRows -> vocab.DropBranchReviewState), not by the git
+	// layer itself.
+	for _, table := range shortlistTables {
+		require.Zerof(t, shortlistRows(t, svc, table, doomedID),
+			"%s still holds rows for the dropped branch", table)
+	}
+}
+
+// TestAbstraction_DropBranchRefusesWithoutRowsHook — the git layer does not
+// know the shortlist tables, so a vcs.Repo whose builder did not register the
+// per-branch delete must refuse the drop BEFORE removing anything, rather
+// than delete the ref and then fail on the branches row (the half-removed
+// state DropBranch's ordering exists to avoid).
+func TestAbstraction_DropBranchRefusesWithoutRowsHook(t *testing.T) {
+	ctx := context.Background()
+	svc := openAbstractionTestService(t)
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/kept", "agent/test"))
+	head, err := svc.rh.HeadCommit(ctx, "agent/kept")
+	require.NoError(t, err)
+
+	svc.rh.SetOnDropBranchRows(nil)
+	err = svc.Branches().DropBranch(ctx, "agent/kept")
+	require.ErrorIs(t, err, vcs.ErrNoDropBranchRowsHook)
+
+	// Nothing was removed: the ref still resolves and the branches row stays.
+	after, err := svc.rh.HeadCommit(ctx, "agent/kept")
+	require.NoError(t, err, "the git ref must survive a refused drop")
+	require.Equal(t, head, after)
+	_, err = svc.rh.BranchID(ctx, "agent/kept")
+	require.NoError(t, err, "the branches row must survive a refused drop")
+}
+
+// shortlistTables are the review-time tables that reference branches(id)
+// without a cascade.
+var shortlistTables = []string{"restatement_pairs", "restatement_cache_state", "restatement_verdicts", "restatement_throttle_state"}
+
+func shortlistRows(t *testing.T, svc *Service, table string, branchID int64) int {
+	t.Helper()
+	var n int
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT count(*) FROM `+table+` WHERE branch_id = ?`, branchID).Scan(&n))
+	return n
 }
 
 // TestAbstraction_TitleVecWidthIsValidatedUnderEveryModel — fact_titles_vec is

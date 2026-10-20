@@ -17,3 +17,10 @@ var ErrBranchNotFound = errors.New("branch not found")
 // should exist. Callers use errors.Is to surface a 404 while propagating real
 // errors as 500.
 var ErrPathNotFound = errors.New("path not found")
+
+// ErrNoDropBranchRowsHook is returned by DropBranch / DropBranchLocked on a
+// Repo whose builder never called SetOnDropBranchRows. The drop is refused
+// before the git ref or any row is removed: without the hook the per-branch
+// rows in non-cascading tables would be left behind and the branches delete
+// would fail after the ref was already gone.
+var ErrNoDropBranchRowsHook = errors.New("drop branch: no SetOnDropBranchRows hook registered")
