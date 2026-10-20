@@ -29,7 +29,7 @@ func similarToOutDegree(t *testing.T, svc *Service, ctx context.Context, path, b
 // TestRebuild_DoesNotDestroyConcurrentCrossBranchSimilarityEdges pins the
 // hazard created by making Rebuild REPLACE the similarity layer.
 //
-// The graph is shared across branches but lockBranch is per-branch, so a writer
+// The graph is shared across branches but LockBranch is per-branch, so a writer
 // on another branch runs fully concurrently with a Rebuild. Rebuild computes
 // its edge list in the KNN pass, BEFORE its transaction opens. A blanket
 // `DELETE FROM edges WHERE type='SIMILAR_TO'` inside that transaction therefore

@@ -111,7 +111,7 @@ func TestAdvanceLocalUpstream_FastForwardsMainFromAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, agentTip, mainTip)
 
-	// main's index answers for the new fact — notifyCommit ran, so the
+	// main's index answers for the new fact — NotifyCommit ran, so the
 	// advance is visible to readers and not just to the ref database.
 	got, err := svc.Facts().ReadFact(ctx, "main", "kb/x.md", nil)
 	require.NoError(t, err)

@@ -36,7 +36,7 @@ const (
 	RuleInactive     = "inactive"      // the record's state is not active
 	RuleMerge        = "merge"         // an unsigned merge that fails M3
 	// RuleMalformedTree: the commit's tree, or a parent's, is not well formed
-	// (checkTreeShape): a directory entry that is not a tree object, a file
+	// (CheckTreeShape): a directory entry that is not a tree object, a file
 	// entry that is not a blob, an object that does not exist, a name go-git
 	// will not read, a duplicate name, or a tree too deep. Judged before every
 	// other rule, in every repository.

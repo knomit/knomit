@@ -488,7 +488,7 @@ func (rh *repoHandler) dropPlan(branch string, tip plumbing.Hash, onUp map[plumb
 		}
 		return found, nil
 	}
-	// sideOf walks a merge's other parents parents-first (walkHistory is
+	// sideOf walks a merge's other parents parents-first (WalkHistory is
 	// post-order), stopping at what its first parent already reaches.
 	sideOf := func(m *object.Commit, visit func(c *object.Commit)) error {
 		first := map[plumbing.Hash]bool{}

@@ -161,7 +161,7 @@ func failNewCommits(known map[plumbing.Hash]bool, err error) func() {
 }
 
 // TestRefMoves_DeriveBeforeTheRef covers B3 and B4: at the rebase
-// fast-forward, the rebase replay's move, a rewind (whose repopulateBranch
+// fast-forward, the rebase replay's move, a rewind (whose RepopulateBranch
 // follows the move) and a write over a legacy branch_commits gap (whose
 // AppendCommitLog populates), a derivation failure leaves the ref where it
 // was — the history is derived BEFORE the ref moves.

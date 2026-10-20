@@ -22,7 +22,7 @@ type testingDir struct {
 // testingTree writes the tree that results from adding files to existing (nil
 // for an empty tree), writing each blob and each changed tree exactly once,
 // and returns its hash. Entries of existing that the batch does not touch are
-// kept; a batch path replaces an entry of the same name, as buildTree does
+// kept; a batch path replaces an entry of the same name, as BuildTree does
 // (a file over a directory, or a directory over a file).
 func testingTree(s *storegit.Storer, existing *object.Tree, files map[string]string) (plumbing.Hash, error) {
 	top := &testingDir{}

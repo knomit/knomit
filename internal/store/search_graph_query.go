@@ -22,7 +22,7 @@ import (
 // referrer whenever git's 1-second commit clock puts the referrer in a later
 // second than the anchor — nondeterministic, and a direct violation of the
 // first-parent-never-wall-clock resolver invariant (see
-// resolveActiveCommitForPath / resolveTargetCommit). Referrers to a distinct
+// ResolveActiveCommitForPath / resolveTargetCommit). Referrers to a distinct
 // version of `path` are already isolated by the (path, blob_hash) node key
 // below. The ONE case the node key cannot separate — a byte-identical revert
 // creating a second blob-version episode whose later referrers surface at the
@@ -52,7 +52,7 @@ func (gs *graphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 	}
 	// Match by the target fact's BLOB-version node at effectiveCommit, not by
 	// the edge's `target_commit`. See OutgoingAtCommit for the merge-commit
-	// rationale: a merge re-touches the path (so resolveActiveCommitForPath
+	// rationale: a merge re-touches the path (so ResolveActiveCommitForPath
 	// lands on the merge) but carries the same blob forward without re-anchoring
 	// the edges, so a target_commit == effectiveCommit filter drops every
 	// incoming edge at a merge-resolved anchor.
@@ -160,7 +160,7 @@ func (gs *graphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 	}
 	// Match edges by the source fact's BLOB-version node at effectiveCommit, not
 	// by the edge's `source_commit` property. A merge commit records a
-	// commit_log add/modify for the path (so resolveActiveCommitForPath lands on
+	// commit_log add/modify for the path (so ResolveActiveCommitForPath lands on
 	// the merge), but carries the SAME blob forward and never re-anchors the
 	// edges — which stay on the original content-write commit. Filtering by
 	// source_commit == effectiveCommit therefore drops every edge at any anchor

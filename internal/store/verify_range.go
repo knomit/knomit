@@ -277,7 +277,7 @@ type judge struct {
 	// kbRoot is the judged repository's fact root, where leaf-renewal reads
 	// the member records of the commit's own tree.
 	kbRoot string
-	// shapeOK memoises the trees checkTreeShape found well formed, across
+	// shapeOK memoises the trees CheckTreeShape found well formed, across
 	// the commits this judge judges (they share most subtrees).
 	shapeOK map[plumbing.Hash]bool
 	// entry says the commits are a MEMBER's branch entering this repository

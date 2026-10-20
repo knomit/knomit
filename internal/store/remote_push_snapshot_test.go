@@ -146,7 +146,7 @@ func waitPush(t *testing.T, ch <-chan pushOutcome) pushOutcome {
 // P1 WritesNotBlockedDuringPush: a push parked after its snapshot (standing
 // in for a push on a slow network) does not hold the branch's write lock, so
 // a fact write on the same branch completes while it is parked. Sabotage:
-// hold lockBranch across the push → the write blocks → red.
+// hold LockBranch across the push → the write blocks → red.
 func TestPush_WritesNotBlockedDuringPush(t *testing.T) {
 	svc, _ := newSnapshotPushFixture(t)
 	park := parkFirstPush(t)
@@ -302,7 +302,7 @@ func TestPush_UnreadableSnapshotIsAnError(t *testing.T) {
 // P6 HungOriginDoesNotStallWrites: P1's property against a REAL hang — an
 // origin that accepts the connection and never answers. While the push waits
 // on it, a writer writing every 50 ms keeps going and no write waits anywhere
-// near the push's duration. Sabotage: hold lockBranch across PushContext →
+// near the push's duration. Sabotage: hold LockBranch across PushContext →
 // every write stalls until the push gives up → red.
 func TestPush_HungOriginDoesNotStallWrites(t *testing.T) {
 	svc, _ := newSnapshotPushFixture(t)

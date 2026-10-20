@@ -244,7 +244,7 @@ func (s *integrity) Verify(ctx context.Context, opts VerifyOpts) (IntegrityRepor
 	// branch_facts, or rewrite graph nodes while any check is running,
 	// so torn mid-write states (e.g. HEAD advanced but branch_facts not
 	// yet updated) cannot appear in the report. Writers serialize on the
-	// write side of the same RWMutex via lockBranch, so they block until
+	// write side of the same RWMutex via LockBranch, so they block until
 	// Verify completes. This is the read-locking behavior promised in
 	// the package doc.
 	//
@@ -455,7 +455,7 @@ func (p PruneResult) Empty() bool { return len(p.Refs) == 0 && p.Markers == 0 }
 // operator asks for it by name (`--prune-generated-refs`), because it deletes
 // git refs and there is no undo short of a reflog knomit does not keep.
 //
-// Scope is exactly the refs isGeneratedRef matches under refs/heads/*, so it
+// Scope is exactly the refs IsGeneratedRef matches under refs/heads/*, so it
 // cannot touch a real branch, and cannot touch refs/knomit-okf/source/*.
 func (s *integrity) PruneGeneratedRefs(ctx context.Context) (PruneResult, error) {
 	var out PruneResult
@@ -649,7 +649,7 @@ func (s *integrity) checkCommitLogParity(ctx context.Context, branch string) []I
 	// branch_commits. Previously this joined branch_commits ↔ commit_log,
 	// which produced false parity gaps for legitimate no-op commits (a
 	// write whose new blob equals the parent's blob at the same path has
-	// zero tree changes, so changedFilesInCommit returns an empty slice
+	// zero tree changes, so ChangedFilesInCommit returns an empty slice
 	// and CommitLogApply records only the branch_commits visibility row
 	// without any commit_log path entries). Branch visibility is the
 	// authoritative invariant — every reachable commit must have a

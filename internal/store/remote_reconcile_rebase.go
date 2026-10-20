@@ -446,7 +446,7 @@ var timeNow = func() time.Time { return time.Now() }
 // before returning, on both success and failure paths; localBranch is
 // unchanged on failure.
 //
-// Caller must hold rh.lockBranch(localBranch).
+// Caller must hold rh.LockBranch(localBranch).
 func (rh *repoHandler) replayOntoUpstream(
 	ctx context.Context,
 	localBranch string,
@@ -572,7 +572,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	for i, orig := range commits {
 		// Honour cancellation between commits: a large rewind under server
 		// shutdown (or HTTP client disconnect) would otherwise hold
-		// lockBranch(localBranch) until the full chain finishes. Local
+		// LockBranch(localBranch) until the full chain finishes. Local
 		// branch is unchanged at this point (only the temp ref has
 		// advanced), and the deferred temp-ref cleanup runs on return.
 		if err := ctx.Err(); err != nil {
@@ -642,7 +642,7 @@ func (rh *repoHandler) replayOntoUpstream(
 // content via the merge commit's tree.
 //
 // On a successful reconcile, the watermark is advanced to current local
-// main. Holds rh.lockBranch(agentBranch) for the duration.
+// main. Holds rh.LockBranch(agentBranch) for the duration.
 func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy) (AgentReconcileResult, error) {
 	unlock := rh.LockBranch(agentBranch)
 	defer unlock()
@@ -847,7 +847,7 @@ func (rh *repoHandler) sideOf(sw *sideWalk, merge *object.Commit) (sideResult, e
 		return &frame{c: c}, nil
 	}
 	// A depth-first post-order walk (parents before children), as
-	// walkHistory, that also records where it met a held commit.
+	// WalkHistory, that also records where it met a held commit.
 	for _, p := range merge.ParentHashes[1:] {
 		root, err := enter(p)
 		if err != nil {

@@ -655,9 +655,9 @@ func TestReceivePack_NewCommitWalkIsProportionalToThePush(t *testing.T) {
 	require.Equal(t, 2, visited, "the walk must not descend into the host's %d-commit history", 31)
 }
 
-// Review B1: register holds lockBranch(peer) where it promotes and moves the
+// Review B1: register holds LockBranch(peer) where it promotes and moves the
 // ref — the lock is what makes the old-hash check a compare-and-swap, and
-// what keeps a lockBranchRead reader (Verify) from seeing the ref ahead of
+// what keeps a LockBranchRead reader (Verify) from seeing the ref ahead of
 // branch_commits and the index (kb/invariants/store/branch-lock-spans-notify).
 func TestReceivePack_RegisterHoldsBranchLock(t *testing.T) {
 	h := newPushHost(t, "", 1)

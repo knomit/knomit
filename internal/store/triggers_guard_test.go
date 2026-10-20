@@ -57,14 +57,14 @@ var triggersAllowedCalls = map[string][]string{
 		"strings.TrimRight", "strings.LastIndex", "strings.Split", "strings.Cut", "strings.EqualFold", "strings.TrimSpace",
 		"context.WithValue", "ctx.Value", "t.IsZero",
 		// #349: WithAgentTrace's refusals and its ctx attach (WithTrailers, the
-		// same transport), and appendTrailers sorting a COPY of the agent's
+		// same transport), and AppendTrailers sorting a COPY of the agent's
 		// own entries — pure helpers, no write
 		"errors.New", "WithTrailers", "len", "append", "sort.SliceStable",
 		// rehearsal F10: rendering a set (t.lines) and joining it to a merge
-		// commit's trailer paragraph (appendTrailersToParagraph) — string
+		// commit's trailer paragraph (AppendTrailersToParagraph) — string
 		// helpers, no write
 		"t.lines", "IsTrailerParagraph", "AppendTrailers",
-		// isTrailerParagraph itself (moved here from conflict_merge.go so the
+		// IsTrailerParagraph itself (moved here from conflict_merge.go so the
 		// commit path does not reach up into the merge cluster): a string test
 		"strings.ContainsAny",
 	},

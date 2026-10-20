@@ -308,8 +308,8 @@ func (s *Service) EnsureLocalUpstream(ctx context.Context, upstream string) (boo
 
 // AdvanceLocalUpstream fast-forwards refs/heads/<upstream> to the agent tip on
 // a repo that has NO origin, so main is a real consensus branch there too.
-// Same shape as reconcileMain's fast-forward — SetReference, populateCommitLog,
-// notifyCommit under the branch lock — with the agent branch in
+// Same shape as reconcileMain's fast-forward — SetReference, PopulateCommitLog,
+// NotifyCommit under the branch lock — with the agent branch in
 // origin/<upstream>'s role.
 //
 // It NEVER resets. Diverged history is logged and skipped: a repo whose

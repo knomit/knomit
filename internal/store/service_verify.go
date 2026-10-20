@@ -13,7 +13,7 @@ func (s *Service) CommitExists(h plumbing.Hash) bool {
 }
 
 // CommitAgent is the agent id in the author address of commit h (the lookup
-// the commit judge makes, agentIDOfAuthor): "" when this repository does not
+// the commit judge makes, AgentIDOfAuthor): "" when this repository does not
 // hold h or its author is not an agent address. Nothing is derived from a
 // branch name.
 func (s *Service) CommitAgent(h plumbing.Hash) string {

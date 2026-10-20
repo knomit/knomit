@@ -107,7 +107,7 @@ func TestVerifyCommitSignature_Refusals(t *testing.T) {
 	}
 }
 
-// wrongNamespace signs c exactly like signCommit but with namespace "file".
+// wrongNamespace signs c exactly like SignCommit but with namespace "file".
 func wrongNamespace(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit {
 	t.Helper()
 	payload, err := commitPayload(c)
@@ -118,7 +118,7 @@ func wrongNamespace(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit
 	return c
 }
 
-// signWithNamespace is signCommit with the namespace as a parameter, so a test
+// signWithNamespace is SignCommit with the namespace as a parameter, so a test
 // can build a correctly-formed SSHSIG for a namespace other than "git".
 func signWithNamespace(t *testing.T, signer ssh.Signer, payload []byte, namespace string) string {
 	t.Helper()

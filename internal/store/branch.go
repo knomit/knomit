@@ -102,10 +102,10 @@ type repoHandler struct {
 	// has held (E4 accepts them as its own). Nil when standalone.
 	ownKeys func() []ssh.PublicKey
 
-	// im is the search-index manager. notifyCommit calls im.Sync after every
+	// im is the search-index manager. NotifyCommit calls im.Sync after every
 	// commit so branch_facts / facts_vec / graph stay in sync with the new
 	// tree at HEAD. Set by Service.Open (via bindIndexManager). If nil,
-	// notifyCommit skips the sync — useful for bare repoHandler tests that
+	// NotifyCommit skips the sync — useful for bare repoHandler tests that
 	// don't exercise the index.
 	im IndexManager
 
@@ -121,8 +121,8 @@ type repoHandler struct {
 	name string // repo name, derived from dbPath at Open time
 
 	// factRoot is the ontology root — the one directory facts live under, and
-	// therefore the only part of the tree the index admits (see isFactPath).
-	// Empty means "not configured": ontologyRoot() falls back to the default,
+	// therefore the only part of the tree the index admits (see IsFactPath).
+	// Empty means "not configured": OntologyRoot() falls back to the default,
 	// so a bare repoHandler built without a Service still behaves. Set by
 	// Service.SetOntologyRoot from cfg.OntologyRoot at build/swap time, never
 	// mutated afterwards, so no lock is needed.
@@ -131,7 +131,7 @@ type repoHandler struct {
 	// netTimeout bounds every remote git network operation (clone/fetch/push/
 	// ls-remote). 0 means no bound (hang-forever, the legacy behavior). Set by
 	// Service.SetNetworkTimeout from cfg.Git.NetworkTimeout at build/swap time;
-	// read at each go-git call site via netCtx. Never mutated after wiring, so
+	// read at each go-git call site via NetCtx. Never mutated after wiring, so
 	// no lock is needed.
 	netTimeout time.Duration
 
@@ -143,7 +143,7 @@ type repoHandler struct {
 	// pushes: it is not the write lock, so a fact write never waits on it.
 	pushMu sync.Map
 
-	// gitTreeReads counts calls to readFileAtCommit + readBlobHashAtCommit —
+	// gitTreeReads counts calls to ReadFileAtCommit + ReadBlobHashAtCommit —
 	// the two commit-tree lookups that dominate rebuildGraph's I/O. It is
 	// cheap observability (one atomic add per go-git tree walk) and lets
 	// rebuild-path tests assert that each (commit, path) is read from git at
@@ -151,15 +151,15 @@ type repoHandler struct {
 	gitTreeReads atomic.Int64
 }
 
-// gitTreeReadCount returns the number of commit-tree reads performed so far.
+// GitTreeReadCount returns the number of commit-tree reads performed so far.
 // Test-only observability into rebuild/graph I/O; see repoHandler.gitTreeReads.
 func (rh *repoHandler) GitTreeReadCount() int64 { return rh.gitTreeReads.Load() }
 
-// lockBranch acquires the per-branch write lock and returns an unlock function.
+// LockBranch acquires the per-branch write lock and returns an unlock function.
 // Used by factIndex, remoteIndex, and MergeBranch to serialize writes on a
 // given branch AND to exclude concurrent Verify runs (which take the read side
-// via lockBranchRead). The lock is held for the full mutation — from the
-// initial ref resolution through SetReference AND notifyCommit's index sync —
+// via LockBranchRead). The lock is held for the full mutation — from the
+// initial ref resolution through SetReference AND NotifyCommit's index sync —
 // so no reader can observe the window between "git HEAD advanced" and "SQL
 // branch_facts / graph updated".
 func (rh *repoHandler) LockBranch(branch string) func() {
@@ -169,7 +169,7 @@ func (rh *repoHandler) LockBranch(branch string) func() {
 	return mu.Unlock
 }
 
-// lockPush acquires the per-branch push mutex (see remoteIndex.Push) and
+// LockPush acquires the per-branch push mutex (see remoteIndex.Push) and
 // returns its unlock. It is held for a whole push, network included, which is
 // why it must never be the write lock.
 func (rh *repoHandler) LockPush(branch string) func() {
@@ -179,7 +179,7 @@ func (rh *repoHandler) LockPush(branch string) func() {
 	return mu.Unlock
 }
 
-// lockBranchRead acquires the per-branch read lock. Multiple readers can hold
+// LockBranchRead acquires the per-branch read lock. Multiple readers can hold
 // it concurrently, but no writer can proceed while any reader holds it. Used
 // by Verify to take a consistent snapshot of a branch's git tree + SQL index
 // state without blocking parallel read-only operations.
@@ -190,7 +190,7 @@ func (rh *repoHandler) LockBranchRead(branch string) func() {
 	return mu.RUnlock
 }
 
-// netCtx derives a deadline-bounded context for a single remote git network
+// NetCtx derives a deadline-bounded context for a single remote git network
 // operation from parent. When netTimeout is 0 the parent is returned unchanged
 // (no bound — legacy hang-forever behavior) with a no-op cancel. Callers MUST
 // always defer the returned cancel. Pass context.Background() at call sites that
@@ -199,7 +199,7 @@ func (rh *repoHandler) NetCtx(parent context.Context) (context.Context, context.
 	return NetCtxWith(parent, rh.netTimeout)
 }
 
-// netCtxWith is the free-function form of netCtx for call sites (e.g. the
+// NetCtxWith is the free-function form of NetCtx for call sites (e.g. the
 // package-level fetchOrigin helper) that hold a timeout value but no
 // repoHandler. timeout<=0 returns parent unchanged with a no-op cancel.
 func NetCtxWith(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -209,14 +209,14 @@ func NetCtxWith(parent context.Context, timeout time.Duration) (context.Context,
 	return context.WithTimeout(parent, timeout)
 }
 
-// setEmbedder attaches an Embedder. Called once during service construction.
+// SetEmbedder attaches an Embedder. Called once during service construction.
 func (rh *repoHandler) SetEmbedder(e Embedder) {
 	rh.embedMu.Lock()
 	defer rh.embedMu.Unlock()
 	rh.embedder = e
 }
 
-// getEmbedder returns the current Embedder under a read lock.
+// Embedder returns the current Embedder under a read lock.
 func (rh *repoHandler) Embedder() Embedder {
 	rh.embedMu.RLock()
 	defer rh.embedMu.RUnlock()
@@ -293,7 +293,7 @@ func (rh *repoHandler) DropBranch(ctx context.Context, name string) error {
 	return rh.DropBranchLocked(ctx, name, id)
 }
 
-// dropBranchLocked is DropBranch's body, for a caller that already holds
+// DropBranchLocked is DropBranch's body, for a caller that already holds
 // name's write lock (demotePeer decides under it whether to drop).
 func (rh *repoHandler) DropBranchLocked(ctx context.Context, name string, id int64) error {
 	// 1. Delete the git ref first. If this fails, we leave the SQLite
@@ -484,7 +484,7 @@ func (rh *repoHandler) SetAgentBranchOwner(ctx context.Context, branch string) e
 	return nil
 }
 
-// configureRemote ensures origin is registered with a fetch refspec for the
+// ConfigureRemote ensures origin is registered with a fetch refspec for the
 // upstream consensus branch (upstreamMain, whatever the origin names) and, when
 // this machine has one, a second for its agent branch. Idempotent. Both branch
 // names are part of their respective refspecs, so callers must pass the same
@@ -543,7 +543,7 @@ func sameRefspecs(a, b []gogitconfig.RefSpec) bool {
 
 // ── git read methods ──────────────────────────────────────────────────────────
 
-// resolveRef returns the commit hash at the tip of branch.
+// ResolveRef returns the commit hash at the tip of branch.
 func (rh *repoHandler) ResolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
 	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
@@ -555,7 +555,7 @@ func (rh *repoHandler) ResolveRef(ctx context.Context, branch string) (plumbing.
 	return ref.Hash(), nil
 }
 
-// readFileAtCommit reads the content of path from a specific commit.
+// ReadFileAtCommit reads the content of path from a specific commit.
 // If the exact path is not found, it falls back to a case-insensitive tree
 // walk so that normalised (lowercase) index paths resolve correctly against
 // pre-normalisation commits that stored paths with mixed case.
@@ -584,7 +584,7 @@ func (rh *repoHandler) ReadFileAtCommit(ctx context.Context, path, commitHash st
 	return content, nil
 }
 
-// firstParentCommit returns the first parent of commitHash, or "" if
+// FirstParentCommit returns the first parent of commitHash, or "" if
 // commitHash is a root commit. For merge commits, this returns the "ours"
 // side (parent[0]) — the branch that was checked out when the merge was
 // performed. Walking first-parent traces a single branch's local history,
@@ -602,13 +602,13 @@ func (rh *repoHandler) FirstParentCommit(ctx context.Context, commitHash string)
 	return commit.ParentHashes[0].String(), nil
 }
 
-// readBlobHashAtCommit returns the blob hash for path in the git tree at
+// ReadBlobHashAtCommit returns the blob hash for path in the git tree at
 // commitHash. Used to bridge (path, commit) → blob_hash when wiring graph
 // edges that point to a specific Fact(path, blob_hash) version.
 //
 // No case-insensitive fallback: refs are stored normalised and target_commit
 // is known-good (returned by resolveTargetCommit), so an exact lookup is
-// sufficient. Compare with readFileAtCommit above which falls back for
+// sufficient. Compare with ReadFileAtCommit above which falls back for
 // pre-normalisation legacy paths.
 func (rh *repoHandler) ReadBlobHashAtCommit(ctx context.Context, path, commitHash string) (string, error) {
 	rh.gitTreeReads.Add(1)
@@ -634,7 +634,7 @@ func (rh *repoHandler) ReadBlobHashAtCommit(ctx context.Context, path, commitHas
 // expired context surfaces as ctx.Err() — NOT as a missing ref. Callers that
 // distinguish "branch absent" (ErrBranchNotFound) from "lookup failed" (e.g.
 // repos.validateLensLocked, which maps the former to 4xx and the latter to
-// 500) rely on this: resolveRef reads the ref via go-git without consulting
+// 500) rely on this: ResolveRef reads the ref via go-git without consulting
 // ctx, so without this guard a cancelled lookup would be indistinguishable
 // from a present branch.
 func (rh *repoHandler) HeadCommit(ctx context.Context, branch string) (string, error) {
@@ -663,7 +663,7 @@ func (rh *repoHandler) HeadCommitInfo(ctx context.Context, branch string) (strin
 	return hash.String(), commit.Committer.When, nil
 }
 
-// blobAtCommit returns the blob hash of path in commit's tree, or "" when the
+// BlobAtCommit returns the blob hash of path in commit's tree, or "" when the
 // path is absent there.
 func (rh *repoHandler) BlobAtCommit(commitHash plumbing.Hash, path string) (string, error) {
 	commit, err := rh.repo.CommitObject(commitHash)
@@ -684,7 +684,7 @@ func (rh *repoHandler) BlobAtCommit(commitHash plumbing.Hash, path string) (stri
 	return entry.Hash.String(), nil
 }
 
-// readFileWithHash returns both the file content and the blob hash for the given path.
+// ReadFileWithHash returns both the file content and the blob hash for the given path.
 func (rh *repoHandler) ReadFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
 	headHash, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
@@ -911,7 +911,7 @@ func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []
 // ── Commit-log wrappers ───────────────────────────────────────────────────────
 // These methods hide storegit cursor types and branch-ID resolution from callers.
 
-// commitLogQuery resolves branch to its numeric ID and delegates to
+// CommitLogQuery resolves branch to its numeric ID and delegates to
 // storegit.CommitLogQuery, hiding cursor construction from callers.
 func (rh *repoHandler) CommitLogQuery(ctx context.Context, branch, path, after, from, before string, limit int) ([]storegit.CommitLogRow, bool, error) {
 	branchID, _ := rh.BranchID(ctx, branch) // 0 on error → no filter
@@ -927,14 +927,14 @@ func (rh *repoHandler) CommitLogQuery(ctx context.Context, branch, path, after, 
 	return rh.gits.CommitLogQuery(branchID, path, cursor, limit)
 }
 
-// commitLogActivity resolves branch to its numeric ID and delegates to
+// CommitLogActivity resolves branch to its numeric ID and delegates to
 // storegit.CommitLogActivity.
 func (rh *repoHandler) CommitLogActivity(ctx context.Context, branch, path string, cutoff7, cutoff30, cutoff90 int64) (storegit.CommitLogActivityResult, error) {
 	branchID, _ := rh.BranchID(ctx, branch)
 	return rh.gits.CommitLogActivity(branchID, path, cutoff7, cutoff30, cutoff90)
 }
 
-// commitLogFileCounts delegates to storegit.CommitLogFileCounts.
+// CommitLogFileCounts delegates to storegit.CommitLogFileCounts.
 // No branch filter needed — commit hashes already identify the branch.
 func (rh *repoHandler) CommitLogFileCounts(hashes []string) (map[string]map[string]int, error) {
 	return rh.gits.CommitLogFileCounts(hashes)

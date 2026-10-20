@@ -14,7 +14,7 @@ import (
 // writing refuses to write them, as a store without a signer does.
 var ErrNoAgentID = errors.New("store has no agent id: refusing to author a commit")
 
-// ownAgentID is the id an authored commit names: the id SetAgentID gave this
+// OwnAgentID is the id an authored commit names: the id SetAgentID gave this
 // store, else (inside a test binary only) the installed fallback's answer for
 // branch, else ErrNoAgentID. branch is the AGENT branch the commit is
 // authored as (for an experiment, its recorded parent); production never

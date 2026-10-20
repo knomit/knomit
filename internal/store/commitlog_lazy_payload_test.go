@@ -125,7 +125,7 @@ func TestPopulateCommitLog_NoTreeReadsForKnownCommits(t *testing.T) {
 
 	// Every commit is already recorded, so no payload — and therefore no tree
 	// read — should be attempted. Before the lazy payload this errored with
-	// "changedFilesInCommit: tree: object not found".
+	// "ChangedFilesInCommit: tree: object not found".
 	require.NoError(t, svc.rh.PopulateCommitLog(ctx, branch),
 		"re-walk of a populated branch must not read commit trees")
 }

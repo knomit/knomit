@@ -54,11 +54,11 @@ func TestReadOnlyStore_RefusesAuthoredWritesOnEveryBranch(t *testing.T) {
 
 // The refusal happens BEFORE the branch lock is taken — part of the gate's
 // stated contract, and the reason it cannot interfere with the
-// notifyCommit-under-the-branch-lock chokepoint: a refused write never enters
+// NotifyCommit-under-the-branch-lock chokepoint: a refused write never enters
 // that region at all.
 //
 // Asserted by holding the branch lock and requiring the write to come back
-// anyway. Were the gate placed after lockBranch, this would deadlock until the
+// anyway. Were the gate placed after LockBranch, this would deadlock until the
 // test's timeout instead of returning.
 func TestReadOnlyStore_RefusesBeforeTakingTheBranchLock(t *testing.T) {
 	dir := t.TempDir()

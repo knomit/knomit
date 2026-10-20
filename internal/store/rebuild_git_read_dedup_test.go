@@ -12,8 +12,8 @@ import (
 //
 // rebuildGraph runs two phases that BOTH walk the identical commit_log query
 // (Phase A.5 restores historical Fact nodes; Phase B writes DERIVED_FROM
-// edges). Historically each phase independently called readBlobHashAtCommit +
-// readFileAtCommit per (commit, path), so every commit_log ref-event was read
+// edges). Historically each phase independently called ReadBlobHashAtCommit +
+// ReadFileAtCommit per (commit, path), so every commit_log ref-event was read
 // from git ~3× (Phase A.5: one blob read/event + content for historical
 // versions; Phase B: one content + one blob read/event). The fix walks the
 // union of events once, caching blob_hash + parsed content, so each unique
@@ -21,13 +21,13 @@ import (
 // 2× the commit_log ref-event count.
 //
 // The gitTreeReads counter on repoHandler (branch.go) is the observability
-// seam: it increments once per readFileAtCommit / readBlobHashAtCommit tree
+// seam: it increments once per ReadFileAtCommit / ReadBlobHashAtCommit tree
 // walk. Within rebuildGraph, the shared walk reads happen ONLY in Phase A.5
 // and Phase B, so measuring the counter delta across a single rebuildGraph
 // call isolates exactly the double-walk.
 //
 // The corpus is deliberately ref-free: DERIVED_FROM edge writes call
-// resolveTargetCommit -> readBlobHashAtCommit per ref target (derived_from.go),
+// resolveTargetCommit -> ReadBlobHashAtCommit per ref target (derived_from.go),
 // which are inherent edge-resolution reads NOT attributable to the walk. This
 // test isolates the walk dedup; edge-writing-with-cache correctness is locked
 // separately by TestRebuildGraph_RestoresHistoricalFactNodes (which has refs,

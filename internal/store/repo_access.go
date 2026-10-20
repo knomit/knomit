@@ -38,11 +38,11 @@ func (rh *repoHandler) SetName(name string) { rh.name = name }
 // SetOnDrop installs the hook DropBranch runs after a branch is dropped.
 func (rh *repoHandler) SetOnDrop(f func(context.Context) error) { rh.onDrop = f }
 
-// SetIndexManager installs the index manager notifyCommit syncs after every
-// commit (nil: notifyCommit skips the sync).
+// SetIndexManager installs the index manager NotifyCommit syncs after every
+// commit (nil: NotifyCommit skips the sync).
 func (rh *repoHandler) SetIndexManager(im IndexManager) { rh.im = im }
 
-// SetOnCommit installs the external commit observer notifyCommit calls last.
+// SetOnCommit installs the external commit observer NotifyCommit calls last.
 func (rh *repoHandler) SetOnCommit(f func(branch, hash string)) { rh.onCommit = f }
 
 // ConsensusBranchFunc returns the consensus-branch resolver (nil only on a
@@ -59,7 +59,7 @@ func (rh *repoHandler) NetTimeout() time.Duration { return rh.netTimeout }
 func (rh *repoHandler) SetNetTimeout(d time.Duration) { rh.netTimeout = d }
 
 // FactRoot is the configured ontology root, empty when not configured (see
-// ontologyRoot for the defaulted value).
+// OntologyRoot for the defaulted value).
 func (rh *repoHandler) FactRoot() string { return rh.factRoot }
 
 // SetFactRoot sets the configured ontology root.
@@ -101,7 +101,7 @@ func (rh *repoHandler) ReplaySkip() map[string]bool { return rh.replaySkip }
 // SetReplaySkip sets ReplaySkip.
 func (rh *repoHandler) SetReplaySkip(set map[string]bool) { rh.replaySkip = set }
 
-// RLockConfig takes the remote-config read lock (configureRemote holds the
+// RLockConfig takes the remote-config read lock (ConfigureRemote holds the
 // write side across a refspec rewrite) and returns its unlock.
 func (rh *repoHandler) RLockConfig() func() {
 	rh.configMu.RLock()

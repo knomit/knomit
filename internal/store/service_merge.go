@@ -13,7 +13,7 @@ import (
 
 // MergePushed merges the pushed branch src, at exactly the commit srcTip, into
 // dst (the caller passes this instance's agent branch), under dst's branch
-// lock and through notifyCommit.
+// lock and through NotifyCommit.
 //
 // It ALWAYS writes one merge commit [dst tip, srcTip] signed by this
 // instance — never a fast-forward, never a tree-identical no-op — so the
@@ -213,7 +213,7 @@ func (s *Service) Experiments() ExperimentIndex { return s.rh }
 // experiment the cutoff selects, which is the part that can be wrong.
 //
 // Not part of ExperimentIndex: production code records activity through
-// notifyCommit, which is what keeps "activity" meaning exactly "a commit
+// NotifyCommit, which is what keeps "activity" meaning exactly "a commit
 // landed here".
 func (s *Service) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
 	res, err := conn(ctx, s.rh.DB()).ExecContext(ctx,

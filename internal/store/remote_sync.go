@@ -214,7 +214,7 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 	}
 
 	// Hold the config READ lock across the origin existence check and the fetch.
-	// configureRemote (via Service.ConfigureRemote, which the origin HAL/session
+	// ConfigureRemote (via Service.ConfigureRemote, which the origin HAL/session
 	// handlers call whenever control.db's origin changes) rewrites the git
 	// remote under configMu.Lock by DeleteRemote+CreateRemote; without this a
 	// concurrent rewrite could delete origin out from under repo.Remote/Fetch
@@ -290,8 +290,8 @@ func (ri *remoteIndex) sync(ctx context.Context, agentBranch string, auth transp
 // reconcileNow runs the post-fetch portion of Sync. Exposed (package-private)
 // for tests that want to set up refs manually without a real remote.
 //
-// Acquires rh.lockBranch(upstreamMain) for reconcileMain and releases it
-// before reconcileAgent acquires rh.lockBranch(agentBranch). This avoids
+// Acquires rh.LockBranch(upstreamMain) for reconcileMain and releases it
+// before reconcileAgent acquires rh.LockBranch(agentBranch). This avoids
 // holding two branch locks simultaneously.
 //
 // upstreamMain is the consensus branch name; Sync, the only production

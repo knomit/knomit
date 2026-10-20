@@ -12,7 +12,7 @@ import (
 
 // #384: a path go-git refuses to READ (ValidTreePath, applied by FindEntry,
 // TreeEntryFile and the tree walker under DiffTree) was accepted on WRITE. The
-// read that refuses it runs in notifyCommit's im.Sync, after the ref has
+// read that refuses it runs in NotifyCommit's im.Sync, after the ref has
 // moved, so the write committed, reported failure, and left a commit every
 // later sync on the branch tripped over. Every write door must refuse such a
 // path before the ref moves, by go-git's own rule.
@@ -184,7 +184,7 @@ func TestWriteFact_RefusesBackslashOnlyName(t *testing.T) {
 }
 
 // Empty segments are out of scope for validatePath (#384) and pass it. They
-// are refused anyway, before the ref moves, by deriveBeforeAdvance's tree
+// are refused anyway, before the ref moves, by DeriveBeforeAdvance's tree
 // decode ("malformed tree: empty filename"), so they cannot poison a branch.
 // This pins that claim in gitReadablePath's comment; it is not ErrInvalidPath.
 func TestWriteFact_EmptySegmentRefusedBeforeRefMoves(t *testing.T) {

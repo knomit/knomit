@@ -12,7 +12,7 @@ import (
 )
 
 // TestingCommitFiles builds its trees in one pass (testingTree) instead of one
-// buildTree per path. The commit must still carry the SAME root tree that the
+// BuildTree per path. The commit must still carry the SAME root tree that the
 // per-path build gives: untouched entries kept, files added in existing and in
 // new directories, an existing file replaced. Sabotage: drop the parent's
 // untouched entries in testingDir.write, or write a directory with the leaf

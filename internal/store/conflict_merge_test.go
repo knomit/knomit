@@ -224,7 +224,7 @@ func TestPeerSync_SettingOnAgentBranchOnly_IsToday(t *testing.T) {
 // one side deleted stays deleted whichever side it was (ruling 2), with the
 // dropped edit named.
 //
-// SABOTAGE: ok=true for a non-fact path (skip isFactPath) → notes.txt gets
+// SABOTAGE: ok=true for a non-fact path (skip IsFactPath) → notes.txt gets
 // fact-merged / errors → red; resurrect on modify/delete (edit wins) → d1 or
 // d2 present → red.
 func TestPeerSync_MergeFacts_FallbackAndRetraction(t *testing.T) {

@@ -250,7 +250,7 @@ func (s *Service) ConfigureRemote(url, upstreamMain, agentBranch string) error {
 func (s *Service) SetNetworkTimeout(d time.Duration) { s.rh.SetNetTimeout(d) }
 
 // SetOntologyRoot sets the directory facts live under — the only part of the
-// tree the index admits (see isFactPath). Wired from cfg.OntologyRoot by the
+// tree the index admits (see IsFactPath). Wired from cfg.OntologyRoot by the
 // repos builder at open time and re-applied on SwapStore reopen, exactly like
 // SetNetworkTimeout; store.Open does not restore it, and an unset root falls
 // back to the package default. Surrounding slashes are trimmed so "kb", "kb/"

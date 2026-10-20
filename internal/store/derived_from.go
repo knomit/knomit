@@ -116,7 +116,7 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 }
 
 // FactLiveAtCommit reports whether `path` is live (present, not retracted) as
-// of `commit` — the delete-RESPECTING sibling of resolveActiveCommitForPath.
+// of `commit` — the delete-RESPECTING sibling of ResolveActiveCommitForPath.
 //
 // It walks the same first-parent ancestry but, crucially, does NOT filter the
 // action: it takes the MOST RECENT commit_log event for the path in that
@@ -125,7 +125,7 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 // `commit`) therefore reads as NOT live — matching the git tree state, which
 // is what "the fact as of commit X" means.
 //
-// resolveActiveCommitForPath answers a different question ("what is the last
+// ResolveActiveCommitForPath answers a different question ("what is the last
 // navigable version") by stepping OVER deletions; that is correct for ref
 // classification and fallback-before content, but wrong as an existence gate.
 //
@@ -165,7 +165,7 @@ func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 // The target Fact node already exists if resolveTargetCommit succeeds — it
 // was upserted when refPath was originally indexed at target_commit. The
 // target's blob_hash is the blob in the target_commit's tree for refPath,
-// resolved via repoHandler.readBlobHashAtCommit.
+// resolved via repoHandler.ReadBlobHashAtCommit.
 //
 // Called AFTER the source Fact node's merge has been committed. The original
 // reason was that direct-SQL reads could not see nodes MERGE'd through Cypher

@@ -14,13 +14,13 @@ import (
 // CommitLogApply maintains commit_parents incrementally for every new commit.
 const commitParentsBackfillKey = "commit_parents_backfilled"
 
-// backfillCommitParents populates commit_parents for every commit already
+// BackfillCommitParents populates commit_parents for every commit already
 // recorded in branch_commits, reading parent edges via go-git. Idempotent:
 // guarded by a meta-table sentinel so it runs at most once per database.
 //
 // Why this is needed: commit_parents was added after commit_log, so existing
 // repos boot with commit_log populated but commit_parents empty. The
-// recursive-CTE walk in resolveActiveCommitForPath would short-circuit at
+// recursive-CTE walk in ResolveActiveCommitForPath would short-circuit at
 // depth 1 without this. New commits are appended in-line by CommitLogApply;
 // only the historical backfill needs this one-off pass.
 func BackfillCommitParents(ctx context.Context, rh *repoHandler) error {

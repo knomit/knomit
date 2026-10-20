@@ -13,7 +13,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// commitSigs returns the author signature (for a given operation) and the
+// CommitSigs returns the author signature (for a given operation) and the
 // committer signature (stable per agent) of a commit written ON branch.
 //
 // Every authored commit — writeFileExact, deleteFile, batchWriteLocked and the
@@ -41,7 +41,7 @@ func (rh *repoHandler) CommitSigs(ctx context.Context, branch, operation string)
 // must be this database's agent branch owner. Authoring them `exp/<name>`
 // (the old behaviour, a verbatim fallback from the branch name) made the
 // acceptance gate look up a member record at an id no member has
-// (agentIDOfAuthor) and showed experiment names in every per-author count.
+// (AgentIDOfAuthor) and showed experiment names in every per-author count.
 //
 // It never falls back to the experiment's name. Each case where the owning
 // agent cannot be named is an error, and the write is refused before any
@@ -53,10 +53,10 @@ func (rh *repoHandler) CommitSigs(ctx context.Context, branch, operation string)
 //     (the repo was taken over since the fork — ErrStaleExperimentParent, the
 //     same refusal commit and sync give).
 //
-// An EMPTY owner is unknown, not a mismatch (checkExperimentParentCurrent):
+// An EMPTY owner is unknown, not a mismatch (CheckExperimentParentCurrent):
 // the recorded parent names the agent then.
 //
-// The id itself is ownAgentID: the persisted id this store was given, never
+// The id itself is OwnAgentID: the persisted id this store was given, never
 // a parse of either branch name.
 func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string, error) {
 	name, isExp := ExperimentNameOf(branch)
@@ -79,7 +79,7 @@ func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string
 	return rh.OwnAgentID(exp.Parent)
 }
 
-// notifyCommit runs the post-commit side effects for a new commit on branch:
+// NotifyCommit runs the post-commit side effects for a new commit on branch:
 //
 //  1. Appends the commit to commit_log (branch-agnostic row + branch_commits
 //     visibility row).
@@ -91,7 +91,7 @@ func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string
 //  3. Calls the external onCommit observer if registered (e.g. SSE broadcast).
 //
 // Called INSIDE the branch lock: every caller (writeFile, deleteFile,
-// batchWrite, MergeBranch, remote reconcile) holds lockBranch(branch) across
+// batchWrite, MergeBranch, remote reconcile) holds LockBranch(branch) across
 // this call, so the ref advance, commit_log append, and im.Sync are atomic
 // w.r.t. concurrent readers and other index mutations on the branch. im.Sync is
 // therefore the lock-FREE primitive — out-of-band callers (the commit observer,
@@ -103,7 +103,7 @@ func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string
 // error so the failing operation is visible at its own call site.
 //
 // Caller cancellation is dropped here (context.WithoutCancel keeps values,
-// deadlines of the surrounding work aside). By the time notifyCommit is
+// deadlines of the surrounding work aside). By the time NotifyCommit is
 // reached the branch ref has ALREADY been advanced by a SetReference that
 // takes no ctx, so honoring cancellation could only produce the torn state
 // this function exists to prevent: the commit lives in git while commit_log /
@@ -138,7 +138,7 @@ func (rh *repoHandler) NotifyCommit(ctx context.Context, branch string, hash plu
 	return nil
 }
 
-// rootCommit walks first-parent ancestry from branch's head to the root commit
+// RootCommit walks first-parent ancestry from branch's head to the root commit
 // — the repo's stable identity. Lives on repoHandler because repoHandler owns
 // git reads; Service.RootCommit and searchIndex.localRepoID both delegate here
 // rather than opening a second handle.

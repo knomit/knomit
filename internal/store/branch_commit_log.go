@@ -19,11 +19,11 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
-// populateCommitLog indexes every commit reachable from the tip of branch
+// PopulateCommitLog indexes every commit reachable from the tip of branch
 // that is not yet recorded on it: commit_log, branch_commits, commit_parents
 // and its path_changes rows. Underived ancestors outside that set are derived
 // first (deriveClosure, git only); the new commits are then recorded parents
-// first, in transactions of pathChangeBatch commits, each deriving its commits
+// first, in transactions of PathChangeBatch commits, each deriving its commits
 // in the same transaction. Everything read from git is prepared before each
 // transaction opens.
 func (rh *repoHandler) PopulateCommitLog(ctx context.Context, branch string) error {
@@ -140,7 +140,7 @@ func (rh *repoHandler) reachableCommits(ctx context.Context, branch string, bran
 	return fresh, total, nil
 }
 
-// payloadsComputed counts commit_log payload diffs (tests: a warm re-populate
+// PayloadsComputed counts commit_log payload diffs (tests: a warm re-populate
 // must compute none).
 var PayloadsComputed atomic.Int64
 
@@ -148,7 +148,7 @@ var PayloadsComputed atomic.Int64
 // transaction, since the commit_log payload is a git diff: derivation's own,
 // when d prepared the commit (commitChanges). A commit already recorded on
 // some branch has its commit_log rows, so it gets no payload, unless all is
-// set (rebuildCommitLog rewrites commit_log).
+// set (RebuildCommitLog rewrites commit_log).
 func (rh *repoHandler) indexItems(ctx context.Context, d *deriver, commits []*object.Commit, all bool) ([]storegit.CommitLogItem, error) {
 	q := conn(ctx, rh.db)
 	items := make([]storegit.CommitLogItem, len(commits))
@@ -177,12 +177,12 @@ func (rh *repoHandler) indexItems(ctx context.Context, d *deriver, commits []*ob
 	return items, nil
 }
 
-// swapHook, when set (tests only), runs inside a rewind's or a rebuild's
+// SwapHook, when set (tests only), runs inside a rewind's or a rebuild's
 // swap transaction after its deletions and before it records new commits; a
 // non-nil error fails the swap there.
 var SwapHook func() error
 
-// lastSwapDuration is how long the last swap transaction held the write lock
+// LastSwapDuration is how long the last swap transaction held the write lock
 // (tests assert it stays short).
 var LastSwapDuration atomic.Int64
 
@@ -278,7 +278,7 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 	})
 }
 
-// repopulateBranch replaces the branch's commit visibility with the commits
+// RepopulateBranch replaces the branch's commit visibility with the commits
 // reachable from its tip (a rewind of main, the rebase replay after one).
 // Derived rows are never deleted.
 func (rh *repoHandler) RepopulateBranch(ctx context.Context, branch string) error {
@@ -299,7 +299,7 @@ func (rh *repoHandler) RepopulateBranch(ctx context.Context, branch string) erro
 	return nil
 }
 
-// rebuildCommitLog rewrites this branch's commit_log from git (populate alone
+// RebuildCommitLog rewrites this branch's commit_log from git (populate alone
 // cannot refresh existing rows: it dedups on branch_commits and commit_log
 // uses INSERT OR IGNORE), so author identity and other per-commit metadata are
 // re-read from the source of truth; re-derives the history rows that were
@@ -340,7 +340,7 @@ func (rh *repoHandler) RebuildCommitLog(ctx context.Context, branch string) (err
 	}
 	// The stage is deleted when the rebuild returns, after the swap and
 	// outside its lock, whether it succeeded or not. A crash in between is
-	// cleared by the next open (openHistory).
+	// cleared by the next open (OpenHistory).
 	defer func() {
 		if _, cerr := conn(ctx, rh.db).ExecContext(context.WithoutCancel(ctx), `DELETE FROM commit_log_stage WHERE branch_id = ?`, branchID); cerr != nil {
 			log.Warn().Err(cerr).Str("branch", branch).Msg("rebuildCommitLog: stage cleanup failed")
@@ -420,11 +420,11 @@ func (rh *repoHandler) stageCommitLog(ctx context.Context, branchID int64, commi
 }
 
 // AppendCommitLog records a single new commit on branch. Every caller moved
-// the ref only after deriveBeforeAdvance derived the commit and its ancestors,
+// the ref only after DeriveBeforeAdvance derived the commit and its ancestors,
 // so recording derives nothing: the hook only verifies. When a parent is not
 // recorded on this branch — a gap left by an older index — the branch is
 // populated instead, which records every missing ancestor (all derived too).
-// Returns an error so callers (notifyCommit) can propagate append failures
+// Returns an error so callers (NotifyCommit) can propagate append failures
 // — previously the error was swallowed to a log.Warn which let silent
 // branches drift out of commit_log parity. The property test P3 surfaced
 // a case where AppendCommitLog failed mid-sequence on a freshly-created

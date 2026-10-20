@@ -1,4 +1,4 @@
-// Tests for the configurable-upstream-branch fix: configureRemote must build
+// Tests for the configurable-upstream-branch fix: ConfigureRemote must build
 // the fetch refspec from the caller's branch name (not a hardcoded "main"),
 // reconcileMain must operate on it, and InitFromRemote must detect the remote
 // symbolic HEAD when the caller did not pick a branch.
@@ -27,7 +27,7 @@ import (
 )
 
 // TestSync_FetchHoldsConfigReadLock regresses the data race where a config
-// rewrite (ConfigureRemote → configureRemote: DeleteRemote+CreateRemote under
+// rewrite (ConfigureRemote → ConfigureRemote: DeleteRemote+CreateRemote under
 // configMu.Lock, which every origin change runs) could rewrite the git remote
 // out from under an in-flight reconcile fetch. Sync now takes configMu.RLock
 // across the origin check + the fetch, so while a config rewrite holds the write lock the fetch must block
@@ -39,12 +39,12 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	// Bound the fetch. Open leaves netTimeout at 0, which netCtxWith reads as
+	// Bound the fetch. Open leaves netTimeout at 0, which NetCtxWith reads as
 	// "no deadline", so the bogus-URL fetch below took however long the host's
 	// resolver needed to give up — 0.3s on a dev box, but over the 5s resume
 	// budget on a CI runner whose resolver does not fail .invalid fast. The
 	// timeout makes the second phase's wait a bound rather than a hope. It
-	// cannot weaken the first phase: netCtxWith runs INSIDE the closure, after
+	// cannot weaken the first phase: NetCtxWith runs INSIDE the closure, after
 	// the RLock, so no deadline is ticking while Sync is parked. Worst case
 	// fetchOrigin spends two of these (strict refspec, then the upstream-only
 	// fallback), still an order of magnitude inside the budget.
@@ -57,7 +57,7 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 
 	ri := svc.Remote().(*remoteIndex)
 
-	// Simulate configureRemote mid-rewrite by holding the write lock.
+	// Simulate ConfigureRemote mid-rewrite by holding the write lock.
 	unlockConfig := ri.rh.LockConfigForTest()
 
 	done := make(chan struct{})
@@ -82,7 +82,7 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	}
 }
 
-// TestConfigureRemote_RefspecUsesConfiguredUpstream: when configureRemote is
+// TestConfigureRemote_RefspecUsesConfiguredUpstream: when ConfigureRemote is
 // given upstreamMain="master", the git config's fetch refspec must reference
 // master (otherwise fetch would silently miss origin/master).
 func TestConfigureRemote_RefspecUsesConfiguredUpstream(t *testing.T) {
@@ -316,7 +316,7 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 	// Asserted with SQL rather than through HeadCommit, which proves none of it:
 	// HeadCommit resolves the git ref and never reads these tables, so it only
 	// restates the ref check above. The gap matters because the failure is
-	// silent from both ends — populateCommitLog returns nil when the ref lookup
+	// silent from both ends — PopulateCommitLog returns nil when the ref lookup
 	// fails, and InitSubscription logs and swallows its error — so a
 	// subscription whose commit log never populated would still look healthy.
 	ctx := context.Background()

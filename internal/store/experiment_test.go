@@ -437,7 +437,7 @@ func TestExperimentCommits_AreSigned(t *testing.T) {
 }
 
 // TestNotifyCommit_RefreshesExperimentActivity: activity is any commit on the
-// experiment, recorded at the notifyCommit chokepoint. Backdated first so the
+// experiment, recorded at the NotifyCommit chokepoint. Backdated first so the
 // assertion is about a VALUE that moved, not about clock resolution.
 func TestNotifyCommit_RefreshesExperimentActivity(t *testing.T) {
 	ctx := context.Background()

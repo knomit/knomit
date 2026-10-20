@@ -32,13 +32,13 @@ func FirstLine(s string) string {
 	return s
 }
 
-// changedFileEntry represents a file changed in a commit (internal to commitlog).
+// ChangedFileEntry represents a file changed in a commit (internal to commitlog).
 type ChangedFileEntry struct {
 	Path   string
 	Action string // "added", "modified", "deleted"
 }
 
-// commitEntries converts changedFileEntry results from a commit into CommitLogEntry structs.
+// commitEntries converts ChangedFileEntry results from a commit into CommitLogEntry structs.
 func commitEntries(c *object.Commit, files []ChangedFileEntry) []storegit.CommitLogEntry {
 	hashStr := c.Hash.String()
 	ts := c.Committer.When.Unix()
@@ -63,7 +63,7 @@ func commitEntries(c *object.Commit, files []ChangedFileEntry) []storegit.Commit
 	return entries
 }
 
-// changedFilesInCommit returns every file added/modified/deleted in c.
+// ChangedFilesInCommit returns every file added/modified/deleted in c.
 // Historically this filtered to .md files only, but that left commit_log
 // sparse for any commit that touched non-.md files (e.g. the InitRepo
 // commit that seeds the ontology file). The Verify tool's commit-log
@@ -90,7 +90,7 @@ func ChangedFilesInCommit(c *object.Commit) ([]ChangedFileEntry, error) {
 }
 
 // changedFilesBetween returns every file added/modified/deleted from fromTree
-// (nil: an empty tree) to toTree — changedFilesInCommit's diff, for callers
+// (nil: an empty tree) to toTree — ChangedFilesInCommit's diff, for callers
 // that load the trees themselves.
 func changedFilesBetween(fromTree, toTree *object.Tree) ([]ChangedFileEntry, error) {
 	changes, err := object.DiffTree(fromTree, toTree)
@@ -113,7 +113,7 @@ func changedFilesBetween(fromTree, toTree *object.Tree) ([]ChangedFileEntry, err
 	return files, nil
 }
 
-// commitLogAge returns a Unix timestamp for `days` days ago.
+// CommitLogAge returns a Unix timestamp for `days` days ago.
 func CommitLogAge(days int) int64 {
 	return time.Now().Unix() - int64(days)*86400
 }

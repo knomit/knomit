@@ -10,7 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// ontCache keeps the last ontology parsed per repository, keyed by the
+// OntCache keeps the last ontology parsed per repository, keyed by the
 // SHA-256 of its bytes: every write reads the ontology at the branch's tip,
 // and parsing compiles its rules.
 type OntCache struct {
@@ -33,7 +33,7 @@ func (c *OntCache) Parse(raw []byte) (*fact.Ontology, error) {
 	return c.ont, c.err
 }
 
-// treeOntology reads the ontology file from a commit's tree, trying every
+// TreeOntology reads the ontology file from a commit's tree, trying every
 // ontology path newest first. (nil, nil) when the tree has none. A symlink at
 // the first rung present is fact.ErrSymlinkNotFollowed naming it: never its
 // link text, never "none".
@@ -42,7 +42,7 @@ func TreeOntology(c *object.Commit) ([]byte, error) {
 	return data, err
 }
 
-// treeOntologyFile is treeOntology also returning the rung it read ("" when
+// TreeOntologyFile is TreeOntology also returning the rung it read ("" when
 // none).
 func TreeOntologyFile(c *object.Commit) (string, []byte, error) {
 	tree, err := c.Tree()

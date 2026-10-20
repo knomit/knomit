@@ -94,7 +94,7 @@ func (rh *repoHandler) GetExperiment(ctx context.Context, name string) (Experime
 	return e, true, nil
 }
 
-// checkExperimentParentCurrent refuses an experiment whose recorded parent is
+// CheckExperimentParentCurrent refuses an experiment whose recorded parent is
 // no longer the agent branch this database records as its owner.
 //
 // This is the STORE's half of a two-layer refusal, the same shape as the
@@ -124,7 +124,7 @@ func (rh *repoHandler) CheckExperimentParentCurrent(ctx context.Context, exp Exp
 }
 
 // touchExperimentActivity records that a commit landed on branch, when branch
-// is an experiment. Called from notifyCommit, the single chokepoint every ref
+// is an experiment. Called from NotifyCommit, the single chokepoint every ref
 // mutation goes through, so "activity" means exactly "a commit happened here"
 // with no second definition to keep in sync.
 //

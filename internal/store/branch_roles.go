@@ -15,7 +15,7 @@ import (
 // matched here — see kb/invariants/okf/source-refs-stay-local.
 const generatedRefPrefix = "okf/"
 
-// isGeneratedRef reports whether a BRANCH NAME (no refs/heads/ prefix) is
+// IsGeneratedRef reports whether a BRANCH NAME (no refs/heads/ prefix) is
 // export residue.
 func IsGeneratedRef(branch string) bool {
 	return strings.HasPrefix(branch, generatedRefPrefix)

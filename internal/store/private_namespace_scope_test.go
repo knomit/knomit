@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPrivateNamespaceIsNotAFactPath pins the same isFactPath rule
+// TestPrivateNamespaceIsNotAFactPath pins the same IsFactPath rule
 // (factpath.go:48) that index_scope_test.go already covers for a generic
 // dot-directory, but anchored on the concrete case this whole design exists
 // to protect: job state a job writes through the fact tools at
@@ -32,11 +32,11 @@ func TestPrivateNamespaceIsNotAFactPath(t *testing.T) {
 		testFactBody("Job state", 0.9, nil), "add", "")
 	require.NoError(t, err)
 	// kb/.drafts/x.md is the ISOLATING companion: .knomit/jobs/x.md above
-	// never reaches the IsPrivatePath check at all — isFactPath's ontology-root
+	// never reaches the IsPrivatePath check at all — IsFactPath's ontology-root
 	// prefix check (path must start with "kb/") already rejects it, since
 	// .knomit sits at the repo root, outside kb/. kb/.drafts/x.md starts with
 	// "kb/" and ends in ".md", so it clears both of the OTHER conditions in
-	// isFactPath and IsPrivatePath is the only thing standing between it and
+	// IsFactPath and IsPrivatePath is the only thing standing between it and
 	// the index. Keep both fixtures: .knomit/ pins the real requirement (job
 	// state must never enter the index); kb/.drafts/ pins the guard that
 	// would actually catch a regression in it. Deleting either assertion

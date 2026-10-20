@@ -536,14 +536,14 @@ func TestResolvedCommit_IsSigned(t *testing.T) {
 }
 
 // TestResolvedCommit_ReachesNotifyCommitOnDst: every branch-ref mutation must
-// call notifyCommit while holding the DST branch lock
+// call NotifyCommit while holding the DST branch lock
 // (kb/invariants/store/notify-commit-single-chokepoint). A resolved commit
 // moves the parent ref, so it must go through that chokepoint too — a merge
 // that moved the ref without it would leave SQL stale relative to git.
 //
 // Asserted through the chokepoint's OBSERVABLE effect on dst: the commit log
 // gains the new tip. Asserting the lock itself is not possible from here; the
-// branch_commits row is what notifyCommit writes, and its absence is exactly
+// branch_commits row is what NotifyCommit writes, and its absence is exactly
 // the staleness the invariant exists to prevent.
 func TestResolvedCommit_ReachesNotifyCommitOnDst(t *testing.T) {
 	ctx := context.Background()
@@ -564,7 +564,7 @@ func TestResolvedCommit_ReachesNotifyCommitOnDst(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, newTip, res.NewTip, "the reported tip is the one the ref now holds")
 
-	// The commit log row for the NEW tip on dst is notifyCommit's work.
+	// The commit log row for the NEW tip on dst is NotifyCommit's work.
 	logged := countRows(t, svc, `SELECT count(*) FROM branch_commits bc
 		JOIN branches b ON b.id = bc.branch_id
 		WHERE b.name = ? AND bc.commit_hash = ?`, testAgentBranch, newTip)

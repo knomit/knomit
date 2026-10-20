@@ -7,7 +7,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// commitTreeShape is checkTreeShape over a commit's tree and every parent's
+// commitTreeShape is CheckTreeShape over a commit's tree and every parent's
 // tree: the gate's rules diff a commit against its parents (recordOwner,
 // artifactRules) and M3 flattens both parents, and a parent tree that
 // truncates truncates the diff.
@@ -21,7 +21,7 @@ import (
 // mode). Only the immediate parents are checked, so commits on top of the
 // repair are admitted again. On a forge it is a push to main past the
 // required `knomit verify ci` check. Neither repairs commit_log:
-// populateCommitLog cannot diff the malformed commit, so every later
+// PopulateCommitLog cannot diff the malformed commit, so every later
 // derivation on that branch still fails. A fresh repository is the clean
 // recovery.
 func commitTreeShape(c *object.Commit, ok map[plumbing.Hash]bool) error {

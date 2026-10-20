@@ -206,7 +206,7 @@ func (rh *repoHandler) privatePathClosure(ctx context.Context, st storer.Encoded
 	shapeOK := map[plumbing.Hash]bool{}
 	for _, c := range commits {
 		// The closure's DiffTree ends silently at a directory entry that is
-		// not a tree (as does every go-git walker; checkTreeShape), so a
+		// not a tree (as does every go-git walker; CheckTreeShape), so a
 		// bogus entry would hide the private paths after it. reachableNew
 		// does not catch one that names an object the host already holds.
 		// Refused here, in every verify_signatures mode, with the judge's

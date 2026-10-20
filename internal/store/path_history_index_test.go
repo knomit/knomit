@@ -265,9 +265,9 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 // because the derivation and the staging run in short batch transactions and
 // only the swap is one transaction.
 //
-// What it asserts is an OUTCOME, not a duration. Through deriveObjectHook the
+// What it asserts is an OUTCOME, not a duration. Through DeriveObjectHook the
 // rebuild (and only the rebuild: the hook matches main's objects AND a
-// rebuildCommitLog frame) is paused three times, each BETWEEN batch
+// RebuildCommitLog frame) is paused three times, each BETWEEN batch
 // transactions, where it holds none:
 //   - "derive": deriveCommits preparing batch 1 (batch 0 committed);
 //   - "derive-end": preparing the tip, the last commit of the last batch;
@@ -276,7 +276,7 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 //
 // Both phases read git only before their batch's beginTxIfNeeded (prepare in
 // deriveCommits, indexItems in stageCommitLog; apply refuses reads with
-// errReadInApply), and the test's ctx carries no transaction. At each pause a
+// ErrReadInApply), and the test's ctx carries no transaction. At each pause a
 // WriteFact on `writer` must succeed before the rebuild resumes. Were either
 // phase inside the swap transaction, or under any transaction spanning
 // batches, that write would wait out _busy_timeout (5 s) and fail with
@@ -296,7 +296,7 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 // flaked (#366: 6.8 s on Windows CI against a 3 s rebuild) with no lock
 // contention at all: (1) `writer` shared main's 2000 commits, so after
 // clearDerived its first WriteFact re-derived the whole closure itself
-// (deriveBeforeAdvance), taking about as long as the rebuild; (2) the first
+// (DeriveBeforeAdvance), taking about as long as the rebuild; (2) the first
 // commit after the rebuild pays SQLite's WAL auto-checkpoint of the rebuild's
 // backlog, 6-11 s on a loaded disk
 // (kb/gotchas/store/sqlite/wal-checkpoint-after-bulk-write/78d0aceb.md). A

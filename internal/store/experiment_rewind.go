@@ -74,7 +74,7 @@ func experimentRewoundRefName(name string) plumbing.ReferenceName {
 // the experiment's own, since the experiment still holds them and the later
 // tip does not.
 //
-// Caller holds lockBranch(agentBranch).
+// Caller holds LockBranch(agentBranch).
 func (rh *repoHandler) markExperimentsRewound(ctx context.Context, agentBranch string, oldTip plumbing.Hash) error {
 	if rh.DB() == nil {
 		return nil
@@ -122,7 +122,7 @@ func (rh *repoHandler) clearExperimentRewound(name string) error {
 // and no resolutions); every resolution must name a path that conflicts, as
 // for a plain merge.
 //
-// Caller holds lockBranch(exp.Parent) and lockBranch(exp.Branch()).
+// Caller holds LockBranch(exp.Parent) and LockBranch(exp.Branch()).
 func (rh *repoHandler) rebuildRewoundExperiment(ctx context.Context, exp Experiment, strategy ConflictStrategy, resolutions map[string]Resolution, o mergeOpts) (rebuilt bool, squashed int, settled []SettledPath, err error) {
 	rec, err := rh.Storer().Reference(experimentRewoundRefName(exp.Name))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {

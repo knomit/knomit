@@ -96,7 +96,7 @@ type ChangesResult struct {
 // NormalizeChangesPrefix turns a caller's folder into the repo path it names.
 //
 // The prefix is RELATIVE TO THE ONTOLOGY ROOT (`tasks/a` means
-// `<ontologyRoot>/tasks/a`), lowercased because knomit writes lowercase fact
+// `<OntologyRoot>/tasks/a`), lowercased because knomit writes lowercase fact
 // paths, stripped of leading and trailing "/", and never given a ".md"
 // suffix. It is refused when it contains ".." or any segment beginning with
 // "." — private state is never a folder a changes read may walk.
@@ -229,7 +229,7 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 // DiffFacts is the trigger dispatcher's read: every fact path under the
 // ontology root that differs between the tree at `from` and the tree at `to`,
 // as added/modified/deleted, sorted bytewise. The same two-tree read as
-// ChangesUnder — subtreeOrEmpty, diffSubtrees, isFactPath, no clock, no
+// ChangesUnder — subtreeOrEmpty, diffSubtrees, IsFactPath, no clock, no
 // commit log, no write — with ONE difference: there is NO ancestry check. The
 // dispatcher's advance is "old head → current head" of the agent branch, and
 // after an origin rewind the old head is NOT an ancestor of the new one (the
@@ -285,7 +285,7 @@ func subtreeOrEmpty(c *object.Commit, base string) (*object.Tree, error) {
 
 // diffSubtrees diffs two folder trees (nil = empty) and returns repo-relative
 // paths sorted bytewise, keeping only those isFact admits. The caller passes
-// repoHandler.isFactPath — the indexer's own membership rule (under the
+// repoHandler.IsFactPath — the indexer's own membership rule (under the
 // ontology root, .md, not private) — so changes and the index agree on what a
 // fact is, with one copy of the rule.
 func diffSubtrees(from, to *object.Tree, base string, isFact func(string) bool) ([]PathChange, error) {

@@ -37,7 +37,7 @@ type CommitSigner struct {
 }
 
 // verifyCommitSignature checks c's SSHSIG signature over the commit payload
-// without its signature header, exactly as signCommit (sshsig.go) produced it:
+// without its signature header, exactly as SignCommit (sshsig.go) produced it:
 // magic, namespace "git", sha512, an Ed25519 key. It returns the key the
 // signature was made with; WHETHER that key is admitted is the caller's
 // question (the acceptance gate's member records), never this function's.

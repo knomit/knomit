@@ -140,14 +140,14 @@ func TestRebuildEmbeddings_RejectsBatchLengthMismatch(t *testing.T) {
 
 // TestRebuild_SerializedWithConcurrentSyncLocked regresses the PR #82
 // background-index race once and for all: the startup heal's Rebuild and the
-// commit observer's Sync mutated a branch's index WITHOUT holding lockBranch,
-// while the inline write path (notifyCommit) DID. So a background Rebuild —
+// commit observer's Sync mutated a branch's index WITHOUT holding LockBranch,
+// while the inline write path (NotifyCommit) DID. So a background Rebuild —
 // which clears the index watermark (setLastCommit "") then re-indexes every
 // file — could interleave with a concurrent index Sync on the same branch,
 // double-inserting into facts_vec / corrupting branch_facts.
 //
 // The invariant is now uniform: every index mutation on a branch holds
-// lockBranch. Rebuild self-locks; out-of-band Sync callers use SyncLocked. This
+// LockBranch. Rebuild self-locks; out-of-band Sync callers use SyncLocked. This
 // test pins the serialization: a SyncLocked issued while a Rebuild is parked
 // mid-embed (holding the branch lock) MUST block until the Rebuild releases it.
 func TestRebuild_SerializedWithConcurrentSyncLocked(t *testing.T) {
@@ -180,7 +180,7 @@ func TestRebuild_SerializedWithConcurrentSyncLocked(t *testing.T) {
 	_, err = si.rh.DB().ExecContext(ctx, `DELETE FROM facts_vec`) // force a full re-embed
 	require.NoError(t, err)
 
-	// Start a Rebuild; it parks inside EmbedDocuments while holding lockBranch.
+	// Start a Rebuild; it parks inside EmbedDocuments while holding LockBranch.
 	rebuildDone := make(chan error, 1)
 	go func() { rebuildDone <- si.Rebuild(ctx, branch, nil) }()
 	select {
@@ -198,7 +198,7 @@ func TestRebuild_SerializedWithConcurrentSyncLocked(t *testing.T) {
 		close(emb.release)
 		t.Fatal("SyncLocked ran while Rebuild held lockBranch — index mutations are NOT serialized")
 	case <-time.After(200 * time.Millisecond):
-		// Good: SyncLocked is parked on lockBranch.
+		// Good: SyncLocked is parked on LockBranch.
 	}
 
 	// Release the embed: Rebuild completes, drops the lock, SyncLocked resumes.

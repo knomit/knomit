@@ -13,7 +13,7 @@ import (
 // differs from the branch's name, so a derivation from the name is visible.
 // Covers the agent branch and an experiment forked from it (whose author is
 // the owning agent, #394). Sabotage: return the fixture fallback (branch minus
-// "agent/") from ownAgentID even when an id is set — red: author "test".
+// "agent/") from OwnAgentID even when an id is set — red: author "test".
 func TestCommitAuthor_IsThePersistedAgentIDNotTheBranchName(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
@@ -50,7 +50,7 @@ func TestCommitAuthor_IsThePersistedAgentIDNotTheBranchName(t *testing.T) {
 // Without an agent id and without the test fixture fallback, an authored
 // write is refused (ErrNoAgentID) before any object is written: production has
 // no name-derived fallback. Sabotage: fall back to the branch name in
-// ownAgentID — red.
+// OwnAgentID — red.
 func TestCommitAuthor_NoAgentIDRefuses(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)

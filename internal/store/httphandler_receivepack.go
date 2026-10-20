@@ -94,7 +94,7 @@ const errNoPushPolicy = "knomit: pushing is not available here: no verified push
 //  4. under the branch lock, on a context that cannot be cancelled: the
 //     old-hash check, ONE transaction promoting the new objects, then the
 //     branch seeded from the upstream (first push) and moved through
-//     advanceBranchTo, which ends in notifyCommit.
+//     advanceBranchTo, which ends in NotifyCommit.
 //
 // Nothing before 4 writes to the host; nothing in 4 may be abandoned by a
 // client that disconnects, because the ref moves before the SQL that
@@ -454,7 +454,7 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 	}
 	if seeded && res.Mode == ModeNoop {
 		// The pushed tip IS the upstream tip: CreateBranch set the ref and its
-		// rows, but no move ran notifyCommit. Run it, so a registration always
+		// rows, but no move ran NotifyCommit. Run it, so a registration always
 		// passes the chokepoint.
 		if err := rp.rh.NotifyCommit(ctx, branch, cmd.New); err != nil {
 			return res, seeded, "", err

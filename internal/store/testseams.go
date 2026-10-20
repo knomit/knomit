@@ -92,7 +92,7 @@ func (rh *repoHandler) BranchLockForTest(branch string) (*sync.RWMutex, bool) {
 	return v.(*sync.RWMutex), true
 }
 
-// LockConfigForTest takes the remote-config WRITE lock, as configureRemote
+// LockConfigForTest takes the remote-config WRITE lock, as ConfigureRemote
 // does across a refspec rewrite, and returns its unlock.
 func (rh *repoHandler) LockConfigForTest() func() {
 	mustBeTest()

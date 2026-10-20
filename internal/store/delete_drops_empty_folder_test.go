@@ -10,7 +10,7 @@ import (
 
 // #375: knomit's deletes write trees the way git does — a folder whose last
 // entry is removed is dropped from its parent, never kept as an empty tree.
-// Every delete path goes through deleteFromTree: DeleteFact, BatchWriteFacts,
+// Every delete path goes through DeleteFromTree: DeleteFact, BatchWriteFacts,
 // and the merge's src-delete.
 
 // treeOf returns the root tree hash at branch's tip.

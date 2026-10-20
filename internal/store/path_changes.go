@@ -33,18 +33,18 @@ import (
 // rows of its ancestors, never from branch_commits or commit_log. Deriving a
 // commit first derives its underived ancestors, walking git parents first
 // (deriveClosure). Rows are IMMUTABLE per hash: nothing deletes them on a
-// rewind or a rebuild. An upgrade or a pathChangesVersion change re-derives
-// them in place, once, while the repo opens (openHistory); a DEGRADED row
+// rewind or a rebuild. An upgrade or a PathChangesVersion change re-derives
+// them in place, once, while the repo opens (OpenHistory); a DEGRADED row
 // (derived around a missing object) is re-derived by :rebuild.
 //
 // WHEN: a commit's rows are derived before the ref that makes it visible
-// advances (deriveBeforeAdvance), and the transaction that records it in
+// advances (DeriveBeforeAdvance), and the transaction that records it in
 // branch_commits refuses it otherwise (CommitLogApply's hook). An indexed
 // commit is never visible without its rows; knomit_explain never derives.
 //
 // LOCKING: every git object read (and diff) is PREPARED outside any
 // transaction; inside, apply runs SQL only — enforced: a git read while
-// applying is an error (errReadInApply).
+// applying is an error (ErrReadInApply).
 //
 // MISSING OBJECTS (user decision) never fail a derivation, so they never fail
 // a write:
@@ -57,14 +57,14 @@ import (
 // once the object is back. Any OTHER read error fails the derivation, nothing
 // is recorded, and a later attempt retries — before the ref moves.
 
-// pathChangesVersion is the version of the derivation below. A stored value
+// PathChangesVersion is the version of the derivation below. A stored value
 // that differs (or none) makes the next OPEN re-derive every branch's history
-// in place (openHistory), before the repo serves anything.
+// in place (OpenHistory), before the repo serves anything.
 const PathChangesVersion = "1"
 
 const PathChangesVersionKey = "path_changes_version"
 
-// pathChangeBatch is how many commits one transaction derives or records
+// PathChangeBatch is how many commits one transaction derives or records
 // where live writers can contend for the write lock (a write's derivation, a
 // populate, a rewind's or a rebuild's derive-before-swap): one commit per
 // transaction would cost one WAL commit each; more per batch holds the lock
@@ -89,23 +89,23 @@ var ErrHistoryChanged = errors.New("path history changed since this position was
 // it signals a bug, never a state to record around.
 var errParentUnderived = errors.New("parent commit is not derived yet")
 
-// errNotDerived is returned by the recording hook for a commit whose rows are
+// ErrNotDerived is returned by the recording hook for a commit whose rows are
 // not derived: recording it would make it visible without its history.
 var ErrNotDerived = errors.New("commit is not derived")
 
-// errReadInApply guards apply's contract: SQL only, never a git read (a
+// ErrReadInApply guards apply's contract: SQL only, never a git read (a
 // write transaction waiting for a pool connection starves other writers).
 var ErrReadInApply = errors.New("git object read inside apply")
 
-// deriveObjectHook, when set (tests only), runs before every git object read
+// DeriveObjectHook, when set (tests only), runs before every git object read
 // of the derivation; a non-nil error is returned as that read's error.
 var DeriveObjectHook func(kind string, h plumbing.Hash) error
 
-// branchTipHook, when set (tests only), runs before the open-time pass
+// BranchTipHook, when set (tests only), runs before the open-time pass
 // resolves a branch's ref; a non-nil error is that resolve's error.
 var BranchTipHook func(branch string) error
 
-// pcTables names the derived tables.
+// ChangeTables names the derived tables.
 type ChangeTables struct{ Changes, Links, FP string }
 
 var ActiveTables = ChangeTables{"path_changes", "path_change_links", "commit_fp"}
@@ -119,14 +119,14 @@ func metaGet(ctx context.Context, q storegit.CtxExecer, key string) (string, err
 	return v, err
 }
 
-// openHistory is the OPEN-TIME pass: it runs while a repo opens or is
+// OpenHistory is the OPEN-TIME pass: it runs while a repo opens or is
 // bootstrapped, before it serves a request or accepts a write, so no writer
 // races it. (A second PROCESS writing the same database meanwhile is out of
 // scope: migrate a copy and move it back.)
 //
 // With the version current it derives only what a branch tip is missing —
 // normally nothing, one lookup per branch. Otherwise (an upgraded database,
-// or a pathChangesVersion change) it re-derives every branch's history IN
+// or a PathChangesVersion change) it re-derives every branch's history IN
 // PLACE. Either way every git read and diff is prepared first; then ONE
 // transaction, SQL only, writes the rows and the version key. A failure rolls
 // it back and is returned: the repo must not open, and the next open retries.
@@ -234,7 +234,7 @@ func (rh *repoHandler) OpenHistory(ctx context.Context) error {
 	return nil
 }
 
-// openHistoryHook, when set (tests only), runs inside the open-time pass's
+// OpenHistoryHook, when set (tests only), runs inside the open-time pass's
 // transaction after every row is applied and before the version key is
 // written; a non-nil error fails the pass there.
 var OpenHistoryHook func() error
@@ -281,12 +281,12 @@ func (rh *repoHandler) branchTips(ctx context.Context) ([]plumbing.Hash, error) 
 	return tips, nil
 }
 
-// deriveBeforeAdvance derives hash (and any underived ancestors) into the
+// DeriveBeforeAdvance derives hash (and any underived ancestors) into the
 // served tables — called BEFORE a ref moves to hash, so a derivation failure
 // leaves the ref where it was. Missing objects never fail it (they become a
 // boundary or content_unavailable); only other read errors do.
 //
-// Caller cancellation is dropped, as in notifyCommit: a write that has built
+// Caller cancellation is dropped, as in NotifyCommit: a write that has built
 // its commit completes (fact_write_cancel_test.go); honouring cancellation
 // here would fail it for no reason the store can act on.
 func (rh *repoHandler) DeriveBeforeAdvance(ctx context.Context, hash plumbing.Hash) error {
@@ -300,7 +300,7 @@ func (rh *repoHandler) DeriveBeforeAdvance(ctx context.Context, hash plumbing.Ha
 
 // deriveClosure derives every underived commit reachable from starts through
 // git parents (starts included), parents first, in short transactions of
-// pathChangeBatch commits, each prepared from git before it opens. It stops at
+// PathChangeBatch commits, each prepared from git before it opens. It stops at
 // derived commits and at commits absent from the object store. A read error
 // other than not-found fails it; what earlier batches committed stays.
 // Returns how many commits it derived.
@@ -757,7 +757,7 @@ func (d *deriver) diffTrees(from, to plumbing.Hash, prefix string, out *[]storeg
 	return incomplete, nil
 }
 
-// commitDiffs counts tree diffs of a commit against its first parent, by
+// CommitDiffs counts tree diffs of a commit against its first parent, by
 // derivation or for commit_log (tests: a write diffs its commit once).
 var CommitDiffs atomic.Int64
 
@@ -1003,7 +1003,7 @@ func (d *deriver) clear(ctx context.Context, tx *sql.Tx, hash string) error {
 
 // apply writes a prepared commit's first-parent depth, jump pointers,
 // degradation mark and path_changes rows, on tx — SQL ONLY: a git read while
-// applying is errReadInApply. A commit already derived is left as is. Every
+// applying is ErrReadInApply. A commit already derived is left as is. Every
 // parent present in the object store must be derived already.
 func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) error {
 	d.applying = true
@@ -1145,7 +1145,7 @@ func (d *deriver) hook(hashes []string, prepared []*preparedCommit) func(ctx con
 	}
 }
 
-// liveChange returns the change of path live at commit X in table set t: the
+// LiveChange returns the change of path live at commit X in table set t: the
 // nearest commit on X's first-parent line (X included) with a row, as the
 // entry it resolves to and the row's own commit. With branchID != 0 only rows
 // visible on that branch count. "" when there is none.

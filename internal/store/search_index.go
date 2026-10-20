@@ -78,7 +78,7 @@ type searchIndex struct {
 
 	// Test-only interleaving hooks, nil in production. The similarity rewrite
 	// races concurrent cross-branch writers by construction (the graph is
-	// shared, lockBranch is per-branch), and that race cannot be exercised with
+	// shared, LockBranch is per-branch), and that race cannot be exercised with
 	// sleeps — it needs the two sides to rendezvous at an exact point.
 	// beforeSimTx fires after the KNN pass and before the transaction opens;
 	// inSimTx fires after the prunes and before the merge loop.
@@ -293,7 +293,7 @@ func (si *searchIndex) NeedsRebuild(ctx context.Context, branch string) (bool, e
 func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	// Suspended: the caller (a bulk Replay into a transient store) will run a
 	// single Rebuild afterward, so per-commit maintenance here is wasted work.
-	// notifyCommit still appends to commit_log before reaching us, so history
+	// NotifyCommit still appends to commit_log before reaching us, so history
 	// is preserved for that Rebuild to reconstruct derived state from.
 	if si.syncSuspended.Load() {
 		return nil
@@ -355,7 +355,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 		}
 		for _, path := range paths {
 			// Facts live under the ontology root; nothing else is one, whatever
-			// it parses as (isFactPath). Skipping here also spares the blob read
+			// it parses as (IsFactPath). Skipping here also spares the blob read
 			// and the per-path git log indexFile would do before rejecting it.
 			if !si.rh.IsFactPath(path) {
 				continue
@@ -420,7 +420,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	if len(indexed) > 0 {
 		// analysis_limit is per-connection and must ride the same Exec: without
 		// it, 0x10000 (consider ALL tables) can trigger an unbounded ANALYZE on a
-		// large corpus while lockBranch is held.
+		// large corpus while LockBranch is held.
 		if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 			`PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002`); err != nil {
 			log.Debug().Err(err).Msg("sync: optimize failed (query plans may drift)")
@@ -439,8 +439,8 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 
 // SyncLocked runs Sync while holding the per-branch write lock.
 //
-// Bare Sync is lock-FREE because its sole legitimate caller, notifyCommit,
-// already holds lockBranch(branch) (every write path — WriteFact, DeleteFact,
+// Bare Sync is lock-FREE because its sole legitimate caller, NotifyCommit,
+// already holds LockBranch(branch) (every write path — WriteFact, DeleteFact,
 // BatchWriteFacts, MergeBranch, remote reconcile — syncs the index under the
 // lock so no reader observes a torn git-HEAD/SQL-index state). Out-of-band
 // callers that are NOT inside the lock — the commit observer and the startup
@@ -456,14 +456,14 @@ func (si *searchIndex) SyncLocked(ctx context.Context, branch string) error {
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
 //
-// Rebuild holds lockBranch(branch) for its entire duration. It clears the index
+// Rebuild holds LockBranch(branch) for its entire duration. It clears the index
 // watermark (setLastCommit "") and rewrites every derived row, so it MUST be
 // mutually exclusive with any other index mutation on the branch — an inline
-// write's notifyCommit→Sync, the commit observer's SyncLocked, or a second
+// write's NotifyCommit→Sync, the commit observer's SyncLocked, or a second
 // Rebuild. Without the lock a concurrent Sync would observe the cleared
 // watermark, launch its own full re-index, and double-insert into facts_vec /
 // corrupt branch_facts (the PR #82 background-index race). No current caller
-// holds lockBranch before calling Rebuild, so self-locking cannot deadlock;
+// holds LockBranch before calling Rebuild, so self-locking cannot deadlock;
 // normal reads don't take branchMu, so they remain non-blocking.
 func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) (err error) {
 	defer si.rh.LockBranch(branch)()
@@ -762,7 +762,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	}
 	defer stmt.Close()
 
-	// Only the ontology root is a candidate (isFactPath). _rebuild_entries is
+	// Only the ontology root is a candidate (IsFactPath). _rebuild_entries is
 	// also the set the branch_facts repopulate below is driven from, so scoping
 	// it here is what EVICTS a stray admitted by an older build — a rebuild is
 	// the repair path for an index that outran the rule.
@@ -1272,7 +1272,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 
 	// The facts snapshot is read INSIDE the write transaction. `facts` rows and
 	// graph Fact nodes are keyed by version and shared by every branch, while
-	// lockBranch is per branch: a delete on another branch runs concurrently
+	// LockBranch is per branch: a delete on another branch runs concurrently
 	// with this rebuild. Read outside the transaction, a delete landing between
 	// the snapshot and BEGIN would remove the facts row and soft-delete the
 	// node, and the sync below would re-merge it live from the stale snapshot.
@@ -1485,7 +1485,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		// But the delete MUST NOT be a blanket `DELETE ... WHERE type=SIMILAR_TO`.
 		// `edges` was computed by the KNN loop above, before this transaction
 		// opened. A writer on another branch shares the graph but NOT
-		// lockBranch, so it can commit a new fact version and its similarity
+		// LockBranch, so it can commit a new fact version and its similarity
 		// edges inside that window. A blanket wipe deletes them and the re-merge
 		// cannot restore them — they are not in this rebuild's snapshot — and
 		// nothing ever regenerates them: that branch's Sync sees last_commit ==
@@ -1617,7 +1617,7 @@ func localFactRefs(refs []string, localRepoID string) []string {
 // inventing edges, which is the safe direction.
 //
 // CALL CONSTRAINT — this reads git, which for knomit means reading SQLite:
-// rootCommit walks first-parent ancestry through the SQLite-backed storer.
+// RootCommit walks first-parent ancestry through the SQLite-backed storer.
 // Two consequences a future caller must preserve:
 //
 //  1. Call it OUTSIDE an open write transaction. The DB runs with
@@ -1635,7 +1635,7 @@ func localFactRefs(refs []string, localRepoID string) []string {
 //
 // The sync.Once keeps the cost to one walk per searchIndex, not one per ref.
 // The branch argument is therefore only read on the first call — safe because
-// every branch of a repo shares the same root commit (see rootCommit).
+// every branch of a repo shares the same root commit (see RootCommit).
 func (si *searchIndex) localRepoID(ctx context.Context, branch string) string {
 	si.repoIDOnce.Do(func() {
 		root, err := si.rh.RootCommit(ctx, branch)

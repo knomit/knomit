@@ -308,7 +308,7 @@ func (rh *repoHandler) ListExperiments(ctx context.Context) ([]Experiment, error
 //
 // The parent comes from the row, not from the caller — re-deriving it would
 // be exactly the ref-shape inference the branch-roles invariant forbids. But
-// it is not trusted blindly either: checkExperimentParentCurrent first
+// it is not trusted blindly either: CheckExperimentParentCurrent first
 // compares it against the agent branch this database RECORDS as its owner,
 // and refuses with ErrStaleExperimentParent when the repo was taken over
 // between the fork and now. Write eligibility refuses the same case one layer
@@ -332,7 +332,7 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 
 	// The parent's lock (the merge's DST) serialises this against a concurrent
 	// fact write on the agent branch and against a rewind of it, and is held
-	// through notifyCommit. An experiment's own merges (commit and sync) are
+	// through NotifyCommit. An experiment's own merges (commit and sync) are
 	// the only merges that stamp the call's agent trace (opts.trace).
 	// STILL ONE MERGE. Resolutions are an input to it, not a second pass over
 	// the tree afterwards: a path the caller adjudicated is decided inside the

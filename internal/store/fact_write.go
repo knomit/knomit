@@ -23,7 +23,7 @@ import (
 // branch lock and before the ref moves, so a refused path leaves nothing
 // behind. That ordering is the point: go-git checks tree paths only on READ
 // (FindEntry, TreeEntryFile, the tree walker under DiffTree), and those reads
-// first run in notifyCommit's im.Sync, AFTER SetReference. A path git cannot
+// first run in NotifyCommit's im.Sync, AFTER SetReference. A path git cannot
 // read back, refused there, leaves a commit on the branch that every later
 // sync trips over (#384).
 func validatePath(path string) error {
@@ -90,7 +90,7 @@ func gitReadablePath(path string) error {
 			// An empty segment ("kb//x.md", "/kb/x.md", "kb/x/") is out of
 			// scope for this check (#384), but go-git DOES refuse an empty
 			// entry name: when it decodes the tree ("malformed tree: empty
-			// filename"). deriveBeforeAdvance decodes the new trees before the
+			// filename"). DeriveBeforeAdvance decodes the new trees before the
 			// ref moves (whenever commit_log is available), so such a write is
 			// refused before it can poison a branch. It is refused late,
 			// though, with a store error, so a REST client gets a 500 rather
@@ -191,9 +191,9 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 
 	// Notify inside the lock — the ref advance, commit_log append, and
 	// im.Sync (which updates branch_facts / graph) must be atomic w.r.t.
-	// concurrent readers (including Verify, which takes lockBranchRead).
+	// concurrent readers (including Verify, which takes LockBranchRead).
 	// A reader observing the window after SetReference but before
-	// notifyCommit would see a torn state: git HEAD at the new commit,
+	// NotifyCommit would see a torn state: git HEAD at the new commit,
 	// SQL index still at the previous one.
 	if err := fi.rh.NotifyCommit(ctx, branch, newCommitHash); err != nil {
 		return "", "", err
@@ -226,7 +226,7 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
 	}
 	if !exists {
-		// Wrapped as ErrPathNotFound — the same sentinel readFileWithHash
+		// Wrapped as ErrPathNotFound — the same sentinel ReadFileWithHash
 		// wraps for a missing read — so a caller one layer up (the REST
 		// DELETE handler) can tell "nothing there" from a real backend
 		// failure and answer 404, exactly as a GET of the same missing path
@@ -257,7 +257,7 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", err
 	}
 
-	// notifyCommit runs inside the branch lock — see writeFile for rationale.
+	// NotifyCommit runs inside the branch lock — see writeFile for rationale.
 	if err := fi.rh.NotifyCommit(ctx, branch, newCommitHash); err != nil {
 		return "", err
 	}
@@ -353,7 +353,7 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 		return "", nil, err
 	}
 
-	// notifyCommit runs inside the branch lock — see writeFile for rationale.
+	// NotifyCommit runs inside the branch lock — see writeFile for rationale.
 	if err := fi.rh.NotifyCommit(ctx, branch, cHash); err != nil {
 		return "", nil, err
 	}
@@ -506,7 +506,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 
 // WriteFact writes a fact to the store and returns the commit and blob hashes.
 // Index sync (branch_facts / facts_vec / graph) is triggered inside writeFile
-// via rh.notifyCommit — no redundant fi.im.Sync call here.
+// via rh.NotifyCommit — no redundant fi.im.Sync call here.
 func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
 	commitHash, blobHash, err := fi.writeFile(ctx, branch, path, content, message, operation)
 	if err != nil {
@@ -547,7 +547,7 @@ func (fi *factIndex) WriteRootFile(ctx context.Context, branch, path, content, m
 }
 
 // DeleteFact deletes a fact. Index sync happens inside deleteFile via
-// rh.notifyCommit.
+// rh.NotifyCommit.
 func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
 	commitHash, err := fi.deleteFile(ctx, branch, path, message, "retract")
 	if err != nil {
@@ -557,7 +557,7 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 }
 
 // BatchWriteFacts writes and deletes multiple facts in a single commit. Index
-// sync happens inside batchWrite via rh.notifyCommit.
+// sync happens inside batchWrite via rh.NotifyCommit.
 func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, deletes, nil, message, operation)
 	return

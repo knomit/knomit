@@ -12,7 +12,7 @@ import (
 )
 
 // TestingSetRef moves (or creates) a git reference WITHOUT a commit and without
-// notifyCommit — for tests in sibling packages that need a ref shape the write
+// NotifyCommit — for tests in sibling packages that need a ref shape the write
 // path never produces on demand: an agent branch rewound so its old head is no
 // longer an ancestor (the replay case), or main moved to a commit as if the
 // acceptance gate had advanced it.
@@ -29,7 +29,7 @@ func (s *Service) TestingSetRef(name, hash string) error {
 	return s.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.ReferenceName(name), plumbing.NewHash(hash)))
 }
 
-// TestingDeleteRef removes a git reference WITHOUT notifyCommit — for a test
+// TestingDeleteRef removes a git reference WITHOUT NotifyCommit — for a test
 // that needs a repo with no upstream branch (F07 PR 5: no main means no repo
 // recipe tier). Test-only by contract (see TestingSetRef).
 func (s *Service) TestingDeleteRef(name string) error {
@@ -40,14 +40,14 @@ func (s *Service) TestingDeleteRef(name string) error {
 }
 
 // TestingCommitFiles commits files onto branch as ONE signed commit, moving
-// the ref but skipping notifyCommit — no commit_log row, no index sync, no
+// the ref but skipping NotifyCommit — no commit_log row, no index sync, no
 // observer. It exists for a test that needs a very large advance (thousands of
 // fact paths) without paying the index's cost for it: the dispatcher's own
 // work is what such a test measures. Test-only by contract (see
 // TestingSetRef). Returns the commit hash.
 //
 // The trees are built in ONE pass (testingTree): each tree object the commit
-// needs is written once. Applying the paths one at a time with buildTree, as
+// needs is written once. Applying the paths one at a time with BuildTree, as
 // the write path does for its handful of files, rewrites every tree on the
 // path for every file: about five tree objects per file, 60,000 loose objects
 // for the 12,000-file advance of TestDispatch_Tx1Bounded, which cost that test
@@ -116,7 +116,7 @@ func (s *Service) Templates() TemplateIndex { return s.rh }
 // (fact.TemplatePathAllowed), no two paths that differ only by case. It is
 // never on the MCP surface. Otherwise it is batchWrite: read-only refused,
 // validatePath, the signer taken before any object is written, the ctx
-// trailers stamped, notifyCommit under the branch lock.
+// trailers stamped, NotifyCommit under the branch lock.
 func (s *Service) WriteSystemTree(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	fi := s.fi
 	if fi.rh.ReadOnly() {

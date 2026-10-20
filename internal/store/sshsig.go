@@ -18,7 +18,7 @@ const (
 	SSHSigHashAlgo  = "sha512"
 )
 
-// appendSSHString appends an SSH wire-format string (uint32 BE length + data).
+// AppendSSHString appends an SSH wire-format string (uint32 BE length + data).
 func AppendSSHString(buf, data []byte) []byte {
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(data)))
@@ -27,7 +27,7 @@ func AppendSSHString(buf, data []byte) []byte {
 	return buf
 }
 
-// signCommit signs a commit payload using the SSHSIG format.
+// SignCommit signs a commit payload using the SSHSIG format.
 // Returns the armored signature string for the commit's PGPSignature field.
 func SignCommit(signer ssh.Signer, payload []byte) (string, error) {
 	// Build the "signed data" blob.

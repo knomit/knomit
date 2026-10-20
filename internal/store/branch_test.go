@@ -48,9 +48,9 @@ func TestBranchID_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 }
 
 // TestLockBranch_DeferReleasesOnPanic pins the panic-safety contract that
-// reconcileNow's IIFE (`defer rh.lockBranch(x)()`) relies on: if the body
+// reconcileNow's IIFE (`defer rh.LockBranch(x)()`) relies on: if the body
 // holding the lock panics, the deferred unlock still fires. The prior
-// non-deferred `unlock := rh.lockBranch(x); ...; unlock()` form would have
+// non-deferred `unlock := rh.LockBranch(x); ...; unlock()` form would have
 // leaked the lock on panic, deadlocking every subsequent op on that branch.
 func TestLockBranch_DeferReleasesOnPanic(t *testing.T) {
 	rh := &repoHandler{}

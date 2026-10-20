@@ -258,7 +258,7 @@ func (h *changeHeap) Pop() any {
 // History is bounded to the ancestry of `anchorCommit`: revisions committed
 // after the anchor are never surfaced ("explain as of C" rewinds the timeline).
 //
-// Walks first-parent ancestry via the shared firstParentChainCTE — NEVER
+// Walks first-parent ancestry via the shared FirstParentChainCTE — NEVER
 // wall-clock ordering. See resolveTargetCommit's doc-comment for the
 // merge-branch rationale. The walk is scoped to `branch` by joining
 // branch_commits on the resolved branch_id, so revisions reachable only via an

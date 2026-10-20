@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// appendTrailersToParagraph joins the trace to a merge commit's EXISTING
+// AppendTrailersToParagraph joins the trace to a merge commit's EXISTING
 // trailer paragraph (its conflict record), so TrailerValues still reads the
 // record and TrailerValue reads the trace; with no trailer paragraph it opens
-// one. Sabotage: appendTrailers instead (red: the record is no longer the
+// one. Sabotage: AppendTrailers instead (red: the record is no longer the
 // last paragraph, TrailerValues reads nothing).
 func TestAppendTrailersToParagraph_JoinsTheRecord(t *testing.T) {
 	tr := Trailers{Trace: "task-1", Run: "run-" + "0123456789abcdef0123456789abcdef"}

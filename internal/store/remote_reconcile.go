@@ -113,7 +113,7 @@ func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) er
 //
 // No lastOrigin (zero: no remote-tracking ref before this fetch, a truly
 // first sync) writes nothing, and the rewind replay keeps its merge-base
-// fallback. Takes rh.lockBranch(agentBranch).
+// fallback. Takes rh.LockBranch(agentBranch).
 func (rh *repoHandler) seedMissingWatermark(agentBranch string, lastOrigin plumbing.Hash) error {
 	if lastOrigin == plumbing.ZeroHash {
 		return nil
@@ -165,7 +165,7 @@ type MainReconcileResult struct {
 // Errors if origin/<upstreamMain> is not present locally (caller must fetch
 // first).
 //
-// Caller must hold rh.lockBranch(upstreamMain). After every ref advance,
+// Caller must hold rh.LockBranch(upstreamMain). After every ref advance,
 // commit_log is repopulated and the index manager is notified so
 // downstream readers see consistent state.
 func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (MainReconcileResult, error) {
@@ -222,15 +222,15 @@ type advanceMove struct {
 
 // advanceBranchTo moves refs/heads/<branch> to hash by create, fast-forward or
 // force-update, and brings every derived table along: the branches row,
-// branch_commits (purged first on a force-update, since populateCommitLog only
-// inserts), then notifyCommit (commit_log, index, observers). It is the body
+// branch_commits (purged first on a force-update, since PopulateCommitLog only
+// inserts), then NotifyCommit (commit_log, index, observers). It is the body
 // reconcileMain has always run, factored out so receive-pack registers a
 // pushed branch through the SAME steps; it is name-neutral and logs nothing —
 // each caller words its own log lines.
 //
-// The caller holds lockBranch(branch). Every step after SetReference is
+// The caller holds LockBranch(branch). Every step after SetReference is
 // context-bound SQL, so a caller whose ctx can be cancelled (a request) must
-// pass one that cannot: a cancellation between the ref move and notifyCommit
+// pass one that cannot: a cancellation between the ref move and NotifyCommit
 // is the torn state kb/invariants/store/notify-commit-single-chokepoint
 // forbids.
 func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash plumbing.Hash) (MainReconcileResult, advanceMove, error) {
@@ -320,7 +320,7 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 	}
 	// The old chain is no longer reachable from the branch. Purge stale
 	// branch_commits rows before repopulating; otherwise Verify reports
-	// unreachable rows because populateCommitLog only INSERTs.
+	// unreachable rows because PopulateCommitLog only INSERTs.
 	if err := rh.RepopulateBranch(ctx, branch); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("repopulate commit_log after force-update: %w", err)
 	}
@@ -345,7 +345,7 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 //
 // The watermark is updated to current local main on both paths so it
 // always has a usable base for a future rewind. Both paths hold
-// rh.lockBranch(agentBranch) for the entire body, including the
+// rh.LockBranch(agentBranch) for the entire body, including the
 // watermark write.
 func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy, mainRewound bool) (AgentReconcileResult, error) {
 	if mainRewound {

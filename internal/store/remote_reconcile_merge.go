@@ -19,7 +19,7 @@ import (
 )
 
 // reconcileAgentMerge merges local upstreamMain into agentBranch. Holds
-// rh.lockBranch(agentBranch) for the entire body so the watermark write
+// rh.LockBranch(agentBranch) for the entire body so the watermark write
 // is atomic with the merge — without this, a concurrent Sync could
 // observe (or write) a stale watermark between the merge and the write.
 //

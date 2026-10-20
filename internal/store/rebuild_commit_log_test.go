@@ -11,7 +11,7 @@ import (
 // TestRebuild_RepopulatesCommitLogAuthorFromGit guards that :rebuild actually
 // rebuilds commit_log from git — not just facts/embeddings/graph. The trap:
 // CommitLogApply dedups on branch_commits and commit_log uses INSERT OR IGNORE,
-// so re-running populateCommitLog over rows that already exist is a no-op and
+// so re-running PopulateCommitLog over rows that already exist is a no-op and
 // leaves stale data (e.g. rows written before author_name was captured) in
 // place. Rebuild must clear this branch's rows and re-walk so the author
 // identity is re-read from the source of truth.

@@ -23,7 +23,7 @@ func trailerStore(t *testing.T) *Service {
 	return svc
 }
 
-// appendTrailers writes the set as the LAST paragraph, in the fixed key
+// AppendTrailers writes the set as the LAST paragraph, in the fixed key
 // order, omitting empty keys; a zero set leaves the message alone; the stamped
 // value wins over a body line of the same key (TrailerValue: last paragraph,
 // last occurrence). Sabotage: append without the blank line (the body's
@@ -50,7 +50,7 @@ func TestAppendTrailers_LastParagraphAndReadBack(t *testing.T) {
 // (batchWriteLocked) — and the paragraph is INSIDE the signed payload: the
 // signature verifies on the stored commit and fails once one trailer
 // character changes. A write with no set on its ctx carries no paragraph.
-// Sabotage: stamp after storeCommit (the altered-trailer check passes); drop
+// Sabotage: stamp after StoreCommit (the altered-trailer check passes); drop
 // one of the three sites (its commit has no paragraph).
 func TestWithTrailers_StampedAtThreeSitesInsideTheSignature(t *testing.T) {
 	svc := trailerStore(t)

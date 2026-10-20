@@ -83,7 +83,7 @@ func (s *Service) OpenRepo() error {
 	if err := BackfillCommitParents(context.Background(), s.rh); err != nil {
 		log.Warn().Err(err).Msg("commit_parents: backfill failed")
 	}
-	// History is derived before the repo serves anything (openHistory); a
+	// History is derived before the repo serves anything (OpenHistory); a
 	// failure keeps it closed, and the next open retries.
 	if err := s.rh.OpenHistory(context.Background()); err != nil {
 		return fmt.Errorf("OpenRepo: history: %w", err)
@@ -184,7 +184,7 @@ func (s *Service) InitRepoWithUpstream(ctx context.Context, initFiles map[string
 	if _, err := s.rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return fmt.Errorf("InitRepo: ensure upstream branch %q: %w", upstreamMain, err)
 	}
-	// History is derived before the repo serves anything (openHistory); a
+	// History is derived before the repo serves anything (OpenHistory); a
 	// failure keeps it closed, and the next open retries.
 	if err := s.rh.OpenHistory(ctx); err != nil {
 		return fmt.Errorf("InitRepo: history: %w", err)
@@ -437,7 +437,7 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 	}
 
 	// Publish the freshly-initialised repo on the handler BEFORE
-	// configureRemote — that helper reaches into rh.repo to read and rewrite
+	// ConfigureRemote — that helper reaches into rh.repo to read and rewrite
 	// the git config, and would panic on nil otherwise. The rest of
 	// InitFromRemote also depends on rh.repo being live for the remote-
 	// tracking ref lookups below.
@@ -557,7 +557,7 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 	}
 
 	log.Info().Str("branch", agentBranch).Str("upstream", upstreamMain).Str("origin", originURL).Msg("git store initialized from remote")
-	// s.rh.repo is already published (set earlier so configureRemote could run).
+	// s.rh.repo is already published (set earlier so ConfigureRemote could run).
 	s.fi.auth = auth
 	if _, err := s.rh.EnsureBranch(ctx, agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: ensure agent branch %q: %w", agentBranch, err)
@@ -565,7 +565,7 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 	if _, err := s.rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: ensure upstream branch %q: %w", upstreamMain, err)
 	}
-	// History is derived before the repo serves anything (openHistory); a
+	// History is derived before the repo serves anything (OpenHistory); a
 	// failure keeps it closed, and the next open retries.
 	if err := s.rh.OpenHistory(ctx); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: history: %w", err)
@@ -667,7 +667,7 @@ func (s *Service) InitSubscription(ctx context.Context, originURL string, auth t
 		return "", fmt.Errorf("InitSubscription: %w", err)
 	}
 
-	// Publish before configureRemote, which reads and rewrites rh.repo's config.
+	// Publish before ConfigureRemote, which reads and rewrites rh.repo's config.
 	s.rh.SetRepository(repo)
 	if err := s.rh.ConfigureRemote(originURL, upstreamMain, ""); err != nil {
 		return "", fmt.Errorf("InitSubscription: configure remote: %w", err)
@@ -693,7 +693,7 @@ func (s *Service) InitSubscription(ctx context.Context, originURL string, auth t
 	if _, err := s.rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", fmt.Errorf("InitSubscription: ensure upstream branch %q: %w", upstreamMain, err)
 	}
-	// History is derived before the repo serves anything (openHistory); a
+	// History is derived before the repo serves anything (OpenHistory); a
 	// failure keeps it closed, and the next open retries.
 	if err := s.rh.OpenHistory(ctx); err != nil {
 		return "", fmt.Errorf("InitSubscription: history: %w", err)
@@ -814,7 +814,7 @@ func (s *Service) initFromEmptyRemote(ctx context.Context, repo *gogit.Repositor
 	if _, err := s.rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote ensure upstream branch %q: %w", upstreamMain, err)
 	}
-	// History is derived before the repo serves anything (openHistory); a
+	// History is derived before the repo serves anything (OpenHistory); a
 	// failure keeps it closed, and the next open retries.
 	if err := s.rh.OpenHistory(ctx); err != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote history: %w", err)

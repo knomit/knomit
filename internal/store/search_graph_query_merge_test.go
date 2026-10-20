@@ -13,7 +13,7 @@ import (
 //
 // Mechanism: DERIVED_FROM edges are anchored to the fact's original
 // content-write commit (source_commit / target_commit on the feature branch),
-// but resolveActiveCommitForPath resolves HEAD to the MERGE commit — commit_log
+// but ResolveActiveCommitForPath resolves HEAD to the MERGE commit — commit_log
 // records the merge as an add/modify of the path (fact_history diffs the merge
 // against its first parent, which lacks the fact). The old queries filtered
 // edges strictly by `r.source_commit = mergeCommit`, which never matches the

@@ -53,7 +53,7 @@ func (e *ForeignLineageError) Is(target error) bool { return target == ErrForeig
 // of a peer merge made in the web UI). A store that has no signer cannot know
 // its own key: every such commit is refused.
 func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
-	// The own key is the key this store signs with (commitSigner: the store's
+	// The own key is the key this store signs with (CommitSigner: the store's
 	// signer, or a test binary's fallback). No signer means no own key.
 	own := map[string]bool{}
 	if signer, err := rh.CommitSigner(); err == nil {
@@ -77,7 +77,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 			return err
 		}
 	}
-	// COLLECT first, JUDGE second. walkHistory is post-order — a commit is
+	// COLLECT first, JUDGE second. WalkHistory is post-order — a commit is
 	// visited after its parents — so judging inside the visit would reach a
 	// merged-in commit before the own merge that vouches for it.
 	type seenCommit struct {

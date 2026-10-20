@@ -27,7 +27,7 @@ func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string, strateg
 	return err
 }
 
-// mergeIntoBranch acquires rh.lockBranch(dst) and calls
+// mergeIntoBranch acquires rh.LockBranch(dst) and calls
 // mergeIntoBranchLocked. Callers that already hold the lock (e.g.
 // reconcileAgentMerge, which holds it for the watermark write) should
 // call mergeIntoBranchLocked directly.
@@ -44,7 +44,7 @@ func (rh *repoHandler) mergeIntoBranch(
 // resolution is per-path and says nothing about any other path.
 //
 // It takes the DST lock, like mergeIntoBranch, and carries it through
-// notifyCommit (invariants/store/branch-lock-spans-notify).
+// NotifyCommit (invariants/store/branch-lock-spans-notify).
 func (rh *repoHandler) mergeIntoBranchResolved(
 	ctx context.Context,
 	src, dst string,
@@ -58,7 +58,7 @@ func (rh *repoHandler) mergeIntoBranchResolved(
 
 // mergeIntoBranchLocked merges src into dst using the given conflict strategy
 // and returns a structured AgentReconcileResult describing what happened.
-// Caller must hold rh.lockBranch(dst).
+// Caller must hold rh.LockBranch(dst).
 //
 // Modes:
 //   - ModeNoop:  src is ancestor of dst (or hashes match); dst unchanged.

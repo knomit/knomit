@@ -62,7 +62,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	}
 
 	// Register the agent branch in target's branches table so the WriteFact →
-	// notifyCommit → CommitLogApply path can find it. The cloned target store
+	// NotifyCommit → CommitLogApply path can find it. The cloned target store
 	// has only git refs at this point; CloneFrom does not populate the branches
 	// table.
 	if _, err := target.rh.EnsureBranch(ctx, cfg.AgentBranch, "refs/heads/"+cfg.AgentBranch); err != nil {
@@ -70,7 +70,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	}
 
 	// The target is a raw clone: its history is derived here, as it would be
-	// at open (openHistory), before the first write.
+	// at open (OpenHistory), before the first write.
 	if err := target.rh.OpenHistory(ctx); err != nil {
 		return nil, fmt.Errorf("Replay: history: %w", err)
 	}

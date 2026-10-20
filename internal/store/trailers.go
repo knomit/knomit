@@ -101,13 +101,13 @@ type trailersCtxKey struct{}
 // replay and reconcile commits are built elsewhere and never see it: a
 // transport commit carries no trailer and strips none. The ONE exception is
 // an experiment's own merge (CommitExperiment, SyncExperiment), which opts the
-// ctx set in explicitly through mergeOpts.trace (appendTrailersToParagraph).
+// ctx set in explicitly through mergeOpts.trace (AppendTrailersToParagraph).
 //
 // The transport is a ctx value (precedent: WithPrecomputedEmbeddings) so the
 // four FactIndex write methods and their callers keep their signatures; the
 // MCP handlers pass their ctx to the write, which is how a script host stamps
 // a write it makes through an UNCHANGED handler. A caller that sets nothing
-// gets no paragraph. The value survives context.WithoutCancel (notifyCommit
+// gets no paragraph. The value survives context.WithoutCancel (NotifyCommit
 // drops cancellation, not values).
 func WithTrailers(ctx context.Context, t Trailers) context.Context {
 	return context.WithValue(ctx, trailersCtxKey{}, t)
@@ -143,13 +143,13 @@ func WithAgentTrace(ctx context.Context, t Trailers) (context.Context, error) {
 	return WithTrailers(ctx, t), nil
 }
 
-// trailersFromContext is the read side of WithTrailers; a zero set when none.
+// TrailersFromContext is the read side of WithTrailers; a zero set when none.
 func TrailersFromContext(ctx context.Context) Trailers {
 	t, _ := ctx.Value(trailersCtxKey{}).(Trailers)
 	return t
 }
 
-// appendTrailers returns message with the non-empty keys of t appended as the
+// AppendTrailers returns message with the non-empty keys of t appended as the
 // LAST paragraph (git's trailer convention, and what TrailerValue reads: the
 // last paragraph, last occurrence wins — so a body that happened to end with
 // a `Knomit-Trace:` line is overridden by the stamped value, never the other
@@ -165,7 +165,7 @@ func AppendTrailers(message string, t Trailers) string {
 }
 
 // lines renders the non-empty keys of t, one `Key: value` line each, in the
-// fixed order appendTrailers documents.
+// fixed order AppendTrailers documents.
 func (t Trailers) lines() string {
 	var out string
 	if t.Trace != "" {
@@ -196,13 +196,13 @@ func (t Trailers) lines() string {
 	return out
 }
 
-// appendTrailersToParagraph is appendTrailers for a message that may ALREADY
+// AppendTrailersToParagraph is AppendTrailers for a message that may ALREADY
 // end with a trailer paragraph — a merge commit's conflict record (key per
 // path, appendTrailerLines). The trace lines join THAT paragraph, after the
 // record, instead of opening a new one: both TrailerValue (Knomit-Trace) and
 // TrailerValues (the conflict record) read only the LAST paragraph, so a
 // second paragraph would hide the record from its readers. With no trailer
-// paragraph it is appendTrailers.
+// paragraph it is AppendTrailers.
 //
 // Used only by an experiment's own merges (CommitExperiment, SyncExperiment),
 // which opt in through mergeOpts.trace; every other merge stays unstamped.

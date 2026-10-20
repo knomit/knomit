@@ -35,7 +35,7 @@ func TestConfigureRemote_WritesTwoRefspecs(t *testing.T) {
 }
 
 // TestConfigureRemote_IsIdempotent covers the early-return path: calling
-// configureRemote twice with identical args must leave exactly two refspecs
+// ConfigureRemote twice with identical args must leave exactly two refspecs
 // (no duplication) and must not error.
 func TestConfigureRemote_IsIdempotent(t *testing.T) {
 	dir := t.TempDir()
@@ -576,7 +576,7 @@ func TestReconcileMain_NoOpWhenAlreadyAtOrigin(t *testing.T) {
 //
 // When the inconsistency is present, the Sync flow used to fail mid-cycle:
 // reconcileMain returned ModeNoop without touching the SQL table, then
-// reconcileAgent → mergeIntoBranchLocked → branchID("main") errored with
+// reconcileAgent → mergeIntoBranchLocked → BranchID("main") errored with
 // "branch \"main\": branch not found", killing the reconcile loop.
 //
 // reconcileMain must heal the SQL table on every success path — not only
