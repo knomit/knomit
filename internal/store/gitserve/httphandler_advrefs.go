@@ -1,4 +1,4 @@
-package store
+package gitserve
 
 import (
 	"context"
@@ -53,7 +53,7 @@ type rootCommitCache struct {
 // once per distinct tip. A failure is NOT cached: it is retried on the next
 // advertisement, and reported as "" so the caller can advertise nothing rather
 // than a wrong identity.
-func (c *rootCommitCache) rootFor(rh *repoHandler, branch string, tip plumbing.Hash) string {
+func (c *rootCommitCache) rootFor(rh *host, branch string, tip plumbing.Hash) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.root != "" && c.tip == tip {
@@ -87,7 +87,7 @@ var errUpstreamMissing = errors.New("knomit: consensus branch does not exist in 
 // The returned set holds every advertised tip; upload-pack refuses wants
 // outside it, which is git's own uploadpack.allowAnySHA1InWant=false default
 // and what stops a hidden ref from being fetchable by hash.
-func buildAdvRefs(rh *repoHandler, upstream string, roots *rootCommitCache) (*packp.AdvRefs, map[plumbing.Hash]struct{}, error) {
+func buildAdvRefs(rh *host, upstream string, roots *rootCommitCache) (*packp.AdvRefs, map[plumbing.Hash]struct{}, error) {
 	ar := packp.NewAdvRefs()
 	tips := map[plumbing.Hash]struct{}{}
 

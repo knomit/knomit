@@ -30,6 +30,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/gitserve"
 )
 
 // The pusher every test pushes as. Branch names carry no ownership (D18):
@@ -84,8 +85,8 @@ func newPushHostWith(t *testing.T, files map[string]string, facts int) *pushHost
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 		if cancelReg {
-			pushRegisterHook = cancel
-			defer func() { pushRegisterHook = nil }()
+			gitserve.SetPushRegisterHookForTest(cancel)
+			defer gitserve.SetPushRegisterHookForTest(nil)
 		}
 		svc.Handler().ServeHTTP(w, r.WithContext(WithPushPolicy(ctx, pol)))
 	}))
@@ -535,9 +536,9 @@ func TestReceivePack_AdvertisementRefusals(t *testing.T) {
 	t.Cleanup(srv.Close)
 	err = p.push(srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), errNoPushPolicy)
+	require.Contains(t, err.Error(), gitserve.NoPushPolicyTextForTest())
 	out := rawPush(t, srv.URL, &packp.Command{Name: plumbing.NewBranchReferenceName(peerBranch), New: c.Hash})
-	require.Contains(t, out, errNoPushPolicy)
+	require.Contains(t, out, gitserve.NoPushPolicyTextForTest())
 	require.Equal(t, plumbing.ZeroHash, h.ref(peerBranch))
 }
 
@@ -639,16 +640,15 @@ func TestReceivePack_NewCommitWalkIsProportionalToThePush(t *testing.T) {
 	c1 := p.commit(p.head(), nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	c2 := p.commit(c1, nil, "kb/notes/y.md", testFactBody("y", 0.9, nil))
 
-	q := newQuarantine(h.svc.rh.Storer())
+	var objs []plumbing.EncodedObject
 	for _, c := range []*object.Commit{c1, c2} {
 		for _, h := range []plumbing.Hash{c.Hash, c.TreeHash} {
 			o, err := p.repo.Storer.EncodedObject(plumbing.AnyObject, h)
 			require.NoError(t, err)
-			_, err = q.SetEncodedObject(o)
-			require.NoError(t, err)
+			objs = append(objs, o)
 		}
 	}
-	commits, visited, err := q.newCommits(c2.Hash, nil)
+	commits, visited, err := gitserve.NewCommitsForTest(h.svc.rh.Storer(), objs, c2.Hash)
 	require.NoError(t, err)
 	require.Len(t, commits, 2)
 	require.Equal(t, c2.Hash, commits[0].Hash)
@@ -665,15 +665,15 @@ func TestReceivePack_RegisterHoldsBranchLock(t *testing.T) {
 	c := p.commit(p.head(), nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	p.setBranch("work", c)
 	held := false
-	pushRegisterHook = func() {
+	gitserve.SetPushRegisterHookForTest(func() {
 		mu, ok := h.svc.rh.BranchLockForTest(peerBranch)
 		if ok && !mu.TryRLock() {
 			held = true
 		} else if ok {
 			mu.RUnlock()
 		}
-	}
-	t.Cleanup(func() { pushRegisterHook = nil })
+	})
+	t.Cleanup(func() { gitserve.SetPushRegisterHookForTest(nil) })
 	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch))
 	require.True(t, held, "register must hold lockBranch(peer) at the point it promotes and moves the ref")
 }

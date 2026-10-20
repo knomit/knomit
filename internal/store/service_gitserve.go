@@ -2,6 +2,8 @@ package store
 
 import (
 	"net/http"
+
+	"knomit/internal/store/gitserve"
 )
 
 // Handler returns an http.Handler implementing the Smart HTTP git protocol
@@ -17,7 +19,7 @@ import (
 //   - POST /git-receive-pack                   — accept a push
 func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
-		s.handler = newGitHTTPHandler(s.rh, s.UpstreamBranch)
+		s.handler = gitserve.NewHandler(s.rh.Repo, s.rh.syncRepo, s.UpstreamBranch)
 	})
 	return s.handler
 }

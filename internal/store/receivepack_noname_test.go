@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/gitserve"
 )
 
 // D18/P1b: a branch's NAME carries no ownership. An enrolled pusher whose
@@ -87,19 +88,19 @@ func TestReceivePack_UpstreamRefusedEvenUnderAgentPrefix(t *testing.T) {
 	ctx := context.Background()
 	const upstream = "agent/consensus"
 	require.NoError(t, h.svc.Branches().CreateBranch(ctx, upstream, "main"))
-	rp := &receivePack{rh: h.svc.rh, upstream: func() string { return upstream }}
+	upstreamFn := func() string { return upstream }
 	req := packp.NewReferenceUpdateRequest()
 	req.Commands = []*packp.Command{{Name: plumbing.NewBranchReferenceName(upstream), Old: h.ref(upstream), New: h.ref("main")}}
 	pctx := WithPushPolicy(ctx, PushPolicy{Pusher: pushFP, OwnBranch: hostBranch})
 
-	cmd, refusal := rp.judgeRequest(pctx, req)
+	cmd, refusal := gitserve.JudgeRequestForTest(pctx, h.svc.rh.Repo, h.svc.rh.syncRepo, upstreamFn, req)
 	require.Nil(t, cmd)
 	require.Equal(t, "knomit: refs/heads/agent/consensus is this repo's upstream branch; it is never pushed", refusal)
 
 	// Control: another agent/ ref passes the same request rules.
 	req.Commands[0].Name = plumbing.NewBranchReferenceName("agent/other")
 	req.Commands[0].Old = plumbing.ZeroHash
-	cmd, refusal = rp.judgeRequest(pctx, req)
+	cmd, refusal = gitserve.JudgeRequestForTest(pctx, h.svc.rh.Repo, h.svc.rh.syncRepo, upstreamFn, req)
 	require.Empty(t, refusal)
 	require.NotNil(t, cmd)
 }

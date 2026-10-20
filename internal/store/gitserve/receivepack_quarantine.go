@@ -1,4 +1,4 @@
-package store
+package gitserve
 
 import (
 	"errors"

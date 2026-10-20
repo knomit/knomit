@@ -400,7 +400,7 @@ func (ri *Index) reconcileNowSwitched(ctx context.Context, agentBranch, upstream
 // a guarantee about what the origin applies: a push that hits network_timeout
 // releases pushMu while the server may still apply it. Against a knomit host
 // the guard for that case is the host's compare-and-set on the advertised old
-// value (httphandler_receivepack.go, "moved since it was advertised").
+// value (gitserve/httphandler_receivepack.go, "moved since it was advertised").
 //
 // After a successful push go-git sets refs/remotes/origin/<branch> to the hash
 // it pushed (S, the command's New) through the configured fetch spec, so the

@@ -18,6 +18,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/gitserve"
 )
 
 // servedStore seeds n fact commits on "main" (the served upstream) and serves it.
@@ -192,9 +194,9 @@ func TestGitHandler_BuildsTheObjectSetOncePerFetch(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	before := objectBuilds.Load()
+	before := gitserve.ObjectBuildsForTest()
 	gitOut(t, work, "pull", "-q", "--ff-only")
-	builds := objectBuilds.Load() - before
+	builds := gitserve.ObjectBuildsForTest() - before
 
 	require.FileExists(t, filepath.Join(work, "kb/f-99.md"), "the pull must still deliver everything")
 	require.Equal(t, int64(1), builds,
@@ -208,9 +210,9 @@ func TestGitHandler_FullCloneBuildsTheObjectSetOnce(t *testing.T) {
 		t.Skip("git not installed")
 	}
 	_, srv := servedStore(t, 20)
-	before := objectBuilds.Load()
+	before := gitserve.ObjectBuildsForTest()
 	gitOut(t, "", "clone", "-q", srv.URL, t.TempDir())
-	require.Equal(t, int64(1), objectBuilds.Load()-before)
+	require.Equal(t, int64(1), gitserve.ObjectBuildsForTest()-before)
 }
 
 // uploadPackRaw POSTs a hand-built upload-pack request. A real git client
