@@ -1,8 +1,7 @@
-package store
+package sessions
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -103,16 +102,4 @@ func TestPipelineSession_AdvancePhase_UpdatesTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, got.UpdatedAt, createdTS,
 		"updated_at must not regress after a phase advance")
-}
-
-// newPhaseTestService opens a fresh SQLite-backed Service in a temp dir and
-// initialises a single repo with one branch suitable for pipeline tests.
-func newPhaseTestService(t *testing.T) *Service {
-	t.Helper()
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
-	return svc
 }

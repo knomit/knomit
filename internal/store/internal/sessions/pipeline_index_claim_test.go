@@ -1,4 +1,4 @@
-package store
+package sessions
 
 import (
 	"context"
@@ -49,7 +49,7 @@ func TestAnswerPipelineWorkItem_ClaimsExactlyOnce(t *testing.T) {
 	require.Nil(t, next, "an answered item must no longer be served")
 
 	var stored string
-	require.NoError(t, svc.Pipeline().(*pipelineIndex).sessionDB.
+	require.NoError(t, svc.Pipeline().sessionDB.
 		QueryRowContext(ctx, `SELECT response FROM pipeline_work_items WHERE id = ?`, item.ID).
 		Scan(&stored))
 	require.Equal(t, "first", stored, "the claim winner's response must be the one stored")

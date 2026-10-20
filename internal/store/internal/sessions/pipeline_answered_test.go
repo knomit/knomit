@@ -1,8 +1,7 @@
-package store
+package sessions
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,10 +13,7 @@ import (
 // to read an answer back out of a session at all.
 func TestAnsweredDistillResponses(t *testing.T) {
 	ctx := context.Background()
-	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+	svc := newPhaseTestService(t)
 
 	pi := svc.Pipeline()
 	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
@@ -67,10 +63,7 @@ func TestAnsweredDistillResponses(t *testing.T) {
 // because completeSession calls this on every session including prune-only ones.
 func TestAnsweredDistillResponses_EmptyWhenNoneAnswered(t *testing.T) {
 	ctx := context.Background()
-	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { svc.Close() })
-	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+	svc := newPhaseTestService(t)
 
 	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)

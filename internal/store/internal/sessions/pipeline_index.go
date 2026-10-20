@@ -1,4 +1,4 @@
-package store
+package sessions
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"knomit/internal/store/internal/sqlite"
 )
 
 // PipelineSession represents an active pipeline session for a tool on a branch.
@@ -114,23 +116,23 @@ type PipelineWorkItem struct {
 	CreatedAt  string
 }
 
-// pipelineIndex spans two databases. Watermark methods (durable progress: how
+// PipelineIndex spans two databases. Watermark methods (durable progress: how
 // far review/hypothesize has processed git history) use the MAIN db (db).
 // Session and work-item methods (ephemeral, in-flight work-stealing state) use
 // the separate session DB (sessionDB). Session methods use sessionDB DIRECTLY
 // and never conn(ctx, …) / beginTxIfNeeded(ctx, …): a ctx-carried *sql.Tx is
 // bound to the MAIN db, so routing session SQL through it would hit the wrong
 // database (where these tables no longer exist).
-type pipelineIndex struct {
+type PipelineIndex struct {
 	db        *sql.DB // the MAIN db (the repo database)
 	sessionDB *sql.DB
 }
 
 // GetPipelineWatermark returns the last-processed commit hash for the given tool+branch,
 // or "" if no watermark has been set.
-func (pi *pipelineIndex) GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error) {
+func (pi *PipelineIndex) GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error) {
 	var hash string
-	err := conn(ctx, pi.db).QueryRowContext(ctx,
+	err := sqlite.Conn(ctx, pi.db).QueryRowContext(ctx,
 		`SELECT commit_hash FROM pipeline_watermarks WHERE tool = ? AND branch = ?`, tool, branch,
 	).Scan(&hash)
 	if err == sql.ErrNoRows {
@@ -143,8 +145,8 @@ func (pi *pipelineIndex) GetPipelineWatermark(ctx context.Context, tool, branch 
 }
 
 // SetPipelineWatermark upserts the last-processed commit hash for a tool+branch.
-func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error {
-	_, err := conn(ctx, pi.db).ExecContext(ctx,
+func (pi *PipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error {
+	_, err := sqlite.Conn(ctx, pi.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO pipeline_watermarks(tool, branch, commit_hash) VALUES (?, ?, ?)`,
 		tool, branch, hash,
 	)
@@ -162,7 +164,7 @@ func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 // it is the request boundary's job (internal/mcp/actor.go), which is the only
 // layer that knows what the claim is made of. Empty is a legitimate value: an
 // in-process caller has no request to attribute to.
-func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error) {
+func (pi *PipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error) {
 	return pi.createPipelineSession(ctx, tool, branch, createdBy, "", anyActive, time.Time{})
 }
 
@@ -176,11 +178,11 @@ const anyActive = "\x00any"
 // last_used_at to be before it, for a displacement decided on staleness. Any other active session fails the call with
 // ErrPipelineSlotChanged and writes nothing, so a caller that decided from a
 // read of the slot never displaces a session it did not see.
-func (pi *pipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
+func (pi *PipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
 	return pi.createPipelineSession(ctx, tool, branch, createdBy, startKey, replace, idleBefore)
 }
 
-func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
+func (pi *PipelineIndex) createPipelineSession(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Own transaction on the session DB. We deliberately do NOT consult any
@@ -291,7 +293,7 @@ func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
 }
 
 // GetPipelineSession returns the session with the given ID, or nil if not found.
-func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
+func (pi *PipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
 	s, err := scanPipelineSession(pi.sessionDB.QueryRowContext(ctx,
 		`SELECT `+pipelineSessionColumns+` FROM pipeline_sessions WHERE id = ?`, id))
 	if err == sql.ErrNoRows {
@@ -305,7 +307,7 @@ func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 
 // ActivePipelineSession returns the tool+branch's active session, or nil when
 // there is none.
-func (pi *pipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
+func (pi *PipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
 	s, err := scanPipelineSession(pi.sessionDB.QueryRowContext(ctx,
 		`SELECT `+pipelineSessionColumns+` FROM pipeline_sessions
 		 WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`, tool, branch))
@@ -321,7 +323,7 @@ func (pi *pipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch
 // MarkPipelineSessionPlanned records that a session's planning has queued its
 // work, and bumps its heartbeat: planning time is not idle time. marked=false
 // means the session was no longer active: displaced while it planned.
-func (pi *pipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) (marked bool, err error) {
+func (pi *PipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) (marked bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET planning = 0, last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
@@ -340,7 +342,7 @@ func (pi *pipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id stri
 // Used when a start fails after creating its session, so the slot is not held
 // by a session nobody will ever plan. Once planned, anyone may have resumed
 // it, so the abandon is then a no-op.
-func (pi *pipelineIndex) AbandonPlanningPipelineSession(ctx context.Context, id string) error {
+func (pi *PipelineIndex) AbandonPlanningPipelineSession(ctx context.Context, id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE id = ? AND status = 'active' AND planning = 1`,
@@ -353,7 +355,7 @@ func (pi *pipelineIndex) AbandonPlanningPipelineSession(ctx context.Context, id 
 // ResumePipelineSession bumps an active, planned session's heartbeat for a
 // resuming caller. resumed=false means it is no longer resumable: it completed, was
 // displaced, or is still planning.
-func (pi *pipelineIndex) ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error) {
+func (pi *PipelineIndex) ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active' AND planning = 0`,
@@ -377,7 +379,7 @@ func (pi *pipelineIndex) ResumePipelineSession(ctx context.Context, id string) (
 // The flag is tool-agnostic: both knomit_review and knomit_hypothesize run on
 // the same Pipeline engine and both accept a scope filter, so both set and
 // honour it. Nothing here is hypothesize-specific.
-func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id string) error {
+func (pi *PipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET scoped = 1, updated_at = ? WHERE id = ?`,
@@ -396,7 +398,7 @@ func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id strin
 // what guarantees the reflect step is enqueued at most once per session,
 // replacing the in-memory `reflectChecked` map that was lost between MCP
 // calls.
-func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
+func (pi *PipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET phase = ?, advancing = 1, updated_at = ? WHERE id = ? AND status = 'active' AND phase = ? AND advancing = 0
@@ -416,7 +418,7 @@ func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, fr
 
 // FinishPipelineSessionAdvance records that a won phase advance's hook has
 // returned, whether it succeeded or failed.
-func (pi *pipelineIndex) FinishPipelineSessionAdvance(ctx context.Context, id string) error {
+func (pi *PipelineIndex) FinishPipelineSessionAdvance(ctx context.Context, id string) error {
 	if _, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET advancing = 0 WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("FinishPipelineSessionAdvance: %w", err)
@@ -426,7 +428,7 @@ func (pi *pipelineIndex) FinishPipelineSessionAdvance(ctx context.Context, id st
 
 // FinishPipelineWorkItem records that a claimed item's apply has returned,
 // whether it succeeded or failed.
-func (pi *pipelineIndex) FinishPipelineWorkItem(ctx context.Context, id int64) error {
+func (pi *PipelineIndex) FinishPipelineWorkItem(ctx context.Context, id int64) error {
 	if _, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_work_items SET applying = 0 WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("FinishPipelineWorkItem: %w", err)
@@ -436,7 +438,7 @@ func (pi *pipelineIndex) FinishPipelineWorkItem(ctx context.Context, id int64) e
 
 // ApplyingPipelineWorkItem returns the id of an item of this session that is
 // claimed and still being applied, or 0.
-func (pi *pipelineIndex) ApplyingPipelineWorkItem(ctx context.Context, sessionID string) (int64, error) {
+func (pi *PipelineIndex) ApplyingPipelineWorkItem(ctx context.Context, sessionID string) (int64, error) {
 	var id int64
 	err := pi.sessionDB.QueryRowContext(ctx,
 		`SELECT id FROM pipeline_work_items WHERE session_id = ? AND applying = 1 ORDER BY id LIMIT 1`,
@@ -453,7 +455,7 @@ func (pi *pipelineIndex) ApplyingPipelineWorkItem(ctx context.Context, sessionID
 // CompletePipelineSession marks an ACTIVE session completed. completed=false
 // means it was no longer active (displaced or already completed), and the
 // caller must not act on its completion, the watermark advance above all.
-func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string) (completed bool, err error) {
+func (pi *PipelineIndex) CompletePipelineSession(ctx context.Context, id string) (completed bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'active' AND advancing = 0`,
@@ -470,7 +472,7 @@ func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string)
 }
 
 // InsertPipelineWorkItem inserts a new work item into the pipeline_work_items table.
-func (pi *pipelineIndex) InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error {
+func (pi *PipelineIndex) InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := pi.sessionDB.ExecContext(ctx,
 		`INSERT INTO pipeline_work_items(session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at)
@@ -485,7 +487,7 @@ func (pi *pipelineIndex) InsertPipelineWorkItem(ctx context.Context, item Pipeli
 
 // NextPipelineWorkItem returns the highest-priority unanswered work item for the given
 // session, or nil if all items have been answered.
-func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error) {
+func (pi *PipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error) {
 	// Heartbeat: serving work keeps the session alive against the idle reaper.
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := pi.sessionDB.ExecContext(ctx,
@@ -530,7 +532,7 @@ func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 // loses the claim and its decisions are never applied a second time, so a
 // duplicate submission can no longer mint a second copy of the same
 // synthesized facts.
-func (pi *pipelineIndex) AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (bool, error) {
+func (pi *PipelineIndex) AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (bool, error) {
 	res, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_work_items SET response = ?, applying = 1 WHERE id = ? AND response IS NULL`,
 		response, id,
@@ -553,7 +555,7 @@ func (pi *pipelineIndex) AnswerPipelineWorkItem(ctx context.Context, id int64, r
 // Running totals live on the row, not on the engine: the MCP handler builds a
 // fresh Reviewer per continue call, so there is no in-memory home for them (see
 // invariants/synthesize/per-call-objects-no-session-state).
-func (pi *pipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error {
+func (pi *PipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions
@@ -572,7 +574,7 @@ func (pi *pipelineIndex) AddPipelineSessionStats(ctx context.Context, id string,
 }
 
 // PipelineWorkItemStats returns the count of completed and remaining work items for a session.
-func (pi *pipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error) {
+func (pi *PipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error) {
 	err = pi.sessionDB.QueryRowContext(ctx,
 		`SELECT
 			COALESCE(SUM(CASE WHEN response IS NOT NULL THEN 1 ELSE 0 END), 0),
@@ -589,7 +591,7 @@ func (pi *pipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID st
 // PendingPipelineWorkItems returns this session's unanswered items in queue
 // order — the same ordering NextPipelineWorkItem serves, so a caller iterating
 // them sees the queue as the agent will.
-func (pi *pipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]PipelineWorkItem, error) {
+func (pi *PipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]PipelineWorkItem, error) {
 	rows, err := pi.sessionDB.QueryContext(ctx,
 		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
 		 FROM pipeline_work_items
@@ -627,7 +629,7 @@ func (pi *pipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID
 //
 // The response is stored exactly as the agent sent it for distill, so
 // parseDistillResponse applies to these strings unchanged.
-func (pi *pipelineIndex) AnsweredDistillResponses(ctx context.Context, sessionID string) ([]string, error) {
+func (pi *PipelineIndex) AnsweredDistillResponses(ctx context.Context, sessionID string) ([]string, error) {
 	rows, err := pi.sessionDB.QueryContext(ctx,
 		`SELECT response
 		 FROM pipeline_work_items
@@ -659,7 +661,7 @@ func (pi *pipelineIndex) AnsweredDistillResponses(ctx context.Context, sessionID
 // stops a payload edit landing on an item whose answer is already being
 // applied. updated=false means the item was claimed first — a benign no-op,
 // exactly as a lost claim is.
-func (pi *pipelineIndex) UpdatePipelineWorkItemFacts(ctx context.Context, id int64, factsJSON string) (bool, error) {
+func (pi *PipelineIndex) UpdatePipelineWorkItemFacts(ctx context.Context, id int64, factsJSON string) (bool, error) {
 	res, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_work_items SET facts_json = ? WHERE id = ? AND response IS NULL`,
 		factsJSON, id)
@@ -675,7 +677,7 @@ func (pi *pipelineIndex) UpdatePipelineWorkItemFacts(ctx context.Context, id int
 
 // DeletePipelineWorkItem removes an unanswered item. Same CAS guard as the
 // payload rewrite above, for the same reason.
-func (pi *pipelineIndex) DeletePipelineWorkItem(ctx context.Context, id int64) (bool, error) {
+func (pi *PipelineIndex) DeletePipelineWorkItem(ctx context.Context, id int64) (bool, error) {
 	res, err := pi.sessionDB.ExecContext(ctx,
 		`DELETE FROM pipeline_work_items WHERE id = ? AND response IS NULL`, id)
 	if err != nil {

@@ -94,6 +94,11 @@ var sameLayerEdges = map[string]bool{
 	// by the git storer; the sqlite child re-exposes those helpers to the
 	// store's sub-indices rather than redefining them.
 	"store/internal/sqlite -> store/git": true,
+	// The sessions child (ephemeral session DB, pipeline and tool indexes)
+	// sits above sqlite in the store's child order (proposal 4.3: sessions ->
+	// sqlite): the pipeline watermarks live in the MAIN db and are read
+	// through the ctx-carried tx helper (sqlite.Conn).
+	"store/internal/sessions -> store/internal/sqlite": true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,
