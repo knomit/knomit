@@ -188,7 +188,7 @@ func Open(path string) (*Service, error) {
 		ax:            ax,
 		mo:            mo,
 		search:        search,
-		pi:            &pipelineIndex{rh: rh, sessionDB: sessionDB},
+		pi:            &pipelineIndex{db: rh.db, sessionDB: sessionDB},
 		ti:            &toolIndex{db: sessionDB},
 		ri:            ri,
 		dbPath:        canonPath,

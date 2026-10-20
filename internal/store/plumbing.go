@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -323,4 +324,63 @@ func storeTree(s *storegit.Storer, entries []object.TreeEntry) (plumbing.Hash, e
 		return plumbing.ZeroHash, fmt.Errorf("storeTree: store tree: %w", err)
 	}
 	return hash, nil
+}
+
+// treeFileInsensitive walks a git tree matching each path component
+// case-insensitively and returns the file contents.
+func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string) (string, error) {
+	entry, err := treeEntryInsensitive(repo, tree, path)
+	if err != nil {
+		return "", err
+	}
+	blob, err := repo.BlobObject(entry.Hash)
+	if err != nil {
+		return "", err
+	}
+	r, err := blob.Reader()
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	b, err := io.ReadAll(r)
+	return string(b), err
+}
+
+// treeEntryInsensitiveVia is treeEntryInsensitive with the subtree loader
+// supplied, so a caller walking many paths can cache trees.
+func treeEntryInsensitiveVia(load func(plumbing.Hash) (*object.Tree, error), tree *object.Tree, path string) (*object.TreeEntry, error) {
+	parts := strings.Split(path, "/")
+	cur := tree
+	for i, part := range parts {
+		var matched *object.TreeEntry
+		for j := range cur.Entries {
+			if strings.EqualFold(cur.Entries[j].Name, part) {
+				matched = &cur.Entries[j]
+				break
+			}
+		}
+		if matched == nil {
+			return nil, fmt.Errorf("component %q: %w", part, ErrPathNotFound)
+		}
+		if i == len(parts)-1 {
+			return matched, nil
+		}
+		if matched.Mode != filemode.Dir {
+			// A file where the path expects a directory: the path is absent.
+			return nil, fmt.Errorf("component %q is not a directory: %w", part, ErrPathNotFound)
+		}
+		sub, err := load(matched.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("subtree %q: %w", part, err)
+		}
+		cur = sub
+	}
+	return nil, fmt.Errorf("empty path")
+}
+
+// treeEntryInsensitive walks a git tree matching each path component
+// case-insensitively and returns the entry at path. A missing component is
+// ErrPathNotFound.
+func treeEntryInsensitive(repo *gogit.Repository, tree *object.Tree, path string) (*object.TreeEntry, error) {
+	return treeEntryInsensitiveVia(repo.TreeObject, tree, path)
 }

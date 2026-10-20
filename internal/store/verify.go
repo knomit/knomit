@@ -433,22 +433,6 @@ func (s *Service) reportUnindexedBranches(skipped []string) []IntegrityIssue {
 	return issues
 }
 
-// generatedRefPrefix is the branch-name prefix the removed server-side OKF
-// export wrote under refs/heads/. Nothing creates these any more (the producer
-// went in bf9becbe, and TestVerify_NoGeneratedRefs pins that), so a ref matching
-// it on a live home is residue from before that commit.
-//
-// Deliberately narrow. knomit-okf's own fetched source history lives at
-// refs/knomit-okf/source/*, OUTSIDE refs/heads, and is live, deliberate and not
-// matched here — see kb/invariants/okf/source-refs-stay-local.
-const generatedRefPrefix = "okf/"
-
-// isGeneratedRef reports whether a BRANCH NAME (no refs/heads/ prefix) is
-// export residue.
-func isGeneratedRef(branch string) bool {
-	return strings.HasPrefix(branch, generatedRefPrefix)
-}
-
 // PruneResult reports what a prune actually removed — not what it considered.
 type PruneResult struct {
 	// Refs are the branch names whose refs were deleted, sorted. On a partial

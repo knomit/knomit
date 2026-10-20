@@ -504,16 +504,6 @@ func trailerSortKey(line string) string {
 	return path + "\x00" + key
 }
 
-func isTrailerParagraph(p string) bool {
-	for _, line := range strings.Split(p, "\n") {
-		k, _, ok := strings.Cut(line, ": ")
-		if !ok || k == "" || strings.ContainsAny(k, " \t") {
-			return false
-		}
-	}
-	return true
-}
-
 // TrailerValues returns every value of the `Key: value` trailer key in the
 // last paragraph of message, in order — the conflict record has one line per
 // path.

@@ -353,12 +353,3 @@ func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch, upstream
 	}
 	return rh.reconcileAgentMerge(ctx, agentBranch, upstreamMain, strategy)
 }
-
-// shortRefHash returns the first 8 chars of a ref hash for log output, or
-// "<zero>" for the zero hash.
-func shortRefHash(h plumbing.Hash) string {
-	if h == plumbing.ZeroHash {
-		return "<zero>"
-	}
-	return h.String()[:8]
-}

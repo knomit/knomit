@@ -216,3 +216,13 @@ func appendTrailersToParagraph(message string, t Trailers) string {
 	}
 	return appendTrailers(message, t)
 }
+
+func isTrailerParagraph(p string) bool {
+	for _, line := range strings.Split(p, "\n") {
+		k, _, ok := strings.Cut(line, ": ")
+		if !ok || k == "" || strings.ContainsAny(k, " \t") {
+			return false
+		}
+	}
+	return true
+}
