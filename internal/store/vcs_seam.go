@@ -9,6 +9,7 @@ import (
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/vocab"
 )
 
 // This file is the parent's seam to the vcs child (internal/vcs): the git
@@ -34,6 +35,14 @@ type repoHandler struct {
 
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 	r := vcs.New(db, gits)
+	// DropBranchLocked deletes a branch's rows in the tables without an ON
+	// DELETE CASCADE between its branch_facts and branches deletes; the git
+	// layer does not know those tables, the vocab child owns them. Registered
+	// here, where the Repo is built, so no repoHandler exists without it (a
+	// Repo without it refuses every drop).
+	r.SetOnDropBranchRows(func(ctx context.Context, branchID int64) error {
+		return vocab.DropBranchReviewState(ctx, db, branchID)
+	})
 	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r), mergeRepo: merge.NewRepo(r)}
 }
 

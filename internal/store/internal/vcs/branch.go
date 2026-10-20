@@ -72,6 +72,12 @@ type Repo struct {
 	gits   *storegit.Storer
 	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer ssh.Signer        // SSH signer for commit signing (shared)
+
+	// onDropBranchRows deletes the per-branch rows higher clusters keep in
+	// tables without an ON DELETE CASCADE; DropBranchLocked runs it between
+	// the branch_facts and the branches deletes (SetOnDropBranchRows).
+	onDropBranchRows func(ctx context.Context, branchID int64) error
+
 	// writeOnt caches the ontology validateWrite last parsed.
 	writeOnt OntCache
 	// agentID is this instance's persisted agent id (SetAgentID), named by
@@ -297,6 +303,12 @@ func (rh *Repo) DropBranch(ctx context.Context, name string) error {
 // DropBranchLocked is DropBranch's body, for a caller that already holds
 // name's write lock (demotePeer decides under it whether to drop).
 func (rh *Repo) DropBranchLocked(ctx context.Context, name string, id int64) error {
+	// 0. Fail closed, before anything is removed, on a Repo whose builder never
+	// registered the step-2b deletes: running without them would leave the
+	// rows behind and fail step 3 after the ref is gone.
+	if rh.onDropBranchRows == nil {
+		return ErrNoDropBranchRowsHook
+	}
 	// 1. Delete the git ref first. If this fails, we leave the SQLite
 	// state untouched so the operation is retryable — better than a
 	// half-removed state where the ref is gone but rows remain.
@@ -308,16 +320,17 @@ func (rh *Repo) DropBranchLocked(ctx context.Context, name string, id int64) err
 	if _, err := sqlite.Conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, id); err != nil {
 		return fmt.Errorf("drop branch_facts: %w", err)
 	}
-	// 2b. Delete the branch's restatement-shortlist state. These tables
-	// reference branches(id) WITHOUT a cascade, and foreign keys are enforced
-	// (_foreign_keys=1), so leaving them would fail step 3 — after the git ref
-	// is already gone, which is the half-removed state step 1 exists to avoid.
-	// Derived state either way: the next review session rebuilds it.
-	for _, table := range []string{"restatement_pairs", "restatement_cache_state", "restatement_verdicts", "restatement_throttle_state"} {
-		if _, err := sqlite.Conn(ctx, rh.db).ExecContext(ctx,
-			`DELETE FROM `+table+` WHERE branch_id = ?`, id); err != nil {
-			return fmt.Errorf("drop %s: %w", table, err)
-		}
+	// 2b. Delete the rows higher clusters keep per branch in tables that
+	// reference branches(id) WITHOUT a cascade (the review pipeline's derived
+	// state). Foreign keys are enforced (_foreign_keys=1), so leaving them
+	// would fail step 3 — after the git ref is already gone, which is the
+	// half-removed state step 1 exists to avoid. This package does not know
+	// which tables those are: the parent registers the deletes with
+	// SetOnDropBranchRows when it builds the Repo, and they run here, with this
+	// ctx (so inside the caller's transaction when there is one), under the
+	// branch's write lock, and their error is returned unchanged.
+	if err := rh.onDropBranchRows(ctx, id); err != nil {
+		return err
 	}
 	// 3. Delete the branches row. This cascades into branch_commits via
 	// the FK defined in migration 000004.

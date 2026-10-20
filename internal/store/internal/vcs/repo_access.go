@@ -38,6 +38,18 @@ func (rh *Repo) SetName(name string) { rh.name = name }
 // SetOnDrop installs the hook DropBranch runs after a branch is dropped.
 func (rh *Repo) SetOnDrop(f func(context.Context) error) { rh.onDrop = f }
 
+// SetOnDropBranchRows installs the delete DropBranchLocked runs for a branch
+// being dropped, after its branch_facts rows and before its branches row: the
+// rows other clusters keep per branch in tables that reference branches(id)
+// without a cascade. It runs with DropBranchLocked's ctx (inside the caller's
+// transaction, if any) and under the branch's write lock, and its error is
+// returned as DropBranchLocked's. The parent registers it when it builds the
+// Repo; a Repo without one refuses every drop (ErrNoDropBranchRowsHook)
+// before removing anything.
+func (rh *Repo) SetOnDropBranchRows(f func(ctx context.Context, branchID int64) error) {
+	rh.onDropBranchRows = f
+}
+
 // SetIndexManager installs the index manager NotifyCommit syncs after every
 // commit (nil: NotifyCommit skips the sync).
 func (rh *Repo) SetIndexManager(im IndexManager) { rh.im = im }

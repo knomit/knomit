@@ -761,6 +761,25 @@ func (ax *AbstractionIndex) branchID(ctx context.Context, branch string) (int64,
 	return id, nil
 }
 
+// DropBranchReviewState deletes branchID's restatement-shortlist state: the
+// four tables this file owns that reference branches(id) WITHOUT a cascade.
+// The store registers it on the vcs.Repo it builds (SetOnDropBranchRows), and
+// vcs.Repo.DropBranchLocked runs it after the branch_facts delete and before
+// the branches row goes, so the enforced foreign keys cannot fail that delete
+// after the git ref is already gone. It runs on db through the ctx-carried
+// transaction when there is one (sqlite.Conn), exactly as the drop's other
+// statements do, and stops at the first failing table. Derived state either
+// way: the next review session rebuilds it.
+func DropBranchReviewState(ctx context.Context, db *sql.DB, branchID int64) error {
+	for _, table := range []string{"restatement_pairs", "restatement_cache_state", "restatement_verdicts", "restatement_throttle_state"} {
+		if _, err := conn(ctx, db).ExecContext(ctx,
+			`DELETE FROM `+table+` WHERE branch_id = ?`, branchID); err != nil {
+			return fmt.Errorf("drop %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 // ── judge verdicts ────────────────────────────────────────────────────────
 //
 // Two consumers, both of which make a corpus decide its own behaviour from its
