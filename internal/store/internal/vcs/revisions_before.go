@@ -1,19 +1,21 @@
-package store
+package vcs
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"knomit/internal/store/internal/sqlite"
 )
 
-// firstParentChainCTE is the recursive first-parent ancestry walk shared by the
-// sparse-history resolvers (RevisionsBefore, resolveActiveCommitForPath). It
+// FirstParentChainCTE is the recursive first-parent ancestry walk shared by the
+// sparse-history resolvers (RevisionsBefore, ResolveActiveCommitForPath). It
 // binds one parameter — the start commit — and yields (commit_hash, depth) rows
 // newest → oldest along parent_order = 0. Callers append their own
 // `SELECT … FROM fpc JOIN …`. First-parent (not wall-clock) ancestry is the
 // load-bearing semantic — see resolveTargetCommit's doc-comment for the
 // merge-branch rationale.
-const firstParentChainCTE = `
+const FirstParentChainCTE = `
 	WITH RECURSIVE fpc(commit_hash, depth) AS (
 	    SELECT ?, 0
 	    UNION ALL
@@ -30,7 +32,7 @@ type RevisionMeta struct {
 	Action      string // "added" | "modified"
 }
 
-// resolveActiveCommitForPath walks first-parent ancestry of fromCommit on
+// ResolveActiveCommitForPath walks first-parent ancestry of fromCommit on
 // `branch`, returning the most recent commit where `path` was added or
 // modified. Deletions are stepped over: they're write events in the
 // sparse history, not stop conditions.
@@ -43,7 +45,7 @@ type RevisionMeta struct {
 // Go-side cursor callback that could re-enter the *sql.DB pool mid-scan.
 //
 // SCHEMA INVARIANT: branch_commits is populated by full-reachability walk
-// from the branch tip (populateCommitLog uses gogit.LogOrderDefault), so
+// from the branch tip (PopulateCommitLog uses gogit.LogOrderDefault), so
 // any first-parent ancestor of an on-branch commit is itself on-branch.
 // The commit_log JOIN further restricts to indexed commits, so off-branch
 // commits cannot appear in the result set even though the walk itself is
@@ -54,17 +56,17 @@ type RevisionMeta struct {
 //
 // First-parent (not wall-clock) ancestry is the correct semantic — see
 // resolveTargetCommit's doc-comment for the merge-branch rationale.
-// resolveActiveCommitForPath lives on repoHandler (it only needs rh.db) so its
+// ResolveActiveCommitForPath lives on Repo (it only needs rh.db) so its
 // callers — factIndex, searchIndex, factQuery and graphStore — share it directly —
 // factIndex's fallback-before read resolves the last-valid version through the
 // SAME index walk the graph resolver uses, instead of a divergent go-git walk.
-func (rh *repoHandler) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+func (rh *Repo) ResolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	if fromCommit == "" {
 		return "", false, nil
 	}
 
 	var hash string
-	err := conn(ctx, rh.db).QueryRowContext(ctx, firstParentChainCTE+`
+	err := sqlite.Conn(ctx, rh.db).QueryRowContext(ctx, FirstParentChainCTE+`
 		SELECT cl.commit_hash
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash

@@ -15,7 +15,7 @@ import (
 // Only sound for DERIVED_FROM. Every other type is covered by the unique index,
 // so a duplicate would fail here rather than producing the new row this returns.
 func (si *searchIndex) graphInsertEdgeReturningID(ctx context.Context, sourceID, targetID int64, edgeType string) (int64, error) {
-	res, err := conn(ctx, si.rh.db).ExecContext(ctx,
+	res, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		`INSERT INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,
 		sourceID, targetID, edgeType,
 	)
@@ -33,7 +33,7 @@ func (si *searchIndex) graphInsertEdgeReturningID(ctx context.Context, sourceID,
 // table edge_props_text. Key ids are resolved in bulk (see graphPropKeyIDs)
 // rather than a statement pair per key.
 func (si *searchIndex) graphSetEdgeProps(ctx context.Context, edgeID int64, props map[string]string) error {
-	db := conn(ctx, si.rh.db)
+	db := conn(ctx, si.rh.DB())
 	keys := sortedKeys(props)
 	keyIDs, err := graphPropKeyIDs(ctx, db, keys)
 	if err != nil {

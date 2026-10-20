@@ -21,10 +21,10 @@ import (
 // after checking it neither writes (refs, objects, SQLite rows) nor reads a
 // clock or the commit log.
 var changesAllowedCalls = map[string][]string{
-	"changes.go": {
+	"internal/vcs/changes.go": {
 		// git reads
 		"?.CommitObject", "c.IsAncestor", "sinceCommit.IsAncestor", "c.Tree", "root.Tree", "object.DiffTree",
-		"rh.resolveRef", "rh.ontologyRoot", "plumbing.NewHash", "?.String",
+		"rh.ResolveRef", "rh.OntologyRoot", "plumbing.NewHash", "?.String",
 		// pure helpers
 		"NormalizeChangesPrefix", "diffSubtrees", "subtreeOrEmpty", "parseFullHash", "isFact", "isHex",
 		"fact.IsPrivatePath", "strings.Contains", "strings.ToLower", "strings.Trim", "strings.Cut", "sort.Slice",
@@ -131,7 +131,7 @@ type storeSnapshot struct {
 func snapshotStore(t *testing.T, svc *Service) storeSnapshot {
 	t.Helper()
 	snap := storeSnapshot{Refs: map[string]string{}}
-	iter, err := svc.rh.gits.IterReferences()
+	iter, err := svc.rh.Storer().IterReferences()
 	require.NoError(t, err)
 	require.NoError(t, iter.ForEach(func(r *plumbing.Reference) error {
 		snap.Refs[r.Name().String()] = r.Hash().String() + " " + r.Target().String()
@@ -143,8 +143,8 @@ func snapshotStore(t *testing.T, svc *Service) storeSnapshot {
 		snap.Branches = append(snap.Branches, b.Name)
 	}
 	sort.Strings(snap.Branches)
-	require.NoError(t, svc.rh.gits.DB().QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&snap.CommitLog))
-	require.NoError(t, svc.rh.gits.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits`).Scan(&snap.BranchCommitRows))
+	require.NoError(t, svc.rh.Storer().DB().QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&snap.CommitLog))
+	require.NoError(t, svc.rh.Storer().DB().QueryRow(`SELECT COUNT(*) FROM branch_commits`).Scan(&snap.BranchCommitRows))
 	return snap
 }
 

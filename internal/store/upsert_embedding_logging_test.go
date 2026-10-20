@@ -17,10 +17,10 @@ import (
 func hasFactsVecRow(t *testing.T, svc *Service, branch, path string) bool {
 	t.Helper()
 	si := svc.si
-	branchID, err := si.rh.branchID(context.Background(), branch)
+	branchID, err := si.rh.BranchID(context.Background(), branch)
 	require.NoError(t, err)
 	var data []byte
-	err = conn(context.Background(), si.rh.db).QueryRowContext(context.Background(), `
+	err = conn(context.Background(), si.rh.DB()).QueryRowContext(context.Background(), `
 		SELECT fv.embedding
 		FROM facts_vec fv
 		JOIN branch_facts bf ON bf.fact_id = fv.rowid

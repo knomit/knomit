@@ -110,7 +110,11 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 	// loose tier, or an error string that merely NAMED one as available, is
 	// exactly what this scan exists to catch — web validation is an allowlist
 	// and must stay silent about the tiers beyond it.
-	dirs := []string{".", "../synthesize", "../store", "../web"}
+	// The store's children (internal/store/internal/...) are the store's own
+	// code moved into subpackages; os.ReadDir does not descend, so each is
+	// named here or a file moved into one silently leaves the scan.
+	dirs := []string{".", "../synthesize", "../store", "../store/internal/sqlite",
+		"../store/internal/sessions", "../store/internal/vcs", "../web"}
 	var files []string
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)

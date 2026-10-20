@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 const hostV1 = "# knomit fleet host v1\nurl: https://hub.example:7443/git/fleet\n"
@@ -25,7 +26,7 @@ func (f *rangeFixture) judgeEntry(c *object.Commit) (Refusal, bool) {
 	require.NoError(f.t, err)
 	mainC, err := object.GetCommit(f.fleet.Storer, ref.Hash())
 	require.NoError(f.t, err)
-	raw, err := treeOntology(mainC)
+	raw, err := vcs.TreeOntology(mainC)
 	require.NoError(f.t, err)
 	ont, err := fact.ParseOntology(raw)
 	require.NoError(f.t, err)

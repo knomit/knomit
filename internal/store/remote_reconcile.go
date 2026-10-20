@@ -21,6 +21,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // rewindClassification distinguishes three outcomes when reconcileMain
@@ -67,7 +69,7 @@ func agentBaseRefName(agentBranch string) plumbing.ReferenceName {
 // Returns plumbing.ErrReferenceNotFound (wrapped) when the watermark has
 // never been written for this branch.
 func (rh *repoHandler) readAgentBase(agentBranch string) (plumbing.Hash, error) {
-	ref, err := rh.gits.Reference(agentBaseRefName(agentBranch))
+	ref, err := rh.Storer().Reference(agentBaseRefName(agentBranch))
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
@@ -78,7 +80,7 @@ func (rh *repoHandler) readAgentBase(agentBranch string) (plumbing.Hash, error) 
 // watermark identifies "the main commit this agent last consumed" and
 // is read on the next Sync tick as the base for unpushedCommits.
 func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) error {
-	return rh.gits.SetReference(plumbing.NewHashReference(agentBaseRefName(agentBranch), hash))
+	return rh.Storer().SetReference(plumbing.NewHashReference(agentBaseRefName(agentBranch), hash))
 }
 
 // seedMissingWatermark writes the watermark for agentBranch from lastOrigin,
@@ -113,12 +115,12 @@ func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) er
 //
 // No lastOrigin (zero: no remote-tracking ref before this fetch, a truly
 // first sync) writes nothing, and the rewind replay keeps its merge-base
-// fallback. Takes rh.lockBranch(agentBranch).
+// fallback. Takes rh.LockBranch(agentBranch).
 func (rh *repoHandler) seedMissingWatermark(agentBranch string, lastOrigin plumbing.Hash) error {
 	if lastOrigin == plumbing.ZeroHash {
 		return nil
 	}
-	unlock := rh.lockBranch(agentBranch)
+	unlock := rh.LockBranch(agentBranch)
 	defer unlock()
 	if _, err := rh.readAgentBase(agentBranch); err == nil {
 		return nil
@@ -128,7 +130,7 @@ func (rh *repoHandler) seedMissingWatermark(agentBranch string, lastOrigin plumb
 	if err := rh.writeAgentBase(agentBranch, lastOrigin); err != nil {
 		return fmt.Errorf("write watermark: %w", err)
 	}
-	log.Info().Str("branch", agentBranch).Str("base", shortRefHash(lastOrigin)).
+	log.Info().Str("branch", agentBranch).Str("base", vcs.ShortRefHash(lastOrigin)).
 		Msg("seedMissingWatermark: no watermark; using where the origin was at the last fetch")
 	return nil
 }
@@ -165,12 +167,12 @@ type MainReconcileResult struct {
 // Errors if origin/<upstreamMain> is not present locally (caller must fetch
 // first).
 //
-// Caller must hold rh.lockBranch(upstreamMain). After every ref advance,
+// Caller must hold rh.LockBranch(upstreamMain). After every ref advance,
 // commit_log is repopulated and the index manager is notified so
 // downstream readers see consistent state.
 func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (MainReconcileResult, error) {
 	originMainName := plumbing.NewRemoteReferenceName("origin", upstreamMain)
-	originMainRef, err := rh.gits.Reference(originMainName)
+	originMainRef, err := rh.Storer().Reference(originMainName)
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: read origin/%s: %w", upstreamMain, err)
 	}
@@ -222,15 +224,15 @@ type advanceMove struct {
 
 // advanceBranchTo moves refs/heads/<branch> to hash by create, fast-forward or
 // force-update, and brings every derived table along: the branches row,
-// branch_commits (purged first on a force-update, since populateCommitLog only
-// inserts), then notifyCommit (commit_log, index, observers). It is the body
+// branch_commits (purged first on a force-update, since PopulateCommitLog only
+// inserts), then NotifyCommit (commit_log, index, observers). It is the body
 // reconcileMain has always run, factored out so receive-pack registers a
 // pushed branch through the SAME steps; it is name-neutral and logs nothing —
 // each caller words its own log lines.
 //
-// The caller holds lockBranch(branch). Every step after SetReference is
+// The caller holds LockBranch(branch). Every step after SetReference is
 // context-bound SQL, so a caller whose ctx can be cancelled (a request) must
-// pass one that cannot: a cancellation between the ref move and notifyCommit
+// pass one that cannot: a cancellation between the ref move and NotifyCommit
 // is the torn state kb/invariants/store/notify-commit-single-chokepoint
 // forbids.
 func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash plumbing.Hash) (MainReconcileResult, advanceMove, error) {
@@ -238,22 +240,22 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 	if hash == plumbing.ZeroHash {
 		return MainReconcileResult{Mode: ModeNoop}, advanceMove{}, nil // nothing to move to
 	}
-	localRef, err := rh.gits.Reference(refName)
+	localRef, err := rh.Storer().Reference(refName)
 	if err != nil {
 		// The branch doesn't exist — create it at hash.
-		if err := rh.deriveBeforeAdvance(ctx, hash); err != nil {
+		if err := rh.DeriveBeforeAdvance(ctx, hash); err != nil {
 			return MainReconcileResult{}, advanceMove{}, err
 		}
-		if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+		if err := rh.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("create local %s: %w", branch, err)
 		}
 		if _, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("ensure %s: %w", branch, err)
 		}
-		if err := rh.populateCommitLog(ctx, branch); err != nil {
+		if err := rh.PopulateCommitLog(ctx, branch); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("populate commit_log after create: %w", err)
 		}
-		if err := rh.notifyCommit(ctx, branch, hash); err != nil {
+		if err := rh.NotifyCommit(ctx, branch, hash); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("notify after create: %w", err)
 		}
 		return MainReconcileResult{Mode: ModeFF, NewTip: hash.String()}, advanceMove{created: true}, nil
@@ -276,11 +278,11 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 		return MainReconcileResult{Mode: ModeNoop}, move, nil
 	}
 
-	localCommit, err := rh.repo.CommitObject(localHash)
+	localCommit, err := rh.Repository().CommitObject(localHash)
 	if err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("local commit: %w", err)
 	}
-	newCommit, err := rh.repo.CommitObject(hash)
+	newCommit, err := rh.Repository().CommitObject(hash)
 	if err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("target commit: %w", err)
 	}
@@ -291,16 +293,16 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 	}
 	if isLocalAncestor {
 		// Fast-forward.
-		if err := rh.deriveBeforeAdvance(ctx, hash); err != nil {
+		if err := rh.DeriveBeforeAdvance(ctx, hash); err != nil {
 			return MainReconcileResult{}, move, err
 		}
-		if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+		if err := rh.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 			return MainReconcileResult{}, move, fmt.Errorf("fast-forward: %w", err)
 		}
-		if err := rh.populateCommitLog(ctx, branch); err != nil {
+		if err := rh.PopulateCommitLog(ctx, branch); err != nil {
 			return MainReconcileResult{}, move, fmt.Errorf("populate commit_log after fast-forward: %w", err)
 		}
-		if err := rh.notifyCommit(ctx, branch, hash); err != nil {
+		if err := rh.NotifyCommit(ctx, branch, hash); err != nil {
 			return MainReconcileResult{}, move, fmt.Errorf("notify after fast-forward: %w", err)
 		}
 		return MainReconcileResult{Mode: ModeFF, NewTip: hash.String()}, move, nil
@@ -312,19 +314,19 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 	// MergeBase itself fails (object-store IO error).
 	move.rewindClassification = classifyMainRewind(localCommit, newCommit)
 
-	if err := rh.deriveBeforeAdvance(ctx, hash); err != nil {
+	if err := rh.DeriveBeforeAdvance(ctx, hash); err != nil {
 		return MainReconcileResult{}, move, err
 	}
-	if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+	if err := rh.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("force-update: %w", err)
 	}
 	// The old chain is no longer reachable from the branch. Purge stale
 	// branch_commits rows before repopulating; otherwise Verify reports
-	// unreachable rows because populateCommitLog only INSERTs.
-	if err := rh.repopulateBranch(ctx, branch); err != nil {
+	// unreachable rows because PopulateCommitLog only INSERTs.
+	if err := rh.RepopulateBranch(ctx, branch); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("repopulate commit_log after force-update: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, branch, hash); err != nil {
+	if err := rh.NotifyCommit(ctx, branch, hash); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("notify after force-update: %w", err)
 	}
 	return MainReconcileResult{Mode: ModeRewound, NewTip: hash.String()}, move, nil
@@ -345,7 +347,7 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 //
 // The watermark is updated to current local main on both paths so it
 // always has a usable base for a future rewind. Both paths hold
-// rh.lockBranch(agentBranch) for the entire body, including the
+// rh.LockBranch(agentBranch) for the entire body, including the
 // watermark write.
 func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy, mainRewound bool) (AgentReconcileResult, error) {
 	if mainRewound {

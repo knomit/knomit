@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// InitRepo seeds the root manifest through writeFileToStore — the low-level
+// InitRepo seeds the root manifest through WriteFileToStore — the low-level
 // git writer, not writeFile/WriteFact — so the fact-path lowercasing rule
 // (which exists to stop case-duplicate ontology topics) never touches it.
 // Assert the case explicitly rather than assuming it: a future refactor that

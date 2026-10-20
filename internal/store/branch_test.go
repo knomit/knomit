@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 func TestResolveRef_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
@@ -18,7 +20,7 @@ func TestResolveRef_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
-	_, err = svc.rh.resolveRef(context.Background(), "does-not-exist")
+	_, err = svc.rh.ResolveRef(context.Background(), "does-not-exist")
 	if err == nil {
 		t.Fatalf("expected error for missing ref, got nil")
 	}
@@ -38,7 +40,7 @@ func TestBranchID_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
-	_, err = svc.rh.branchID(context.Background(), "does-not-exist")
+	_, err = svc.rh.BranchID(context.Background(), "does-not-exist")
 	if err == nil {
 		t.Fatalf("expected error for missing branch, got nil")
 	}
@@ -48,23 +50,23 @@ func TestBranchID_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 }
 
 // TestLockBranch_DeferReleasesOnPanic pins the panic-safety contract that
-// reconcileNow's IIFE (`defer rh.lockBranch(x)()`) relies on: if the body
+// reconcileNow's IIFE (`defer rh.LockBranch(x)()`) relies on: if the body
 // holding the lock panics, the deferred unlock still fires. The prior
-// non-deferred `unlock := rh.lockBranch(x); ...; unlock()` form would have
+// non-deferred `unlock := rh.LockBranch(x); ...; unlock()` form would have
 // leaked the lock on panic, deadlocking every subsequent op on that branch.
 func TestLockBranch_DeferReleasesOnPanic(t *testing.T) {
-	rh := &repoHandler{}
+	rh := &repoHandler{Repo: &vcs.Repo{}}
 
 	func() {
 		defer func() { _ = recover() }()
-		defer rh.lockBranch("main")()
+		defer rh.LockBranch("main")()
 		panic("simulated reconcileMain panic")
 	}()
 
 	// If the deferred unlock did not fire, the second acquire blocks forever.
 	done := make(chan struct{})
 	go func() {
-		defer rh.lockBranch("main")()
+		defer rh.LockBranch("main")()
 		close(done)
 	}()
 	select {

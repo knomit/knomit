@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // F24 M3: a set holding ONLY the template keys is not zero, and renders them
@@ -22,7 +23,7 @@ func TestTrailers_TemplateOnlySetIsStamped(t *testing.T) {
 		require.False(t, set.IsZero(), "%+v must not be zero", set)
 	}
 	set := Trailers{Template: "mission", TemplateSource: "kb://034f37d5b4a5@" + strings.Repeat("a", 40), Run: "run-x"}
-	got := appendTrailers("init: x", set)
+	got := vcs.AppendTrailers("init: x", set)
 	require.Equal(t, "init: x\n\nKnomit-Run: run-x\nKnomit-Template: mission\nKnomit-Template-Source: kb://034f37d5b4a5@"+strings.Repeat("a", 40)+"\n", got)
 	require.Equal(t, "mission", TrailerValue(got, TrailerTemplate))
 

@@ -65,7 +65,7 @@ func (f SkillBundledFile) Contents() ([]byte, error) {
 
 // skillsTree is fact.SkillsDir at commit, or nil when the commit has none.
 func (rh *repoHandler) skillsTree(commit plumbing.Hash) (*object.Tree, error) {
-	c, err := rh.repo.CommitObject(commit)
+	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return nil, fmt.Errorf("skills: commit %s: %w", commit, err)
 	}

@@ -21,6 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 )
 
 func namedSigner(t *testing.T, name string) ssh.Signer {
@@ -49,7 +50,7 @@ func signed(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig, err := signCommit(s, payload)
+	sig, err := vcs.SignCommit(s, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,7 @@ func TestVerifyCommitSignature_Refusals(t *testing.T) {
 	}
 }
 
-// wrongNamespace signs c exactly like signCommit but with namespace "file".
+// wrongNamespace signs c exactly like SignCommit but with namespace "file".
 func wrongNamespace(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit {
 	t.Helper()
 	payload, err := commitPayload(c)
@@ -118,30 +119,30 @@ func wrongNamespace(t *testing.T, c *object.Commit, s ssh.Signer) *object.Commit
 	return c
 }
 
-// signWithNamespace is signCommit with the namespace as a parameter, so a test
+// signWithNamespace is SignCommit with the namespace as a parameter, so a test
 // can build a correctly-formed SSHSIG for a namespace other than "git".
 func signWithNamespace(t *testing.T, signer ssh.Signer, payload []byte, namespace string) string {
 	t.Helper()
 	h := sha512.Sum512(payload)
 	var signedData []byte
-	signedData = append(signedData, sshsigMagic...)
-	signedData = appendSSHString(signedData, []byte(namespace))
-	signedData = appendSSHString(signedData, nil)
-	signedData = appendSSHString(signedData, []byte(sshsigHashAlgo))
-	signedData = appendSSHString(signedData, h[:])
+	signedData = append(signedData, vcs.SSHSigMagic...)
+	signedData = vcs.AppendSSHString(signedData, []byte(namespace))
+	signedData = vcs.AppendSSHString(signedData, nil)
+	signedData = vcs.AppendSSHString(signedData, []byte(vcs.SSHSigHashAlgo))
+	signedData = vcs.AppendSSHString(signedData, h[:])
 	sig, err := signer.Sign(rand.Reader, signedData)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var env []byte
-	env = append(env, sshsigMagic...)
+	env = append(env, vcs.SSHSigMagic...)
 	env = append(env, 0, 0, 0, 1)
-	env = appendSSHString(env, signer.PublicKey().Marshal())
-	env = appendSSHString(env, []byte(namespace))
-	env = appendSSHString(env, nil)
-	env = appendSSHString(env, []byte(sshsigHashAlgo))
-	env = appendSSHString(env, ssh.Marshal(sig))
-	return armor(env)
+	env = vcs.AppendSSHString(env, signer.PublicKey().Marshal())
+	env = vcs.AppendSSHString(env, []byte(namespace))
+	env = vcs.AppendSSHString(env, nil)
+	env = vcs.AppendSSHString(env, []byte(vcs.SSHSigHashAlgo))
+	env = vcs.AppendSSHString(env, ssh.Marshal(sig))
+	return vcs.Armor(env)
 }
 
 // TestVerifyCommitSignature_StockGitSSHSignature: an operator signs hand
@@ -214,7 +215,7 @@ func TestVerifyCommitSignature_KnomitWritePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(res.CommitHash))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(res.CommitHash))
 	if err != nil {
 		t.Fatal(err)
 	}

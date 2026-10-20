@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // Round-5 tests: derivation from git alone, missing objects as boundaries or
@@ -31,18 +33,18 @@ func writeVersionsStore(t *testing.T, svc *Service, n int) []string {
 // removeObject deletes a git object and returns a function that puts it back.
 func removeObject(t *testing.T, svc *Service, h plumbing.Hash) (restore func()) {
 	t.Helper()
-	obj, err := svc.rh.gits.EncodedObject(plumbing.AnyObject, h)
+	obj, err := svc.rh.Storer().EncodedObject(plumbing.AnyObject, h)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.DeleteObjectForTest(h))
+	require.NoError(t, svc.rh.Storer().DeleteObjectForTest(h))
 	return func() {
-		_, err := svc.rh.gits.SetEncodedObject(obj)
+		_, err := svc.rh.Storer().SetEncodedObject(obj)
 		require.NoError(t, err)
 	}
 }
 
 func staleVersion(t *testing.T, svc *Service) {
 	t.Helper()
-	_, err := svc.rh.db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES ('path_changes_version', '0')`)
+	_, err := svc.rh.DB().Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES ('path_changes_version', '0')`)
 	require.NoError(t, err)
 }
 
@@ -52,12 +54,12 @@ func staleVersion(t *testing.T, svc *Service) {
 func TestPathHistory_TamperedCommitLogIsIgnored(t *testing.T) {
 	svc, ctx := openPathHistoryStore(t)
 	c := writeVersionsStore(t, svc, 3)
-	_, err := svc.rh.db.Exec(`UPDATE commit_log SET action = 'deleted' WHERE commit_hash = ? AND path = 'kb/t.md'`, c[1])
+	_, err := svc.rh.DB().Exec(`UPDATE commit_log SET action = 'deleted' WHERE commit_hash = ? AND path = 'kb/t.md'`, c[1])
 	require.NoError(t, err)
 	staleVersion(t, svc)
-	require.NoError(t, svc.rh.openHistory(ctx))
+	require.NoError(t, svc.rh.OpenHistory(ctx))
 	require.Equal(t, reversed(c), historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[2])))
-	require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+	require.NoError(t, svc.rh.RebuildCommitLog(ctx, "main"))
 	require.Equal(t, reversed(c), historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[2])))
 }
 
@@ -102,11 +104,11 @@ func TestPathHistory_RestoredObjectsAreRederived(t *testing.T) {
 		c := writeVersionsStore(t, svc, 3)
 		restore := removeObject(t, svc, plumbing.NewHash(blobOf(t, svc, c[0], "kb/t.md")))
 		staleVersion(t, svc)
-		require.NoError(t, svc.rh.openHistory(ctx))
+		require.NoError(t, svc.rh.OpenHistory(ctx))
 		require.True(t, fullHistory(t, svc, "main", "kb/t.md", c[2])[2].ContentUnavailable)
 
 		restore()
-		require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+		require.NoError(t, svc.rh.RebuildCommitLog(ctx, "main"))
 		revs := fullHistory(t, svc, "main", "kb/t.md", c[2])
 		for _, r := range revs {
 			require.False(t, r.ContentUnavailable, "%s re-derived", r.Commit)
@@ -118,13 +120,13 @@ func TestPathHistory_RestoredObjectsAreRederived(t *testing.T) {
 		c := writeVersionsStore(t, svc, 5)
 		restore := removeObject(t, svc, plumbing.NewHash(c[1]))
 		staleVersion(t, svc)
-		require.NoError(t, svc.rh.openHistory(ctx))
+		require.NoError(t, svc.rh.OpenHistory(ctx))
 		revs := fullHistory(t, svc, "main", "kb/t.md", c[4])
 		require.Equal(t, []string{c[4], c[3], c[2]}, historyCommits(revs), "history starts at the boundary")
 		require.Equal(t, "added", revs[2].Action)
 
 		restore()
-		require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+		require.NoError(t, svc.rh.RebuildCommitLog(ctx, "main"))
 		require.Equal(t, reversed(c), historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[4])))
 	})
 }
@@ -139,27 +141,27 @@ func TestPathHistory_TreeAndParentReadErrorsFail(t *testing.T) {
 			c := writeVersionsStore(t, svc, 2)
 			t0 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 			next := writeRawCommit(t, svc, []string{c[1]}, map[string]string{"kb/t.md": testFactBody("v2", 0.6, nil)}, t0, "v2")
-			parent, err := svc.rh.repo.CommitObject(plumbing.NewHash(c[1]))
+			parent, err := svc.rh.Repository().CommitObject(plumbing.NewHash(c[1]))
 			require.NoError(t, err)
 			target := parent.TreeHash // the parent's tree: read by the diff and by blobAt
 			if kind == "commit" {
 				target = parent.Hash
 			}
 			injected := errors.New("injected " + kind + " read error")
-			deriveObjectHook = func(k string, h plumbing.Hash) error {
+			vcs.DeriveObjectHook = func(k string, h plumbing.Hash) error {
 				if k == kind && h == target {
 					return injected
 				}
 				return nil
 			}
-			err = svc.rh.deriveBeforeAdvance(ctx, plumbing.NewHash(next))
-			deriveObjectHook = nil
+			err = svc.rh.DeriveBeforeAdvance(ctx, plumbing.NewHash(next))
+			vcs.DeriveObjectHook = nil
 			require.ErrorIs(t, err, injected)
-			derived, err := newDeriver(svc.rh, activeTables).isDerived(ctx, svc.rh.db, next)
+			derived, err := svc.rh.IsDerivedForTest(ctx, next)
 			require.NoError(t, err)
 			require.False(t, derived, "nothing recorded")
 
-			require.NoError(t, svc.rh.deriveBeforeAdvance(ctx, plumbing.NewHash(next)))
+			require.NoError(t, svc.rh.DeriveBeforeAdvance(ctx, plumbing.NewHash(next)))
 			moveBranch(t, svc, "main", next)
 			require.NoError(t, svc.rh.AppendCommitLog(ctx, "main", next))
 			require.Equal(t, reversed(append(c, next)), historyCommits(fullHistory(t, svc, "main", "kb/t.md", next)))
@@ -172,10 +174,8 @@ func TestPathHistory_TreeAndParentReadErrorsFail(t *testing.T) {
 func TestDeriver_ApplyNeverReadsGit(t *testing.T) {
 	svc, _ := openPathHistoryStore(t)
 	c := writeVersionsStore(t, svc, 1)
-	d := newDeriver(svc.rh, activeTables)
-	d.applying = true
-	_, err := d.commit(plumbing.NewHash(c[0]))
-	require.ErrorIs(t, err, errReadInApply)
+	err := svc.rh.DeriveReadWhileApplyingForTest(plumbing.NewHash(c[0]))
+	require.ErrorIs(t, err, vcs.ErrReadInApply)
 }
 
 // TestLiveRevision_EqualsRevisionsBeforeEdgeCases extends the equivalence to a
@@ -221,7 +221,7 @@ func TestLiveRevision_EqualsRevisionsBeforeEdgeCases(t *testing.T) {
 		c := writeVersionsStore(t, svc, 5)
 		removeObject(t, svc, plumbing.NewHash(c[1]))
 		staleVersion(t, svc)
-		require.NoError(t, svc.rh.openHistory(ctx))
+		require.NoError(t, svc.rh.OpenHistory(ctx))
 		check(t, svc, "kb/t.md", c[2:]) // versions above the boundary
 		got, err := svc.Search().LiveRevision(ctx, "main", "kb/t.md", c[0])
 		require.NoError(t, err)

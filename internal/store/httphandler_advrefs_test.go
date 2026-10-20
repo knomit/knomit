@@ -33,9 +33,9 @@ func TestGitHandler_AdvertisesCuratedView(t *testing.T) {
 	require.NoError(t, err)
 
 	// Private refs that must NOT be advertised.
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.ReferenceName("refs/remotes/origin/main"), plumbing.NewHash(tip))))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.ReferenceName("refs/knomit/agent-base/agent/host-1"), plumbing.NewHash(tip))))
 
 	srv := httptest.NewServer(svc.Handler())

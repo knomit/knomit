@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // Log returns up to 50 log entries for commits that modified path on branch.
 // Queries commit_log directly; branch is accepted for interface compatibility.
 func (hq *historyQuery) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
-	rows, _, err := hq.rh.commitLogQuery(ctx, branch, path, "", "", "", 50)
+	rows, _, err := hq.rh.CommitLogQuery(ctx, branch, path, "", "", "", 50)
 	if err != nil {
 		return nil, fmt.Errorf("Log: %w", err)
 	}
@@ -19,7 +21,7 @@ func (hq *historyQuery) Log(ctx context.Context, branch, path string) ([]LogEntr
 		entries = append(entries, LogEntry{
 			Commit:  r.Hash,
 			Date:    time.Unix(r.Timestamp, 0).UTC().Format(time.RFC3339),
-			Message: firstLine(r.Message),
+			Message: vcs.FirstLine(r.Message),
 		})
 	}
 	return entries, nil
@@ -27,7 +29,7 @@ func (hq *historyQuery) Log(ctx context.Context, branch, path string) ([]LogEntr
 
 // LogPaginated returns paginated log entries with file-count tags.
 func (hq *historyQuery) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
-	rows, hasMore, err := hq.rh.commitLogQuery(ctx, branch, path, after, from, before, limit)
+	rows, hasMore, err := hq.rh.CommitLogQuery(ctx, branch, path, after, from, before, limit)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("LogPaginated: %w", err)
 	}
@@ -37,7 +39,7 @@ func (hq *historyQuery) LogPaginated(ctx context.Context, branch, path string, l
 		entries = append(entries, LogEntryWithTags{
 			Commit:    r.Hash,
 			Date:      time.Unix(r.Timestamp, 0).UTC().Format(time.RFC3339),
-			Message:   firstLine(r.Message),
+			Message:   vcs.FirstLine(r.Message),
 			Operation: r.Operation,
 			Author:    CommitAuthor{Name: r.AuthorName, Email: r.AuthorEmail},
 		})
@@ -77,7 +79,7 @@ func (hq *historyQuery) enrichFileCounts(entries []LogEntryWithTags) {
 		idx[e.Commit] = i
 	}
 
-	counts, err := hq.rh.commitLogFileCounts(hashes)
+	counts, err := hq.rh.CommitLogFileCounts(hashes)
 	if err != nil {
 		return
 	}
@@ -97,7 +99,7 @@ func (hq *historyQuery) enrichFileCounts(entries []LogEntryWithTags) {
 // queried from commit_log. When pathPrefix is non-empty, only files under
 // that directory are returned.
 func (hq *historyQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error) {
-	db := conn(ctx, hq.rh.db)
+	db := conn(ctx, hq.rh.DB())
 
 	var committedAt int64
 	var message, operation, authorName, authorEmail string
@@ -141,7 +143,7 @@ func (hq *historyQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix
 	return &CommitDetailResult{
 		Commit:    commitHash,
 		Date:      time.Unix(committedAt, 0).UTC().Format(time.RFC3339),
-		Message:   firstLine(message),
+		Message:   vcs.FirstLine(message),
 		Operation: operation,
 		Author:    CommitAuthor{Name: authorName, Email: authorEmail},
 		Files:     files,
@@ -150,11 +152,11 @@ func (hq *historyQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix
 
 // Activity returns commit-activity metrics for path using SQL aggregates.
 func (hq *historyQuery) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
-	cutoff7 := commitLogAge(7)
-	cutoff30 := commitLogAge(30)
-	cutoff90 := commitLogAge(90)
+	cutoff7 := vcs.CommitLogAge(7)
+	cutoff30 := vcs.CommitLogAge(30)
+	cutoff90 := vcs.CommitLogAge(90)
 
-	r, err := hq.rh.commitLogActivity(ctx, branch, path, cutoff7, cutoff30, cutoff90)
+	r, err := hq.rh.CommitLogActivity(ctx, branch, path, cutoff7, cutoff30, cutoff90)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("Activity: %w", err)
 	}
@@ -175,11 +177,11 @@ func (hq *historyQuery) Activity(ctx context.Context, branch, path string) (Acti
 // FactsIter opens a cursor over facts for the given branch ordered by fact_id DESC.
 // The caller must call Close() when done to release the underlying database cursor.
 func (fq *factQuery) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 		`SELECT bf.path, f.blob_hash, bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id

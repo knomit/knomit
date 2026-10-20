@@ -15,13 +15,19 @@ import (
 // refuses to work outside a test binary (testing.Testing); this test keeps
 // production SOURCE from even naming it or its installer package.
 //
-// Allowed non-test files: the hook's own definition (internal/store/sign.go)
-// and the installer package (internal/testsupport/testsigner), which is itself
-// kept out of every shipped binary by TestHarnessNotLinkedIntoShippedBinaries.
+// Allowed non-test files: the hook's own definition (the store's vcs child,
+// internal/store/internal/vcs/sign.go), the parent's one-line forwarder under
+// the public store name (internal/store/vcs_testhooks.go), and the installer
+// package (internal/testsupport/testsigner), which is itself kept out of every
+// shipped binary by TestHarnessNotLinkedIntoShippedBinaries.
 func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
+	def := filepath.Join("internal", "store", "internal", "vcs", "sign.go")
+	fwd := filepath.Join("internal", "store", "vcs_testhooks.go")
+	requireNaming(t, def, "SetTestFallbackSigner")
+	requireNaming(t, fwd, "SetTestFallbackSigner")
 	offenders := productionSourceNaming(t,
 		[]string{"SetTestFallbackSigner", "internal/testsupport/testsigner"},
-		filepath.Join("internal", "store", "sign.go"),
+		def, fwd,
 		filepath.Join("internal", "testsupport", "testsigner", "testsigner.go"),
 	)
 	if len(offenders) > 0 {
@@ -37,9 +43,15 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 // at all. The READ side, store.TestFallbackAgentID, is deliberately not a
 // needle: repos.Manager calls it, and outside a test binary it returns "".
 func TestFallbackAgentIDOnlyInstalledFromTests(t *testing.T) {
+	// The setter lives in the store's vcs child; the parent forwards it under
+	// its public store name from vcs_testhooks.go.
+	def := filepath.Join("internal", "store", "internal", "vcs", "agent_id.go")
+	fwd := filepath.Join("internal", "store", "vcs_testhooks.go")
+	requireNaming(t, def, "SetTestFallbackAgentID")
+	requireNaming(t, fwd, "SetTestFallbackAgentID")
 	offenders := productionSourceNaming(t,
 		[]string{"SetTestFallbackAgentID", "FixtureAgentID"},
-		filepath.Join("internal", "store", "agent_id.go"),
+		def, fwd,
 		filepath.Join("internal", "testsupport", "testsigner", "testsigner.go"),
 	)
 	if len(offenders) > 0 {
@@ -90,6 +102,20 @@ func TestFastDurabilityOnlyReferencedFromTests(t *testing.T) {
 	offenders := productionSourceNaming(t, needles, def, fwd)
 	if len(offenders) > 0 {
 		t.Fatalf("production source must not reference the test durability switch:\n  %s", strings.Join(offenders, "\n  "))
+	}
+}
+
+// requireNaming fails unless the module-root-relative file names needle: an
+// allowlisted file that no longer holds the hook means it was renamed or moved
+// and the guard would check nothing.
+func requireNaming(t *testing.T, file, needle string) {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join("..", "..", file))
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+	if !strings.Contains(string(src), needle) {
+		t.Fatalf("%s no longer contains %q: the hook was renamed or moved, so this guard checks nothing — update its allowlist", file, needle)
 	}
 }
 

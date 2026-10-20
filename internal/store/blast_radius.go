@@ -47,7 +47,7 @@ SELECT DISTINCT np.value
   JOIN node_props_text np ON np.node_id = deps.node_id
   JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
  WHERE np.value <> ?`
-	rows, err := conn(ctx, gs.rh.db).QueryContext(ctx, q,
+	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx, q,
 		NodeFact, path, EdgeDerivedFrom, EdgeDerivedFrom, path)
 	if err != nil {
 		return nil, fmt.Errorf("reverseDependentPaths %q: %w", path, err)
@@ -88,7 +88,7 @@ func (gs *graphStore) BlastRadius(ctx context.Context, branch, path string) (int
 	if len(deps) == 0 {
 		return 0, nil
 	}
-	branchID, err := gs.rh.branchID(ctx, branch)
+	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("BlastRadius: branchID: %w", err)
 	}
@@ -114,7 +114,7 @@ func (gs *graphStore) BlastRadius(ctx context.Context, branch, path string) (int
 		}
 		var n int
 		q := "SELECT COUNT(*) FROM branch_facts WHERE branch_id = ? AND path IN (" + ph + ")"
-		if err := conn(ctx, gs.rh.db).QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		if err := conn(ctx, gs.rh.DB()).QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
 			return 0, fmt.Errorf("BlastRadius: liveness count: %w", err)
 		}
 		count += n

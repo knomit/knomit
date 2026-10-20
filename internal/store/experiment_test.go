@@ -38,7 +38,7 @@ func newExperimentTestStore(t *testing.T) *Service {
 // without sleeping or depending on the clock's resolution.
 func setExperimentActivity(t *testing.T, svc *Service, name string, when time.Time) {
 	t.Helper()
-	res, err := svc.rh.db.Exec(
+	res, err := svc.rh.DB().Exec(
 		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`, when.Unix(), name)
 	require.NoError(t, err)
 	n, err := res.RowsAffected()
@@ -49,7 +49,7 @@ func setExperimentActivity(t *testing.T, svc *Service, name string, when time.Ti
 func countRows(t *testing.T, svc *Service, query string, args ...any) int {
 	t.Helper()
 	var n int
-	require.NoError(t, svc.rh.db.QueryRow(query, args...).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(query, args...).Scan(&n))
 	return n
 }
 
@@ -74,11 +74,11 @@ func writeOnOrphanRef(t *testing.T, svc *Service, name, path, title, body string
 	branch := ExperimentBranch(name)
 	tip, err := svc.Branches().HeadCommit(ctx, branch)
 	require.NoError(t, err)
-	_, err = svc.rh.db.Exec(`INSERT INTO experiments (name, description, parent_branch, fork_commit, created_at, last_activity_at)
+	_, err = svc.rh.DB().Exec(`INSERT INTO experiments (name, description, parent_branch, fork_commit, created_at, last_activity_at)
 		VALUES (?, '', ?, ?, 0, 0)`, name, testAgentBranch, tip)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, branch, path, title, body)
-	_, err = svc.rh.db.Exec(`DELETE FROM experiments WHERE name = ?`, name)
+	_, err = svc.rh.DB().Exec(`DELETE FROM experiments WHERE name = ?`, name)
 	require.NoError(t, err)
 }
 
@@ -347,7 +347,7 @@ func TestRollbackExperiment_RemovesEveryTrace(t *testing.T) {
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", "exp/throwaway", "dddd4444"))
 
 	var branchID int64
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, "exp/throwaway").Scan(&branchID))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT id FROM branches WHERE name = ?`, "exp/throwaway").Scan(&branchID))
 	require.Positive(t, countRows(t, svc, `SELECT count(*) FROM branch_facts WHERE branch_id = ?`, branchID))
 
 	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "throwaway"))
@@ -414,7 +414,7 @@ func TestExperimentCommits_AreSigned(t *testing.T) {
 	// Prove the signer is actually wired: an ordinary fact write must be
 	// signed too, or a later empty signature says nothing about exp/*.
 	guardHash := writeMergeFact(t, svc, testAgentBranch, "kb/guard.md", "guard", "body")
-	guard, err := svc.rh.repo.CommitObject(plumbing.NewHash(guardHash))
+	guard, err := svc.rh.Repository().CommitObject(plumbing.NewHash(guardHash))
 	require.NoError(t, err)
 	require.NotEmpty(t, guard.PGPSignature, "precondition: the test signer is installed")
 
@@ -431,13 +431,13 @@ func TestExperimentCommits_AreSigned(t *testing.T) {
 
 	hash, err := svc.Branches().HeadCommit(ctx, "exp/signed")
 	require.NoError(t, err)
-	commit, err := svc.rh.repo.CommitObject(plumbing.NewHash(hash))
+	commit, err := svc.rh.Repository().CommitObject(plumbing.NewHash(hash))
 	require.NoError(t, err)
 	require.NotEmpty(t, commit.PGPSignature, "the merge commit on exp/* must carry a signature")
 }
 
 // TestNotifyCommit_RefreshesExperimentActivity: activity is any commit on the
-// experiment, recorded at the notifyCommit chokepoint. Backdated first so the
+// experiment, recorded at the NotifyCommit chokepoint. Backdated first so the
 // assertion is about a VALUE that moved, not about clock resolution.
 func TestNotifyCommit_RefreshesExperimentActivity(t *testing.T) {
 	ctx := context.Background()
@@ -782,7 +782,7 @@ func TestRollbackExperiment_CleansAnOrphanRef(t *testing.T) {
 	writeOnOrphanRef(t, svc, "half-open", "kb/partial.md", "partial", "body")
 
 	var branchID int64
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, "exp/half-open").Scan(&branchID))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT id FROM branches WHERE name = ?`, "exp/half-open").Scan(&branchID))
 	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM experiments WHERE name = ?`, "half-open"),
 		"fixture precondition: there is no record, only a ref")
 

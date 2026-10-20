@@ -129,7 +129,7 @@ func TestValidateWrite_TheStoreRefusesAnInvalidFactAtTheSource(t *testing.T) {
 
 func (rh *repoHandler) resolveRefMust(t *testing.T, branch string) string {
 	t.Helper()
-	h, err := rh.resolveRef(context.Background(), branch)
+	h, err := rh.ResolveRef(context.Background(), branch)
 	require.NoError(t, err)
 	return h.String()
 }

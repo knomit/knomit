@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
+	"knomit/internal/store/internal/vcs"
 
 	"github.com/rs/zerolog/log"
 )
@@ -40,7 +41,7 @@ type RecentFactEntry struct {
 // NULL otherwise.
 var contextBlobColumn = fmt.Sprintf(
 	`(SELECT o2.data FROM objects o2 WHERE o2.hash = f.blob_hash AND o2.type = %d AND EXISTS (SELECT 1 FROM fact_context fc WHERE fc.fact_id = f.id))`,
-	blobObjectType)
+	vcs.BlobObjectType)
 
 // RecentFacts returns facts on the given branch ordered by most recent commit,
 // paginated by opts.Offset/opts.Limit. If opts.Text is non-empty, it performs
@@ -53,7 +54,7 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 		return fq.recentFactsSearch(ctx, branch, opts)
 	}
 
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts: %w", err)
 	}
@@ -77,7 +78,7 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 
 	countArgs := append(append([]any{branchID}, flt.args...), epArgs...)
 	var total int
-	if err := conn(ctx, fq.rh.db).QueryRowContext(ctx,
+	if err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx,
 		`SELECT COUNT(*)
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
@@ -90,7 +91,7 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 	}
 
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(fe.expires, ''),
 		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash, `+contextBlobColumn+`
 		 FROM branch_facts bf
@@ -127,7 +128,7 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 // recentFactsSearch uses semantic search to find matching facts, then returns
 // them ordered by committed_at with pagination.
 func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
 	}
@@ -157,7 +158,7 @@ func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 		scoreByPath[r.Path] = r.Score
 	}
 
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(fe.expires, ''),
 		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash, `+contextBlobColumn+`
 		 FROM branch_facts bf
@@ -220,12 +221,12 @@ func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 // entry for the given path, provided that entry's action is not 'deleted'.
 // Returns ("", false) if the path is not found or its latest action is deleted.
 func (fq *factQuery) LastCommitForPath(ctx context.Context, branch, path string) (string, bool) {
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", false
 	}
 	var hash, action string
-	err = conn(ctx, fq.rh.db).QueryRowContext(ctx,
+	err = conn(ctx, fq.rh.DB()).QueryRowContext(ctx,
 		`SELECT cl.commit_hash, cl.action
 		 FROM commit_log cl
 		 JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
@@ -605,7 +606,7 @@ func (fq *factQuery) expandMotifQuery(ctx context.Context, branchID int64, q Sea
 		return nil, nil
 	}
 
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, `
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, `
 		SELECT DISTINCT fm.motif,
 		       COALESCE(a.canonical_id, fm.motif),
 		       COALESCE(a.cluster_key, '')
@@ -765,7 +766,7 @@ func (fq *factQuery) filterByEpisodeOps(ctx context.Context, results []SearchRes
 		args[i] = h
 	}
 
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 		`SELECT commit_hash, operation FROM commit_log WHERE commit_hash IN (`+ph[:len(ph)-1]+`) GROUP BY commit_hash`,
 		args...,
 	)
@@ -811,12 +812,12 @@ func (fq *factQuery) filterByEpisodeOps(ctx context.Context, results []SearchRes
 // branch), exactly as TokenDF and SubjectLabelDF do, so this and the df values
 // a caller compares against it are counted over the same population.
 func (fq *factQuery) LiveFactCount(ctx context.Context, branch string) (int, error) {
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("LiveFactCount: %w", err)
 	}
 	var n int
-	if err := conn(ctx, fq.rh.db).QueryRowContext(ctx,
+	if err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ?`, branchID).Scan(&n); err != nil {
 		return 0, fmt.Errorf("LiveFactCount: %w", err)
 	}
@@ -883,7 +884,7 @@ func CutoffNotice(text bool, minSimilarity float64, diags ...SearchDiag) string 
 }
 
 func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -900,8 +901,8 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
-		args := append(append([]any{blobObjectType, branchID}, flt.args...), limit)
-		rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+		args := append(append([]any{vcs.BlobObjectType, branchID}, flt.args...), limit)
+		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 			        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''),
 			        bf.commit_hash, o.data, COALESCE(cl.committed_at, 0)
@@ -939,7 +940,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	}
 
 	// Model-dependent cosine cutoffs (rerank tiers + recall floor below).
-	th := EmbedderThresholds(fq.rh.getEmbedder())
+	th := EmbedderThresholds(fq.rh.Embedder())
 
 	vecSimByPath := make(map[string]float64)
 	kLimit := limit * 5
@@ -956,7 +957,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	// NULL and the outer query returns no rows (caller falls back to filter
 	// search, same as if there were no embedder).
 	if q.QueryByPath != "" && len(q.QueryVec) == 0 {
-		rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 			`SELECT f.path, (1.0 - fv.distance) as similarity
 			 FROM facts_vec fv
 			 JOIN facts f ON f.id = fv.rowid
@@ -991,7 +992,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 			log.Debug().Int("vec_hits", len(vecSimByPath)).Str("source_path", q.QueryByPath).Msg("vec search complete (via path)")
 		}
 	} else {
-		emb := fq.rh.getEmbedder()
+		emb := fq.rh.Embedder()
 		if emb == nil && len(q.QueryVec) == 0 {
 			// DELIBERATE EXCEPTION, kept: a store opened WITHOUT an embedder
 			// (read-only tooling, tests) has no vectors to search, so a text
@@ -1019,7 +1020,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 				return nil, errors.New("search: no query vector available")
 			}
 			vecBlob := float32SliceToBytes(queryVec)
-			rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+			rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 				`SELECT f.path, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
@@ -1094,7 +1095,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 		pathArgs = append(pathArgs, p)
 	}
 
-	metaRows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+	metaRows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 		        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''), bf.commit_hash,
 		        COALESCE(cl.committed_at, 0)
@@ -1137,11 +1138,11 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	// ── Phase 2: fetch bodies for the top-limit facts only ────────────────
 	bodyPH := strings.Repeat("?,", len(candidates))
 	bodyArgs := make([]any, 0, len(candidates)+1)
-	bodyArgs = append(bodyArgs, blobObjectType)
+	bodyArgs = append(bodyArgs, vcs.BlobObjectType)
 	for _, c := range candidates {
 		bodyArgs = append(bodyArgs, c.rec.BlobHash)
 	}
-	bodyRows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+	bodyRows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 		`SELECT hash, data FROM objects WHERE type = ? AND hash IN (`+bodyPH[:len(bodyPH)-1]+`)`,
 		bodyArgs...,
 	)

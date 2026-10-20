@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // The causal-trace trailers (F07 PR 3), store half.
@@ -23,25 +25,25 @@ func trailerStore(t *testing.T) *Service {
 	return svc
 }
 
-// appendTrailers writes the set as the LAST paragraph, in the fixed key
+// AppendTrailers writes the set as the LAST paragraph, in the fixed key
 // order, omitting empty keys; a zero set leaves the message alone; the stamped
 // value wins over a body line of the same key (TrailerValue: last paragraph,
 // last occurrence). Sabotage: append without the blank line (the body's
 // last paragraph absorbs the keys and a body `Knomit-Trace:` line wins).
 func TestAppendTrailers_LastParagraphAndReadBack(t *testing.T) {
 	full := Trailers{Trace: "t-1", Cause: strings.Repeat("a", 40), Trigger: "inbox"}
-	msg := appendTrailers("learn: x\n\nbody para\n", full)
+	msg := vcs.AppendTrailers("learn: x\n\nbody para\n", full)
 	require.Equal(t, "learn: x\n\nbody para\n\nKnomit-Trace: t-1\nKnomit-Cause: "+strings.Repeat("a", 40)+"\nKnomit-Trigger: inbox\n", msg)
 	require.Equal(t, "t-1", TrailerValue(msg, TrailerTrace))
 	require.Equal(t, strings.Repeat("a", 40), TrailerValue(msg, TrailerCause))
 	require.Equal(t, "inbox", TrailerValue(msg, TrailerTrigger))
 
-	require.Equal(t, "learn: x", appendTrailers("learn: x", Trailers{}), "a zero set stamps nothing")
-	require.Equal(t, "learn: x\n\nKnomit-Trigger: inbox\n", appendTrailers("learn: x\n\n\n", Trailers{Trigger: "inbox"}), "empty keys are omitted; trailing newlines are normalised")
+	require.Equal(t, "learn: x", vcs.AppendTrailers("learn: x", Trailers{}), "a zero set stamps nothing")
+	require.Equal(t, "learn: x\n\nKnomit-Trigger: inbox\n", vcs.AppendTrailers("learn: x\n\n\n", Trailers{Trigger: "inbox"}), "empty keys are omitted; trailing newlines are normalised")
 
 	// A body whose last line looks like a trailer: the stamped paragraph is
 	// the LAST one, so the stamped value is what reads back.
-	tricky := appendTrailers("learn: x\n\nKnomit-Trace: body-says-so", Trailers{Trace: "stamped"})
+	tricky := vcs.AppendTrailers("learn: x\n\nKnomit-Trace: body-says-so", Trailers{Trace: "stamped"})
 	require.Equal(t, "stamped", TrailerValue(tricky, TrailerTrace))
 }
 
@@ -50,7 +52,7 @@ func TestAppendTrailers_LastParagraphAndReadBack(t *testing.T) {
 // (batchWriteLocked) — and the paragraph is INSIDE the signed payload: the
 // signature verifies on the stored commit and fails once one trailer
 // character changes. A write with no set on its ctx carries no paragraph.
-// Sabotage: stamp after storeCommit (the altered-trailer check passes); drop
+// Sabotage: stamp after StoreCommit (the altered-trailer check passes); drop
 // one of the three sites (its commit has no paragraph).
 func TestWithTrailers_StampedAtThreeSitesInsideTheSignature(t *testing.T) {
 	svc := trailerStore(t)
@@ -87,7 +89,7 @@ func TestWithTrailers_StampedAtThreeSitesInsideTheSignature(t *testing.T) {
 
 	// The paragraph is signed: the stored commit verifies with this store's
 	// key; the same commit with one trailer character changed does not.
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(r.CommitHash))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(r.CommitHash))
 	require.NoError(t, err)
 	signer, err := verifyCommitSignature(c)
 	require.NoError(t, err)
@@ -109,22 +111,22 @@ func TestAppendTrailers_RunAndExtraOrder(t *testing.T) {
 	cause := strings.Repeat("a", 40)
 	run := "run-" + strings.Repeat("b", 32)
 	full := Trailers{Trace: "t-1", Cause: cause, Trigger: "inbox", Run: run,
-		Extra: []TrailerEntry{{"Zeta", "z"}, {"Ticket", "ABC-12"}, {"Alpha", "a"}}}
+		Extra: []TrailerEntry{{Key: "Zeta", Value: "z"}, {Key: "Ticket", Value: "ABC-12"}, {Key: "Alpha", Value: "a"}}}
 	require.Equal(t, "learn: x\n\nKnomit-Trace: t-1\nKnomit-Cause: "+cause+"\nKnomit-Trigger: inbox\nKnomit-Run: "+run+
-		"\nAlpha: a\nTicket: ABC-12\nZeta: z\n", appendTrailers("learn: x", full))
-	require.Equal(t, []TrailerEntry{{"Zeta", "z"}, {"Ticket", "ABC-12"}, {"Alpha", "a"}}, full.Extra, "the caller's slice is not reordered")
-	require.Equal(t, run, TrailerValue(appendTrailers("learn: x", full), TrailerRun))
-	require.Equal(t, "ABC-12", TrailerValue(appendTrailers("learn: x", full), "ticket"))
+		"\nAlpha: a\nTicket: ABC-12\nZeta: z\n", vcs.AppendTrailers("learn: x", full))
+	require.Equal(t, []TrailerEntry{{Key: "Zeta", Value: "z"}, {Key: "Ticket", Value: "ABC-12"}, {Key: "Alpha", Value: "a"}}, full.Extra, "the caller's slice is not reordered")
+	require.Equal(t, run, TrailerValue(vcs.AppendTrailers("learn: x", full), TrailerRun))
+	require.Equal(t, "ABC-12", TrailerValue(vcs.AppendTrailers("learn: x", full), "ticket"))
 
 	require.False(t, Trailers{Run: run}.IsZero(), "a Run-only set is a set")
-	require.False(t, Trailers{Extra: []TrailerEntry{{"Ticket", "x"}}}.IsZero(), "an Extra-only set is a set")
+	require.False(t, Trailers{Extra: []TrailerEntry{{Key: "Ticket", Value: "x"}}}.IsZero(), "an Extra-only set is a set")
 	require.True(t, Trailers{Extra: []TrailerEntry{}}.IsZero())
-	require.Equal(t, "learn: x\n\nKnomit-Run: "+run+"\n", appendTrailers("learn: x", Trailers{Run: run}))
-	require.Equal(t, "learn: x\n\nTicket: x\n", appendTrailers("learn: x", Trailers{Extra: []TrailerEntry{{"Empty", ""}, {"Ticket", "x"}}}))
+	require.Equal(t, "learn: x\n\nKnomit-Run: "+run+"\n", vcs.AppendTrailers("learn: x", Trailers{Run: run}))
+	require.Equal(t, "learn: x\n\nTicket: x\n", vcs.AppendTrailers("learn: x", Trailers{Extra: []TrailerEntry{{Key: "Empty", Value: ""}, {Key: "Ticket", Value: "x"}}}))
 
 	// The F07 three-key paragraph is unchanged.
 	require.Equal(t, "learn: x\n\nKnomit-Trace: t-1\nKnomit-Cause: "+cause+"\nKnomit-Trigger: inbox\n",
-		appendTrailers("learn: x", Trailers{Trace: "t-1", Cause: cause, Trigger: "inbox"}))
+		vcs.AppendTrailers("learn: x", Trailers{Trace: "t-1", Cause: cause, Trigger: "inbox"}))
 }
 
 // WithAgentTrace: an agent set reaches the commit; a ctx that already carries
@@ -136,7 +138,7 @@ func TestWithAgentTrace_RefusesOverKnomitsSet(t *testing.T) {
 	svc := trailerStore(t)
 	ctx := context.Background()
 	run := "run-" + strings.Repeat("d", 32)
-	agent := Trailers{Trace: "task-7", Run: run, Extra: []TrailerEntry{{"Ticket", "ABC-12"}}}
+	agent := Trailers{Trace: "task-7", Run: run, Extra: []TrailerEntry{{Key: "Ticket", Value: "ABC-12"}}}
 
 	stamped, err := WithAgentTrace(ctx, agent)
 	require.NoError(t, err)
@@ -150,7 +152,7 @@ func TestWithAgentTrace_RefusesOverKnomitsSet(t *testing.T) {
 	host := WithTrailers(ctx, knomits)
 	got, err := WithAgentTrace(host, agent)
 	require.ErrorIs(t, err, ErrTraceOverride)
-	require.Equal(t, knomits, trailersFromContext(got), "knomit's set is untouched")
+	require.Equal(t, knomits, vcs.TrailersFromContext(got), "knomit's set is untouched")
 	_, err = WithAgentTrace(host, Trailers{})
 	require.ErrorIs(t, err, ErrTraceOverride, "a passed trace is refused on a host write even when empty")
 
@@ -159,7 +161,7 @@ func TestWithAgentTrace_RefusesOverKnomitsSet(t *testing.T) {
 
 	plain, err := WithAgentTrace(ctx, Trailers{})
 	require.NoError(t, err)
-	require.True(t, trailersFromContext(plain).IsZero())
-	_, set := plain.Value(trailersCtxKey{}).(Trailers)
+	require.True(t, vcs.TrailersFromContext(plain).IsZero())
+	set := vcs.HasTrailersForTest(plain)
 	require.False(t, set, "a zero agent set attaches nothing")
 }

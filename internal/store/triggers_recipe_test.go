@@ -15,7 +15,7 @@ import (
 // (text, default ”), and the run-id lookup is an index range.
 func TestMigration000031_RecipeColumns(t *testing.T) {
 	svc := newChangesService(t)
-	rows, err := svc.rh.db.Query(`SELECT name, "notnull", dflt_value FROM pragma_table_info('trigger_fires')`)
+	rows, err := svc.rh.DB().Query(`SELECT name, "notnull", dflt_value FROM pragma_table_info('trigger_fires')`)
 	require.NoError(t, err)
 	defer rows.Close()
 	cols := map[string]string{}
@@ -35,9 +35,9 @@ func TestMigration000031_RecipeColumns(t *testing.T) {
 	}
 	require.Len(t, cols, 25, "the 21 columns of 000029, the three, and 000033's message")
 	var n int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('trigger_fires_run', 'trigger_fires_branch')`).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('trigger_fires_run', 'trigger_fires_branch')`).Scan(&n))
 	require.Equal(t, 2, n)
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'trigger_fires_000031'`).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'trigger_fires_000031'`).Scan(&n))
 	require.Equal(t, 0, n, "the copy table is gone")
 }
 
@@ -65,16 +65,16 @@ func TestMigration000031_ReRunsAndKeepsTheLog(t *testing.T) {
 	// at head is followed by the later migrations, exactly as recovery's Up()
 	// continues, so the head schema the store reads is restored after each.
 	later := read("000033_trigger_fire_message.up.sql")
-	_, err = svc.rh.db.Exec(up)
+	_, err = svc.rh.DB().Exec(up)
 	require.NoError(t, err, "the body re-runs over an applied schema")
-	_, err = svc.rh.db.Exec(later)
+	_, err = svc.rh.DB().Exec(later)
 	require.NoError(t, err)
 	require.Equal(t, before, mustFires(t, tr, "agent/a"), "a re-run keeps the log")
-	_, err = svc.rh.db.Exec(down)
+	_, err = svc.rh.DB().Exec(down)
 	require.NoError(t, err)
-	_, err = svc.rh.db.Exec(up)
+	_, err = svc.rh.DB().Exec(up)
 	require.NoError(t, err)
-	_, err = svc.rh.db.Exec(later)
+	_, err = svc.rh.DB().Exec(later)
 	require.NoError(t, err)
 	require.Equal(t, before, mustFires(t, tr, "agent/a"), "down then up keeps the log and its ids")
 	_, err = tr.RecordTriggerRuns(ctx, []TriggerRun{{Branch: "agent/a", RangeFrom: "t", RangeTo: "u"}})
@@ -137,7 +137,7 @@ func TestMigration000033_MessageColumn(t *testing.T) {
 	ctx := context.Background()
 	tr := svc.Triggers()
 	var dflt string
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT dflt_value FROM pragma_table_info('trigger_fires') WHERE name = 'message'`).Scan(&dflt))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT dflt_value FROM pragma_table_info('trigger_fires') WHERE name = 'message'`).Scan(&dflt))
 	require.Equal(t, "''", dflt)
 	require.NoError(t, tr.RecordTriggerResults(ctx, []TriggerFire{{
 		Trigger: "w", Branch: "agent/a", Path: "kb/x.md", Outcome: TriggerOutcomeDone, Message: "exit 0 cost=1.03",
@@ -154,21 +154,21 @@ func TestMigration000033_MessageColumn(t *testing.T) {
 		return string(b)
 	}
 	up, down := read("000033_trigger_fire_message.up.sql"), read("000033_trigger_fire_message.down.sql")
-	_, err := svc.rh.db.Exec(up)
+	_, err := svc.rh.DB().Exec(up)
 	require.NoError(t, err, "the body re-runs over an applied schema")
 	after := mustFires(t, tr, "agent/a")
 	require.Len(t, after, 1)
 	require.Equal(t, before[0].ID, after[0].ID, "ids survive")
 	require.Equal(t, before[0].RunID, after[0].RunID, "the other columns survive")
-	_, err = svc.rh.db.Exec(down)
+	_, err = svc.rh.DB().Exec(down)
 	require.NoError(t, err)
 	var n int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('trigger_fires') WHERE name = 'message'`).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM pragma_table_info('trigger_fires') WHERE name = 'message'`).Scan(&n))
 	require.Equal(t, 0, n, "down removes the column")
-	_, err = svc.rh.db.Exec(up)
+	_, err = svc.rh.DB().Exec(up)
 	require.NoError(t, err)
 	require.Len(t, mustFires(t, tr, "agent/a"), 1, "down then up keeps the log")
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'trigger_fires_000033'`).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'trigger_fires_000033'`).Scan(&n))
 	require.Equal(t, 0, n, "the copy table is gone")
 }
 

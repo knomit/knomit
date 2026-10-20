@@ -29,7 +29,7 @@ func TestVerify_NoGeneratedRefs(t *testing.T) {
 	require.Equal(t, []string{"main"}, report.Branches, "no generated refs may appear as branches")
 
 	// And no okf/* ref exists at all — not merely absent from the branch list.
-	iter, err := svc.rh.gits.IterReferences()
+	iter, err := svc.rh.Storer().IterReferences()
 	require.NoError(t, err)
 	require.NoError(t, iter.ForEach(func(ref *plumbing.Reference) error {
 		require.NotContains(t, ref.Name().String(), "okf/",

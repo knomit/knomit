@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // ErrForeignLineage is E4's refusal: origin's copy of this instance's agent
@@ -53,10 +55,10 @@ func (e *ForeignLineageError) Is(target error) bool { return target == ErrForeig
 // of a peer merge made in the web UI). A store that has no signer cannot know
 // its own key: every such commit is refused.
 func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
-	// The own key is the key this store signs with (commitSigner: the store's
+	// The own key is the key this store signs with (CommitSigner: the store's
 	// signer, or a test binary's fallback). No signer means no own key.
 	own := map[string]bool{}
-	if signer, err := rh.commitSigner(); err == nil {
+	if signer, err := rh.CommitSigner(); err == nil {
 		fp, err := keyFingerprint(signer.PublicKey())
 		if err != nil {
 			return fmt.Errorf("E4: own key: %w", err)
@@ -66,20 +68,18 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 	// Registered in a fleet: every key this instance's own member record has
 	// held (its versions) is also its own, so a key rotation does not make the
 	// instance's earlier commits foreign.
-	if rh.ownKeys != nil {
-		for _, k := range rh.ownKeys() {
-			if fp, err := keyFingerprint(k); err == nil {
-				own[fp] = true
-			}
+	for _, k := range rh.OwnKeys() {
+		if fp, err := keyFingerprint(k); err == nil {
+			own[fp] = true
 		}
 	}
 	below := map[plumbing.Hash]bool{}
 	if upstream != plumbing.ZeroHash {
-		if err := walkHistory(rh.gits, upstream, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.Storer(), upstream, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
 			return err
 		}
 	}
-	// COLLECT first, JUDGE second. walkHistory is post-order — a commit is
+	// COLLECT first, JUDGE second. WalkHistory is post-order — a commit is
 	// visited after its parents — so judging inside the visit would reach a
 	// merged-in commit before the own merge that vouches for it.
 	type seenCommit struct {
@@ -88,7 +88,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 		ownSig bool   // signed by an own key (accepted alone does not vouch)
 	}
 	var order []seenCommit
-	err := walkHistory(rh.gits, agentTip, below, func(c *object.Commit) {
+	err := vcs.WalkHistory(rh.Storer(), agentTip, below, func(c *object.Commit) {
 		if rh.acceptedCommit(c.Hash) {
 			order = append(order, seenCommit{c: c})
 			return
@@ -124,7 +124,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 			if below[p] || vouched[p] {
 				continue
 			}
-			if err := walkHistory(rh.gits, p, below, func(c *object.Commit) { vouched[c.Hash] = true }); err != nil {
+			if err := vcs.WalkHistory(rh.Storer(), p, below, func(c *object.Commit) { vouched[c.Hash] = true }); err != nil {
 				return err
 			}
 		}
@@ -135,7 +135,7 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 		if sc.reason == "" || vouched[sc.c.Hash] {
 			continue
 		}
-		refused = append(refused, shortRefHash(sc.c.Hash)+": "+sc.reason)
+		refused = append(refused, vcs.ShortRefHash(sc.c.Hash)+": "+sc.reason)
 		commits = append(commits, sc.c.Hash.String())
 	}
 	if len(refused) > 0 {

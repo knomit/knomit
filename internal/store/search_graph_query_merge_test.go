@@ -13,7 +13,7 @@ import (
 //
 // Mechanism: DERIVED_FROM edges are anchored to the fact's original
 // content-write commit (source_commit / target_commit on the feature branch),
-// but resolveActiveCommitForPath resolves HEAD to the MERGE commit — commit_log
+// but ResolveActiveCommitForPath resolves HEAD to the MERGE commit — commit_log
 // records the merge as an add/modify of the path (fact_history diffs the merge
 // against its first parent, which lacks the fact). The old queries filtered
 // edges strictly by `r.source_commit = mergeCommit`, which never matches the
@@ -46,7 +46,7 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 	// Precondition: on main, A's effective write-commit resolves to the MERGE
 	// commit (not the feature write) — the exact condition that breaks the
 	// commit-equality edge filter.
-	eff, ok, err := si.rh.resolveActiveCommitForPath(ctx, "main", "kb/a.md", head)
+	eff, ok, err := si.rh.ResolveActiveCommitForPath(ctx, "main", "kb/a.md", head)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, head, eff, "precondition: A's effective write-commit on main IS the merge commit")

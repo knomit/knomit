@@ -11,7 +11,7 @@ import (
 // indexedPaths returns every path the index holds for a branch.
 func indexedPaths(t *testing.T, svc *Service, branch string) []string {
 	t.Helper()
-	rows, err := svc.rh.db.QueryContext(context.Background(),
+	rows, err := svc.rh.DB().QueryContext(context.Background(),
 		`SELECT bf.path FROM branch_facts bf
 		 JOIN branches b ON b.id = bf.branch_id
 		 WHERE b.name = ? ORDER BY bf.path`, branch)
@@ -92,7 +92,7 @@ func TestIndex_DeleteEvictsPathOutsideOntologyRoot(t *testing.T) {
 	// and the FK has to point somewhere.
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/obs/real.md", testFactBody("Real", 0.9, nil), "add", "")
 	require.NoError(t, err)
-	_, err = svc.rh.db.ExecContext(ctx,
+	_, err = svc.rh.DB().ExecContext(ctx,
 		`INSERT INTO branch_facts(branch_id, path, fact_id, commit_hash)
 		 SELECT b.id, 'stray.md', f.id, ''
 		 FROM branches b, facts f WHERE b.name = ? AND f.path = 'kb/obs/real.md'`, "agent/a")

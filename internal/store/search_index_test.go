@@ -62,7 +62,7 @@ func TestNeedsRebuildDetectsModelChange(t *testing.T) {
 	// Persist a current schema version + a matching embedding identity.
 	emb := &configurableEmbedder{id: "embeddinggemma", dim: 768}
 	svc.SetEmbedder(emb)
-	_, err = si.rh.db.ExecContext(ctx,
+	_, err = si.rh.DB().ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey("main"), GraphSchemaVersion)
 	require.NoError(t, err)
 	seedEmbedIdentity(t, si, "embeddinggemma", 768)
@@ -99,7 +99,7 @@ func TestRebuild_BumpsGraphSchemaVersion(t *testing.T) {
 
 	si := svc.si
 	var version string
-	require.NoError(t, si.rh.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, schemaVersionKey("main")).Scan(&version))
+	require.NoError(t, si.rh.DB().QueryRow(`SELECT value FROM meta WHERE key = ?`, schemaVersionKey("main")).Scan(&version))
 	require.Equal(t, GraphSchemaVersion, version)
 }
 
@@ -129,7 +129,7 @@ func TestRebuildGraph_WritesEdgePerRefEvent(t *testing.T) {
 
 	si := svc.si
 	var count int
-	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
 	require.Equal(t, 2, count, "expected one DERIVED_FROM edge per (D version) referencing E")
 }
@@ -179,7 +179,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 
 	// fact_domains must contain one row per (fact, domain-value) pair.
 	var domainRows int
-	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_domains`).Scan(&domainRows))
 	require.Equal(t, 3, domainRows, "fact_domains must be re-populated after rebuild (alpha:2 + beta:1)")
 
@@ -190,7 +190,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 
 	// fact_entities must also be re-populated.
 	var entityRows int
-	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_entities`).Scan(&entityRows))
 	require.Equal(t, 3, entityRows, "fact_entities must be re-populated after rebuild (alpha:2 + beta:1)")
 
@@ -235,21 +235,21 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 
 	// Verify fact was inserted.
 	var factID int64
-	err = si.rh.db.QueryRowContext(ctx,
+	err = si.rh.DB().QueryRowContext(ctx,
 		`SELECT id FROM facts WHERE path = ?`, rec.Path).Scan(&factID)
 	require.NoError(t, err, "fact must be inserted")
 	require.Greater(t, factID, int64(0))
 
 	// Verify fact_entities contains exactly 2 rows (one per unique entity).
 	var entityCount int
-	err = si.rh.db.QueryRowContext(ctx,
+	err = si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_entities WHERE fact_id = ?`, factID).Scan(&entityCount)
 	require.NoError(t, err)
 	require.Equal(t, 2, entityCount, "fact_entities should have exactly 2 rows for 2 unique entities (Claude, Anthropic)")
 
 	// Verify both entities are present (not just a lucky count).
 	var entities []string
-	rows, err := si.rh.db.QueryContext(ctx,
+	rows, err := si.rh.DB().QueryContext(ctx,
 		`SELECT entity FROM fact_entities WHERE fact_id = ? ORDER BY entity`, factID)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -263,14 +263,14 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 
 	// Verify fact_domains contains exactly 2 rows (one per unique domain).
 	var domainCount int
-	err = si.rh.db.QueryRowContext(ctx,
+	err = si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_domains WHERE fact_id = ?`, factID).Scan(&domainCount)
 	require.NoError(t, err)
 	require.Equal(t, 2, domainCount, "fact_domains should have exactly 2 rows for 2 unique domains (ai, machine learning)")
 
 	// Verify both domains are present.
 	var domains []string
-	rows, err = si.rh.db.QueryContext(ctx,
+	rows, err = si.rh.DB().QueryContext(ctx,
 		`SELECT domain FROM fact_domains WHERE fact_id = ? ORDER BY domain`, factID)
 	require.NoError(t, err)
 	defer rows.Close()

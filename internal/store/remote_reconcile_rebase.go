@@ -19,6 +19,7 @@ import (
 
 	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // unpushedCommits returns commits reachable from localTip but not from
@@ -92,11 +93,11 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 		return nil, false, false, nil
 	}
 
-	local, err := rh.repo.CommitObject(localTip)
+	local, err := rh.Repository().CommitObject(localTip)
 	if err != nil {
 		return nil, false, false, fmt.Errorf("unpushedCommits: local commit %s: %w", localTip, err)
 	}
-	upstream, err := rh.repo.CommitObject(upstreamTip)
+	upstream, err := rh.Repository().CommitObject(upstreamTip)
 	if err != nil {
 		return nil, false, false, fmt.Errorf("unpushedCommits: upstream commit %s: %w", upstreamTip, err)
 	}
@@ -146,7 +147,7 @@ func (rh *repoHandler) unpushedCommitsDropping(localTip, upstreamTip, explicitBa
 	var onUpstream map[plumbing.Hash]bool
 	if !disjoint {
 		onUpstream = map[plumbing.Hash]bool{}
-		if err := walkHistory(rh.gits, upstreamTip, nil, func(c *object.Commit) { onUpstream[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.Storer(), upstreamTip, nil, func(c *object.Commit) { onUpstream[c.Hash] = true }); err != nil {
 			return nil, false, false, fmt.Errorf("unpushedCommits: upstream history: %w", err)
 		}
 	}
@@ -251,7 +252,7 @@ func (rh *repoHandler) strictlyAhead(local, upstream *object.Commit, explicitBas
 	if !upstreamAncestor || explicitBase == plumbing.ZeroHash || explicitBase == upstream.Hash {
 		return upstreamAncestor, nil
 	}
-	base, err := rh.repo.CommitObject(explicitBase)
+	base, err := rh.Repository().CommitObject(explicitBase)
 	if err != nil {
 		return false, fmt.Errorf("watermark commit %s: %w", explicitBase, err)
 	}
@@ -301,11 +302,11 @@ func (rh *repoHandler) replayCommit(
 ) (plumbing.Hash, error) {
 	// The signer is resolved BEFORE the synthetic base or any merged tree is
 	// written: a refused replay (ErrNoSigner) must leave no object behind.
-	signer, err := rh.commitSigner()
+	signer, err := rh.CommitSigner()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: %w", err)
 	}
-	ontoCommit, err := rh.repo.CommitObject(ontoHash)
+	ontoCommit, err := rh.Repository().CommitObject(ontoHash)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: onto commit %s: %w", ontoHash, err)
 	}
@@ -329,7 +330,7 @@ func (rh *repoHandler) replayCommit(
 		// storer field; a struct literal would leave that field nil and
 		// crash on .Tree(). Storing a synthetic commit and rehydrating via
 		// object.GetCommit attaches the storer.
-		emptyTreeHash, err := storeEmptyTree(rh.gits)
+		emptyTreeHash, err := storeEmptyTree(rh.Storer())
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("replayCommit: empty tree: %w", err)
 		}
@@ -339,15 +340,15 @@ func (rh *repoHandler) replayCommit(
 			Message:   "synthetic empty-tree base",
 			TreeHash:  emptyTreeHash,
 		}
-		enc := rh.gits.NewEncodedObject()
+		enc := rh.Storer().NewEncodedObject()
 		if err := synth.Encode(enc); err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("replayCommit: encode synthetic base: %w", err)
 		}
-		synthHash, err := rh.gits.SetEncodedObject(enc)
+		synthHash, err := rh.Storer().SetEncodedObject(enc)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("replayCommit: store synthetic base: %w", err)
 		}
-		baseCommit, err = object.GetCommit(rh.gits, synthHash)
+		baseCommit, err = object.GetCommit(rh.Storer(), synthHash)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("replayCommit: rehydrate synthetic base: %w", err)
 		}
@@ -406,7 +407,7 @@ func (rh *repoHandler) replayCommit(
 		ParentHashes: append([]plumbing.Hash{ontoHash}, extraParents...),
 	}
 
-	h, err := storeCommit(rh.gits, signer, newCommit)
+	h, err := vcs.StoreCommit(rh.Storer(), signer, newCommit)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: %w", err)
 	}
@@ -446,7 +447,7 @@ var timeNow = func() time.Time { return time.Now() }
 // before returning, on both success and failure paths; localBranch is
 // unchanged on failure.
 //
-// Caller must hold rh.lockBranch(localBranch).
+// Caller must hold rh.LockBranch(localBranch).
 func (rh *repoHandler) replayOntoUpstream(
 	ctx context.Context,
 	localBranch string,
@@ -455,7 +456,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	strategy ConflictStrategy,
 ) (AgentReconcileResult, error) {
 	localRefName := plumbing.NewBranchReferenceName(localBranch)
-	localRef, err := rh.gits.Reference(localRefName)
+	localRef, err := rh.Storer().Reference(localRefName)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: local ref %q: %w", localBranch, err)
 	}
@@ -487,11 +488,11 @@ func (rh *repoHandler) replayOntoUpstream(
 		if localTip == upstreamTip {
 			return AgentReconcileResult{Mode: ModeNoop}, nil
 		}
-		localCommit, err := rh.repo.CommitObject(localTip)
+		localCommit, err := rh.Repository().CommitObject(localTip)
 		if err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: local commit: %w", err)
 		}
-		upstreamCommit, err := rh.repo.CommitObject(upstreamTip)
+		upstreamCommit, err := rh.Repository().CommitObject(upstreamTip)
 		if err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: upstream commit: %w", err)
 		}
@@ -500,17 +501,17 @@ func (rh *repoHandler) replayOntoUpstream(
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: IsAncestor: %w", err)
 		}
 		if isLocalAncestor {
-			if err := rh.deriveBeforeAdvance(ctx, upstreamTip); err != nil {
+			if err := rh.DeriveBeforeAdvance(ctx, upstreamTip); err != nil {
 				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
 			}
 			newRef := plumbing.NewHashReference(localRefName, upstreamTip)
-			if err := rh.gits.SetReference(newRef); err != nil {
+			if err := rh.Storer().SetReference(newRef); err != nil {
 				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
 			}
-			if err := rh.populateCommitLog(ctx, localBranch); err != nil {
+			if err := rh.PopulateCommitLog(ctx, localBranch); err != nil {
 				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: populate after FF: %w", err)
 			}
-			if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
+			if err := rh.NotifyCommit(ctx, localBranch, upstreamTip); err != nil {
 				return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
 			}
 			return AgentReconcileResult{Mode: ModeFF, NewTip: upstreamTip.String()}, nil
@@ -553,7 +554,7 @@ func (rh *repoHandler) replayOntoUpstream(
 
 	tempRefName := plumbing.NewBranchReferenceName(localBranch + "-replaying")
 	// Start temp ref at upstream tip.
-	if err := rh.gits.SetReference(plumbing.NewHashReference(tempRefName, upstreamTip)); err != nil {
+	if err := rh.Storer().SetReference(plumbing.NewHashReference(tempRefName, upstreamTip)); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: init temp ref: %w", err)
 	}
 	// Always remove the temp ref before returning — success or failure —
@@ -561,8 +562,8 @@ func (rh *repoHandler) replayOntoUpstream(
 	// The check via Reference() guards against double-removal noise if a
 	// future code path drops the ref explicitly before returning.
 	defer func() {
-		if _, err := rh.gits.Reference(tempRefName); err == nil {
-			if rmErr := rh.gits.RemoveReference(tempRefName); rmErr != nil {
+		if _, err := rh.Storer().Reference(tempRefName); err == nil {
+			if rmErr := rh.Storer().RemoveReference(tempRefName); rmErr != nil {
 				log.Warn().Err(rmErr).Msg("replayOntoUpstream: remove temp ref (continuing)")
 			}
 		}
@@ -572,7 +573,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	for i, orig := range commits {
 		// Honour cancellation between commits: a large rewind under server
 		// shutdown (or HTTP client disconnect) would otherwise hold
-		// lockBranch(localBranch) until the full chain finishes. Local
+		// LockBranch(localBranch) until the full chain finishes. Local
 		// branch is unchanged at this point (only the temp ref has
 		// advanced), and the deferred temp-ref cleanup runs on return.
 		if err := ctx.Err(); err != nil {
@@ -586,17 +587,17 @@ func (rh *repoHandler) replayOntoUpstream(
 		}
 		current = newHash
 		// Advance temp ref so each replayed commit is reachable.
-		if err := rh.gits.SetReference(plumbing.NewHashReference(tempRefName, current)); err != nil {
+		if err := rh.Storer().SetReference(plumbing.NewHashReference(tempRefName, current)); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: advance temp ref: %w", err)
 		}
 	}
 
 	// Atomic move: agent ref → new tip. Temp ref is cleaned up by the
 	// deferred removal above.
-	if err := rh.deriveBeforeAdvance(ctx, current); err != nil {
+	if err := rh.DeriveBeforeAdvance(ctx, current); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: %w", err)
 	}
-	if err := rh.gits.SetReference(plumbing.NewHashReference(localRefName, current)); err != nil {
+	if err := rh.Storer().SetReference(plumbing.NewHashReference(localRefName, current)); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: atomic move: %w", err)
 	}
 
@@ -604,10 +605,10 @@ func (rh *repoHandler) replayOntoUpstream(
 	// stale branch_commits rows and rebuild parity from the new tip — in one
 	// transaction, so no reader sees the branch empty in between — without
 	// Verify complaining about unreachable rows.
-	if err := rh.repopulateBranch(ctx, localBranch); err != nil {
+	if err := rh.RepopulateBranch(ctx, localBranch); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: repopulate: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, localBranch, current); err != nil {
+	if err := rh.NotifyCommit(ctx, localBranch, current); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify: %w", err)
 	}
 
@@ -642,13 +643,13 @@ func (rh *repoHandler) replayOntoUpstream(
 // content via the merge commit's tree.
 //
 // On a successful reconcile, the watermark is advanced to current local
-// main. Holds rh.lockBranch(agentBranch) for the duration.
+// main. Holds rh.LockBranch(agentBranch) for the duration.
 func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy) (AgentReconcileResult, error) {
-	unlock := rh.lockBranch(agentBranch)
+	unlock := rh.LockBranch(agentBranch)
 	defer unlock()
 
 	mainRefName := plumbing.NewBranchReferenceName(upstreamMain)
-	mainRef, err := rh.gits.Reference(mainRefName)
+	mainRef, err := rh.Storer().Reference(mainRefName)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("reconcileAgentRebase: read local %s: %w", upstreamMain, err)
 	}
@@ -668,14 +669,14 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, up
 	log.Info().
 		Str("branch", agentBranch).
 		Str("upstream", "refs/heads/"+upstreamMain).
-		Str("base", shortRefHash(base)).
+		Str("base", vcs.ShortRefHash(base)).
 		Msgf("reconcileAgentRebase: replaying onto local %s with watermark base", upstreamMain)
 
 	// Every experiment of this branch is recorded BEFORE the branch moves:
 	// experiments are not rebuilt here, and one that still holds what this
 	// rewind scrubs must be rebuilt by its next commit or sync, not merged
 	// (rebuildRewoundExperiment).
-	if agentRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName(agentBranch)); err == nil {
+	if agentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch)); err == nil {
 		if err := rh.markExperimentsRewound(ctx, agentBranch, agentRef.Hash()); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("reconcileAgentRebase: %w", err)
 		}
@@ -695,7 +696,7 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, up
 // replaySkips reports whether c changes only replay-skipped paths (and at
 // least one).
 func (rh *repoHandler) replaySkips(c *object.Commit) (bool, error) {
-	if len(rh.replaySkip) == 0 || c.NumParents() != 1 {
+	if len(rh.ReplaySkip()) == 0 || c.NumParents() != 1 {
 		return false, nil
 	}
 	parent, err := c.Parents().Next()
@@ -719,7 +720,7 @@ func (rh *repoHandler) replaySkips(c *object.Commit) (bool, error) {
 	}
 	for _, ch := range changes {
 		for _, name := range []string{ch.From.Name, ch.To.Name} {
-			if name != "" && !rh.replaySkip[name] {
+			if name != "" && !rh.ReplaySkip()[name] {
 				return false, nil
 			}
 		}
@@ -747,16 +748,14 @@ type sideWalk struct {
 // stop is held plus the first-parent chain the main walk visits itself.
 func (rh *repoHandler) newSideWalk(local *object.Commit, stopAt plumbing.Hash, onUpstream map[plumbing.Hash]bool) (*sideWalk, error) {
 	sw := &sideWalk{own: map[string]bool{}, held: map[plumbing.Hash]bool{}, stop: map[plumbing.Hash]bool{}}
-	if signer, err := rh.commitSigner(); err == nil {
+	if signer, err := rh.CommitSigner(); err == nil {
 		if fp, err := keyFingerprint(signer.PublicKey()); err == nil {
 			sw.own[fp] = true
 		}
 	}
-	if rh.ownKeys != nil {
-		for _, k := range rh.ownKeys() {
-			if fp, err := keyFingerprint(k); err == nil {
-				sw.own[fp] = true
-			}
+	for _, k := range rh.OwnKeys() {
+		if fp, err := keyFingerprint(k); err == nil {
+			sw.own[fp] = true
 		}
 	}
 	if len(sw.own) == 0 {
@@ -767,7 +766,7 @@ func (rh *repoHandler) newSideWalk(local *object.Commit, stopAt plumbing.Hash, o
 	}
 	if stopAt != plumbing.ZeroHash {
 		// onUpstream is ancestry-closed, so it prunes this walk.
-		if err := walkHistory(rh.gits, stopAt, sw.held, func(c *object.Commit) { sw.held[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.Storer(), stopAt, sw.held, func(c *object.Commit) { sw.held[c.Hash] = true }); err != nil {
 			return nil, fmt.Errorf("stop point history: %w", err)
 		}
 		sw.held[stopAt] = true
@@ -842,14 +841,14 @@ func (rh *repoHandler) sideOf(sw *sideWalk, merge *object.Commit) (sideResult, e
 			return nil, nil
 		}
 		sw.stop[h] = true
-		c, err := object.GetCommit(rh.gits, h)
+		c, err := object.GetCommit(rh.Storer(), h)
 		if err != nil {
 			return nil, err
 		}
 		return &frame{c: c}, nil
 	}
 	// A depth-first post-order walk (parents before children), as
-	// walkHistory, that also records where it met a held commit.
+	// WalkHistory, that also records where it met a held commit.
 	for _, p := range merge.ParentHashes[1:] {
 		root, err := enter(p)
 		if err != nil {
@@ -909,7 +908,7 @@ func (rh *repoHandler) sideOf(sw *sideWalk, merge *object.Commit) (sideResult, e
 			if h == first.Hash {
 				continue
 			}
-			hc, err := object.GetCommit(rh.gits, h)
+			hc, err := object.GetCommit(rh.Storer(), h)
 			if err != nil {
 				return res, err
 			}

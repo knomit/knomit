@@ -19,6 +19,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 )
 
 // ErrNotFleet: the repository's ontology is not the fleet ontology.
@@ -83,7 +84,7 @@ func loadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]FleetM
 	// one bogus entry would hide every record after it (and a member could
 	// plant one in its own folder to make the members sorting after it
 	// vanish). A malformed tree fails the load instead.
-	if err := checkTreeShape(tree, nil); err != nil {
+	if err := vcs.CheckTreeShape(tree, nil); err != nil {
 		return nil, fmt.Errorf("fleet %s: malformed tree: %w", fleetID, err)
 	}
 	prefix := path.Join(root, fact.MembersTopic) + "/"
@@ -156,7 +157,7 @@ func loadFleetAt(fleetID string, c *object.Commit, root string) (Fleet, error) {
 	if root == "" {
 		root = "kb"
 	}
-	raw, err := treeOntology(c)
+	raw, err := vcs.TreeOntology(c)
 	if err != nil {
 		return Fleet{}, fmt.Errorf("fleet: ontology: %w", err)
 	}

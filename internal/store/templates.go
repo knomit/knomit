@@ -70,7 +70,7 @@ type TemplateFactFile struct {
 }
 
 func (rh *repoHandler) treeAt(commit plumbing.Hash, dir string) (*object.Tree, error) {
-	c, err := rh.repo.CommitObject(commit)
+	c, err := rh.Repository().CommitObject(commit)
 	if err != nil {
 		return nil, fmt.Errorf("templates: commit %s: %w", commit, err)
 	}
@@ -132,7 +132,7 @@ func (w *templateWalk) walk(ctx context.Context, t *object.Tree, prefix string) 
 		rel := path.Join(prefix, e.Name)
 		switch e.Mode {
 		case filemode.Dir:
-			sub, err := w.rh.repo.TreeObject(e.Hash)
+			sub, err := w.rh.Repository().TreeObject(e.Hash)
 			if err != nil {
 				return fmt.Errorf("templates: folder %s: %w", rel, err)
 			}
@@ -158,7 +158,7 @@ func (w *templateWalk) walk(ctx context.Context, t *object.Tree, prefix string) 
 		if len(w.out)+1 > fact.TemplateMaxFiles {
 			return fmt.Errorf("%w: more than %d files", ErrTemplateTooLarge, fact.TemplateMaxFiles)
 		}
-		blob, err := w.rh.repo.BlobObject(e.Hash)
+		blob, err := w.rh.Repository().BlobObject(e.Hash)
 		if err != nil {
 			return fmt.Errorf("templates: blob %s: %w", rel, err)
 		}
@@ -195,7 +195,7 @@ func (rh *repoHandler) TemplateFactsAt(ctx context.Context, commit plumbing.Hash
 		if e.Mode != filemode.Dir || !fact.ValidTemplateName(e.Name) {
 			continue
 		}
-		sub, err := rh.repo.TreeObject(e.Hash)
+		sub, err := rh.Repository().TreeObject(e.Hash)
 		if err != nil {
 			return nil, fmt.Errorf("templates: folder %s/%s: %w", dir, e.Name, err)
 		}
@@ -203,7 +203,7 @@ func (rh *repoHandler) TemplateFactsAt(ctx context.Context, commit plumbing.Hash
 			if !fe.Mode.IsFile() || !strings.HasSuffix(fe.Name, ".md") {
 				continue
 			}
-			blob, err := rh.repo.BlobObject(fe.Hash)
+			blob, err := rh.Repository().BlobObject(fe.Hash)
 			if err != nil {
 				return nil, fmt.Errorf("templates: blob %s/%s/%s: %w", dir, e.Name, fe.Name, err)
 			}

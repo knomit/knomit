@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // MergeBranch merges src into dst using the given conflict strategy.
@@ -27,7 +28,7 @@ func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string, strateg
 	return err
 }
 
-// mergeIntoBranch acquires rh.lockBranch(dst) and calls
+// mergeIntoBranch acquires rh.LockBranch(dst) and calls
 // mergeIntoBranchLocked. Callers that already hold the lock (e.g.
 // reconcileAgentMerge, which holds it for the watermark write) should
 // call mergeIntoBranchLocked directly.
@@ -44,21 +45,21 @@ func (rh *repoHandler) mergeIntoBranch(
 // resolution is per-path and says nothing about any other path.
 //
 // It takes the DST lock, like mergeIntoBranch, and carries it through
-// notifyCommit (invariants/store/branch-lock-spans-notify).
+// NotifyCommit (invariants/store/branch-lock-spans-notify).
 func (rh *repoHandler) mergeIntoBranchResolved(
 	ctx context.Context,
 	src, dst string,
 	strategy ConflictStrategy,
 	resolutions map[string]Resolution,
 ) (AgentReconcileResult, error) {
-	unlock := rh.lockBranch(dst)
+	unlock := rh.LockBranch(dst)
 	defer unlock()
 	return rh.mergeIntoBranchLockedResolved(ctx, src, dst, strategy, resolutions)
 }
 
 // mergeIntoBranchLocked merges src into dst using the given conflict strategy
 // and returns a structured AgentReconcileResult describing what happened.
-// Caller must hold rh.lockBranch(dst).
+// Caller must hold rh.LockBranch(dst).
 //
 // Modes:
 //   - ModeNoop:  src is ancestor of dst (or hashes match); dst unchanged.
@@ -179,21 +180,21 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		strategy = StrategyLocalWins
 	}
 
-	if _, err := rh.branchID(ctx, src); err != nil {
+	if _, err := rh.BranchID(ctx, src); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: src %q: %w", src, err)
 	}
-	if _, err := rh.branchID(ctx, dst); err != nil {
+	if _, err := rh.BranchID(ctx, dst); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: dst %q: %w", dst, err)
 	}
 
 	srcRefName := plumbing.NewBranchReferenceName(src)
 	dstRefName := plumbing.NewBranchReferenceName(dst)
 
-	srcRef, err := rh.gits.Reference(srcRefName)
+	srcRef, err := rh.Storer().Reference(srcRefName)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: resolve src ref %q: %w", src, err)
 	}
-	dstRef, err := rh.gits.Reference(dstRefName)
+	dstRef, err := rh.Storer().Reference(dstRefName)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: resolve dst ref %q: %w", dst, err)
 	}
@@ -213,11 +214,11 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
 	}
 
-	srcCommit, err := rh.repo.CommitObject(srcHash)
+	srcCommit, err := rh.Repository().CommitObject(srcHash)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: src commit: %w", err)
 	}
-	dstCommit, err := rh.repo.CommitObject(dstHash)
+	dstCommit, err := rh.Repository().CommitObject(dstHash)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: dst commit: %w", err)
 	}
@@ -246,17 +247,17 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		if err := noLeftoverResolutions(resolutions, nil); err != nil {
 			return AgentReconcileResult{}, err
 		}
-		if err := rh.deriveBeforeAdvance(ctx, srcHash); err != nil {
+		if err := rh.DeriveBeforeAdvance(ctx, srcHash); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 		}
 		newRef := plumbing.NewHashReference(dstRefName, srcHash)
-		if err := rh.gits.SetReference(newRef); err != nil {
+		if err := rh.Storer().SetReference(newRef); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward ref: %w", err)
 		}
-		if err := rh.populateCommitLog(ctx, dst); err != nil {
+		if err := rh.PopulateCommitLog(ctx, dst); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward populate: %w", err)
 		}
-		if err := rh.notifyCommit(ctx, dst, srcHash); err != nil {
+		if err := rh.NotifyCommit(ctx, dst, srcHash); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward notify: %w", err)
 		}
 		log.Info().
@@ -313,14 +314,14 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 
 	// The signer is resolved BEFORE the three-way merge writes any tree: a
 	// refused merge (ErrNoSigner) must leave no object behind.
-	signer, err := rh.commitSigner()
+	signer, err := rh.CommitSigner()
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
 	// The merge commit's author is resolved here too, for the same reason: an
 	// experiment whose owning agent cannot be named (commitAgentID) refuses
 	// the merge before any tree is written.
-	author, committer, err := rh.commitSigs(ctx, dst, "merge")
+	author, committer, err := rh.CommitSigs(ctx, dst, "merge")
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
@@ -418,28 +419,28 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	mc := &object.Commit{
 		Author:       author,
 		Committer:    committer,
-		Message:      appendTrailersToParagraph(appendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.trace),
+		Message:      vcs.AppendTrailersToParagraph(appendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.trace),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},
 	}
 
-	mergeHash, err := storeCommit(rh.gits, signer, mc)
+	mergeHash, err := vcs.StoreCommit(rh.Storer(), signer, mc)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge commit: %w", err)
 	}
 
-	if err := rh.deriveBeforeAdvance(ctx, mergeHash); err != nil {
+	if err := rh.DeriveBeforeAdvance(ctx, mergeHash); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
 	newRef := plumbing.NewHashReference(dstRefName, mergeHash)
-	if err := rh.gits.SetReference(newRef); err != nil {
+	if err := rh.Storer().SetReference(newRef); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: update dst ref: %w", err)
 	}
 
-	if err := rh.populateCommitLog(ctx, dst); err != nil {
+	if err := rh.PopulateCommitLog(ctx, dst); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: populate commit_log: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, dst, mergeHash); err != nil {
+	if err := rh.NotifyCommit(ctx, dst, mergeHash); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: three-way notify: %w", err)
 	}
 
@@ -575,11 +576,11 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 					pickSide(path, ResolveSrc, plumbing.ZeroHash, blobHash, dstBlob)
 				}
 			}
-			newRootHash, err := buildTree(rh.gits, currentTree, path, blobHash)
+			newRootHash, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("apply insert %q: %w", path, err)
 			}
-			currentTree, err = object.GetTree(rh.gits, newRootHash)
+			currentTree, err = object.GetTree(rh.Storer(), newRootHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("reload tree after insert %q: %w", path, err)
 			}
@@ -631,11 +632,11 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 				}
 			}
 
-			newRootHash, err := buildTree(rh.gits, currentTree, path, blobHash)
+			newRootHash, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("apply modify %q: %w", path, err)
 			}
-			currentTree, err = object.GetTree(rh.gits, newRootHash)
+			currentTree, err = object.GetTree(rh.Storer(), newRootHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("reload tree after modify %q: %w", path, err)
 			}
@@ -677,7 +678,7 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 				pickSide(path, ResolveSrc, baseHash, plumbing.ZeroHash, dstHashAtPath)
 			}
 
-			newRootHash, err := deleteFromTree(rh.gits, currentTree, path)
+			newRootHash, err := vcs.DeleteFromTree(rh.Storer(), currentTree, path)
 			if err != nil {
 				// dstHas was confirmed above, so the path SHOULD be present
 				// in currentTree (an earlier iteration cannot have removed
@@ -688,7 +689,7 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 				// still contains a file the strategy meant to delete.
 				return plumbing.ZeroHash, nil, fmt.Errorf("merge: delete %q from tree: %w", path, err)
 			}
-			currentTree, err = object.GetTree(rh.gits, newRootHash)
+			currentTree, err = object.GetTree(rh.Storer(), newRootHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("reload tree after delete %q: %w", path, err)
 			}
@@ -774,7 +775,7 @@ func (rh *repoHandler) applyResolution(
 ) (*object.Tree, error) {
 	switch {
 	case res.Body != nil:
-		blobHash, err := writeBlobToStore(rh.gits, res.Body)
+		blobHash, err := vcs.WriteBlobToStore(rh.Storer(), res.Body)
 		if err != nil {
 			return nil, fmt.Errorf("resolution body for %q: %w", path, err)
 		}
@@ -782,11 +783,11 @@ func (rh *repoHandler) applyResolution(
 
 	case res.Side == ResolveSrc:
 		if srcDeleted {
-			newRoot, err := deleteFromTree(rh.gits, currentTree, path)
+			newRoot, err := vcs.DeleteFromTree(rh.Storer(), currentTree, path)
 			if err != nil {
 				return nil, fmt.Errorf("resolution src-delete %q: %w", path, err)
 			}
-			return object.GetTree(rh.gits, newRoot)
+			return object.GetTree(rh.Storer(), newRoot)
 		}
 		return rh.setPath(currentTree, path, srcBlob)
 
@@ -802,11 +803,11 @@ func (rh *repoHandler) applyResolution(
 
 // setPath puts blobHash at path in the tree and reloads it.
 func (rh *repoHandler) setPath(currentTree *object.Tree, path string, blobHash plumbing.Hash) (*object.Tree, error) {
-	newRoot, err := buildTree(rh.gits, currentTree, path, blobHash)
+	newRoot, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
 	if err != nil {
 		return nil, fmt.Errorf("apply resolution %q: %w", path, err)
 	}
-	return object.GetTree(rh.gits, newRoot)
+	return object.GetTree(rh.Storer(), newRoot)
 }
 
 // treeBlobHash looks up path in tree. Returns (hash, true) if the path
@@ -831,9 +832,9 @@ func (rh *repoHandler) mergeFactsInvalid(dstCommit *object.Commit, merged plumbi
 	if err != nil {
 		return "", err
 	}
-	mt, err := object.GetTree(rh.gits, merged)
+	mt, err := object.GetTree(rh.Storer(), merged)
 	if err != nil {
 		return "", err
 	}
-	return validateNewFacts(ont, rh.ontologyRoot(), []*object.Tree{dt}, mt)
+	return validateNewFacts(ont, rh.OntologyRoot(), []*object.Tree{dt}, mt)
 }

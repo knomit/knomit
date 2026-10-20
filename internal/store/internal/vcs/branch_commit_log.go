@@ -1,7 +1,7 @@
-// Commit-log maintenance methods on repoHandler. These were previously on
-// searchIndex but moved here because they only touch repoHandler state
+// Commit-log maintenance methods on Repo. These were previously on
+// searchIndex but moved here because they only touch Repo state
 // (gits, repo, db) and are called by multiple subsystems.
-package store
+package vcs
 
 import (
 	"context"
@@ -17,17 +17,18 @@ import (
 	"github.com/rs/zerolog/log"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/sqlite"
 )
 
-// populateCommitLog indexes every commit reachable from the tip of branch
+// PopulateCommitLog indexes every commit reachable from the tip of branch
 // that is not yet recorded on it: commit_log, branch_commits, commit_parents
 // and its path_changes rows. Underived ancestors outside that set are derived
 // first (deriveClosure, git only); the new commits are then recorded parents
-// first, in transactions of pathChangeBatch commits, each deriving its commits
+// first, in transactions of PathChangeBatch commits, each deriving its commits
 // in the same transaction. Everything read from git is prepared before each
 // transaction opens.
-func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) error {
-	if _, err := rh.resolveRef(ctx, branch); err != nil {
+func (rh *Repo) PopulateCommitLog(ctx context.Context, branch string) error {
+	if _, err := rh.ResolveRef(ctx, branch); err != nil {
 		// Branch not found (empty repo) — just mark available if table exists.
 		_ = rh.gits.CommitLogAvailable()
 		return nil
@@ -35,7 +36,7 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 	if !rh.gits.CommitLogAvailable() {
 		return nil
 	}
-	branchID, err := rh.branchID(ctx, branch)
+	branchID, err := rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("populateCommitLog: branch %q: %w", branch, err)
 	}
@@ -56,7 +57,7 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 // recordCommits records commits (parents first) on branch: their underived
 // ancestors outside the set first, then the commits themselves in batches,
 // each derived in the transaction that records it.
-func (rh *repoHandler) recordCommits(ctx context.Context, branch string, order []*object.Commit) error {
+func (rh *Repo) recordCommits(ctx context.Context, branch string, order []*object.Commit) error {
 	d := newIndexingDeriver(rh)
 	in := make(map[plumbing.Hash]bool, len(order))
 	for _, c := range order {
@@ -73,9 +74,9 @@ func (rh *repoHandler) recordCommits(ctx context.Context, branch string, order [
 	if _, err := rh.deriveClosure(ctx, d, outside); err != nil {
 		return err
 	}
-	q := conn(ctx, rh.db)
-	for i := 0; i < len(order); i += pathChangeBatch {
-		chunk := order[i:min(i+pathChangeBatch, len(order))]
+	q := sqlite.Conn(ctx, rh.db)
+	for i := 0; i < len(order); i += PathChangeBatch {
+		chunk := order[i:min(i+PathChangeBatch, len(order))]
 		hashes := make([]string, len(chunk))
 		prepared := make([]*preparedCommit, len(chunk))
 		for j, c := range chunk {
@@ -105,8 +106,8 @@ func (rh *repoHandler) recordCommits(ctx context.Context, branch string, order [
 // reachableCommits walks the branch tip and returns the commits NOT yet
 // recorded on the branch (all of them when branchID is 0), and how many
 // commits it walked.
-func (rh *repoHandler) reachableCommits(ctx context.Context, branch string, branchID int64) ([]*object.Commit, int, error) {
-	hash, err := rh.resolveRef(ctx, branch)
+func (rh *Repo) reachableCommits(ctx context.Context, branch string, branchID int64) ([]*object.Commit, int, error) {
+	hash, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return nil, 0, nil
 	}
@@ -115,7 +116,7 @@ func (rh *repoHandler) reachableCommits(ctx context.Context, branch string, bran
 		return nil, 0, fmt.Errorf("log: %w", err)
 	}
 	defer logIter.Close()
-	q := conn(ctx, rh.db)
+	q := sqlite.Conn(ctx, rh.db)
 	var fresh []*object.Commit
 	total := 0
 	err = logIter.ForEach(func(c *object.Commit) error {
@@ -140,17 +141,17 @@ func (rh *repoHandler) reachableCommits(ctx context.Context, branch string, bran
 	return fresh, total, nil
 }
 
-// payloadsComputed counts commit_log payload diffs (tests: a warm re-populate
+// PayloadsComputed counts commit_log payload diffs (tests: a warm re-populate
 // must compute none).
-var payloadsComputed atomic.Int64
+var PayloadsComputed atomic.Int64
 
 // indexItems builds CommitLogApply items for commits — OUTSIDE any
 // transaction, since the commit_log payload is a git diff: derivation's own,
 // when d prepared the commit (commitChanges). A commit already recorded on
 // some branch has its commit_log rows, so it gets no payload, unless all is
-// set (rebuildCommitLog rewrites commit_log).
-func (rh *repoHandler) indexItems(ctx context.Context, d *deriver, commits []*object.Commit, all bool) ([]storegit.CommitLogItem, error) {
-	q := conn(ctx, rh.db)
+// set (RebuildCommitLog rewrites commit_log).
+func (rh *Repo) indexItems(ctx context.Context, d *deriver, commits []*object.Commit, all bool) ([]storegit.CommitLogItem, error) {
+	q := sqlite.Conn(ctx, rh.db)
 	items := make([]storegit.CommitLogItem, len(commits))
 	for i, c := range commits {
 		items[i] = storegit.CommitLogItem{Hash: c.Hash.String(), Parents: parentHashes(c)}
@@ -163,32 +164,32 @@ func (rh *repoHandler) indexItems(ctx context.Context, d *deriver, commits []*ob
 				continue
 			}
 		}
-		payloadsComputed.Add(1)
+		PayloadsComputed.Add(1)
 		changes, err := d.commitChanges(c)
 		if err != nil {
 			return nil, fmt.Errorf("changed files %s: %w", c.Hash, err)
 		}
-		files := make([]changedFileEntry, len(changes))
+		files := make([]ChangedFileEntry, len(changes))
 		for j, e := range changes {
-			files[j] = changedFileEntry{path: e.Path, action: e.Action}
+			files[j] = ChangedFileEntry{Path: e.Path, Action: e.Action}
 		}
 		items[i].Entries = commitEntries(c, files)
 	}
 	return items, nil
 }
 
-// swapHook, when set (tests only), runs inside a rewind's or a rebuild's
+// SwapHook, when set (tests only), runs inside a rewind's or a rebuild's
 // swap transaction after its deletions and before it records new commits; a
 // non-nil error fails the swap there.
-var swapHook func() error
+var SwapHook func() error
 
-// lastSwapDuration is how long the last swap transaction held the write lock
+// LastSwapDuration is how long the last swap transaction held the write lock
 // (tests assert it stays short).
-var lastSwapDuration atomic.Int64
+var LastSwapDuration atomic.Int64
 
 // branchSet returns the commits recorded on the branch.
-func (rh *repoHandler) branchSet(ctx context.Context, branchID int64) (map[string]bool, error) {
-	rows, err := conn(ctx, rh.db).QueryContext(ctx, `SELECT commit_hash FROM branch_commits WHERE branch_id = ?`, branchID)
+func (rh *Repo) branchSet(ctx context.Context, branchID int64) (map[string]bool, error) {
+	rows, err := sqlite.Conn(ctx, rh.db).QueryContext(ctx, `SELECT commit_hash FROM branch_commits WHERE branch_id = ?`, branchID)
 	if err != nil {
 		return nil, fmt.Errorf("branch set: %w", err)
 	}
@@ -210,7 +211,7 @@ func (rh *repoHandler) branchSet(ctx context.Context, branchID int64) (map[strin
 // lock), after before (rebuild's staged commit_log swap). Readers see the old
 // branch or the new one, never a mix. Every recorded commit is derived first
 // (deriveClosure, short batches), so the hook only verifies.
-func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID int64, reachable []*object.Commit, before func(ctx context.Context, tx *sql.Tx) error) error {
+func (rh *Repo) swapBranch(ctx context.Context, branch string, branchID int64, reachable []*object.Commit, before func(ctx context.Context, tx *sql.Tx) error) error {
 	current, err := rh.branchSet(ctx, branchID)
 	if err != nil {
 		return err
@@ -248,7 +249,7 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 		hashes[i] = c.Hash.String()
 	}
 	var start time.Time
-	defer func() { lastSwapDuration.Store(int64(time.Since(start))) }()
+	defer func() { LastSwapDuration.Store(int64(time.Since(start))) }()
 	return rh.gits.CommitLogApply(ctx, branch, items, storegit.CommitLogApplyOptions{
 		Before: func(ctx context.Context, tx *sql.Tx) error {
 			start = time.Now()
@@ -267,8 +268,8 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 					return fmt.Errorf("swap: drop: %w", err)
 				}
 			}
-			if swapHook != nil {
-				if err := swapHook(); err != nil {
+			if SwapHook != nil {
+				if err := SwapHook(); err != nil {
 					return err
 				}
 			}
@@ -278,14 +279,14 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 	})
 }
 
-// repopulateBranch replaces the branch's commit visibility with the commits
+// RepopulateBranch replaces the branch's commit visibility with the commits
 // reachable from its tip (a rewind of main, the rebase replay after one).
 // Derived rows are never deleted.
-func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) error {
+func (rh *Repo) RepopulateBranch(ctx context.Context, branch string) error {
 	if !rh.gits.CommitLogAvailable() {
 		return nil
 	}
-	branchID, err := rh.branchID(ctx, branch)
+	branchID, err := rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("repopulateBranch: branch %q: %w", branch, err)
 	}
@@ -299,7 +300,7 @@ func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) erro
 	return nil
 }
 
-// rebuildCommitLog rewrites this branch's commit_log from git (populate alone
+// RebuildCommitLog rewrites this branch's commit_log from git (populate alone
 // cannot refresh existing rows: it dedups on branch_commits and commit_log
 // uses INSERT OR IGNORE), so author identity and other per-commit metadata are
 // re-read from the source of truth; re-derives the history rows that were
@@ -314,14 +315,14 @@ func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) erro
 // commit still on another branch keeps them: they are that branch's. Only rows
 // that differ are written, so an unchanged branch's swap writes nothing.
 // Derived rows are immutable per hash and never deleted here.
-func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) (err error) {
+func (rh *Repo) RebuildCommitLog(ctx context.Context, branch string) (err error) {
 	if !rh.gits.CommitLogAvailable() {
 		return nil
 	}
 	if _, err := rh.rederiveDegraded(ctx); err != nil {
 		return fmt.Errorf("rebuildCommitLog: %w", err)
 	}
-	branchID, err := rh.branchID(ctx, branch)
+	branchID, err := rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("rebuildCommitLog: branch id: %w", err)
 	}
@@ -340,9 +341,9 @@ func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) (err
 	}
 	// The stage is deleted when the rebuild returns, after the swap and
 	// outside its lock, whether it succeeded or not. A crash in between is
-	// cleared by the next open (openHistory).
+	// cleared by the next open (OpenHistory).
 	defer func() {
-		if _, cerr := conn(ctx, rh.db).ExecContext(context.WithoutCancel(ctx), `DELETE FROM commit_log_stage WHERE branch_id = ?`, branchID); cerr != nil {
+		if _, cerr := sqlite.Conn(ctx, rh.db).ExecContext(context.WithoutCancel(ctx), `DELETE FROM commit_log_stage WHERE branch_id = ?`, branchID); cerr != nil {
 			log.Warn().Err(cerr).Str("branch", branch).Msg("rebuildCommitLog: stage cleanup failed")
 		}
 	}()
@@ -379,19 +380,19 @@ func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) (err
 // commit_log_stage for branchID, in short transactions, outside any lock the
 // swap will hold. Every commit also gets a row with an empty path, so the swap
 // knows the whole reachable set, including commits that changed nothing.
-func (rh *repoHandler) stageCommitLog(ctx context.Context, branchID int64, commits []*object.Commit) error {
-	d := newDeriver(rh, activeTables)
-	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM commit_log_stage WHERE branch_id = ?`, branchID); err != nil {
+func (rh *Repo) stageCommitLog(ctx context.Context, branchID int64, commits []*object.Commit) error {
+	d := newDeriver(rh, ActiveTables)
+	if _, err := sqlite.Conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM commit_log_stage WHERE branch_id = ?`, branchID); err != nil {
 		return fmt.Errorf("stage: %w", err)
 	}
 	const insert = `INSERT OR IGNORE INTO commit_log_stage (branch_id, commit_hash, path, message, operation, author_name, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	for i := 0; i < len(commits); i += pathChangeBatch {
-		chunk := commits[i:min(i+pathChangeBatch, len(commits))]
+	for i := 0; i < len(commits); i += PathChangeBatch {
+		chunk := commits[i:min(i+PathChangeBatch, len(commits))]
 		items, err := rh.indexItems(ctx, d, chunk, true)
 		if err != nil {
 			return err
 		}
-		tctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
+		tctx, tx, own, err := sqlite.BeginTxIfNeeded(ctx, rh.db)
 		if err != nil {
 			return fmt.Errorf("stage: %w", err)
 		}
@@ -420,16 +421,16 @@ func (rh *repoHandler) stageCommitLog(ctx context.Context, branchID int64, commi
 }
 
 // AppendCommitLog records a single new commit on branch. Every caller moved
-// the ref only after deriveBeforeAdvance derived the commit and its ancestors,
+// the ref only after DeriveBeforeAdvance derived the commit and its ancestors,
 // so recording derives nothing: the hook only verifies. When a parent is not
 // recorded on this branch — a gap left by an older index — the branch is
 // populated instead, which records every missing ancestor (all derived too).
-// Returns an error so callers (notifyCommit) can propagate append failures
+// Returns an error so callers (NotifyCommit) can propagate append failures
 // — previously the error was swallowed to a log.Warn which let silent
 // branches drift out of commit_log parity. The property test P3 surfaced
 // a case where AppendCommitLog failed mid-sequence on a freshly-created
 // child branch and the resulting gap was only caught by a later Verify.
-func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr string) error {
+func (rh *Repo) AppendCommitLog(ctx context.Context, branch, hashStr string) error {
 	if !rh.gits.CommitLogAvailable() {
 		return nil
 	}
@@ -437,11 +438,11 @@ func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr stri
 	if err != nil {
 		return fmt.Errorf("AppendCommitLog: get commit %s: %w", hashStr, err)
 	}
-	branchID, err := rh.branchID(ctx, branch)
+	branchID, err := rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("AppendCommitLog: branch %q: %w", branch, err)
 	}
-	q := conn(ctx, rh.db)
+	q := sqlite.Conn(ctx, rh.db)
 	for _, p := range c.ParentHashes {
 		var n int
 		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`, branchID, p.String()).Scan(&n); err != nil {
@@ -449,7 +450,7 @@ func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr stri
 		}
 		if n == 0 {
 			if _, oerr := rh.repo.CommitObject(p); oerr == nil {
-				return rh.populateCommitLog(ctx, branch)
+				return rh.PopulateCommitLog(ctx, branch)
 			}
 		}
 	}

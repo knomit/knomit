@@ -27,7 +27,7 @@ func extractBody(raw []byte) string {
 // scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
 func (fq *factQuery) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
 	}
@@ -71,7 +71,7 @@ func (fq *factQuery) Completions(ctx context.Context, branch, category, prefix s
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":
-		rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 			`SELECT DISTINCT f.path
 			 FROM branch_facts bf
 			 JOIN facts f ON f.id = bf.fact_id
@@ -113,7 +113,7 @@ func (fq *factQuery) Completions(ctx context.Context, branch, category, prefix s
 
 // queryDistinct executes a query and returns distinct non-empty string values.
 func (fq *factQuery) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
-	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, query, args...)
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ type StatsResult struct {
 // own DefaultAxis, because the whole point of the call is to pin a mount to an
 // axis it did not choose; NormalizeAxis is the caller's to apply.
 func (fq *factQuery) Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]Highlight, bool, error) {
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, false, fmt.Errorf("highlights: %w", err)
 	}
@@ -206,7 +206,7 @@ func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string)
 		Highlights: []Highlight{},
 	}
 
-	branchID, err := fq.rh.branchID(ctx, branch)
+	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return res, fmt.Errorf("stats: %w", err)
 	}
@@ -222,7 +222,7 @@ func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string)
 		q += ` AND f.path LIKE ?`
 		args = append(args, pathPrefix+"%")
 	}
-	if err := conn(ctx, fq.rh.db).QueryRowContext(ctx, q, args...).Scan(&res.Total, &avgConf); err != nil {
+	if err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx, q, args...).Scan(&res.Total, &avgConf); err != nil {
 		return res, err
 	}
 	if avgConf != nil {
@@ -241,7 +241,7 @@ func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string)
 		dargs = append(dargs, pathPrefix+"%")
 	}
 	dq += ` GROUP BY d.value`
-	drows, err := conn(ctx, fq.rh.db).QueryContext(ctx, dq, dargs...)
+	drows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, dq, dargs...)
 	if err != nil {
 		return res, err
 	}
@@ -266,7 +266,7 @@ func (fq *factQuery) Stats(ctx context.Context, branch, pathPrefix, axis string)
 		eargs = append(eargs, pathPrefix+"%")
 	}
 	eq += ` GROUP BY e.value`
-	erows, err := conn(ctx, fq.rh.db).QueryContext(ctx, eq, eargs...)
+	erows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, eq, eargs...)
 	if err != nil {
 		return res, err
 	}

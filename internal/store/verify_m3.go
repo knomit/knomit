@@ -8,6 +8,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // m3Verdict is merge rule M3's answer for one merge commit: whether its tree
@@ -61,14 +63,14 @@ func checkM3(merge *object.Commit) (m3Verdict, error) {
 	// skips submodule entries, so a "clean" merge could add a gitlink its
 	// parents do not carry and still pass. The TreeWalker itself ends
 	// silently at a directory entry that is not a tree, so the tree's shape
-	// is checked first (checkTreeShape): such an entry is an error, never
+	// is checked first (CheckTreeShape): such an entry is an error, never
 	// the end of the walk.
 	flat := func(c *object.Commit) (map[string]pathEntry, error) {
 		tree, err := c.Tree()
 		if err != nil {
 			return nil, err
 		}
-		if err := checkTreeShape(tree, nil); err != nil {
+		if err := vcs.CheckTreeShape(tree, nil); err != nil {
 			return nil, err
 		}
 		out := map[string]pathEntry{}

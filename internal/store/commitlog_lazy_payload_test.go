@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // newCommitLogService opens a fresh single-branch repo for commit-log tests.
@@ -43,7 +44,7 @@ func applySynthetic(t *testing.T, s *Service, branch string, hashes []string) {
 		}}}
 	}
 	noDerive := func(context.Context, *sql.Tx, int) error { return nil }
-	require.NoError(t, s.rh.gits.CommitLogApply(context.Background(), branch, items, storegit.CommitLogApplyOptions{Derive: noDerive}))
+	require.NoError(t, s.rh.Storer().CommitLogApply(context.Background(), branch, items, storegit.CommitLogApplyOptions{Derive: noDerive}))
 }
 
 // TestPopulateCommitLog_SkipsPayloadForKnownCommits is the regression anchor
@@ -56,13 +57,13 @@ func TestPopulateCommitLog_SkipsPayloadForKnownCommits(t *testing.T) {
 		_, err := svc.Facts().WriteFact(ctx, branch, "kb/"+name+".md", testFactBody(name, 0.9, nil), "learn "+name, "learn")
 		require.NoError(t, err)
 	}
-	before := payloadsComputed.Load()
-	require.NoError(t, svc.rh.populateCommitLog(ctx, branch))
-	require.Equal(t, before, payloadsComputed.Load(), "re-walk of fully-recorded commits must compute no payloads")
+	before := vcs.PayloadsComputed.Load()
+	require.NoError(t, svc.rh.PopulateCommitLog(ctx, branch))
+	require.Equal(t, before, vcs.PayloadsComputed.Load(), "re-walk of fully-recorded commits must compute no payloads")
 
 	_, err := svc.Facts().WriteFact(ctx, branch, "kb/d.md", testFactBody("d", 0.9, nil), "learn d", "learn")
 	require.NoError(t, err)
-	require.Equal(t, before+1, payloadsComputed.Load(), "a new commit is computed once")
+	require.Equal(t, before+1, vcs.PayloadsComputed.Load(), "a new commit is computed once")
 }
 
 // TestCommitLogApply_WalksPastDedupHits guards the DAG invariant: a dedup hit
@@ -80,13 +81,13 @@ func TestCommitLogApply_WalksPastDedupHits(t *testing.T) {
 
 	for _, h := range []string{a, b, c} {
 		var n int
-		require.NoError(t, svc.rh.db.QueryRow(
+		require.NoError(t, svc.rh.DB().QueryRow(
 			`SELECT COUNT(*) FROM branch_commits bc JOIN branches br ON br.id = bc.branch_id
 			 WHERE br.name = ? AND bc.commit_hash = ?`, branch, h).Scan(&n))
 		require.Equalf(t, 1, n, "branch_commits row for %s", h)
 	}
 	var edges int
-	require.NoError(t, svc.rh.db.QueryRow(
+	require.NoError(t, svc.rh.DB().QueryRow(
 		`SELECT COUNT(*) FROM commit_parents WHERE commit_hash = ? AND parent_hash = ?`,
 		c, b).Scan(&edges))
 	require.Equal(t, 1, edges, "commit_parents edge past the dedup hit")
@@ -107,9 +108,9 @@ func TestPopulateCommitLog_NoTreeReadsForKnownCommits(t *testing.T) {
 	}
 
 	// Collect every commit reachable from the tip, then drop its tree object.
-	head, err := svc.rh.resolveRef(ctx, branch)
+	head, err := svc.rh.ResolveRef(ctx, branch)
 	require.NoError(t, err)
-	iter, err := svc.rh.repo.Log(&gogit.LogOptions{From: head, Order: gogit.LogOrderDefault})
+	iter, err := svc.rh.Repository().Log(&gogit.LogOptions{From: head, Order: gogit.LogOrderDefault})
 	require.NoError(t, err)
 	var trees []plumbing.Hash
 	require.NoError(t, iter.ForEach(func(c *object.Commit) error {
@@ -120,12 +121,12 @@ func TestPopulateCommitLog_NoTreeReadsForKnownCommits(t *testing.T) {
 	require.NotEmpty(t, trees)
 
 	for _, h := range trees {
-		require.NoError(t, svc.rh.gits.DeleteObjectForTest(h))
+		require.NoError(t, svc.rh.Storer().DeleteObjectForTest(h))
 	}
 
 	// Every commit is already recorded, so no payload — and therefore no tree
 	// read — should be attempted. Before the lazy payload this errored with
-	// "changedFilesInCommit: tree: object not found".
-	require.NoError(t, svc.rh.populateCommitLog(ctx, branch),
+	// "ChangedFilesInCommit: tree: object not found".
+	require.NoError(t, svc.rh.PopulateCommitLog(ctx, branch),
 		"re-walk of a populated branch must not read commit trees")
 }

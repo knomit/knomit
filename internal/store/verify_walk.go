@@ -36,7 +36,7 @@ const (
 	RuleInactive     = "inactive"      // the record's state is not active
 	RuleMerge        = "merge"         // an unsigned merge that fails M3
 	// RuleMalformedTree: the commit's tree, or a parent's, is not well formed
-	// (checkTreeShape): a directory entry that is not a tree object, a file
+	// (CheckTreeShape): a directory entry that is not a tree object, a file
 	// entry that is not a blob, an object that does not exist, a name go-git
 	// will not read, a duplicate name, or a tree too deep. Judged before every
 	// other rule, in every repository.
@@ -90,9 +90,9 @@ func keyFingerprint(pk ssh.PublicKey) (string, error) {
 // acceptedCommit reports whether h is on this instance's accept list, which
 // waives E4 for that one commit.
 func (rh *repoHandler) acceptedCommit(h plumbing.Hash) bool {
-	if rh.acceptList == nil {
+	if rh.AcceptList() == nil {
 		return false
 	}
-	_, ok := rh.acceptList.Lookup(h)
+	_, ok := rh.AcceptList().Lookup(h)
 	return ok
 }

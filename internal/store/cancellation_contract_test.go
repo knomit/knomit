@@ -51,7 +51,7 @@ func TestMidQueryCancellation_SurfacesAsContextCanceled(t *testing.T) {
 	defer cancel()
 
 	var n int
-	qerr := svc.rh.db.QueryRowContext(ctx, slowQuery).Scan(&n)
+	qerr := svc.rh.DB().QueryRowContext(ctx, slowQuery).Scan(&n)
 	require.Error(t, qerr, "the cancel must abort the statement, not let it run to completion")
 
 	var se sqlite3.Error

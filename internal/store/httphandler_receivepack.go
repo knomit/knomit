@@ -21,6 +21,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/platform/version"
+	"knomit/internal/store/internal/vcs"
 )
 
 // PushPolicy is what the HTTP edge knows about ONE receive-pack request and
@@ -94,7 +95,7 @@ const errNoPushPolicy = "knomit: pushing is not available here: no verified push
 //  4. under the branch lock, on a context that cannot be cancelled: the
 //     old-hash check, ONE transaction promoting the new objects, then the
 //     branch seeded from the upstream (first push) and moved through
-//     advanceBranchTo, which ends in notifyCommit.
+//     advanceBranchTo, which ends in NotifyCommit.
 //
 // Nothing before 4 writes to the host; nothing in 4 may be abandoned by a
 // client that disconnects, because the ref moves before the SQL that
@@ -197,7 +198,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		reply.out = reply.mux
 	}
 	pol, _ := pushPolicyFrom(r.Context())
-	lg := log.With().Str("repo", rp.rh.name).Str("pusher", pol.Pusher).Logger()
+	lg := log.With().Str("repo", rp.rh.Name()).Str("pusher", pol.Pusher).Logger()
 
 	// Refusals from the commands alone read nothing more: the client is
 	// still sending its pack, and an answer written before the body is
@@ -221,7 +222,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		reply.refuse(msg)
 	}
 
-	q := newQuarantine(rp.rh.gits)
+	q := newQuarantine(rp.rh.Storer())
 	var pack *bufio.Reader
 	if req.Packfile != nil {
 		// Decode leaves the rest of the body here even when nothing follows
@@ -262,7 +263,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		agent := ""
 		if c, err := object.GetCommit(q, cmd.New); err == nil {
-			agent = agentIDOfAuthor(c.Author.Email)
+			agent = vcs.AgentIDOfAuthor(c.Author.Email)
 		}
 		pol.Judged(branch, cmd.New.String(), agent, refusal)
 	}
@@ -289,7 +290,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	judged("")
 
-	ev := lg.Info().Str("old", shortRefHash(cmd.Old)).Str("new", shortRefHash(cmd.New)).
+	ev := lg.Info().Str("old", vcs.ShortRefHash(cmd.Old)).Str("new", vcs.ShortRefHash(cmd.New)).
 		Int("commits", len(commits)).Int("objects", len(objs))
 	switch {
 	case seeded:
@@ -301,7 +302,7 @@ func (rp *receivePack) serve(w http.ResponseWriter, r *http.Request) {
 		// peer whose commits are on it; commits the host had not merged yet
 		// disappear from this branch until someone pushes them again. Worth
 		// one line above INFO, naming the pusher (on lg).
-		lg.Warn().Str("old", shortRefHash(cmd.Old)).Str("new", shortRefHash(cmd.New)).
+		lg.Warn().Str("old", vcs.ShortRefHash(cmd.Old)).Str("new", vcs.ShortRefHash(cmd.New)).
 			Int("commits", len(commits)).Int("objects", len(objs)).
 			Msg("receive-pack: force-updated (not a descendant of the previous tip)")
 	default:
@@ -332,7 +333,7 @@ func (rp *receivePack) judgeRequest(ctx context.Context, req *packp.ReferenceUpd
 	case pol.Pusher == "":
 		return nil, errNoPushPolicy
 	}
-	if _, err := rp.rh.resolveRef(ctx, rp.upstream()); err != nil {
+	if _, err := rp.rh.ResolveRef(ctx, rp.upstream()); err != nil {
 		return nil, fmt.Sprintf("%s: %q", errUpstreamMissing.Error(), rp.upstream())
 	}
 	if len(req.Commands) != 1 {
@@ -419,10 +420,10 @@ func (rp *receivePack) privatePathClosure(ctx context.Context, q *quarantine, co
 // cancelled whenever the client goes away.
 func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []plumbing.EncodedObject) (res MainReconcileResult, seeded bool, refusal string, err error) {
 	branch := cmd.Name.Short()
-	defer rp.rh.lockBranch(branch)()
+	defer rp.rh.LockBranch(branch)()
 
 	cur := plumbing.ZeroHash
-	if ref, rerr := rp.rh.gits.Reference(cmd.Name); rerr == nil {
+	if ref, rerr := rp.rh.Storer().Reference(cmd.Name); rerr == nil {
 		cur = ref.Hash()
 	} else if !errors.Is(rerr, plumbing.ErrReferenceNotFound) {
 		return res, false, "", fmt.Errorf("read %s: %w", cmd.Name, rerr)
@@ -435,7 +436,7 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 	if pushRegisterHook != nil {
 		pushRegisterHook()
 	}
-	if err := rp.rh.gits.PutObjects(ctx, objs); err != nil {
+	if err := rp.rh.Storer().PutObjects(ctx, objs); err != nil {
 		return res, false, "", fmt.Errorf("promote: %w", err)
 	}
 	if cur == plumbing.ZeroHash {
@@ -454,9 +455,9 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 	}
 	if seeded && res.Mode == ModeNoop {
 		// The pushed tip IS the upstream tip: CreateBranch set the ref and its
-		// rows, but no move ran notifyCommit. Run it, so a registration always
+		// rows, but no move ran NotifyCommit. Run it, so a registration always
 		// passes the chokepoint.
-		if err := rp.rh.notifyCommit(ctx, branch, cmd.New); err != nil {
+		if err := rp.rh.NotifyCommit(ctx, branch, cmd.New); err != nil {
 			return res, seeded, "", err
 		}
 	}
@@ -489,12 +490,12 @@ func (rh *repoHandler) heldAdmitted(ctx context.Context, upstream string) func(p
 	loaded := false
 	load := func() error {
 		loaded = true
-		if up, err := rh.gits.Reference(plumbing.NewBranchReferenceName(upstream)); err == nil {
+		if up, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(upstream)); err == nil {
 			heads = append(heads, up.Hash())
 		} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return err
 		}
-		iter, err := rh.gits.IterReferences()
+		iter, err := rh.Storer().IterReferences()
 		if err != nil {
 			return err
 		}
@@ -523,7 +524,7 @@ func (rh *repoHandler) heldAdmitted(ctx context.Context, upstream string) func(p
 				if reach[head] {
 					continue
 				}
-				if err := walkHistory(rh.gits, head, reach, func(c *object.Commit) { reach[c.Hash] = true }); err != nil {
+				if err := vcs.WalkHistory(rh.Storer(), head, reach, func(c *object.Commit) { reach[c.Hash] = true }); err != nil {
 					return false, err
 				}
 			}

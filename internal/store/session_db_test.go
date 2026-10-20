@@ -32,7 +32,7 @@ func TestSessionTables_RelocatedOutOfMainDB(t *testing.T) {
 
 	mainHas := func(table string) bool {
 		var n int
-		err := svc.rh.db.QueryRowContext(ctx,
+		err := svc.rh.DB().QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n)
 		require.NoError(t, err)
 		return n > 0

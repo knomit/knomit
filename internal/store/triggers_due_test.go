@@ -18,10 +18,10 @@ import (
 func TestMigration000030_TableExists(t *testing.T) {
 	svc := newChangesService(t)
 	var n int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'trigger_due_fires'`).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'trigger_due_fires'`).Scan(&n))
 	require.Equal(t, 1, n)
 	var sql string
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'trigger_due_fires'`).Scan(&sql))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'trigger_due_fires'`).Scan(&sql))
 	require.Contains(t, sql, "PRIMARY KEY (branch, trigger, path)", "the key starts with branch so the per-run read is an index range")
 }
 
@@ -74,7 +74,7 @@ func TestDueCandidates_LivenessJoinAndBoundary(t *testing.T) {
 	_, err := svc.Facts().DeleteFact(ctx, "agent/a", "kb/alpha/shared.md", "retract")
 	require.NoError(t, err)
 	var rows int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM fact_expires fe JOIN facts f ON f.id = fe.fact_id WHERE f.path = 'kb/alpha/shared.md'`).Scan(&rows))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM fact_expires fe JOIN facts f ON f.id = fe.fact_id WHERE f.path = 'kb/alpha/shared.md'`).Scan(&rows))
 	require.Equal(t, 1, rows, "fixture: fact_expires keeps the version's row (main holds it) — the join is what makes it not a candidate")
 	require.NotContains(t, dueAt(t, svc, "agent/a", at), "kb/alpha/shared.md")
 
@@ -85,7 +85,7 @@ func TestDueCandidates_LivenessJoinAndBoundary(t *testing.T) {
 	write("agent/a", "kb/alpha/moved.md", expNow.Add(-30*time.Minute))
 	require.Equal(t, at-1800, dueAt(t, svc, "agent/a", at)["kb/alpha/moved.md"])
 	var versions int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM fact_expires fe JOIN facts f ON f.id = fe.fact_id WHERE f.path = 'kb/alpha/moved.md'`).Scan(&versions))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM fact_expires fe JOIN facts f ON f.id = fe.fact_id WHERE f.path = 'kb/alpha/moved.md'`).Scan(&versions))
 	require.Equal(t, 2, versions, "fixture: the old version's row is an orphan in fact_expires; only the join keeps it out")
 }
 
@@ -120,7 +120,7 @@ func TestDueMarks_RoundTripAndForgottenWithTheName(t *testing.T) {
 	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", nil, nil, []DueMark{{Trigger: "x", Path: "kb/a.md", ExpiresAt: 150, FiredAt: 600}}))
 	require.EqualValues(t, 150, marks("agent/a")[DueKey{Trigger: "x", Path: "kb/a.md"}])
 	var n int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM trigger_due_fires`).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM trigger_due_fires`).Scan(&n))
 	require.Equal(t, 4, n, "three keys on agent/a and one on agent/b")
 
 	// The name x leaves: its bookmark and its marks go, y's stay, agent/b's stay.
@@ -152,7 +152,7 @@ func TestAdvanceTriggerWatermarks_DueMarksUnbounded(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, marks, n, "every processed fact is marked, whatever the log kept")
 	var rows int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM trigger_due_fires WHERE branch = 'agent/a' AND trigger = 'big'`).Scan(&rows))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM trigger_due_fires WHERE branch = 'agent/a' AND trigger = 'big'`).Scan(&rows))
 	require.Equal(t, n, rows)
 }
 
@@ -167,7 +167,7 @@ func TestTriggerFires_FiredAtIsUTCWithZ(t *testing.T) {
 	_, err := svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "h", RangeTo: "h", Paths: 1, Evaluated: 1, Fires: 1, Rows: fireRows(1, "z")})
 	require.NoError(t, err)
 	var stored int64
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT fired_at FROM trigger_fires WHERE outcome = 'run'`).Scan(&stored))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT fired_at FROM trigger_fires WHERE outcome = 'run'`).Scan(&stored))
 	require.InDelta(t, time.Now().UTC().Unix(), stored, 5, "stored as Unix seconds")
 
 	ny, err := time.LoadLocation("America/New_York")
@@ -207,8 +207,8 @@ func BenchmarkDueCandidates(b *testing.B) {
 			require.NoError(b, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "main", "agent/a"))
 			ctx := context.Background()
 			var branchID int64
-			require.NoError(b, svc.rh.db.QueryRow(`SELECT id FROM branches WHERE name = 'agent/a'`).Scan(&branchID))
-			tx, err := svc.rh.db.BeginTx(ctx, nil)
+			require.NoError(b, svc.rh.DB().QueryRow(`SELECT id FROM branches WHERE name = 'agent/a'`).Scan(&branchID))
+			tx, err := svc.rh.DB().BeginTx(ctx, nil)
 			require.NoError(b, err)
 			const now = int64(1_800_000_000)
 			for i := 0; i < tc.live; i++ {
@@ -227,7 +227,7 @@ func BenchmarkDueCandidates(b *testing.B) {
 				require.NoError(b, err)
 			}
 			require.NoError(b, tx.Commit())
-			_, err = svc.rh.db.ExecContext(ctx, `ANALYZE`)
+			_, err = svc.rh.DB().ExecContext(ctx, `ANALYZE`)
 			require.NoError(b, err)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {

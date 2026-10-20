@@ -12,6 +12,8 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // validatePath refuses a path the store must never commit, wrapping
@@ -23,7 +25,7 @@ import (
 // branch lock and before the ref moves, so a refused path leaves nothing
 // behind. That ordering is the point: go-git checks tree paths only on READ
 // (FindEntry, TreeEntryFile, the tree walker under DiffTree), and those reads
-// first run in notifyCommit's im.Sync, AFTER SetReference. A path git cannot
+// first run in NotifyCommit's im.Sync, AFTER SetReference. A path git cannot
 // read back, refused there, leaves a commit on the branch that every later
 // sync trips over (#384).
 func validatePath(path string) error {
@@ -90,7 +92,7 @@ func gitReadablePath(path string) error {
 			// An empty segment ("kb//x.md", "/kb/x.md", "kb/x/") is out of
 			// scope for this check (#384), but go-git DOES refuse an empty
 			// entry name: when it decodes the tree ("malformed tree: empty
-			// filename"). deriveBeforeAdvance decodes the new trees before the
+			// filename"). DeriveBeforeAdvance decodes the new trees before the
 			// ref moves (whenever commit_log is available), so such a write is
 			// refused before it can poison a branch. It is refused late,
 			// though, with a store error, so a REST client gets a 500 rather
@@ -131,22 +133,22 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 // no other write can land between the check and the commit. On a mismatch
 // nothing is written and the error wraps ErrFactChanged.
 func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, message, operation, expectBlob string) (commitHash string, blobHash string, err error) {
-	if fi.rh.readOnly {
+	if fi.rh.ReadOnly() {
 		return "", "", ErrRepoReadOnly
 	}
 	if err := validatePath(path); err != nil {
 		return "", "", fmt.Errorf("store: WriteFile: %w", err)
 	}
 
-	unlock := fi.rh.lockBranch(branch)
+	unlock := fi.rh.LockBranch(branch)
 	defer unlock()
 
-	headHash, err := fi.rh.resolveRef(ctx, branch)
+	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
 	}
 	if expectBlob != "" {
-		current, err := fi.rh.blobAtCommit(headHash, path)
+		current, err := fi.rh.BlobAtCommit(headHash, path)
 		if err != nil {
 			return "", "", fmt.Errorf("WriteFile: precondition: %w", err)
 		}
@@ -162,40 +164,40 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 		}
 	}
 
-	signer, err := fi.rh.commitSigner()
+	signer, err := fi.rh.CommitSigner()
 	if err != nil {
 		return "", "", fmt.Errorf("WriteFile: %w", err)
 	}
-	author, committer, err := fi.rh.commitSigs(ctx, branch, operation)
+	author, committer, err := fi.rh.CommitSigs(ctx, branch, operation)
 	if err != nil {
 		return "", "", fmt.Errorf("WriteFile: %w", err)
 	}
 	// The causal-trace trailers (F07): stamped here, on the message the
 	// builder signs, when the caller's ctx carries a set; nothing otherwise.
-	message = appendTrailers(message, trailersFromContext(ctx))
-	newCommitHash, newBlobHash, err := writeFileToStore(fi.rh.gits, signer, headHash, path, content, message, author, committer)
+	message = vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx))
+	newCommitHash, newBlobHash, err := vcs.WriteFileToStore(fi.rh.Storer(), signer, headHash, path, content, message, author, committer)
 	if err != nil {
 		return "", "", err
 	}
 
 	// Derive the commit's history rows BEFORE the ref moves: a failure here
 	// leaves the branch where it was, never moved with the call failed.
-	if err := fi.rh.deriveBeforeAdvance(ctx, newCommitHash); err != nil {
+	if err := fi.rh.DeriveBeforeAdvance(ctx, newCommitHash); err != nil {
 		return "", "", err
 	}
 	// Update the branch ref to point to the new commit.
 	branchRefName := plumbing.NewBranchReferenceName(branch)
-	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
+	if err := fi.rh.Storer().SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
 		return "", "", err
 	}
 
 	// Notify inside the lock — the ref advance, commit_log append, and
 	// im.Sync (which updates branch_facts / graph) must be atomic w.r.t.
-	// concurrent readers (including Verify, which takes lockBranchRead).
+	// concurrent readers (including Verify, which takes LockBranchRead).
 	// A reader observing the window after SetReference but before
-	// notifyCommit would see a torn state: git HEAD at the new commit,
+	// NotifyCommit would see a torn state: git HEAD at the new commit,
 	// SQL index still at the previous one.
-	if err := fi.rh.notifyCommit(ctx, branch, newCommitHash); err != nil {
+	if err := fi.rh.NotifyCommit(ctx, branch, newCommitHash); err != nil {
 		return "", "", err
 	}
 	return newCommitHash.String(), newBlobHash.String(), nil
@@ -204,7 +206,7 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 // deleteFile removes path from branch and creates a commit.
 // Returns the commit hash of the new commit.
 func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error) {
-	if fi.rh.readOnly {
+	if fi.rh.ReadOnly() {
 		return "", ErrRepoReadOnly
 	}
 	path = strings.ToLower(path)
@@ -212,10 +214,10 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", fmt.Errorf("store: DeleteFile: %w", err)
 	}
 
-	unlock := fi.rh.lockBranch(branch)
+	unlock := fi.rh.LockBranch(branch)
 	defer unlock()
 
-	headHash, err := fi.rh.resolveRef(ctx, branch)
+	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("DeleteFile: ref: %w", err)
 	}
@@ -226,7 +228,7 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
 	}
 	if !exists {
-		// Wrapped as ErrPathNotFound — the same sentinel readFileWithHash
+		// Wrapped as ErrPathNotFound — the same sentinel ReadFileWithHash
 		// wraps for a missing read — so a caller one layer up (the REST
 		// DELETE handler) can tell "nothing there" from a real backend
 		// failure and answer 404, exactly as a GET of the same missing path
@@ -235,30 +237,30 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", fmt.Errorf("DeleteFile: %q: %w", path, ErrPathNotFound)
 	}
 
-	signer, err := fi.rh.commitSigner()
+	signer, err := fi.rh.CommitSigner()
 	if err != nil {
 		return "", fmt.Errorf("DeleteFile: %w", err)
 	}
-	author, committer, err := fi.rh.commitSigs(ctx, branch, operation)
+	author, committer, err := fi.rh.CommitSigs(ctx, branch, operation)
 	if err != nil {
 		return "", fmt.Errorf("DeleteFile: %w", err)
 	}
-	message = appendTrailers(message, trailersFromContext(ctx)) // see writeFileExact
-	newCommitHash, err := deleteFileFromStore(fi.rh.gits, signer, headHash, path, message, author, committer)
+	message = vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx)) // see writeFileExact
+	newCommitHash, err := vcs.DeleteFileFromStore(fi.rh.Storer(), signer, headHash, path, message, author, committer)
 	if err != nil {
 		return "", err
 	}
 
-	if err := fi.rh.deriveBeforeAdvance(ctx, newCommitHash); err != nil {
+	if err := fi.rh.DeriveBeforeAdvance(ctx, newCommitHash); err != nil {
 		return "", err
 	}
 	branchRefName := plumbing.NewBranchReferenceName(branch)
-	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
+	if err := fi.rh.Storer().SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
 		return "", err
 	}
 
-	// notifyCommit runs inside the branch lock — see writeFile for rationale.
-	if err := fi.rh.notifyCommit(ctx, branch, newCommitHash); err != nil {
+	// NotifyCommit runs inside the branch lock — see writeFile for rationale.
+	if err := fi.rh.NotifyCommit(ctx, branch, newCommitHash); err != nil {
 		return "", err
 	}
 	return newCommitHash.String(), nil
@@ -305,7 +307,7 @@ func SetBatchWriteUnlockedHookForTest(f func()) (restore func()) {
 // is written; otherwise nothing is written and the error is a
 // *RetractMissingError. nil means no precondition.
 func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
-	if fi.rh.readOnly {
+	if fi.rh.ReadOnly() {
 		return "", nil, ErrRepoReadOnly
 	}
 	if len(files) == 0 && len(deletes) == 0 {
@@ -346,15 +348,15 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 		(*h)()
 	}
 
-	unlock := fi.rh.lockBranch(branch)
+	unlock := fi.rh.LockBranch(branch)
 	defer unlock()
 	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, deletes, mustExist, message, operation)
 	if err != nil {
 		return "", nil, err
 	}
 
-	// notifyCommit runs inside the branch lock — see writeFile for rationale.
-	if err := fi.rh.notifyCommit(ctx, branch, cHash); err != nil {
+	// NotifyCommit runs inside the branch lock — see writeFile for rationale.
+	if err := fi.rh.NotifyCommit(ctx, branch, cHash); err != nil {
 		return "", nil, err
 	}
 	return cHash.String(), blobHashes, nil
@@ -363,11 +365,11 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 // batchWriteLocked performs the actual batchWrite work. Caller must hold the branch lock.
 func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (plumbing.Hash, map[string]string, error) {
 	// Before any object is written: a refused batch must leave nothing behind.
-	signer, err := fi.rh.commitSigner()
+	signer, err := fi.rh.CommitSigner()
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
 	}
-	headHash, err := fi.rh.resolveRef(ctx, branch)
+	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: ref: %w", err)
 	}
@@ -382,7 +384,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		for _, path := range mustExist {
 			blob := ""
 			if headHash != plumbing.ZeroHash {
-				if blob, err = fi.rh.blobAtCommit(headHash, path); err != nil {
+				if blob, err = fi.rh.BlobAtCommit(headHash, path); err != nil {
 					return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: precondition: %w", err)
 				}
 			}
@@ -407,7 +409,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	// Read existing root tree.
 	var rootTree *object.Tree
 	if parentHash != plumbing.ZeroHash {
-		parentCommit, err := object.GetCommit(fi.rh.gits, parentHash)
+		parentCommit, err := object.GetCommit(fi.rh.Storer(), parentHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: get parent commit: %w", err)
 		}
@@ -428,7 +430,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	}
 	for path, content := range files {
 		// Create blob.
-		blobObj := fi.rh.gits.NewEncodedObject()
+		blobObj := fi.rh.Storer().NewEncodedObject()
 		blobObj.SetType(plumbing.BlobObject)
 		bw, err := blobObj.Writer()
 		if err != nil {
@@ -439,20 +441,20 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: blob write for %q: %w", path, err)
 		}
 		bw.Close()
-		blobHash, err := fi.rh.gits.SetEncodedObject(blobObj)
+		blobHash, err := fi.rh.Storer().SetEncodedObject(blobObj)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: store blob for %q: %w", path, err)
 		}
 		blobHashes[path] = blobHash.String()
 
 		// Update tree.
-		currentRootHash, err = buildTree(fi.rh.gits, rootTree, path, blobHash)
+		currentRootHash, err = vcs.BuildTree(fi.rh.Storer(), rootTree, path, blobHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: build tree for %q: %w", path, err)
 		}
 
 		// Load updated root tree for next iteration.
-		rootTree, err = object.GetTree(fi.rh.gits, currentRootHash)
+		rootTree, err = object.GetTree(fi.rh.Storer(), currentRootHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: get updated tree: %w", err)
 		}
@@ -464,41 +466,41 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		if rootTree == nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: delete %q: branch has no tree", path)
 		}
-		currentRootHash, err = deleteFromTree(fi.rh.gits, rootTree, path)
+		currentRootHash, err = vcs.DeleteFromTree(fi.rh.Storer(), rootTree, path)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: delete %q: %w", path, err)
 		}
-		rootTree, err = object.GetTree(fi.rh.gits, currentRootHash)
+		rootTree, err = object.GetTree(fi.rh.Storer(), currentRootHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: get tree after delete: %w", err)
 		}
 	}
 
 	// Create single commit.
-	author, committer, err := fi.rh.commitSigs(ctx, branch, operation)
+	author, committer, err := fi.rh.CommitSigs(ctx, branch, operation)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
 	}
 	commit := &object.Commit{
 		Author:    author,
 		Committer: committer,
-		Message:   appendTrailers(message, trailersFromContext(ctx)), // see writeFileExact
+		Message:   vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx)), // see writeFileExact
 		TreeHash:  currentRootHash,
 	}
 	if parentHash != plumbing.ZeroHash {
 		commit.ParentHashes = []plumbing.Hash{parentHash}
 	}
 
-	cHash, err := storeCommit(fi.rh.gits, signer, commit)
+	cHash, err := vcs.StoreCommit(fi.rh.Storer(), signer, commit)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
 	}
 
-	if err := fi.rh.deriveBeforeAdvance(ctx, cHash); err != nil {
+	if err := fi.rh.DeriveBeforeAdvance(ctx, cHash); err != nil {
 		return plumbing.ZeroHash, nil, err
 	}
 	branchRefName := plumbing.NewBranchReferenceName(branch)
-	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, cHash)); err != nil {
+	if err := fi.rh.Storer().SetReference(plumbing.NewHashReference(branchRefName, cHash)); err != nil {
 		return plumbing.ZeroHash, nil, err
 	}
 	return cHash, blobHashes, nil
@@ -506,7 +508,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 
 // WriteFact writes a fact to the store and returns the commit and blob hashes.
 // Index sync (branch_facts / facts_vec / graph) is triggered inside writeFile
-// via rh.notifyCommit — no redundant fi.im.Sync call here.
+// via rh.NotifyCommit — no redundant fi.im.Sync call here.
 func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
 	commitHash, blobHash, err := fi.writeFile(ctx, branch, path, content, message, operation)
 	if err != nil {
@@ -547,7 +549,7 @@ func (fi *factIndex) WriteRootFile(ctx context.Context, branch, path, content, m
 }
 
 // DeleteFact deletes a fact. Index sync happens inside deleteFile via
-// rh.notifyCommit.
+// rh.NotifyCommit.
 func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
 	commitHash, err := fi.deleteFile(ctx, branch, path, message, "retract")
 	if err != nil {
@@ -557,7 +559,7 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 }
 
 // BatchWriteFacts writes and deletes multiple facts in a single commit. Index
-// sync happens inside batchWrite via rh.notifyCommit.
+// sync happens inside batchWrite via rh.NotifyCommit.
 func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, deletes, nil, message, operation)
 	return
@@ -574,13 +576,13 @@ func (fi *factIndex) BatchWriteFactsMustExist(ctx context.Context, branch string
 
 // tag creates a lightweight tag ref at the tip of branch.
 func (fi *factIndex) tag(ctx context.Context, branch, name string) error {
-	headHash, err := fi.rh.resolveRef(ctx, branch)
+	headHash, err := fi.rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("tag: ref: %w", err)
 	}
 
 	tagRefName := plumbing.NewTagReferenceName(name)
-	return fi.rh.gits.SetReference(plumbing.NewHashReference(tagRefName, headHash))
+	return fi.rh.Storer().SetReference(plumbing.NewHashReference(tagRefName, headHash))
 }
 
 // tagsContaining returns tag names whose target is reachable from hash.
@@ -589,7 +591,7 @@ func (fi *factIndex) tagsContaining(ctx context.Context, hash string) ([]string,
 
 	// Build set of all commits reachable from targetHash (one walk).
 	reachable := make(map[plumbing.Hash]bool)
-	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{From: targetHash})
+	logIter, err := fi.rh.Repository().Log(&gogit.LogOptions{From: targetHash})
 	if err != nil {
 		return nil, fmt.Errorf("tagsContaining: log from target: %w", err)
 	}
@@ -599,7 +601,7 @@ func (fi *factIndex) tagsContaining(ctx context.Context, hash string) ([]string,
 	})
 	logIter.Close()
 
-	refIter, err := fi.rh.gits.IterReferences()
+	refIter, err := fi.rh.Storer().IterReferences()
 	if err != nil {
 		return nil, fmt.Errorf("tagsContaining: iter refs: %w", err)
 	}

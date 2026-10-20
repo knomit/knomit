@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // ErrFactInvalid matches *FactInvalidError with errors.Is.
@@ -32,8 +33,6 @@ func (e *FactInvalidError) Unwrap() error { return e.Err }
 func (e *FactInvalidError) Is(target error) bool {
 	return target == ErrFactInvalid
 }
-
-func (rh *repoHandler) ontologyCache() *ontCache { return &rh.writeOnt }
 
 type carriedOverKey struct{}
 
@@ -74,7 +73,7 @@ func (rh *repoHandler) validateWrite(head plumbing.Hash, files map[string]string
 	if head.IsZero() || len(files) == 0 {
 		return nil
 	}
-	root := rh.ontologyRoot()
+	root := rh.OntologyRoot()
 	var paths []string
 	deleted := map[string]bool{}
 	for _, d := range deletes {
@@ -88,18 +87,18 @@ func (rh *repoHandler) validateWrite(head plumbing.Hash, files map[string]string
 	if len(paths) == 0 {
 		return nil
 	}
-	c, err := object.GetCommit(rh.gits, head)
+	c, err := object.GetCommit(rh.Storer(), head)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
-	raw, err := treeOntology(c)
+	raw, err := vcs.TreeOntology(c)
 	if err != nil {
 		return fmt.Errorf("validate: the ontology at %s: %w", head, err)
 	}
 	if raw == nil {
 		return nil
 	}
-	ont, err := rh.ontologyCache().parse(raw)
+	ont, err := rh.OntologyCache().Parse(raw)
 	if err != nil {
 		// No rule can be read. Whether such a repository takes writes at all
 		// is decided where it is opened (repos.loadOntology: unwritable), and

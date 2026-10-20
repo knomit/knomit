@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // Tests for derive-at-index (review rounds 3-4): a commit's path_changes rows
@@ -40,12 +41,11 @@ func TestPathHistory_TipFirstIndexingNeverTruncates(t *testing.T) {
 	moveBranch(t, svc, "main", tip)
 
 	// Recording a commit that is not derived is refused, and nothing lands.
-	d := newDeriver(svc.rh, activeTables)
-	err := svc.rh.gits.CommitLogApply(ctx, "main", []storegit.CommitLogItem{{Hash: tip, Parents: []string{parent}}},
-		storegit.CommitLogApplyOptions{Derive: d.hook([]string{tip}, nil)})
-	require.ErrorIs(t, err, errNotDerived)
+	err := svc.rh.Storer().CommitLogApply(ctx, "main", []storegit.CommitLogItem{{Hash: tip, Parents: []string{parent}}},
+		storegit.CommitLogApplyOptions{Derive: svc.rh.DeriveHookForTest([]string{tip})})
+	require.ErrorIs(t, err, vcs.ErrNotDerived)
 	var visible int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM branch_commits WHERE commit_hash = ?`, tip).Scan(&visible))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits WHERE commit_hash = ?`, tip).Scan(&visible))
 	require.Zero(t, visible, "the refused commit is not visible: its transaction rolled back")
 
 	// The append path derives the never-indexed ancestors first.
@@ -67,11 +67,11 @@ func reopen(t *testing.T, svc *Service, dbPath string) *Service {
 func clearDerived(t *testing.T, svc *Service, version string) {
 	t.Helper()
 	for _, stmt := range []string{`DELETE FROM path_changes`, `DELETE FROM path_change_links`, `DELETE FROM commit_fp`, `DELETE FROM meta WHERE key = 'path_changes_version'`} {
-		_, err := svc.rh.db.Exec(stmt)
+		_, err := svc.rh.DB().Exec(stmt)
 		require.NoError(t, err)
 	}
 	if version != "" {
-		_, err := svc.rh.db.Exec(`INSERT INTO meta(key, value) VALUES ('path_changes_version', ?)`, version)
+		_, err := svc.rh.DB().Exec(`INSERT INTO meta(key, value) VALUES ('path_changes_version', ?)`, version)
 		require.NoError(t, err)
 	}
 }
@@ -93,7 +93,7 @@ func TestPathHistory_LegacyGapDerivesFromGit(t *testing.T) {
 		require.NoError(t, err)
 		commits = append(commits, r.CommitHash)
 	}
-	_, err = svc.rh.db.Exec(`DELETE FROM branch_commits WHERE commit_hash = ?`, commits[2])
+	_, err = svc.rh.DB().Exec(`DELETE FROM branch_commits WHERE commit_hash = ?`, commits[2])
 	require.NoError(t, err)
 	clearDerived(t, svc, "")
 
@@ -103,7 +103,7 @@ func TestPathHistory_LegacyGapDerivesFromGit(t *testing.T) {
 	require.NoError(t, err, "writes keep working")
 	require.Equal(t, reversed(append(commits, r.CommitHash)), historyCommits(fullHistory(t, svc, "main", "kb/t.md", r.CommitHash)))
 	var n int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM branch_commits WHERE commit_hash = ?`, commits[2]).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits WHERE commit_hash = ?`, commits[2]).Scan(&n))
 	require.Equal(t, 1, n, "populate recorded the gap")
 }
 
@@ -136,7 +136,7 @@ func TestPathHistory_VersionBumpOverDeletedSideBranch(t *testing.T) {
 
 	// Legacy shape: the side commits were only ever indexed on "side".
 	for _, h := range sides {
-		_, err := svc.rh.db.Exec(`DELETE FROM branch_commits WHERE commit_hash = ? AND branch_id = (SELECT id FROM branches WHERE name = 'main')`, h)
+		_, err := svc.rh.DB().Exec(`DELETE FROM branch_commits WHERE commit_hash = ? AND branch_id = (SELECT id FROM branches WHERE name = 'main')`, h)
 		require.NoError(t, err)
 	}
 	require.NoError(t, svc.Branches().DropBranch(ctx, "side"))
@@ -163,18 +163,18 @@ func TestPathHistory_ReadErrorRecordsNothing(t *testing.T) {
 	moveBranch(t, svc, "main", next)
 	prevBlob := plumbing.NewHash(blobOf(t, svc, commits[2], "kb/t.md"))
 	injected := errors.New("injected read error")
-	deriveObjectHook = func(kind string, h plumbing.Hash) error {
+	vcs.DeriveObjectHook = func(kind string, h plumbing.Hash) error {
 		if kind == "blob" && h == prevBlob {
 			return injected
 		}
 		return nil
 	}
 	err := svc.rh.AppendCommitLog(ctx, "main", next)
-	deriveObjectHook = nil
+	vcs.DeriveObjectHook = nil
 	require.ErrorIs(t, err, injected)
 	for _, table := range []string{"branch_commits", "commit_fp", "path_changes"} {
 		var n int
-		require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE commit_hash = ?`, next).Scan(&n))
+		require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE commit_hash = ?`, next).Scan(&n))
 		require.Zero(t, n, "%s: nothing recorded for the failed commit", table)
 	}
 
@@ -186,14 +186,14 @@ func TestPathHistory_ReadErrorRecordsNothing(t *testing.T) {
 // transaction, after it cleared the branch and before it re-records it.
 func pauseSwap(t *testing.T, check func()) {
 	t.Helper()
-	swapHook = func() error { check(); return nil }
-	t.Cleanup(func() { swapHook = nil })
+	vcs.SwapHook = func() error { check(); return nil }
+	t.Cleanup(func() { vcs.SwapHook = nil })
 }
 
 func branchCommitCount(t *testing.T, svc *Service, branch string) int {
 	t.Helper()
 	var n int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM branch_commits WHERE branch_id = (SELECT id FROM branches WHERE name = ?)`, branch).Scan(&n))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits WHERE branch_id = (SELECT id FROM branches WHERE name = ?)`, branch).Scan(&n))
 	return n
 }
 
@@ -218,7 +218,7 @@ func TestPathHistory_RewindIsAtomic(t *testing.T) {
 		require.Len(t, page, 5)
 	})
 	moveBranch(t, svc, "main", commits[2])
-	require.NoError(t, svc.rh.repopulateBranch(ctx, "main"))
+	require.NoError(t, svc.rh.RepopulateBranch(ctx, "main"))
 	require.True(t, paused, "the swap ran through the pause")
 	require.Equal(t, oldCount-2, branchCommitCount(t, svc, "main"))
 	require.Equal(t, reversed(commits[:3]), historyCommits(fullHistory(t, svc, "main", "kb/t.md", commits[2])))
@@ -244,9 +244,9 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 
 	// Missing rows (not deleted by anything here: removed to show rebuild
 	// derives what is missing).
-	_, err = svc.rh.db.Exec(`DELETE FROM commit_fp WHERE commit_hash = ?`, commits[1])
+	_, err = svc.rh.DB().Exec(`DELETE FROM commit_fp WHERE commit_hash = ?`, commits[1])
 	require.NoError(t, err)
-	_, err = svc.rh.db.Exec(`DELETE FROM path_changes WHERE commit_hash = ?`, commits[1])
+	_, err = svc.rh.DB().Exec(`DELETE FROM path_changes WHERE commit_hash = ?`, commits[1])
 	require.NoError(t, err)
 
 	oldCount := branchCommitCount(t, svc, "main")
@@ -255,7 +255,7 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 		paused = true
 		require.Equal(t, oldCount, branchCommitCount(t, svc, "main"), "mid-rebuild the reader sees the old branch, whole")
 	})
-	require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+	require.NoError(t, svc.rh.RebuildCommitLog(ctx, "main"))
 	require.True(t, paused)
 	require.Equal(t, wantMain, historyCommits(fullHistory(t, svc, "main", "kb/t.md", commits[3])))
 	require.Equal(t, wantOther, historyCommits(fullHistory(t, svc, "other", "kb/t.md", o.CommitHash)), "another branch's history survives")
@@ -266,9 +266,9 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 // because the derivation and the staging run in short batch transactions and
 // only the swap is one transaction.
 //
-// What it asserts is an OUTCOME, not a duration. Through deriveObjectHook the
+// What it asserts is an OUTCOME, not a duration. Through DeriveObjectHook the
 // rebuild (and only the rebuild: the hook matches main's objects AND a
-// rebuildCommitLog frame) is paused three times, each BETWEEN batch
+// RebuildCommitLog frame) is paused three times, each BETWEEN batch
 // transactions, where it holds none:
 //   - "derive": deriveCommits preparing batch 1 (batch 0 committed);
 //   - "derive-end": preparing the tip, the last commit of the last batch;
@@ -277,7 +277,7 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 //
 // Both phases read git only before their batch's beginTxIfNeeded (prepare in
 // deriveCommits, indexItems in stageCommitLog; apply refuses reads with
-// errReadInApply), and the test's ctx carries no transaction. At each pause a
+// ErrReadInApply), and the test's ctx carries no transaction. At each pause a
 // WriteFact on `writer` must succeed before the rebuild resumes. Were either
 // phase inside the swap transaction, or under any transaction spanning
 // batches, that write would wait out _busy_timeout (5 s) and fail with
@@ -297,7 +297,7 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 // flaked (#366: 6.8 s on Windows CI against a 3 s rebuild) with no lock
 // contention at all: (1) `writer` shared main's 2000 commits, so after
 // clearDerived its first WriteFact re-derived the whole closure itself
-// (deriveBeforeAdvance), taking about as long as the rebuild; (2) the first
+// (DeriveBeforeAdvance), taking about as long as the rebuild; (2) the first
 // commit after the rebuild pays SQLite's WAL auto-checkpoint of the rebuild's
 // backlog, 6-11 s on a loaded disk
 // (kb/gotchas/store/sqlite/wal-checkpoint-after-bulk-write/78d0aceb.md). A
@@ -318,16 +318,16 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	}
 	tip := commits[len(commits)-1]
 	moveBranch(t, svc, "main", tip)
-	require.NoError(t, svc.rh.populateCommitLog(ctx, "main"))
+	require.NoError(t, svc.rh.PopulateCommitLog(ctx, "main"))
 	// The writer branch: an orphan (see above).
 	moveBranch(t, svc, "writer", writeRawCommit(t, svc, nil, map[string]string{"kb/w.md": testFactBody("w", 0.5, nil)}, t0, "writer root"))
-	require.NoError(t, svc.rh.populateCommitLog(ctx, "writer"))
+	require.NoError(t, svc.rh.PopulateCommitLog(ctx, "writer"))
 	// Force the rebuild to derive everything again, in batches.
-	clearDerived(t, svc, pathChangesVersion)
-	require.Greater(t, len(commits), 4*pathChangeBatch, "the fixture spans several batches")
+	clearDerived(t, svc, vcs.PathChangesVersion)
+	require.Greater(t, len(commits), 4*vcs.PathChangeBatch, "the fixture spans several batches")
 
 	treeOf := func(h string) plumbing.Hash {
-		c, err := svc.rh.repo.CommitObject(plumbing.NewHash(h))
+		c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
 		require.NoError(t, err)
 		return c.TreeHash
 	}
@@ -339,7 +339,7 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 		hash            plumbing.Hash
 	}
 	triggers := []trigger{
-		{"derive", "deriveCommits", "tree", treeOf(commits[pathChangeBatch])},
+		{"derive", "deriveCommits", "tree", treeOf(commits[vcs.PathChangeBatch])},
 		{"derive-end", "deriveCommits", "tree", treeOf(tip)},
 		// The parent read of commits[1000]: in no first chunk, whichever
 		// order staging takes.
@@ -353,13 +353,13 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	abort := make(chan struct{})
 	// Advanced only by the rebuild's goroutine, but read by the writers'.
 	var next atomic.Int32
-	deriveObjectHook = func(kind string, h plumbing.Hash) error {
+	vcs.DeriveObjectHook = func(kind string, h plumbing.Hash) error {
 		i := int(next.Load())
 		if i == len(triggers) {
 			return nil
 		}
 		tr := triggers[i]
-		if kind != tr.kind || h != tr.hash || !callerIs("rebuildCommitLog") || !callerIs(tr.fn) {
+		if kind != tr.kind || h != tr.hash || !callerIs("RebuildCommitLog") || !callerIs(tr.fn) {
 			return nil
 		}
 		next.Add(1)
@@ -376,7 +376,7 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 		return nil
 	}
 	var swapped atomic.Bool
-	swapHook = func() error { swapped.Store(true); return nil }
+	vcs.SwapHook = func() error { swapped.Store(true); return nil }
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
@@ -416,17 +416,17 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	// the store closes.
 	t.Cleanup(func() {
 		shutdown()
-		deriveObjectHook, swapHook = nil, nil
+		vcs.DeriveObjectHook, vcs.SwapHook = nil, nil
 	})
 
 	start := time.Now()
 	go func() {
 		defer close(rebuildDone)
-		rebuildErr <- svc.rh.rebuildCommitLog(ctx, "main")
+		rebuildErr <- svc.rh.RebuildCommitLog(ctx, "main")
 	}()
 	derived := func(h string) bool {
 		var n int
-		require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM commit_fp WHERE commit_hash = ?`, h).Scan(&n))
+		require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM commit_fp WHERE commit_hash = ?`, h).Scan(&n))
 		return n > 0
 	}
 	var pausedFor time.Duration
@@ -447,21 +447,19 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 		switch p.phase {
 		case "derive":
 			require.True(t, derived(commits[0]), "batch 0 is committed")
-			require.False(t, derived(commits[pathChangeBatch]), "batch 1 is not")
+			require.False(t, derived(commits[vcs.PathChangeBatch]), "batch 1 is not")
 		case "derive-end":
-			lastBatch := (len(commits) - 1) / pathChangeBatch * pathChangeBatch
+			lastBatch := (len(commits) - 1) / vcs.PathChangeBatch * vcs.PathChangeBatch
 			require.True(t, derived(commits[lastBatch-1]), "every batch before the tip's is committed")
 			require.False(t, derived(commits[lastBatch]), "the tip's batch is not")
 			require.False(t, derived(tip), "the tip is not derived yet")
 			// Drop the diffs derivation kept for staging, so staging
 			// diffs again and the hook reaches it (see above).
-			svc.rh.changes.mu.Lock()
-			svc.rh.changes.m, svc.rh.changes.n = nil, 0
-			svc.rh.changes.mu.Unlock()
+			svc.rh.ResetChangeListsForTest()
 		case "stage":
 			require.True(t, derived(tip), "the derivation is done")
 			var staged int
-			require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM commit_log_stage WHERE branch_id = (SELECT id FROM branches WHERE name = 'main')`).Scan(&staged))
+			require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM commit_log_stage WHERE branch_id = (SELECT id FROM branches WHERE name = 'main')`).Scan(&staged))
 			require.NotZero(t, staged, "a stage chunk is committed")
 		}
 		close(p.resume)
@@ -472,7 +470,7 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	shutdown()
 	require.True(t, swapped.Load(), "the rebuild swapped")
 	require.NoError(t, werr, "a concurrent writer never fails with a lock timeout")
-	swap := time.Duration(lastSwapDuration.Load())
+	swap := time.Duration(vcs.LastSwapDuration.Load())
 	t.Logf("rebuild %v unpaused (re-deriving 2000 commits); swap transaction %v; worst concurrent write %v (logged, not asserted)", elapsed, swap, worst)
 	// The lock is held only for the swap: re-deriving 2000 commits happens
 	// before it, in short batches. A rebuild that derived inside the swap
@@ -488,7 +486,7 @@ func callerIs(name string) bool {
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
 	for {
 		f, more := frames.Next()
-		if strings.HasPrefix(f.Function, "knomit/internal/store.") && strings.HasSuffix(f.Function, "."+name) {
+		if strings.HasPrefix(f.Function, "knomit/internal/store/internal/vcs.") && strings.HasSuffix(f.Function, "."+name) {
 			return true
 		}
 		if !more {
@@ -505,7 +503,7 @@ func TestPathHistory_IndexedButUnderivedIsAnError(t *testing.T) {
 	svc, ctx := openPathHistoryStore(t)
 	r, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v", 0.5, nil), "v", "")
 	require.NoError(t, err)
-	_, err = svc.rh.db.Exec(`DELETE FROM commit_fp WHERE commit_hash = ?`, r.CommitHash)
+	_, err = svc.rh.DB().Exec(`DELETE FROM commit_fp WHERE commit_hash = ?`, r.CommitHash)
 	require.NoError(t, err)
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", r.CommitHash, nil, 3)
 	require.ErrorContains(t, err, "never derived")
@@ -529,7 +527,7 @@ func TestPathHistory_AnchorLeftBranchIsHistoryChanged(t *testing.T) {
 	require.Equal(t, []string{commits[3]}, cur.Frontier)
 
 	moveBranch(t, svc, "main", commits[4])
-	require.NoError(t, svc.rh.repopulateBranch(ctx, "main"))
+	require.NoError(t, svc.rh.RepopulateBranch(ctx, "main"))
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", anchor, cur, 2)
 	require.ErrorIs(t, err, ErrHistoryChanged, "the frontier is still on the branch; only the anchor check sees the rewind")
 }
@@ -586,7 +584,7 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 	}
 	moveBranch(b, svc, "main", commits[n-1])
 	start := time.Now()
-	require.NoError(b, svc.rh.populateCommitLog(ctx, "main"))
+	require.NoError(b, svc.rh.PopulateCommitLog(ctx, "main"))
 	b.Logf("indexed %d commits (commit_log + path_changes) in %v", n, time.Since(start))
 
 	tip := commits[n-1]
@@ -643,16 +641,16 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 			h := writeRawCommit(b, svc, []string{nodrvTip}, map[string]string{p: testFactBody(fmt.Sprintf("y%d", i), 0.5, nil), "kb/noise.md": "n"}, t0.Add(time.Duration(n+i)*time.Minute), "append")
 			moveBranch(b, svc, "nodrv", h)
 			b.StartTimer()
-			c, err := svc.rh.repo.CommitObject(plumbing.NewHash(h))
+			c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
 			if err != nil {
 				b.Fatal(err)
 			}
-			items, err := svc.rh.indexItems(ctx, newDeriver(svc.rh, activeTables), []*object.Commit{c}, false)
+			items, err := svc.rh.IndexItemsForTest(ctx, []*object.Commit{c}, false)
 			if err != nil {
 				b.Fatal(err)
 			}
 			noDerive := func(context.Context, *sql.Tx, int) error { return nil }
-			if err := svc.rh.gits.CommitLogApply(ctx, "nodrv", items, storegit.CommitLogApplyOptions{Derive: noDerive}); err != nil {
+			if err := svc.rh.Storer().CommitLogApply(ctx, "nodrv", items, storegit.CommitLogApplyOptions{Derive: noDerive}); err != nil {
 				b.Fatal(err)
 			}
 			nodrvTip = h
@@ -701,11 +699,11 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 		}
 	}()
 	start = time.Now()
-	require.NoError(b, svc.rh.rebuildCommitLog(ctx, "main"))
+	require.NoError(b, svc.rh.RebuildCommitLog(ctx, "main"))
 	elapsed := time.Since(start)
 	close(stop)
 	<-done
-	b.Logf("rebuild of %d commits: %v; swap transaction %v; worst concurrent write %v (worst of 20 writes with no rebuild: %v)", n, elapsed, time.Duration(lastSwapDuration.Load()), worst, base)
+	b.Logf("rebuild of %d commits: %v; swap transaction %v; worst concurrent write %v (worst of 20 writes with no rebuild: %v)", n, elapsed, time.Duration(vcs.LastSwapDuration.Load()), worst, base)
 }
 
 func fullHistoryB(b *testing.B, svc *Service, branch, path, anchor string) []FactRevision {
@@ -746,7 +744,7 @@ func TestLiveRevision_EqualsRevisionsBefore(t *testing.T) {
 		require.NoError(t, svc.Branches().MergeBranch(ctx, "main", "agent", StrategyLocalWins))
 	}
 	var all []string
-	rows, err := svc.rh.db.Query(`SELECT DISTINCT commit_hash FROM branch_commits`)
+	rows, err := svc.rh.DB().Query(`SELECT DISTINCT commit_hash FROM branch_commits`)
 	require.NoError(t, err)
 	for rows.Next() {
 		var h string

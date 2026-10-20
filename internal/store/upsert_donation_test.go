@@ -86,7 +86,7 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 	// The stored facts_vec row must hold the DONATED vector, not what
 	// the embedder would have returned for the donated content.
 	var factID int64
-	err = svc.rh.db.QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/donated.md").Scan(&factID)
+	err = svc.rh.DB().QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/donated.md").Scan(&factID)
 	require.NoError(t, err)
 
 	storedVec, err := svc.si.getEmbeddingByFact(ctx, "kb/donated.md", "")
@@ -94,7 +94,7 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 	// not, fall back to a direct vec0 query.
 	if err != nil || storedVec == nil {
 		var vecBytes []byte
-		err = svc.rh.db.QueryRow(`SELECT embedding FROM facts_vec WHERE rowid = ?`, factID).Scan(&vecBytes)
+		err = svc.rh.DB().QueryRow(`SELECT embedding FROM facts_vec WHERE rowid = ?`, factID).Scan(&vecBytes)
 		require.NoError(t, err)
 		require.Len(t, vecBytes, 768*4, "facts_vec stores 768 float32s = 3072 bytes")
 		// First float32 from sentinel pattern is 0.5; check the first 4 bytes.

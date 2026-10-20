@@ -24,7 +24,7 @@ var triggersAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// git reads
 		"?.CommitObject", "c.Tree", "cur.NumParents", "tree.FindEntry", "tree.TreeEntryFile", "tree.File",
-		"f.Contents", "walkHistory", "?.Reference", "ref.Hash", "?.String",
+		"f.Contents", "vcs.WalkHistory", "?.Reference", "ref.Hash", "?.String",
 		// the tree-entry mode test every .knomit/ reader shares (a symlink is
 		// never a file), and the named error for a symlinked ontology: pure
 		"isSystemFileMode", "fact.SymlinkNotFollowed",
@@ -38,29 +38,33 @@ var triggersAllowedCalls = map[string][]string{
 		// F23: GuidanceAt's path re-check and content checks — pure helpers
 		// over the path string and the blob it read, no write
 		"strings.HasPrefix", "path.Clean", "slices.Contains", "strings.Split", "utf8.ValidString", "strings.ContainsRune",
+		// the repo's handles, read through the vcs accessors (field reads
+		// before the vcs extraction): the go-git repository and storer for the
+		// git reads above, the database for this store's own tables below
+		"rh.Repository", "?.Repository", "rh.Storer", "rh.DB",
 		// this store's own tables (and the read-only liveness join)
-		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn", "rh.branchID",
+		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn", "rh.BranchID",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",
 		// the signer
-		"rh.commitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",
+		"rh.CommitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",
 		// pure helpers
 		"boolInt", "UTCStamp", "time.Now", "time.Unix", "?.UTC", "?.Unix", "?.Format", "ctx.Err", "errors.Is", "errors.New", "fmt.Errorf", "sort.Strings",
 		"append", "len", "make", "min",
 	},
-	"trailers.go": {
+	"internal/vcs/trailers.go": {
 		// the reader, and the ctx transport of the trailer set (WithTrailers is
 		// read by the three fact builders in fact_write.go, never here)
 		"strings.TrimRight", "strings.LastIndex", "strings.Split", "strings.Cut", "strings.EqualFold", "strings.TrimSpace",
 		"context.WithValue", "ctx.Value", "t.IsZero",
 		// #349: WithAgentTrace's refusals and its ctx attach (WithTrailers, the
-		// same transport), and appendTrailers sorting a COPY of the agent's
+		// same transport), and AppendTrailers sorting a COPY of the agent's
 		// own entries — pure helpers, no write
 		"errors.New", "WithTrailers", "len", "append", "sort.SliceStable",
 		// rehearsal F10: rendering a set (t.lines) and joining it to a merge
-		// commit's trailer paragraph (appendTrailersToParagraph) — string
+		// commit's trailer paragraph (AppendTrailersToParagraph) — string
 		// helpers, no write
-		"t.lines", "isTrailerParagraph", "appendTrailers",
-		// isTrailerParagraph itself (moved here from conflict_merge.go so the
+		"t.lines", "IsTrailerParagraph", "AppendTrailers",
+		// IsTrailerParagraph itself (moved here from conflict_merge.go so the
 		// commit path does not reach up into the merge cluster): a string test
 		"strings.ContainsAny",
 	},

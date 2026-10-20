@@ -69,7 +69,7 @@ func (gs *graphStore) SubgraphEdges(ctx context.Context, paths []string) ([][2]s
 		// Both endpoints must be live here (unlike the cohesion reader, which
 		// only filters the far endpoint), preserving the previous Cypher
 		// predicate. Dedup via `seen` keeps repeated pairs idempotent.
-		pairs, err := graphSimilarToNeighbours(ctx, conn(ctx, gs.rh.db), chunk, true)
+		pairs, err := graphSimilarToNeighbours(ctx, conn(ctx, gs.rh.DB()), chunk, true)
 		if err != nil {
 			return nil, fmt.Errorf("subgraph edges: %w", err)
 		}

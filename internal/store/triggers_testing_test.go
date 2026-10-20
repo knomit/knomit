@@ -9,10 +9,12 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // TestingCommitFiles builds its trees in one pass (testingTree) instead of one
-// buildTree per path. The commit must still carry the SAME root tree that the
+// BuildTree per path. The commit must still carry the SAME root tree that the
 // per-path build gives: untouched entries kept, files added in existing and in
 // new directories, an existing file replaced. Sabotage: drop the parent's
 // untouched entries in testingDir.write, or write a directory with the leaf
@@ -24,9 +26,9 @@ func TestTestingCommitFiles_TreeMatchesPerPathBuild(t *testing.T) {
 		_, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody(p, 0.5, nil), "seed", "")
 		require.NoError(t, err)
 	}
-	parent, err := svc.rh.resolveRef(ctx, "main")
+	parent, err := svc.rh.ResolveRef(ctx, "main")
 	require.NoError(t, err)
-	parentCommit, err := svc.rh.repo.CommitObject(parent)
+	parentCommit, err := svc.rh.Repository().CommitObject(parent)
 	require.NoError(t, err)
 	parentTree, err := parentCommit.Tree()
 	require.NoError(t, err)
@@ -45,17 +47,17 @@ func TestTestingCommitFiles_TreeMatchesPerPathBuild(t *testing.T) {
 	sort.Strings(paths)
 	want, tree := parentTree.Hash, parentTree
 	for _, p := range paths {
-		blob, err := writeBlobToStore(svc.rh.gits, []byte(files[p]))
+		blob, err := vcs.WriteBlobToStore(svc.rh.Storer(), []byte(files[p]))
 		require.NoError(t, err)
-		want, err = buildTree(svc.rh.gits, tree, p, blob)
+		want, err = vcs.BuildTree(svc.rh.Storer(), tree, p, blob)
 		require.NoError(t, err)
-		tree, err = object.GetTree(svc.rh.gits, want)
+		tree, err = object.GetTree(svc.rh.Storer(), want)
 		require.NoError(t, err)
 	}
 
 	h, err := svc.TestingCommitFiles("main", files, "batch")
 	require.NoError(t, err)
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(h))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
 	require.NoError(t, err)
 	require.Equal(t, []plumbing.Hash{parent}, c.ParentHashes)
 	require.NotEqual(t, parentTree.Hash, c.TreeHash, "reached: the batch changed the tree")

@@ -60,7 +60,7 @@ func TestRebuildEmbeddings_CancelledMidChunk_StopsImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(bg)
 	defer cancel()
 	emb := &cancellingEmbedder{cancel: cancel}
-	svc.rh.setEmbedder(emb)
+	svc.rh.SetEmbedder(emb)
 
 	_, rerr := svc.si.rebuildEmbeddings(ctx, nil)
 	require.Error(t, rerr, "a cancelled rebuild must report the cancellation, not succeed quietly")

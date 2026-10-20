@@ -38,31 +38,31 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 
 	// 1. Set up agent branch in target store.
 	agentRefName := plumbing.NewBranchReferenceName(cfg.AgentBranch)
-	existingAgentRef, err := target.rh.gits.Reference(agentRefName)
+	existingAgentRef, err := target.rh.Storer().Reference(agentRefName)
 	if cfg.UseExistingBranch && err == nil && existingAgentRef != nil {
 		// Agent branch exists on remote and caller wants to reuse it — switch to it.
-		if err := target.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		if err := target.rh.Storer().SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 			return nil, fmt.Errorf("Replay: set HEAD to existing agent branch: %w", err)
 		}
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Msg("replay: using existing remote agent branch as base")
 	} else {
 		// No existing agent branch — create from the selected main branch.
 		defaultRefName := plumbing.NewBranchReferenceName(cfg.DefaultBranch)
-		defaultRef, err := target.rh.gits.Reference(defaultRefName)
+		defaultRef, err := target.rh.Storer().Reference(defaultRefName)
 		if err != nil {
 			return nil, fmt.Errorf("Replay: resolve default branch %q: %w", cfg.DefaultBranch, err)
 		}
-		if err := target.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
+		if err := target.rh.Storer().SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
 			return nil, fmt.Errorf("Replay: create agent branch: %w", err)
 		}
-		if err := target.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		if err := target.rh.Storer().SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 			return nil, fmt.Errorf("Replay: set HEAD: %w", err)
 		}
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Str("from", cfg.DefaultBranch).Msg("replay: created agent branch from main")
 	}
 
 	// Register the agent branch in target's branches table so the WriteFact →
-	// notifyCommit → CommitLogApply path can find it. The cloned target store
+	// NotifyCommit → CommitLogApply path can find it. The cloned target store
 	// has only git refs at this point; CloneFrom does not populate the branches
 	// table.
 	if _, err := target.rh.EnsureBranch(ctx, cfg.AgentBranch, "refs/heads/"+cfg.AgentBranch); err != nil {
@@ -70,8 +70,8 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	}
 
 	// The target is a raw clone: its history is derived here, as it would be
-	// at open (openHistory), before the first write.
-	if err := target.rh.openHistory(ctx); err != nil {
+	// at open (OpenHistory), before the first write.
+	if err := target.rh.OpenHistory(ctx); err != nil {
 		return nil, fmt.Errorf("Replay: history: %w", err)
 	}
 
@@ -122,7 +122,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	// failure it stays empty, which makes every kb:// ref read as foreign and
 	// therefore PRESERVED — the safe direction for a routine that deletes.
 	localRepoID := ""
-	if root, rerr := local.rh.rootCommit(ctx, localBranch); rerr == nil {
+	if root, rerr := local.rh.RootCommit(ctx, localBranch); rerr == nil {
 		localRepoID = fact.ID12(root)
 	} else {
 		log.Warn().Err(rerr).Str("branch", localBranch).
@@ -206,7 +206,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 // readBlobByHash reads the content of a blob by its hash from the service's git repo.
 func readBlobByHash(s *Service, hashStr string) (string, error) {
 	h := plumbing.NewHash(hashStr)
-	blob, err := s.rh.repo.BlobObject(h)
+	blob, err := s.rh.Repository().BlobObject(h)
 	if err != nil {
 		return "", fmt.Errorf("readBlobByHash: %w", err)
 	}
@@ -317,12 +317,12 @@ func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, 
 // extractExternalRefsFromHistory looks up the last version of a deleted fact in
 // local git history and extracts its external (http/https) refs.
 func extractExternalRefsFromHistory(ctx context.Context, local *Service, localBranch, deadPath string) ([]string, error) {
-	localHash, err := local.rh.resolveRef(ctx, localBranch)
+	localHash, err := local.rh.ResolveRef(ctx, localBranch)
 	if err != nil {
 		return nil, fmt.Errorf("extractExternalRefsFromHistory: ref: %w", err)
 	}
 
-	logIter, err := local.rh.repo.Log(&gogit.LogOptions{
+	logIter, err := local.rh.Repository().Log(&gogit.LogOptions{
 		From:     localHash,
 		FileName: &deadPath,
 	})

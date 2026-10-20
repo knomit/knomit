@@ -17,6 +17,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 )
 
 // ErrNoFleet: verification is on in the knowledge base but no fleet
@@ -86,7 +87,7 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 	if err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
-	raw, err := treeOntology(mainC)
+	raw, err := vcs.TreeOntology(mainC)
 	if err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: ontology at %s: %w", in.Main, err)
 	}
@@ -115,11 +116,11 @@ func CheckRange(in RangeInput) (RangeVerdict, error) {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
 	onMain := map[plumbing.Hash]bool{}
-	if err := walkHistory(kb.Storer, mainC.Hash, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(kb.Storer, mainC.Hash, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
 	var commits []*object.Commit
-	if err := walkHistory(kb.Storer, candC.Hash, onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+	if err := vcs.WalkHistory(kb.Storer, candC.Hash, onMain, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return RangeVerdict{}, fmt.Errorf("verify: %w", err)
 	}
 	// RuleValidation first, in EVERY mode and every repository, on the
@@ -227,7 +228,7 @@ func mergeResultValid(kbDir string, kb *gogit.Repository, mainC, candC *object.C
 		return Refusal{}, false, fmt.Errorf("main's tree: %w", err)
 	}
 	if root == "" {
-		root = defaultOntologyRoot
+		root = vcs.DefaultOntologyRoot
 	}
 	paths, err := newFactPaths(root, []*object.Tree{mainTree}, treeC)
 	if err != nil {
@@ -277,7 +278,7 @@ type judge struct {
 	// kbRoot is the judged repository's fact root, where leaf-renewal reads
 	// the member records of the commit's own tree.
 	kbRoot string
-	// shapeOK memoises the trees checkTreeShape found well formed, across
+	// shapeOK memoises the trees CheckTreeShape found well formed, across
 	// the commits this judge judges (they share most subtrees).
 	shapeOK map[plumbing.Hash]bool
 	// entry says the commits are a MEMBER's branch entering this repository
@@ -424,7 +425,7 @@ func (j judge) judgeSigner(c *object.Commit) (Refusal, bool) {
 		return Refusal{Commit: h, Rule: RuleSignature, Reason: serr.Error()}, false
 	}
 	fp := s.Fingerprint
-	id := agentIDOfAuthor(c.Author.Email)
+	id := vcs.AgentIDOfAuthor(c.Author.Email)
 	if id == "" {
 		return Refusal{Commit: h, Rule: RuleNoRecord, SignerFP: fp, Reason: fmt.Sprintf("author %q is not an agent address", c.Author.Email)}, false
 	}
@@ -473,7 +474,7 @@ func (j judge) hostRecord(c *object.Commit, id string) (Refusal, bool) {
 	if err != nil {
 		return refuse(fmt.Sprintf("the commit's tree cannot be read: %v", err))
 	}
-	parents, err := parentTrees(c)
+	parents, err := vcs.ParentTrees(c)
 	if err != nil {
 		return refuse(fmt.Sprintf("a parent's tree cannot be read: %v", err))
 	}
@@ -749,7 +750,7 @@ func (j judge) recordOwner(c *object.Commit, id string) (Refusal, bool) {
 	if err != nil {
 		return refuse(fmt.Sprintf("the commit's tree cannot be read: %v", err))
 	}
-	parents, err := parentTrees(c)
+	parents, err := vcs.ParentTrees(c)
 	if err != nil {
 		return refuse(fmt.Sprintf("a parent's tree cannot be read: %v", err))
 	}

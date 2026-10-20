@@ -127,7 +127,7 @@ func Open(path string) (*Service, error) {
 	gits := storegit.NewStorer(db)
 	rh := newRepoHandler(db, gits)
 	// Derive repo name from dbPath: /path/to/core.db → "core"
-	rh.name = strings.TrimSuffix(filepath.Base(path), ".db")
+	rh.SetName(strings.TrimSuffix(filepath.Base(path), ".db"))
 	si := &searchIndex{rh: rh}
 
 	// facts_vec is code-managed (migration 000009 drops the old static
@@ -141,8 +141,8 @@ func Open(path string) (*Service, error) {
 		return nil, fmt.Errorf("store.Open: ensure facts_vec: %w", err)
 	}
 
-	rh.onDrop = si.GC
-	rh.im = si // notifyCommit delegates to im.Sync after every commit.
+	rh.SetOnDrop(si.GC)
+	rh.SetIndexManager(si) // notifyCommit delegates to im.Sync after every commit.
 	fi := &factIndex{rh: rh}
 	ri := &remoteIndex{rh: rh}
 	fq := &factQuery{rh: rh}
@@ -176,14 +176,14 @@ func Open(path string) (*Service, error) {
 		ax:            ax,
 		mo:            mo,
 		search:        search,
-		pi:            sessions.NewPipelineIndex(rh.db, sessionDB),
+		pi:            sessions.NewPipelineIndex(rh.DB(), sessionDB),
 		ti:            sessions.NewToolIndex(sessionDB),
 		ri:            ri,
 		dbPath:        canonPath,
 		sessionDB:     sessionDB,
 		sessionDBPath: sessionPath,
 	}
-	rh.consensusBranch = s.UpstreamBranch
+	rh.SetConsensusBranchFunc(s.UpstreamBranch)
 	return s, nil
 }
 
@@ -232,13 +232,13 @@ func (s *Service) SetOrigin(o *Origin) {
 // public way in, so the fetch and reconcile paths below it never see an empty
 // branch name and carry no default of their own.
 func (s *Service) ConfigureRemote(url, upstreamMain, agentBranch string) error {
-	if s.rh.repo == nil {
+	if s.rh.Repository() == nil {
 		return fmt.Errorf("ConfigureRemote: repository not initialised")
 	}
 	if upstreamMain == "" {
 		return fmt.Errorf("ConfigureRemote: %w", ErrNoConsensusBranch)
 	}
-	return s.rh.configureRemote(url, upstreamMain, agentBranch)
+	return s.rh.ConfigureRemote(url, upstreamMain, agentBranch)
 }
 
 // SetNetworkTimeout bounds every remote git network operation (clone, fetch,
@@ -247,10 +247,10 @@ func (s *Service) ConfigureRemote(url, upstreamMain, agentBranch string) error {
 // remote aborts instead of hanging forever. 0 disables the bound (legacy
 // behavior). Wired from cfg.Git.NetworkTimeout by the repos builder at open
 // time and re-applied on SwapStore reopen (store.Open does not restore it).
-func (s *Service) SetNetworkTimeout(d time.Duration) { s.rh.netTimeout = d }
+func (s *Service) SetNetworkTimeout(d time.Duration) { s.rh.SetNetTimeout(d) }
 
 // SetOntologyRoot sets the directory facts live under — the only part of the
-// tree the index admits (see isFactPath). Wired from cfg.OntologyRoot by the
+// tree the index admits (see IsFactPath). Wired from cfg.OntologyRoot by the
 // repos builder at open time and re-applied on SwapStore reopen, exactly like
 // SetNetworkTimeout; store.Open does not restore it, and an unset root falls
 // back to the package default. Surrounding slashes are trimmed so "kb", "kb/"
@@ -259,7 +259,7 @@ func (s *Service) SetNetworkTimeout(d time.Duration) { s.rh.netTimeout = d }
 // Changing the root does NOT re-scope an existing index: rows admitted under
 // the previous root survive until the next Rebuild, which repopulates from the
 // tree under the new one.
-func (s *Service) SetOntologyRoot(root string) { s.rh.factRoot = strings.Trim(root, "/") }
+func (s *Service) SetOntologyRoot(root string) { s.rh.SetFactRoot(strings.Trim(root, "/")) }
 
 // SetReadOnly marks the store as accepting no AUTHORED commits on any branch.
 // Wired by the repos builder for subscriptions. The gate sits at the shared
@@ -275,7 +275,7 @@ func (s *Service) SetOntologyRoot(root string) { s.rh.factRoot = strings.Trim(ro
 // and a swap that omits this leaves a subscription writable with no error and
 // no log. It is set at build/swap time before the store is published and never
 // mutated afterwards, which is why the bool needs no lock.
-func (s *Service) SetReadOnly(ro bool) { s.rh.readOnly = ro }
+func (s *Service) SetReadOnly(ro bool) { s.rh.SetReadOnly(ro) }
 
 // Remote returns the RemoteIndex for git remote configuration and sync.
 func (s *Service) Remote() RemoteIndex { return s.ri }
@@ -312,7 +312,7 @@ func (s *Service) Motifs() MotifIndex { return s.mo }
 func (s *Service) IndexManager() IndexManager { return s.si }
 
 // SetEmbedder configures the embedder used by the search index for vector operations.
-func (s *Service) SetEmbedder(e BatchEmbedder) { s.rh.setEmbedder(e) }
+func (s *Service) SetEmbedder(e BatchEmbedder) { s.rh.SetEmbedder(e) }
 
 // Pipeline returns the PipelineIndex for pipeline session management.
 func (s *Service) Pipeline() PipelineIndex { return s.pi }
@@ -329,14 +329,14 @@ func (s *Service) Branches() BranchIndex { return s.rh }
 // every clone of a repo, which makes it the repo's stable identity
 // (lenses RFC decision 11); all branches share it.
 func (s *Service) RootCommit(ctx context.Context, branch string) (string, error) {
-	return s.rh.rootCommit(ctx, branch)
+	return s.rh.RootCommit(ctx, branch)
 }
 
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
 // is not enabled.
 func (s *Service) Checkpoint() error {
-	_, err := s.rh.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err := s.rh.DB().Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	return err
 }
 
@@ -352,19 +352,19 @@ func (s *Service) Close() error {
 			_ = os.Remove(s.sessionDBPath + suffix)
 		}
 	}
-	return s.rh.db.Close()
+	return s.rh.DB().Close()
 }
 
 // SetSigner sets the SSH signer used for commit signing.
 func (s *Service) SetSigner(signer ssh.Signer) {
-	s.rh.signer = signer
+	s.rh.SetSigner(signer)
 }
 
 // SetOnCommit registers a callback invoked after every commit (after internal
 // bookkeeping). This allows callers to observe commits for side-effects such
 // as SSE broadcasting. The callback receives the branch name and commit hash.
 func (s *Service) SetOnCommit(fn func(branch, hash string)) {
-	s.rh.onCommit = fn
+	s.rh.SetOnCommit(fn)
 }
 
 // HasSharedHistory checks whether localBranch shares any commits with remoteBranch on the remote service.
@@ -372,12 +372,12 @@ func (s *Service) SetOnCommit(fn func(branch, hash string)) {
 func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remote *Service, remoteBranch string) (bool, error) {
 	const maxCommits = 1000
 
-	localHash, err := s.rh.resolveRef(ctx, localBranch)
+	localHash, err := s.rh.ResolveRef(ctx, localBranch)
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: local ref: %w", err)
 	}
 	localHashes := make(map[plumbing.Hash]struct{})
-	localIter, err := s.rh.repo.Log(&gogit.LogOptions{From: localHash})
+	localIter, err := s.rh.Repository().Log(&gogit.LogOptions{From: localHash})
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: local log: %w", err)
 	}
@@ -393,11 +393,11 @@ func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remo
 		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
 	}
 
-	remoteHash, err := remote.rh.resolveRef(ctx, remoteBranch)
+	remoteHash, err := remote.rh.ResolveRef(ctx, remoteBranch)
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: remote ref: %w", err)
 	}
-	remoteIter, err := remote.rh.repo.Log(&gogit.LogOptions{From: remoteHash})
+	remoteIter, err := remote.rh.Repository().Log(&gogit.LogOptions{From: remoteHash})
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: remote log: %w", err)
 	}
@@ -451,5 +451,5 @@ func canonicalizePath(path string) string {
 //
 // Local read only; never touches the network.
 func (s *Service) HasObject(hash string) bool {
-	return s.rh.gits.HasEncodedObject(plumbing.NewHash(hash)) == nil
+	return s.rh.Storer().HasEncodedObject(plumbing.NewHash(hash)) == nil
 }

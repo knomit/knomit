@@ -138,7 +138,7 @@ func TestReceivePack_AdoptedHostHeldTipMergeRefused(t *testing.T) {
 // knomitTreeHash is the hash of the .knomit/ subtree at branch's tip.
 func knomitTreeHash(t *testing.T, h *pushHost, branch string) plumbing.Hash {
 	t.Helper()
-	c, err := object.GetCommit(h.svc.rh.gits, h.ref(branch))
+	c, err := object.GetCommit(h.svc.rh.Storer(), h.ref(branch))
 	require.NoError(t, err)
 	tree, err := c.Tree()
 	require.NoError(t, err)

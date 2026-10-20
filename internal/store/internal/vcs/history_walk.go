@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"fmt"
@@ -11,12 +11,12 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
-// walkHistory visits every commit reachable from start and not from stop,
+// WalkHistory visits every commit reachable from start and not from stop,
 // parents before children (a depth-first post-order), once each. A start in
 // stop is reachable from stop, so nothing is visited: E4 must not judge an
 // agent tip that is already on origin's main (a forge merge it fast-forwarded
 // onto).
-func walkHistory(st storer.EncodedObjectStorer, start plumbing.Hash, stop map[plumbing.Hash]bool, visit func(*object.Commit)) error {
+func WalkHistory(st storer.EncodedObjectStorer, start plumbing.Hash, stop map[plumbing.Hash]bool, visit func(*object.Commit)) error {
 	if stop[start] {
 		return nil
 	}
@@ -53,13 +53,13 @@ func walkHistory(st storer.EncodedObjectStorer, start plumbing.Hash, stop map[pl
 	return nil
 }
 
-// checkTreeShape walks tree recursively by its entries, NOT with go-git's
+// CheckTreeShape walks tree recursively by its entries, NOT with go-git's
 // TreeWalker, and fails on the first entry that is not well formed:
 //   - a directory entry (mode 040000) whose object is missing or is not a tree;
 //   - a file or symlink entry whose object is missing or is not a blob;
 //   - a name go-git refuses to read back (TreeEntryFile / FindEntry, its
 //     ValidTreePath), a name holding '/', or a name twice in one tree;
-//   - a tree deeper than maxShapeDepth.
+//   - a tree deeper than MaxShapeDepth.
 //
 // A gitlink (submodule entry) names a commit in another repository and is not
 // looked up, as everywhere else in the gate. Tree decoding canonicalises every
@@ -76,20 +76,20 @@ func walkHistory(st storer.EncodedObjectStorer, start plumbing.Hash, stop map[pl
 // ok, when not nil, memoises the trees already found well formed: a tree is
 // content-addressed, so one verdict holds for every commit that shares it.
 // The error names the path of the offending entry.
-func checkTreeShape(tree *object.Tree, ok map[plumbing.Hash]bool) error {
+func CheckTreeShape(tree *object.Tree, ok map[plumbing.Hash]bool) error {
 	return treeShape(tree, "", 0, ok)
 }
 
-// maxShapeDepth bounds the recursion as go-git's own walker does (its
+// MaxShapeDepth bounds the recursion as go-git's own walker does (its
 // maxTreeDepth).
-const maxShapeDepth = 1024
+const MaxShapeDepth = 1024
 
 func treeShape(t *object.Tree, dir string, depth int, ok map[plumbing.Hash]bool) error {
 	if ok[t.Hash] {
 		return nil
 	}
-	if depth > maxShapeDepth {
-		return fmt.Errorf("%s: deeper than %d trees", dir, maxShapeDepth)
+	if depth > MaxShapeDepth {
+		return fmt.Errorf("%s: deeper than %d trees", dir, MaxShapeDepth)
 	}
 	seen := make(map[string]bool, len(t.Entries))
 	for i := range t.Entries {
@@ -132,16 +132,16 @@ func treeShape(t *object.Tree, dir string, depth int, ok map[plumbing.Hash]bool)
 	return nil
 }
 
-// agentIDOfAuthor returns the agent id in an agent author address,
+// AgentIDOfAuthor returns the agent id in an agent author address,
 // <id>[+<op>]@agents.knomit.io, or "" for any other address. It is
 // pki.AgentIDOfEmail, the ONE string operation on an identity, shared with the
 // certificate's email SAN so the two can never disagree (R2). The id is
 // OPAQUE: it is looked up and compared, never parsed further.
-func agentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
+func AgentIDOfAuthor(email string) string { return pki.AgentIDOfEmail(email) }
 
-// parentTrees returns the trees of c's parents, or the empty tree (nil) for a
+// ParentTrees returns the trees of c's parents, or the empty tree (nil) for a
 // root commit.
-func parentTrees(c *object.Commit) ([]*object.Tree, error) {
+func ParentTrees(c *object.Commit) ([]*object.Tree, error) {
 	if c.NumParents() == 0 {
 		return []*object.Tree{nil}, nil
 	}
@@ -160,9 +160,9 @@ func parentTrees(c *object.Commit) ([]*object.Tree, error) {
 	return out, nil
 }
 
-// shortRefHash returns the first 8 chars of a ref hash for log output, or
+// ShortRefHash returns the first 8 chars of a ref hash for log output, or
 // "<zero>" for the zero hash.
-func shortRefHash(h plumbing.Hash) string {
+func ShortRefHash(h plumbing.Hash) string {
 	if h == plumbing.ZeroHash {
 		return "<zero>"
 	}

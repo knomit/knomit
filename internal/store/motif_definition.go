@@ -50,7 +50,7 @@ type DefinitionTarget struct {
 // prompt a fresh sentence. A flag set by the merge path would have caught only
 // the first.
 func (mi *motifIndex) ClustersNeedingDefinition(ctx context.Context, branch string) ([]DefinitionTarget, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("ClustersNeedingDefinition: %w", err)
 	}
@@ -90,7 +90,7 @@ type definitionRow struct {
 }
 
 func (mi *motifIndex) definitionRows(ctx context.Context, branchID int64) (map[string]definitionRow, error) {
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx,
 		`SELECT cluster_key, definition, members FROM motif_definitions WHERE branch_id = ?`,
 		branchID)
 	if err != nil {
@@ -138,7 +138,7 @@ type DefinitionStamp struct {
 // planning and applying would mark a pre-merge definition as current for a
 // post-merge cluster, permanently: nothing would ever re-queue it.
 func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, definition string, stamp DefinitionStamp) error {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("PutDefinition: %w", err)
 	}
@@ -150,7 +150,7 @@ func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, def
 		}
 		members = current[clusterKey]
 	}
-	if _, err := conn(ctx, mi.rh.db).ExecContext(ctx,
+	if _, err := conn(ctx, mi.rh.DB()).ExecContext(ctx,
 		`INSERT INTO motif_definitions(branch_id, cluster_key, definition, members, authored_at)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(branch_id, cluster_key) DO UPDATE SET
@@ -172,12 +172,12 @@ func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, def
 // worse than a slightly wide sentence. ClustersNeedingDefinition is what
 // queues it for refresh.
 func (mi *motifIndex) Definition(ctx context.Context, branch, clusterKey string) (string, bool, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", false, fmt.Errorf("Definition: %w", err)
 	}
 	var def string
-	err = conn(ctx, mi.rh.db).QueryRowContext(ctx,
+	err = conn(ctx, mi.rh.DB()).QueryRowContext(ctx,
 		`SELECT definition FROM motif_definitions WHERE branch_id = ? AND cluster_key = ?`,
 		branchID, clusterKey).Scan(&def)
 	if err == sql.ErrNoRows {
@@ -272,7 +272,7 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 // a search is a way of reading the list, a path is which corpus you are in.
 func (mi *motifIndex) VocabularyHealthUnder(ctx context.Context, branch, pathPrefix string) (MotifVocabularyHealth, error) {
 	var h MotifVocabularyHealth
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return h, fmt.Errorf("VocabularyHealth: %w", err)
 	}
@@ -301,7 +301,7 @@ func (mi *motifIndex) VocabularyHealthUnder(ctx context.Context, branch, pathPre
 		scope = " AND bf.path LIKE ?"
 		args = append(args, pathPrefix+"%")
 	}
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+	rows, err := conn(ctx, mi.rh.DB()).QueryContext(ctx, `
 		SELECT `+key+`,
 		       COUNT(DISTINCT bf.path),
 		       COUNT(DISTINCT CASE WHEN f.kind = 'epistemic' THEN bf.path END)
@@ -341,13 +341,13 @@ func (mi *motifIndex) VocabularyHealthUnder(ctx context.Context, branch, pathPre
 // something was offering; both surviving callers already discarded it. A
 // return value nothing reads is one a later reader trusts by accident.
 func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, total int, err error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
 	}
 	// Both counts come from ONE query over ONE denominator, so coverage can
 	// never be reported against a total some other clause computed.
-	err = conn(ctx, mi.rh.db).QueryRowContext(ctx, `
+	err = conn(ctx, mi.rh.DB()).QueryRowContext(ctx, `
 		SELECT
 		  COUNT(DISTINCT CASE WHEN EXISTS (
 		      SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id) THEN bf.path END),
@@ -376,7 +376,7 @@ type MotifDefinitionStatus struct {
 // A key with no stored definition is ABSENT from the result — "missing" is the
 // absence, not an empty entry, matching Definition's (_, false, nil).
 func (mi *motifIndex) Definitions(ctx context.Context, branch string, keys []string) (map[string]MotifDefinitionStatus, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
+	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("Definitions: %w", err)
 	}

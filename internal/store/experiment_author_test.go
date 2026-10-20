@@ -26,14 +26,14 @@ func commitsSince(t *testing.T, svc *Service, tip, stop string) []*object.Commit
 	t.Helper()
 	seen := map[plumbing.Hash]bool{}
 	if stop != "" {
-		stopC, err := svc.rh.repo.CommitObject(plumbing.NewHash(stop))
+		stopC, err := svc.rh.Repository().CommitObject(plumbing.NewHash(stop))
 		require.NoError(t, err)
 		require.NoError(t, object.NewCommitPreorderIter(stopC, nil, nil).ForEach(func(c *object.Commit) error {
 			seen[c.Hash] = true
 			return nil
 		}))
 	}
-	tipC, err := svc.rh.repo.CommitObject(plumbing.NewHash(tip))
+	tipC, err := svc.rh.Repository().CommitObject(plumbing.NewHash(tip))
 	require.NoError(t, err)
 	var out []*object.Commit
 	require.NoError(t, object.NewCommitPreorderIter(tipC, seen, nil).ForEach(func(c *object.Commit) error {
@@ -135,7 +135,7 @@ func TestExperimentCommits_EmptyOwnerUsesRecordedParent(t *testing.T) {
 	_, err = svc.Experiments().OpenExperiment(ctx, "unowned", "", testAgentBranch)
 	require.NoError(t, err)
 	h := writeMergeFact(t, svc, "exp/unowned", "kb/x.md", "x", "body")
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(h))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
 	require.NoError(t, err)
 	requireAuthoredBy(t, []*object.Commit{c}, "test")
 }
@@ -214,10 +214,10 @@ func copyToBare(t *testing.T, svc *Service, refs map[string]string) string {
 	for _, h := range refs {
 		tips = append(tips, plumbing.NewHash(h))
 	}
-	hashes, err := revlist.Objects(svc.rh.repo.Storer, tips, nil)
+	hashes, err := revlist.Objects(svc.rh.Repository().Storer, tips, nil)
 	require.NoError(t, err)
 	for _, h := range hashes {
-		o, err := svc.rh.repo.Storer.EncodedObject(plumbing.AnyObject, h)
+		o, err := svc.rh.Repository().Storer.EncodedObject(plumbing.AnyObject, h)
 		require.NoError(t, err)
 		_, err = bare.Storer.SetEncodedObject(o)
 		require.NoError(t, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 	"strings"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 )
 
 // TestingSetRef moves (or creates) a git reference WITHOUT a commit and without
-// notifyCommit — for tests in sibling packages that need a ref shape the write
+// NotifyCommit — for tests in sibling packages that need a ref shape the write
 // path never produces on demand: an agent branch rewound so its old head is no
 // longer an ancestor (the replay case), or main moved to a commit as if the
 // acceptance gate had advanced it.
@@ -26,28 +27,28 @@ func (s *Service) TestingSetRef(name, hash string) error {
 	if !plumbing.IsHash(hash) {
 		return fmt.Errorf("TestingSetRef: %q is not a commit hash", hash)
 	}
-	return s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(name), plumbing.NewHash(hash)))
+	return s.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.ReferenceName(name), plumbing.NewHash(hash)))
 }
 
-// TestingDeleteRef removes a git reference WITHOUT notifyCommit — for a test
+// TestingDeleteRef removes a git reference WITHOUT NotifyCommit — for a test
 // that needs a repo with no upstream branch (F07 PR 5: no main means no repo
 // recipe tier). Test-only by contract (see TestingSetRef).
 func (s *Service) TestingDeleteRef(name string) error {
 	if !testing.Testing() {
 		panic("store.TestingDeleteRef called outside a test binary")
 	}
-	return s.rh.gits.RemoveReference(plumbing.ReferenceName(name))
+	return s.rh.Storer().RemoveReference(plumbing.ReferenceName(name))
 }
 
 // TestingCommitFiles commits files onto branch as ONE signed commit, moving
-// the ref but skipping notifyCommit — no commit_log row, no index sync, no
+// the ref but skipping NotifyCommit — no commit_log row, no index sync, no
 // observer. It exists for a test that needs a very large advance (thousands of
 // fact paths) without paying the index's cost for it: the dispatcher's own
 // work is what such a test measures. Test-only by contract (see
 // TestingSetRef). Returns the commit hash.
 //
 // The trees are built in ONE pass (testingTree): each tree object the commit
-// needs is written once. Applying the paths one at a time with buildTree, as
+// needs is written once. Applying the paths one at a time with BuildTree, as
 // the write path does for its handful of files, rewrites every tree on the
 // path for every file: about five tree objects per file, 60,000 loose objects
 // for the 12,000-file advance of TestDispatch_Tx1Bounded, which cost that test
@@ -59,11 +60,11 @@ func (s *Service) TestingCommitFiles(branch string, files map[string]string, mes
 	}
 	rh := s.rh
 	ctx := context.Background()
-	parent, err := rh.resolveRef(ctx, branch)
+	parent, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", err
 	}
-	parentCommit, err := rh.repo.CommitObject(parent)
+	parentCommit, err := rh.Repository().CommitObject(parent)
 	if err != nil {
 		return "", fmt.Errorf("TestingCommitFiles: parent: %w", err)
 	}
@@ -71,15 +72,15 @@ func (s *Service) TestingCommitFiles(branch string, files map[string]string, mes
 	if err != nil {
 		return "", fmt.Errorf("TestingCommitFiles: parent tree: %w", err)
 	}
-	root, err := testingTree(rh.gits, tree, files)
+	root, err := testingTree(rh.Storer(), tree, files)
 	if err != nil {
 		return "", fmt.Errorf("TestingCommitFiles: %w", err)
 	}
-	signer, err := rh.commitSigner()
+	signer, err := rh.CommitSigner()
 	if err != nil {
 		return "", err
 	}
-	author, committer, err := rh.commitSigs(ctx, branch, "learn")
+	author, committer, err := rh.CommitSigs(ctx, branch, "learn")
 	if err != nil {
 		return "", err
 	}
@@ -90,11 +91,11 @@ func (s *Service) TestingCommitFiles(branch string, files map[string]string, mes
 		TreeHash:     root,
 		ParentHashes: []plumbing.Hash{parent},
 	}
-	h, err := storeCommit(rh.gits, signer, c)
+	h, err := vcs.StoreCommit(rh.Storer(), signer, c)
 	if err != nil {
 		return "", err
 	}
-	if err := rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)); err != nil {
+	if err := rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)); err != nil {
 		return "", err
 	}
 	return h.String(), nil
@@ -116,10 +117,10 @@ func (s *Service) Templates() TemplateIndex { return s.rh }
 // (fact.TemplatePathAllowed), no two paths that differ only by case. It is
 // never on the MCP surface. Otherwise it is batchWrite: read-only refused,
 // validatePath, the signer taken before any object is written, the ctx
-// trailers stamped, notifyCommit under the branch lock.
+// trailers stamped, NotifyCommit under the branch lock.
 func (s *Service) WriteSystemTree(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	fi := s.fi
-	if fi.rh.readOnly {
+	if fi.rh.ReadOnly() {
 		return "", nil, ErrRepoReadOnly
 	}
 	if len(files) == 0 {
@@ -138,13 +139,13 @@ func (s *Service) WriteSystemTree(ctx context.Context, branch string, files map[
 			return "", nil, fmt.Errorf("store: WriteSystemTree: %w", err)
 		}
 	}
-	unlock := fi.rh.lockBranch(branch)
+	unlock := fi.rh.LockBranch(branch)
 	defer unlock()
 	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, nil, nil, message, operation)
 	if err != nil {
 		return "", nil, err
 	}
-	if err := fi.rh.notifyCommit(ctx, branch, cHash); err != nil {
+	if err := fi.rh.NotifyCommit(ctx, branch, cHash); err != nil {
 		return "", nil, err
 	}
 	return cHash.String(), blobHashes, nil

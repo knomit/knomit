@@ -10,7 +10,7 @@ import (
 
 // #375: knomit's deletes write trees the way git does — a folder whose last
 // entry is removed is dropped from its parent, never kept as an empty tree.
-// Every delete path goes through deleteFromTree: DeleteFact, BatchWriteFacts,
+// Every delete path goes through DeleteFromTree: DeleteFact, BatchWriteFacts,
 // and the merge's src-delete.
 
 // treeOf returns the root tree hash at branch's tip.
@@ -18,7 +18,7 @@ func treeOf(t *testing.T, svc *Service, branch string) string {
 	t.Helper()
 	head, err := svc.Branches().HeadCommit(context.Background(), branch)
 	require.NoError(t, err)
-	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(head))
+	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(head))
 	require.NoError(t, err)
 	return c.TreeHash.String()
 }

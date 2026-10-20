@@ -14,6 +14,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 const scrubbedPath = "kb/secret.md"
@@ -26,7 +28,7 @@ func expRwSetup(t *testing.T) (*Service, plumbing.Hash) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
 	require.NoError(t, svc.rh.writeAgentBase("agent/test", c1))
 	return svc, c1
 }
@@ -36,7 +38,7 @@ func expRwSetup(t *testing.T) (*Service, plumbing.Hash) {
 func expRwPushSecret(t *testing.T, svc *Service) plumbing.Hash {
 	t.Helper()
 	x := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", scrubbedPath, "S", "scrub me"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), x)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), x)))
 	require.NoError(t, svc.rh.writeAgentBase("agent/test", x))
 	return x
 }
@@ -46,7 +48,7 @@ func expRwPushSecret(t *testing.T, svc *Service) plumbing.Hash {
 func expRwRewind(t *testing.T, svc *Service, parent plumbing.Hash, path string) (plumbing.Hash, AgentReconcileResult) {
 	t.Helper()
 	u := upstreamCommit(t, svc, parent, path, "---\ntype: observation\n---\n# U\n\n"+path+"\n")
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
 	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	// Each test gives the agent branch a write of its own first: a branch with
@@ -64,7 +66,7 @@ func expRwRewind(t *testing.T, svc *Service, parent plumbing.Hash, path string) 
 func reaches(t *testing.T, svc *Service, branch string, h plumbing.Hash) bool {
 	t.Helper()
 	found := false
-	require.NoError(t, walkHistory(svc.rh.gits, mustHeadHash(t, svc, branch), nil, func(c *object.Commit) {
+	require.NoError(t, vcs.WalkHistory(svc.rh.Storer(), mustHeadHash(t, svc, branch), nil, func(c *object.Commit) {
 		if c.Hash == h {
 			found = true
 		}
@@ -177,7 +179,7 @@ func TestExperimentAcrossARewind_NoScrubbedOverlapCommitsNormally(t *testing.T) 
 	res, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Mode)
-	mc, err := svc.rh.repo.CommitObject(mustHeadHash(t, svc, "agent/test"))
+	mc, err := svc.rh.Repository().CommitObject(mustHeadHash(t, svc, "agent/test"))
 	require.NoError(t, err)
 	require.Len(t, mc.ParentHashes, 2)
 	require.Equal(t, expTip, mc.ParentHashes[1], "the experiment's own commits are merged as they are, not rebuilt")
@@ -267,9 +269,9 @@ func TestExperimentAcrossARewind_RollbackClearsTheRecord(t *testing.T) {
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	expRwRewind(t, svc, c1, "kb/u.md")
-	_, err = svc.rh.gits.Reference(plumbing.ReferenceName("refs/knomit/experiment-rewound/e"))
+	_, err = svc.rh.Storer().Reference(plumbing.ReferenceName("refs/knomit/experiment-rewound/e"))
 	require.NoError(t, err, "setup: the rewind recorded the experiment")
 	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "e"))
-	_, err = svc.rh.gits.Reference(plumbing.ReferenceName("refs/knomit/experiment-rewound/e"))
+	_, err = svc.rh.Storer().Reference(plumbing.ReferenceName("refs/knomit/experiment-rewound/e"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound)
 }

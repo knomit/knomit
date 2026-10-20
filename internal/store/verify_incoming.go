@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/store/internal/vcs"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -58,17 +59,17 @@ func (rh *repoHandler) incomingValid(ctx context.Context, upstream string, tip p
 		// Under net-change judging the host holds the invalid intermediates
 		// of branches it admitted fixed, so a ref moved back onto one of
 		// them must be refused here, not only by the merge guard.
-		held, err := object.GetCommit(rh.gits, tip)
+		held, err := object.GetCommit(rh.Storer(), tip)
 		if err != nil {
 			return ""
 		}
 		tipC = held
 	}
-	h, err := rh.resolveRef(ctx, upstream)
+	h, err := rh.ResolveRef(ctx, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
 	}
-	c, err := object.GetCommit(rh.gits, h)
+	c, err := object.GetCommit(rh.Storer(), h)
 	if err != nil {
 		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
 	}
@@ -76,7 +77,7 @@ func (rh *repoHandler) incomingValid(ctx context.Context, upstream string, tip p
 	if err != nil {
 		return fmt.Sprintf("knomit: the ontology at %s could not be read: %v", upstream, err)
 	}
-	if r, ok := branchFactsValid(tipC, c, ont, rh.ontologyRoot()); !ok {
+	if r, ok := branchFactsValid(tipC, c, ont, rh.OntologyRoot()); !ok {
 		return fmt.Sprintf("knomit: commit %s %s: %s: %s", r.Commit, CommitRefusedByValidation, r.Rule, r.Reason)
 	}
 	return ""
@@ -120,11 +121,11 @@ func (rh *repoHandler) judgeIncoming(ctx context.Context, upstream string, fleet
 	// upstream is the fleet ontology).
 	selfRoot := ""
 	if fact.IsFleetOntology(ont) {
-		if selfRoot = rh.factRoot; selfRoot == "" {
+		if selfRoot = rh.FactRoot(); selfRoot == "" {
 			selfRoot = "kb"
 		}
 	}
-	gate := newJudge(fleet, selfRoot, ont, rh.factRoot)
+	gate := newJudge(fleet, selfRoot, ont, rh.FactRoot())
 	// A member's branch, never this instance's own: the host-record rule
 	// applies (hostRecord).
 	gate.entry = true
@@ -195,7 +196,7 @@ func (rh *repoHandler) privatePathClosure(ctx context.Context, st storer.Encoded
 	if len(commits) == 0 {
 		return ""
 	}
-	uh, err := rh.resolveRef(ctx, upstream)
+	uh, err := rh.ResolveRef(ctx, upstream)
 	if err != nil {
 		return fmt.Sprintf("knomit: %s could not be read: %v", upstream, err)
 	}
@@ -206,7 +207,7 @@ func (rh *repoHandler) privatePathClosure(ctx context.Context, st storer.Encoded
 	shapeOK := map[plumbing.Hash]bool{}
 	for _, c := range commits {
 		// The closure's DiffTree ends silently at a directory entry that is
-		// not a tree (as does every go-git walker; checkTreeShape), so a
+		// not a tree (as does every go-git walker; CheckTreeShape), so a
 		// bogus entry would hide the private paths after it. reachableNew
 		// does not catch one that names an object the host already holds.
 		// Refused here, in every verify_signatures mode, with the judge's
@@ -289,15 +290,15 @@ func privateChangeFromBase(c, up *object.Commit) (string, error) {
 // (rule A) and its artifact rules (R7). With verification on, an ontology
 // that does not parse is an error: its rules cannot be known.
 func (rh *repoHandler) verifyModeAt(ctx context.Context, branch string) (mode string, ont *fact.Ontology, err error) {
-	h, err := rh.resolveRef(ctx, branch)
+	h, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", nil, err
 	}
-	c, err := object.GetCommit(rh.gits, h)
+	c, err := object.GetCommit(rh.Storer(), h)
 	if err != nil {
 		return "", nil, err
 	}
-	raw, err := treeOntology(c)
+	raw, err := vcs.TreeOntology(c)
 	if err != nil {
 		return "", nil, err
 	}

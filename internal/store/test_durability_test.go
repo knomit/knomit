@@ -50,7 +50,7 @@ func TestSetTestFastDurability_SyncOffWALKept(t *testing.T) {
 			svc, err := Open(filepath.Join(dir, "k.db"))
 			require.NoError(t, err)
 			defer svc.Close()
-			journal, sync := pragmas(t, svc.rh.db)
+			journal, sync := pragmas(t, svc.rh.DB())
 			require.Equal(t, "wal", journal, "main DB must stay in WAL")
 			require.Equal(t, tc.wantSync, sync, "main DB synchronous")
 

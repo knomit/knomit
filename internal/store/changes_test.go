@@ -61,9 +61,9 @@ func restamp(t *testing.T, svc *Service, branch string, parents []plumbing.Hash,
 func restampAs(t *testing.T, svc *Service, branch string, parents []plumbing.Hash, when time.Time, msg string) string {
 	t.Helper()
 	rh := svc.rh
-	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	require.NoError(t, err)
-	tip, err := rh.repo.CommitObject(ref.Hash())
+	tip, err := rh.Repository().CommitObject(ref.Hash())
 	require.NoError(t, err)
 	if parents == nil {
 		parents = tip.ParentHashes
@@ -73,20 +73,20 @@ func restampAs(t *testing.T, svc *Service, branch string, parents []plumbing.Has
 		msg = tip.Message
 	}
 	c := &object.Commit{Author: sig, Committer: sig, Message: msg, TreeHash: tip.TreeHash, ParentHashes: parents}
-	obj := rh.repo.Storer.NewEncodedObject()
+	obj := rh.Repository().Storer.NewEncodedObject()
 	require.NoError(t, c.Encode(obj))
-	h, err := rh.repo.Storer.SetEncodedObject(obj)
+	h, err := rh.Repository().Storer.SetEncodedObject(obj)
 	require.NoError(t, err)
-	require.NoError(t, rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)))
+	require.NoError(t, rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)))
 	return h.String()
 }
 
 // folderPresent reports whether dir exists as a tree entry at branch's tip.
 func folderPresent(t *testing.T, svc *Service, branch, dir string) bool {
 	t.Helper()
-	ref, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	require.NoError(t, err)
-	c, err := svc.rh.repo.CommitObject(ref.Hash())
+	c, err := svc.rh.Repository().CommitObject(ref.Hash())
 	require.NoError(t, err)
 	root, err := c.Tree()
 	require.NoError(t, err)
@@ -225,7 +225,7 @@ func TestChangesUnder_SinceNotBehindHeadRefused(t *testing.T) {
 	c2 := writeF(t, svc, "main", "kb/tasks/a/t2.md")
 	// Rewind main to c1: c2 now lies AHEAD of head, as a bookmark taken on a
 	// machine whose main was further along would.
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(c1))))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(c1))))
 
 	res, err := svc.Facts().ChangesUnder(context.Background(), "main", ChangesQuery{Since: c2, Prefix: "tasks/a"})
 	require.ErrorIs(t, err, ErrSinceNotBehind)
@@ -357,7 +357,7 @@ func TestChangesUnder_DeletionSurvivesFastForwardOverOlderCommit(t *testing.T) {
 	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, res.Mode, "fixture: main must FAST-FORWARD to y, the path that hides x")
-	tip, err := svc.rh.resolveRef(ctx, "main")
+	tip, err := svc.rh.ResolveRef(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, y, tip.String())
 

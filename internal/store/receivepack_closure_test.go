@@ -30,7 +30,7 @@ func pusherOf(t *testing.T, k ssh.Signer) (fp, branch string) {
 // branchFiles reads the files at a host branch's tip.
 func (h *pushHost) branchFiles(branch string) map[string]string {
 	h.t.Helper()
-	c, err := object.GetCommit(h.svc.rh.gits, h.ref(branch))
+	c, err := object.GetCommit(h.svc.rh.Storer(), h.ref(branch))
 	require.NoError(h.t, err)
 	out := map[string]string{}
 	it, err := c.Files()

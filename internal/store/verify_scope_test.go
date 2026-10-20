@@ -46,10 +46,10 @@ func TestVerify_UnindexedBranchIsSkippedNotReported(t *testing.T) {
 	svc := newVerifyRepo(t)
 	ctx := context.Background()
 
-	head, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/test"))
+	head, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/test"))
 	require.NoError(t, err)
 	foreign := plumbing.NewBranchReferenceName("agent/other-machine-deadbeef")
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(foreign, head.Hash())))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(foreign, head.Hash())))
 
 	report, err := svc.Verify(ctx, VerifyOpts{})
 	require.NoError(t, err)
@@ -70,9 +70,9 @@ func TestVerify_AllBranchesOptsBackIn(t *testing.T) {
 	svc := newVerifyRepo(t)
 	ctx := context.Background()
 
-	head, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/test"))
+	head, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/test"))
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewBranchReferenceName("agent/other-machine-deadbeef"), head.Hash())))
 
 	report, err := svc.Verify(ctx, VerifyOpts{AllBranches: true})
@@ -89,9 +89,9 @@ func TestVerify_AllBranchesOptsBackIn(t *testing.T) {
 func TestVerify_AllBranchesStillNamesTheGeneratedRefRepair(t *testing.T) {
 	svc := newVerifyRepo(t)
 
-	head, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/test"))
+	head, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/test"))
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewBranchReferenceName("okf/main"), head.Hash())))
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{AllBranches: true})
@@ -114,7 +114,7 @@ func TestVerify_FreshRepoStillChecksItsAgentBranch(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	var metaRows int
-	require.NoError(t, svc.rh.gits.DB().QueryRow(
+	require.NoError(t, svc.rh.Storer().DB().QueryRow(
 		`SELECT COUNT(*) FROM meta WHERE key LIKE 'last_commit:%'`).Scan(&metaRows))
 	require.Zero(t, metaRows, "precondition: a fresh repo has no last_commit row")
 
@@ -130,9 +130,9 @@ func TestVerify_FreshRepoStillChecksItsAgentBranch(t *testing.T) {
 func TestVerify_GeneratedRefIsWarnedNotErrored(t *testing.T) {
 	svc := newVerifyRepo(t)
 
-	head, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/test"))
+	head, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/test"))
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewBranchReferenceName("okf/main"), head.Hash())))
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{})
@@ -161,13 +161,13 @@ func TestPruneGeneratedRefs_RemovesResidueAndNothingElse(t *testing.T) {
 	svc := newVerifyRepo(t)
 	ctx := context.Background()
 
-	head, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/test"))
+	head, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/test"))
 	require.NoError(t, err)
 	for _, name := range []string{"okf/main", "okf/agent/test"} {
-		require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 			plumbing.NewBranchReferenceName(name), head.Hash())))
 	}
-	_, err = svc.rh.gits.DB().Exec(
+	_, err = svc.rh.Storer().DB().Exec(
 		`INSERT OR REPLACE INTO kv(key, value) VALUES ('okf:marker:main', 'x')`)
 	require.NoError(t, err)
 
@@ -177,18 +177,18 @@ func TestPruneGeneratedRefs_RemovesResidueAndNothingElse(t *testing.T) {
 	require.EqualValues(t, 1, pruned.Markers, "the marker row must be counted, not silently deleted")
 
 	// The real branches survive.
-	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/test"))
+	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/test"))
 	require.NoError(t, err, "prune must not touch a real branch")
-	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("main"))
 	require.NoError(t, err, "prune must not touch main")
 
 	// The generated ones are gone, markers included.
 	for _, name := range []string{"okf/main", "okf/agent/test"} {
-		_, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(name))
+		_, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(name))
 		require.Error(t, err, "%s must be gone", name)
 	}
 	var markers int
-	require.NoError(t, svc.rh.gits.DB().QueryRow(
+	require.NoError(t, svc.rh.Storer().DB().QueryRow(
 		`SELECT COUNT(*) FROM kv WHERE key LIKE 'okf:marker:%'`).Scan(&markers))
 	require.Zero(t, markers)
 
@@ -209,7 +209,7 @@ func TestVerify_DetectsCommitParentsDrift(t *testing.T) {
 		testFactBody("B", 0.9, nil), "second", "learn")
 	require.NoError(t, err)
 
-	_, err = svc.rh.gits.DB().Exec(
+	_, err = svc.rh.Storer().DB().Exec(
 		`UPDATE commit_parents SET parent_hash = ? WHERE commit_hash = ?`,
 		"0000000000000000000000000000000000000000", res.CommitHash)
 	require.NoError(t, err)
@@ -238,10 +238,10 @@ func TestVerify_UnreadableCommitParentsDoesNotFabricateOneErrorPerCommit(t *test
 
 	// Precondition: several commits with real parent edges.
 	var edges int
-	require.NoError(t, svc.rh.gits.DB().QueryRow(`SELECT COUNT(*) FROM commit_parents`).Scan(&edges))
+	require.NoError(t, svc.rh.Storer().DB().QueryRow(`SELECT COUNT(*) FROM commit_parents`).Scan(&edges))
 	require.Greater(t, edges, 1)
 
-	_, err := svc.rh.gits.DB().Exec(`DROP TABLE commit_parents`)
+	_, err := svc.rh.Storer().DB().Exec(`DROP TABLE commit_parents`)
 	require.NoError(t, err)
 
 	report, err := svc.Verify(ctx, VerifyOpts{})
@@ -269,7 +269,7 @@ func TestVerify_RootCommitWithoutParentRowsIsClean(t *testing.T) {
 func TestVerify_DetectsCommitLogOrphan(t *testing.T) {
 	svc := newVerifyRepo(t)
 
-	_, err := svc.rh.gits.DB().Exec(
+	_, err := svc.rh.Storer().DB().Exec(
 		`INSERT INTO commit_log(commit_hash, path, committed_at, message)
 		 VALUES ('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 'kb/ghost.md', 0, 'ghost')`)
 	require.NoError(t, err)
@@ -312,12 +312,12 @@ func TestVerify_CommitWithoutCommitLogRowsIsClean(t *testing.T) {
 func TestVerify_DetectsDerivedTableOrphan(t *testing.T) {
 	svc := newVerifyRepo(t)
 
-	_, err := svc.rh.gits.DB().Exec(`PRAGMA foreign_keys = OFF`)
+	_, err := svc.rh.Storer().DB().Exec(`PRAGMA foreign_keys = OFF`)
 	require.NoError(t, err)
-	_, err = svc.rh.gits.DB().Exec(
+	_, err = svc.rh.Storer().DB().Exec(
 		`INSERT INTO fact_domains(fact_id, domain) VALUES (999999, 'ghost')`)
 	require.NoError(t, err)
-	_, err = svc.rh.gits.DB().Exec(`PRAGMA foreign_keys = ON`)
+	_, err = svc.rh.Storer().DB().Exec(`PRAGMA foreign_keys = ON`)
 	require.NoError(t, err)
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{})
@@ -336,11 +336,11 @@ func TestVerify_DomainCanonicalizationSkewIsWarningOnly(t *testing.T) {
 	svc := newVerifyRepo(t)
 
 	var factID int64
-	require.NoError(t, svc.rh.gits.DB().QueryRow(`SELECT id FROM facts LIMIT 1`).Scan(&factID))
-	_, err := svc.rh.gits.DB().Exec(
+	require.NoError(t, svc.rh.Storer().DB().QueryRow(`SELECT id FROM facts LIMIT 1`).Scan(&factID))
+	_, err := svc.rh.Storer().DB().Exec(
 		`INSERT OR REPLACE INTO fact_domains(fact_id, domain) VALUES (?, 'claude-code')`, factID)
 	require.NoError(t, err)
-	_, err = svc.rh.gits.DB().Exec(
+	_, err = svc.rh.Storer().DB().Exec(
 		`INSERT OR REPLACE INTO fact_domain_tokens(fact_id, domain, token) VALUES (?, 'claude code', 'claude')`,
 		factID)
 	require.NoError(t, err)
@@ -360,7 +360,7 @@ func TestVerify_DomainCanonicalizationSkewIsWarningOnly(t *testing.T) {
 func TestVerify_DetectsDirtySchemaVersion(t *testing.T) {
 	svc := newVerifyRepo(t)
 
-	_, err := svc.rh.gits.DB().Exec(`UPDATE schema_migrations SET dirty = 1`)
+	_, err := svc.rh.Storer().DB().Exec(`UPDATE schema_migrations SET dirty = 1`)
 	require.NoError(t, err)
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{})
@@ -378,14 +378,14 @@ func TestVerify_DetectsDirtySchemaVersion(t *testing.T) {
 func TestPruneGeneratedRefs_ReportsOnlyWhatItDeleted(t *testing.T) {
 	svc := newVerifyRepo(t)
 
-	head, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("agent/test"))
+	head, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/test"))
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewBranchReferenceName("okf/main"), head.Hash())))
 
 	// Closing the database makes every delete fail, so nothing is removed and
 	// the result must name nothing.
-	require.NoError(t, svc.rh.gits.DB().Close())
+	require.NoError(t, svc.rh.Storer().DB().Close())
 
 	pruned, err := svc.PruneGeneratedRefs(context.Background())
 	require.Error(t, err)
@@ -435,11 +435,11 @@ func TestVerify_ReportOrderIsStable(t *testing.T) {
 
 	// Enough distinct ghost rows that map iteration order would show through.
 	var factID int64
-	require.NoError(t, svc.rh.gits.DB().QueryRow(`SELECT id FROM facts LIMIT 1`).Scan(&factID))
+	require.NoError(t, svc.rh.Storer().DB().QueryRow(`SELECT id FROM facts LIMIT 1`).Scan(&factID))
 	head, err := svc.rh.HeadCommit(ctx, "agent/test")
 	require.NoError(t, err)
 	for _, p := range []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md", "kb/e.md"} {
-		_, err := svc.rh.gits.DB().Exec(
+		_, err := svc.rh.Storer().DB().Exec(
 			`INSERT INTO branch_facts(branch_id, path, fact_id, commit_hash)
 			 VALUES ((SELECT id FROM branches WHERE name = 'agent/test'), ?, ?, ?)`,
 			p, factID, head)

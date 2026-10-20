@@ -7,6 +7,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // DeleteObjectForTest removes a git object (blob, tree, or commit) from the
@@ -16,7 +18,7 @@ import (
 // Exported (vs. the previous lowercase form) so the testenv DSL's
 // CorruptObject helper in a different package can call it.
 func (s *Service) DeleteObjectForTest(hash string) error {
-	return s.rh.gits.DeleteObjectForTest(plumbing.NewHash(hash))
+	return s.rh.Storer().DeleteObjectForTest(plumbing.NewHash(hash))
 }
 
 // RawDBForTest returns the underlying *sql.DB handle. EXISTS ONLY for
@@ -24,7 +26,7 @@ func (s *Service) DeleteObjectForTest(hash string) error {
 // deleting commit_log entries, inserting ghost rows, corrupting
 // facts.blob_hash, etc. Do not call from production code paths.
 func (s *Service) RawDBForTest() *sql.DB {
-	return s.rh.gits.DB()
+	return s.rh.Storer().DB()
 }
 
 // FetchRefspecsForTest returns the fetch refspecs configured on the named git
@@ -38,10 +40,10 @@ func (s *Service) RawDBForTest() *sql.DB {
 // leaves the stored branch correct and the fetch silently tracking the OLD
 // branch — see TestPatchOriginUpstream_PersistsToControlDB.
 func (s *Service) FetchRefspecsForTest(remote string) []string {
-	if s.rh.repo == nil {
+	if s.rh.Repository() == nil {
 		return nil
 	}
-	cfg, err := s.rh.repo.Config()
+	cfg, err := s.rh.Repository().Config()
 	if err != nil {
 		return nil
 	}
@@ -66,10 +68,10 @@ func (s *Service) FetchRefspecsForTest(remote string) []string {
 // left fetching a url nothing records looks identical to one that was never
 // touched.
 func (s *Service) RemoteURLsForTest(remote string) []string {
-	if s.rh.repo == nil {
+	if s.rh.Repository() == nil {
 		return nil
 	}
-	cfg, err := s.rh.repo.Config()
+	cfg, err := s.rh.Repository().Config()
 	if err != nil {
 		return nil
 	}
@@ -116,13 +118,13 @@ func (s *Service) RawExecutableForTest(ctx context.Context, branch, path, conten
 func (s *Service) rawEntryForTest(ctx context.Context, branch, path, content, message string, mode filemode.FileMode) (string, error) {
 	target := content
 	rh := s.rh
-	unlock := rh.lockBranch(branch)
+	unlock := rh.LockBranch(branch)
 	defer unlock()
-	head, err := rh.resolveRef(ctx, branch)
+	head, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return "", err
 	}
-	tip, err := rh.repo.CommitObject(head)
+	tip, err := rh.Repository().CommitObject(head)
 	if err != nil {
 		return "", err
 	}
@@ -130,25 +132,25 @@ func (s *Service) rawEntryForTest(ctx context.Context, branch, path, content, me
 	if err != nil {
 		return "", err
 	}
-	blob, err := writeBlobToStore(rh.gits, []byte(target))
+	blob, err := vcs.WriteBlobToStore(rh.Storer(), []byte(target))
 	if err != nil {
 		return "", err
 	}
-	rootHash, err := buildTreeMode(rh.gits, root, path, mode, blob)
+	rootHash, err := vcs.BuildTreeMode(rh.Storer(), root, path, mode, blob)
 	if err != nil {
 		return "", err
 	}
 	c := &object.Commit{Author: tip.Author, Committer: tip.Committer, Message: message,
 		TreeHash: rootHash, ParentHashes: []plumbing.Hash{head}}
-	obj := rh.gits.NewEncodedObject()
+	obj := rh.Storer().NewEncodedObject()
 	if err := c.Encode(obj); err != nil {
 		return "", err
 	}
-	h, err := rh.gits.SetEncodedObject(obj)
+	h, err := rh.Storer().SetEncodedObject(obj)
 	if err != nil {
 		return "", err
 	}
-	if err := rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)); err != nil {
+	if err := rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)); err != nil {
 		return "", err
 	}
 	return h.String(), nil
@@ -157,14 +159,14 @@ func (s *Service) rawEntryForTest(ctx context.Context, branch, path, content, me
 // deleteCommitLogRowForTest removes commit_log rows for the given commit hash.
 // Test-only escape hatch for integrity-check tests.
 func (s *Service) deleteCommitLogRowForTest(commitHash string) error {
-	_, err := s.rh.gits.DB().Exec(`DELETE FROM commit_log WHERE commit_hash = ?`, commitHash)
+	_, err := s.rh.Storer().DB().Exec(`DELETE FROM commit_log WHERE commit_hash = ?`, commitHash)
 	return err
 }
 
 // deleteBranchFactsRowForTest removes a branch_facts row for (branch, path).
 // Test-only escape hatch for integrity-check tests.
 func (s *Service) deleteBranchFactsRowForTest(branch, path string) error {
-	_, err := s.rh.gits.DB().Exec(
+	_, err := s.rh.Storer().DB().Exec(
 		`DELETE FROM branch_facts
 		 WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND path = ?`,
 		branch, path)
@@ -174,7 +176,7 @@ func (s *Service) deleteBranchFactsRowForTest(branch, path string) error {
 // corruptFactsBlobHashForTest overwrites the blob_hash column on a facts row
 // so it no longer matches the tree's blob hash at HEAD. Test-only escape hatch.
 func (s *Service) corruptFactsBlobHashForTest(factID int64, newBlobHash string) error {
-	_, err := s.rh.gits.DB().Exec(
+	_, err := s.rh.Storer().DB().Exec(
 		`UPDATE facts SET blob_hash = ? WHERE id = ?`, newBlobHash, factID)
 	return err
 }
@@ -182,7 +184,7 @@ func (s *Service) corruptFactsBlobHashForTest(factID int64, newBlobHash string) 
 // deleteEmbeddingForTest removes a facts_vec row for the given facts.id.
 // Test-only escape hatch.
 func (s *Service) deleteEmbeddingForTest(factID int64) error {
-	_, err := s.rh.gits.DB().Exec(`DELETE FROM facts_vec WHERE rowid = ?`, factID)
+	_, err := s.rh.Storer().DB().Exec(`DELETE FROM facts_vec WHERE rowid = ?`, factID)
 	return err
 }
 
@@ -191,7 +193,7 @@ func (s *Service) deleteEmbeddingForTest(factID int64) error {
 // edges, labels and properties cascade (ON DELETE CASCADE), which is what
 // Cypher's DETACH DELETE did.
 func (s *Service) deleteGraphFactNodeForTest(path, blobHash string) error {
-	_, err := s.rh.gits.DB().Exec(`
+	_, err := s.rh.Storer().DB().Exec(`
 		DELETE FROM nodes
 		WHERE id IN (
 			SELECT nl.node_id

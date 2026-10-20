@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"crypto/rand"
@@ -12,14 +12,14 @@ import (
 )
 
 const (
-	sshsigMagic     = "SSHSIG"
-	sshsigVersion   = 1
-	sshsigNamespace = "git"
-	sshsigHashAlgo  = "sha512"
+	SSHSigMagic     = "SSHSIG"
+	SSHSigVersion   = 1
+	SSHSigNamespace = "git"
+	SSHSigHashAlgo  = "sha512"
 )
 
-// appendSSHString appends an SSH wire-format string (uint32 BE length + data).
-func appendSSHString(buf, data []byte) []byte {
+// AppendSSHString appends an SSH wire-format string (uint32 BE length + data).
+func AppendSSHString(buf, data []byte) []byte {
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(data)))
 	buf = append(buf, lenBuf[:]...)
@@ -27,18 +27,18 @@ func appendSSHString(buf, data []byte) []byte {
 	return buf
 }
 
-// signCommit signs a commit payload using the SSHSIG format.
+// SignCommit signs a commit payload using the SSHSIG format.
 // Returns the armored signature string for the commit's PGPSignature field.
-func signCommit(signer ssh.Signer, payload []byte) (string, error) {
+func SignCommit(signer ssh.Signer, payload []byte) (string, error) {
 	// Build the "signed data" blob.
 	h := sha512.Sum512(payload)
 
 	var signed []byte
-	signed = append(signed, sshsigMagic...) // magic, raw, NOT length-prefixed
-	signed = appendSSHString(signed, []byte(sshsigNamespace))
-	signed = appendSSHString(signed, nil) // reserved
-	signed = appendSSHString(signed, []byte(sshsigHashAlgo))
-	signed = appendSSHString(signed, h[:])
+	signed = append(signed, SSHSigMagic...) // magic, raw, NOT length-prefixed
+	signed = AppendSSHString(signed, []byte(SSHSigNamespace))
+	signed = AppendSSHString(signed, nil) // reserved
+	signed = AppendSSHString(signed, []byte(SSHSigHashAlgo))
+	signed = AppendSSHString(signed, h[:])
 
 	sig, err := signer.Sign(rand.Reader, signed)
 	if err != nil {
@@ -52,21 +52,21 @@ func signCommit(signer ssh.Signer, payload []byte) (string, error) {
 	pubBlob := signer.PublicKey().Marshal()
 
 	var env []byte
-	env = append(env, sshsigMagic...) // magic, raw
+	env = append(env, SSHSigMagic...) // magic, raw
 	var verBuf [4]byte
-	binary.BigEndian.PutUint32(verBuf[:], sshsigVersion)
+	binary.BigEndian.PutUint32(verBuf[:], SSHSigVersion)
 	env = append(env, verBuf[:]...)     // version
-	env = appendSSHString(env, pubBlob) // public key
-	env = appendSSHString(env, []byte(sshsigNamespace))
-	env = appendSSHString(env, nil) // reserved
-	env = appendSSHString(env, []byte(sshsigHashAlgo))
-	env = appendSSHString(env, sigBlob) // signature blob
+	env = AppendSSHString(env, pubBlob) // public key
+	env = AppendSSHString(env, []byte(SSHSigNamespace))
+	env = AppendSSHString(env, nil) // reserved
+	env = AppendSSHString(env, []byte(SSHSigHashAlgo))
+	env = AppendSSHString(env, sigBlob) // signature blob
 
-	return armor(env), nil
+	return Armor(env), nil
 }
 
 // armor wraps raw bytes in PEM-like SSH signature armor with 70-char lines.
-func armor(data []byte) string {
+func Armor(data []byte) string {
 	encoded := base64.StdEncoding.EncodeToString(data)
 
 	var sb strings.Builder

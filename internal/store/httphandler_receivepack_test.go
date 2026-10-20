@@ -109,13 +109,13 @@ func (h *pushHost) fleet(f Fleet, err error) func(context.Context) (Fleet, error
 func (h *pushHost) objects() int {
 	h.t.Helper()
 	var n int
-	require.NoError(h.t, h.svc.rh.db.QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&n))
+	require.NoError(h.t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&n))
 	return n
 }
 
 func (h *pushHost) ref(branch string) plumbing.Hash {
 	h.t.Helper()
-	r, err := h.svc.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	r, err := h.svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return plumbing.ZeroHash
 	}
@@ -252,13 +252,13 @@ func TestReceivePack_OwnBranchRegisteredAndIndexed(t *testing.T) {
 
 	require.Equal(t, c.Hash, h.ref(peerBranch), "the host's ref is the pushed tip")
 	var id int64
-	require.NoError(t, h.svc.rh.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, peerBranch).Scan(&id))
+	require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT id FROM branches WHERE name = ?`, peerBranch).Scan(&id))
 	for i := range 3 {
 		body, err := factAt(t, h.svc, peerBranch, fmt.Sprintf("kb/notes/peer-%d.md", i))
 		require.NoError(t, err)
 		require.Contains(t, body, fmt.Sprintf("peer %d", i))
 		var n int
-		require.NoError(t, h.svc.rh.db.QueryRow(`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ? AND path = ?`,
+		require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ? AND path = ?`,
 			id, fmt.Sprintf("kb/notes/peer-%d.md", i)).Scan(&n))
 		require.Equal(t, 1, n, "branch_facts row for the pushed fact")
 	}
@@ -470,7 +470,7 @@ func TestReceivePack_NonFastForwardIndexFollows(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, body, "z")
 	var n int
-	require.NoError(t, h.svc.rh.db.QueryRow(`SELECT COUNT(*) FROM branch_commits
+	require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits
 		WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND commit_hash = ?`, peerBranch, a1.Hash.String()).Scan(&n))
 	require.Equal(t, 0, n, "the dropped commit is no longer on the branch")
 	rep, err := h.svc.Verify(context.Background(), VerifyOpts{})
@@ -497,7 +497,7 @@ func TestReceivePack_HostOwnBranchUnaffected(t *testing.T) {
 // offers exactly the four capabilities — never delete-refs.
 func TestReceivePack_Advertisement(t *testing.T) {
 	h := newPushHost(t, "", 1)
-	require.NoError(t, h.svc.rh.gits.SetReference(plumbing.NewHashReference("refs/remotes/origin/secret", h.ref("main"))))
+	require.NoError(t, h.svc.rh.Storer().SetReference(plumbing.NewHashReference("refs/remotes/origin/secret", h.ref("main"))))
 	resp, err := http.Get(h.srv.URL + "/info/refs?service=git-receive-pack")
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -620,10 +620,10 @@ func TestReceivePack_CancelAfterAcceptStillRegistersWhole(t *testing.T) {
 
 	require.Equal(t, c.Hash, h.ref(peerBranch))
 	var n int
-	require.NoError(t, h.svc.rh.db.QueryRow(`SELECT COUNT(*) FROM branch_commits
+	require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits
 		WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND commit_hash = ?`, peerBranch, c.Hash.String()).Scan(&n))
 	require.Equal(t, 1, n, "branch_commits describes the tip")
-	require.NoError(t, h.svc.rh.db.QueryRow(`SELECT COUNT(*) FROM branch_facts
+	require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_facts
 		WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND path = ?`, peerBranch, "kb/notes/x.md").Scan(&n))
 	require.Equal(t, 1, n, "branch_facts describes the tip")
 	rep, err := h.svc.Verify(context.Background(), VerifyOpts{})
@@ -639,7 +639,7 @@ func TestReceivePack_NewCommitWalkIsProportionalToThePush(t *testing.T) {
 	c1 := p.commit(p.head(), nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	c2 := p.commit(c1, nil, "kb/notes/y.md", testFactBody("y", 0.9, nil))
 
-	q := newQuarantine(h.svc.rh.gits)
+	q := newQuarantine(h.svc.rh.Storer())
 	for _, c := range []*object.Commit{c1, c2} {
 		for _, h := range []plumbing.Hash{c.Hash, c.TreeHash} {
 			o, err := p.repo.Storer.EncodedObject(plumbing.AnyObject, h)
@@ -655,9 +655,9 @@ func TestReceivePack_NewCommitWalkIsProportionalToThePush(t *testing.T) {
 	require.Equal(t, 2, visited, "the walk must not descend into the host's %d-commit history", 31)
 }
 
-// Review B1: register holds lockBranch(peer) where it promotes and moves the
+// Review B1: register holds LockBranch(peer) where it promotes and moves the
 // ref — the lock is what makes the old-hash check a compare-and-swap, and
-// what keeps a lockBranchRead reader (Verify) from seeing the ref ahead of
+// what keeps a LockBranchRead reader (Verify) from seeing the ref ahead of
 // branch_commits and the index (kb/invariants/store/branch-lock-spans-notify).
 func TestReceivePack_RegisterHoldsBranchLock(t *testing.T) {
 	h := newPushHost(t, "", 1)
@@ -666,11 +666,11 @@ func TestReceivePack_RegisterHoldsBranchLock(t *testing.T) {
 	p.setBranch("work", c)
 	held := false
 	pushRegisterHook = func() {
-		v, ok := h.svc.rh.branchMu.Load(peerBranch)
-		if ok && !v.(*sync.RWMutex).TryRLock() {
+		mu, ok := h.svc.rh.BranchLockForTest(peerBranch)
+		if ok && !mu.TryRLock() {
 			held = true
 		} else if ok {
-			v.(*sync.RWMutex).RUnlock()
+			mu.RUnlock()
 		}
 	}
 	t.Cleanup(func() { pushRegisterHook = nil })

@@ -71,7 +71,7 @@ func TestMigration017_UpgradesPreMigrationDatabase(t *testing.T) {
 
 	var v int
 	var dirty bool
-	require.NoError(t, svc2.rh.db.QueryRow(
+	require.NoError(t, svc2.rh.DB().QueryRow(
 		`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty))
 	// Derived, not pinned: this test's subject is migration 017, and a literal
 	// here makes every LATER migration fail it for reasons that have nothing to
@@ -84,7 +84,7 @@ func TestMigration017_UpgradesPreMigrationDatabase(t *testing.T) {
 	// The connection columns are gone...
 	for _, gone := range []string{"url", "branch", "auth_method", "auth_token"} {
 		var n int
-		require.NoError(t, svc2.rh.db.QueryRow(
+		require.NoError(t, svc2.rh.DB().QueryRow(
 			`SELECT COUNT(*) FROM pragma_table_info('remotes') WHERE name = ?`, gone).Scan(&n))
 		require.Zero(t, n, "remotes.%s must be dropped", gone)
 	}

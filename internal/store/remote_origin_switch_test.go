@@ -253,7 +253,7 @@ func TestSync_SwitchPushesTheBranchTheNewOriginLacks(t *testing.T) {
 
 	swPoint(t, svc, fileuri.New(b))
 	wmSync(t, svc)
-	_, err := svc.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", "agent/test"))
+	_, err := svc.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", "agent/test"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "the tracking ref mirrors B, which has no agent branch")
 	pres, err := svc.Remote().(*remoteIndex).Push(context.Background(), "agent/test", nil)
 	require.NoError(t, err)

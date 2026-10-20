@@ -59,7 +59,7 @@ func (c *rootCommitCache) rootFor(rh *repoHandler, branch string, tip plumbing.H
 	if c.root != "" && c.tip == tip {
 		return c.root
 	}
-	root, err := rh.rootCommit(context.Background(), branch)
+	root, err := rh.RootCommit(context.Background(), branch)
 	if err != nil {
 		// Advertising no identity is the honest answer, and it costs only the
 		// early refusal: the post-clone check (layer 3) is authoritative and
@@ -104,7 +104,7 @@ func buildAdvRefs(rh *repoHandler, upstream string, roots *rootCommitCache) (*pa
 	_ = caps.Set(capability.Sideband64k)
 
 	upstreamRef := plumbing.NewBranchReferenceName(upstream)
-	ref, err := rh.gits.Reference(upstreamRef)
+	ref, err := rh.Storer().Reference(upstreamRef)
 	if err != nil {
 		// REFUSE, rather than serve a headless advertisement. Omitting HEAD
 		// and logging at warn made `git clone` print
@@ -133,7 +133,7 @@ func buildAdvRefs(rh *repoHandler, upstream string, roots *rootCommitCache) (*pa
 		}
 	}
 
-	iter, err := rh.gits.IterReferences()
+	iter, err := rh.Storer().IterReferences()
 	if err != nil {
 		return nil, nil, fmt.Errorf("advrefs: iter references: %w", err)
 	}

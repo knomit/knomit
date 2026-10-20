@@ -95,14 +95,14 @@ func newSnapshotPushFixture(t *testing.T) (*Service, string) {
 
 func localTip(t *testing.T, svc *Service) plumbing.Hash {
 	t.Helper()
-	r, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(snapBranch))
+	r, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(snapBranch))
 	require.NoError(t, err)
 	return r.Hash()
 }
 
 func trackingTip(t *testing.T, svc *Service) plumbing.Hash {
 	t.Helper()
-	r, err := svc.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", snapBranch))
+	r, err := svc.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", snapBranch))
 	require.NoError(t, err)
 	return r.Hash()
 }
@@ -146,7 +146,7 @@ func waitPush(t *testing.T, ch <-chan pushOutcome) pushOutcome {
 // P1 WritesNotBlockedDuringPush: a push parked after its snapshot (standing
 // in for a push on a slow network) does not hold the branch's write lock, so
 // a fact write on the same branch completes while it is parked. Sabotage:
-// hold lockBranch across the push → the write blocks → red.
+// hold LockBranch across the push → the write blocks → red.
 func TestPush_WritesNotBlockedDuringPush(t *testing.T) {
 	svc, _ := newSnapshotPushFixture(t)
 	park := parkFirstPush(t)
@@ -250,14 +250,14 @@ func TestPush_RewriteDuringOtherCallerPush(t *testing.T) {
 
 	// The rewrite: the branch goes back to base and gains a different commit.
 	func() {
-		defer svc.rh.lockBranch(snapBranch)()
-		require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(snapBranch), base)))
+		defer svc.rh.LockBranch(snapBranch)()
+		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(snapBranch), base)))
 	}()
 	writeTestFact(t, svc, "kb/notes/new.md", "new", "new")
 	sNew := localTip(t, svc)
-	newCommit, err := svc.rh.repo.CommitObject(sNew)
+	newCommit, err := svc.rh.Repository().CommitObject(sNew)
 	require.NoError(t, err)
-	oldCommit, err := svc.rh.repo.CommitObject(sOld)
+	oldCommit, err := svc.rh.Repository().CommitObject(sOld)
 	require.NoError(t, err)
 	isAnc, err := oldCommit.IsAncestor(newCommit)
 	require.NoError(t, err)
@@ -286,7 +286,7 @@ func TestPush_UnreadableSnapshotIsAnError(t *testing.T) {
 
 	writeTestFact(t, svc, "kb/notes/lost.md", "lost", "lost")
 	lost := localTip(t, svc)
-	require.NoError(t, svc.rh.gits.DeleteObjectForTest(lost))
+	require.NoError(t, svc.rh.Storer().DeleteObjectForTest(lost))
 
 	res, err := svc.Remote().Push(context.Background(), snapBranch, nil)
 	require.Error(t, err, "a push that sent nothing must not read as up to date")
@@ -302,7 +302,7 @@ func TestPush_UnreadableSnapshotIsAnError(t *testing.T) {
 // P6 HungOriginDoesNotStallWrites: P1's property against a REAL hang — an
 // origin that accepts the connection and never answers. While the push waits
 // on it, a writer writing every 50 ms keeps going and no write waits anywhere
-// near the push's duration. Sabotage: hold lockBranch across PushContext →
+// near the push's duration. Sabotage: hold LockBranch across PushContext →
 // every write stalls until the push gives up → red.
 func TestPush_HungOriginDoesNotStallWrites(t *testing.T) {
 	svc, _ := newSnapshotPushFixture(t)

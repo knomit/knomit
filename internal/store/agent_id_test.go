@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
 // D18/P1b: an authored commit names the PERSISTED agent id the store was given
@@ -13,7 +15,7 @@ import (
 // differs from the branch's name, so a derivation from the name is visible.
 // Covers the agent branch and an experiment forked from it (whose author is
 // the owning agent, #394). Sabotage: return the fixture fallback (branch minus
-// "agent/") from ownAgentID even when an id is set — red: author "test".
+// "agent/") from OwnAgentID even when an id is set — red: author "test".
 func TestCommitAuthor_IsThePersistedAgentIDNotTheBranchName(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
@@ -50,12 +52,12 @@ func TestCommitAuthor_IsThePersistedAgentIDNotTheBranchName(t *testing.T) {
 // Without an agent id and without the test fixture fallback, an authored
 // write is refused (ErrNoAgentID) before any object is written: production has
 // no name-derived fallback. Sabotage: fall back to the branch name in
-// ownAgentID — red.
+// OwnAgentID — red.
 func TestCommitAuthor_NoAgentIDRefuses(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 	svc.SetSigner(newTestSigner(t))
-	prev := testFallbackAgent.Load()
+	prev := vcs.TestFallbackAgentForTest()
 	SetTestFallbackAgentID(nil)
 	t.Cleanup(func() {
 		if prev != nil {
@@ -63,11 +65,11 @@ func TestCommitAuthor_NoAgentIDRefuses(t *testing.T) {
 		}
 	})
 	var objs int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&objs))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&objs))
 	_, err := svc.Facts().WriteFact(ctx, testAgentBranch, "kb/a.md", "---\ntype: observation\n---\n# a\n\nbody\n", "learn: a", "learn")
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNoAgentID), "err = %v", err)
 	var after int
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&after))
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&after))
 	require.Equal(t, objs, after, "a refused write leaves no object")
 }

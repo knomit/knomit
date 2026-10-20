@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/internal/vcs"
 )
 
 // The malformed-tree rows: a directory entry (mode 040000) naming a blob, and
@@ -111,10 +112,10 @@ func bogusMergeOf(t *testing.T, st storer.EncodedObjectStorer, tip, anc *object.
 	return shapeCommit(t, st, tree, "", nil, tip, anc)
 }
 
-// checkTreeShape refuses each malformed shape and names the entry, nested
+// CheckTreeShape refuses each malformed shape and names the entry, nested
 // ones included; a well-formed tree with a gitlink passes. Row count asserted.
 //
-// SABOTAGE: make checkTreeShape return nil → every refused row passes → red.
+// SABOTAGE: make CheckTreeShape return nil → every refused row passes → red.
 func TestCheckTreeShape(t *testing.T) {
 	r := newMemRepo(t)
 	good := r.tree(map[string]string{"kb/a.md": "a", "kb/notes/b.md": "b"})
@@ -140,7 +141,7 @@ func TestCheckTreeShape(t *testing.T) {
 		th := graftTree(t, r.st, good, row.dir, row.entry)
 		tree, err := object.GetTree(r.st, th)
 		require.NoError(t, err)
-		err = checkTreeShape(tree, map[plumbing.Hash]bool{})
+		err = vcs.CheckTreeShape(tree, map[plumbing.Hash]bool{})
 		if row.want == "" {
 			require.NoError(t, err, row.name)
 		} else {
@@ -151,7 +152,7 @@ func TestCheckTreeShape(t *testing.T) {
 	}
 	require.Equal(t, len(rows), ran)
 
-	// Depth: a chain of maxShapeDepth+2 trees fails, one of maxShapeDepth
+	// Depth: a chain of MaxShapeDepth+2 trees fails, one of MaxShapeDepth
 	// passes (go-git's own walker stops at the same depth).
 	chain := func(n int) *object.Tree {
 		h := r.tree(map[string]string{"x.md": "x"})
@@ -162,8 +163,8 @@ func TestCheckTreeShape(t *testing.T) {
 		require.NoError(t, err)
 		return tree
 	}
-	require.NoError(t, checkTreeShape(chain(maxShapeDepth), nil))
-	err := checkTreeShape(chain(maxShapeDepth+2), nil)
+	require.NoError(t, vcs.CheckTreeShape(chain(vcs.MaxShapeDepth), nil))
+	err := vcs.CheckTreeShape(chain(vcs.MaxShapeDepth+2), nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "deeper than")
 }
@@ -172,7 +173,7 @@ func TestCheckTreeShape(t *testing.T) {
 // reviewer's scratch repro (an otherwise clean merge plus "kc" naming a blob
 // or a missing object, then "zz-evil.md") was {OK:true}.
 //
-// SABOTAGE: drop the checkTreeShape call in checkM3's flat → OK → red.
+// SABOTAGE: drop the CheckTreeShape call in checkM3's flat → OK → red.
 func TestM3_AMalformedTreeIsAnError(t *testing.T) {
 	r := newMemRepo(t)
 	base := map[string]string{"kb/a.md": "a1", "kb/u.md": "u1"}
@@ -202,7 +203,7 @@ func TestM3_AMalformedTreeIsAnError(t *testing.T) {
 // the entry, for a blob-as-dir and a missing object; and the same on the
 // fleet repository judging itself.
 //
-// SABOTAGE: make checkTreeShape return nil → both rows admitted → red.
+// SABOTAGE: make CheckTreeShape return nil → both rows admitted → red.
 func TestCheckRange_MalformedTreeRefused(t *testing.T) {
 	ran := 0
 	for _, kind := range []string{"blob as dir", "missing object"} {
@@ -256,7 +257,7 @@ func bogusOwnFolderCommit(t *testing.T, f *rangeFixture, main *object.Commit, x 
 // fewer members: CheckRange cannot run (an error) instead of judging boss
 // no-record.
 //
-// SABOTAGE: make checkTreeShape return nil → the commit is admitted, the
+// SABOTAGE: make CheckTreeShape return nil → the commit is admitted, the
 // loader returns 1 member and boss's commit is no-record → red.
 func TestCheckRange_MalformedTreeInTheOwnFolder(t *testing.T) {
 	f, main, base, boss, x := ownerFixture(t)
@@ -294,7 +295,7 @@ func pushNew(t *testing.T, h *pushHost, pe *peer, c *object.Commit, branch strin
 	it, err := pe.repo.Storer.IterEncodedObjects(plumbing.AnyObject)
 	require.NoError(t, err)
 	require.NoError(t, it.ForEach(func(o plumbing.EncodedObject) error {
-		if h.svc.rh.gits.HasEncodedObject(o.Hash()) != nil {
+		if h.svc.rh.Storer().HasEncodedObject(o.Hash()) != nil {
 			hs = append(hs, o.Hash())
 		}
 		return nil
@@ -317,7 +318,7 @@ func pushNew(t *testing.T, h *pushHost, pe *peer, c *object.Commit, branch strin
 // entry sorting before .knomit/ hid a change to the ontology from it. The
 // missing-object row is the completeness walk's (unchanged) refusal.
 //
-// SABOTAGE: make checkTreeShape return nil → the three malformed-tree rows
+// SABOTAGE: make CheckTreeShape return nil → the three malformed-tree rows
 // are admitted → red.
 func TestReceivePack_MalformedTreeRefused(t *testing.T) {
 	p := newTestFleetPKI(t)
@@ -405,13 +406,13 @@ func malformedTip(t *testing.T, st storer.EncodedObjectStorer, base *object.Comm
 	return shapeCommit(t, st, tree, agent, s, base)
 }
 
-// requireWellFormed asserts c's OWN tree passes checkTreeShape, so a refusal
+// requireWellFormed asserts c's OWN tree passes CheckTreeShape, so a refusal
 // can only come from a parent's.
 func requireWellFormed(t *testing.T, c *object.Commit) {
 	t.Helper()
 	tree, err := c.Tree()
 	require.NoError(t, err)
-	require.NoError(t, checkTreeShape(tree, nil), "the judged commit's own tree is well formed")
+	require.NoError(t, vcs.CheckTreeShape(tree, nil), "the judged commit's own tree is well formed")
 }
 
 // CheckRange: main's tip P, below the range, holds the malformed tree. boss's
@@ -461,15 +462,15 @@ func TestReceivePack_MalformedUpstreamTipRefused(t *testing.T) {
 	require.NoError(t, err)
 	copied := 0
 	require.NoError(t, it.ForEach(func(o plumbing.EncodedObject) error {
-		if h.svc.rh.gits.HasEncodedObject(o.Hash()) == nil {
+		if h.svc.rh.Storer().HasEncodedObject(o.Hash()) == nil {
 			return nil
 		}
 		copied++
-		_, err := h.svc.rh.gits.SetEncodedObject(o)
+		_, err := h.svc.rh.Storer().SetEncodedObject(o)
 		return err
 	}))
 	require.Positive(t, copied)
-	require.NoError(t, h.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), p.Hash)))
+	require.NoError(t, h.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), p.Hash)))
 
 	c := pe.commitAs("peer-abcd1234", []*object.Commit{p}, nil,
 		with(pe.files(pe.head()), "kb/zzz-victim.md", "victim v2"))

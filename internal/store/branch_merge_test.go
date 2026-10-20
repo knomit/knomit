@@ -226,7 +226,7 @@ func TestMergeBranch_MergeCommitHasTwoParents(t *testing.T) {
 	require.NoError(t, err)
 
 	mergeHash := plumbing.NewHash(mergeHashStr)
-	mc, err := svc.rh.repo.CommitObject(mergeHash)
+	mc, err := svc.rh.Repository().CommitObject(mergeHash)
 	require.NoError(t, err)
 	require.Len(t, mc.ParentHashes, 2, "merge commit must have two parents")
 	require.Equal(t, dstHashBefore, mc.ParentHashes[0].String(), "first parent must be dst HEAD before merge")
@@ -291,7 +291,7 @@ func TestMergeIntoBranch_DivergentCreatesOneMergeCommit(t *testing.T) {
 	require.Equal(t, ModeMerge, res.Mode)
 	require.NotEmpty(t, res.NewTip)
 
-	newTip, err := svc.rh.repo.CommitObject(plumbing.NewHash(res.NewTip))
+	newTip, err := svc.rh.Repository().CommitObject(plumbing.NewHash(res.NewTip))
 	require.NoError(t, err)
 	require.Equal(t, 2, newTip.NumParents(), "merge commit has two parents")
 	require.Equal(t, preAgentTip, newTip.ParentHashes[0], "first parent is previous agent tip (ours)")

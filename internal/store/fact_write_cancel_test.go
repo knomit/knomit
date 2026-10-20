@@ -11,12 +11,12 @@ import (
 // TestWriteFact_CancelledContext_KeepsGitAndIndexConsistent: a caller whose
 // context is already cancelled must not be able to leave git ahead of the SQL
 // index. writeFile advances the branch ref via SetReference (not ctx-bound) and
-// then calls notifyCommit (AppendCommitLog + im.Sync, both ctx-bound SQL); if
-// cancellation reached notifyCommit the commit would exist in git while
+// then calls NotifyCommit (AppendCommitLog + im.Sync, both ctx-bound SQL); if
+// cancellation reached NotifyCommit the commit would exist in git while
 // commit_log / branch_facts never learned about it, and the caller would be
 // told the write failed.
 //
-// resolveRef ignores ctx, so a pre-cancelled context reaches SetReference
+// ResolveRef ignores ctx, so a pre-cancelled context reaches SetReference
 // deterministically — no timing window needed to reproduce.
 func TestWriteFact_CancelledContext_KeepsGitAndIndexConsistent(t *testing.T) {
 	dir := t.TempDir()
@@ -40,13 +40,13 @@ func TestWriteFact_CancelledContext_KeepsGitAndIndexConsistent(t *testing.T) {
 	require.NotEmpty(t, got.Content)
 
 	var n int
-	require.NoError(t, svc.rh.db.QueryRowContext(context.Background(),
+	require.NoError(t, svc.rh.DB().QueryRowContext(context.Background(),
 		`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ?`, res.CommitHash).Scan(&n))
 	require.Equal(t, 1, n, "commit %s advanced the git ref but never reached commit_log", res.CommitHash)
 }
 
 // TestDeleteFact_CancelledContext_KeepsGitAndIndexConsistent: same invariant on
-// the delete path, which has the identical SetReference-then-notifyCommit
+// the delete path, which has the identical SetReference-then-NotifyCommit
 // sequence.
 func TestDeleteFact_CancelledContext_KeepsGitAndIndexConsistent(t *testing.T) {
 	dir := t.TempDir()

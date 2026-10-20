@@ -76,7 +76,7 @@ const epistemicLiveJoin = `
 // "Rows lacking a vector" IS the backfill delta: facts rows are content-
 // addressed, so editing a fact produces a new row that no vector points at.
 func (ax *abstractionIndex) LiveFactsMissingTitleVector(ctx context.Context, branch string, limit int) ([]TitleTarget, error) {
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT f.id, f.path, f.title`+epistemicLiveJoin+`
 		   AND NOT EXISTS (SELECT 1 FROM fact_titles_vec tv WHERE tv.rowid = f.id)
 		 ORDER BY f.id ASC
@@ -106,14 +106,14 @@ func (ax *abstractionIndex) PutTitleVectors(ctx context.Context, vecs []TitleVec
 	// One transaction for the batch: a backfill writes these 32 at a time, and
 	// under _txlock=immediate each implicit transaction is a process-wide write
 	// lock acquisition.
-	ctx, tx, owned, err := beginTxIfNeeded(ctx, ax.rh.db)
+	ctx, tx, owned, err := beginTxIfNeeded(ctx, ax.rh.DB())
 	if err != nil {
 		return fmt.Errorf("abstraction: begin tx: %w", err)
 	}
 	if owned {
 		defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 	}
-	db := conn(ctx, ax.rh.db)
+	db := conn(ctx, ax.rh.DB())
 	for _, v := range vecs {
 		if _, err := db.ExecContext(ctx,
 			`DELETE FROM fact_titles_vec WHERE rowid = ?`, v.FactID); err != nil {
@@ -137,7 +137,7 @@ func (ax *abstractionIndex) PutTitleVectors(ctx context.Context, vecs []TitleVec
 // read as "nothing to find".
 func (ax *abstractionIndex) TitleVectorCoverage(ctx context.Context, branch string) (int, int, error) {
 	var have, total int
-	err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT
 		     COUNT(CASE WHEN EXISTS (SELECT 1 FROM fact_titles_vec tv WHERE tv.rowid = f.id) THEN 1 END),
 		     COUNT(f.id)`+epistemicLiveJoin, branch).Scan(&have, &total)
@@ -175,7 +175,7 @@ func (ax *abstractionIndex) liveEpistemicFacts(ctx context.Context, branch strin
 	if onAxisOnly {
 		query += ` AND EXISTS (SELECT 1 FROM fact_titles_vec tv WHERE tv.rowid = f.id)`
 	}
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx, query, branch)
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx, query, branch)
 	if err != nil {
 		return nil, fmt.Errorf("abstraction: live facts: %w", err)
 	}
@@ -213,7 +213,7 @@ func (ax *abstractionIndex) TopTitleNeighbours(ctx context.Context, branch strin
 		return nil, nil
 	}
 	var blob []byte
-	err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT embedding FROM fact_titles_vec WHERE rowid = ?`, factID).Scan(&blob)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -222,7 +222,7 @@ func (ax *abstractionIndex) TopTitleNeighbours(ctx context.Context, branch strin
 		return nil, fmt.Errorf("abstraction: read title vector %d: %w", factID, err)
 	}
 
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT f.id, f.path, (1.0 - tv.distance) AS similarity
 		   FROM fact_titles_vec tv
 		   JOIN facts f ON f.id = tv.rowid
@@ -278,7 +278,7 @@ func (ax *abstractionIndex) TitleVectorsByFactID(ctx context.Context, ids []int6
 	}
 	for _, chunk := range chunkIDs(ids) {
 		placeholders, args := idPlaceholders(chunk)
-		rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 			`SELECT rowid, embedding FROM fact_titles_vec WHERE rowid IN (`+placeholders+`)`, args...)
 		if err != nil {
 			return nil, fmt.Errorf("abstraction: title vectors: %w", err)
@@ -313,7 +313,7 @@ func (ax *abstractionIndex) BodyVectorsByFactID(ctx context.Context, ids []int64
 	}
 	for _, chunk := range chunkIDs(ids) {
 		placeholders, args := idPlaceholders(chunk)
-		rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 			`SELECT rowid, embedding FROM facts_vec WHERE rowid IN (`+placeholders+`)`, args...)
 		if err != nil {
 			return nil, fmt.Errorf("abstraction: body vectors: %w", err)
@@ -352,7 +352,7 @@ func (ax *abstractionIndex) BodyVectorsByFactID(ctx context.Context, ids []int64
 // CachedPairFactIDs returns the fact ids the pair cache was last built over.
 // Diffed against LiveEpistemicFactIDs, this IS the delta — no watermark.
 func (ax *abstractionIndex) CachedPairFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error) {
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT s.fact_id
 		   FROM restatement_cache_state s
 		   JOIN branches b ON b.id = s.branch_id
@@ -391,7 +391,7 @@ func (ax *abstractionIndex) FactIDsByPath(ctx context.Context, branch string, pa
 		for _, p := range chunk {
 			args = append(args, p)
 		}
-		rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 			`SELECT f.id, f.path`+epistemicLiveJoin+` AND f.path IN (`+placeholders+`)`, args...)
 		if err != nil {
 			return nil, fmt.Errorf("abstraction: fact ids by path: %w", err)
@@ -443,7 +443,7 @@ func (ax *abstractionIndex) PartnersOfFacts(ctx context.Context, branch string, 
 		args = append(args, branchID)
 		args = append(args, ids...)
 		args = append(args, ids...)
-		rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 			`SELECT a_fact_id, b_fact_id FROM restatement_pairs
 			  WHERE branch_id = ?
 			    AND (a_fact_id IN (`+placeholders+`) OR b_fact_id IN (`+placeholders+`))`, args...)
@@ -483,7 +483,7 @@ func (ax *abstractionIndex) DeleteRestatementPair(ctx context.Context, branch st
 	if err != nil {
 		return err
 	}
-	if _, err := conn(ctx, ax.rh.db).ExecContext(ctx,
+	if _, err := conn(ctx, ax.rh.DB()).ExecContext(ctx,
 		`DELETE FROM restatement_pairs
 		  WHERE branch_id = ?
 		    AND ((a_fact_id = ? AND b_fact_id = ?) OR (a_fact_id = ? AND b_fact_id = ?))`,
@@ -509,14 +509,14 @@ func (ax *abstractionIndex) ReplaceRestatementPairs(ctx context.Context, branch 
 		return err
 	}
 
-	ctx, tx, owned, err := beginTxIfNeeded(ctx, ax.rh.db)
+	ctx, tx, owned, err := beginTxIfNeeded(ctx, ax.rh.DB())
 	if err != nil {
 		return fmt.Errorf("abstraction: begin tx: %w", err)
 	}
 	if owned {
 		defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 	}
-	db := conn(ctx, ax.rh.db)
+	db := conn(ctx, ax.rh.DB())
 
 	for _, chunk := range chunkIDs(dropFactIDs) {
 		placeholders, ids := idPlaceholders(chunk)
@@ -574,7 +574,7 @@ func (ax *abstractionIndex) RestatementPairsByRank(ctx context.Context, branch s
 	if limit <= 0 {
 		return nil, nil
 	}
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT p.a_path, p.b_path, p.a_fact_id, p.b_fact_id, p.title_cos, p.match_kind
 		   FROM restatement_pairs p
 		   JOIN branches b ON b.id = p.branch_id
@@ -604,7 +604,7 @@ func (ax *abstractionIndex) RestatementPairsByMatchKind(ctx context.Context, bra
 		args = append(args, k)
 	}
 	args = append(args, limit)
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT p.a_path, p.b_path, p.a_fact_id, p.b_fact_id, p.title_cos, p.match_kind
 		   FROM restatement_pairs p
 		   JOIN branches b ON b.id = p.branch_id
@@ -646,7 +646,7 @@ func (ax *abstractionIndex) RestatementPairsByMatchKindOldest(ctx context.Contex
 		args = append(args, k)
 	}
 	args = append(args, limit)
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT p.a_path, p.b_path, p.a_fact_id, p.b_fact_id, p.title_cos, p.match_kind
 		   FROM restatement_pairs p
 		   JOIN branches b ON b.id = p.branch_id
@@ -675,7 +675,7 @@ func scanRestatementPairs(rows *sql.Rows) ([]RestatementPair, error) {
 // LiveEpistemicFactTitles is the structural detection pass's input: what each
 // live fact SAYS IT IS, rather than where it sits in the vector space.
 func (ax *abstractionIndex) LiveEpistemicFactTitles(ctx context.Context, branch string) (map[int64]LiveFactTitle, error) {
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT f.id, f.path, f.title`+epistemicLiveJoin, branch)
 	if err != nil {
 		return nil, fmt.Errorf("abstraction: live fact titles: %w", err)
@@ -700,7 +700,7 @@ func (ax *abstractionIndex) LiveEpistemicFactTitles(ctx context.Context, branch 
 // be the corpus-property constant this design exists without.
 func (ax *abstractionIndex) RestatementPairStats(ctx context.Context, branch string) (RestatementPairStats, error) {
 	var st RestatementPairStats
-	if err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+	if err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT COUNT(*)
 		   FROM restatement_pairs p
 		   JOIN branches b ON b.id = p.branch_id
@@ -710,7 +710,7 @@ func (ax *abstractionIndex) RestatementPairStats(ctx context.Context, branch str
 	if st.Count == 0 {
 		return st, nil
 	}
-	if err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+	if err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT COUNT(*)
 		   FROM restatement_pairs p
 		   JOIN branches b ON b.id = p.branch_id
@@ -736,7 +736,7 @@ func (ax *abstractionIndex) pairQuantile(ctx context.Context, branch string, cou
 		offset = count - 1
 	}
 	var v float64
-	err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT p.title_cos
 		   FROM restatement_pairs p
 		   JOIN branches b ON b.id = p.branch_id
@@ -753,7 +753,7 @@ func (ax *abstractionIndex) pairQuantile(ctx context.Context, branch string, cou
 // resolver, so this sub-service shares the cache and returns the same
 // ErrBranchNotFound every other caller matches on.
 func (ax *abstractionIndex) branchID(ctx context.Context, branch string) (int64, error) {
-	id, err := ax.rh.branchID(ctx, branch)
+	id, err := ax.rh.BranchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("abstraction: %w", err)
 	}
@@ -777,7 +777,7 @@ func (ax *abstractionIndex) RecordRestatementVerdict(ctx context.Context, branch
 	if v.Resolved {
 		resolved = 1
 	}
-	if _, err := conn(ctx, ax.rh.db).ExecContext(ctx,
+	if _, err := conn(ctx, ax.rh.DB()).ExecContext(ctx,
 		`INSERT INTO restatement_verdicts
 		     (branch_id, a_path, b_path, a_fact_id, b_fact_id, resolved, judged_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -793,7 +793,7 @@ func (ax *abstractionIndex) RecentRestatementVerdicts(ctx context.Context, branc
 	if window <= 0 {
 		return nil, nil
 	}
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT v.a_path, v.b_path, v.a_fact_id, v.b_fact_id, v.resolved, v.judged_at
 		   FROM restatement_verdicts v
 		   JOIN branches b ON b.id = v.branch_id
@@ -832,7 +832,7 @@ func (ax *abstractionIndex) RecentRestatementVerdicts(ctx context.Context, branc
 // structurally the moment either fact is edited, with no staleness rule to get
 // wrong.
 func (ax *abstractionIndex) KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error) {
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
 		`SELECT v.a_fact_id, v.b_fact_id
 		   FROM restatement_verdicts v
 		   JOIN branches b ON b.id = v.branch_id
@@ -867,7 +867,7 @@ func FactIDPairKey(a, b int64) string {
 // last spent a probe slot. Zero for a branch that has never been defunded.
 func (ax *abstractionIndex) ProbeSessionsWaited(ctx context.Context, branch string) (int, error) {
 	var n int
-	err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, ax.rh.DB()).QueryRowContext(ctx,
 		`SELECT s.sessions_since_probe
 		   FROM restatement_throttle_state s
 		   JOIN branches b ON b.id = s.branch_id
@@ -887,7 +887,7 @@ func (ax *abstractionIndex) SetProbeSessionsWaited(ctx context.Context, branch s
 	if err != nil {
 		return err
 	}
-	if _, err := conn(ctx, ax.rh.db).ExecContext(ctx,
+	if _, err := conn(ctx, ax.rh.DB()).ExecContext(ctx,
 		`INSERT INTO restatement_throttle_state(branch_id, sessions_since_probe)
 		 VALUES (?, ?)
 		 ON CONFLICT(branch_id) DO UPDATE SET sessions_since_probe = excluded.sessions_since_probe`,

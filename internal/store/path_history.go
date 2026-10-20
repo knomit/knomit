@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 	"sort"
 )
 
@@ -19,11 +20,11 @@ import (
 // instead of a first-parent walk; below a history boundary (a missing commit
 // object) it finds nothing. "" when there is none.
 func (hq *historyQuery) LiveRevision(ctx context.Context, branch, path, anchor string) (string, error) {
-	branchID, err := hq.rh.branchID(ctx, branch)
+	branchID, err := hq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("LiveRevision: branchID: %w", err)
 	}
-	_, row, err := liveChange(ctx, conn(ctx, hq.rh.db), activeTables, path, anchor, branchID)
+	_, row, err := vcs.LiveChange(ctx, conn(ctx, hq.rh.DB()), vcs.ActiveTables, path, anchor, branchID)
 	return row, err
 }
 
@@ -69,11 +70,11 @@ func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 	if anchorCommit == "" || limit <= 0 {
 		return nil, nil, nil
 	}
-	branchID, err := hq.rh.branchID(ctx, branch)
+	branchID, err := hq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, nil, fmt.Errorf("PathHistory: branchID: %w", err)
 	}
-	db := conn(ctx, hq.rh.db)
+	db := conn(ctx, hq.rh.DB())
 	onBranch := func(h string) (bool, error) {
 		var one int
 		err := db.QueryRowContext(ctx, `SELECT 1 FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`, branchID, h).Scan(&one)
@@ -97,7 +98,7 @@ func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 			// underived anchor is a broken invariant (only damage makes it):
 			// say so rather than answer with an empty history.
 			var marked int
-			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+activeTables.fp+` WHERE commit_hash = ?`, anchorCommit).Scan(&marked); err != nil {
+			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+vcs.ActiveTables.FP+` WHERE commit_hash = ?`, anchorCommit).Scan(&marked); err != nil {
 				return nil, nil, fmt.Errorf("PathHistory: mark: %w", err)
 			}
 			if marked == 0 {
@@ -106,7 +107,7 @@ func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 		}
 		// Candidate rows are always scoped to the branch: rows of commits on
 		// no branch (never garbage-collected) are not even scanned.
-		head, _, err := liveChange(ctx, db, activeTables, path, anchorCommit, branchID)
+		head, _, err := vcs.LiveChange(ctx, db, vcs.ActiveTables, path, anchorCommit, branchID)
 		if err != nil || head == "" {
 			return nil, nil, err
 		}
@@ -185,7 +186,7 @@ func loadChange(ctx context.Context, db storegit.CtxExecer, branchID int64, path
 	var unavailable int
 	err := db.QueryRowContext(ctx, `
 		SELECT pc.blob, pc.action, pc.author_at, pc.order_at, pc.gen, pc.message, pc.diff, pc.content_unavailable
-		  FROM `+activeTables.changes+` pc
+		  FROM `+vcs.ActiveTables.Changes+` pc
 		  JOIN branch_commits bc ON bc.commit_hash = pc.commit_hash AND bc.branch_id = ?
 		 WHERE pc.path = ? AND pc.commit_hash = ? AND pc.entry = 1`, branchID, path, commit).
 		Scan(&n.Blob, &n.Action, &n.AuthoredAt, &n.orderAt, &n.gen, &n.Message, &diff, &unavailable)
@@ -203,7 +204,7 @@ func loadChange(ctx context.Context, db storegit.CtxExecer, branchID int64, path
 		}
 	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT from_commit, from_blob FROM `+activeTables.links+`
+		SELECT from_commit, from_blob FROM `+vcs.ActiveTables.Links+`
 		 WHERE path = ? AND commit_hash = ? ORDER BY parent_order`, path, commit)
 	if err != nil {
 		return n, false, fmt.Errorf("PathHistory: links %s: %w", commit, err)
@@ -258,7 +259,7 @@ func (h *changeHeap) Pop() any {
 // History is bounded to the ancestry of `anchorCommit`: revisions committed
 // after the anchor are never surfaced ("explain as of C" rewinds the timeline).
 //
-// Walks first-parent ancestry via the shared firstParentChainCTE — NEVER
+// Walks first-parent ancestry via the shared FirstParentChainCTE — NEVER
 // wall-clock ordering. See resolveTargetCommit's doc-comment for the
 // merge-branch rationale. The walk is scoped to `branch` by joining
 // branch_commits on the resolved branch_id, so revisions reachable only via an
@@ -268,11 +269,11 @@ func (hq *historyQuery) RevisionsBefore(ctx context.Context, branch, path, ancho
 	if anchorCommit == "" || limit <= 0 {
 		return nil, nil
 	}
-	branchID, err := hq.rh.branchID(ctx, branch)
+	branchID, err := hq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("RevisionsBefore: branchID: %w", err)
 	}
-	rows, err := conn(ctx, hq.rh.db).QueryContext(ctx, firstParentChainCTE+`
+	rows, err := conn(ctx, hq.rh.DB()).QueryContext(ctx, vcs.FirstParentChainCTE+`
 		SELECT cl.commit_hash, COALESCE(cl.committed_at, 0), cl.message, cl.action
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
@@ -293,7 +294,7 @@ func (hq *historyQuery) RevisionsBefore(ctx context.Context, branch, path, ancho
 		if err := rows.Scan(&rm.Commit, &rm.CommittedAt, &msg, &rm.Action); err != nil {
 			return nil, fmt.Errorf("RevisionsBefore: scan: %w", err)
 		}
-		rm.Message = firstLine(msg)
+		rm.Message = vcs.FirstLine(msg)
 		out = append(out, rm)
 	}
 	if err := rows.Err(); err != nil {

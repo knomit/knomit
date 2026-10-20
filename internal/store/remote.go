@@ -11,8 +11,8 @@ import (
 )
 
 // remoteIndex owns remote configuration and git sync/push operations.
-// All git-level plumbing (signer, authorSig, committerSig, notifyCommit,
-// populateCommitLog) lives on repoHandler; remoteIndex reaches UP via ri.rh.*
+// All git-level plumbing (signer, authorSig, committerSig, NotifyCommit,
+// PopulateCommitLog) lives on repoHandler; remoteIndex reaches UP via ri.rh.*
 // and never through a sibling subsystem.
 type remoteIndex struct {
 	rh *repoHandler
@@ -97,11 +97,11 @@ type Remote struct {
 // report them as its own. A missing row and a missing git remote are both
 // tolerated, so the call is idempotent.
 func (ri *remoteIndex) DeleteRemote(name string) error {
-	if _, err := ri.rh.db.Exec(`DELETE FROM remotes WHERE name = ?`, name); err != nil {
+	if _, err := ri.rh.DB().Exec(`DELETE FROM remotes WHERE name = ?`, name); err != nil {
 		return fmt.Errorf("delete remote row: %w", err)
 	}
-	if ri.rh.repo != nil {
-		if err := ri.rh.repo.DeleteRemote(name); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
+	if ri.rh.Repository() != nil {
+		if err := ri.rh.Repository().DeleteRemote(name); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
 			return fmt.Errorf("delete git remote: %w", err)
 		}
 	}
@@ -135,7 +135,7 @@ func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
 	}
 	// Status is optional: a repo whose origin was just configured has no row
 	// until its first sync, and that is not an error.
-	err := ri.rh.db.QueryRow(
+	err := ri.rh.DB().QueryRow(
 		`SELECT interval, last_sync_at, last_status, last_error,
 		        push_interval, last_push_at, last_push_status, last_push_error
 		   FROM remotes WHERE name = ?`, name,
@@ -160,7 +160,7 @@ const defaultSyncInterval = 300
 // inserts it ahead of time.
 func (ri *remoteIndex) updateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := ri.rh.db.Exec(
+	_, err := ri.rh.DB().Exec(
 		`INSERT INTO remotes (name, interval, push_interval, last_sync_at, last_status, last_error)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET
@@ -193,7 +193,7 @@ func (ri *remoteIndex) RecordPushError(name, msg string) error {
 // the status row if absent. See updateRemoteStatus.
 func (ri *remoteIndex) updateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := ri.rh.db.Exec(
+	_, err := ri.rh.DB().Exec(
 		`INSERT INTO remotes (name, interval, push_interval, last_push_at, last_push_status, last_push_error)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET

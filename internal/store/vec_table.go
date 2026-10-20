@@ -59,7 +59,7 @@ func (si *searchIndex) ensureFactsVecDefault(ctx context.Context) error {
 // the constants above and `dim` comes from the trusted model registry (or
 // defaultVecDim), so formatting both into DDL is safe.
 func (si *searchIndex) createVecTable(ctx context.Context, table string, dim int) error {
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		fmt.Sprintf(`CREATE VIRTUAL TABLE %s USING vec0(embedding FLOAT[%d] distance_metric=cosine)`, table, dim),
 	); err != nil {
 		return fmt.Errorf("create %s[%d]: %w", table, dim, err)
@@ -135,7 +135,7 @@ func (si *searchIndex) clearRestatementState(ctx context.Context) error {
 		"restatement_verdicts",
 		"restatement_throttle_state",
 	} {
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM `+table); err != nil {
+		if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `DELETE FROM `+table); err != nil {
 			return fmt.Errorf("clear %s on embed-identity change: %w", table, err)
 		}
 	}
@@ -146,7 +146,7 @@ func (si *searchIndex) clearRestatementState(ctx context.Context) error {
 // read back from its stored DDL.
 func (si *searchIndex) vecTableHasDim(ctx context.Context, table string, dim int) (bool, error) {
 	var ddl sql.NullString
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT sql FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&ddl)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -173,20 +173,20 @@ func (si *searchIndex) recreateVecTable(ctx context.Context, table string, dim i
 
 func (si *searchIndex) vecTableExists(ctx context.Context, table string) (bool, error) {
 	var n int
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&n)
 	return n > 0, err
 }
 
 func (si *searchIndex) dropVecTable(ctx context.Context, table string) error {
-	_, err := conn(ctx, si.rh.db).ExecContext(ctx, `DROP TABLE IF EXISTS `+table)
+	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `DROP TABLE IF EXISTS `+table)
 	return err
 }
 
 // persistedEmbedModelID returns meta.embed_model_id ("" if unset).
 func (si *searchIndex) persistedEmbedModelID(ctx context.Context) (string, error) {
 	var v string
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT value FROM meta WHERE key = 'embed_model_id'`).Scan(&v)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -197,7 +197,7 @@ func (si *searchIndex) persistedEmbedModelID(ctx context.Context) (string, error
 // persistedEmbedDim returns meta.embed_dim (0 if unset).
 func (si *searchIndex) persistedEmbedDim(ctx context.Context) (int, error) {
 	var v int
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT value FROM meta WHERE key = 'embed_dim'`).Scan(&v)
 	if err == sql.ErrNoRows {
 		return 0, nil

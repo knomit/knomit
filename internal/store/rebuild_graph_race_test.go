@@ -12,7 +12,7 @@ import (
 // the cross-branch race in rebuildGraph.
 //
 // `facts` rows and graph Fact nodes are keyed by version and shared by every
-// branch, while lockBranch is per branch, so a delete on another branch runs
+// branch, while LockBranch is per branch, so a delete on another branch runs
 // fully concurrently with a Rebuild. rebuildGraph used to read its `facts`
 // snapshot before opening its write transaction. A delete landing in between
 // removed the facts row and soft-deleted the node; the transaction then

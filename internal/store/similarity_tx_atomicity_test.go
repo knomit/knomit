@@ -84,7 +84,7 @@ func TestGraphBuildSimilarityEdges_RewriteIsInvisibleUntilCommit(t *testing.T) {
 	// final equality below would be measuring that instead of the commit.
 	const rewritten = "kb/c.md"
 	var blob string
-	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT blob_hash FROM facts WHERE path = ?`, rewritten).Scan(&blob))
 	require.Greater(t, similarToOutDegree(t, svc, ctx, rewritten, blob), 0,
 		"the rewritten version must have edges, or the delete under test is a no-op")

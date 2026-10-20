@@ -1,4 +1,4 @@
-package store
+package vcs
 
 import (
 	"errors"
@@ -27,11 +27,11 @@ import (
 // never verified.
 var ErrNoSigner = errors.New("store has no commit signer: refusing to write an unsigned commit")
 
-// commitSigner returns the signer an AUTHORED commit must carry: this store's
+// CommitSigner returns the signer an AUTHORED commit must carry: this store's
 // signer, else (inside a test binary only) the test fallback, else
 // ErrNoSigner. Callers ask for it BEFORE writing any object, so a refused write
 // leaves nothing behind in the object store.
-func (rh *repoHandler) commitSigner() (ssh.Signer, error) {
+func (rh *Repo) CommitSigner() (ssh.Signer, error) {
 	if rh.signer != nil {
 		return rh.signer, nil
 	}
@@ -41,13 +41,13 @@ func (rh *repoHandler) commitSigner() (ssh.Signer, error) {
 	return nil, ErrNoSigner
 }
 
-// storeCommit encodes c and stores it as exactly ONE object. When signer is
+// StoreCommit encodes c and stores it as exactly ONE object. When signer is
 // non-nil the commit is signed first, in memory, over the payload without the
 // signature header (EncodeWithoutSignature), so no unsigned pre-image is left
 // unreachable in the store — the old sign-after-store path left one orphan per
 // write. A nil signer stores the commit unsigned: only the init commits of a
 // new repository do that (plumbing, repo.go), by design.
-func storeCommit(s *storegit.Storer, signer ssh.Signer, c *object.Commit) (plumbing.Hash, error) {
+func StoreCommit(s *storegit.Storer, signer ssh.Signer, c *object.Commit) (plumbing.Hash, error) {
 	if signer != nil {
 		payloadObj := s.NewEncodedObject()
 		if err := c.EncodeWithoutSignature(payloadObj); err != nil {
@@ -62,7 +62,7 @@ func storeCommit(s *storegit.Storer, signer ssh.Signer, c *object.Commit) (plumb
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("storeCommit: read payload: %w", err)
 		}
-		signature, err := signCommit(signer, payload)
+		signature, err := SignCommit(signer, payload)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("storeCommit: sign: %w", err)
 		}
@@ -88,7 +88,7 @@ var testFallback atomic.Pointer[ssh.Signer]
 // SetSigner keep working after ErrNoSigner. Each test package installs it from
 // its TestMain (internal/testsupport/testsigner). Pass nil to remove it.
 //
-// It panics outside a test binary (testing.Testing), and commitSigner
+// It panics outside a test binary (testing.Testing), and CommitSigner
 // ignores it there too, so a production knomit can never sign with it: a
 // Service without a signer is ErrNoSigner, always. A test that must prove a
 // path wires the REAL signer asserts the key in the signature, which the

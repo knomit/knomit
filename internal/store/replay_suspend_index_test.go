@@ -15,10 +15,10 @@ func countIndexedFacts(t *testing.T, svc *Service, branch string) int {
 	t.Helper()
 	ctx := context.Background()
 	si := svc.si
-	bid, err := si.rh.branchID(ctx, branch)
+	bid, err := si.rh.BranchID(ctx, branch)
 	require.NoError(t, err)
 	var n int
-	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ?`, bid).Scan(&n))
 	return n
 }
@@ -130,12 +130,12 @@ func TestSchemaVersionState(t *testing.T) {
 	si := svc.si
 
 	setVersion := func(v string) {
-		_, err := si.rh.db.ExecContext(ctx,
+		_, err := si.rh.DB().ExecContext(ctx,
 			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey("main"), v)
 		require.NoError(t, err)
 	}
 	clearVersion := func() {
-		_, err := si.rh.db.ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, schemaVersionKey("main"))
+		_, err := si.rh.DB().ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, schemaVersionKey("main"))
 		require.NoError(t, err)
 	}
 

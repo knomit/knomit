@@ -6,26 +6,28 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/internal/vcs"
 )
 
-// appendTrailersToParagraph joins the trace to a merge commit's EXISTING
+// AppendTrailersToParagraph joins the trace to a merge commit's EXISTING
 // trailer paragraph (its conflict record), so TrailerValues still reads the
 // record and TrailerValue reads the trace; with no trailer paragraph it opens
-// one. Sabotage: appendTrailers instead (red: the record is no longer the
+// one. Sabotage: AppendTrailers instead (red: the record is no longer the
 // last paragraph, TrailerValues reads nothing).
 func TestAppendTrailersToParagraph_JoinsTheRecord(t *testing.T) {
 	tr := Trailers{Trace: "task-1", Run: "run-" + "0123456789abcdef0123456789abcdef"}
 	withRecord := appendTrailerLines("merge: exp/x into agent/a (refuse)", []string{TrailerMerge + ": kb/a.md src", TrailerMerge + ": kb/b.md dst"})
-	got := appendTrailersToParagraph(withRecord, tr)
+	got := vcs.AppendTrailersToParagraph(withRecord, tr)
 	require.Equal(t, "merge: exp/x into agent/a (refuse)\n\n"+
 		"Knomit-Merge: kb/a.md src\nKnomit-Merge: kb/b.md dst\n"+
 		"Knomit-Trace: task-1\nKnomit-Run: run-0123456789abcdef0123456789abcdef\n", got)
 	require.Len(t, TrailerValues(got, TrailerMerge), 2, "the record is still read")
 	require.Equal(t, "task-1", TrailerValue(got, TrailerTrace))
 
-	plain := appendTrailersToParagraph("merge: exp/x into agent/a (refuse)", tr)
+	plain := vcs.AppendTrailersToParagraph("merge: exp/x into agent/a (refuse)", tr)
 	require.Equal(t, "merge: exp/x into agent/a (refuse)\n\nKnomit-Trace: task-1\nKnomit-Run: run-0123456789abcdef0123456789abcdef\n", plain)
-	require.Equal(t, "merge: m", appendTrailersToParagraph("merge: m", Trailers{}), "no set: unchanged")
+	require.Equal(t, "merge: m", vcs.AppendTrailersToParagraph("merge: m", Trailers{}), "no set: unchanged")
 }
 
 // Only an experiment's OWN merge reads the ctx trace: a plain merge

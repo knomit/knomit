@@ -91,9 +91,9 @@ func (r *cmRepo) branch(name, from string) {
 
 func (r *cmRepo) tip(branch string) *object.Commit {
 	r.t.Helper()
-	ref, err := r.svc.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := r.svc.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	require.NoError(r.t, err)
-	c, err := object.GetCommit(r.svc.rh.gits, ref.Hash())
+	c, err := object.GetCommit(r.svc.rh.Storer(), ref.Hash())
 	require.NoError(r.t, err)
 	return c
 }
@@ -122,7 +122,7 @@ func (r *cmRepo) parse(content string) fact.Fact {
 // state a fetch leaves, so reconcileNow's main step is a no-op.
 func (r *cmRepo) setOriginTip(branch string) {
 	r.t.Helper()
-	require.NoError(r.t, r.svc.rh.gits.SetReference(plumbing.NewHashReference(
+	require.NoError(r.t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewRemoteReferenceName("origin", branch), r.tip(branch).Hash)))
 }
 
@@ -153,7 +153,7 @@ func peerFork(t *testing.T, consensusOnt, agentOnt string) (*cmRepo, *object.Com
 	r.write(consensus, "kb/notes/g.md", cmFact(t, "unrelated", 0.7))
 	r.write(agent, "kb/notes/f.md", cmFact(t, "agent body", 0.7, "AgentAdded"))
 	r.setOriginTip(consensus)
-	base, err := object.GetCommit(r.svc.rh.gits, baseCommit)
+	base, err := object.GetCommit(r.svc.rh.Storer(), baseCommit)
 	require.NoError(t, err)
 	return r, base, r.tip(consensus), r.tip(agent)
 }
@@ -224,7 +224,7 @@ func TestPeerSync_SettingOnAgentBranchOnly_IsToday(t *testing.T) {
 // one side deleted stays deleted whichever side it was (ruling 2), with the
 // dropped edit named.
 //
-// SABOTAGE: ok=true for a non-fact path (skip isFactPath) → notes.txt gets
+// SABOTAGE: ok=true for a non-fact path (skip IsFactPath) → notes.txt gets
 // fact-merged / errors → red; resurrect on modify/delete (edit wins) → d1 or
 // d2 present → red.
 func TestPeerSync_MergeFacts_FallbackAndRetraction(t *testing.T) {
@@ -391,7 +391,7 @@ func TestReplay_MergeFacts(t *testing.T) {
 	const agent = "agent/replay-abcd1234"
 	r.branch(agent, "main")
 	seed := r.write(agent, "kb/notes/f.md", cmFact(t, "base", 0.7))
-	require.NoError(t, r.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
+	require.NoError(t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
 	require.NoError(t, r.svc.rh.writeAgentBase(agent, seed))
 	ctx := WithTrailers(context.Background(), Trailers{Trace: "t-123"})
 	_, err := r.svc.Facts().WriteFact(ctx, agent, "kb/notes/f.md", cmFact(t, "agent body", 0.9), "learn: f", "learn")
@@ -424,7 +424,7 @@ func replayFork(t *testing.T) (*cmRepo, string, plumbing.Hash) {
 	r.branch(agent, "main")
 	r.write(agent, "notes.txt", "base\n")
 	seed := r.write(agent, "kb/notes/f.md", cmFact(t, "base", 0.7))
-	require.NoError(t, r.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
+	require.NoError(t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
 	require.NoError(t, r.svc.rh.writeAgentBase(agent, seed))
 	_, err := r.svc.Facts().WriteFact(context.Background(), agent, "kb/notes/f.md", cmFact(t, "agent body", 0.9), "learn: f", "learn")
 	require.NoError(t, err)

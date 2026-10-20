@@ -50,7 +50,7 @@ func TestRebuildGraph_PrunesStaleSimilarityEdges(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	db := svc.rh.db
+	db := svc.rh.DB()
 	countSimilar := func() int {
 		var n int
 		require.NoError(t, db.QueryRowContext(ctx,
@@ -128,7 +128,7 @@ func TestRebuildGraph_SimilarityRespectsTopKCap(t *testing.T) {
 
 	ctx := context.Background()
 	branch := "main"
-	db := svc.rh.db
+	db := svc.rh.DB()
 
 	// More facts than the bound, so every source has more candidates than it
 	// can keep and the truncation is real rather than incidental.
@@ -208,7 +208,7 @@ func TestRebuildGraph_SimilarityIsIdempotent(t *testing.T) {
 	}
 
 	pairs := func() []string {
-		rows, err := svc.rh.db.QueryContext(ctx,
+		rows, err := svc.rh.DB().QueryContext(ctx,
 			`SELECT source_id || '->' || target_id FROM edges WHERE type = ? ORDER BY 1`,
 			EdgeSimilarTo)
 		require.NoError(t, err)
@@ -248,7 +248,7 @@ func TestRebuild_LeavesPlannerStatistics(t *testing.T) {
 	ctx := context.Background()
 	graphStats := func() int {
 		var n int
-		require.NoError(t, svc.rh.db.QueryRowContext(ctx, `
+		require.NoError(t, svc.rh.DB().QueryRowContext(ctx, `
 			SELECT COUNT(DISTINCT tbl) FROM sqlite_stat1
 			 WHERE tbl IN ('edges','nodes','node_props_text','node_labels')`).Scan(&n))
 		return n
@@ -265,7 +265,7 @@ func TestRebuild_LeavesPlannerStatistics(t *testing.T) {
 	// Isolate Rebuild's own ANALYZE: drop what Sync left, so passing below can
 	// only come from Rebuild. This is the fresh-clone state — graph tables
 	// populated after the last time anything analysed them.
-	_, err = svc.rh.db.ExecContext(ctx, `DELETE FROM sqlite_stat1`)
+	_, err = svc.rh.DB().ExecContext(ctx, `DELETE FROM sqlite_stat1`)
 	require.NoError(t, err)
 	require.Zero(t, graphStats(), "stats cleared")
 

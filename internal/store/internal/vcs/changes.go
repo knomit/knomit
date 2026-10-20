@@ -18,7 +18,7 @@
 // is not reported — for a reader of state (a task pool, an inbox) that is the
 // right answer, because the thing is no longer there. Per-event history is the
 // commit list's job, not this one's.
-package store
+package vcs
 
 import (
 	"context"
@@ -96,7 +96,7 @@ type ChangesResult struct {
 // NormalizeChangesPrefix turns a caller's folder into the repo path it names.
 //
 // The prefix is RELATIVE TO THE ONTOLOGY ROOT (`tasks/a` means
-// `<ontologyRoot>/tasks/a`), lowercased because knomit writes lowercase fact
+// `<OntologyRoot>/tasks/a`), lowercased because knomit writes lowercase fact
 // paths, stripped of leading and trailing "/", and never given a ".md"
 // suffix. It is refused when it contains ".." or any segment beginning with
 // "." — private state is never a folder a changes read may walk.
@@ -136,13 +136,13 @@ func NormalizeChangesPrefix(ontologyRoot, prefix string) (string, error) {
 //   - only .md paths, and never a path with a private segment below the prefix;
 //   - rows sorted bytewise by path; a rename is "deleted" + "added" (no rename
 //     detection).
-func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error) {
-	base, err := NormalizeChangesPrefix(rh.ontologyRoot(), q.Prefix)
+func (rh *Repo) ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error) {
+	base, err := NormalizeChangesPrefix(rh.OntologyRoot(), q.Prefix)
 	if err != nil {
 		return ChangesResult{}, err
 	}
 
-	tip, err := rh.resolveRef(ctx, branch)
+	tip, err := rh.ResolveRef(ctx, branch)
 	if err != nil {
 		return ChangesResult{}, err
 	}
@@ -207,7 +207,7 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 		return ChangesResult{}, err
 	}
 
-	rows, err := diffSubtrees(fromTree, toTree, base, rh.isFactPath)
+	rows, err := diffSubtrees(fromTree, toTree, base, rh.IsFactPath)
 	if err != nil {
 		return ChangesResult{}, err
 	}
@@ -229,7 +229,7 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 // DiffFacts is the trigger dispatcher's read: every fact path under the
 // ontology root that differs between the tree at `from` and the tree at `to`,
 // as added/modified/deleted, sorted bytewise. The same two-tree read as
-// ChangesUnder — subtreeOrEmpty, diffSubtrees, isFactPath, no clock, no
+// ChangesUnder — subtreeOrEmpty, diffSubtrees, IsFactPath, no clock, no
 // commit log, no write — with ONE difference: there is NO ancestry check. The
 // dispatcher's advance is "old head → current head" of the agent branch, and
 // after an origin rewind the old head is NOT an ancestor of the new one (the
@@ -237,8 +237,8 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 // meaningful, and refusing them would silently lose the fires. ChangesUnder
 // keeps its check: its `since` is a client's bookmark, where a sideways diff
 // fabricates deletions. A ZeroHash `from` is the empty tree.
-func (rh *repoHandler) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]PathChange, error) {
-	base := rh.ontologyRoot()
+func (rh *Repo) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]PathChange, error) {
+	base := rh.OntologyRoot()
 	var fromTree *object.Tree
 	if from != plumbing.ZeroHash {
 		fc, err := rh.repo.CommitObject(from)
@@ -257,7 +257,7 @@ func (rh *repoHandler) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([
 	if err != nil {
 		return nil, err
 	}
-	return diffSubtrees(fromTree, toTree, base, rh.isFactPath)
+	return diffSubtrees(fromTree, toTree, base, rh.IsFactPath)
 }
 
 // subtreeOrEmpty returns the tree at base in c, or nil (the empty tree) when
@@ -285,7 +285,7 @@ func subtreeOrEmpty(c *object.Commit, base string) (*object.Tree, error) {
 
 // diffSubtrees diffs two folder trees (nil = empty) and returns repo-relative
 // paths sorted bytewise, keeping only those isFact admits. The caller passes
-// repoHandler.isFactPath — the indexer's own membership rule (under the
+// Repo.IsFactPath — the indexer's own membership rule (under the
 // ontology root, .md, not private) — so changes and the index agree on what a
 // fact is, with one copy of the rule.
 func diffSubtrees(from, to *object.Tree, base string, isFact func(string) bool) ([]PathChange, error) {

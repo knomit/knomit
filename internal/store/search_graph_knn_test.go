@@ -52,7 +52,7 @@ func TestGraphBuildSimilarityEdges_SkipsNeighborWithNullDistance(t *testing.T) {
 	writeSrcFact(t, svc, branch, "kb/x/src.md", "normal content body", nil, nil)
 
 	var blobHash string
-	require.NoError(t, svc.si.rh.db.QueryRow(
+	require.NoError(t, svc.si.rh.DB().QueryRow(
 		`SELECT blob_hash FROM facts WHERE path = ?`, "kb/x/src.md").Scan(&blobHash))
 
 	// Before the fix this returns:

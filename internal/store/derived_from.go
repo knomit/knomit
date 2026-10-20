@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/internal/vcs"
 )
 
 // resolveTargetCommit walks first-parent ancestry of sourceCommit on the
@@ -52,13 +53,13 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 	// trivially "touches" refPath. Skip past it so the walk lands on the
 	// genuine prior version (or runs off-branch if there is none).
 	if refPath == sourcePath {
-		parent, err := si.rh.firstParentCommit(ctx, cur)
+		parent, err := si.rh.FirstParentCommit(ctx, cur)
 		if err != nil {
 			return "", false, fmt.Errorf("resolveTargetCommit: firstParentCommit (self-ref): %w", err)
 		}
 		cur = parent
 	}
-	return si.rh.resolveActiveCommitForPath(ctx, branch, refPath, cur)
+	return si.rh.ResolveActiveCommitForPath(ctx, branch, refPath, cur)
 }
 
 // FactExistsAt reports whether `path` has any valid (added/modified)
@@ -80,12 +81,12 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 		// HEAD anchor: a fact is "live on the branch" iff there's a
 		// branch_facts row for (branch, path). branch_facts is the live
 		// view of which paths are currently un-retracted on the branch.
-		branchID, err := fq.rh.branchID(ctx, branch)
+		branchID, err := fq.rh.BranchID(ctx, branch)
 		if err != nil {
 			return false, fmt.Errorf("FactExistsAt: branchID: %w", err)
 		}
 		var n int
-		err = conn(ctx, fq.rh.db).QueryRowContext(ctx,
+		err = conn(ctx, fq.rh.DB()).QueryRowContext(ctx,
 			`SELECT 1 FROM branch_facts WHERE branch_id = ? AND path = ?`,
 			branchID, path,
 		).Scan(&n)
@@ -97,7 +98,7 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 			if herr != nil {
 				return false, fmt.Errorf("FactExistsAt: HeadCommit: %w", herr)
 			}
-			_, ok, werr := fq.rh.resolveActiveCommitForPath(ctx, branch, path, head)
+			_, ok, werr := fq.rh.ResolveActiveCommitForPath(ctx, branch, path, head)
 			if werr != nil {
 				return false, fmt.Errorf("FactExistsAt: walk-back at HEAD: %w", werr)
 			}
@@ -108,7 +109,7 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 		}
 		return true, nil
 	}
-	_, ok, err := fq.rh.resolveActiveCommitForPath(ctx, branch, path, commit)
+	_, ok, err := fq.rh.ResolveActiveCommitForPath(ctx, branch, path, commit)
 	if err != nil {
 		return false, err
 	}
@@ -116,7 +117,7 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 }
 
 // FactLiveAtCommit reports whether `path` is live (present, not retracted) as
-// of `commit` — the delete-RESPECTING sibling of resolveActiveCommitForPath.
+// of `commit` — the delete-RESPECTING sibling of ResolveActiveCommitForPath.
 //
 // It walks the same first-parent ancestry but, crucially, does NOT filter the
 // action: it takes the MOST RECENT commit_log event for the path in that
@@ -125,7 +126,7 @@ func (fq *factQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 // `commit`) therefore reads as NOT live — matching the git tree state, which
 // is what "the fact as of commit X" means.
 //
-// resolveActiveCommitForPath answers a different question ("what is the last
+// ResolveActiveCommitForPath answers a different question ("what is the last
 // navigable version") by stepping OVER deletions; that is correct for ref
 // classification and fallback-before content, but wrong as an existence gate.
 //
@@ -137,7 +138,7 @@ func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 	}
 
 	var action string
-	err := conn(ctx, fq.rh.db).QueryRowContext(ctx, firstParentChainCTE+`
+	err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx, vcs.FirstParentChainCTE+`
 		SELECT cl.action
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
@@ -165,7 +166,7 @@ func (fq *factQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 // The target Fact node already exists if resolveTargetCommit succeeds — it
 // was upserted when refPath was originally indexed at target_commit. The
 // target's blob_hash is the blob in the target_commit's tree for refPath,
-// resolved via repoHandler.readBlobHashAtCommit.
+// resolved via repoHandler.ReadBlobHashAtCommit.
 //
 // Called AFTER the source Fact node's merge has been committed. The original
 // reason was that direct-SQL reads could not see nodes MERGE'd through Cypher
@@ -214,7 +215,7 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 			continue
 		}
 
-		targetBlobHash, err := si.rh.readBlobHashAtCommit(ctx, refPath, targetCommit)
+		targetBlobHash, err := si.rh.ReadBlobHashAtCommit(ctx, refPath, targetCommit)
 		if err != nil {
 			return fmt.Errorf("graphAddDerivedFromAtCommitTx: blob_hash for %s@%s: %w", refPath, targetCommit, err)
 		}
@@ -263,7 +264,7 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 // refs that were already successfully wired in pass 1.
 func (si *searchIndex) graphDerivedFromEdgeExists(ctx context.Context, srcID, tgtID int64, sourceCommit, targetCommit string) (bool, error) {
 	var n int
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM edges e
 		JOIN edge_props_text sc ON sc.edge_id = e.id
@@ -285,7 +286,7 @@ func (si *searchIndex) graphDerivedFromEdgeExists(ctx context.Context, srcID, tg
 // node exists (caller decides whether that's an error).
 func (si *searchIndex) graphNodeIDByBlob(ctx context.Context, path, blobHash string) (int64, error) {
 	var nodeID int64
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
 		SELECT npp.node_id
 		FROM node_props_text npp
 		JOIN property_keys kp ON kp.id = npp.key_id AND kp.key = 'path'

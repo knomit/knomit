@@ -44,14 +44,14 @@ func typedFactBody(title string, typ fact.Type, conf float64, refs []string) str
 func forceCommittedAt(t *testing.T, svc *Service, branch, path string, ts int64) {
 	t.Helper()
 	ctx := context.Background()
-	branchID, err := svc.rh.branchID(ctx, branch)
+	branchID, err := svc.rh.BranchID(ctx, branch)
 	require.NoError(t, err)
 	var commitHash string
-	err = svc.rh.db.QueryRowContext(ctx,
+	err = svc.rh.DB().QueryRowContext(ctx,
 		`SELECT commit_hash FROM branch_facts WHERE branch_id = ? AND path = ?`,
 		branchID, path).Scan(&commitHash)
 	require.NoError(t, err)
-	res, err := svc.rh.db.ExecContext(ctx,
+	res, err := svc.rh.DB().ExecContext(ctx,
 		`UPDATE commit_log SET committed_at = ? WHERE commit_hash = ? AND path = ?`,
 		ts, commitHash, path)
 	require.NoError(t, err)

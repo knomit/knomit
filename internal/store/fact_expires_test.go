@@ -151,7 +151,7 @@ func TestSearch_ResultsCarryExpiresAsWritten(t *testing.T) {
 func TestFactExpires_RebuildRepopulates(t *testing.T) {
 	svc, branch := expiresFixture(t)
 	ctx := context.Background()
-	_, err := svc.si.rh.db.ExecContext(ctx, `DELETE FROM fact_expires`)
+	_, err := svc.si.rh.DB().ExecContext(ctx, `DELETE FROM fact_expires`)
 	require.NoError(t, err)
 	require.Empty(t, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true)}),
 		"clearing must empty the side table, or the rebuild below proves nothing")
@@ -160,7 +160,7 @@ func TestFactExpires_RebuildRepopulates(t *testing.T) {
 
 	require.Equal(t, []string{"kb/alpha/past.md"}, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true)}))
 	var n int
-	require.NoError(t, svc.si.rh.db.QueryRowContext(ctx,
+	require.NoError(t, svc.si.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_expires`).Scan(&n))
 	require.Equal(t, 3, n)
 }
@@ -179,9 +179,9 @@ func TestFactExpires_UpgradeFromV5ForcesRebuild(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stale, "fixture: a freshly rebuilt branch must be current")
 
-	_, err = svc.si.rh.db.ExecContext(ctx, `DELETE FROM fact_expires`)
+	_, err = svc.si.rh.DB().ExecContext(ctx, `DELETE FROM fact_expires`)
 	require.NoError(t, err)
-	res, err := svc.si.rh.db.ExecContext(ctx, `UPDATE meta SET value = '5' WHERE key = ?`, schemaVersionKey(branch))
+	res, err := svc.si.rh.DB().ExecContext(ctx, `UPDATE meta SET value = '5' WHERE key = ?`, schemaVersionKey(branch))
 	require.NoError(t, err)
 	n, _ := res.RowsAffected()
 	require.EqualValues(t, 1, n, "fixture: the version row must exist to be downgraded")
@@ -266,7 +266,7 @@ func TestFactExpires_RebuildKeepsSpacedKey(t *testing.T) {
 	q := SearchOptions{Expired: boolp(true), Now: expNow}
 	require.Equal(t, []string{"kb/alpha/spaced.md"}, searchPaths(t, svc, branch, q), "fixture: the incremental path indexes it")
 
-	_, err = svc.si.rh.db.ExecContext(ctx, `DELETE FROM fact_expires`)
+	_, err = svc.si.rh.DB().ExecContext(ctx, `DELETE FROM fact_expires`)
 	require.NoError(t, err)
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 	require.Equal(t, []string{"kb/alpha/spaced.md"}, searchPaths(t, svc, branch, q), "the rebuild agrees with the parser")

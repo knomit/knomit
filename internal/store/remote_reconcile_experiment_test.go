@@ -12,7 +12,7 @@ import (
 // hasFileAt reports whether path is in the tree of branch's tip.
 func hasFileAt(t *testing.T, svc *Service, branch, path string) bool {
 	t.Helper()
-	c, err := svc.rh.repo.CommitObject(mustHeadHash(t, svc, branch))
+	c, err := svc.rh.Repository().CommitObject(mustHeadHash(t, svc, branch))
 	require.NoError(t, err)
 	tree, err := c.Tree()
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestReconcileAgentRebase_ExperimentMergeSurvivesARewind(t *testing.T) {
 	require.NoError(t, svc.InitRepo(ctx, map[string]string{}, "agent/test"))
 
 	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
 
 	// The experiment opens at c1.
 	_, err = svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
@@ -52,7 +52,7 @@ func TestReconcileAgentRebase_ExperimentMergeSurvivesARewind(t *testing.T) {
 	// Origin main gains m1; the steady reconcile fast-forwards the agent
 	// branch onto it and sets the watermark.
 	m1 := upstreamCommit(t, svc, c1, "kb/m1.md", "---\ntype: observation\n---\n# M1\n\nm1\n")
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), m1)))
 	r, err := svc.rh.reconcileAgentMerge(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, r.Mode, "setup: the agent branch fast-forwards onto main")
@@ -65,7 +65,7 @@ func TestReconcileAgentRebase_ExperimentMergeSurvivesARewind(t *testing.T) {
 
 	// The rewind: origin main is force-pushed to u, on c1, lacking m1.
 	u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nu\n")
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
 	_, err = svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/exp.md"), "the experiment's committed knowledge must survive the rewind")
@@ -95,13 +95,13 @@ func TestReconcileAgentRebase_DropsCommitsThatChangeOnlySkippedPaths(t *testing.
 	svc.SetReplaySkipPaths("artifacts/fleet/master")
 
 	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
 	_, _, err = svc.Facts().BatchWriteFacts(ctx, "agent/test", map[string]string{"artifacts/fleet/master": "me\n"}, nil, "claim", "created")
 	require.NoError(t, err)
 
 	// Only the marker commit beyond the new upstream: nothing to replay.
 	u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
 	res, err := svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, 0, res.NumReplayed)
@@ -114,7 +114,7 @@ func TestReconcileAgentRebase_DropsCommitsThatChangeOnlySkippedPaths(t *testing.
 	writeMergeFact(t, svc, "agent/test", "kb/own.md", "Own", "mine")
 	// A rewind: upstream moves to a sibling of what local holds.
 	u3 := upstreamCommit(t, svc, u, "kb/u3.md", "---\ntype: observation\n---\n# U3\n\nu3\n")
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u3)))
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u3)))
 	res, err = svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.NumReplayed, "only kb/own.md is replayed")
@@ -138,7 +138,7 @@ func replaysMixedWholeAndUnsetNothing(t *testing.T) {
 			svc.SetReplaySkipPaths("artifacts/fleet/master")
 		}
 		c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
-		require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
+		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
 		if skip {
 			// The marker and a fact in ONE commit: replayed whole.
 			_, _, err = svc.Facts().BatchWriteFacts(ctx, "agent/test", map[string]string{"artifacts/fleet/master": "me\n", "kb/both.md": "---\ntype: observation\n---\n# Both\n\nboth\n"}, nil, "claim+fact", "created")
@@ -148,7 +148,7 @@ func replaysMixedWholeAndUnsetNothing(t *testing.T) {
 		}
 		require.NoError(t, err)
 		u := upstreamCommit(t, svc, c1, "kb/u.md", "---\ntype: observation\n---\n# U\n\nnew host\n")
-		require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
+		require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
 		res, err := svc.rh.reconcileAgentRebase(ctx, "agent/test", "main", StrategyLocalWins)
 		require.NoError(t, err)
 		require.Equal(t, 1, res.NumReplayed, "skip=%v", skip)

@@ -50,13 +50,13 @@ func TestConsensusBranch_RecordedNotDefaulted(t *testing.T) {
 		require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "trunk", "agent/host-1"))
 		// Forget the record, as on a repo from an older binary; add a pushed
 		// peer branch and an experiment, which are never candidates.
-		_, err = svc.rh.db.Exec(`DELETE FROM meta WHERE key = ?`, consensusBranchKey)
+		_, err = svc.rh.DB().Exec(`DELETE FROM meta WHERE key = ?`, consensusBranchKey)
 		require.NoError(t, err)
 		svc.ri.setConsensus("")
 		tip, err := svc.Branches().HeadCommit(ctx, "agent/host-1")
 		require.NoError(t, err)
 		for _, b := range []string{"agent/peer-abcd1234", "exp/try"} {
-			require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(b), plumbing.NewHash(tip))))
+			require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(b), plumbing.NewHash(tip))))
 		}
 		require.Equal(t, "trunk", svc.UpstreamBranch())
 		require.Equal(t, "trunk", svc.recordedConsensusBranch(), "and records it")

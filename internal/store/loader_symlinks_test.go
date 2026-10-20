@@ -42,10 +42,10 @@ func requireSymlinkOntologyError(t *testing.T, err error, path string) {
 // A symlinked ontology is an ERROR naming its path at every store reader of
 // the ontology (user ruling 2026-10-08, "d"): OntologyAtCommit (triggers,
 // guidance), OntologyAt and OntologyFileAt (repo open, create-time check,
-// consensus, sync and conflicts settings) and treeOntology (fleet, verify).
+// consensus, sync and conflicts settings) and TreeOntology (fleet, verify).
 // A legacy rung holding a regular ontology does not cover for it: the first
 // rung present is the ontology, and it is a symlink.
-// Sabotage: OntologyAtCommit or treeOntologyFile back on IsFile → the crafted
+// Sabotage: OntologyAtCommit or TreeOntologyFile back on IsFile → the crafted
 // link text is returned as the ontology → red.
 func TestOntologyReaders_SymlinkIsANamedError(t *testing.T) {
 	svc := newChangesService(t)

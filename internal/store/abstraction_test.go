@@ -317,7 +317,7 @@ func TestAbstraction_TitleVecWidthFixedOnAnUpgradedDatabase(t *testing.T) {
 	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
 
 	// Simulate the pre-axis database: the titles table simply is not there.
-	_, err := svc.rh.db.ExecContext(ctx, `DROP TABLE fact_titles_vec`)
+	_, err := svc.rh.DB().ExecContext(ctx, `DROP TABLE fact_titles_vec`)
 	require.NoError(t, err)
 	require.NoError(t, svc.Close())
 
@@ -382,13 +382,13 @@ func TestCosineSim_OrthogonalIsZeroNotNull(t *testing.T) {
 	a[0], b[1] = 1, 1
 
 	var sim *float64
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT knomit_cosine_sim(?, ?)`,
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT knomit_cosine_sim(?, ?)`,
 		float32SliceToBytes(a), float32SliceToBytes(b)).Scan(&sim))
 	require.NotNil(t, sim, "orthogonal vectors have a similarity, and it is 0")
 	require.InDelta(t, 0.0, *sim, 1e-9)
 
 	// A zero-norm vector genuinely has none.
-	require.NoError(t, svc.rh.db.QueryRow(`SELECT knomit_cosine_sim(?, ?)`,
+	require.NoError(t, svc.rh.DB().QueryRow(`SELECT knomit_cosine_sim(?, ?)`,
 		float32SliceToBytes(a), float32SliceToBytes(make([]float32, 8))).Scan(&sim))
 	require.Nil(t, sim, "a degenerate vector has no similarity to anything")
 
