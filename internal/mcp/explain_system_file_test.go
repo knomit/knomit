@@ -15,6 +15,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // Reads of .knomit/ by exact path (user ruling 2026-10-06: "reopen reads by
@@ -240,7 +241,7 @@ func TestExplain_SystemFileSuperseded(t *testing.T) {
 	require.False(t, before.Superseded)
 
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, err := svc.RawWriteForTest(context.Background(), "agent/test", sysState, "v2\n", "people change the system through git")
+		_, err := storetest.RawWrite(context.Background(), svc, "agent/test", sysState, "v2\n", "people change the system through git")
 		require.NoError(t, err)
 	}))
 

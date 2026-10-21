@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // WithRead delegates to the underlying RepoInstance.WithRead, exposing the
@@ -132,7 +133,7 @@ func (b *BranchHandle) CommitCount() int {
 		// SQL — every commit on the branch has at least one commit_log
 		// row per path it touched, so SELECT COUNT(DISTINCT commit_hash)
 		// FROM branch_commits WHERE branch_id = (...).
-		db := svc.RawDBForTest()
+		db := storetest.RawDB(svc)
 		row := db.QueryRow(`
 			SELECT COUNT(*)
 			FROM branch_commits

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // ---- F08 PR A, M1: the F04 atomic move (`retract` on knomit_learn).
@@ -187,13 +188,14 @@ func TestLearn_ConcurrentMovesOneWins(t *testing.T) {
 	arrived.Add(n)
 	release := make(chan struct{})
 	var once sync.Once
-	restore := store.SetBatchWriteUnlockedHookForTest(func() {
+	restore := facts.SetBatchWriteUnlockedHookForTest(func() {
 		arrived.Done()
 		select {
 		case <-release:
 		case <-time.After(10 * time.Second):
 		}
 	})
+
 	defer restore()
 	go func() {
 		arrived.Wait()

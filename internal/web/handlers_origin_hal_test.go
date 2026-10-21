@@ -19,6 +19,7 @@ import (
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 	"knomit/internal/web/hal"
 )
 
@@ -566,7 +567,7 @@ func TestPutOrigin_PersistsToControlDB(t *testing.T) {
 			scanErr = errors.New("nil svc")
 			return
 		}
-		rows, err := svc.RawDBForTest().Query(`SELECT name FROM pragma_table_info('remotes')`)
+		rows, err := storetest.RawDB(svc).Query(`SELECT name FROM pragma_table_info('remotes')`)
 		if err != nil {
 			scanErr = err
 			return
@@ -661,7 +662,7 @@ func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
 	var refspecs []string
 	ri.WithRead(func(svc *store.Service) {
 		remote, err = svc.Remote().GetRemote("origin")
-		refspecs = svc.FetchRefspecsForTest("origin")
+		refspecs = storetest.FetchRefspecs(svc, "origin")
 	})
 	if err != nil {
 		t.Fatalf("GetRemote: %v", err)
@@ -842,7 +843,7 @@ func TestSetOrigin_FailedPersistRestoresTheGitRemote(t *testing.T) {
 	var urls []string
 	var remote *store.Remote
 	ri.WithRead(func(svc *store.Service) {
-		urls = svc.RemoteURLsForTest("origin")
+		urls = storetest.RemoteURLs(svc, "origin")
 		remote, _ = svc.Remote().GetRemote("origin")
 	})
 	if len(urls) != 1 || urls[0] != first {
@@ -882,7 +883,7 @@ func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
 	}
 
 	var refspecs []string
-	ri.WithRead(func(svc *store.Service) { refspecs = svc.FetchRefspecsForTest("origin") })
+	ri.WithRead(func(svc *store.Service) { refspecs = storetest.FetchRefspecs(svc, "origin") })
 	got := make(map[string]bool, len(refspecs))
 	for _, rs := range refspecs {
 		got[rs] = true

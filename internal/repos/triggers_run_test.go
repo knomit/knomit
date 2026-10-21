@@ -24,6 +24,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/serverkey"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/playbooks"
 )
 
@@ -192,7 +193,7 @@ func TestRun_AgentBranchRecipeNeverRuns(t *testing.T) {
 
 	// No upstream branch: the repo tier is skipped, the local recipe runs.
 	svc := testService(t, ri)
-	require.NoError(t, svc.TestingDeleteRef("refs/heads/"+svc.UpstreamBranch()))
+	require.NoError(t, storetest.DeleteRef(svc, "refs/heads/"+svc.UpstreamBranch()))
 	tip, err := svc.Triggers().UpstreamTip(context.Background(), svc.UpstreamBranch())
 	require.NoError(t, err)
 	require.True(t, tip.IsZero(), "the fixture must really have no main")

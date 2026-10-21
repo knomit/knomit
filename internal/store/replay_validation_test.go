@@ -30,7 +30,7 @@ func TestValidateWrite_ACopyOfALegacyInvalidFactIsCarriedOver(t *testing.T) {
 	require.NoError(t, local.InitRepo(ctx, ont, agent))
 	_, err = local.Facts().WriteFact(ctx, agent, "kb/notes/a.md", note("a", "e"), "a", "")
 	require.NoError(t, err)
-	_, err = local.TestingCommitFiles(agent, map[string]string{"kb/notes/legacy.md": note("legacy")}, "legacy, before the rule")
+	_, err = local.rh.CommitFilesForTest(agent, map[string]string{"kb/notes/legacy.md": note("legacy")}, "legacy, before the rule")
 	require.NoError(t, err)
 	_, err = local.Facts().WriteFact(ctx, agent, "kb/notes/z.md", note("z", "e"), "z", "")
 	require.NoError(t, err)
@@ -75,9 +75,9 @@ func TestValidateWrite_AReplayThatAltersALegacyInvalidFactJudgesIt(t *testing.T)
 	f.Refs = []string{"kb/notes/gone.md"} // dead: neither side holds it
 	legacy, err := fact.SerializeFact(f)
 	require.NoError(t, err)
-	_, err = local.TestingCommitFiles(agent, map[string]string{"kb/notes/legacy.md": legacy}, "legacy, before the rule")
+	_, err = local.rh.CommitFilesForTest(agent, map[string]string{"kb/notes/legacy.md": legacy}, "legacy, before the rule")
 	require.NoError(t, err)
-	// An ordinary write after it syncs the index (TestingCommitFiles does not).
+	// An ordinary write after it syncs the index (CommitFilesForTest does not).
 	_, err = local.Facts().WriteFact(ctx, agent, "kb/notes/z.md", note("z", "e"), "z", "")
 	require.NoError(t, err)
 

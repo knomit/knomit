@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/embeddings/params"
@@ -44,7 +45,7 @@ func TestVerify_DetectsMissingBlob(t *testing.T) {
 	require.NotEmpty(t, res.BlobHash)
 
 	// Delete the blob from the storer directly.
-	require.NoError(t, svc.DeleteObjectForTest(res.BlobHash))
+	require.NoError(t, svc.rh.Storer().DeleteObjectForTest(plumbing.NewHash(res.BlobHash)))
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{})
 	require.NoError(t, err)

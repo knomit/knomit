@@ -204,6 +204,16 @@ var sameLayerEdges = map[string]bool{
 	"store/fsck -> store/facts":        true,
 	"store/fsck -> store/index":        true,
 	"store/fsck -> store/internal/vcs": true,
+	// The storetest package (test doors for tests outside the store) reaches
+	// each child through that child's registration hook: the vcs repo, the
+	// facts index, the merge repo, and the sqlite durability switch. It is a
+	// test package; TestHarnessNotLinkedIntoShippedBinaries keeps it out of
+	// every binary and TestTestSeamsNotReachedFromProduction out of production
+	// imports.
+	"store/storetest -> store/facts":           true,
+	"store/storetest -> store/internal/sqlite": true,
+	"store/storetest -> store/internal/vcs":    true,
+	"store/storetest -> store/merge":           true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

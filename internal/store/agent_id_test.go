@@ -58,10 +58,10 @@ func TestCommitAuthor_NoAgentIDRefuses(t *testing.T) {
 	svc := newExperimentTestStore(t)
 	svc.SetSigner(newTestSigner(t))
 	prev := vcs.TestFallbackAgentForTest()
-	SetTestFallbackAgentID(nil)
+	vcs.SetTestFallbackAgentID(nil)
 	t.Cleanup(func() {
 		if prev != nil {
-			SetTestFallbackAgentID(*prev)
+			vcs.SetTestFallbackAgentID(*prev)
 		}
 	})
 	var objs int

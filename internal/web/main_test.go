@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -17,9 +17,9 @@ import (
 // Windows the fsyncs of each create dominated the package's run time (706s ->
 // 389s on a Windows 10 laptop; see .github/workflows/tests.yml). WAL itself
 // stays on, so locking behaves as in production; see
-// store.SetTestFastDurability for what a durability test must do instead.
+// storetest.SetFastDurability for what a durability test must do instead.
 func TestMain(m *testing.M) {
 	testsigner.Install()
-	store.SetTestFastDurability(true)
+	storetest.SetFastDurability(true)
 	os.Exit(m.Run())
 }

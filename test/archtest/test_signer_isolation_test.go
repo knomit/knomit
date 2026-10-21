@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestFallbackSignerOnlyReferencedFromTests: store.SetTestFallbackSigner lets a
+// TestFallbackSignerOnlyReferencedFromTests: storetest.SetFallbackSigner lets a
 // test binary commit through a Service that has no signer. Production must
 // never reach it: a signer-less production Service fails with ErrNoSigner at
 // its first write, and that is the whole point of F09 PR 2. The hook already
@@ -16,13 +16,15 @@ import (
 // production SOURCE from even naming it or its installer package.
 //
 // Allowed non-test files: the hook's own definition (the store's vcs child,
-// internal/store/internal/vcs/sign.go), the parent's one-line forwarder under
-// the public store name (internal/store/vcs_testhooks.go), and the installer
-// package (internal/testsupport/testsigner), which is itself kept out of every
-// shipped binary by TestHarnessNotLinkedIntoShippedBinaries.
+// internal/store/internal/vcs/sign.go), its one door for tests outside the
+// store (storetest.SetFallbackSigner, internal/store/storetest/storetest.go,
+// which is itself kept out of every shipped binary and out of production
+// imports by TestHarnessNotLinkedIntoShippedBinaries and
+// TestTestSeamsNotReachedFromProduction), and the installer package
+// (internal/testsupport/testsigner).
 func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 	def := filepath.Join("internal", "store", "internal", "vcs", "sign.go")
-	fwd := filepath.Join("internal", "store", "vcs_testhooks.go")
+	fwd := filepath.Join("internal", "store", "storetest", "storetest.go")
 	requireNaming(t, def, "SetTestFallbackSigner")
 	requireNaming(t, fwd, "SetTestFallbackSigner")
 	offenders := productionSourceNaming(t,
@@ -35,7 +37,7 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 	}
 }
 
-// TestFallbackAgentIDOnlyInstalledFromTests: store.SetTestFallbackAgentID lets
+// TestFallbackAgentIDOnlyInstalledFromTests: storetest.SetFallbackAgentID lets
 // a test binary author commits as a fixture id derived from a branch name.
 // Production never derives an agent id from a name (D18): a store given no id
 // fails with ErrNoAgentID. The setter refuses to work outside a test binary;
@@ -43,10 +45,10 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 // at all. The READ side, store.TestFallbackAgentID, is deliberately not a
 // needle: repos.Manager calls it, and outside a test binary it returns "".
 func TestFallbackAgentIDOnlyInstalledFromTests(t *testing.T) {
-	// The setter lives in the store's vcs child; the parent forwards it under
-	// its public store name from vcs_testhooks.go.
+	// The setter lives in the store's vcs child; tests outside the store reach
+	// it through storetest.SetFallbackAgentID (storetest.go).
 	def := filepath.Join("internal", "store", "internal", "vcs", "agent_id.go")
-	fwd := filepath.Join("internal", "store", "vcs_testhooks.go")
+	fwd := filepath.Join("internal", "store", "storetest", "storetest.go")
 	requireNaming(t, def, "SetTestFallbackAgentID")
 	requireNaming(t, fwd, "SetTestFallbackAgentID")
 	offenders := productionSourceNaming(t,
@@ -59,7 +61,7 @@ func TestFallbackAgentIDOnlyInstalledFromTests(t *testing.T) {
 	}
 }
 
-// TestFastDurabilityOnlyReferencedFromTests: store.SetTestFastDurability turns
+// TestFastDurabilityOnlyReferencedFromTests: storetest.SetFastDurability turns
 // SQLite's fsyncs off (synchronous=OFF) for a whole test binary (#365). In a
 // production knomit that would turn a power cut into a corrupt store or
 // control.db, so the switch is set only from a test package's TestMain. Like
@@ -79,10 +81,10 @@ func TestFastDurabilityOnlyReferencedFromTests(t *testing.T) {
 	// The switch lives in the store's sqlite child (the atomic is unexported
 	// there, so nothing else in package store can reach it); the parent only
 	// forwards the setter under its public name for the test packages that call
-	// store.SetTestFastDurability. Both files may name it; every needle must
+	// storetest.SetFastDurability. Both files may name it; every needle must
 	// appear in the definition, and the forwarder must still name the setter.
 	def := filepath.Join("internal", "store", "internal", "sqlite", "test_durability.go")
-	fwd := filepath.Join("internal", "store", "sqlite_conn.go")
+	fwd := filepath.Join("internal", "store", "storetest", "storetest.go")
 	src, err := os.ReadFile(filepath.Join("..", "..", def))
 	if err != nil {
 		t.Fatalf("read the switch's definition file: %v", err)
@@ -94,10 +96,10 @@ func TestFastDurabilityOnlyReferencedFromTests(t *testing.T) {
 	}
 	fsrc, err := os.ReadFile(filepath.Join("..", "..", fwd))
 	if err != nil {
-		t.Fatalf("read the switch's forwarder file: %v", err)
+		t.Fatalf("read the switch's storetest door: %v", err)
 	}
 	if !strings.Contains(string(fsrc), "SetTestFastDurability") {
-		t.Fatalf("%s no longer forwards SetTestFastDurability: the switch's public name moved, so this guard's allowlist is stale", fwd)
+		t.Fatalf("%s no longer calls SetTestFastDurability: the switch's door moved, so this guard's allowlist is stale", fwd)
 	}
 	offenders := productionSourceNaming(t, needles, def, fwd)
 	if len(offenders) > 0 {

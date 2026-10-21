@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // #533 review 3 SF1: the foreign_commit dead end has a confirmed way out.
@@ -47,7 +48,7 @@ func TestFleetDrop_ALeftMembersTwoCommitsCanBeLeftOutWholeOnceConfirmed(t *testi
 			{"kb/members/beta/one.md", "alpha work one"},
 			{"kb/members/alpha/two.md", "alpha work two"},
 		} {
-			h, err := svc.TestingCommitFiles(ari.AgentBranch(), map[string]string{w.p: rvPolicy}, w.msg)
+			h, err := storetest.CommitFiles(svc, ari.AgentBranch(), map[string]string{w.p: rvPolicy}, w.msg)
 			require.NoError(t, err)
 			side = append(side, h)
 		}
@@ -59,7 +60,7 @@ func TestFleetDrop_ALeftMembersTwoCommitsCanBeLeftOutWholeOnceConfirmed(t *testi
 	// The master's copy merges it past that judge.
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
 		require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/alpha-held", f.mri.AgentBranch()))
-		require.NoError(t, svc.TestingSetRef("refs/heads/agent/alpha-held", side[1]))
+		require.NoError(t, storetest.SetRef(svc, "refs/heads/agent/alpha-held", side[1]))
 		_, err := svc.MergePushed(ctx, "agent/alpha-held", f.mri.AgentBranch(), plumbing.NewHash(side[1]), "")
 		require.NoError(t, err)
 		require.NoError(t, svc.Branches().DropBranch(ctx, "agent/alpha-held"))

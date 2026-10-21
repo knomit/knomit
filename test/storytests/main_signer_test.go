@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -16,9 +16,9 @@ import (
 // internal/web does: a test that loses power mid-run has lost nothing worth
 // keeping. WAL stays on, so locking behaves as in production. A test of
 // durability itself must turn the switch off for its own duration; see
-// store.SetTestFastDurability.
+// storetest.SetFastDurability.
 func TestMain(m *testing.M) {
 	testsigner.Install()
-	store.SetTestFastDurability(true)
+	storetest.SetFastDurability(true)
 	os.Exit(m.Run())
 }

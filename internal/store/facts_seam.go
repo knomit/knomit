@@ -108,10 +108,3 @@ func UTCStamp(unix int64) string { return facts.UTCStamp(unix) }
 // WithCarriedOver marks ctx as carrying commits whose content was already
 // validated at the source (see facts.WithCarriedOver).
 func WithCarriedOver(ctx context.Context) context.Context { return facts.WithCarriedOver(ctx) }
-
-// SetBatchWriteUnlockedHookForTest installs f as the pre-lock hook of every
-// batch write in this process. The child's function panics outside a test
-// binary.
-func SetBatchWriteUnlockedHookForTest(f func()) (restore func()) {
-	return facts.SetBatchWriteUnlockedHookForTest(f)
-}

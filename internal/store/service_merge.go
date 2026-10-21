@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"knomit/internal/fact"
 	"knomit/internal/store/merge"
-	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -130,12 +129,3 @@ func (s *Service) PushedBranches(ctx context.Context, names []string, agentBranc
 
 // Experiments returns the experiment lifecycle sub-service.
 func (s *Service) Experiments() ExperimentIndex { return s.rh }
-
-// SetExperimentActivityForTest backdates an experiment's last_activity_at.
-//
-// TEST SEAM, and exported only because the sweeper's tests live in
-// internal/repos and cannot reach this table any other way. See
-// merge.Repo.SetExperimentActivityForTest. Not part of ExperimentIndex.
-func (s *Service) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
-	return s.rh.SetExperimentActivityForTest(ctx, name, when)
-}

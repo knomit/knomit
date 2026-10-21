@@ -11,6 +11,7 @@ import (
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // #428 follow-ups (N1, N4): the REST write door checks a fact's NEW ref to a
@@ -23,7 +24,7 @@ const restSymlink = ".knomit/skills/link.md" // -> x.md, a regular file beside i
 func (h threeRootsREST) seedSymlink(t *testing.T) {
 	t.Helper()
 	require.NoError(t, h.ri.WithRead(func(svc *store.Service) {
-		_, err := svc.RawSymlinkForTest(context.Background(), h.ri.AgentBranch(), restSymlink, "x.md", "a symlink pushed through git")
+		_, err := storetest.RawSymlink(context.Background(), svc, h.ri.AgentBranch(), restSymlink, "x.md", "a symlink pushed through git")
 		require.NoError(t, err)
 	}))
 }

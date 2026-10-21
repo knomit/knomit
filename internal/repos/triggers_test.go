@@ -18,6 +18,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -440,7 +441,7 @@ func TestDispatch_AuthorVerifiedOnlyUnderF09(t *testing.T) {
 	setOntology(t, ri, triggerOntology(verifyLog, entries...))
 	release := parkDispatcher(t, ri)
 	below := writeOn(t, ri, trigAgent, "kb/tasks/below.md")
-	require.NoError(t, svc.TestingSetRef("refs/heads/main", below))
+	require.NoError(t, storetest.SetRef(svc, "refs/heads/main", below))
 	release()
 	waitTriggerHead(t, ri, below)
 	write(t, ri, "kb/tasks/above.md")
@@ -470,7 +471,7 @@ func TestDispatch_VerifiedAfterRestart(t *testing.T) {
 	waitTriggerHead(t, ri2, head(t, ri2))
 	release := parkDispatcher(t, ri2)
 	c := writeOn(t, ri2, trigAgent, "kb/tasks/after-restart.md")
-	require.NoError(t, testService(t, ri2).TestingSetRef("refs/heads/main", c))
+	require.NoError(t, storetest.SetRef(testService(t, ri2), "refs/heads/main", c))
 	release()
 	waitTriggerHead(t, ri2, c)
 	require.Equal(t, []string{"kb/tasks/after-restart.md"}, pathsOf(firesOf(t, ri2, "verified-only")),
@@ -822,7 +823,7 @@ func TestDispatch_NonlinearRewindDiffs(t *testing.T) {
 
 	// The rewind: the branch goes back to base (hA is no longer in its
 	// history) and a new commit lands on top.
-	require.NoError(t, svc.TestingSetRef("refs/heads/"+trigAgent, base))
+	require.NoError(t, storetest.SetRef(svc, "refs/heads/"+trigAgent, base))
 	hC := write(t, ri, "kb/tasks/new.md")
 	linear, err := svc.Triggers().IsAncestor(context.Background(), plumbing.NewHash(hA), plumbing.NewHash(hC))
 	require.NoError(t, err)

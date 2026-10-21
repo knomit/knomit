@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 const rvPolicy = "---\nkind: pragmatic\ntype: policy\n---\n# alpha work\n\nwork\n"
@@ -37,7 +38,7 @@ func TestFleetDrop_AMemberWorkMergedWhileMainWasHeldSurvivesTheDrop(t *testing.T
 			// main held by a bad own commit (past the writers, which refuse it).
 			var bad string
 			require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
-				h, err := svc.TestingCommitFiles(f.mri.AgentBranch(), map[string]string{"kb/members/master/note.md": notPolicy}, "bad")
+				h, err := storetest.CommitFiles(svc, f.mri.AgentBranch(), map[string]string{"kb/members/master/note.md": notPolicy}, "bad")
 				require.NoError(t, err)
 				bad = h
 			}))

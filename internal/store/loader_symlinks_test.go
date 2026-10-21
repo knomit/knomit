@@ -17,7 +17,7 @@ const craftedOntology = "id: crafted\nname: Crafted\ntopics:\n  notes:\n    desc
 
 func symlinkAt(t *testing.T, svc *Service, branch, path, target string) plumbing.Hash {
 	t.Helper()
-	h, err := svc.RawSymlinkForTest(context.Background(), branch, path, target, "symlink "+path)
+	h, err := svc.rh.RawSymlinkForTest(context.Background(), branch, path, target, "symlink "+path)
 	require.NoError(t, err)
 	return plumbing.NewHash(h)
 }

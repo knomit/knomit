@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/store/storetest"
 )
 
 // A symlink under .knomit/skills/ is never followed (user ruling 2026-10-08:
@@ -25,8 +26,9 @@ func putSymlink(t *testing.T, ri *repos.RepoInstance, name, file, target string)
 	svc, release, err := ri.Acquire()
 	require.NoError(t, err)
 	defer release()
-	_, err = svc.RawSymlinkForTest(context.Background(), svc.UpstreamBranch(),
+	_, err = storetest.RawSymlink(context.Background(), svc, svc.UpstreamBranch(),
 		fact.SkillsDir+"/"+name+"/"+file, target, "symlink "+name+"/"+file)
+
 	require.NoError(t, err)
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -47,7 +48,7 @@ func TestFleetJudgeOwn_TheHubRefusesItsOwnInvalidRecordBeforeMainMoves(t *testin
 	var badCommit string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		// Past the store's write cores, which refuse it at the source.
-		h, err := svc.TestingCommitFiles(ri.AgentBranch(), map[string]string{bad: notPolicy}, "a bad note")
+		h, err := storetest.CommitFiles(svc, ri.AgentBranch(), map[string]string{bad: notPolicy}, "a bad note")
 		require.NoError(t, err)
 		badCommit = h
 		// A legitimate write after it, which the way out must keep.
@@ -112,7 +113,7 @@ func TestFleetJudgeOwn_AForgeMasterRefusesItsOwnInvalidWritesBeforePublishing(t 
 
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
 		// Past the store's write cores, which refuse it at the source.
-		_, err := svc.TestingCommitFiles(f.mri.AgentBranch(), map[string]string{"kb/members/master/note.md": notPolicy}, "a bad note")
+		_, err := storetest.CommitFiles(svc, f.mri.AgentBranch(), map[string]string{"kb/members/master/note.md": notPolicy}, "a bad note")
 		require.NoError(t, err)
 	}))
 	roundOnPush(t, f.mri, f.master.fleetPushed)
@@ -157,7 +158,7 @@ func TestFleetJudgeOwn_TheFetchJudgeRefusesAMemberInvalidFact(t *testing.T) {
 
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
 		// Past the store's write cores, which refuse it at the source.
-		_, err := svc.TestingCommitFiles(ari.AgentBranch(), map[string]string{"kb/members/alpha/note.md": notPolicy}, "a bad note")
+		_, err := storetest.CommitFiles(svc, ari.AgentBranch(), map[string]string{"kb/members/alpha/note.md": notPolicy}, "a bad note")
 		require.NoError(t, err)
 	}))
 	round(t, ari)

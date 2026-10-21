@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // #532's leave duty under the judges (both on, as in production): on a
@@ -78,7 +79,7 @@ func TestFleetJudgeOwn_LeaveAutoRevokeAndRejoinPassTheJudge(t *testing.T) {
 	// main back.
 	mainBefore := f.rev(t, "main")
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
-		_, err := svc.TestingCommitFiles(f.mri.AgentBranch(), map[string]string{"kb/members/master/note.md": notPolicy}, "a bad note")
+		_, err := storetest.CommitFiles(svc, f.mri.AgentBranch(), map[string]string{"kb/members/master/note.md": notPolicy}, "a bad note")
 		require.NoError(t, err)
 	}))
 	roundOnPush(t, f.mri, f.master.fleetPushed)

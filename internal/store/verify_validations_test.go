@@ -145,7 +145,7 @@ func TestValidation_ReceivePackJudgesOnlyWhatACommitAddsOrChanges(t *testing.T) 
 	mine := p.commit(base, nil, "kb/notes/mine.md", note("mine", "e"))
 	// Written past every write path (a commit no rule ran on), as legacy
 	// content arrives: the store's own write would refuse it at the source.
-	_, err := h.svc.TestingCommitFiles("main", map[string]string{"kb/notes/later.md": note("later")}, "later")
+	_, err := h.svc.rh.CommitFilesForTest("main", map[string]string{"kb/notes/later.md": note("later")}, "later")
 	require.NoError(t, err)
 	require.NoError(t, p.repo.Fetch(&gogit.FetchOptions{RemoteName: "origin"}))
 	mainC := p.head()
@@ -284,13 +284,13 @@ func TestValidation_TheHubRefusesAMemberFactThatIsNotPolicy(t *testing.T) {
 	require.Equal(t, ok.Hash, h.ref("agent/rogue"))
 }
 
-// rawBranch is branchWith through TestingCommitFiles: one commit per kv pair,
+// rawBranch is branchWith through CommitFilesForTest: one commit per kv pair,
 // past the store's write cores (and so past validateWrite).
 func (h *pushHost) rawBranch(branch, from string, kv ...string) plumbing.Hash {
 	h.t.Helper()
 	require.NoError(h.t, h.svc.Branches().CreateBranch(context.Background(), branch, from))
 	for i := 0; i+1 < len(kv); i += 2 {
-		_, err := h.svc.TestingCommitFiles(branch, map[string]string{kv[i]: kv[i+1]}, "write "+kv[i])
+		_, err := h.svc.rh.CommitFilesForTest(branch, map[string]string{kv[i]: kv[i+1]}, "write "+kv[i])
 		require.NoError(h.t, err)
 	}
 	return h.ref(branch)

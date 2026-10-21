@@ -18,6 +18,12 @@ var forbidden = []string{
 	// it calls refuses to work outside a test binary anyway; this keeps the
 	// package itself out of every shipped binary too.
 	"knomit/internal/testsupport/testsigner",
+	// The test doors into a *store.Service (corrupt an object, plant a ref,
+	// commit without the index, backdate an experiment). Its init panics outside
+	// a test binary; this keeps the package itself out of every shipped binary
+	// too, and TestTestSeamsNotReachedFromProduction keeps production source
+	// from importing it.
+	"knomit/internal/store/storetest",
 }
 
 // shippedGroups are the module's real binaries (main packages), grouped by the

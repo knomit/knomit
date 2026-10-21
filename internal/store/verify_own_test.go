@@ -102,7 +102,7 @@ func TestJudgeOwn_TheMastersOwnCommitsAreJudgedBeforeMainMoves(t *testing.T) {
 		{"an invalid member record (not a policy fact)", "boss", func(h *pushHost, _, _ ssh.Signer) {
 			// Past the store's write cores (they refuse it at the source): a
 			// hand edit, or a writer from before this rule.
-			_, err := h.svc.TestingCommitFiles(hostBranch, map[string]string{"kb/members/boss/note.md": "---\ntype: observation\n---\n# note\n\nnot a policy\n"}, "bad")
+			_, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/members/boss/note.md": "---\ntype: observation\n---\n# note\n\nnot a policy\n"}, "bad")
 			require.NoError(h.t, err)
 		}, RuleValidation},
 		{"the host record, main naming it (control)", "boss", func(h *pushHost, _, _ ssh.Signer) {
@@ -173,7 +173,7 @@ func TestJudgeOwn_TheMastersOwnCommitsAreJudgedBeforeMainMoves(t *testing.T) {
 // (and the unsigned host write) holds main -> red.
 func TestJudgeOwn_AKnowledgeBaseMainFollowsUnjudged(t *testing.T) {
 	h := newPushHostWith(t, map[string]string{fact.OntologyFile: validatedOntology(VerifyEnforce)}, 0)
-	_, err := h.svc.TestingCommitFiles(hostBranch, map[string]string{"kb/notes/n.md": note("n")}, "n")
+	_, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/n.md": note("n")}, "n")
 	require.NoError(t, err)
 	tip := h.ref(hostBranch)
 	_, err = h.svc.AdvanceLocalUpstream(context.Background(), hostBranch, "main")

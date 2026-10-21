@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -18,7 +18,7 @@ import (
 // internal/web does: a test that loses power mid-run has lost nothing worth
 // keeping. WAL stays on, so locking behaves as in production. A test of
 // durability itself must turn the switch off for its own duration; see
-// store.SetTestFastDurability.
+// storetest.SetFastDurability.
 //
 // t.Parallel. A top-level test that calls t.Parallel waits until every test
 // that does not has finished, and then runs beside the other parallel ones
@@ -28,7 +28,7 @@ import (
 // (triggerTestHooks), the sync, consensus and recipe-exec hooks, the other
 // package-level seams (swapCopy, hostPlatform, guidanceWarnHook,
 // templatePresetByID, recipeServerAddrWait, experimentSweepIntervalOverride),
-// captureLogs (log.Logger), t.Setenv, SetTestFastDurability and fact's
+// captureLogs (log.Logger), t.Setenv, storetest.SetFastDurability and fact's
 // trigger globals. It also excludes a test whose assertion is a latency or a
 // short positive deadline (the write-latency gates,
 // EmitReachesStreamWithoutDebounce, a 2 s Eventually): those keep the machine
@@ -44,6 +44,6 @@ import (
 func TestMain(m *testing.M) {
 	maybeRunRecipeHelper()
 	testsigner.Install()
-	store.SetTestFastDurability(true)
+	storetest.SetFastDurability(true)
 	os.Exit(m.Run())
 }

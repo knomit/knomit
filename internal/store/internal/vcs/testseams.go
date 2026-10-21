@@ -32,6 +32,37 @@ func mustBeTest() {
 	}
 }
 
+// serviceRepo maps a *store.Service, passed as any because this package cannot
+// import the store, to the *Repo it was built on. The store registers it from
+// its init (RegisterServiceRepo); storetest reads it through
+// ServiceRepoForTest. It is the only way a test outside package store reaches
+// a vcs seam without a Service method or an exported accessor, so the store
+// carries no test-only method and no value of this package's type crosses the
+// internal/ rule in production code.
+var serviceRepo func(svc any) *Repo
+
+// RegisterServiceRepo installs the function ServiceRepoForTest uses. The
+// store calls it once, from its init. A second registration panics: two
+// registrations mean two stores claiming the same hook.
+func RegisterServiceRepo(f func(svc any) *Repo) {
+	if serviceRepo != nil {
+		panic("vcs: RegisterServiceRepo called twice")
+	}
+	serviceRepo = f
+}
+
+// ServiceRepoForTest is the *Repo of svc, which must be the *store.Service the
+// registered function accepts. Test-only by contract: it panics outside a test
+// binary (mustBeTest). It is the getter behind every storetest function that
+// needs the vcs handle.
+func ServiceRepoForTest(svc any) *Repo {
+	mustBeTest()
+	if serviceRepo == nil {
+		panic("vcs: ServiceRepoForTest called before the store registered its Service")
+	}
+	return serviceRepo(svc)
+}
+
 // IsDerivedForTest reports whether hash has derived path-change rows.
 func (rh *Repo) IsDerivedForTest(ctx context.Context, hash string) (bool, error) {
 	mustBeTest()
@@ -142,12 +173,12 @@ func TestFallbackAgentForTest() *func(branch string) string {
 // acceptance gate had advanced it.
 //
 // Test-only by contract: it panics outside a test binary (mustBeTest), so no
-// production path can move a ref behind the store's back. The parent's
-// Service.TestingSetRef is its one-line forward.
+// production path can move a ref behind the store's back. Tests outside the
+// store reach it through storetest.SetRef.
 func (rh *Repo) SetRefForTest(name, hash string) error {
 	mustBeTest()
 	if !plumbing.IsHash(hash) {
-		return fmt.Errorf("TestingSetRef: %q is not a commit hash", hash)
+		return fmt.Errorf("SetRefForTest: %q is not a commit hash", hash)
 	}
 	return rh.Storer().SetReference(plumbing.NewHashReference(plumbing.ReferenceName(name), plumbing.NewHash(hash)))
 }

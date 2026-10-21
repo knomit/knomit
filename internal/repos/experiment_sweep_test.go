@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // TestExperimentSweep_ErrorDoesNotStopTheLoop is the invariant the local
@@ -249,7 +250,7 @@ func TestExperimentSweep_CommitRefreshesActivity(t *testing.T) {
 func backdateExperiment(t *testing.T, ri *RepoInstance, name string, when time.Time) {
 	t.Helper()
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.SetExperimentActivityForTest(context.Background(), name, when))
+		require.NoError(t, storetest.SetExperimentActivity(context.Background(), svc, name, when))
 	}))
 }
 
