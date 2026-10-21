@@ -12,6 +12,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // commitFixture is a real Manager with a mounted repo "alpha" and an applied
@@ -199,7 +200,7 @@ func TestHandleCommit_Disjoint_HappyPathSavesOrigin(t *testing.T) {
 	}
 
 	// Origin persisted, and injected into the swapped-in store.
-	var origin *store.Remote
+	var origin *remotesync.Remote
 	var err error
 	if aerr := ri.WithRead(func(c *store.Service) { origin, err = c.Remote().GetRemote("origin") }); aerr != nil {
 		t.Fatalf("acquire: %v", aerr)

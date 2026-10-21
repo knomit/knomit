@@ -14,6 +14,7 @@ import (
 
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 )
 
 // bareRemoteWith builds a bare remote holding one commit on each of branches
@@ -72,14 +73,14 @@ func TestResolveUpstream_HeadNotMainByName(t *testing.T) {
 		ref, err := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("trunk"))
 		require.NoError(t, err)
 		require.NotEqual(t, plumbing.ZeroHash, ref.Hash())
-		require.Equal(t, "trunk", svc.UpstreamBranch())
+		require.Equal(t, "trunk", svc.Remote().UpstreamBranch())
 	}
 
 	t.Run("clone", func(t *testing.T) {
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
-		up, _, err := svc.InitFromRemote(context.Background(), fileuri.New(bare), nil, "", "agent/test", nil, nil)
+		up, _, err := svc.Remote().InitFromRemote(context.Background(), fileuri.New(bare), nil, "", "agent/test", nil, nil)
 		require.NoError(t, err)
 		assertTrunk(t, svc, up)
 	})
@@ -87,7 +88,7 @@ func TestResolveUpstream_HeadNotMainByName(t *testing.T) {
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
-		up, err := svc.InitSubscription(context.Background(), fileuri.New(bare), nil, "", nil)
+		up, err := svc.Remote().InitSubscription(context.Background(), fileuri.New(bare), nil, "", nil)
 		require.NoError(t, err)
 		assertTrunk(t, svc, up)
 	})
@@ -102,7 +103,7 @@ func TestResolveUpstream_UndecidableIsRefused(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	_, _, err = svc.InitFromRemote(context.Background(), fileuri.New(bare), nil, "", "agent/test", nil, nil)
+	_, _, err = svc.Remote().InitFromRemote(context.Background(), fileuri.New(bare), nil, "", "agent/test", nil, nil)
 	require.ErrorIs(t, err, ErrNoConsensusBranch)
 	require.Contains(t, err.Error(), "trunk", "the refusal lists the candidates")
 }
@@ -117,11 +118,11 @@ func TestNewRepo_DefaultConsensusBranchOnlyWhenUnnamed(t *testing.T) {
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
-		up, wasEmpty, err := svc.InitFromRemote(context.Background(), fileuri.New(bare), nil, "trunk", "agent/test", nil, nil)
+		up, wasEmpty, err := svc.Remote().InitFromRemote(context.Background(), fileuri.New(bare), nil, "trunk", "agent/test", nil, nil)
 		require.NoError(t, err)
 		require.True(t, wasEmpty)
 		require.Equal(t, "trunk", up)
-		require.Equal(t, "trunk", svc.UpstreamBranch())
+		require.Equal(t, "trunk", svc.Remote().UpstreamBranch())
 	})
 	t.Run("empty remote, nothing requested", func(t *testing.T) {
 		bare := t.TempDir()
@@ -129,17 +130,17 @@ func TestNewRepo_DefaultConsensusBranchOnlyWhenUnnamed(t *testing.T) {
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
-		up, _, err := svc.InitFromRemote(context.Background(), fileuri.New(bare), nil, "", "agent/test", nil, nil)
+		up, _, err := svc.Remote().InitFromRemote(context.Background(), fileuri.New(bare), nil, "", "agent/test", nil, nil)
 		require.NoError(t, err)
-		require.Equal(t, DefaultConsensusBranch, up)
+		require.Equal(t, remotesync.DefaultConsensusBranch, up)
 	})
 	t.Run("local create", func(t *testing.T) {
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
 		require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
-		require.Equal(t, DefaultConsensusBranch, svc.UpstreamBranch())
-		require.Equal(t, DefaultConsensusBranch, svc.recordedConsensusBranch())
+		require.Equal(t, remotesync.DefaultConsensusBranch, svc.Remote().UpstreamBranch())
+		require.Equal(t, remotesync.DefaultConsensusBranch, svc.Remote().RecordedConsensusBranch())
 	})
 }
 
@@ -162,7 +163,7 @@ func TestSyncEntries_RefuseAnEmptyConsensusBranch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, cfg.Remotes, "origin", "nothing is configured for a refused branch")
 
-	svc.SetOrigin(&Origin{URL: "https://example.invalid/kb.git"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git"})
 	_, err = svc.Remote().Sync(context.Background(), "agent/test", nil)
 	require.ErrorIs(t, err, ErrNoConsensusBranch)
 }

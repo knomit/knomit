@@ -103,7 +103,7 @@ func (ri *RepoInstance) ConsensusGuidance(ctx context.Context) *ConsensusGuidanc
 }
 
 func (c *guidanceCache) at(ctx context.Context, repo string, svc *store.Service) *ConsensusGuidance {
-	branch := svc.UpstreamBranch()
+	branch := svc.Remote().UpstreamBranch()
 	tr := svc.FactsRepo()
 	tip, err := tr.UpstreamTip(ctx, branch)
 	c.mu.Lock()

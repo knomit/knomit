@@ -46,7 +46,7 @@ func TestFleetRenew_AnUnpublishedRevokeIsNotUndoneByARenewal(t *testing.T) {
 	var revokedOnMain bool
 	var serialOnMain string
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
-		fl, err := svc.FleetAt(svc.UpstreamBranch())
+		fl, err := svc.FleetAt(svc.Remote().UpstreamBranch())
 		require.NoError(t, err)
 		revokedOnMain = fl.PKI.Revoked("alpha")
 		c, _ := fl.PKI.Cert("alpha")
@@ -81,7 +81,7 @@ func TestFleetRenew_ALeaveOnTheAgentBranchIsNotRenewedBeforeMain(t *testing.T) {
 		var s string
 		require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
 			if branch == "" {
-				branch = svc.UpstreamBranch()
+				branch = svc.Remote().UpstreamBranch()
 			}
 			fl, err := svc.FleetAt(branch)
 			require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestFleetRenew_ALeaveOnTheAgentBranchIsNotRenewedBeforeMain(t *testing.T) {
 	var revokedOnMain bool
 	var serialOnMain, state string
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
-		fl, err := svc.FleetAt(svc.UpstreamBranch())
+		fl, err := svc.FleetAt(svc.Remote().UpstreamBranch())
 		require.NoError(t, err)
 		revokedOnMain = fl.PKI.Revoked("alpha")
 		c, _ := fl.PKI.Cert("alpha")

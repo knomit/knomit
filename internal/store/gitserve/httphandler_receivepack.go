@@ -473,7 +473,7 @@ func (rp *receivePack) register(ctx context.Context, cmd *packp.Command, objs []
 // the fleet repository, where a held commit ends it only when it is reachable
 // from the consensus branch or from a local refs/heads/agent/* branch. Those
 // refs are admitted by construction: receive-pack's register and the fleet
-// master's PromotePeer create them only after the judge, and this host's own
+// master's AdmitPeerBranch (remotesync.Index) create them only after the judge, and this host's own
 // agent branch is written only by this host. Remote-tracking refs are not
 // admitted: a fetch stores whatever the origin had.
 //

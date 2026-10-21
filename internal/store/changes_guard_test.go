@@ -33,7 +33,7 @@ var changesAllowedCalls = map[string][]string{
 		"append", "len", "make",
 	},
 	"../mcp/changes.go": {
-		"repos.RequireBinding", "b.Write", "?.Acquire", "release", "svc.UpstreamBranch", "svc.Facts", "?.ChangesUnder",
+		"repos.RequireBinding", "b.Write", "?.Acquire", "release", "svc.Remote", "remote.UpstreamBranch", "svc.Facts", "?.ChangesUnder",
 		"store.DecodeChangesCursor", "store.EncodeChangesCursor",
 		"req.GetInt", "req.GetString", "req.GetBool", "context.WithTimeout", "cancel",
 		"mcpgo.NewTool", "mcpgo.WithDescription", "mcpgo.WithString", "mcpgo.WithNumber", "mcpgo.WithBoolean",

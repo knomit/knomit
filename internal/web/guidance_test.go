@@ -29,7 +29,7 @@ func TestGuidance_RESTCannotWriteGuidance(t *testing.T) {
 			rem, err := svc.Remote().GetRemote("origin")
 			require.NoError(t, err)
 			require.Nil(t, rem, "the case under test is a repo with no origin")
-			_, err = svc.AdvanceLocalUpstream(ctx, ri.AgentBranch(), svc.UpstreamBranch())
+			_, err = svc.Remote().AdvanceLocalUpstream(ctx, ri.AgentBranch(), svc.Remote().UpstreamBranch())
 			require.NoError(t, err)
 		}))
 	}

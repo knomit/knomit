@@ -41,3 +41,19 @@ func (s *Service) OntologyAt(ctx context.Context, branch string) ([]byte, error)
 func (s *Service) OntologyFileAt(ctx context.Context, branch string) (string, []byte, error) {
 	return s.rh.OntologyFileAt(ctx, branch)
 }
+
+// SetReplaySkipPaths names the paths a rewind replay never carries: a
+// non-merge commit of this branch that changes nothing but these paths is
+// dropped from the replay instead of being re-submitted onto the new
+// upstream. The fleet repository sets its master marker
+// (fact.FleetMasterPath): a copy that is not the master on the new upstream
+// never re-submits its own claim to the role, or its stand-down, which the
+// host's judge would refuse for good (user ruling 2026-10-16: the loser
+// drops its own claim). Any other repository sets nothing.
+func (s *Service) SetReplaySkipPaths(paths ...string) {
+	set := map[string]bool{}
+	for _, p := range paths {
+		set[p] = true
+	}
+	s.rh.SetReplaySkip(set)
+}

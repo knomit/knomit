@@ -7,12 +7,13 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/spf13/cobra"
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
+
+	"github.com/spf13/cobra"
 )
 
 func newBridgesCmd() *cobra.Command {
@@ -399,7 +400,7 @@ func branchOrConsensus(svc *store.Service, flag string) (string, error) {
 	if flag != "" {
 		return flag, nil
 	}
-	if b := svc.UpstreamBranch(); b != "" {
+	if b := svc.Remote().UpstreamBranch(); b != "" {
 		return b, nil
 	}
 	return "", fmt.Errorf("--branch not given and the index records no consensus branch: pass --branch")

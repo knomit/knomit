@@ -28,7 +28,7 @@ func TestEnsureLocalUpstream_CreatesMissingMainFromOrigin(t *testing.T) {
 		plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(tip))))
 	require.NoError(t, svc.rh.Storer().RemoveReference(plumbing.NewBranchReferenceName("main")))
 
-	created, err := svc.EnsureLocalUpstream(ctx, "main")
+	created, err := svc.Remote().EnsureLocalUpstream(ctx, "main")
 	require.NoError(t, err)
 	require.True(t, created)
 	got, err := svc.Branches().HeadCommit(ctx, "main")
@@ -39,7 +39,7 @@ func TestEnsureLocalUpstream_CreatesMissingMainFromOrigin(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, fact.Content)
 
-	created, err = svc.EnsureLocalUpstream(ctx, "main")
+	created, err = svc.Remote().EnsureLocalUpstream(ctx, "main")
 	require.NoError(t, err)
 	require.False(t, created, "idempotent")
 }
@@ -54,7 +54,7 @@ func TestEnsureLocalUpstream_NoopWithoutAnOriginRef(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, svc.rh.Storer().RemoveReference(plumbing.NewBranchReferenceName("main")))
 
-	created, err := svc.EnsureLocalUpstream(ctx, "main")
+	created, err := svc.Remote().EnsureLocalUpstream(ctx, "main")
 	require.NoError(t, err)
 	require.False(t, created)
 	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("main"))
@@ -81,7 +81,7 @@ func TestEnsureLocalUpstream_LeavesAnExistingUpstreamAlone(t *testing.T) {
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(agentTip))))
 
-	created, err := svc.EnsureLocalUpstream(ctx, "main")
+	created, err := svc.Remote().EnsureLocalUpstream(ctx, "main")
 	require.NoError(t, err)
 	require.False(t, created)
 	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
@@ -96,7 +96,7 @@ func TestAdvanceLocalUpstream_FastForwardsMainFromAgent(t *testing.T) {
 	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "main", "agent/a"))
 	ctx := context.Background()
 
-	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
+	res, err := svc.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeNoop, res.Mode, "fresh init: tips equal")
 
@@ -105,7 +105,7 @@ func TestAdvanceLocalUpstream_FastForwardsMainFromAgent(t *testing.T) {
 	agentTip, err := svc.Branches().HeadCommit(ctx, "agent/a")
 	require.NoError(t, err)
 
-	res, err = svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
+	res, err = svc.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeFF, res.Mode)
 	require.Equal(t, agentTip, res.NewTip)
@@ -119,7 +119,7 @@ func TestAdvanceLocalUpstream_FastForwardsMainFromAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, got.Content, "x")
 
-	res, err = svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
+	res, err = svc.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeNoop, res.Mode, "idempotent")
 }
@@ -137,7 +137,7 @@ func TestAdvanceLocalUpstream_SkipsWhenMainIsNotAnAncestor(t *testing.T) {
 	mainBefore, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
-	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
+	res, err := svc.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeNoop, res.Mode)
 	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
@@ -163,7 +163,7 @@ func TestAdvanceLocalUpstream_NoopWhenUpstreamIsTheAgentBranch(t *testing.T) {
 	before, err := svc.Branches().HeadCommit(ctx, "agent/a")
 	require.NoError(t, err)
 
-	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "agent/a")
+	res, err := svc.Remote().AdvanceLocalUpstream(ctx, "agent/a", "agent/a")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeNoop, res.Mode)
 	after, err := svc.Branches().HeadCommit(ctx, "agent/a")

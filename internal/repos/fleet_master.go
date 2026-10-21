@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // The master merges (R-merge, round 3): on the fleet repository only the
@@ -256,7 +257,7 @@ func demote(ctx context.Context, svc *store.Service, branch, own string, local p
 	if local.IsZero() {
 		return
 	}
-	dropped, err := svc.DemotePeerBranch(ctx, branch, own, local)
+	dropped, err := svc.Remote().DemotePeerBranch(ctx, branch, own, local)
 	switch {
 	case err != nil:
 		lg.Warn().Err(err).Str("branch", branch).Msg("fleet master: the refused branch could not be demoted; retried next round")
@@ -279,15 +280,15 @@ func localHead(ctx context.Context, svc *store.Service, branch string) plumbing.
 // where every branch's verdict is memoised reads none.
 type lazyMain struct {
 	svc  *store.Service
-	hist *store.MainHistory
+	hist *remotesync.MainHistory
 	err  error
 	done bool
 }
 
-func (l *lazyMain) get(ctx context.Context) (*store.MainHistory, error) {
+func (l *lazyMain) get(ctx context.Context) (*remotesync.MainHistory, error) {
 	if !l.done {
 		l.done = true
-		l.hist, l.err = l.svc.MainHistory(ctx)
+		l.hist, l.err = l.svc.Remote().MainHistory(ctx)
 	}
 	return l.hist, l.err
 }
@@ -313,7 +314,7 @@ func (p *fleetPeers) mayMerge(ctx context.Context, svc *store.Service, branch, o
 		lg.Warn().Err(err).Str("branch", branch).Msg("fleet master: branch not re-judged; not merged this run")
 		return false
 	}
-	reason, err := svc.JudgePeerBranch(ctx, branch, own, tip, h)
+	reason, err := svc.Remote().JudgePeerBranch(ctx, branch, own, tip, h)
 	if err != nil {
 		lg.Warn().Err(err).Str("branch", branch).Msg("fleet master: branch not re-judged; not merged this run")
 		return false
@@ -411,7 +412,7 @@ func (ri *RepoInstance) publishesFleetMain(svc *store.Service) bool {
 	// A forge create whose publish failed (#518): the root, and the marker,
 	// are on the agent branch only; main has never held the root.
 	m := ri.env.m
-	return ri.fleetDoor && ri.IsFleet() && m.holdsFleetRootAt(svc, ri.AgentBranch()) && !m.holdsFleetRootAt(svc, svc.UpstreamBranch())
+	return ri.fleetDoor && ri.IsFleet() && m.holdsFleetRootAt(svc, ri.AgentBranch()) && !m.holdsFleetRootAt(svc, svc.Remote().UpstreamBranch())
 }
 
 // admit judges every fetched member branch whose (tip, main) was not judged
@@ -424,7 +425,7 @@ func (p *fleetPeers) admit(ctx context.Context, svc *store.Service, own string, 
 		lg.Warn().Err(err).Msg("fleet master: list the fetched member branches")
 		return
 	}
-	mainTip, err := svc.Branches().HeadCommit(ctx, svc.UpstreamBranch())
+	mainTip, err := svc.Branches().HeadCommit(ctx, svc.Remote().UpstreamBranch())
 	if err != nil {
 		lg.Warn().Err(err).Msg("fleet master: read main; member branches not judged this round")
 		return
@@ -449,7 +450,7 @@ func (p *fleetPeers) admit(ctx context.Context, svc *store.Service, own string, 
 			return
 		}
 		local := localHead(ctx, svc, branch)
-		reason, err := svc.AdmitPeerBranch(ctx, branch, own, key.tip, h)
+		reason, err := svc.Remote().AdmitPeerBranch(ctx, branch, own, key.tip, h)
 		if err != nil {
 			lg.Warn().Err(err).Str("branch", branch).Msg("fleet master: member branch not judged; retried next round")
 			continue
@@ -484,7 +485,7 @@ func (p *fleetPeers) admit(ctx context.Context, svc *store.Service, own string, 
 // earlier round) failed to publish is published by the next round. A
 // refusal is recorded on the push status row, since PublishUpstream records
 // nothing.
-func (p *fleetPeers) publish(ctx context.Context, svc *store.Service, own string, auth transport.AuthMethod) (store.PushResult, error) {
+func (p *fleetPeers) publish(ctx context.Context, svc *store.Service, own string, auth transport.AuthMethod) (remotesync.PushResult, error) {
 	res, err := publishFleetMainOn(ctx, svc, own, auth)
 	if err != nil && !errors.Is(ctx.Err(), context.Canceled) {
 		if rerr := svc.Remote().RecordPushError("origin", err.Error()); rerr != nil {
@@ -495,7 +496,7 @@ func (p *fleetPeers) publish(ctx context.Context, svc *store.Service, own string
 }
 
 // noteOwnJudge records a refusal of this instance's own commits by the judge
-// that runs before the fleet's main moves (store.ErrOwnCommitRefused: main
+// that runs before the fleet's main moves (remotesync.ErrOwnCommitRefused: main
 // was NOT moved) as the fleet's last error, so GET /fleet last_error shows it
 // rather than a log line only; and, given nil (main moved), clears such a
 // recorded refusal. Any other outcome is not its to record: the callers that
@@ -505,7 +506,7 @@ func (m *Manager) noteOwnJudge(err error) {
 	if db == nil {
 		return
 	}
-	if errors.Is(err, store.ErrOwnCommitRefused) {
+	if errors.Is(err, remotesync.ErrOwnCommitRefused) {
 		if rerr := recordFleetAttempt(db, err, time.Now()); rerr != nil {
 			log.Warn().Err(rerr).Msg("fleet: recording the judge's refusal of this instance's own commit failed")
 		}
@@ -515,7 +516,7 @@ func (m *Manager) noteOwnJudge(err error) {
 		return
 	}
 	row, rerr := readFleetRow(db)
-	if rerr == nil && strings.Contains(row.LastError, store.OwnCommitRefusedText) {
+	if rerr == nil && strings.Contains(row.LastError, remotesync.OwnCommitRefusedText) {
 		_ = recordFleetAttempt(db, nil, time.Now())
 	}
 }
@@ -523,7 +524,7 @@ func (m *Manager) noteOwnJudge(err error) {
 // mainHeldCommit is the commit a recorded own-judge refusal names
 // ("knomit: main was not moved: commit <hash> refused by ..."), or "".
 func mainHeldCommit(lastError string) string {
-	_, rest, ok := strings.Cut(lastError, store.OwnCommitRefusedText+" ")
+	_, rest, ok := strings.Cut(lastError, remotesync.OwnCommitRefusedText+" ")
 	if !ok {
 		return ""
 	}
@@ -541,7 +542,7 @@ type FleetDropResult struct {
 	MergesDropped int    `json:"merges_dropped"`
 	// LeftOut: the commits the confirmed fallback left out (the merge and
 	// every commit its side brought); empty for a plain drop.
-	LeftOut []store.LostCommit `json:"left_out,omitempty"`
+	LeftOut []remotesync.LostCommit `json:"left_out,omitempty"`
 	// Published: main moved (or already was) at the rebuilt branch.
 	// PublishError: why not, when it did not (another refused commit, a
 	// forge that refused the push); the fleet's last_error says it too.
@@ -554,7 +555,7 @@ type FleetDropResult struct {
 // (GET /fleet last_error_main_held). The refused commit stays on the agent
 // branch and every later move of main is refused with it; this rebuilds the
 // fleet repository's agent branch on main without that commit
-// (store.DropUnpublishedCommit: that commit's own changes are gone, except
+// (remotesync.Index.DropUnpublishedCommit: that commit's own changes are gone, except
 // where a later commit on the branch edited the same file; every other
 // unpublished commit, members' merges included, is replayed), then publishes
 // main. Only a non-merge commit main does not hold can be dropped (409
@@ -571,7 +572,7 @@ func (m *Manager) DropFleetCommit(ctx context.Context, commit string) (FleetDrop
 // with merge_commit or foreign_commit and the member who could fix the
 // content cannot (it has left, or is gone for good). The merge that brought
 // commit in (or commit itself, when it is that merge) is left out WHOLE,
-// with every commit its side brought (store.DropUnpublishedCommitLeavingOutMerges);
+// with every commit its side brought (remotesync.Index.DropUnpublishedCommitLeavingOutMerges);
 // the rest of the branch is replayed and main is published. confirmed is the
 // list of commit hashes the operator was shown (the refusal's leave_out) and
 // confirmed: when what would be left out differs now, nothing changes (409
@@ -600,29 +601,29 @@ func (m *Manager) dropFleetCommit(ctx context.Context, commit string, leaveOut b
 			return
 		}
 		if leaveOut {
-			out.Replayed, out.LeftOut, derr = svc.DropUnpublishedCommitLeavingOutMerges(ctx, ri.AgentBranch(), plumbing.NewHash(commit), confirmed)
+			out.Replayed, out.LeftOut, derr = svc.Remote().DropUnpublishedCommitLeavingOutMerges(ctx, ri.AgentBranch(), plumbing.NewHash(commit), confirmed)
 			return
 		}
-		out.Replayed, out.MergesDropped, derr = svc.DropUnpublishedCommit(ctx, ri.AgentBranch(), plumbing.NewHash(commit), true)
+		out.Replayed, out.MergesDropped, derr = svc.Remote().DropUnpublishedCommit(ctx, ri.AgentBranch(), plumbing.NewHash(commit), true)
 	}); err != nil {
 		return FleetDropResult{}, err
 	}
-	if errors.Is(derr, store.ErrNotUnpublished) {
+	if errors.Is(derr, remotesync.ErrNotUnpublished) {
 		return FleetDropResult{}, fleetErr(http.StatusConflict, "not_unpublished", "commit "+commit+" is not on this instance's fleet branch, or the fleet's main already holds it: there is nothing to drop")
 	}
-	var merge *store.DropMergeError
+	var merge *remotesync.DropMergeError
 	if errors.As(derr, &merge) {
 		fe := fleetErr(http.StatusUnprocessableEntity, "merge_commit", "commit "+commit+" is a merge: it brings in another branch's commits and cannot be dropped as one; nothing was changed. Drop the commit that wrote the refused content, the one the Fleet page's notice names, or leave this whole merge out, which loses every commit listed with this answer")
 		fe.LeaveOut = merge.LeaveOut
 		return FleetDropResult{}, fe
 	}
-	var foreign *store.DropForeignError
+	var foreign *remotesync.DropForeignError
 	if errors.As(derr, &foreign) {
 		fe := fleetErr(http.StatusConflict, "foreign_commit", "commit "+commit+" came in with a merge of agent "+foreign.Agent+"'s branch, and dropping it would re-sign that agent's other commits, which the fleet refuses; nothing was changed. Ask "+foreign.Agent+" to fix the content on its branch, or, if it cannot (it has left, or is gone for good), leave the whole merge out, which loses every commit listed with this answer")
 		fe.LeaveOut = foreign.LeaveOut
 		return FleetDropResult{}, fe
 	}
-	var changed *store.LeaveOutChangedError
+	var changed *remotesync.LeaveOutChangedError
 	if errors.As(derr, &changed) {
 		fe := fleetErr(http.StatusConflict, "leave_out_changed", "the fleet branch has moved since the list was shown: leaving the merge out would now lose the commits listed with this answer; nothing was changed")
 		fe.LeaveOut = changed.LeaveOut

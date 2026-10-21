@@ -639,7 +639,7 @@ func newGitPeer(t *testing.T, root string, o *gitOrigin, name, agent, signer str
 	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: "kb", Mode: "clone", Origin: &repos.OriginSpec{URL: o.url, Branch: o.branch}}, nil)
 	require.NoError(t, err)
 	n := &missionNode{name: name, m: m, ri: ri, branch: agent, tools: tools}
-	require.Equal(t, o.branch, n.svc(t).UpstreamBranch(), "the consensus branch is the origin's")
+	require.Equal(t, o.branch, n.svc(t).Remote().UpstreamBranch(), "the consensus branch is the origin's")
 	n.ri.QuiesceTriggersForTest(t)
 	return n
 }

@@ -262,7 +262,7 @@ func hubPublishes(t *testing.T, hub *fleetNode, p, want string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if err := ri.WithRead(func(s *store.Service) {
-		if _, err := s.AdvanceLocalUpstream(context.Background(), own, s.UpstreamBranch()); err != nil {
+		if _, err := s.Remote().AdvanceLocalUpstream(context.Background(), own, s.Remote().UpstreamBranch()); err != nil {
 			t.Fatal(err)
 		}
 	}); err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -61,7 +62,7 @@ func TestFleetJudgeOwn_TheHubRefusesItsOwnInvalidRecordBeforeMainMoves(t *testin
 	require.Equal(t, mainBefore, localTip(t, ri, "main"), "main did not move")
 	st, err := m.FleetStatus(ctx)
 	require.NoError(t, err)
-	require.Contains(t, st.LastError, store.OwnCommitRefusedText)
+	require.Contains(t, st.LastError, remotesync.OwnCommitRefusedText)
 	require.Contains(t, st.LastError, `"members-are-policy"`)
 	require.False(t, st.LastErrorCommitRefused, "not a host refusing this copy's push: the member's leave/revoke advice does not apply")
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
@@ -122,11 +123,11 @@ func TestFleetJudgeOwn_AForgeMasterRefusesItsOwnInvalidWritesBeforePublishing(t 
 	st, err := f.master.FleetStatus(ctx)
 	require.NoError(t, err)
 	require.Contains(t, st.LastError, `"members-are-policy"`)
-	require.Contains(t, st.LastError, store.OwnCommitRefusedText)
+	require.Contains(t, st.LastError, remotesync.OwnCommitRefusedText)
 
 	other := fact.RenderFleetMaster("other")
 	err = f.master.publishMarkerChange(ctx, f.mri, &other, "forged")
-	require.ErrorIs(t, err, store.ErrOwnCommitRefused)
+	require.ErrorIs(t, err, remotesync.ErrOwnCommitRefused)
 	require.Contains(t, err.Error(), "host-record")
 	require.Equal(t, mainBefore, f.rev(t, "main"), "the forge's main still names the master")
 }

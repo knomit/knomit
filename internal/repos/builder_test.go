@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // TestReconcileLoop_UnreadableRemoteIsLoggedAndSkipped pins that a GetRemote
@@ -27,7 +28,7 @@ func TestReconcileLoop_UnreadableRemoteIsLoggedAndSkipped(t *testing.T) {
 	// An injected origin is what makes GetRemote read the DB at all — without
 	// one it short-circuits to (nil, nil) and never fails. Then close the DB so
 	// the status-row read returns "database is closed".
-	svc.SetOrigin(&store.Origin{URL: "https://example.test/kb.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.test/kb.git", Branch: "main"})
 	require.NoError(t, svc.Close())
 
 	var buf syncBuf

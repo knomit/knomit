@@ -52,7 +52,7 @@ func hostWithRepo(t *testing.T) (*repos.Manager, *repos.RepoInstance) {
 	require.NoError(t, ri.WithRead(func(s *store.Service) {
 		_, werr := s.Facts().WriteFact(ctx, "agent/host-11111111", "kb/first.md", originFactBody("first"), "first", "")
 		require.NoError(t, werr)
-		_, rerr := s.AdvanceLocalUpstream(ctx, "agent/host-11111111", "main")
+		_, rerr := s.Remote().AdvanceLocalUpstream(ctx, "agent/host-11111111", "main")
 		require.NoError(t, rerr)
 	}))
 	return m, ri

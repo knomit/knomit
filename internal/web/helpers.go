@@ -94,7 +94,7 @@ func assembleAuthToken(authMethod, token, user, password string) string {
 //
 // Branch is the upstream consensus branch on the remote. When omitted, the
 // handler keeps the existing remote's value, else the repo's own recorded
-// consensus branch (store.UpstreamBranch); it never supplies a name of its
+// consensus branch (remotesync.Index.UpstreamBranch); it never supplies a name of its
 // own. Callers that have already discovered the right name (via the
 // connectivity-test flow) should send it explicitly.
 type setOriginRequest struct {

@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -108,7 +109,7 @@ func TestFleetMaster_TwoRootHoldersRaceTheFirstPublishWins(t *testing.T) {
 	// alpha's claim from the main it fetched is not a fast-forward any more:
 	// a lost race, told apart from other push failures (review 3 N3).
 	body := fact.RenderFleetMaster("alpha")
-	require.ErrorIs(t, am.publishMarkerChange(ctx, ari, &body, "claim"), store.ErrUpstreamMoved)
+	require.ErrorIs(t, am.publishMarkerChange(ctx, ari, &body, "claim"), remotesync.ErrUpstreamMoved)
 	am.claimFleetMaster(ctx, ari)
 	require.Equal(t, "master", f.forgeMarker(t), "the first publish wins")
 

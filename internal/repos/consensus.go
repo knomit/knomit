@@ -205,7 +205,7 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 	}
 	defer release()
 
-	upstream := svc.UpstreamBranch()
+	upstream := svc.Remote().UpstreamBranch()
 	// admit, on the fleet repository, re-judges a branch's tip against the
 	// current main before it is merged (fleetPeers.mayMerge): a branch
 	// admitted before main moved (a revocation) may now be refused, and is

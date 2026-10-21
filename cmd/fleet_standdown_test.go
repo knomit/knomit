@@ -311,7 +311,7 @@ func TestFleetMasterSwitch_LegacyReturnedMasterIsDemotedCleanly(t *testing.T) {
 		if _, _, err := s.Facts().BatchWriteFacts(ctx, ri.AgentBranch(), nil, []string{fact.FleetMasterPath}, "a fleet created before the marker", "deleted"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.AdvanceLocalUpstream(ctx, ri.AgentBranch(), s.UpstreamBranch()); err != nil {
+		if _, err := s.Remote().AdvanceLocalUpstream(ctx, ri.AgentBranch(), s.Remote().UpstreamBranch()); err != nil {
 			t.Fatal(err)
 		}
 	}); err != nil {

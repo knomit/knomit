@@ -19,7 +19,7 @@ import (
 // only from its own goroutine.
 //
 //   - refresh reads the setting at the tip of the repo's CONSENSUS branch
-//     (svc.UpstreamBranch(), never a fixed name) — once before the loop's
+//     (svc.Remote().UpstreamBranch(), never a fixed name) — once before the loop's
 //     first round and again before every wait — and publishes the push half
 //     into ri.realtimePush. That atomic is the only thing ri.onCommit reads:
 //     onCommit runs under the writer's branch lock and must never read the
@@ -66,7 +66,7 @@ func newSyncMode(svc *store.Service, repo, agentBranch string, readOnly bool, re
 		pushOK:      pushAllowed(readOnly, agentBranch),
 		realtime:    realtime,
 		read: func(ctx context.Context) ([]byte, string, error) {
-			at := svc.UpstreamBranch()
+			at := svc.Remote().UpstreamBranch()
 			data, err := svc.OntologyAt(ctx, at)
 			return data, at, err
 		},

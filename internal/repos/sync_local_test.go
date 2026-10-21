@@ -14,6 +14,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // A repo with no origin never starts a reconcile loop, so its consensus
@@ -116,7 +117,7 @@ func TestRunLocalReconcileLoop_SkipsTheAdvanceWhileTheRepoHasAnOrigin(t *testing
 	svc := testService(t, ri)
 	ctx := context.Background()
 
-	svc.SetOrigin(&store.Origin{URL: "https://example.invalid/kb.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: "main"})
 	_, err := svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/x.md",
 		adoptFact("agent-only"), "x", "")
 	require.NoError(t, err)

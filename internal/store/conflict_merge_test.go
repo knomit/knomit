@@ -182,7 +182,7 @@ func TestPeerSync_MergeFacts_NonMainConsensus(t *testing.T) {
 	r, base, consensusTip, agentTip := peerFork(t, cmOntology("merge"), "")
 	const agent = "agent/peer-abcd1234"
 
-	res, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
+	res, err := r.svc.Remote().ReconcileNowForTest(context.Background(), agent, "master")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeMerge, res.Agent.Mode)
 
@@ -215,7 +215,7 @@ func TestPeerSync_SettingOnAgentBranchOnly_IsToday(t *testing.T) {
 	r, base, consensusTip, agentTip := peerFork(t, "", cmOntology("merge"))
 	const agent = "agent/peer-abcd1234"
 
-	res, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
+	res, err := r.svc.Remote().ReconcileNowForTest(context.Background(), agent, "master")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeMerge, res.Agent.Mode)
 
@@ -266,7 +266,7 @@ func TestPeerSync_MergeFacts_FallbackAndRetraction(t *testing.T) {
 	r.setOriginTip(consensus)
 	agentBefore := r.tip(agent)
 
-	_, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, consensus)
+	_, err := r.svc.Remote().ReconcileNowForTest(context.Background(), agent, consensus)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 
@@ -302,8 +302,8 @@ func TestPeerSync_MergeFacts_FallbackAndRetraction(t *testing.T) {
 // row says so), and main carries no setting.
 func hostFork(t *testing.T, conflicts string) (*cmRepo, plumbing.Hash) {
 	r := newCMRepo(t)
-	r.svc.SetOrigin(&Origin{URL: "https://example.invalid/kb.git", Branch: "master"})
-	require.Equal(t, "master", r.svc.UpstreamBranch())
+	r.svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: "master"})
+	require.Equal(t, "master", r.svc.Remote().UpstreamBranch())
 	r.write("main", "kb/notes/f.md", cmFact(t, "base", 0.7))
 	r.branch("master", "main")
 	r.write("master", fact.OntologyFile, cmOntology(conflicts))
@@ -498,7 +498,7 @@ func TestPeerSync_Off_RecordsEverySidePick(t *testing.T) {
 	r.write(agent, "x.txt", "agent\n")
 	r.setOriginTip(consensus)
 
-	_, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, consensus)
+	_, err := r.svc.Remote().ReconcileNowForTest(context.Background(), agent, consensus)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	lines := merge.TrailerValues(tip.Message, merge.TrailerConflict)

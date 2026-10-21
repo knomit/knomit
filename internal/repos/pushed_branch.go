@@ -27,7 +27,7 @@ import (
 // and no pushed branches.
 func (ri *RepoInstance) IsPushedBranch(branch string) bool {
 	upstream := ""
-	_ = ri.WithRead(func(svc *store.Service) { upstream = svc.UpstreamBranch() })
+	_ = ri.WithRead(func(svc *store.Service) { upstream = svc.Remote().UpstreamBranch() })
 	return ri.isPushedBranch(branch, upstream)
 }
 

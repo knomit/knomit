@@ -191,7 +191,7 @@ func TestFleetStatus_AnInterruptedMove(t *testing.T) {
 		t.Helper()
 		decided, err := m.ResolveOrigin(ctx, OriginSpec{URL: url})
 		require.NoError(t, err)
-		require.NoError(t, ri.WithRead(func(svc *store.Service) { decided.Branch = svc.UpstreamBranch() }))
+		require.NoError(t, ri.WithRead(func(svc *store.Service) { decided.Branch = svc.Remote().UpstreamBranch() }))
 		_, err = m.Send(ctx, ri, AttachOrigin(decided))
 		require.NoError(t, err)
 	}

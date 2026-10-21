@@ -32,6 +32,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -108,7 +109,7 @@ func serveConsensusGit(t *testing.T, ri *RepoInstance) string {
 
 func (h *cHost) svc(t *testing.T) *store.Service { return testService(t, h.ri) }
 
-func (h *cHost) upstream(t *testing.T) string { return h.svc(t).UpstreamBranch() }
+func (h *cHost) upstream(t *testing.T) string { return h.svc(t).Remote().UpstreamBranch() }
 
 // setOntology commits ont on the agent branch and moves the consensus
 // branch up to it (the host's local reconcile, run by hand).
@@ -123,7 +124,7 @@ func (h *cHost) setOntology(t *testing.T, ont string) {
 func (h *cHost) advance(t *testing.T) {
 	t.Helper()
 	svc := h.svc(t)
-	_, err := svc.AdvanceLocalUpstream(context.Background(), cHostAgent, svc.UpstreamBranch())
+	_, err := svc.Remote().AdvanceLocalUpstream(context.Background(), cHostAgent, svc.Remote().UpstreamBranch())
 	require.NoError(t, err)
 }
 
@@ -352,7 +353,7 @@ func TestConsensus_OriginRepoUnaffected(t *testing.T) {
 	h := newConsensusHost(t, triggerOntology(""), hostOpts{})
 	svc := h.svc(t)
 	const originURL = "https://example.invalid/consensus/kb.git"
-	svc.SetOrigin(&store.Origin{URL: originURL, Branch: "develop"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: originURL, Branch: "develop"})
 	up := h.upstream(t)
 	require.Equal(t, "develop", up)
 	require.NotEqual(t, "main", up, "this test's consensus branch is not main")

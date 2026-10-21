@@ -16,7 +16,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // F21 S2: the `sync: {push, pull}` root attribute.
@@ -120,9 +120,9 @@ func modeFor(t *testing.T, ri *RepoInstance, agent string, n time.Duration) *syn
 func startModeLoop(t *testing.T, ri *RepoInstance, agent, upstream string, mode *syncMode) *countingLoop {
 	t.Helper()
 	svc := testService(t, ri)
-	svc.SetOrigin(&store.Origin{URL: "https://example.invalid/kb.git", Branch: upstream})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: upstream})
 	l := &countingLoop{mode: mode}
-	auth := func(*store.Remote) (transport.AuthMethod, error) {
+	auth := func(*remotesync.Remote) (transport.AuthMethod, error) {
 		n := l.ticks.Add(1)
 		if g, ok := l.gates.Load(n); ok {
 			<-g.(chan struct{})
@@ -156,7 +156,7 @@ func startModeLoop(t *testing.T, ri *RepoInstance, agent, upstream string, mode 
 func startRealModeLoop(t *testing.T, ri *RepoInstance, originRoot string, mode *syncMode) *atomic.Int64 {
 	t.Helper()
 	var ticks atomic.Int64
-	auth := func(*store.Remote) (transport.AuthMethod, error) { ticks.Add(1); return nil, nil }
+	auth := func(*remotesync.Remote) (transport.AuthMethod, error) { ticks.Add(1); return nil, nil }
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -385,7 +385,7 @@ func TestSyncMode_ReadAtConsensusTip(t *testing.T) {
 
 	win, ws := modeSeams(t, false, nil)
 	l := startModeLoop(t, ri, trigAgent, "trunk", modeFor(t, ri, trigAgent, 0))
-	require.Equal(t, "trunk", svc.UpstreamBranch(), "fixture: the consensus branch is trunk")
+	require.Equal(t, "trunk", svc.Remote().UpstreamBranch(), "fixture: the consensus branch is trunk")
 	waitTicks(t, l, 1)
 	waitForWaits(t, ws, 1)
 	write(t, ri, "kb/tasks/a.md")
@@ -502,7 +502,7 @@ func noOriginModeRepo(t *testing.T, push, pull string) *RepoInstance {
 	_, ri := newTriggerRepo(t)
 	setOntology(t, ri, triggerOntology(syncRoot(push, pull)))
 	svc := testService(t, ri)
-	_, err := svc.AdvanceLocalUpstream(context.Background(), trigAgent, svc.UpstreamBranch())
+	_, err := svc.Remote().AdvanceLocalUpstream(context.Background(), trigAgent, svc.Remote().UpstreamBranch())
 	require.NoError(t, err)
 	return ri
 }
@@ -539,7 +539,7 @@ func TestSyncMode_LocalLoop(t *testing.T) {
 	waitOpens(t, win, 1)
 	win.releaseAll()
 	require.Eventually(t, func() bool {
-		m, err := svc.Branches().HeadCommit(context.Background(), svc.UpstreamBranch())
+		m, err := svc.Branches().HeadCommit(context.Background(), svc.Remote().UpstreamBranch())
 		return err == nil && m == h
 	}, 20*time.Second, 10*time.Millisecond, "the woken local round moves the consensus branch to the agent head")
 	require.Equal(t, int64(2), ticks.Load())

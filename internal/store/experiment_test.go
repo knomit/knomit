@@ -574,7 +574,7 @@ func TestReconcile_DoesNotTouchExperiments(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, agentTip, mainBefore, "precondition: there is something to reconcile")
 
-	res, err := svc.AdvanceLocalUpstream(ctx, testAgentBranch, "main")
+	res, err := svc.Remote().AdvanceLocalUpstream(ctx, testAgentBranch, "main")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeFF, res.Mode, "precondition: the tick did real work")
 

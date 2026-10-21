@@ -362,7 +362,7 @@ func newMissionPeer(t *testing.T, url string) *missionNode {
 func (n *missionNode) advance(t *testing.T) {
 	t.Helper()
 	svc := n.svc(t)
-	_, err := svc.AdvanceLocalUpstream(context.Background(), n.branch, svc.UpstreamBranch())
+	_, err := svc.Remote().AdvanceLocalUpstream(context.Background(), n.branch, svc.Remote().UpstreamBranch())
 	require.NoError(t, err)
 }
 
@@ -483,7 +483,7 @@ func branchesOf(t *testing.T, h, p *missionNode) []struct {
 		where  string
 		n      *missionNode
 		branch string
-	}{{"H agent", h, h.branch}, {"H consensus", h, h.svc(t).UpstreamBranch()}, {"P agent", p, p.branch}}
+	}{{"H agent", h, h.branch}, {"H consensus", h, h.svc(t).Remote().UpstreamBranch()}, {"P agent", p, p.branch}}
 }
 
 // historyOf is every commit reachable from any branch the host serves (the

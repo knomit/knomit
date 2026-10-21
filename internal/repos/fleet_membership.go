@@ -25,6 +25,7 @@ import (
 	"knomit/internal/pki"
 	"knomit/internal/platform/privdir"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // Fleet membership (POST /api/v1/fleet/enroll | join | leave | revoke |
@@ -1125,7 +1126,7 @@ func (m *Manager) flushBeforeSwitch(ctx context.Context, ri *RepoInstance) error
 // reachable, and the hub (no origin) needs its next sync round.
 func unpublishedWayOut(perr error, origin bool) string {
 	switch {
-	case errors.Is(perr, store.ErrOwnCommitRefused):
+	case errors.Is(perr, remotesync.ErrOwnCommitRefused):
 		c := mainHeldCommit(perr.Error())
 		if c == "" {
 			return "The fleet's rules refuse a commit on this instance's own branch, so main does not move while it is there and waiting does not help: drop it first (the fleet page's \"Drop commit\" card), then try again"
@@ -1153,7 +1154,7 @@ func (m *Manager) fleetBranchPublished(ctx context.Context, ri *RepoInstance) (b
 			rerr = err
 			return
 		}
-		main, err := svc.Branches().HeadCommit(ctx, svc.UpstreamBranch())
+		main, err := svc.Branches().HeadCommit(ctx, svc.Remote().UpstreamBranch())
 		if err != nil {
 			rerr = err
 			return
@@ -1552,7 +1553,7 @@ func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) (string, er
 	if decided.AuthMethod != "cert" {
 		return m.followForge(ctx, ri, decided, prev)
 	}
-	if err := ri.WithRead(func(svc *store.Service) { decided.Branch = svc.UpstreamBranch() }); err != nil {
+	if err := ri.WithRead(func(svc *store.Service) { decided.Branch = svc.Remote().UpstreamBranch() }); err != nil {
 		return "", err
 	}
 	if _, err = m.Send(ctx, ri, AttachOrigin(decided)); err != nil {
@@ -1588,7 +1589,7 @@ func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o
 		return "", fleetErr(http.StatusConflict, "not_this_fleet",
 			credentialFree(o.URL)+" now answers as an instance of this fleet, not as a forge, and takes no credential. Point this copy at it (Fleet → Settings → Point at the new host)")
 	}
-	if err := ri.WithRead(func(svc *store.Service) { decided.Branch = svc.UpstreamBranch() }); err != nil {
+	if err := ri.WithRead(func(svc *store.Service) { decided.Branch = svc.Remote().UpstreamBranch() }); err != nil {
 		return "", err
 	}
 	if err := m.probeFleetForge(ctx, decided); err != nil {

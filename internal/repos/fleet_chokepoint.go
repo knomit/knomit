@@ -70,7 +70,7 @@ func (m *Manager) isFleetMaster(svc *store.Service) bool {
 	if svc == nil || !m.holdsFleetRoot(svc) {
 		return false
 	}
-	named, err := fleetMasterOn(svc, svc.UpstreamBranch())
+	named, err := fleetMasterOn(svc, svc.Remote().UpstreamBranch())
 	return err == nil && named != "" && named == m.AgentID()
 }
 
@@ -86,7 +86,7 @@ func (m *Manager) holdsFleetRoot(svc *store.Service) bool {
 	if svc == nil {
 		return false
 	}
-	return m.holdsFleetRootAt(svc, svc.UpstreamBranch())
+	return m.holdsFleetRootAt(svc, svc.Remote().UpstreamBranch())
 }
 
 // fleetMasterOn is the agent id the master marker at branch names, "" when

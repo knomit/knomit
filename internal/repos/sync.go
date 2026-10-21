@@ -13,6 +13,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/store"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 )
 
 // remoteAuthFn returns a transport.AuthMethod for the given remote record, or
@@ -26,7 +27,7 @@ import (
 // must treat that tick as a sync FAILURE and surface it, rather than silently
 // downgrading to anonymous (which would mask a broken credential against a
 // remote that happens to permit anonymous access).
-type remoteAuthFn func(remote *store.Remote) (transport.AuthMethod, error)
+type remoteAuthFn func(remote *remotesync.Remote) (transport.AuthMethod, error)
 
 // pushWakeWindow is the D-window ruling (F07 PR 4, user, 2026-09-28): a push
 // fire opens a countdown of this length, and when it ends ONE sync round runs
@@ -85,7 +86,7 @@ func syncNow() time.Time {
 // loopInterval is the origin loop's normal wait: min(interval, push_interval)
 // from the remote record, 300 s when that is not positive. It is also the
 // breakers' base: an open breaker skips its step for 2× this, doubling.
-func loopInterval(r *store.Remote) time.Duration {
+func loopInterval(r *remotesync.Remote) time.Duration {
 	interval := r.Interval
 	if r.PushInterval > 0 && r.PushInterval < interval {
 		interval = r.PushInterval
@@ -130,7 +131,7 @@ func awaitPushWindow(ctx context.Context, wake <-chan struct{}) bool {
 // makeRemoteAuthFn builds a remoteAuthFn that resolves auth from a remote
 // record using the given fallback config and key path.
 func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remoteAuthFn {
-	return func(remote *store.Remote) (transport.AuthMethod, error) {
+	return func(remote *remotesync.Remote) (transport.AuthMethod, error) {
 		authCfg := remoteAuthFromRecord(remote, fallbackAuth)
 		// The URL go-git uses is the derived .git/config; this resolves the
 		// credential and refuses a URL stored with the fleet transport's
@@ -190,7 +191,7 @@ func tickAbandoned(ctx context.Context, err error) bool {
 		errors.Is(err, context.Canceled)
 }
 
-func syncChanged(result store.SyncResult) bool {
+func syncChanged(result remotesync.SyncResult) bool {
 	moved := func(m merge.Mode) bool { return m != merge.ModeNoop && m != "" }
 	return moved(result.Main.Mode) || moved(result.Agent.Mode)
 }
@@ -212,7 +213,7 @@ func syncChanged(result store.SyncResult) bool {
 // The edge is read off the PERSISTED status rather than an in-memory failure
 // counter so it survives a server restart, where the counter starts at zero
 // but the recorded status is still "error".
-func shouldBroadcastSyncOK(result store.SyncResult, wasFailing bool) bool {
+func shouldBroadcastSyncOK(result remotesync.SyncResult, wasFailing bool) bool {
 	return syncChanged(result) || wasFailing
 }
 
@@ -519,7 +520,7 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 		// breaker is open).
 		if pushDue {
 			attempt("push")
-			var pushResult store.PushResult
+			var pushResult remotesync.PushResult
 			var err error
 			if h := currentSyncHooks().refusePush; h != nil {
 				err = h(repo)
@@ -531,10 +532,10 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 				// The master publishes main: its agent branch, without force.
 				// A refusal is this round's push error like any other, so the
 				// fleet state machine (onPush) sees it.
-				var mainResult store.PushResult
+				var mainResult remotesync.PushResult
 				if mainResult, err = peers.publish(ctx, svc, agentBranch, auth); err == nil && mainResult.Pushed {
 					pushResult.Pushed = true
-					lg.Info().Str("branch", svc.UpstreamBranch()).Msg("reconcile: fleet master published main")
+					lg.Info().Str("branch", svc.Remote().UpstreamBranch()).Msg("reconcile: fleet master published main")
 				}
 			}
 			if tickAbandoned(ctx, err) {
@@ -594,7 +595,7 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *TaskHub, eve
 		// Re-read remote config every iteration to pick up interval changes.
 		// A read that fails, or finds no remote, skips to the default wait:
 		// the next tick asks again.
-		var remoteForWait store.Remote
+		var remoteForWait remotesync.Remote
 		if fresh, err := svc.Remote().GetRemote("origin"); err != nil {
 			lg.Warn().Err(err).Msg("reconcile loop: remote read failed; skipping to the next tick")
 		} else if fresh == nil {
@@ -682,7 +683,7 @@ func runLocalReconcileLoop(ctx context.Context, svc *store.Service, repo, agentB
 			if before != nil {
 				before(ctx, svc)
 			}
-			_, err := svc.AdvanceLocalUpstream(ctx, agentBranch, svc.UpstreamBranch())
+			_, err := svc.Remote().AdvanceLocalUpstream(ctx, agentBranch, svc.Remote().UpstreamBranch())
 			if after != nil {
 				after(err)
 			}

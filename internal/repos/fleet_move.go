@@ -145,7 +145,7 @@ func (m *Manager) localFleetRoot(ri *RepoInstance) (path string, pem []byte, ups
 			err = errors.New("fleet repository is not open")
 			return
 		}
-		upstream = svc.UpstreamBranch()
+		upstream = svc.Remote().UpstreamBranch()
 		pem, found, err = svc.FileAt(upstream, layout.Root, maxFleetHostSize*4)
 	}); werr != nil {
 		return "", nil, "", werr

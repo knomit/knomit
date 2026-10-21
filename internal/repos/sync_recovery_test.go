@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 )
 
 func TestRemoteStatusIsError(t *testing.T) {
@@ -24,25 +24,25 @@ func TestRemoteStatusIsError(t *testing.T) {
 }
 
 func TestShouldBroadcastSyncOK(t *testing.T) {
-	noop := store.SyncResult{
-		Main:  store.MainReconcileResult{Mode: merge.ModeNoop},
+	noop := remotesync.SyncResult{
+		Main:  remotesync.MainReconcileResult{Mode: merge.ModeNoop},
 		Agent: merge.AgentReconcileResult{Mode: merge.ModeNoop},
 	}
-	mainMoved := store.SyncResult{
-		Main:  store.MainReconcileResult{Mode: merge.ModeFF},
+	mainMoved := remotesync.SyncResult{
+		Main:  remotesync.MainReconcileResult{Mode: merge.ModeFF},
 		Agent: merge.AgentReconcileResult{Mode: merge.ModeNoop},
 	}
-	agentMoved := store.SyncResult{
-		Main:  store.MainReconcileResult{Mode: merge.ModeNoop},
+	agentMoved := remotesync.SyncResult{
+		Main:  remotesync.MainReconcileResult{Mode: merge.ModeNoop},
 		Agent: merge.AgentReconcileResult{Mode: merge.ModeMerge},
 	}
 	// A zero Mode is the "step did not run / nothing to report" shape, which
 	// must be treated exactly like noop rather than as a change.
-	empty := store.SyncResult{}
+	empty := remotesync.SyncResult{}
 
 	cases := []struct {
 		name       string
-		result     store.SyncResult
+		result     remotesync.SyncResult
 		wasFailing bool
 		want       bool
 	}{

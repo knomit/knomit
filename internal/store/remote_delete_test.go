@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/remotesync"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +28,7 @@ func TestDeleteRemote_RemovesStatusRowGitRemoteAndIsIdempotent(t *testing.T) {
 
 	// A configured origin, as control.db injects it, plus the git remote and a
 	// status row the first (failed) sync would have left behind.
-	svc.SetOrigin(&Origin{URL: "https://example.com/repo.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.com/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.com/repo.git", "main", "agent/test"))
 	require.NoError(t, svc.Remote().RecordSyncError("origin", "boom"))
 
@@ -62,7 +64,7 @@ func TestDeleteRemote_RemovesStatusRowGitRemoteAndIsIdempotent(t *testing.T) {
 
 	// Clearing the injected origin is control.db's half; together they leave the
 	// repo with no origin at all.
-	svc.SetOrigin(nil)
+	svc.Remote().SetOrigin(nil)
 	got, err = svc.Remote().GetRemote("origin")
 	require.NoError(t, err)
 	require.Nil(t, got)

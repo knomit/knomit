@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/remotesync"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/storage/memory"
@@ -66,8 +68,8 @@ func TestGitHandler_AdvertisedHeadFollowsConfiguredUpstream(t *testing.T) {
 	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "master", "agent/host-1"))
 	// Connection identity — including the consensus branch name — is INJECTED
 	// from control.db, not read out of the repo's own tables.
-	svc.SetOrigin(&Origin{URL: "https://example.invalid/kb.git", Branch: "master"})
-	require.Equal(t, "master", svc.UpstreamBranch())
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: "master"})
+	require.Equal(t, "master", svc.Remote().UpstreamBranch())
 
 	srv := httptest.NewServer(svc.Handler())
 	defer srv.Close()
@@ -94,8 +96,8 @@ func headlessServed(t *testing.T) (*httptest.Server, plumbing.Hash) {
 	agentTip, err := svc.Branches().HeadCommit(ctx, "agent/host-1")
 	require.NoError(t, err)
 
-	svc.SetOrigin(&Origin{URL: "https://example.invalid/kb.git", Branch: "master"})
-	require.Equal(t, "master", svc.UpstreamBranch())
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: "master"})
+	require.Equal(t, "master", svc.Remote().UpstreamBranch())
 	_, err = svc.Branches().HeadCommit(ctx, "master")
 	require.Error(t, err, "the fixture must really lack the configured consensus branch")
 
@@ -150,7 +152,7 @@ func TestService_UpstreamBranch_DefaultsToMainWithoutOrigin(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
-	require.Equal(t, "main", svc.UpstreamBranch())
+	require.Equal(t, "main", svc.Remote().UpstreamBranch())
 }
 
 // TestGitHandler_DoesNotAdvertiseExperiments: an experiment is local-only and

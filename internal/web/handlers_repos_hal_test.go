@@ -14,6 +14,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/web/hal"
 )
 
@@ -39,10 +40,10 @@ func newTestManagerWithRepos(t *testing.T, names ...string) *repos.Manager {
 // the map has no origin (nil, nil), the GET /origin provider's own "none".
 type perRepoOriginProvider struct {
 	stubOriginProvider
-	byName map[string]*store.Remote
+	byName map[string]*remotesync.Remote
 }
 
-func (p *perRepoOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*store.Remote, error) {
+func (p *perRepoOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*remotesync.Remote, error) {
 	return p.byName[ri.Name()], nil
 }
 
@@ -57,7 +58,7 @@ func (p *perRepoOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInsta
 // red; read last_status into both fields → alpha's push is "ok" → red.
 func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
 	ok, bad := "ok", "error"
-	op := &perRepoOriginProvider{byName: map[string]*store.Remote{
+	op := &perRepoOriginProvider{byName: map[string]*remotesync.Remote{
 		"alpha": {Name: "origin", URL: "https://x.test/a.git", LastStatus: &ok, LastPushStatus: &bad},
 		"beta":  {Name: "origin", URL: "https://x.test/b.git", LastStatus: &bad},
 	}}

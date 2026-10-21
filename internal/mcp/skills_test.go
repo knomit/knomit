@@ -15,6 +15,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // F08 PR C: skills served as MCP prompts per binding, and by knomit_skill.
@@ -60,9 +61,9 @@ func newSkillRepo(t *testing.T, m *repos.Manager, name, upstream string) *repos.
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, upstream, "agent/test"))
 	if upstream != "main" {
-		svc.SetOrigin(&store.Origin{URL: "https://example.invalid/" + name + ".git", Branch: upstream})
+		svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/" + name + ".git", Branch: upstream})
 	}
-	require.Equal(t, upstream, svc.UpstreamBranch())
+	require.Equal(t, upstream, svc.Remote().UpstreamBranch())
 	uid := "uid-" + name
 	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
 		UID: uid, Name: name, State: repos.StateActive, Profile: "code", CreatedAt: 1,
@@ -83,7 +84,7 @@ func putFile(t *testing.T, ri *repos.RepoInstance, branch, name, file, content s
 	require.NoError(t, err)
 	defer release()
 	if branch == "" {
-		branch = svc.UpstreamBranch()
+		branch = svc.Remote().UpstreamBranch()
 	}
 	_, err = svc.Facts().WriteFact(context.Background(), branch, fact.SkillsDir+"/"+name+"/"+file, content, "skill "+name, "updated")
 	require.NoError(t, err)

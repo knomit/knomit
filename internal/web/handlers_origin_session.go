@@ -19,6 +19,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/web/hal"
 )
 
@@ -239,11 +240,11 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			sendEvent(map[string]string{"phase": "cloning", "progress": msg})
 		}
 
-		cloneErr := remoteSvc.CloneFrom(gitURL, auth, progressFn)
+		cloneErr := remoteSvc.Remote().CloneFrom(gitURL, auth, progressFn)
 		if cloneErr != nil {
 			remoteSvc.Close()
 			msg := fmt.Sprintf("clone failed: %v", cloneErr)
-			if errors.Is(cloneErr, store.ErrEmptyRemote) {
+			if errors.Is(cloneErr, remotesync.ErrEmptyRemote) {
 				msg = "Remote repository has no branches. Initialize it with at least one branch (e.g. `main` with an initial commit) before connecting."
 			}
 			log.Warn().Err(cloneErr).Str("repo", repo).Str("url", sess.URL).Msg("test connectivity: clone failed")

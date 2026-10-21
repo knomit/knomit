@@ -79,7 +79,7 @@ func switchRevokeProbeAt(t *testing.T, at time.Time, renewOpt ...bool) {
 	var revoked bool
 	var serial string
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
-		fl, err := svc.FleetAt(svc.UpstreamBranch())
+		fl, err := svc.FleetAt(svc.Remote().UpstreamBranch())
 		require.NoError(t, err)
 		revoked = fl.PKI.Revoked("bravo")
 		c, _ := fl.PKI.Cert("bravo")
@@ -217,7 +217,7 @@ func giveUpAfterEarlyExport(t *testing.T, how string, renew bool) {
 	var revoked bool
 	var serial string
 	require.NoError(t, ari.WithRead(func(svc *store.Service) {
-		fl, err := svc.FleetAt(svc.UpstreamBranch())
+		fl, err := svc.FleetAt(svc.Remote().UpstreamBranch())
 		require.NoError(t, err)
 		revoked = fl.PKI.Revoked("bravo")
 		c, _ := fl.PKI.Cert("bravo")

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // A disjoint-history connect swaps the store, and with it the repo's root
@@ -63,7 +64,7 @@ func TestSwapStore_FailedSwapKeepsTheInjectedOrigin(t *testing.T) {
 	const originURL = "https://origin.test/kb.git"
 	require.NoError(t, m.Origins().Set(ri.UID(), Origin{URL: originURL, Branch: "main"}))
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		svc.SetOrigin(&store.Origin{URL: originURL, Branch: "main"})
+		svc.Remote().SetOrigin(&remotesync.Origin{URL: originURL, Branch: "main"})
 	}))
 	idBefore := ri.ID()
 
@@ -75,7 +76,7 @@ func TestSwapStore_FailedSwapKeepsTheInjectedOrigin(t *testing.T) {
 	require.ErrorContains(t, err, "swap failed")
 	require.Equal(t, "ready", ri.Status().Stage, "the walk ran after the failed apply")
 
-	var remote *store.Remote
+	var remote *remotesync.Remote
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		remote, _ = svc.Remote().GetRemote("origin")
 	}))

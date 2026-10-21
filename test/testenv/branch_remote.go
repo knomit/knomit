@@ -5,20 +5,21 @@ import (
 
 	"knomit/internal/store"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 )
 
 // Push pushes this branch to the repo's configured origin remote. Returns
-// the store.PushResult so tests can inspect whether the push was forced, a
+// the remotesync.PushResult so tests can inspect whether the push was forced, a
 // no-op, etc. Fails the test on a Push error. Auto-verifies the repo after
 // the push.
 //
 // The repo must be Connect()ed to a RemoteHandle first. If no origin is
 // configured, the production Push returns PushResult{} with no error
 // (treating it as a no-op) — this matches the normal "no remote" test case.
-func (b *BranchHandle) Push() store.PushResult {
+func (b *BranchHandle) Push() remotesync.PushResult {
 	t := b.repo.sb.t
 	t.Helper()
-	var result store.PushResult
+	var result remotesync.PushResult
 	var pushErr error
 	b.repo.ri.WithRead(func(svc *store.Service) {
 		result, pushErr = svc.Remote().Push(context.Background(), b.name, nil)
@@ -33,17 +34,17 @@ func (b *BranchHandle) Push() store.PushResult {
 }
 
 // Sync runs one reconcile cycle (fetch + reconcileMain + reconcileAgent)
-// using the production Sync code path. Returns the store.SyncResult so
+// using the production Sync code path. Returns the remotesync.SyncResult so
 // tests can inspect Main / Agent outcomes. Fails the test on a Sync error.
 // Auto-verifies the repo after the sync.
 //
 // After Sync, the branch's snapshot stack captures the new HEAD via
 // pushSnapshot so subsequent At/AtIndex/AtName work consistently with
 // other mutation methods.
-func (b *BranchHandle) Sync() store.SyncResult {
+func (b *BranchHandle) Sync() remotesync.SyncResult {
 	t := b.repo.sb.t
 	t.Helper()
-	var result store.SyncResult
+	var result remotesync.SyncResult
 	var syncErr error
 	b.repo.ri.WithRead(func(svc *store.Service) {
 		result, syncErr = svc.Remote().Sync(context.Background(), b.name, nil)

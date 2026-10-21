@@ -17,6 +17,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/pki"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // FleetError is a refusal of a fleet operation, with the HTTP status and the
@@ -31,7 +32,7 @@ type FleetError struct {
 	// LeaveOut, when set, is what the confirmed fallback of a refused drop
 	// (merge_commit, foreign_commit, leave_out_changed) would lose: the
 	// merge and every commit its side brought.
-	LeaveOut []store.LostCommit
+	LeaveOut []remotesync.LostCommit
 }
 
 func (e *FleetError) Error() string { return e.Code + ": " + e.Msg }
@@ -94,13 +95,13 @@ type FleetStatus struct {
 	// the new host's main lacks). It is also set for a commit that adds or
 	// changes a fact failing the ontology's validations
 	// (store.CommitRefusedByValidation). It is NOT set when the judge of the
-	// master's OWN commits held its main back (store.OwnCommitRefusedText):
+	// master's OWN commits held its main back (remotesync.OwnCommitRefusedText):
 	// that is no host refusing this copy's push, and the leave/revoke advice
 	// the UI shows for one does not apply; last_error says it in full. Read
 	// from the recorded error only, as LastErrorRefused is.
 	LastErrorCommitRefused bool `json:"last_error_commit_refused,omitempty"`
 	// LastErrorMainHeld: LastError is the judge of THIS instance's own
-	// commits holding the fleet's main back (store.OwnCommitRefusedText):
+	// commits holding the fleet's main back (remotesync.OwnCommitRefusedText):
 	// main stays where it is, every later move is refused too while the
 	// commit is on the agent branch, and the way out is POST
 	// /fleet/drop-commit with LastErrorMainHeldCommit. Read from the recorded
@@ -303,7 +304,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
 		LastErrorRefused: strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
 		LastErrorCommitRefused: (strings.Contains(row.LastError, store.CommitRefusedByJudge) || strings.Contains(row.LastError, store.CommitRefusedByValidation)) &&
-			!strings.Contains(row.LastError, store.OwnCommitRefusedText),
+			!strings.Contains(row.LastError, remotesync.OwnCommitRefusedText),
 		LastErrorStoodDown:      strings.Contains(row.LastError, FleetPushRefusalStoodDown),
 		LastErrorMainHeldCommit: mainHeldCommit(row.LastError),
 		Host:                    FleetHostOffer{Listener: m.tlsAddr(), ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...)},
@@ -546,7 +547,7 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 			serr = errors.New("fleet repository is not open")
 			return
 		}
-		since, serr = svc.FleetSince(svc.UpstreamBranch(), paths, maxFleetWalk)
+		since, serr = svc.FleetSince(svc.Remote().UpstreamBranch(), paths, maxFleetWalk)
 	}); err != nil {
 		return nil, err
 	}
@@ -595,7 +596,7 @@ func deriveRevoked(f store.Fleet) {
 
 // fleetAtMain reads the fleet at the fleet repository's consensus branch: the
 // origin's branch, else the one recorded with the repo
-// (store.UpstreamBranch). Never a name assumed for it.
+// (remotesync.Index.UpstreamBranch). Never a name assumed for it.
 func (m *Manager) fleetAtMain(ri *RepoInstance) (store.Fleet, error) {
 	var out store.Fleet
 	var lerr error
@@ -604,7 +605,7 @@ func (m *Manager) fleetAtMain(ri *RepoInstance) (store.Fleet, error) {
 			lerr = errors.New("fleet repository is not open")
 			return
 		}
-		upstream := svc.UpstreamBranch()
+		upstream := svc.Remote().UpstreamBranch()
 		if upstream == "" {
 			lerr = fmt.Errorf("fleet repository: %w", store.ErrNoConsensusBranch)
 			return
@@ -786,7 +787,7 @@ func (m *Manager) ownFleetKeys() []ssh.PublicKey {
 		if svc == nil {
 			return
 		}
-		if upstream := svc.UpstreamBranch(); upstream != "" {
+		if upstream := svc.Remote().UpstreamBranch(); upstream != "" {
 			keys, _ = svc.FleetKeysOf(upstream, m.AgentID())
 		}
 	})

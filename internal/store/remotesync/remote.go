@@ -17,7 +17,7 @@ import (
 type Index struct {
 	rh *Repo
 
-	// originMu guards origin. Service.SetOrigin re-points a running repo's
+	// originMu guards origin. Index.SetOrigin re-points a running repo's
 	// origin (the HAL PUT/DELETE handlers do this on a live repo) while
 	// runReconcileLoop's background goroutine concurrently calls GetRemote —
 	// without a lock those are a bare read/write race on the same field.
@@ -54,11 +54,27 @@ func (ri *Index) cachedConsensus() string {
 	return ri.consensus
 }
 
-// SetOrigin stores the injected origin under a write lock. See originMu.
+// SetOrigin supplies the repo's remote connection from control.db. A nil
+// origin means this repo has none, which GetRemote reports as (nil, nil) — the
+// contract every sync path branches on. Must be called before OpenRepo so
+// rehydrateUpstreamMain and the fetch refspec see it.
+//
+// Safe to call on a running repo: the origin HAL handlers re-point a live
+// repo's origin while the background reconcile loop concurrently calls
+// GetRemote, so the write goes through originMu rather than a bare field
+// assignment.
+//
+// A non-nil origin with a branch also RECORDS that branch as the repo's
+// consensus branch (consensus_branch.go), after the origin is stored, so
+// removing the origin later (SetOrigin(nil)) leaves the repo on the branch it
+// had, never on a default.
 func (ri *Index) SetOrigin(o *Origin) {
 	ri.originMu.Lock()
 	ri.origin = o
 	ri.originMu.Unlock()
+	if o != nil && o.Branch != "" {
+		ri.RecordConsensusBranch(o.Branch)
+	}
 }
 
 // getOrigin reads the injected origin under a read lock. See originMu.
@@ -73,7 +89,7 @@ func (ri *Index) getOrigin() *Origin {
 // re-cloned from a record that outlives it. AuthToken is plaintext — the
 // caller holds the Crypt now, and the store holds no Crypt at all.
 //
-// Wired via Service.SetOrigin, the same ambient-configuration idiom as
+// Wired via Index.SetOrigin (svc.Remote().SetOrigin), the same ambient-configuration idiom as
 // SetSigner / SetOntologyRoot.
 type Origin struct {
 	URL        string

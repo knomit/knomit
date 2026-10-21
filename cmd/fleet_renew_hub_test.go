@@ -43,7 +43,7 @@ func TestFleetRenew_HubLeaveOnTheAgentBranchIsNotRenewed(t *testing.T) {
 	}
 	var onMain string
 	_ = ri.WithRead(func(s *store.Service) {
-		onMain = readAt(t, ri, s.UpstreamBranch(), recordPath("bravo"))
+		onMain = readAt(t, ri, s.Remote().UpstreamBranch(), recordPath("bravo"))
 	})
 	if !strings.Contains(onMain, "state: active") {
 		t.Fatalf("fixture: main should still say active: %q", onMain)

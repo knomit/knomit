@@ -13,6 +13,7 @@ import (
 	"knomit/internal/pki"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/web/hal"
 )
 
@@ -40,7 +41,7 @@ var (
 // from the record that outlives it. GetOrigin needs no Manager: the injected
 // origin already makes GetRemote return the control.db-backed record.
 type originProvider interface {
-	GetOrigin(ctx context.Context, ri *repos.RepoInstance) (*store.Remote, error)
+	GetOrigin(ctx context.Context, ri *repos.RepoInstance) (*remotesync.Remote, error)
 	SetOriginUpstream(ctx context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error
 }
 
@@ -110,7 +111,7 @@ func originsOf(m *repos.Manager) (*repos.Origins, error) {
 // returning the real error, and replacing it with the rollback's would hide the
 // reason the write failed. The log line is the only trace of a repo left
 // pointing at a url nothing else records, so it is an Error.
-func restoreRemoteConfig(svc *store.Service, ri *repos.RepoInstance, prev *store.Remote, op string) {
+func restoreRemoteConfig(svc *store.Service, ri *repos.RepoInstance, prev *remotesync.Remote, op string) {
 	var rerr error
 	if prev != nil && prev.URL != "" {
 		rerr = repos.ConfigureGitRemote(svc, prev.URL, prev.AuthMethod, prev.Branch, ri.AgentBranch())
@@ -124,9 +125,9 @@ func restoreRemoteConfig(svc *store.Service, ri *repos.RepoInstance, prev *store
 	}
 }
 
-func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*store.Remote, error) {
+func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*remotesync.Remote, error) {
 	var (
-		remote *store.Remote
+		remote *remotesync.Remote
 		err    error
 	)
 	if aerr := ri.WithRead(func(svc *store.Service) {
@@ -176,7 +177,7 @@ func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manag
 			restoreRemoteConfig(svc, ri, existing, "SetOriginUpstream")
 			return
 		}
-		svc.SetOrigin(&store.Origin{
+		svc.Remote().SetOrigin(&remotesync.Origin{
 			URL:        existing.URL,
 			Branch:     branch,
 			AuthMethod: existing.AuthMethod,

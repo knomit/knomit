@@ -17,7 +17,6 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/merge"
-	"knomit/internal/store/remotesync"
 )
 
 // peerForkAgentConfident is the peer-sync shape where the confidence rule and
@@ -41,7 +40,7 @@ func peerForkAgentConfident(t *testing.T, conflicts string) (*cmRepo, *object.Co
 func (r *cmRepo) peerSync() *object.Commit {
 	r.t.Helper()
 	const agent = "agent/peer-abcd1234"
-	_, err := r.svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), agent, "master")
+	_, err := r.svc.Remote().ReconcileNowForTest(context.Background(), agent, "master")
 	require.NoError(r.t, err)
 	return r.tip(agent)
 }

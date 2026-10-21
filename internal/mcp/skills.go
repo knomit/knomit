@@ -28,7 +28,7 @@ import (
 //     a lens is its write repo only (a repo mounted read-only in a lens serves
 //     no skills there), and the unscoped mount has no repo at all.
 //   - WHICH COMMIT: the tip of the repo's consensus branch,
-//     UpstreamTip(svc.UpstreamBranch()) — never the agent branch, never an
+//     UpstreamTip(svc.Remote().UpstreamBranch()) — never the agent branch, never an
 //     experiment, never a branch name spelled here (ruling D2, and the
 //     addendum: "main" means the repo's configured consensus branch). A
 //     session's own unmerged edit therefore changes nothing it is told, and a
@@ -112,7 +112,7 @@ func (src *skillSource) load(ctx context.Context, ri *repos.RepoInstance) (*skil
 }
 
 func (src *skillSource) loadFrom(ctx context.Context, repo string, svc *store.Service) (*skillSet, error) {
-	branch := svc.UpstreamBranch()
+	branch := svc.Remote().UpstreamBranch()
 	tip, err := svc.FactsRepo().UpstreamTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("skills: read %s of repo %s: %w", branch, repo, err)

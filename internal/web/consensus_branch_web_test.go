@@ -109,7 +109,7 @@ func TestDeleteOrigin_StartsTheLocalReconcileLoopAtOnce(t *testing.T) {
 	deleteOrigin(t, s, "mission")
 
 	var consensus string
-	if err := ri.WithRead(func(svc *store.Service) { consensus = svc.UpstreamBranch() }); err != nil {
+	if err := ri.WithRead(func(svc *store.Service) { consensus = svc.Remote().UpstreamBranch() }); err != nil {
 		t.Fatal(err)
 	}
 	if consensus != "trunk" {

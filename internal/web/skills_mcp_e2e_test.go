@@ -40,7 +40,7 @@ func putE2ESkill(t *testing.T, ri *repos.RepoInstance, name, body string) {
 	require.NoError(t, err)
 	defer release()
 	src := fmt.Sprintf("---\nname: %s\ndescription: %s skill\n---\n%s", name, name, body)
-	_, err = svc.Facts().WriteFact(context.Background(), svc.UpstreamBranch(), fact.SkillPath(name), src, "skill", "updated")
+	_, err = svc.Facts().WriteFact(context.Background(), svc.Remote().UpstreamBranch(), fact.SkillPath(name), src, "skill", "updated")
 	require.NoError(t, err)
 }
 

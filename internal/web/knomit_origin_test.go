@@ -54,7 +54,7 @@ func TestKnomitOrigin_SubscribeFollowsPeerMain(t *testing.T) {
 		_, werr := s.Facts().WriteFact(ctx, "agent/a", "kb/first.md",
 			originFactBody("first"), "first", "")
 		require.NoError(t, werr)
-		res, rerr := s.AdvanceLocalUpstream(ctx, "agent/a", "main")
+		res, rerr := s.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 		require.NoError(t, rerr)
 		require.Equal(t, merge.ModeFF, res.Mode)
 	}))
@@ -82,7 +82,7 @@ func TestKnomitOrigin_SubscribeFollowsPeerMain(t *testing.T) {
 		_, werr := s.Facts().WriteFact(ctx, "agent/a", "kb/second.md",
 			originFactBody("second"), "second", "")
 		require.NoError(t, werr)
-		res, rerr := s.AdvanceLocalUpstream(ctx, "agent/a", "main")
+		res, rerr := s.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 		require.NoError(t, rerr)
 		require.Equal(t, merge.ModeFF, res.Mode)
 	}))
@@ -112,7 +112,7 @@ func TestKnomitOrigin_PeerSeesOnlyTheConsensusAndAgentBranches(t *testing.T) {
 		_, werr := s.Facts().WriteFact(ctx, "agent/a", "kb/first.md",
 			originFactBody("first"), "first", "")
 		require.NoError(t, werr)
-		_, rerr := s.AdvanceLocalUpstream(ctx, "agent/a", "main")
+		_, rerr := s.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 		require.NoError(t, rerr)
 	}))
 

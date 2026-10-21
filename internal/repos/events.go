@@ -25,6 +25,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 var (
@@ -390,7 +391,7 @@ func applyAttach(r *RepoInstance, o OriginSpec) error {
 		branch = existing.Branch
 	}
 	if branch == "" {
-		branch = svc.UpstreamBranch()
+		branch = svc.Remote().UpstreamBranch()
 	}
 	if err := ConfigureGitRemote(svc, o.URL, o.AuthMethod, branch, r.agentBranch); err != nil {
 		return err
@@ -410,7 +411,7 @@ func applyAttach(r *RepoInstance, o OriginSpec) error {
 		restoreRemote(svc, r, existing)
 		return err
 	}
-	svc.SetOrigin(&store.Origin{URL: o.URL, Branch: branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: o.URL, Branch: branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken})
 	return nil
 }
 
@@ -438,14 +439,14 @@ func applyDetach(r *RepoInstance) error {
 		restoreRemote(svc, r, existing)
 		return err
 	}
-	svc.SetOrigin(nil)
+	svc.Remote().SetOrigin(nil)
 	return nil
 }
 
 // restoreRemote puts the git remote back the way prev describes it after the
 // control.db write that should have made a change durable failed. A failed
 // restore is logged: the caller is already returning the real error.
-func restoreRemote(svc *store.Service, r *RepoInstance, prev *store.Remote) {
+func restoreRemote(svc *store.Service, r *RepoInstance, prev *remotesync.Remote) {
 	var err error
 	if prev != nil && prev.URL != "" {
 		err = ConfigureGitRemote(svc, prev.URL, prev.AuthMethod, prev.Branch, r.agentBranch)

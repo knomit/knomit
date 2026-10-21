@@ -32,17 +32,17 @@ func wmFixture(t *testing.T) (*Service, string, plumbing.Hash) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	_, _, err = svc.InitFromRemote(context.Background(), fileuri.New(bare), nil, "main", "agent/test", nil, nil)
+	_, _, err = svc.Remote().InitFromRemote(context.Background(), fileuri.New(bare), nil, "main", "agent/test", nil, nil)
 	require.NoError(t, err)
-	svc.SetOrigin(&Origin{URL: fileuri.New(bare), Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: fileuri.New(bare), Branch: "main"})
 	r := mustHeadHash(t, svc, "main")
 	return svc, bare, r
 }
 
 // wmSync runs one Sync and returns its agent result.
-func wmSync(t *testing.T, svc *Service) SyncResult {
+func wmSync(t *testing.T, svc *Service) remotesync.SyncResult {
 	t.Helper()
-	res, err := svc.Remote().(*remotesync.Index).Sync(context.Background(), "agent/test", nil)
+	res, err := svc.Remote().Sync(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 	return res
 }
@@ -50,7 +50,7 @@ func wmSync(t *testing.T, svc *Service) SyncResult {
 // wmPush pushes the agent branch to the bare remote.
 func wmPush(t *testing.T, svc *Service) {
 	t.Helper()
-	_, err := svc.Remote().(*remotesync.Index).Push(context.Background(), "agent/test", nil)
+	_, err := svc.Remote().Push(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 }
 

@@ -75,35 +75,66 @@ func (h *MainHistory) OnMain() map[plumbing.Hash]bool { return h.onMain }
 // Tip is the consensus branch's tip this history was read at.
 func (h *MainHistory) Tip() plumbing.Hash { return h.tip }
 
-// PromotePeer sets refs/heads/<branch> to tip, as receivePack.register does
+// AdmitPeerBranch is where a fetched member branch enters this repository.
+// It judges tip with JudgePeerBranch and, admitted, promotes it.
+//
+// Admitted: refs/heads/<branch> is set to tip as receive-pack's register sets
+// it (a new branch seeded from the consensus branch, then moved; a rewind is
+// allowed, as on a push), through the commit chokepoint, which kicks the
+// consensus merger. Returns "" then. Refused: nothing moves, and the refusal
+// text is returned. err is for what could not be judged at all.
+//
+// main is the consensus branch's history (MainHistory); nil reads it here.
+// The caller decides who may call this (only the fleet's master); the store
+// checks only the branch's shape: an agent/* branch that is neither the
+// consensus branch nor own.
+//
+// The promotion sets refs/heads/<branch> to tip as receivePack.register does
 // for a push, minus the objects (a fetch already stored them) and the
 // old-hash check (nothing advertised a value to compare).
-func (rh *Repo) PromotePeer(ctx context.Context, branch, upstream string, tip plumbing.Hash) error {
+func (ri *Index) AdmitPeerBranch(ctx context.Context, branch, own string, tip plumbing.Hash, main *MainHistory) (refusal string, err error) {
+	refusal, err = ri.JudgePeerBranch(ctx, branch, own, tip, main)
+	if err != nil || refusal != "" {
+		return refusal, err
+	}
+	upstream := ri.UpstreamBranch()
+	rh := ri.rh
 	defer rh.vr.LockBranch(branch)()
 	ctx = context.WithoutCancel(ctx)
 	seeded := false
 	if _, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(branch)); errors.Is(err, plumbing.ErrReferenceNotFound) {
 		if err := rh.vr.CreateBranch(ctx, branch, upstream); err != nil {
-			return fmt.Errorf("AdmitPeerBranch: seed %s: %w", branch, err)
+			return "", fmt.Errorf("AdmitPeerBranch: seed %s: %w", branch, err)
 		}
 		seeded = true
 	} else if err != nil {
-		return fmt.Errorf("AdmitPeerBranch: read %s: %w", branch, err)
+		return "", fmt.Errorf("AdmitPeerBranch: read %s: %w", branch, err)
 	}
 	res, _, err := rh.AdvanceBranchTo(ctx, branch, tip)
 	if err != nil {
-		return fmt.Errorf("AdmitPeerBranch: %w", err)
+		return "", fmt.Errorf("AdmitPeerBranch: %w", err)
 	}
 	if seeded && res.Mode == merge.ModeNoop {
-		return rh.vr.NotifyCommit(ctx, branch, tip)
+		return "", rh.vr.NotifyCommit(ctx, branch, tip)
 	}
-	return nil
+	return "", nil
 }
 
-// ReadMainHistory reads the consensus branch's tip and its history; the
-// contract is Service.MainHistory's. upstream is the consensus branch's name
-// (the Service resolves it and refuses "").
-func (rh *Repo) ReadMainHistory(ctx context.Context, upstream string) (*MainHistory, error) {
+// MainHistory reads the consensus branch's tip and its history. An empty
+// consensus branch is refused with ErrNoConsensusBranch before anything is
+// read, so the read below never resolves a ref named "".
+func (ri *Index) MainHistory(ctx context.Context) (*MainHistory, error) {
+	upstream := ri.UpstreamBranch()
+	if upstream == "" {
+		return nil, fmt.Errorf("MainHistory: %w", vcs.ErrNoConsensusBranch)
+	}
+	return ri.readMainHistory(ctx, upstream)
+}
+
+// readMainHistory is the read MainHistory does once the consensus branch is
+// known to be non-empty; JudgePeerBranch shares it, having refused "" itself.
+func (ri *Index) readMainHistory(ctx context.Context, upstream string) (*MainHistory, error) {
+	rh := ri.rh
 	uh, err := rh.vr.ResolveRef(ctx, upstream)
 	if err != nil {
 		return nil, fmt.Errorf("MainHistory: %s: %w", upstream, err)
@@ -115,12 +146,28 @@ func (rh *Repo) ReadMainHistory(ctx context.Context, upstream string) (*MainHist
 	return NewMainHistory(uh, onMain), nil
 }
 
-// JudgePeerBranch judges a member branch's tip without moving anything; the
-// contract is Service.JudgePeerBranch's. upstream is the consensus branch's
-// name, already resolved and checked non-empty by the Service. The fleet the
-// judge reads is the one at upstream in THIS store (fleetrec.At, which is what
-// Service.FleetAt reads).
-func (rh *Repo) JudgePeerBranch(ctx context.Context, upstream, branch, own string, tip plumbing.Hash, main *MainHistory) (string, error) {
+// JudgePeerBranch judges a member branch's tip without moving anything: the
+// commits of tip ∖ main (EVERY one, not the tip alone), with receive-pack's
+// core: the private-path closure, then judgeIncoming against the fleet at
+// the consensus branch — which, the caller being the fleet repository's
+// master, is this repository itself. There is no pusher, so there is no
+// signer = pusher rule; every other rule (signature, records, rules A/B,
+// artifact rules) is the push's. Returns the refusal text, or "".
+//
+// It is the fetch judge (AdmitPeerBranch) and the master's re-judge of a
+// local agent/* branch when main has moved since it was admitted (the
+// merger's, on both hostings: a revocation on main can turn an admitted,
+// unmerged tip into a refused one).
+//
+// An empty consensus branch is refused with ErrNoConsensusBranch before the
+// shape checks. The fleet the judge reads is the one at the consensus branch
+// in THIS store (fleetrec.At, which is what Service.FleetAt reads).
+func (ri *Index) JudgePeerBranch(ctx context.Context, branch, own string, tip plumbing.Hash, main *MainHistory) (string, error) {
+	upstream := ri.UpstreamBranch()
+	if upstream == "" {
+		return "", fmt.Errorf("JudgePeerBranch: %w", vcs.ErrNoConsensusBranch)
+	}
+	rh := ri.rh
 	switch {
 	case !strings.HasPrefix(branch, "agent/") || branch == upstream || branch == own:
 		return "", fmt.Errorf("JudgePeerBranch: %q is not a member's agent branch", branch)
@@ -129,7 +176,7 @@ func (rh *Repo) JudgePeerBranch(ctx context.Context, upstream, branch, own strin
 	}
 	if main == nil {
 		var err error
-		if main, err = rh.ReadMainHistory(ctx, upstream); err != nil {
+		if main, err = ri.readMainHistory(ctx, upstream); err != nil {
 			return "", err
 		}
 	}
@@ -148,9 +195,19 @@ func (rh *Repo) JudgePeerBranch(ctx context.Context, upstream, branch, own strin
 }
 
 // DemotePeerBranch removes the local refs/heads/<branch> when it is still at
-// tip; the contract is Service.DemotePeerBranch's. upstream is the consensus
-// branch's name as the Service resolved it.
-func (rh *Repo) DemotePeerBranch(ctx context.Context, upstream, branch, own string, tip plumbing.Hash) (bool, error) {
+// tip: the fleet master's answer to a re-judge that refused a branch it had
+// admitted (PR #524 N3), so the merger cannot merge it. A branch that moved
+// meanwhile (a push or a promotion of a newer tip) is left alone, and
+// reported false. Only an agent/* branch other than the consensus branch and
+// own is ever touched. The objects stay; on the fleet repository a held
+// commit no admitted ref reaches is judged again by receive-pack (heldAdmitted).
+//
+// Unlike MainHistory and JudgePeerBranch this does NOT refuse an empty
+// consensus branch: with "" the branch == upstream test can never match, so
+// only the agent/ prefix and own are excluded.
+func (ri *Index) DemotePeerBranch(ctx context.Context, branch, own string, tip plumbing.Hash) (bool, error) {
+	upstream := ri.UpstreamBranch()
+	rh := ri.rh
 	if !strings.HasPrefix(branch, "agent/") || branch == upstream || branch == own {
 		return false, fmt.Errorf("DemotePeerBranch: %q is not a member's agent branch", branch)
 	}

@@ -97,7 +97,7 @@ func (m *Manager) revokeLeftMembers(ctx context.Context, ri *RepoInstance) ([]st
 			rerr = errors.New("fleet repository is not open")
 			return
 		}
-		mainCRL, _, err := svc.FileAt(svc.UpstreamBranch(), f.PKI.Layout.CRL, maxFleetCRLRead)
+		mainCRL, _, err := svc.FileAt(svc.Remote().UpstreamBranch(), f.PKI.Layout.CRL, maxFleetCRLRead)
 		if err != nil {
 			rerr = err
 			return

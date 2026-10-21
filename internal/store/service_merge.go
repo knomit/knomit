@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+
 	"knomit/internal/fact"
 	"knomit/internal/store/merge"
 
@@ -62,7 +63,7 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 // follows) as the consensus side and Refuse for whatever a key set to off
 // leaves.
 func (s *Service) hostConflictStrategy(ctx context.Context, o *merge.MergeOpts) merge.ConflictStrategy {
-	strategy, on := s.rh.ConflictsStrategy(ctx, s.UpstreamBranch())
+	strategy, on := s.rh.ConflictsStrategy(ctx, s.ri.UpstreamBranch())
 	if !on {
 		return merge.StrategyRefuse
 	}

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/remotesync"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // remoteEventLog records the RemoteEvents a repo's hub publishes, and lets a
@@ -166,6 +166,6 @@ func TestRemoteStatusValue(t *testing.T) {
 	require.Equal(t, "", RemoteStatusValue(nil))
 	require.Equal(t, "ok", RemoteStatusValue(&ok))
 	require.Equal(t, "error", RemoteStatusValue(&bad))
-	s, p := RemoteHealth(&store.Remote{LastStatus: &ok})
+	s, p := RemoteHealth(&remotesync.Remote{LastStatus: &ok})
 	require.Equal(t, [2]string{"ok", ""}, [2]string{s, p})
 }

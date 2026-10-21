@@ -422,3 +422,125 @@ func TestStoreMergeCores_GuardDiscriminates(t *testing.T) {
 		}
 	}
 }
+
+var consensusRecordDoor = map[string]bool{"RecordConsensusBranch": true}
+
+// TestStoreConsensusRecord_OnlyInsideStore (PR E5): Service.Remote() hands out
+// *remotesync.Index, and RecordConsensusBranch is exported on it only because
+// package store's InitRepoWithUpstream calls it. It writes the repo's recorded
+// consensus branch, which UpstreamBranch answers (and with it the fleet
+// admission trust root), so a call from any other package would redirect it.
+// This parses every .go file outside internal/store/** (tests included) and
+// fails on any selector of the name; the record is written by SetOrigin and the
+// bootstraps inside the child.
+//
+// Non-vacuity: at least 500 files are walked outside the store; the method is
+// still declared in internal/store/remotesync and still selected by
+// internal/store/repo.go.
+func TestStoreConsensusRecord_OnlyInsideStore(t *testing.T) {
+	const minFiles = 500
+	root := filepath.Join("..", "..")
+	fset := token.NewFileSet()
+	var offenders []string
+	scanned := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch rel {
+			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+				return filepath.SkipDir
+			}
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".go") {
+			return nil
+		}
+		scanned++
+		for _, u := range selectorUses(t, fset, path, nil, consensusRecordDoor) {
+			offenders = append(offenders, rel+" "+u)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < minFiles {
+		t.Fatalf("scanned only %d .go files outside internal/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
+	}
+
+	storeRoot := filepath.Join(root, "internal", "store")
+	declared, calledFromRepo := false, false
+	err = filepath.WalkDir(storeRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if perr != nil {
+			return perr
+		}
+		dir := filepath.ToSlash(filepath.Dir(path))
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncDecl:
+				if dir == filepath.ToSlash(filepath.Join(storeRoot, "remotesync")) && x.Recv != nil && x.Name.Name == "RecordConsensusBranch" {
+					declared = true
+				}
+			case *ast.SelectorExpr:
+				if filepath.Base(path) == "repo.go" && dir == filepath.ToSlash(storeRoot) && x.Sel.Name == "RecordConsensusBranch" {
+					calledFromRepo = true
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !declared {
+		t.Error("internal/store/remotesync no longer declares a method RecordConsensusBranch: it was renamed or moved, so this guard checks nothing")
+	}
+	if !calledFromRepo {
+		t.Error("internal/store/repo.go no longer selects RecordConsensusBranch: the caller moved or was renamed, so this guard's expectations are stale")
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("RecordConsensusBranch rewrites the recorded consensus branch (kb/invariants/store/consensus-branch-recorded/bcde3d66.md), "+
+			"which UpstreamBranch and the fleet admission trust root follow; only internal/store/** may call it:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
+}
+
+// TestStoreConsensusRecord_GuardDiscriminates: a call or method value is
+// flagged whatever the receiver; the reader RecordedConsensusBranch, a
+// declaration, a comment and a string are not.
+func TestStoreConsensusRecord_GuardDiscriminates(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"call through the handle", "package p\nfunc f() { svc.Remote().RecordConsensusBranch(\"x\") }", 1},
+		{"bound handle", "package p\nfunc f() { r.RecordConsensusBranch(\"x\") }", 1},
+		{"method value", "package p\nfunc f() { g := r.RecordConsensusBranch; _ = g }", 1},
+		{"reader", "package p\nfunc f() { r.RecordedConsensusBranch() }", 0},
+		{"declaration", "package p\ntype R struct{}\nfunc (r *R) RecordConsensusBranch(string) {}", 0},
+		{"comment", "package p\n// RecordConsensusBranch persists\nfunc f() {}", 0},
+		{"string", "package p\nvar s = \"r.RecordConsensusBranch()\"", 0},
+	}
+	for _, c := range cases {
+		got := selectorUses(t, token.NewFileSet(), c.name+".go", c.src, consensusRecordDoor)
+		if len(got) != c.want {
+			t.Errorf("%s: %d uses, want %d (%v)", c.name, len(got), c.want, got)
+		}
+	}
+}
