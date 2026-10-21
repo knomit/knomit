@@ -198,20 +198,40 @@ func TestApplyPruneDecisions_MergeSystemFileRefs(t *testing.T) {
 // built by writeGate, so none can be built without the .knomit/ file
 // resolver. A refs.New outside ref_gate.go fails the build here.
 func TestSynthesize_OneRefGateConstructor(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	require.NoError(t, err)
+	// WALKED, not read flat: a child package of synthesize would otherwise sit
+	// outside the scan while the test stayed green. The exemption is keyed by
+	// the slash path relative to this directory, so only the top-level
+	// ref_gate.go is exempt, never a same-named file in a child.
 	ctor := regexp.MustCompile(`\brefs\.New\(`)
 	var hits []string
-	for _, e := range entries {
-		n := e.Name()
-		if !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") || n == "ref_gate.go" {
-			continue
+	scanned := 0
+	require.NoError(t, filepath.WalkDir(".", func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		src, err := os.ReadFile(n)
+		if d.IsDir() {
+			return nil
+		}
+		key := filepath.ToSlash(p)
+		if !strings.HasSuffix(key, ".go") || strings.HasSuffix(key, "_test.go") {
+			return nil
+		}
+		scanned++
+		if key == "ref_gate.go" {
+			return nil
+		}
+		src, err := os.ReadFile(p)
 		require.NoError(t, err)
 		if ctor.Match(src) {
-			hits = append(hits, n)
+			hits = append(hits, key)
 		}
-	}
+		return nil
+	}))
+	// Non-vacuity: the walk read the package, and the one permitted
+	// constructor is still where the exemption says it is.
+	require.Greater(t, scanned, 20, "the guard must actually have walked the package")
+	exempt, err := os.ReadFile("ref_gate.go")
+	require.NoError(t, err)
+	require.Truef(t, ctor.Match(exempt), "ref_gate.go no longer calls refs.New: the exemption key is stale")
 	require.Empty(t, hits, "build synthesize ref gates with writeGate, not refs.New")
 }

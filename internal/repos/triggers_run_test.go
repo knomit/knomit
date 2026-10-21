@@ -250,24 +250,31 @@ func TestScript_NoExecInSandbox(t *testing.T) {
 // internal/repos except the exec file and its OS twins. Sabotage: import
 // os/exec in trigger_script.go (red).
 func TestRecipe_OSExecOnlyInExecFile(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	require.NoError(t, err)
+	// WALKED, not globbed: a child package of internal/repos must not be able
+	// to import os/exec unnoticed. Keys are slash paths relative to this
+	// directory, so a child's file is `dir/file.go` and is never confused with
+	// a top-level file of the same name.
 	fset := token.NewFileSet()
 	var importers []string
 	walked := 0
-	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") {
-			continue
+	require.NoError(t, filepath.WalkDir(".", func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		key := filepath.ToSlash(p)
+		if d.IsDir() || !strings.HasSuffix(key, ".go") || strings.HasSuffix(key, "_test.go") {
+			return nil
 		}
 		walked++
-		af, err := parser.ParseFile(fset, f, nil, parser.ImportsOnly)
-		require.NoError(t, err, f)
+		af, err := parser.ParseFile(fset, p, nil, parser.ImportsOnly)
+		require.NoError(t, err, key)
 		for _, imp := range af.Imports {
 			if imp.Path.Value == `"os/exec"` {
-				importers = append(importers, f)
+				importers = append(importers, key)
 			}
 		}
-	}
+		return nil
+	}))
 	require.Greater(t, walked, 20, "the guard must actually have walked the package")
 	sort.Strings(importers)
 	require.Equal(t, []string{"trigger_recipe_exec.go", "trigger_recipe_exec_unix.go", "trigger_recipe_exec_windows.go"}, importers)
