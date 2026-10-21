@@ -67,6 +67,7 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 	d := Deps{
 		RI:          ri,
 		Facts:       svc.Facts(),
+		Files:       svc.FactsRepo(),
 		Search:      svc.Search(),
 		Pipeline:    svc.Pipeline(),
 		Branches:    svc.Branches(),

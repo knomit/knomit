@@ -620,8 +620,8 @@ func (rh *Repo) UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash
 
 // AncestorSet is every commit reachable from tip, tip included. The
 // dispatcher walks it once per run per distinct tip and reuses it. It uses
-// F09's own history walk (verify_walk.go). Nothing is re-verified here: the gate that advanced main
-// did that, and reachability from main IS acceptance.
+// F09's own history walk (verify_walk.go). Nothing is re-verified here: the
+// gate that advanced main did that, and reachability from main IS acceptance.
 func (rh *Repo) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error) {
 	set := map[plumbing.Hash]bool{}
 	if err := vcs.WalkHistory(rh.vr.Storer(), tip, nil, func(c *object.Commit) { set[c.Hash] = true }); err != nil {
@@ -736,10 +736,8 @@ func (rh *Repo) RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, 
 // RecordTriggerResults is the write of a recipe's LATE result rows (F07
 // PR 5): each row as given, with its own branch and range (copied from the
 // fire that started it), and NO run row — a result is not a dispatcher run.
-// One transaction; the retention prune runs in the same transaction. These are the late
-// result rows of recipes, each with its own branch and range, no run row, and
-// the retention prune in the same transaction (the prune otherwise rides tx2,
-// which a result-only flush does not run).
+// One transaction; the retention prune runs in it too (the prune otherwise
+// rides tx2, which a result-only flush does not run).
 func (rh *Repo) RecordTriggerResults(ctx context.Context, rows []TriggerFire) error {
 	if len(rows) == 0 {
 		return nil
@@ -789,7 +787,7 @@ func boolInt(b bool) int {
 // AdvanceTriggerWatermarks is tx2: upserts set, deletes del (their
 // bookmarks AND their due marks), upserts the due marks (chunked, never
 // capped by TriggerFireRetention), then prunes trigger_fires to the newest
-// TriggerFireRetention rows (tx2).
+// TriggerFireRetention rows.
 func (rh *Repo) AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error {
 	tx, err := rh.vr.DB().BeginTx(ctx, nil)
 	if err != nil {

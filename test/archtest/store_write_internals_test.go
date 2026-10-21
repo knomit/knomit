@@ -31,6 +31,12 @@ func systemTreeDoorAllowed(rel string) bool {
 // `x.WriteSystemTree` (a call or a method value) in the source. A declaration
 // (`func (fi *Index) WriteSystemTree`) and a comment are not selectors.
 func systemTreeDoorUses(t *testing.T, fset *token.FileSet, name string, src any) []string {
+	return selectorUses(t, fset, name, src, map[string]bool{systemTreeDoor: true})
+}
+
+// selectorUses returns one "line N: <name>" string per selector expression
+// `x.<name>` for a name in names.
+func selectorUses(t *testing.T, fset *token.FileSet, name string, src any, names map[string]bool) []string {
 	t.Helper()
 	f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
 	if err != nil {
@@ -38,8 +44,8 @@ func systemTreeDoorUses(t *testing.T, fset *token.FileSet, name string, src any)
 	}
 	var uses []string
 	ast.Inspect(f, func(n ast.Node) bool {
-		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == systemTreeDoor {
-			uses = append(uses, "line "+strconv.Itoa(fset.Position(sel.Sel.Pos()).Line))
+		if sel, ok := n.(*ast.SelectorExpr); ok && names[sel.Sel.Name] {
+			uses = append(uses, "line "+strconv.Itoa(fset.Position(sel.Sel.Pos()).Line)+": "+sel.Sel.Name)
 		}
 		return true
 	})
@@ -127,8 +133,8 @@ func TestStoreSystemTreeDoor_OnlyFromRepos(t *testing.T) {
 }
 
 // TestStoreSystemTreeDoor_GuardDiscriminates runs the detector on inline
-// source: a call, a method value and a chained call are flagged; a declaration,
-// a comment and a string are not.
+// source: a call and a method value are flagged; a declaration, a comment and
+// a string are not. It also checks the allowed-path predicate.
 func TestStoreSystemTreeDoor_GuardDiscriminates(t *testing.T) {
 	cases := []struct {
 		name string
@@ -155,6 +161,121 @@ func TestStoreSystemTreeDoor_GuardDiscriminates(t *testing.T) {
 	} {
 		if systemTreeDoorAllowed(rel) != want {
 			t.Errorf("systemTreeDoorAllowed(%q) = %v, want %v", rel, !want, want)
+		}
+	}
+}
+
+// triggerTableWrites are the facts.Repo methods that write the trigger
+// dispatcher's SQLite tables. They take no branch lock and touch no git
+// object, but nothing except the dispatcher has a reason to call them: a
+// caller elsewhere could forge or erase fire history and move watermarks.
+var triggerTableWrites = map[string]bool{
+	"RecordTriggerRun": true, "RecordTriggerRuns": true,
+	"RecordTriggerResults": true, "AdvanceTriggerWatermarks": true,
+}
+
+// TestFactsRepoTriggerWrites_OnlyFromDispatcher: handing out *facts.Repo (PR E3)
+// makes the four trigger-table writes callable from every package that holds a
+// Service. They were already reachable through Service.Triggers(), so E3 did
+// not widen the method set; this guard pins the reach. It parses every .go
+// file outside internal/store/** and fails on a non-test file other than
+// internal/repos/triggers.go that selects one of them.
+//
+// Non-vacuity: at least 500 files walked; triggers.go must use
+// RecordTriggerRuns, RecordTriggerResults and AdvanceTriggerWatermarks; and
+// facts/triggers.go must still declare all four.
+func TestFactsRepoTriggerWrites_OnlyFromDispatcher(t *testing.T) {
+	const minFiles = 500
+	const dispatcher = "internal/repos/triggers.go"
+	root := filepath.Join("..", "..")
+	fset := token.NewFileSet()
+	var offenders []string
+	scanned := 0
+	allowed := map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch rel {
+			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+				return filepath.SkipDir
+			}
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".go") {
+			return nil
+		}
+		scanned++
+		if strings.HasSuffix(rel, "_test.go") {
+			return nil
+		}
+		for _, u := range selectorUses(t, fset, path, nil, triggerTableWrites) {
+			if rel == dispatcher {
+				allowed[u[strings.Index(u, ": ")+2:]] = true
+			} else {
+				offenders = append(offenders, rel+" "+u)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < minFiles {
+		t.Fatalf("scanned only %d .go files, want at least %d: the walk no longer reaches the module", scanned, minFiles)
+	}
+	for _, want := range []string{"RecordTriggerRuns", "RecordTriggerResults", "AdvanceTriggerWatermarks"} {
+		if !allowed[want] {
+			t.Errorf("%s no longer calls %s: the dispatcher moved or was renamed, so this guard's allowlist is stale", dispatcher, want)
+		}
+	}
+	decl := filepath.Join(root, "internal", "store", "facts", "triggers.go")
+	f, err := parser.ParseFile(token.NewFileSet(), decl, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string]bool{}
+	for _, dd := range f.Decls {
+		if fn, ok := dd.(*ast.FuncDecl); ok && fn.Recv != nil && triggerTableWrites[fn.Name.Name] {
+			declared[fn.Name.Name] = true
+		}
+	}
+	for name := range triggerTableWrites {
+		if !declared[name] {
+			t.Errorf("%s no longer declares %s: it moved, so this guard checks nothing", decl, name)
+		}
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("the trigger-table writes belong to the dispatcher (%s) alone:\n  %s", dispatcher, strings.Join(offenders, "\n  "))
+	}
+}
+
+// TestFactsRepoTriggerWrites_GuardDiscriminates: calls and method values of any
+// of the four names are flagged; a declaration, a comment and a read such as
+// RecentTriggerFires are not.
+func TestFactsRepoTriggerWrites_GuardDiscriminates(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"call", "package p\nfunc f() { svc.FactsRepo().AdvanceTriggerWatermarks() }", 1},
+		{"method value", "package p\nfunc f() { g := tr.RecordTriggerRun; _ = g }", 1},
+		{"two", "package p\nfunc f() { tr.RecordTriggerRuns(); tr.RecordTriggerResults() }", 2},
+		{"read", "package p\nfunc f() { tr.RecentTriggerFires() }", 0},
+		{"declaration", "package p\ntype R struct{}\nfunc (r *R) RecordTriggerRun() {}", 0},
+		{"comment", "package p\n// AdvanceTriggerWatermarks is tx2\nfunc f() {}", 0},
+	}
+	for _, c := range cases {
+		got := selectorUses(t, token.NewFileSet(), c.name+".go", c.src, triggerTableWrites)
+		if len(got) != c.want {
+			t.Errorf("%s: %d uses, want %d (%v)", c.name, len(got), c.want, got)
 		}
 	}
 }

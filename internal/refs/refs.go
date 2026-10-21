@@ -109,7 +109,7 @@ func (g Gate) WithFiles(fileExists ResolveFunc) Gate {
 	return g
 }
 
-// FromSystemFiles is the file resolver for a caller holding the store.s
+// FromSystemFiles is the file resolver for a caller holding the store's
 // facts.Repo: the path must name a FILE (not a directory) under .knomit/
 // at the tip of branch — the commit this write is about to become the child
 // of, i.e. the referrer's own commit, exactly as FromFactQuery.
