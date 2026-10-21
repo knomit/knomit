@@ -1,7 +1,6 @@
 package model
 
 import (
-	_ "embed"
 	"errors"
 	"os"
 	"path/filepath"
