@@ -18,12 +18,12 @@ import (
 // last paragraph, TrailerValues reads nothing).
 func TestAppendTrailersToParagraph_JoinsTheRecord(t *testing.T) {
 	tr := Trailers{Trace: "task-1", Run: "run-" + "0123456789abcdef0123456789abcdef"}
-	withRecord := merge.AppendTrailerLines("merge: exp/x into agent/a (refuse)", []string{TrailerMerge + ": kb/a.md src", TrailerMerge + ": kb/b.md dst"})
+	withRecord := merge.AppendTrailerLines("merge: exp/x into agent/a (refuse)", []string{merge.TrailerMerge + ": kb/a.md src", merge.TrailerMerge + ": kb/b.md dst"})
 	got := vcs.AppendTrailersToParagraph(withRecord, tr)
 	require.Equal(t, "merge: exp/x into agent/a (refuse)\n\n"+
 		"Knomit-Merge: kb/a.md src\nKnomit-Merge: kb/b.md dst\n"+
 		"Knomit-Trace: task-1\nKnomit-Run: run-0123456789abcdef0123456789abcdef\n", got)
-	require.Len(t, TrailerValues(got, TrailerMerge), 2, "the record is still read")
+	require.Len(t, merge.TrailerValues(got, merge.TrailerMerge), 2, "the record is still read")
 	require.Equal(t, "task-1", TrailerValue(got, TrailerTrace))
 
 	plain := vcs.AppendTrailersToParagraph("merge: exp/x into agent/a (refuse)", tr)
@@ -52,18 +52,18 @@ func TestExperimentTrace_OnlyTheExperimentsOwnMerge(t *testing.T) {
 	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/peer", testAgentBranch))
 	writeMergeFact(t, svc, "agent/peer", "kb/peer.md", "peer", "body")
 	writeMergeFact(t, svc, testAgentBranch, "kb/own.md", "own", "body")
-	require.NoError(t, svc.rh.MergeBranch(ctx, "agent/peer", testAgentBranch, StrategyLocalWins))
+	require.NoError(t, svc.rh.MergeBranch(ctx, "agent/peer", testAgentBranch, merge.StrategyLocalWins))
 	plain := msgOf(testAgentBranch)
 	require.Contains(t, plain, "merge: agent/peer into", "fixture: a merge commit was written")
 	require.Empty(t, TrailerValue(plain, TrailerTrace), "a transport merge is never stamped: %q", plain)
 
 	// The experiment's own merge, under the same ctx.
-	_, err = svc.Experiments().OpenExperiment(context.Background(), "own", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(context.Background(), "own", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/own", "kb/exp.md", "exp", "body")
 	writeMergeFact(t, svc, testAgentBranch, "kb/own-2.md", "own 2", "body")
-	res, err := svc.Experiments().CommitExperiment(ctx, "own", nil)
+	res, err := svc.Merge().CommitExperiment(ctx, "own", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 	require.Equal(t, "task-2", TrailerValue(msgOf(testAgentBranch), TrailerTrace))
 }

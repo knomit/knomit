@@ -10,6 +10,7 @@ import (
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/storetest"
 )
 
@@ -82,13 +83,13 @@ func TestNormalize_SystemFileRefMustExistOnEitherSide(t *testing.T) {
 
 	for _, ref := range []string{resBoth, resParentOnly, resExpOnly} {
 		out, err := Normalize(ctx, ri, resParent, resExp,
-			map[string]store.Resolution{resFactPath: {Body: resolutionBody(t, ref)}})
+			map[string]merge.Resolution{resFactPath: {Body: resolutionBody(t, ref)}})
 		require.NoErrorf(t, err, "a resolution citing %s", ref)
 		require.Containsf(t, string(out[resFactPath].Body), own+ref, "%s stored canonical", ref)
 	}
 	for _, ref := range []string{resMissing, resSymlink} {
 		_, err := Normalize(ctx, ri, resParent, resExp,
-			map[string]store.Resolution{resFactPath: {Body: resolutionBody(t, ref)}})
+			map[string]merge.Resolution{resFactPath: {Body: resolutionBody(t, ref)}})
 		require.Errorf(t, err, "a resolution citing %s", ref)
 		require.Containsf(t, err.Error(), "does not exist under .knomit/ at the tip", "a resolution citing %s", ref)
 		require.Containsf(t, err.Error(), ref, "the refusal names %s", ref)

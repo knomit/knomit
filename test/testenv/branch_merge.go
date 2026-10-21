@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // MergeFrom merges the source branch into this branch using the given
@@ -24,16 +25,16 @@ import (
 // message ("merge: src into dst (strategy)") — the DSL does not take a
 // custom message argument. If tests need merge-message assertions,
 // read via the commit object directly.
-func (b *BranchHandle) MergeFrom(src *BranchHandle, strategy store.ConflictStrategy) *Snapshot {
+func (b *BranchHandle) MergeFrom(src *BranchHandle, strategy merge.ConflictStrategy) *Snapshot {
 	return b.mergeFrom(src, strategy, "")
 }
 
 // MergeFromAs is MergeFrom with an explicit snapshot name.
-func (b *BranchHandle) MergeFromAs(name string, src *BranchHandle, strategy store.ConflictStrategy) *Snapshot {
+func (b *BranchHandle) MergeFromAs(name string, src *BranchHandle, strategy merge.ConflictStrategy) *Snapshot {
 	return b.mergeFrom(src, strategy, name)
 }
 
-func (b *BranchHandle) mergeFrom(src *BranchHandle, strategy store.ConflictStrategy, name string) *Snapshot {
+func (b *BranchHandle) mergeFrom(src *BranchHandle, strategy merge.ConflictStrategy, name string) *Snapshot {
 	t := b.repo.sb.t
 	t.Helper()
 	if src == nil {
@@ -45,7 +46,7 @@ func (b *BranchHandle) mergeFrom(src *BranchHandle, strategy store.ConflictStrat
 
 	var mergeErr error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		mergeErr = svc.Branches().MergeBranch(context.Background(), src.name, b.name, strategy)
+		mergeErr = svc.Merge().MergeBranch(context.Background(), src.name, b.name, strategy)
 	})
 	if mergeErr != nil {
 		t.Fatalf("MergeFrom(%s -> %s, %s): %v", src.name, b.name, strategy, mergeErr)

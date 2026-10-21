@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/merge"
 )
 
 // validatedOntology is a knowledge base ontology (not the fleet's) whose
@@ -168,7 +169,7 @@ func TestValidation_ReceivePackJudgesOnlyWhatACommitAddsOrChanges(t *testing.T) 
 // the empty tree instead of dst's -> the host's own invalid legacy fact
 // refuses the clean branch -> red.
 func TestValidation_MergeIntoTheAgentBranchJudgesTheResult(t *testing.T) {
-	for name, merge := range guardedMerges {
+	for name, mergeCall := range guardedMerges {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			h := newPushHostWith(t, map[string]string{fact.OntologyFile: validatedOntology(""), "kb/notes/legacy.md": note("legacy")}, 0)
@@ -179,7 +180,7 @@ func TestValidation_MergeIntoTheAgentBranchJudgesTheResult(t *testing.T) {
 			// push before this rule, a hand-made commit): the store's own write
 			// would refuse the invalid content at the source.
 			bad := h.rawBranch("agent/bad-1", hostBranch, "kb/notes/bad.md", note("bad"))
-			_, err := merge(h.svc, ctx, "agent/bad-1", hostBranch, bad)
+			_, err := mergeCall(h.svc, ctx, "agent/bad-1", hostBranch, bad)
 			var ve *ValidationRefusedError
 			require.True(t, errors.As(err, &ve), "want a validation refusal, got %v", err)
 			require.ErrorIs(t, err, ErrValidationRefused)
@@ -188,9 +189,9 @@ func TestValidation_MergeIntoTheAgentBranchJudgesTheResult(t *testing.T) {
 			require.Equal(t, before, h.ref(hostBranch), "a refused merge moves nothing")
 
 			fixed := h.rawBranch("agent/fixed-1", hostBranch, "kb/notes/f.md", note("f"), "kb/notes/f.md", note("f", "e"))
-			res, err := merge(h.svc, ctx, "agent/fixed-1", hostBranch, fixed)
+			res, err := mergeCall(h.svc, ctx, "agent/fixed-1", hostBranch, fixed)
 			require.NoError(t, err, "the result holds only the fixed fact")
-			require.Equal(t, ModeMerge, res.Mode)
+			require.Equal(t, merge.ModeMerge, res.Mode)
 			require.NotEqual(t, before, h.ref(hostBranch))
 		})
 	}

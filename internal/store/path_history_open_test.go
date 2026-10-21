@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 )
 
 // Round-6 tests: the upgrade runs once, at open, before release (user
@@ -176,7 +177,7 @@ func TestRefMoves_DeriveBeforeTheRef(t *testing.T) {
 			tip := mustHeadHash(t, svc, agent)
 			u := writeRawCommit(t, svc, []string{tip.String()}, map[string]string{"kb/u.md": testFactBody("u", 0.5, nil)}, t0, "upstream")
 			return agent, func() error {
-				_, err := svc.rh.ReplayOntoUpstreamForTest(context.Background(), agent, plumbing.NewHash(u), plumbing.ZeroHash, StrategyLocalWins)
+				_, err := svc.rh.ReplayOntoUpstreamForTest(context.Background(), agent, plumbing.NewHash(u), plumbing.ZeroHash, merge.StrategyLocalWins)
 				return err
 			}
 		},
@@ -186,7 +187,7 @@ func TestRefMoves_DeriveBeforeTheRef(t *testing.T) {
 			base := mustHeadHash(t, svc, "main")
 			u := writeRawCommit(t, svc, []string{base.String()}, map[string]string{"kb/u.md": testFactBody("u", 0.5, nil)}, t0, "upstream")
 			return agent, func() error {
-				_, err := svc.rh.ReplayOntoUpstreamForTest(context.Background(), agent, plumbing.NewHash(u), plumbing.ZeroHash, StrategyLocalWins)
+				_, err := svc.rh.ReplayOntoUpstreamForTest(context.Background(), agent, plumbing.NewHash(u), plumbing.ZeroHash, merge.StrategyLocalWins)
 				return err
 			}
 		},

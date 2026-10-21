@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/remotesync"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -136,7 +137,7 @@ func TestReconcileMain_UsesConfiguredUpstream(t *testing.T) {
 
 	res, err := svc.rh.ReconcileMainForTest(context.Background(), "master")
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, res.Mode)
+	require.Equal(t, merge.ModeFF, res.Mode)
 	require.Equal(t, plumbing.NewHash(newMasterCommit), mustHeadHash(t, svc, "master"))
 }
 

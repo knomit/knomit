@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 )
 
 // Replay copies local facts into a target service's agent branch.
@@ -34,7 +35,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		cfg.DefaultBranch = b
 	}
 	if cfg.Strategy == "" {
-		cfg.Strategy = StrategyLocalWins
+		cfg.Strategy = merge.StrategyLocalWins
 	}
 
 	// 1. Set up agent branch in target store.
@@ -147,13 +148,13 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		isShared := remotePathSet[f.path]
 		if isShared {
 			switch cfg.Strategy {
-			case StrategyRemoteWins:
+			case merge.StrategyRemoteWins:
 				// Skip — remote version is kept.
 				if cfg.OnProgress != nil {
 					cfg.OnProgress(i+1, len(localFacts))
 				}
 				continue
-			case StrategyLocalWins:
+			case merge.StrategyLocalWins:
 				result.Overwrites++
 			}
 		}

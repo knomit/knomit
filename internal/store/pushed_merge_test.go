@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/verify"
 )
 
@@ -67,7 +68,7 @@ func (f *pushedFixture) commit(h plumbing.Hash) *object.Commit {
 	return c
 }
 
-func (f *pushedFixture) merge(srcTip plumbing.Hash, side ResolutionSide) (AgentReconcileResult, error) {
+func (f *pushedFixture) merge(srcTip plumbing.Hash, side merge.ResolutionSide) (merge.AgentReconcileResult, error) {
 	return f.svc.MergePushed(context.Background(), pmPeer, pmAgent, srcTip, side)
 }
 
@@ -103,7 +104,7 @@ func TestMergePushed_ThreeWay(t *testing.T) {
 
 	res, err := f.merge(peerTip, "")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 	f.requireHostMerge(hostBefore, peerTip)
 	require.Equal(t, peerTip, f.tip(pmPeer), "the peer's ref is never written")
 	require.Contains(t, f.blob(f.tip(pmAgent), "kb/p.md"), "peer")
@@ -121,7 +122,7 @@ func TestMergePushed_NeverFastForwards(t *testing.T) {
 
 	res, err := f.merge(peerTip, "")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode, "never a fast-forward for this caller")
+	require.Equal(t, merge.ModeMerge, res.Mode, "never a fast-forward for this caller")
 	tip := f.requireHostMerge(hostBefore, peerTip)
 	require.Equal(t, f.commit(peerTip).TreeHash, tip.TreeHash, "the tree is the peer's")
 	verifyMergeClean(t, f.svc, pmAgent)
@@ -129,12 +130,12 @@ func TestMergePushed_NeverFastForwards(t *testing.T) {
 	// The other caller: an experiment committed in an FF shape still
 	// fast-forwards its parent onto the experiment's own commit.
 	ctx := context.Background()
-	_, err = f.svc.Experiments().OpenExperiment(ctx, "ff", "", pmAgent)
+	_, err = f.svc.Merge().OpenExperiment(ctx, "ff", "", pmAgent)
 	require.NoError(t, err)
 	expTip := plumbing.NewHash(writeMergeFact(t, f.svc, "exp/ff", "kb/e.md", "e", "e"))
-	eres, err := f.svc.Experiments().CommitExperiment(ctx, "ff", nil)
+	eres, err := f.svc.Merge().CommitExperiment(ctx, "ff", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, eres.Mode, "experiment commit keeps its fast-forward")
+	require.Equal(t, merge.ModeFF, eres.Mode, "experiment commit keeps its fast-forward")
 	require.Equal(t, expTip, f.tip(pmAgent))
 }
 
@@ -146,7 +147,7 @@ func TestMergePushed_ConflictRefused(t *testing.T) {
 	hostBefore := f.onHost("kb/base.md", "host version")
 
 	_, err := f.merge(peerTip, "")
-	var conflict *MergeConflictError
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 	require.Equal(t, []string{"kb/base.md"}, conflict.Paths)
 	require.Equal(t, peerTip.String(), conflict.SrcCommit)
@@ -159,9 +160,9 @@ func TestMergePushed_ConflictRefused(t *testing.T) {
 // the survivor is WHICH body the side names.
 func TestMergePushed_WholeSetResolution(t *testing.T) {
 	for _, c := range []struct {
-		side ResolutionSide
+		side merge.ResolutionSide
 		want string
-	}{{ResolveDst, "host version"}, {ResolveSrc, "peer version"}} {
+	}{{merge.ResolveDst, "host version"}, {merge.ResolveSrc, "peer version"}} {
 		t.Run(string(c.side), func(t *testing.T) {
 			f := newPushedFixture(t)
 			peerTip := f.onPeer("kb/base.md", "peer version")
@@ -169,7 +170,7 @@ func TestMergePushed_WholeSetResolution(t *testing.T) {
 
 			res, err := f.merge(peerTip, c.side)
 			require.NoError(t, err)
-			require.Equal(t, ModeMerge, res.Mode)
+			require.Equal(t, merge.ModeMerge, res.Mode)
 			f.requireHostMerge(hostBefore, peerTip)
 			require.Contains(t, f.blob(f.tip(pmAgent), "kb/base.md"), c.want)
 		})
@@ -185,9 +186,9 @@ func TestMergePushed_BranchMoved(t *testing.T) {
 	hostBefore := f.tip(pmAgent)
 
 	_, err := f.merge(seen, "")
-	var bm *BranchMovedError
+	var bm *merge.BranchMovedError
 	require.ErrorAs(t, err, &bm)
-	require.True(t, errors.Is(err, ErrBranchMoved))
+	require.True(t, errors.Is(err, merge.ErrBranchMoved))
 	require.Equal(t, seen.String(), bm.Expected)
 	require.Equal(t, moved.String(), bm.Actual)
 	require.Equal(t, hostBefore, f.tip(pmAgent), "nothing moves")
@@ -200,9 +201,9 @@ func TestMergePushed_BranchMoved(t *testing.T) {
 func TestMergePushed_ToMergeAndTreeIdentical(t *testing.T) {
 	f := newPushedFixture(t)
 	ctx := context.Background()
-	info := func() PushedBranchInfo {
+	info := func() merge.PushedBranchInfo {
 		t.Helper()
-		got, err := f.svc.PushedBranches(ctx, []string{pmPeer}, pmAgent, "kb")
+		got, err := f.svc.Merge().PushedBranches(ctx, []string{pmPeer}, pmAgent, "kb")
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		return got[0]
@@ -231,7 +232,7 @@ func TestMergePushed_ToMergeAndTreeIdentical(t *testing.T) {
 	hostBefore := f.tip(pmAgent)
 	res, err := f.merge(peerSame, "")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode, "a tree-identical merge is still recorded")
+	require.Equal(t, merge.ModeMerge, res.Mode, "a tree-identical merge is still recorded")
 	tip := f.requireHostMerge(hostBefore, peerSame)
 	require.Equal(t, f.commit(hostBefore).TreeHash, tip.TreeHash)
 	require.Equal(t, 0, info().ToMerge, "the count clears")
@@ -240,7 +241,7 @@ func TestMergePushed_ToMergeAndTreeIdentical(t *testing.T) {
 	// Nothing new: a true no-op.
 	res, err = f.merge(peerSame, "")
 	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode)
+	require.Equal(t, merge.ModeNoop, res.Mode)
 }
 
 // PushedBranches reports files outside the ontology root separately, since
@@ -254,7 +255,7 @@ func TestPushedBranches_OtherFilesChanged(t *testing.T) {
 	f.svc.SetSigner(f.host)
 	require.NoError(t, err)
 
-	got, err := f.svc.PushedBranches(ctx, []string{pmPeer}, pmAgent, "kb")
+	got, err := f.svc.Merge().PushedBranches(ctx, []string{pmPeer}, pmAgent, "kb")
 	require.NoError(t, err)
 	require.Equal(t, 1, got[0].OtherFilesChanged)
 	require.NotEmpty(t, got[0].MergeBase)
@@ -291,7 +292,7 @@ func (f *pushedFixture) noFFMerge(other plumbing.Hash, tree plumbing.Hash) plumb
 func TestMergeConsensus_SkipsMergeOnlyNoChange(t *testing.T) {
 	f := newPushedFixture(t)
 	ctx := context.Background()
-	mergeC := func(tip plumbing.Hash) AgentReconcileResult {
+	mergeC := func(tip plumbing.Hash) merge.AgentReconcileResult {
 		t.Helper()
 		res, err := f.svc.MergeConsensus(ctx, pmPeer, pmAgent, tip)
 		require.NoError(t, err)
@@ -300,27 +301,27 @@ func TestMergeConsensus_SkipsMergeOnlyNoChange(t *testing.T) {
 
 	// The first exchange: the peer's authored fact is merged and recorded.
 	p1 := f.onPeer("kb/p1.md", "p1")
-	require.Equal(t, ModeMerge, mergeC(p1).Mode)
+	require.Equal(t, merge.ModeMerge, mergeC(p1).Mode)
 	h1 := f.tip(pmAgent)
 
 	// The peer merges the host's merge back in with a merge commit of its
 	// own (no fast-forward), tree = the host's: nothing new.
 	pm := f.noFFMerge(h1, f.commit(h1).TreeHash)
-	require.Equal(t, ModeNoop, mergeC(pm).Mode, "a merge-only, change-free peer tip is not recorded")
+	require.Equal(t, merge.ModeNoop, mergeC(pm).Mode, "a merge-only, change-free peer tip is not recorded")
 	require.Equal(t, h1, f.tip(pmAgent), "the host's branch did not move")
 
 	// Again, with the host moving on in between: still nothing to record.
 	f.onHost("kb/h2.md", "h2")
 	h2 := f.tip(pmAgent)
 	pm2 := f.noFFMerge(h2, f.commit(h2).TreeHash)
-	require.Equal(t, ModeNoop, mergeC(pm2).Mode)
+	require.Equal(t, merge.ModeNoop, mergeC(pm2).Mode)
 	require.Equal(t, h2, f.tip(pmAgent))
 
 	// A merge-only tip that CHANGES something (an edited merge) is recorded.
 	require.NoError(t, f.svc.Branches().CreateBranch(ctx, "scratch", pmAgent))
 	scratch := plumbing.NewHash(writeMergeFact(t, f.svc, "scratch", "kb/evil.md", "evil", "evil"))
 	pm3 := f.noFFMerge(h2, f.commit(scratch).TreeHash)
-	require.Equal(t, ModeMerge, mergeC(pm3).Mode, "a merge commit that brings a change is merged")
+	require.Equal(t, merge.ModeMerge, mergeC(pm3).Mode, "a merge commit that brings a change is merged")
 	f.requireHostMerge(h2, pm3)
 
 	// A peer's AUTHORED commit whose content the host already has is still
@@ -329,7 +330,7 @@ func TestMergeConsensus_SkipsMergeOnlyNoChange(t *testing.T) {
 	peerSame := f.onPeer("kb/same.md", "same")
 	hostBefore := f.tip(pmAgent)
 	require.Equal(t, f.commit(hostBefore).TreeHash, f.commit(peerSame).TreeHash, "fixture: trees are identical")
-	require.Equal(t, ModeMerge, mergeC(peerSame).Mode, "an authored commit is recorded")
+	require.Equal(t, merge.ModeMerge, mergeC(peerSame).Mode, "an authored commit is recorded")
 	f.requireHostMerge(hostBefore, peerSame)
 	verifyMergeClean(t, f.svc, pmAgent)
 }
@@ -343,13 +344,13 @@ func TestMergeConsensus_RefusesConflictAndMovedTip(t *testing.T) {
 	hostBefore := f.onHost("kb/base.md", "host's")
 
 	_, err := f.svc.MergeConsensus(ctx, pmPeer, pmAgent, peerTip)
-	var conflict *MergeConflictError
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 	require.Equal(t, []string{"kb/base.md"}, conflict.Paths)
 	require.Equal(t, hostBefore, f.tip(pmAgent), "a refused merge moves nothing")
 
 	_, err = f.svc.MergeConsensus(ctx, pmPeer, pmAgent, hostBefore)
-	require.ErrorIs(t, err, ErrBranchMoved)
+	require.ErrorIs(t, err, merge.ErrBranchMoved)
 }
 
 // OntologyAt reads the ontology at a branch's tip, nil when there is none.

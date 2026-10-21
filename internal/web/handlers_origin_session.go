@@ -18,6 +18,7 @@ import (
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/internal/web/hal"
 )
 
@@ -577,8 +578,8 @@ func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 			return
 		}
 
-		strategy := store.ConflictStrategy(req.ConflictStrategy)
-		if strategy != store.StrategyLocalWins && strategy != store.StrategyRemoteWins {
+		strategy := merge.ConflictStrategy(req.ConflictStrategy)
+		if strategy != merge.StrategyLocalWins && strategy != merge.StrategyRemoteWins {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
 				"conflict_strategy must be local_wins or remote_wins", r.URL.Path)
 			return

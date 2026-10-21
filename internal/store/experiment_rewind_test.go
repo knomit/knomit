@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 )
 
 const scrubbedPath = "kb/secret.md"
@@ -45,17 +46,17 @@ func expRwPushSecret(t *testing.T, svc *Service) plumbing.Hash {
 
 // expRwRewind force-moves main to a new commit on parent and runs the rewind
 // reconcile of the agent branch.
-func expRwRewind(t *testing.T, svc *Service, parent plumbing.Hash, path string) (plumbing.Hash, AgentReconcileResult) {
+func expRwRewind(t *testing.T, svc *Service, parent plumbing.Hash, path string) (plumbing.Hash, merge.AgentReconcileResult) {
 	t.Helper()
 	u := upstreamCommit(t, svc, parent, path, "---\ntype: observation\n---\n# U\n\n"+path+"\n")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
-	res, err := svc.rh.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", StrategyLocalWins)
+	res, err := svc.rh.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", merge.StrategyLocalWins)
 	require.NoError(t, err)
 	// Each test gives the agent branch a write of its own first: a branch with
 	// nothing of its own beyond the watermark is kept as it stands by a rewind
 	// (the empty-walk shape), scrubbed content included, which is not the
 	// shape under test here.
-	require.Equal(t, ModeRebase, res.Mode, "setup: the rewind rebuilt the agent branch")
+	require.Equal(t, merge.ModeRebase, res.Mode, "setup: the rewind rebuilt the agent branch")
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath), "setup: the rewind scrubbed it")
 	return u, res
 }
@@ -81,7 +82,7 @@ func TestExperimentAcrossARewind_CommitKeepsTheScrub(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	x := expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "exp/e", "kb/e2.md", "E2", "exp two")
@@ -89,7 +90,7 @@ func TestExperimentAcrossARewind_CommitKeepsTheScrub(t *testing.T) {
 
 	u1, _ := expRwRewind(t, svc, c1, "kb/u.md")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath), "the commit must not bring the scrubbed fact back")
 	require.False(t, reaches(t, svc, "agent/test", x), "the scrubbed commit must not reach the agent branch's history (it would be pushed)")
@@ -113,26 +114,26 @@ func TestExperimentAcrossARewind_SyncKeepsTheScrub(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	x := expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	expRwRewind(t, svc, c1, "kb/u.md")
 
-	_, err = svc.Experiments().SyncExperiment(ctx, "e")
+	_, err = svc.Merge().SyncExperiment(ctx, "e")
 	require.NoError(t, err)
 	require.False(t, hasFileAt(t, svc, "exp/e", scrubbedPath), "the sync must drop the scrubbed fact from the experiment")
 	require.False(t, reaches(t, svc, "exp/e", x), "the experiment must no longer hold the scrubbed commit")
 	for _, p := range []string{"kb/e.md", "kb/w.md", "kb/u.md"} {
 		require.True(t, hasFileAt(t, svc, "exp/e", p), p)
 	}
-	exp, ok, err := svc.Experiments().GetExperiment(ctx, "e")
+	exp, ok, err := svc.Branches().GetExperiment(ctx, "e")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, mustHeadHash(t, svc, "agent/test").String(), exp.ForkCommit,
 		"the fork point moves to where the experiment was rebuilt, so 'since the fork' shows only its own work")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath))
 	require.False(t, reaches(t, svc, "agent/test", x))
@@ -146,17 +147,17 @@ func TestExperimentAcrossARewind_SyncKeepsTheScrub(t *testing.T) {
 func TestExperimentAcrossARewind_FastForwardSyncBeforeTheRewind(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	x := expRwPushSecret(t, svc)
-	r, err := svc.Experiments().SyncExperiment(ctx, "e")
+	r, err := svc.Merge().SyncExperiment(ctx, "e")
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, r.Mode, "setup: the sync fast-forwards")
+	require.Equal(t, merge.ModeFF, r.Mode, "setup: the sync fast-forwards")
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	expRwRewind(t, svc, c1, "kb/u.md")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath))
 	require.False(t, reaches(t, svc, "agent/test", x))
@@ -169,16 +170,16 @@ func TestExperimentAcrossARewind_FastForwardSyncBeforeTheRewind(t *testing.T) {
 func TestExperimentAcrossARewind_NoScrubbedOverlapCommitsNormally(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	expRwRewind(t, svc, c1, "kb/u.md")
 
 	expTip := mustHeadHash(t, svc, "exp/e")
-	res, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
+	res, err := svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 	mc, err := svc.rh.Repository().CommitObject(mustHeadHash(t, svc, "agent/test"))
 	require.NoError(t, err)
 	require.Len(t, mc.ParentHashes, 2)
@@ -193,14 +194,14 @@ func TestExperimentAcrossARewind_NoScrubbedOverlapCommitsNormally(t *testing.T) 
 // with the path, and the caller's resolution decides.
 func TestExperimentAcrossARewind_EditOfAScrubbedFileIsAConflict(t *testing.T) {
 	for _, tc := range []struct {
-		side    ResolutionSide
+		side    merge.ResolutionSide
 		present bool
-	}{{ResolveDst, false}, {ResolveSrc, true}} {
+	}{{merge.ResolveDst, false}, {merge.ResolveSrc, true}} {
 		t.Run(string(tc.side), func(t *testing.T) {
 			ctx := context.Background()
 			svc, c1 := expRwSetup(t)
 			x := expRwPushSecret(t, svc)
-			_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+			_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 			require.NoError(t, err)
 			writeMergeFact(t, svc, "exp/e", scrubbedPath, "S", "edited in the experiment")
 			writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
@@ -209,8 +210,8 @@ func TestExperimentAcrossARewind_EditOfAScrubbedFileIsAConflict(t *testing.T) {
 			agentBefore := mustHeadHash(t, svc, "agent/test")
 			expBefore := mustHeadHash(t, svc, "exp/e")
 
-			_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
-			var conflict *MergeConflictError
+			_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
+			var conflict *merge.MergeConflictError
 			require.True(t, errors.As(err, &conflict), "want a conflict, got %v", err)
 			require.Equal(t, []string{scrubbedPath}, conflict.Paths)
 			require.True(t, conflict.Rewound)
@@ -222,11 +223,11 @@ func TestExperimentAcrossARewind_EditOfAScrubbedFileIsAConflict(t *testing.T) {
 
 			// A sync cannot settle it either: it would drop the experiment's
 			// own edit for good, or bring the scrubbed file back.
-			_, err = svc.Experiments().SyncExperiment(ctx, "e")
+			_, err = svc.Merge().SyncExperiment(ctx, "e")
 			require.True(t, errors.As(err, &conflict), "sync: want a conflict, got %v", err)
 			require.Equal(t, expBefore, mustHeadHash(t, svc, "exp/e"))
 
-			_, err = svc.Experiments().CommitExperiment(ctx, "e", map[string]Resolution{scrubbedPath: {Side: tc.side}})
+			_, err = svc.Merge().CommitExperiment(ctx, "e", map[string]merge.Resolution{scrubbedPath: {Side: tc.side}})
 			require.NoError(t, err)
 			require.Equal(t, tc.present, hasFileAt(t, svc, "agent/test", scrubbedPath))
 			require.True(t, hasFileAt(t, svc, "agent/test", "kb/e.md"))
@@ -242,7 +243,7 @@ func TestExperimentAcrossARewind_TwoRewindsBeforeTheCommit(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	x := expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
@@ -250,7 +251,7 @@ func TestExperimentAcrossARewind_TwoRewindsBeforeTheCommit(t *testing.T) {
 	writeMergeFact(t, svc, "agent/test", "kb/w2.md", "W2", "w2")
 	expRwRewind(t, svc, u1, "kb/u2.md")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath))
 	require.False(t, reaches(t, svc, "agent/test", x))
@@ -265,13 +266,13 @@ func TestExperimentAcrossARewind_RollbackClearsTheRecord(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	expRwRewind(t, svc, c1, "kb/u.md")
 	_, err = svc.rh.Storer().Reference(plumbing.ReferenceName("refs/knomit/experiment-rewound/e"))
 	require.NoError(t, err, "setup: the rewind recorded the experiment")
-	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "e"))
+	require.NoError(t, svc.Merge().RollbackExperiment(ctx, "e"))
 	_, err = svc.rh.Storer().Reference(plumbing.ReferenceName("refs/knomit/experiment-rewound/e"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound)
 }

@@ -21,31 +21,6 @@ func mustBeTest(name string) {
 	}
 }
 
-// serviceRepo maps a *store.Service, passed as any because this package cannot
-// import the store, to the *Repo it was built with. The store registers it from
-// its init; storetest reads it through ServiceRepoForTest. Same shape and
-// reason as vcs.ServiceRepoForTest: no Service accessor returns the handle.
-var serviceRepo func(svc any) *Repo
-
-// RegisterServiceRepo installs the function ServiceRepoForTest uses. The store
-// calls it once, from its init. A second registration panics.
-func RegisterServiceRepo(f func(svc any) *Repo) {
-	if serviceRepo != nil {
-		panic("merge: RegisterServiceRepo called twice")
-	}
-	serviceRepo = f
-}
-
-// ServiceRepoForTest is the *Repo of svc, a *store.Service. It panics outside a
-// test binary.
-func ServiceRepoForTest(svc any) *Repo {
-	mustBeTest("ServiceRepoForTest")
-	if serviceRepo == nil {
-		panic("merge: ServiceRepoForTest called before the store registered its Service")
-	}
-	return serviceRepo(svc)
-}
-
 // MergeIntoBranchForTest is mergeIntoBranch: it takes the dst lock and merges
 // src into dst with the strategy.
 func (rh *Repo) MergeIntoBranchForTest(ctx context.Context, src, dst string, strategy ConflictStrategy) (AgentReconcileResult, error) {
@@ -86,12 +61,12 @@ func ExperimentRewoundRefNameForTest(name string) plumbing.ReferenceName {
 //
 // TEST SEAM, and exported only because the sweeper's tests live in
 // internal/repos and cannot reach this table any other way (they call it
-// through storetest.SetExperimentActivity). Expiry is
+// through storetest.SetExperimentActivity, which reaches the handle as Service.Merge). Expiry is
 // measured in days, so the alternative is a test that either sleeps for days
 // or asserts nothing; backdating the row makes the assertion about WHICH
 // experiment the cutoff selects, which is the part that can be wrong.
 //
-// Not part of ExperimentIndex: production code records activity through
+// Not part of the lifecycle API: production code records activity through
 // NotifyCommit, which is what keeps "activity" meaning exactly "a commit
 // landed here".
 func (rh *Repo) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {

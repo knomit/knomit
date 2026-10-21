@@ -11,17 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/merge"
 )
 
 // mergeFn is MergePushed or MergeConsensus, as the merge-time guard tests
 // call them.
-type mergeFn func(s *Service, ctx context.Context, src, dst string, tip plumbing.Hash) (AgentReconcileResult, error)
+type mergeFn func(s *Service, ctx context.Context, src, dst string, tip plumbing.Hash) (merge.AgentReconcileResult, error)
 
 var guardedMerges = map[string]mergeFn{
-	"MergePushed": func(s *Service, ctx context.Context, src, dst string, tip plumbing.Hash) (AgentReconcileResult, error) {
+	"MergePushed": func(s *Service, ctx context.Context, src, dst string, tip plumbing.Hash) (merge.AgentReconcileResult, error) {
 		return s.MergePushed(ctx, src, dst, tip, "")
 	},
-	"MergeConsensus": func(s *Service, ctx context.Context, src, dst string, tip plumbing.Hash) (AgentReconcileResult, error) {
+	"MergeConsensus": func(s *Service, ctx context.Context, src, dst string, tip plumbing.Hash) (merge.AgentReconcileResult, error) {
 		return s.MergeConsensus(ctx, src, dst, tip)
 	},
 }
@@ -46,7 +47,7 @@ func (h *pushHost) branchWith(branch, from string, kv ...string) plumbing.Hash {
 // moves nothing; a branch with a kb/ change merges. The bad branch is tried
 // first and does not stop the good one: exactly one merge commit lands.
 func TestMergeGuard_RefusesPrivateRevertMergesKB(t *testing.T) {
-	for name, merge := range guardedMerges {
+	for name, mergeCall := range guardedMerges {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			h := newPushHost(t, VerifyOff, 1)
@@ -69,16 +70,16 @@ func TestMergeGuard_RefusesPrivateRevertMergesKB(t *testing.T) {
 			agentTip := h.ref(hostBranch)
 			knomitBefore := knomitTreeHash(t, h, hostBranch)
 			merged := 0
-			var refused []*PrivatePathMergeError
+			var refused []*merge.PrivatePathMergeError
 			for _, b := range []struct {
 				name string
 				tip  plumbing.Hash
 			}{{"agent/bad-22222222", bad}, {"agent/good-33333333", good}} {
-				res, err := merge(h.svc, ctx, b.name, hostBranch, b.tip)
-				var pe *PrivatePathMergeError
+				res, err := mergeCall(h.svc, ctx, b.name, hostBranch, b.tip)
+				var pe *merge.PrivatePathMergeError
 				switch {
 				case err == nil:
-					require.Equal(t, ModeMerge, res.Mode)
+					require.Equal(t, merge.ModeMerge, res.Mode)
 					merged++
 				case errors.As(err, &pe):
 					refused = append(refused, pe)
@@ -112,8 +113,8 @@ func TestMergeGuard_SideCannotOverrideIt(t *testing.T) {
 	_, _, err := h.svc.Facts().WriteFileExactForTest(ctx, hostBranch, fact.OntologyFile, kbOntology(VerifyOff)+"# host\n", "o", "edit", "")
 	require.NoError(t, err)
 	tip := h.ref(hostBranch)
-	_, err = h.svc.MergePushed(ctx, "agent/peer-44444444", hostBranch, peer, ResolveSrc)
-	require.ErrorIs(t, err, ErrPrivatePathMerge)
+	_, err = h.svc.MergePushed(ctx, "agent/peer-44444444", hostBranch, peer, merge.ResolveSrc)
+	require.ErrorIs(t, err, merge.ErrPrivatePathMerge)
 	require.Equal(t, tip, h.ref(hostBranch))
 }
 

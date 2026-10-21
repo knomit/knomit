@@ -19,6 +19,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -304,7 +305,7 @@ func TestDispatch_MergeAddModifyDeleteOncePerPath(t *testing.T) {
 	require.NoError(t, err)
 	b := r.CommitHash
 	c := deleteOn(t, ri, "peer", "kb/tasks/c.md")
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "peer", trigAgent, store.StrategyRemoteWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "peer", trigAgent, merge.StrategyRemoteWins))
 	h := head(t, ri)
 	waitTriggerHead(t, ri, h)
 
@@ -326,7 +327,7 @@ func TestDispatch_MergeAddModifyDeleteOncePerPath(t *testing.T) {
 	}
 
 	// The same merge again is a no-op advance: nothing fires.
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "peer", trigAgent, store.StrategyRemoteWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "peer", trigAgent, merge.StrategyRemoteWins))
 	require.Equal(t, h, head(t, ri), "fixture: the re-merge is a no-op")
 	time.Sleep(150 * time.Millisecond)
 	require.Len(t, firesOf(t, ri, "all"), before+3)
@@ -364,15 +365,15 @@ func TestDispatch_SourceLocalVsMerged(t *testing.T) {
 	svc.SetSigner(testsigner.Named("peer"))
 	writeOn(t, ri, "main", "kb/tasks/peer.md")
 	svc.SetSigner(nil) // back to the test fallback, this instance's key
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "main", trigAgent, store.StrategyRemoteWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "main", trigAgent, merge.StrategyRemoteWins))
 	waitTriggerHead(t, ri, head(t, ri))
 
 	// An experiment: authored exp/<name> (no fingerprint in the author), but
 	// signed by this instance.
-	_, err := svc.Experiments().OpenExperiment(ctx, "e1", "", trigAgent)
+	_, err := svc.Merge().OpenExperiment(ctx, "e1", "", trigAgent)
 	require.NoError(t, err)
 	writeOn(t, ri, "exp/e1", "kb/tasks/exp.md")
-	_, err = svc.Experiments().CommitExperiment(ctx, "e1", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e1", nil)
 	require.NoError(t, err)
 	waitTriggerHead(t, ri, head(t, ri))
 
@@ -678,7 +679,7 @@ func TestDispatch_NoFireOnMainOrExp(t *testing.T) {
 
 	_, err := svc.AdvanceLocalUpstream(ctx, trigAgent, "main")
 	require.NoError(t, err)
-	_, err = svc.Experiments().OpenExperiment(ctx, "e", "", trigAgent)
+	_, err = svc.Merge().OpenExperiment(ctx, "e", "", trigAgent)
 	require.NoError(t, err)
 	writeOn(t, ri, "exp/e", "kb/tasks/in-exp.md")
 	time.Sleep(200 * time.Millisecond)
@@ -686,7 +687,7 @@ func TestDispatch_NoFireOnMainOrExp(t *testing.T) {
 	require.Equal(t, seq, seq2, "main and exp/* commits must not kick the dispatcher")
 	require.Len(t, firesOf(t, ri, "all"), 1)
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
 	waitTriggerHead(t, ri, head(t, ri))
 	require.Equal(t, []string{"kb/tasks/in-exp.md", "kb/tasks/own.md"}, pathsOf(firesOf(t, ri, "all")))

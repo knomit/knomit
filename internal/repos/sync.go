@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // remoteAuthFn returns a transport.AuthMethod for the given remote record, or
@@ -190,7 +191,7 @@ func tickAbandoned(ctx context.Context, err error) bool {
 }
 
 func syncChanged(result store.SyncResult) bool {
-	moved := func(m store.Mode) bool { return m != store.ModeNoop && m != "" }
+	moved := func(m merge.Mode) bool { return m != merge.ModeNoop && m != "" }
 	return moved(result.Main.Mode) || moved(result.Agent.Mode)
 }
 

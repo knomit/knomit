@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 )
 
 // ---- DiffFacts
@@ -70,11 +71,11 @@ func TestToucher_SamePathTwiceInOneMerge(t *testing.T) {
 	b := plumbing.NewHash(modifyF(t, svc, "peer", "kb/tasks/a/x.md")) // B
 	writeF(t, svc, "peer", "kb/tasks/a/y.md")                         // C
 	deleteF(t, svc, "peer", "kb/tasks/a/y.md")                        // D
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "peer", "agent/a", StrategyRemoteWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "peer", "agent/a", merge.StrategyRemoteWins))
 	head := mustHeadHash(t, svc, "agent/a")
-	merge, err := svc.rh.Repository().CommitObject(head)
+	mergeObj, err := svc.rh.Repository().CommitObject(head)
 	require.NoError(t, err)
-	require.Equal(t, 2, merge.NumParents(), "fixture: the merge must be a real merge commit")
+	require.Equal(t, 2, mergeObj.NumParents(), "fixture: the merge must be a real merge commit")
 	require.NotEqual(t, plumbing.NewHash(base), head)
 
 	res := toucher(t, svc, head, "kb/tasks/a/x.md")
@@ -95,7 +96,7 @@ func TestToucher_BotMergeNotAuthor(t *testing.T) {
 	theirs := plumbing.NewHash(writeF(t, svc, "peer", "kb/tasks/a/theirs.md"))
 	// A merge commit authored by a "bot", built by hand: the tree is the
 	// agent's tree plus theirs.md (exactly what a clean merge produces).
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "peer", "agent/a", StrategyRemoteWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "peer", "agent/a", merge.StrategyRemoteWins))
 	head := mustHeadHash(t, svc, "agent/a")
 	restampAs(t, svc, "agent/a", nil, fixedTime(1), "Merge pull request #1 from peer")
 	head2 := mustHeadHash(t, svc, "agent/a")
@@ -309,7 +310,7 @@ func TestTriggerWatermarks_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"x": "h2"}, wms)
 	// OpenExperiment copies pipeline watermarks, never trigger watermarks.
-	_, err = svc.Experiments().OpenExperiment(ctx, "e", "", "agent/a")
+	_, err = svc.Merge().OpenExperiment(ctx, "e", "", "agent/a")
 	require.NoError(t, err)
 	wms, err = tr.TriggerWatermarks(ctx, "exp/e")
 	require.NoError(t, err)

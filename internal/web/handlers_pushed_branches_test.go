@@ -177,7 +177,7 @@ func TestPushedMerge_Refusals(t *testing.T) {
 	peerTip := pbWrite(t, m, pbPeer, "kb/architecture/demo/bbbbbbbb.md", "p")
 	require.NoError(t, m.Get(pbRepo).WithRead(func(svc *store.Service) {
 		ctx := context.Background()
-		_, err := svc.Experiments().OpenExperiment(ctx, "try", "", pbAgent)
+		_, err := svc.Merge().OpenExperiment(ctx, "try", "", pbAgent)
 		require.NoError(t, err)
 	}))
 	hostBefore := pbHead(t, m, pbAgent)

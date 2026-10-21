@@ -13,6 +13,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 type expHistoryPage struct {
@@ -49,8 +50,8 @@ func mergeDeliveredHistory(t *testing.T, ctx context.Context, ri *repos.RepoInst
 			_, err := svc.Facts().WriteFact(ctx, "main", fmt.Sprintf("kb/other%d.md", k),
 				mustSerialize(t, fmt.Sprintf("kb/other%d.md", k), "Other"), "other", "")
 			require.NoError(t, err)
-			require.NoError(t, svc.Branches().MergeBranch(ctx, explainTestBranch, "main", store.StrategyLocalWins))
-			require.NoError(t, svc.Branches().MergeBranch(ctx, "main", explainTestBranch, store.StrategyLocalWins))
+			require.NoError(t, svc.Merge().MergeBranch(ctx, explainTestBranch, "main", merge.StrategyLocalWins))
+			require.NoError(t, svc.Merge().MergeBranch(ctx, "main", explainTestBranch, merge.StrategyLocalWins))
 		})
 	}
 	return writes
@@ -220,7 +221,7 @@ func TestExplain_HistoryDiffIsAgainstEditedFromContent(t *testing.T) {
 	writeExplainFact(t, ctx, ri, path, "Base", 0.5, nil)
 	var xCommit string
 	ri.WithRead(func(svc *store.Service) {
-		exp, err := svc.Experiments().OpenExperiment(ctx, "side", "", explainTestBranch)
+		exp, err := svc.Merge().OpenExperiment(ctx, "side", "", explainTestBranch)
 		require.NoError(t, err)
 		r, err := svc.Facts().WriteFact(ctx, exp.Branch(), path, mustSerializeConf(t, path, "Base", 0.7), "X: confidence", "")
 		require.NoError(t, err)
@@ -228,7 +229,7 @@ func TestExplain_HistoryDiffIsAgainstEditedFromContent(t *testing.T) {
 	})
 	yCommit := writeExplainFact(t, ctx, ri, path, "Base edited", 0.5, nil)
 	ri.WithRead(func(svc *store.Service) {
-		_, err := svc.Experiments().CommitExperiment(ctx, "side", map[string]store.Resolution{
+		_, err := svc.Merge().CommitExperiment(ctx, "side", map[string]merge.Resolution{
 			path: {Body: []byte(mustSerializeConf(t, path, "Base edited", 0.7))},
 		})
 		require.NoError(t, err)

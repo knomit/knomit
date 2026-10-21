@@ -239,7 +239,7 @@ func TestExperimentSweep_CommitRefreshesActivity(t *testing.T) {
 			"---\ntype: observation\n---\n# revive\n\nstill working on it\n", "keep alive", "test")
 		require.NoError(t, err)
 
-		dropped, err := svc.Experiments().ExpireExperiments(ctx, time.Now().Add(-30*24*time.Hour))
+		dropped, err := svc.Merge().ExpireExperiments(ctx, time.Now().Add(-30*24*time.Hour))
 		require.NoError(t, err)
 		require.Empty(t, dropped, "a commit on the experiment refreshed last_activity_at")
 	}))
@@ -258,7 +258,7 @@ func experimentExists(t *testing.T, ri *RepoInstance, name string) bool {
 	t.Helper()
 	var found bool
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, ok, err := svc.Experiments().GetExperiment(context.Background(), name)
+		_, ok, err := svc.Branches().GetExperiment(context.Background(), name)
 		require.NoError(t, err)
 		found = ok
 	}))

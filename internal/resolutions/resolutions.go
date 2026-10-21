@@ -43,6 +43,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 )
 
 // Normalize validates every {body} resolution and rewrites it to the bytes
@@ -57,12 +58,12 @@ func Normalize(
 	ctx context.Context,
 	ri *repos.RepoInstance,
 	parent, experiment string,
-	in map[string]store.Resolution,
-) (map[string]store.Resolution, error) {
+	in map[string]merge.Resolution,
+) (map[string]merge.Resolution, error) {
 	if len(in) == 0 {
 		return in, nil
 	}
-	out := make(map[string]store.Resolution, len(in))
+	out := make(map[string]merge.Resolution, len(in))
 	for file, res := range in {
 		// F25: a dot path is closed to the fact tools, and a resolution is
 		// a fact-tool write whatever its kind — {body} authors content, and
@@ -82,7 +83,7 @@ func Normalize(
 		if err != nil {
 			return nil, err
 		}
-		out[file] = store.Resolution{Body: normalized}
+		out[file] = merge.Resolution{Body: normalized}
 	}
 	return out, nil
 }
@@ -201,7 +202,7 @@ func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 		}
 		var versions []version
 		if name, ok := strings.CutPrefix(experiment, store.ExperimentPrefix); ok {
-			exp, found, err := svc.Experiments().GetExperiment(ctx, name)
+			exp, found, err := svc.Branches().GetExperiment(ctx, name)
 			if err != nil {
 				outErr = fmt.Errorf("resolution for %q: read experiment: %w", file, err)
 				return

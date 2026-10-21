@@ -21,6 +21,7 @@ import (
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -389,7 +390,7 @@ func TestScript_WritesAsThisMachine(t *testing.T) {
 	svc.SetSigner(testsigner.Named("peer"))
 	peer := writeOn(t, ri, "main", "kb/tasks/in/peer.md")
 	svc.SetSigner(nil)
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "main", trigAgent, store.StrategyRemoteWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "main", trigAgent, merge.StrategyRemoteWins))
 	settle(t, ri)
 
 	commits := commitsAfter(t, ri, before)
@@ -502,9 +503,9 @@ func TestScript_ChainAcrossTriggers(t *testing.T) {
 	svc.SetSigner(testsigner.Named("peer"))
 	writeOn(t, ri, "main", "kb/other/peer.md")
 	svc.SetSigner(nil)
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "main", trigAgent, store.StrategyRemoteWins))
-	merge := settle(t, ri)
-	info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(merge))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "main", trigAgent, merge.StrategyRemoteWins))
+	mergeTip := settle(t, ri)
+	info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(mergeTip))
 	require.NoError(t, err)
 	require.Len(t, info.Parents, 2, "fixture: the head is the merge commit")
 	require.NotContains(t, info.Message, "Knomit-")

@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 func TestEnsureLocalUpstream_CreatesMissingMainFromOrigin(t *testing.T) {
@@ -96,7 +98,7 @@ func TestAdvanceLocalUpstream_FastForwardsMainFromAgent(t *testing.T) {
 
 	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode, "fresh init: tips equal")
+	require.Equal(t, merge.ModeNoop, res.Mode, "fresh init: tips equal")
 
 	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/x.md", testFactBody("x", 0.9, nil), "x", "")
 	require.NoError(t, err)
@@ -105,7 +107,7 @@ func TestAdvanceLocalUpstream_FastForwardsMainFromAgent(t *testing.T) {
 
 	res, err = svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, res.Mode)
+	require.Equal(t, merge.ModeFF, res.Mode)
 	require.Equal(t, agentTip, res.NewTip)
 	mainTip, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
@@ -119,7 +121,7 @@ func TestAdvanceLocalUpstream_FastForwardsMainFromAgent(t *testing.T) {
 
 	res, err = svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode, "idempotent")
+	require.Equal(t, merge.ModeNoop, res.Mode, "idempotent")
 }
 
 func TestAdvanceLocalUpstream_SkipsWhenMainIsNotAnAncestor(t *testing.T) {
@@ -137,7 +139,7 @@ func TestAdvanceLocalUpstream_SkipsWhenMainIsNotAnAncestor(t *testing.T) {
 
 	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode)
+	require.Equal(t, merge.ModeNoop, res.Mode)
 	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, mainBefore, mainAfter, "diverged: never reset")
@@ -163,7 +165,7 @@ func TestAdvanceLocalUpstream_NoopWhenUpstreamIsTheAgentBranch(t *testing.T) {
 
 	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "agent/a")
 	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode)
+	require.Equal(t, merge.ModeNoop, res.Mode)
 	after, err := svc.Branches().HeadCommit(ctx, "agent/a")
 	require.NoError(t, err)
 	require.Equal(t, before, after)

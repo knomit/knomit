@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/test/testenv"
 )
 
@@ -102,7 +102,7 @@ func TestReconcile_G3_CommonAncestorNoRemoteAgent(t *testing.T) {
 	// histories (agent has kb/local.md, main has kb/promoted.md, sharing
 	// the seed root) produce a single merge commit.
 	syncRes := agent.Sync()
-	require.Equal(t, store.ModeMerge, syncRes.Agent.Mode,
+	require.Equal(t, merge.ModeMerge, syncRes.Agent.Mode,
 		"diverged histories produce one merge commit")
 
 	postAgent := a.Branch("agent/test")
@@ -249,7 +249,7 @@ func TestReconcile_G7_PostPushPicksUpMainAdvance(t *testing.T) {
 	// kb/local.md, main has kb/promoted.md) or fast-forward; never via
 	// the rebase fallback (which only fires on origin/main rewind).
 	syncRes := agent.Sync()
-	require.Contains(t, []store.Mode{store.ModeMerge, store.ModeFF}, syncRes.Agent.Mode,
+	require.Contains(t, []merge.Mode{merge.ModeMerge, merge.ModeFF}, syncRes.Agent.Mode,
 		"post-push main advance must take the merge path, not rebase")
 
 	postAgent := a.Branch("agent/test")
@@ -325,7 +325,7 @@ func TestReconcile_G10_MergeThenRewindDoesNotResurrectOldMain(t *testing.T) {
 	// Steady-state sync: produces a merge commit on the agent whose tree
 	// includes both agent's local-1 and main's main-old.
 	syncRes := agent.Sync()
-	require.Equal(t, store.ModeMerge, syncRes.Agent.Mode,
+	require.Equal(t, merge.ModeMerge, syncRes.Agent.Mode,
 		"setup: steady-state must produce a real merge commit")
 
 	postMergeAgent := a.Branch("agent/test")

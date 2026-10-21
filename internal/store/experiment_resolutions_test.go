@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 // Resolutions settle a refused commit INSIDE the same three-way merge. The
@@ -22,7 +24,7 @@ func TestCommitExperiment_RefusalCarriesTheThreeCommits(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	exp, err := svc.Experiments().OpenExperiment(ctx, "three", "", testAgentBranch)
+	exp, err := svc.Merge().OpenExperiment(ctx, "three", "", testAgentBranch)
 	require.NoError(t, err)
 	forkCommit := exp.ForkCommit
 
@@ -34,8 +36,8 @@ func TestCommitExperiment_RefusalCarriesTheThreeCommits(t *testing.T) {
 	agentHead, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "three", nil)
-	var conflict *MergeConflictError
+	_, err = svc.Merge().CommitExperiment(ctx, "three", nil)
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 
 	require.Equal(t, expHead, conflict.SrcCommit,
@@ -59,22 +61,22 @@ func TestCommitExperiment_BaseIsTheMergeBaseNotTheForkCommit(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	exp, err := svc.Experiments().OpenExperiment(ctx, "resynced", "", testAgentBranch)
+	exp, err := svc.Merge().OpenExperiment(ctx, "resynced", "", testAgentBranch)
 	require.NoError(t, err)
 	forkCommit := exp.ForkCommit
 
 	// A first round of divergence, settled by a sync.
 	writeMergeFact(t, svc, "exp/resynced", "kb/one.md", "one", "experiment one")
 	writeMergeFact(t, svc, testAgentBranch, "kb/one.md", "one", "agent one")
-	_, err = svc.Experiments().SyncExperiment(ctx, "resynced")
+	_, err = svc.Merge().SyncExperiment(ctx, "resynced")
 	require.NoError(t, err)
 
 	// Now a fresh conflict on a different path.
 	writeMergeFact(t, svc, "exp/resynced", "kb/two.md", "two", "experiment two")
 	writeMergeFact(t, svc, testAgentBranch, "kb/two.md", "two", "agent two")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "resynced", nil)
-	var conflict *MergeConflictError
+	_, err = svc.Merge().CommitExperiment(ctx, "resynced", nil)
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 
 	base := mergeBaseOf(t, svc, "exp/resynced", testAgentBranch)
@@ -93,7 +95,7 @@ func TestCommitExperiment_DualAddHasNoBaseVersion(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "dualadd", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "dualadd", "", testAgentBranch)
 	require.NoError(t, err)
 	// Neither side had kb/new.md at the fork point.
 	writeMergeFact(t, svc, "exp/dualadd", "kb/new.md", "new", "experiment version")
@@ -102,8 +104,8 @@ func TestCommitExperiment_DualAddHasNoBaseVersion(t *testing.T) {
 	writeMergeFact(t, svc, "exp/dualadd", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "dualadd", nil)
-	var conflict *MergeConflictError
+	_, err = svc.Merge().CommitExperiment(ctx, "dualadd", nil)
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 
 	require.Equal(t, []string{"kb/base.md", "kb/new.md"}, conflict.Paths)
@@ -123,7 +125,7 @@ func TestCommitExperiment_AllTheirsIsANoop(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "alltheirs", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "alltheirs", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/alltheirs", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
@@ -131,18 +133,18 @@ func TestCommitExperiment_AllTheirsIsANoop(t *testing.T) {
 	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
-	res, err := svc.Experiments().CommitExperiment(ctx, "alltheirs", map[string]Resolution{
-		"kb/base.md": {Side: ResolveDst},
+	res, err := svc.Merge().CommitExperiment(ctx, "alltheirs", map[string]merge.Resolution{
+		"kb/base.md": {Side: merge.ResolveDst},
 	})
 	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode,
+	require.Equal(t, merge.ModeNoop, res.Mode,
 		"an all-theirs resolution produces a tree identical to the parent's")
 
 	agentAfter, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, agentBefore, agentAfter, "no merge commit, so the parent must not move")
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "alltheirs")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "alltheirs")
 	require.NoError(t, err)
 	require.False(t, ok, "the experiment is still deleted — the action did happen")
 }
@@ -154,15 +156,15 @@ func TestCommitExperiment_LeftoverResolutionOnACleanMerge(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "clean", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "clean", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/clean", "kb/exp-only.md", "exp only", "body")
 
 	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "clean", map[string]Resolution{
-		"kb/exp-only.md": {Side: ResolveSrc},
+	_, err = svc.Merge().CommitExperiment(ctx, "clean", map[string]merge.Resolution{
+		"kb/exp-only.md": {Side: merge.ResolveSrc},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "did not conflict")
@@ -173,7 +175,7 @@ func TestCommitExperiment_LeftoverResolutionOnACleanMerge(t *testing.T) {
 	require.Equal(t, agentBefore, agentAfter,
 		"the rejection must happen BEFORE the fast-forward moves the branch")
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "clean")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "clean")
 	require.NoError(t, err)
 	require.True(t, ok, "and the experiment must survive a rejected commit")
 }
@@ -186,16 +188,16 @@ func TestCommitExperiment_ResolutionForDstOnlyPathIsRefused(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "dstonly", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "dstonly", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/dstonly", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 	// Changed on the parent ONLY: not a conflict, and invisible to the walk.
 	writeMergeFact(t, svc, testAgentBranch, "kb/agent-only.md", "agent only", "body")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "dstonly", map[string]Resolution{
-		"kb/base.md":       {Side: ResolveSrc},
-		"kb/agent-only.md": {Side: ResolveSrc},
+	_, err = svc.Merge().CommitExperiment(ctx, "dstonly", map[string]merge.Resolution{
+		"kb/base.md":       {Side: merge.ResolveSrc},
+		"kb/agent-only.md": {Side: merge.ResolveSrc},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "did not conflict")
@@ -227,13 +229,13 @@ func TestCommitExperiment_ResolveOurs_TakesTheExperimentVersion(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "ours", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "ours", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/ours", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "ours", map[string]Resolution{
-		"kb/base.md": {Side: ResolveSrc},
+	_, err = svc.Merge().CommitExperiment(ctx, "ours", map[string]merge.Resolution{
+		"kb/base.md": {Side: merge.ResolveSrc},
 	})
 	require.NoError(t, err)
 
@@ -242,7 +244,7 @@ func TestCommitExperiment_ResolveOurs_TakesTheExperimentVersion(t *testing.T) {
 	require.NotContains(t, got, "agent rewrite",
 		"ResolveSrc must REPLACE the parent's version, not merge into it")
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "ours")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "ours")
 	require.NoError(t, err)
 	require.False(t, ok, "a resolved commit still deletes the experiment")
 }
@@ -252,13 +254,13 @@ func TestCommitExperiment_ResolveTheirs_KeepsTheParentVersion(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "theirs", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "theirs", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/theirs", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "theirs", map[string]Resolution{
-		"kb/base.md": {Side: ResolveDst},
+	_, err = svc.Merge().CommitExperiment(ctx, "theirs", map[string]merge.Resolution{
+		"kb/base.md": {Side: merge.ResolveDst},
 	})
 	require.NoError(t, err)
 
@@ -274,13 +276,13 @@ func TestCommitExperiment_ResolveBody_LandsContentFromNeitherSide(t *testing.T) 
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "merged", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "merged", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/merged", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
 	merged := "---\ntype: observation\nconfidence: 0.9\n---\n# base\n\nboth readings, reconciled\n"
-	_, err = svc.Experiments().CommitExperiment(ctx, "merged", map[string]Resolution{
+	_, err = svc.Merge().CommitExperiment(ctx, "merged", map[string]merge.Resolution{
 		"kb/base.md": {Body: []byte(merged)},
 	})
 	require.NoError(t, err)
@@ -298,13 +300,13 @@ func TestCommitExperiment_BodyWinsOverSide(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "both", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "both", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/both", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "both", map[string]Resolution{
-		"kb/base.md": {Side: ResolveDst, Body: []byte("---\ntype: observation\n---\n# base\n\nthe body\n")},
+	_, err = svc.Merge().CommitExperiment(ctx, "both", map[string]merge.Resolution{
+		"kb/base.md": {Side: merge.ResolveDst, Body: []byte("---\ntype: observation\n---\n# base\n\nthe body\n")},
 	})
 	require.NoError(t, err)
 	require.Contains(t, readExperimentFact(t, svc, testAgentBranch, "kb/base.md"), "the body")
@@ -317,7 +319,7 @@ func TestCommitExperiment_EmptyResolutionIsRefused(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "empty", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "empty", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/empty", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
@@ -325,7 +327,7 @@ func TestCommitExperiment_EmptyResolutionIsRefused(t *testing.T) {
 	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "empty", map[string]Resolution{
+	_, err = svc.Merge().CommitExperiment(ctx, "empty", map[string]merge.Resolution{
 		"kb/base.md": {},
 	})
 	require.Error(t, err)
@@ -344,7 +346,7 @@ func TestCommitExperiment_ResolutionForNonConflictingPathIsRefused(t *testing.T)
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "extra", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "extra", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/extra", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, "exp/extra", "kb/exp-only.md", "exp only", "body")
@@ -354,9 +356,9 @@ func TestCommitExperiment_ResolutionForNonConflictingPathIsRefused(t *testing.T)
 	require.NoError(t, err)
 	commitsBefore := countRows(t, svc, `SELECT count(*) FROM branch_commits`)
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "extra", map[string]Resolution{
-		"kb/base.md":     {Side: ResolveSrc},
-		"kb/exp-only.md": {Side: ResolveSrc}, // added only on the experiment: no conflict
+	_, err = svc.Merge().CommitExperiment(ctx, "extra", map[string]merge.Resolution{
+		"kb/base.md":     {Side: merge.ResolveSrc},
+		"kb/exp-only.md": {Side: merge.ResolveSrc}, // added only on the experiment: no conflict
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "did not conflict")
@@ -378,7 +380,7 @@ func TestCommitExperiment_PartialResolutionsRefuseOnlyTheRest(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "partial", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "partial", "", testAgentBranch)
 	require.NoError(t, err)
 	for _, p := range []string{"kb/a.md", "kb/b.md", "kb/c.md"} {
 		writeMergeFact(t, svc, "exp/partial", p, "base", "experiment rewrite")
@@ -390,11 +392,11 @@ func TestCommitExperiment_PartialResolutionsRefuseOnlyTheRest(t *testing.T) {
 	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "partial", map[string]Resolution{
-		"kb/a.md": {Side: ResolveSrc},
-		"kb/b.md": {Side: ResolveDst},
+	_, err = svc.Merge().CommitExperiment(ctx, "partial", map[string]merge.Resolution{
+		"kb/a.md": {Side: merge.ResolveSrc},
+		"kb/b.md": {Side: merge.ResolveDst},
 	})
-	var conflict *MergeConflictError
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 	require.Equal(t, []string{"kb/c.md"}, conflict.Paths,
 		"only the unresolved path may be reported")
@@ -409,10 +411,10 @@ func TestCommitExperiment_PartialResolutionsRefuseOnlyTheRest(t *testing.T) {
 	require.Equal(t, agentBefore, agentAfter)
 
 	// And the retry that settles the last one goes through.
-	_, err = svc.Experiments().CommitExperiment(ctx, "partial", map[string]Resolution{
-		"kb/a.md": {Side: ResolveSrc},
-		"kb/b.md": {Side: ResolveDst},
-		"kb/c.md": {Side: ResolveSrc},
+	_, err = svc.Merge().CommitExperiment(ctx, "partial", map[string]merge.Resolution{
+		"kb/a.md": {Side: merge.ResolveSrc},
+		"kb/b.md": {Side: merge.ResolveDst},
+		"kb/c.md": {Side: merge.ResolveSrc},
 	})
 	require.NoError(t, err)
 	require.Contains(t, readExperimentFact(t, svc, testAgentBranch, "kb/a.md"), "experiment rewrite")
@@ -427,15 +429,15 @@ func TestCommitExperiment_EverythingElseStillMerges(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "rest", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "rest", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/rest", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, "exp/rest", "kb/exp-only.md", "exp only", "from the experiment")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/agent-only.md", "agent only", "from the agent branch")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "rest", map[string]Resolution{
-		"kb/base.md": {Side: ResolveSrc},
+	_, err = svc.Merge().CommitExperiment(ctx, "rest", map[string]merge.Resolution{
+		"kb/base.md": {Side: merge.ResolveSrc},
 	})
 	require.NoError(t, err)
 
@@ -453,25 +455,25 @@ func TestCommitExperiment_NewConflictAfterParentMovesIsListedAlone(t *testing.T)
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "moving", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "moving", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/moving", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, "exp/moving", "kb/second.md", "second", "experiment second")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
 	// First refusal names one path.
-	_, err = svc.Experiments().CommitExperiment(ctx, "moving", nil)
-	var first *MergeConflictError
+	_, err = svc.Merge().CommitExperiment(ctx, "moving", nil)
+	var first *merge.MergeConflictError
 	require.ErrorAs(t, err, &first)
 	require.Equal(t, []string{"kb/base.md"}, first.Paths)
 
 	// The parent moves under us, colliding with a second path.
 	writeMergeFact(t, svc, testAgentBranch, "kb/second.md", "second", "agent second")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "moving", map[string]Resolution{
-		"kb/base.md": {Side: ResolveSrc},
+	_, err = svc.Merge().CommitExperiment(ctx, "moving", map[string]merge.Resolution{
+		"kb/base.md": {Side: merge.ResolveSrc},
 	})
-	var second *MergeConflictError
+	var second *merge.MergeConflictError
 	require.ErrorAs(t, err, &second)
 	require.Equal(t, []string{"kb/second.md"}, second.Paths,
 		"only the NEW conflict — the resolved path must not be re-reported")
@@ -486,13 +488,13 @@ func TestCommitExperiment_ResolutionsRejectedForResolvingStrategies(t *testing.T
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "strat", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "strat", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/strat", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	_, err = svc.rh.MergeIntoBranchResolvedForTest(ctx, "exp/strat", testAgentBranch, StrategyLocalWins,
-		map[string]Resolution{"kb/base.md": {Side: ResolveSrc}})
+	_, err = svc.rh.MergeIntoBranchResolvedForTest(ctx, "exp/strat", testAgentBranch, merge.StrategyLocalWins,
+		map[string]merge.Resolution{"kb/base.md": {Side: merge.ResolveSrc}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "resolutions are only valid with")
 }
@@ -515,18 +517,18 @@ func TestResolvedCommit_IsSigned(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, guard.PGPSignature, "precondition: the test signer is installed and live")
 
-	_, err = svc.Experiments().OpenExperiment(ctx, "signedres", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "signedres", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/signedres", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
 	// ResolveSrc, not ResolveDst: taking the parent's side would produce a
 	// tree identical to dst and therefore NO merge commit to inspect.
-	res, err := svc.Experiments().CommitExperiment(ctx, "signedres", map[string]Resolution{
-		"kb/base.md": {Side: ResolveSrc},
+	res, err := svc.Merge().CommitExperiment(ctx, "signedres", map[string]merge.Resolution{
+		"kb/base.md": {Side: merge.ResolveSrc},
 	})
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode, "precondition: a real merge commit was synthesized")
+	require.Equal(t, merge.ModeMerge, res.Mode, "precondition: a real merge commit was synthesized")
 
 	hash, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
@@ -549,16 +551,16 @@ func TestResolvedCommit_ReachesNotifyCommitOnDst(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "notify", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "notify", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/notify", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	res, err := svc.Experiments().CommitExperiment(ctx, "notify", map[string]Resolution{
-		"kb/base.md": {Side: ResolveSrc},
+	res, err := svc.Merge().CommitExperiment(ctx, "notify", map[string]merge.Resolution{
+		"kb/base.md": {Side: merge.ResolveSrc},
 	})
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 
 	newTip, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
@@ -582,25 +584,25 @@ func TestResolvedCommit_ReachesNotifyCommitOnDst(t *testing.T) {
 func TestCommitExperiment_ResolveInsertArm(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		res  Resolution
+		res  merge.Resolution
 		want string
 		gone string
 	}{
-		{"ours takes the experiment's addition", Resolution{Side: ResolveSrc}, "experiment version", "agent version"},
-		{"theirs keeps the parent's addition", Resolution{Side: ResolveDst}, "agent version", "experiment version"},
-		{"body lands neither", Resolution{Body: []byte("---\ntype: observation\n---\n# new\n\nthird version\n")}, "third version", "agent version"},
+		{"ours takes the experiment's addition", merge.Resolution{Side: merge.ResolveSrc}, "experiment version", "agent version"},
+		{"theirs keeps the parent's addition", merge.Resolution{Side: merge.ResolveDst}, "agent version", "experiment version"},
+		{"body lands neither", merge.Resolution{Body: []byte("---\ntype: observation\n---\n# new\n\nthird version\n")}, "third version", "agent version"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			svc := newExperimentTestStore(t)
 
-			_, err := svc.Experiments().OpenExperiment(ctx, "insertarm", "", testAgentBranch)
+			_, err := svc.Merge().OpenExperiment(ctx, "insertarm", "", testAgentBranch)
 			require.NoError(t, err)
 			// Neither side had kb/new.md at the fork point.
 			writeMergeFact(t, svc, "exp/insertarm", "kb/new.md", "new", "experiment version")
 			writeMergeFact(t, svc, testAgentBranch, "kb/new.md", "new", "agent version")
 
-			_, err = svc.Experiments().CommitExperiment(ctx, "insertarm", map[string]Resolution{
+			_, err = svc.Merge().CommitExperiment(ctx, "insertarm", map[string]merge.Resolution{
 				"kb/new.md": tc.res,
 			})
 			require.NoError(t, err)
@@ -621,15 +623,15 @@ func TestCommitExperiment_ResolveDeleteArm(t *testing.T) {
 
 	// Seed, fork, then delete on the experiment and modify on the parent.
 	writeMergeFact(t, svc, testAgentBranch, "kb/doomed.md", "doomed", "original")
-	_, err := svc.Experiments().OpenExperiment(ctx, "deletearm", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "deletearm", "", testAgentBranch)
 	require.NoError(t, err)
 	_, err = svc.Facts().DeleteFact(ctx, "exp/deletearm", "kb/doomed.md", "retract on the experiment")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, testAgentBranch, "kb/doomed.md", "doomed", "agent rewrite")
 
 	// Unresolved, this refuses.
-	_, err = svc.Experiments().CommitExperiment(ctx, "deletearm", nil)
-	var conflict *MergeConflictError
+	_, err = svc.Merge().CommitExperiment(ctx, "deletearm", nil)
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 	require.Equal(t, []string{"kb/doomed.md"}, conflict.Paths)
 	require.True(t, conflict.HasBase("kb/doomed.md"),
@@ -637,8 +639,8 @@ func TestCommitExperiment_ResolveDeleteArm(t *testing.T) {
 
 	// "ours" is the experiment's version, and the experiment's version is that
 	// the fact is GONE.
-	_, err = svc.Experiments().CommitExperiment(ctx, "deletearm", map[string]Resolution{
-		"kb/doomed.md": {Side: ResolveSrc},
+	_, err = svc.Merge().CommitExperiment(ctx, "deletearm", map[string]merge.Resolution{
+		"kb/doomed.md": {Side: merge.ResolveSrc},
 	})
 	require.NoError(t, err)
 
@@ -655,14 +657,14 @@ func TestCommitExperiment_ResolveDeleteArm_TheirsKeepsTheFact(t *testing.T) {
 	svc := newExperimentTestStore(t)
 
 	writeMergeFact(t, svc, testAgentBranch, "kb/doomed.md", "doomed", "original")
-	_, err := svc.Experiments().OpenExperiment(ctx, "keepit", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "keepit", "", testAgentBranch)
 	require.NoError(t, err)
 	_, err = svc.Facts().DeleteFact(ctx, "exp/keepit", "kb/doomed.md", "retract on the experiment")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, testAgentBranch, "kb/doomed.md", "doomed", "agent rewrite")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "keepit", map[string]Resolution{
-		"kb/doomed.md": {Side: ResolveDst},
+	_, err = svc.Merge().CommitExperiment(ctx, "keepit", map[string]merge.Resolution{
+		"kb/doomed.md": {Side: merge.ResolveDst},
 	})
 	require.NoError(t, err)
 

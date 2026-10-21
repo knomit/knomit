@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // The commit summary says, per path, how the repo's `conflicts` setting (or
@@ -17,7 +17,7 @@ import (
 func TestSettledSummary_SaysWhatWasDropped(t *testing.T) {
 	require.Empty(t, settledSummary(nil), "nothing settled: nothing appended")
 
-	s := settledSummary([]store.SettledPath{
+	s := settledSummary([]merge.SettledPath{
 		{Path: "kb/a.md", Kept: "merged"},
 		{Path: "kb/b.md", Kept: "dst", Dropped: "src-modify"},
 		{Path: "kb/c.md", Kept: "dst", Dropped: "src-modify", Deleted: true},

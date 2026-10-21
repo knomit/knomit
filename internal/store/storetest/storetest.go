@@ -12,7 +12,6 @@ import (
 	"knomit/internal/store"
 	"knomit/internal/store/internal/sqlite"
 	"knomit/internal/store/internal/vcs"
-	"knomit/internal/store/merge"
 )
 
 // SetRef moves (or creates) the git reference name to the commit hash WITHOUT a
@@ -88,7 +87,7 @@ func RemoteURLs(s *store.Service, remote string) []string {
 // backdates the row; backdating makes the assertion about WHICH experiment the
 // cutoff selects. Production records activity through NotifyCommit only.
 func SetExperimentActivity(ctx context.Context, s *store.Service, name string, when time.Time) error {
-	return merge.ServiceRepoForTest(s).SetExperimentActivityForTest(ctx, name, when)
+	return s.Merge().SetExperimentActivityForTest(ctx, name, when)
 }
 
 // SetFallbackSigner installs signer as the commit signer of every Service in

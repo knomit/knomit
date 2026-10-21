@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 // writeThreeVersions writes kb/t.md three times and returns the three commit
@@ -157,7 +159,7 @@ func TestRevisionsBefore_MergeAnomalyPicksFirstParent(t *testing.T) {
 	mainRes, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v3", 0.7, nil), "v3 on main", "")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyLocalWins))
 
 	tip, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)

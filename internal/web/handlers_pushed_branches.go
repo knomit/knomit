@@ -20,6 +20,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/internal/web/hal"
 )
 
@@ -64,12 +65,12 @@ func handleHALPushedBranches(
 			sort.Strings(names)
 
 			var (
-				infos []store.PushedBranchInfo
+				infos []merge.PushedBranchInfo
 				err2  error
 			)
 			if len(names) > 0 {
 				if aerr := ri.WithRead(func(svc *store.Service) {
-					infos, err2 = svc.PushedBranches(r.Context(), names, ri.AgentBranch(), ri.OntologyRoot())
+					infos, err2 = svc.Merge().PushedBranches(r.Context(), names, ri.AgentBranch(), ri.OntologyRoot())
 				}); aerr != nil {
 					hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
 					return
@@ -142,13 +143,13 @@ func handlePushedMerge() http.HandlerFunc {
 				"expected_tip must be the full 40-hex commit of the pushed branch you reviewed", r.URL.Path)
 			return
 		}
-		var side store.ResolutionSide
+		var side merge.ResolutionSide
 		switch req.Resolution {
 		case "":
 		case "host":
-			side = store.ResolveDst
+			side = merge.ResolveDst
 		case "peer":
-			side = store.ResolveSrc
+			side = merge.ResolveSrc
 		default:
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid resolution",
 				`resolution must be "host" (keep this host's version of every conflicting fact) or "peer" (take the pushed branch's); got `+
@@ -170,7 +171,7 @@ func handlePushedMerge() http.HandlerFunc {
 		pushed := ri.IsPushedBranch(branch)
 		var (
 			exists bool
-			res    store.AgentReconcileResult
+			res    merge.AgentReconcileResult
 			err    error
 		)
 		if aerr := ri.WithRead(func(svc *store.Service) {
@@ -214,9 +215,9 @@ func handlePushedMerge() http.HandlerFunc {
 // branch's, peer_commit the pushed branch's — so the UI can link each fact's
 // two versions.
 func writePushedMergeError(w http.ResponseWriter, r *http.Request, err error) {
-	var conflict *store.MergeConflictError
-	var moved *store.BranchMovedError
-	var private *store.PrivatePathMergeError
+	var conflict *merge.MergeConflictError
+	var moved *merge.BranchMovedError
+	var private *merge.PrivatePathMergeError
 	var invalid *store.ValidationRefusedError
 	switch {
 	case errors.As(err, &invalid):
@@ -242,7 +243,7 @@ func writePushedMergeError(w http.ResponseWriter, r *http.Request, err error) {
 		hal.WriteProblemWithExtra(w, http.StatusConflict, "Branch moved",
 			moved.Branch+" moved since you reviewed it; review it again", r.URL.Path,
 			map[string]any{"expected_tip": moved.Expected, "actual_tip": moved.Actual})
-	case errors.Is(err, store.ErrUnrelatedHistories):
+	case errors.Is(err, merge.ErrUnrelatedHistories):
 		hal.WriteProblem(w, http.StatusConflict, "Unrelated histories", err.Error(), r.URL.Path)
 	case errors.Is(err, store.ErrNoSigner):
 		hal.WriteProblem(w, http.StatusConflict, "Cannot sign", err.Error(), r.URL.Path)

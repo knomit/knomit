@@ -258,7 +258,7 @@ func experimentChangedPaths(w http.ResponseWriter, r *http.Request, ri *repos.Re
 		err   error
 	)
 	if aerr := ri.WithRead(func(svc *store.Service) {
-		exp, found, err = svc.Experiments().GetExperiment(r.Context(), name)
+		exp, found, err = svc.Branches().GetExperiment(r.Context(), name)
 		if err != nil || !found {
 			return
 		}

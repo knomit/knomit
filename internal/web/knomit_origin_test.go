@@ -11,6 +11,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // originFactBody is a minimal valid fact: the frontmatter the indexer needs
@@ -55,7 +56,7 @@ func TestKnomitOrigin_SubscribeFollowsPeerMain(t *testing.T) {
 		require.NoError(t, werr)
 		res, rerr := s.AdvanceLocalUpstream(ctx, "agent/a", "main")
 		require.NoError(t, rerr)
-		require.Equal(t, store.ModeFF, res.Mode)
+		require.Equal(t, merge.ModeFF, res.Mode)
 	}))
 
 	srvA := httptest.NewServer(GitRemoteHandler(a))
@@ -83,7 +84,7 @@ func TestKnomitOrigin_SubscribeFollowsPeerMain(t *testing.T) {
 		require.NoError(t, werr)
 		res, rerr := s.AdvanceLocalUpstream(ctx, "agent/a", "main")
 		require.NoError(t, rerr)
-		require.Equal(t, store.ModeFF, res.Mode)
+		require.Equal(t, merge.ModeFF, res.Mode)
 	}))
 
 	// B's sync — restarting its Sync stage runs one inline reconcile under a

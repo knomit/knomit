@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 func TestRemoteStatusIsError(t *testing.T) {
@@ -24,16 +25,16 @@ func TestRemoteStatusIsError(t *testing.T) {
 
 func TestShouldBroadcastSyncOK(t *testing.T) {
 	noop := store.SyncResult{
-		Main:  store.MainReconcileResult{Mode: store.ModeNoop},
-		Agent: store.AgentReconcileResult{Mode: store.ModeNoop},
+		Main:  store.MainReconcileResult{Mode: merge.ModeNoop},
+		Agent: merge.AgentReconcileResult{Mode: merge.ModeNoop},
 	}
 	mainMoved := store.SyncResult{
-		Main:  store.MainReconcileResult{Mode: store.ModeFF},
-		Agent: store.AgentReconcileResult{Mode: store.ModeNoop},
+		Main:  store.MainReconcileResult{Mode: merge.ModeFF},
+		Agent: merge.AgentReconcileResult{Mode: merge.ModeNoop},
 	}
 	agentMoved := store.SyncResult{
-		Main:  store.MainReconcileResult{Mode: store.ModeNoop},
-		Agent: store.AgentReconcileResult{Mode: store.ModeMerge},
+		Main:  store.MainReconcileResult{Mode: merge.ModeNoop},
+		Agent: merge.AgentReconcileResult{Mode: merge.ModeMerge},
 	}
 	// A zero Mode is the "step did not run / nothing to report" shape, which
 	// must be treated exactly like noop rather than as a change.

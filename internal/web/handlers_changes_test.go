@@ -14,6 +14,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 type changesPage struct {
@@ -199,7 +200,7 @@ func TestREST_Changes_CursorForMainRefusedOnABranchContainingItsHead(t *testing.
 	agent := ri.AgentBranch()
 	seedOn(t, ri, "main", "kb/tasks/a/t1.md", "kb/tasks/a/t2.md", "kb/tasks/a/t3.md")
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().MergeBranch(context.Background(), "main", agent, store.StrategyLocalWins))
+		require.NoError(t, svc.Merge().MergeBranch(context.Background(), "main", agent, merge.StrategyLocalWins))
 	}))
 
 	rec, p1 := getChanges(t, r, "/repos/alpha/branches/main/changes?prefix=tasks/a&limit=1")

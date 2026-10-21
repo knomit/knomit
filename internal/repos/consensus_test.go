@@ -621,7 +621,7 @@ func TestConsensus_ConflictLeftForHuman(t *testing.T) {
 	require.Zero(t, s.Merges)
 	require.Equal(t, 1, warningsWith(s, "conflicting paths kb/tasks/shared.md"), "one warning: %v", s.Warnings)
 	require.True(t, h.ri.IsPushedBranch(cPeerAgent))
-	info, err := h.svc(t).PushedBranches(context.Background(), []string{cPeerAgent}, cHostAgent, "kb")
+	info, err := h.svc(t).Merge().PushedBranches(context.Background(), []string{cPeerAgent}, cHostAgent, "kb")
 	require.NoError(t, err)
 	require.Len(t, info, 1)
 	require.Positive(t, info[0].ToMerge, "left in the Pushed branches list for a human")

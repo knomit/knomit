@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/merge"
 )
 
 // #394: a commit written on an experiment branch is authored and committed by
@@ -75,7 +76,7 @@ func TestExperimentCommits_AuthoredByOwningAgent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Experiment 1: every write kind, a sync merge, then a merge-commit commit.
-	_, err = svc.Experiments().OpenExperiment(ctx, "every-path", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "every-path", "", testAgentBranch)
 	require.NoError(t, err)
 	exp := "exp/every-path"
 	content := func(title string) string { return "---\ntype: observation\n---\n# " + title + "\n\nbody\n" }
@@ -91,9 +92,9 @@ func TestExperimentCommits_AuthoredByOwningAgent(t *testing.T) {
 	require.NoError(t, err)
 	// The agent branch moves, so sync writes a merge commit ON the experiment.
 	writeMergeFact(t, svc, testAgentBranch, "kb/agent-side.md", "agent side", "body")
-	syncRes, err := svc.Experiments().SyncExperiment(ctx, "every-path")
+	syncRes, err := svc.Merge().SyncExperiment(ctx, "every-path")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, syncRes.Mode, "fixture: sync must synthesize a merge commit on the experiment")
+	require.Equal(t, merge.ModeMerge, syncRes.Mode, "fixture: sync must synthesize a merge commit on the experiment")
 	expTip, err := svc.Branches().HeadCommit(ctx, exp)
 	require.NoError(t, err)
 	onExp := commitsSince(t, svc, expTip, forkBase)
@@ -102,18 +103,18 @@ func TestExperimentCommits_AuthoredByOwningAgent(t *testing.T) {
 
 	// Then the agent branch moves again, so the commit is a merge commit.
 	writeMergeFact(t, svc, testAgentBranch, "kb/agent-side-2.md", "agent side 2", "body")
-	res, err := svc.Experiments().CommitExperiment(ctx, "every-path", nil)
+	res, err := svc.Merge().CommitExperiment(ctx, "every-path", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode, "fixture: the commit writes a merge commit")
+	require.Equal(t, merge.ModeMerge, res.Mode, "fixture: the commit writes a merge commit")
 
 	// Experiment 2: a fast-forward commit carries the experiment's own commits
 	// onto the agent branch unchanged — so they must already be the agent's.
-	_, err = svc.Experiments().OpenExperiment(ctx, "fast-forward", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "fast-forward", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/fast-forward", "kb/ff.md", "ff", "body")
-	res, err = svc.Experiments().CommitExperiment(ctx, "fast-forward", nil)
+	res, err = svc.Merge().CommitExperiment(ctx, "fast-forward", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, res.Mode, "fixture: nothing moved on the parent, so this is a fast-forward")
+	require.Equal(t, merge.ModeFF, res.Mode, "fixture: nothing moved on the parent, so this is a fast-forward")
 
 	agentTip, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
@@ -132,7 +133,7 @@ func TestExperimentCommits_EmptyOwnerUsesRecordedParent(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, owner, "fixture: no owner recorded")
 
-	_, err = svc.Experiments().OpenExperiment(ctx, "unowned", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "unowned", "", testAgentBranch)
 	require.NoError(t, err)
 	h := writeMergeFact(t, svc, "exp/unowned", "kb/x.md", "x", "body")
 	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
@@ -166,7 +167,7 @@ func TestExperimentCommits_NoOwnerNoWrite(t *testing.T) {
 
 	t.Run("taken over", func(t *testing.T) {
 		svc := newExperimentTestStore(t)
-		_, err := svc.Experiments().OpenExperiment(ctx, "stale", "", testAgentBranch)
+		_, err := svc.Merge().OpenExperiment(ctx, "stale", "", testAgentBranch)
 		require.NoError(t, err)
 		writeMergeFact(t, svc, testAgentBranch, "kb/moved.md", "moved", "body")
 		require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/successor", testAgentBranch))
@@ -176,7 +177,7 @@ func TestExperimentCommits_NoOwnerNoWrite(t *testing.T) {
 		_, err = svc.Facts().WriteFact(ctx, "exp/stale", "kb/x.md", content, "learn: x", "learn")
 		require.ErrorIs(t, err, ErrStaleExperimentParent)
 		// The sync merge commit is refused the same way (its own gate first).
-		_, err = svc.Experiments().SyncExperiment(ctx, "stale")
+		_, err = svc.Merge().SyncExperiment(ctx, "stale")
 		require.ErrorIs(t, err, ErrStaleExperimentParent)
 		after, err := svc.Branches().HeadCommit(ctx, "exp/stale")
 		require.NoError(t, err)
@@ -193,7 +194,7 @@ func TestExperimentCommits_NoOwnerNoWrite(t *testing.T) {
 		writeMergeFact(t, svc, testAgentBranch, "kb/moved.md", "moved", "body")
 		before, err := svc.Branches().HeadCommit(ctx, "exp/ghost")
 		require.NoError(t, err)
-		_, err = svc.rh.MergeIntoBranchForTest(ctx, testAgentBranch, "exp/ghost", StrategyRemoteWins)
+		_, err = svc.rh.MergeIntoBranchForTest(ctx, testAgentBranch, "exp/ghost", merge.StrategyRemoteWins)
 		require.ErrorIs(t, err, ErrOrphanExperimentRef)
 		after, err := svc.Branches().HeadCommit(ctx, "exp/ghost")
 		require.NoError(t, err)
@@ -246,17 +247,17 @@ func TestCheckRange_ExperimentRangeNamesTheOwningAgent(t *testing.T) {
 	require.NoError(t, svc.Branches().CreateBranch(ctx, testAgentBranch, "main"))
 	require.NoError(t, svc.Branches().SetAgentBranchOwner(ctx, testAgentBranch))
 
-	_, err = svc.Experiments().OpenExperiment(ctx, "gated", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "gated", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/gated", "kb/notes/one.md", "one", "body")
 	writeMergeFact(t, svc, testAgentBranch, "kb/notes/agent.md", "agent", "body")
-	_, err = svc.Experiments().SyncExperiment(ctx, "gated")
+	_, err = svc.Merge().SyncExperiment(ctx, "gated")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/gated", "kb/notes/two.md", "two", "body")
 	writeMergeFact(t, svc, testAgentBranch, "kb/notes/agent-2.md", "agent 2", "body")
-	res, err := svc.Experiments().CommitExperiment(ctx, "gated", nil)
+	res, err := svc.Merge().CommitExperiment(ctx, "gated", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode, "fixture: a merge commit lands the experiment")
+	require.Equal(t, merge.ModeMerge, res.Mode, "fixture: a merge commit lands the experiment")
 
 	mainTip, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)

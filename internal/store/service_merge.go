@@ -35,20 +35,20 @@ import (
 // setting settled the conflicts (guardPrivate); one whose result adds or
 // changes a fact that fails the ontology's validations at dst's tip is
 // refused with *ValidationRefusedError (validateFacts, RuleValidation).
-func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumbing.Hash, side ResolutionSide) (AgentReconcileResult, error) {
+func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumbing.Hash, side merge.ResolutionSide) (merge.AgentReconcileResult, error) {
 	if srcTip.IsZero() {
-		return AgentReconcileResult{}, fmt.Errorf("MergePushed: the reviewed tip of %s is required", src)
+		return merge.AgentReconcileResult{}, fmt.Errorf("MergePushed: the reviewed tip of %s is required", src)
 	}
 	switch side {
-	case "", ResolveSrc, ResolveDst:
+	case "", merge.ResolveSrc, merge.ResolveDst:
 	default:
-		return AgentReconcileResult{}, fmt.Errorf("MergePushed: unknown side %q", side)
+		return merge.AgentReconcileResult{}, fmt.Errorf("MergePushed: unknown side %q", side)
 	}
 	rh := s.rh
 	unlock := rh.LockBranch(dst)
 	defer unlock()
 	o := merge.MergeOpts{SrcTip: srcTip, Record: true, Side: side, GuardPrivate: true, ValidateFacts: true}
-	strategy := StrategyRefuse
+	strategy := merge.StrategyRefuse
 	if side == "" {
 		strategy = s.hostConflictStrategy(ctx, &o)
 	}
@@ -61,12 +61,12 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 // — that setting, with the host's own branch (dst, which the consensus branch
 // follows) as the consensus side and Refuse for whatever a key set to off
 // leaves.
-func (s *Service) hostConflictStrategy(ctx context.Context, o *merge.MergeOpts) ConflictStrategy {
+func (s *Service) hostConflictStrategy(ctx context.Context, o *merge.MergeOpts) merge.ConflictStrategy {
 	strategy, on := s.rh.ConflictsStrategy(ctx, s.UpstreamBranch())
 	if !on {
-		return StrategyRefuse
+		return merge.StrategyRefuse
 	}
-	o.FactConsensus, o.FactFallback = fact.MergeDst, StrategyRefuse
+	o.FactConsensus, o.FactFallback = fact.MergeDst, merge.StrategyRefuse
 	return strategy
 }
 
@@ -90,9 +90,9 @@ func (s *Service) hostConflictStrategy(ctx context.Context, o *merge.MergeOpts) 
 // Like MergePushed, a merge whose result would change a private path of dst
 // is refused (*PrivatePathMergeError); the consensus merger remembers the
 // refused tip and retries the branch once it moves.
-func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip plumbing.Hash) (AgentReconcileResult, error) {
+func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip plumbing.Hash) (merge.AgentReconcileResult, error) {
 	if srcTip.IsZero() {
-		return AgentReconcileResult{}, fmt.Errorf("MergeConsensus: the tip of %s is required", src)
+		return merge.AgentReconcileResult{}, fmt.Errorf("MergeConsensus: the tip of %s is required", src)
 	}
 	rh := s.rh
 	unlock := rh.LockBranch(dst)
@@ -101,31 +101,3 @@ func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip pl
 	strategy := s.hostConflictStrategy(ctx, &o)
 	return rh.MergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
 }
-
-// OntologyAt returns the ontology file at branch's tip, trying every ontology
-// path newest first: (nil, nil) when that tree has none. The consensus merger
-// reads the repo's settings where the repo's owner decides them, the tip of
-// the consensus branch.
-//
-// A symlink at the first rung present is an error wrapping
-// fact.ErrSymlinkNotFollowed and naming the path, never (nil, nil).
-func (s *Service) OntologyAt(ctx context.Context, branch string) ([]byte, error) {
-	_, data, err := s.rh.OntologyFileAt(ctx, branch)
-	return data, err
-}
-
-// OntologyFileAt is OntologyAt also returning the rung it read ("" when the
-// tip has none). The repo's open (repos.loadOntology) and its create-time
-// check (branchHasOntology) read the ontology through it.
-func (s *Service) OntologyFileAt(ctx context.Context, branch string) (string, []byte, error) {
-	return s.rh.OntologyFileAt(ctx, branch)
-}
-
-// PushedBranches reports each named branch against agentBranch. See
-// merge.Repo.PushedBranches.
-func (s *Service) PushedBranches(ctx context.Context, names []string, agentBranch, ontologyRoot string) ([]PushedBranchInfo, error) {
-	return s.rh.PushedBranches(ctx, names, agentBranch, ontologyRoot)
-}
-
-// Experiments returns the experiment lifecycle sub-service.
-func (s *Service) Experiments() ExperimentIndex { return s.rh }

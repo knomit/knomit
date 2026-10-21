@@ -71,7 +71,7 @@ func TestDecodeOptionalJSON_ExperimentCommitThroughTheRouter(t *testing.T) {
 	open := func(name string) {
 		t.Helper()
 		require.NoError(t, m.Get(resolutionRepo).WithRead(func(svc *store.Service) {
-			_, err := svc.Experiments().OpenExperiment(context.Background(), name, "", "agent/test")
+			_, err := svc.Merge().OpenExperiment(context.Background(), name, "", "agent/test")
 			require.NoError(t, err)
 		}))
 	}

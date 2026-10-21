@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/test/testenv"
 )
 
@@ -145,7 +146,7 @@ func TestProperty_MergeIsIdempotent(t *testing.T) {
 
 	const iterations = 50
 	paths := []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md"}
-	strategies := []store.ConflictStrategy{store.StrategyLocalWins, store.StrategyRemoteWins}
+	strategies := []merge.ConflictStrategy{merge.StrategyLocalWins, merge.StrategyRemoteWins}
 
 	for iter := range iterations {
 		gen := testenv.NewOpGen(seed + int64(iter))

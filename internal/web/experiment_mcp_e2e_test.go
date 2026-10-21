@@ -193,7 +193,7 @@ func TestExperiment_IsPerHandleNotPerSession(t *testing.T) {
 	// conjure one for the other job on the same connection.
 	ri := m.Get("jobB-repo")
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		list, err := svc.Experiments().ListExperiments(context.Background())
+		list, err := svc.Merge().ListExperiments(context.Background())
 		require.NoError(t, err)
 		require.Empty(t, list, "job B's repo must hold no experiment")
 	}))
@@ -297,7 +297,7 @@ func TestExperiment_LazyHealAfterAnOutOfBandRollback(t *testing.T) {
 	// with no handle in sight.
 	ri := m.Get("jobA-repo")
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Experiments().RollbackExperiment(context.Background(), "doomed"))
+		require.NoError(t, svc.Merge().RollbackExperiment(context.Background(), "doomed"))
 	}))
 
 	// The caller's next call still runs, on the agent branch.
@@ -344,7 +344,7 @@ func TestExperiment_LazyHealWhenEligibilityLapses(t *testing.T) {
 		AgentBranch: "agent/successor", Ontology: old.Ontology(), OntologyRoot: "kb",
 	}))
 	require.NoError(t, m.Get("jobA-repo").WithRead(func(svc *store.Service) {
-		_, ok, err := svc.Experiments().GetExperiment(context.Background(), "orphaned")
+		_, ok, err := svc.Branches().GetExperiment(context.Background(), "orphaned")
 		require.NoError(t, err)
 		require.True(t, ok, "precondition: the row still EXISTS — only eligibility changed")
 	}))
@@ -399,7 +399,7 @@ func TestLensExperimentMount_RefusesABindingArgument(t *testing.T) {
 	h, m := experimentServer(t)
 	write := m.Get("jobA-repo")
 	require.NoError(t, write.WithRead(func(svc *store.Service) {
-		_, err := svc.Experiments().OpenExperiment(context.Background(), "url-bound", "", write.AgentBranch())
+		_, err := svc.Merge().OpenExperiment(context.Background(), "url-bound", "", write.AgentBranch())
 		require.NoError(t, err)
 	}))
 	_, err := m.LensRegistry().Create(repos.Lens{
@@ -426,7 +426,7 @@ func TestLensExperimentMount_RePinsOnlyTheWriteMember(t *testing.T) {
 	write := m.Get("jobA-repo")
 	read := m.Get("jobB-repo")
 	require.NoError(t, write.WithRead(func(svc *store.Service) {
-		_, err := svc.Experiments().OpenExperiment(context.Background(), "lens-side", "", write.AgentBranch())
+		_, err := svc.Merge().OpenExperiment(context.Background(), "lens-side", "", write.AgentBranch())
 		require.NoError(t, err)
 	}))
 	_, err := m.LensRegistry().Create(repos.Lens{

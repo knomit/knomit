@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // TaskEvent is the event payload broadcast to SSE clients via TaskHub.
@@ -203,7 +204,7 @@ type SyncEvent struct {
 	Remote string                      `json:"remote"`
 	Status string                      `json:"status"` // "sync_ok" or "sync_error"
 	Main   *store.MainReconcileResult  `json:"main,omitempty"`
-	Agent  *store.AgentReconcileResult `json:"agent,omitempty"`
+	Agent  *merge.AgentReconcileResult `json:"agent,omitempty"`
 	Error  string                      `json:"error,omitempty"`
 }
 

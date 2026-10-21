@@ -10,11 +10,11 @@ import "knomit/internal/store/internal/vcs"
 
 // Repo is the merge cluster's view of the git layer: a named handle on the
 // vcs.Repo (vr, never embedded, so none of its methods is promoted onto this
-// type or onto whatever holds it) plus the merge and experiment methods. The parent's repoHandler embeds both
-// *vcs.Repo and *Repo, so callers keep writing rh.MergeBranch,
-// rh.OpenExperiment, ... by promotion; the vcs methods reach them through the
-// repoHandler's own embed. Embedding is not virtual: nothing in
-// here calls a method declared on the parent's repoHandler.
+// type or onto whatever holds it) plus the merge and experiment methods.
+// Service.Merge hands this type out to callers outside the store, which is why
+// it must stay free of vcs methods; the parent's repoHandler embeds it beside
+// *vcs.Repo for its own calls. Embedding is not virtual: nothing in here calls
+// a method declared on the parent's repoHandler.
 type Repo struct {
 	vr *vcs.Repo
 }

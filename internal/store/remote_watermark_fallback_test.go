@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -106,7 +107,7 @@ func TestSync_NoWatermarkResetToAnAncestorDoesNotKeepTheRemovedCommit(t *testing
 
 		wmSetOriginMain(t, bare, r)
 		res := wmSync(t, svc)
-		require.Equal(t, ModeRewound, res.Main.Mode)
+		require.Equal(t, merge.ModeRewound, res.Main.Mode)
 		require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"), "the removed file stays removed")
 		require.False(t, reachableFrom(t, svc, "agent/test", s), "the removed commit is not on the branch")
 		base, err := svc.rh.ReadAgentBaseForTest("agent/test")
@@ -125,8 +126,8 @@ func TestSync_NoWatermarkResetToAnAncestorDoesNotKeepTheRemovedCommit(t *testing
 
 		wmSetOriginMain(t, bare, r)
 		res := wmSync(t, svc)
-		require.Equal(t, ModeRewound, res.Main.Mode)
-		require.Equal(t, ModeRebase, res.Agent.Mode)
+		require.Equal(t, merge.ModeRewound, res.Main.Mode)
+		require.Equal(t, merge.ModeRebase, res.Agent.Mode)
 		require.Equal(t, 1, res.Agent.NumReplayed)
 		require.True(t, hasFileAt(t, svc, "agent/test", "kb/later.md"), "the own unsynced write is kept")
 		require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"))
@@ -158,7 +159,7 @@ func TestSync_ExistingWatermarkIsNotOverwritten(t *testing.T) {
 
 	wmSetOriginMain(t, bare, r)
 	res := wmSync(t, svc)
-	require.Equal(t, ModeRewound, res.Main.Mode)
+	require.Equal(t, merge.ModeRewound, res.Main.Mode)
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/b.md"), "the own unsynced write is kept")
 	require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"), "the real watermark s stops the walk; s is not kept")
 	require.False(t, reachableFrom(t, svc, "agent/test", s))
@@ -179,7 +180,7 @@ func TestSync_NoWatermarkGenuinelyAheadDropsNothing(t *testing.T) {
 	wmDropWatermark(t, svc)
 
 	res := wmSync(t, svc)
-	require.Equal(t, ModeRewound, res.Main.Mode, "setup: the main reconcile reports a rewind")
+	require.Equal(t, merge.ModeRewound, res.Main.Mode, "setup: the main reconcile reports a rewind")
 	require.Equal(t, w, mustHeadHash(t, svc, "agent/test"), "nothing dropped, hashes unchanged")
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/w.md"))
 }
@@ -197,8 +198,8 @@ func TestSync_FirstSyncEverKeepsTheMergeBaseFallback(t *testing.T) {
 
 	wmSetOriginMain(t, bare, r)
 	res := wmSync(t, svc)
-	require.Equal(t, ModeRewound, res.Main.Mode)
-	require.Equal(t, ModeNoop, res.Agent.Mode, "unchanged: the merge-base fallback reads the branch as ahead")
+	require.Equal(t, merge.ModeRewound, res.Main.Mode)
+	require.Equal(t, merge.ModeNoop, res.Agent.Mode, "unchanged: the merge-base fallback reads the branch as ahead")
 	require.Equal(t, s, mustHeadHash(t, svc, "agent/test"))
 	base, err := svc.rh.ReadAgentBaseForTest("agent/test")
 	require.NoError(t, err)

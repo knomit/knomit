@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 )
 
 // #533 review B2, the reviewer's probe made a test: connecting a repository
@@ -43,7 +44,7 @@ func TestValidateWrite_ACopyOfALegacyInvalidFactIsCarriedOver(t *testing.T) {
 
 	iter, err := local.Search().FactsIter(ctx, agent)
 	require.NoError(t, err)
-	res, err := Replay(ctx, local, agent, iter, clone, ReplayConfig{Strategy: StrategyLocalWins, AgentBranch: agent, DefaultBranch: "main"})
+	res, err := Replay(ctx, local, agent, iter, clone, ReplayConfig{Strategy: merge.StrategyLocalWins, AgentBranch: agent, DefaultBranch: "main"})
 	require.NoError(t, err, "connecting a repository with a legacy invalid fact")
 	require.Equal(t, 3, res.FromLocal)
 	paths, err := clone.rh.ListAll(ctx, agent)
@@ -88,7 +89,7 @@ func TestValidateWrite_AReplayThatAltersALegacyInvalidFactJudgesIt(t *testing.T)
 	require.NoError(t, clone.InitRepo(ctx, ont, "main"))
 	iter, err := local.Search().FactsIter(ctx, agent)
 	require.NoError(t, err)
-	_, err = Replay(ctx, local, agent, iter, clone, ReplayConfig{Strategy: StrategyLocalWins, AgentBranch: agent, DefaultBranch: "main"})
+	_, err = Replay(ctx, local, agent, iter, clone, ReplayConfig{Strategy: merge.StrategyLocalWins, AgentBranch: agent, DefaultBranch: "main"})
 	require.ErrorIs(t, err, facts.ErrFactInvalid, "the altered fact is judged")
 	require.Contains(t, err.Error(), "kb/notes/legacy.md")
 }

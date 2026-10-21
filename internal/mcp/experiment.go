@@ -21,6 +21,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/resolutions"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // experimentTool declares knomit_experiment.
@@ -89,7 +90,7 @@ type experimentResult struct {
 //
 // An unusable entry is an ERROR, never a skipped path: silently dropping one
 // would refuse the commit for a path the caller believes it resolved.
-func parseResolutions(raw any) (map[string]store.Resolution, error) {
+func parseResolutions(raw any) (map[string]merge.Resolution, error) {
 	if raw == nil {
 		return nil, nil
 	}
@@ -97,15 +98,15 @@ func parseResolutions(raw any) (map[string]store.Resolution, error) {
 	if !ok {
 		return nil, fmt.Errorf("`resolutions` must be an object keyed by fact path, got %T", raw)
 	}
-	out := make(map[string]store.Resolution, len(m))
+	out := make(map[string]merge.Resolution, len(m))
 	for file, v := range m {
 		switch val := v.(type) {
 		case string:
 			switch val {
 			case "ours":
-				out[file] = store.Resolution{Side: store.ResolveSrc}
+				out[file] = merge.Resolution{Side: merge.ResolveSrc}
 			case "theirs":
-				out[file] = store.Resolution{Side: store.ResolveDst}
+				out[file] = merge.Resolution{Side: merge.ResolveDst}
 			default:
 				return nil, fmt.Errorf("resolution for %q must be \"ours\", \"theirs\", or {\"body\": \"...\"}, got %q", file, val)
 			}
@@ -121,7 +122,7 @@ func parseResolutions(raw any) (map[string]store.Resolution, error) {
 			if body == "" {
 				return nil, fmt.Errorf("resolution body for %q is empty; to drop the fact, retract it instead", file)
 			}
-			out[file] = store.Resolution{Body: []byte(body)}
+			out[file] = merge.Resolution{Body: []byte(body)}
 		default:
 			return nil, fmt.Errorf("resolution for %q must be \"ours\", \"theirs\", or {\"body\": \"...\"}, got %T", file, v)
 		}
@@ -131,7 +132,7 @@ func parseResolutions(raw any) (map[string]store.Resolution, error) {
 
 // rewoundNote opens a refusal that came from rebuilding an experiment open
 // across a rewind, so the reader knows why the experiment is replayed.
-func rewoundNote(c *store.MergeConflictError) string {
+func rewoundNote(c *merge.MergeConflictError) string {
 	if !c.Rewound {
 		return ""
 	}
@@ -149,7 +150,7 @@ func rewoundNote(c *store.MergeConflictError) string {
 //
 // The hashes are FULL and never abbreviated: they are passed straight back as
 // knomit_explain's `commit`, and a shortened one may not resolve.
-func conflictReadingGuide(c *store.MergeConflictError) string {
+func conflictReadingGuide(c *merge.MergeConflictError) string {
 	var b strings.Builder
 	b.WriteString("Read each path with knomit_explain {file, commit}:\n")
 	for _, p := range c.Paths {
@@ -276,7 +277,7 @@ func pickExperiment(name, active string) string {
 
 // experimentList reports this repo's experiments, marking the current one.
 func experimentList(ctx context.Context, svc *store.Service, b *repos.Binding, active string) (experimentResult, error) {
-	all, err := svc.Experiments().ListExperiments(ctx)
+	all, err := svc.Merge().ListExperiments(ctx)
 	if err != nil {
 		return experimentResult{}, err
 	}
@@ -330,7 +331,7 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 			ri.Name(), parent)
 	}
 
-	exp, err := svc.Experiments().OpenExperiment(ctx, name, description, parent)
+	exp, err := svc.Merge().OpenExperiment(ctx, name, description, parent)
 	if err != nil {
 		return experimentResult{}, err
 	}
@@ -402,12 +403,12 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 }
 
 // experimentCommit merges into the agent branch and leaves the experiment.
-func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name string, resolutions map[string]store.Resolution) (experimentResult, error) {
+func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name string, resolutions map[string]merge.Resolution) (experimentResult, error) {
 	if name == "" {
 		return experimentResult{}, errors.New(
 			"knomit_experiment commit needs a `name`, or a session that is inside an experiment")
 	}
-	result, err := svc.Experiments().CommitExperiment(ctx, name, resolutions)
+	result, err := svc.Merge().CommitExperiment(ctx, name, resolutions)
 	if err != nil {
 		// A refused commit is a STATE, not a malfunction, so it comes back as
 		// the paths plus what to do about them rather than as a bare error.
@@ -416,7 +417,7 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 		// the fact at each of them: the fork point, what this experiment made
 		// of it, and what the parent made of it. Telling an agent only that a
 		// path conflicted leaves it to guess at a merge it cannot see.
-		var conflict *store.MergeConflictError
+		var conflict *merge.MergeConflictError
 		if errors.As(err, &conflict) {
 			return experimentResult{}, fmt.Errorf(
 				"commit refused: %s%s and %s both changed %d path(s) since the fork, and nothing was changed.\n"+
@@ -445,7 +446,7 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 	// not make, and someone would go looking for a commit that never existed.
 	summary := fmt.Sprintf("experiment %q merged into %q (%s) and deleted; this session is back on %q",
 		name, agent, result.Mode, agent)
-	if result.Mode == store.ModeNoop {
+	if result.Mode == merge.ModeNoop {
 		summary = fmt.Sprintf(
 			"experiment %q added nothing to %q — the merged result was identical to it, so no commit was written and %q did not move. The experiment is deleted and this session is back on %q",
 			name, agent, agent, agent)
@@ -465,7 +466,7 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 // the experiment is deleted on success, so "merged" alone would read as if
 // nothing was lost. The experiment is the merge source (src), the agent
 // branch the destination (dst).
-func settledSummary(settled []store.SettledPath) string {
+func settledSummary(settled []merge.SettledPath) string {
 	if len(settled) == 0 {
 		return ""
 	}
@@ -507,7 +508,7 @@ func experimentRollback(ctx context.Context, mgr *repos.Manager, svc *store.Serv
 		return experimentResult{}, errors.New(
 			"knomit_experiment rollback needs a `name`, or a session that is inside an experiment")
 	}
-	if err := svc.Experiments().RollbackExperiment(ctx, name); err != nil {
+	if err := svc.Merge().RollbackExperiment(ctx, name); err != nil {
 		return experimentResult{}, err
 	}
 	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
@@ -528,12 +529,12 @@ func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, n
 		return experimentResult{}, errors.New(
 			"knomit_experiment sync needs a `name`, or a session that is inside an experiment")
 	}
-	result, err := svc.Experiments().SyncExperiment(ctx, name)
+	result, err := svc.Merge().SyncExperiment(ctx, name)
 	if err != nil {
 		// Only an experiment open across a rewind can be refused here: its
 		// sync rebuilds it on the new branch, and a parent-wins pick would
 		// drop its own version for good.
-		var conflict *store.MergeConflictError
+		var conflict *merge.MergeConflictError
 		if errors.As(err, &conflict) {
 			return experimentResult{}, fmt.Errorf(
 				"sync refused: %s%s and %s both changed %d path(s), and nothing was changed. "+
@@ -546,7 +547,7 @@ func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, n
 		}
 		return experimentResult{}, err
 	}
-	if result.Mode == store.ModeRebase {
+	if result.Mode == merge.ModeRebase {
 		return experimentResult{
 			Branch: store.ExperimentBranch(name), Active: name,
 			Summary: fmt.Sprintf(

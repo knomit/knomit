@@ -1,8 +1,10 @@
 package store
 
+import "knomit/internal/store/merge"
+
 // ReplayConfig controls replay behavior.
 type ReplayConfig struct {
-	Strategy          ConflictStrategy
+	Strategy          merge.ConflictStrategy
 	AgentBranch       string
 	DefaultBranch     string
 	UseExistingBranch bool // if true and AgentBranch exists on target, replay on top of it

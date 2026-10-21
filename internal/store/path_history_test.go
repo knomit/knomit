@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 )
 
 func openPathHistoryStore(t *testing.T) (*Service, context.Context) {
@@ -182,14 +183,14 @@ func TestPathHistory_MergeDeliveredWrites(t *testing.T) {
 		}
 		_, err := svc.Facts().WriteFact(ctx, "main", fmt.Sprintf("kb/other%d.md", k), testFactBody("x", 0.5, nil), "other", "")
 		require.NoError(t, err)
-		require.NoError(t, svc.Branches().MergeBranch(ctx, "agent", "main", StrategyLocalWins))
+		require.NoError(t, svc.Merge().MergeBranch(ctx, "agent", "main", merge.StrategyLocalWins))
 		tip, err := svc.Branches().HeadCommit(ctx, "main")
 		require.NoError(t, err)
 		mc, err := svc.rh.Repository().CommitObject(plumbing.NewHash(tip))
 		require.NoError(t, err)
 		require.Len(t, mc.ParentHashes, 2, "setup must produce a two-parent PR merge")
 		merges = append(merges, tip)
-		require.NoError(t, svc.Branches().MergeBranch(ctx, "main", "agent", StrategyLocalWins))
+		require.NoError(t, svc.Merge().MergeBranch(ctx, "main", "agent", merge.StrategyLocalWins))
 	}
 
 	fp, err := svc.Search().RevisionsBefore(ctx, "main", p, merges[len(merges)-1], 100)
@@ -266,7 +267,7 @@ func TestPathHistory_DiffBaseIsTheEditedFromContent(t *testing.T) {
 	require.NoError(t, err)
 	y, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody("B edited", 0.5, nil), "Y: body", "")
 	require.NoError(t, err)
-	_, err = svc.rh.MergeIntoBranchResolvedForTest(ctx, "side", "main", StrategyRefuse, map[string]Resolution{
+	_, err = svc.rh.MergeIntoBranchResolvedForTest(ctx, "side", "main", merge.StrategyRefuse, map[string]merge.Resolution{
 		p: {Body: []byte(testFactBody("B edited", 0.7, nil))},
 	})
 	require.NoError(t, err)
@@ -310,9 +311,9 @@ func TestPathHistory_MixedCasePath(t *testing.T) {
 	base := rawCommit(t, svc, "main", nil, map[string]string{real: testFactBody("v1", 0.5, nil)}, t0, "v1")
 	side := rawCommit(t, svc, "side", []string{base}, map[string]string{real: testFactBody("v2", 0.6, nil)}, t0.Add(time.Hour), "v2 on side")
 	other := rawCommit(t, svc, "main", []string{base}, map[string]string{real: testFactBody("v1", 0.5, nil), "kb/Other.md": "x"}, t0.Add(2*time.Hour), "other on main")
-	merge := rawCommit(t, svc, "main", []string{other, side}, map[string]string{real: testFactBody("v2", 0.6, nil), "kb/Other.md": "x"}, t0.Add(3*time.Hour), "Merge pull request")
+	prMerge := rawCommit(t, svc, "main", []string{other, side}, map[string]string{real: testFactBody("v2", 0.6, nil), "kb/Other.md": "x"}, t0.Add(3*time.Hour), "Merge pull request")
 
-	revs := fullHistory(t, svc, "main", p, merge)
+	revs := fullHistory(t, svc, "main", p, prMerge)
 	require.Equal(t, []string{side, base}, historyCommits(revs), "the PR merge carries the side's write; it is not a change")
 }
 
@@ -331,7 +332,7 @@ func TestPathHistory_LocalWinsLoserExcluded(t *testing.T) {
 	require.NoError(t, err)
 	v3, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v3", 0.7, nil), "v3 on main", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyLocalWins))
 
 	tip, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
@@ -435,7 +436,7 @@ func TestPathHistory_RebuildAndVersionResetAreConsistent(t *testing.T) {
 		}
 		_, err := svc.Facts().WriteFact(ctx, "main", fmt.Sprintf("kb/o%d.md", k), testFactBody("o", 0.5, nil), "o", "")
 		require.NoError(t, err)
-		require.NoError(t, svc.Branches().MergeBranch(ctx, "agent", "main", StrategyLocalWins))
+		require.NoError(t, svc.Merge().MergeBranch(ctx, "agent", "main", merge.StrategyLocalWins))
 	}
 	tip, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)

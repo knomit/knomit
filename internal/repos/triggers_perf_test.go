@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/storetest"
 )
 
@@ -543,7 +543,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 			}
 			if tc.merge {
 				writeB(trigAgent, "kb/other/mine.md")
-				must(svc.Branches().MergeBranch(ctx, "peer", trigAgent, store.StrategyRemoteWins))
+				must(svc.Merge().MergeBranch(ctx, "peer", trigAgent, merge.StrategyRemoteWins))
 			}
 			waitHead(headOf())
 			d := ri.triggers

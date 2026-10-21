@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/test/testenv"
 )
 
@@ -62,12 +62,12 @@ func TestReconcile_G9_SquashMergeFastForwardsAgent(t *testing.T) {
 	syncResult := agent.Sync()
 
 	// Main fast-forwarded.
-	require.Equal(t, store.ModeFF, syncResult.Main.Mode, "main must fast-forward to new origin/main")
+	require.Equal(t, merge.ModeFF, syncResult.Main.Mode, "main must fast-forward to new origin/main")
 
 	// Agent: this is the critical assertion. With the OLD design, agent
 	// would be replayed with N orphan commits. With the NEW design, the
 	// merge is a tree-level no-op and agent ref is unchanged.
-	require.Equal(t, store.ModeNoop, syncResult.Agent.Mode,
+	require.Equal(t, merge.ModeNoop, syncResult.Agent.Mode,
 		"squash-merged content is identical → agent reconcile is no-op (no merge commit, no rebase)")
 
 	// Agent ref and counts unchanged.

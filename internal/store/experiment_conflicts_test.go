@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/merge"
 )
 
 // An experiment commit honors the repo's `conflicts` setting, read at the tip
@@ -29,7 +30,7 @@ func expConflictFork(t *testing.T, ontology string) (*Service, *cmRepo) {
 	if ontology != "" {
 		r.write("main", fact.OntologyFile, ontology)
 	}
-	_, err := svc.Experiments().OpenExperiment(context.Background(), "x", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(context.Background(), "x", "", testAgentBranch)
 	require.NoError(t, err)
 	r.write("exp/x", expF, cmFact(t, "experiment body", 0.9))
 	r.write(testAgentBranch, expF, cmFact(t, "parent body", 0.6, "ParentAdded"))
@@ -38,7 +39,7 @@ func expConflictFork(t *testing.T, ontology string) (*Service, *cmRepo) {
 
 func expStillOpen(t *testing.T, svc *Service) bool {
 	t.Helper()
-	_, ok, err := svc.Experiments().GetExperiment(context.Background(), "x")
+	_, ok, err := svc.Branches().GetExperiment(context.Background(), "x")
 	require.NoError(t, err)
 	return ok
 }
@@ -51,9 +52,9 @@ func expStillOpen(t *testing.T, svc *Service) bool {
 // SABOTAGE S1a (CommitExperiment ignores the setting) → refused → red.
 func TestCommitExperiment_ConflictsMerge_FieldMerges(t *testing.T) {
 	svc, r := expConflictFork(t, cmOntology("merge"))
-	res, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
+	res, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
 	require.NoError(t, err, "the setting settles the conflict; no refusal")
-	require.Equal(t, ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 
 	tip := r.tip(testAgentBranch)
 	_, out := r.blob(tip, expF)
@@ -61,9 +62,9 @@ func TestCommitExperiment_ConflictsMerge_FieldMerges(t *testing.T) {
 	require.Equal(t, "experiment body", f.Body)
 	require.Equal(t, 0.9, f.Confidence)
 	require.Equal(t, []string{"ParentAdded"}, f.Entities)
-	require.Len(t, TrailerValues(tip.Message, TrailerMerge), 1)
+	require.Len(t, merge.TrailerValues(tip.Message, merge.TrailerMerge), 1)
 	require.Contains(t, tip.Message, "(conflicts:merge/off)")
-	require.Equal(t, []SettledPath{{Path: expF, Kept: "merged"}}, res.Settled)
+	require.Equal(t, []merge.SettledPath{{Path: expF, Kept: "merged"}}, res.Settled)
 	require.False(t, expStillOpen(t, svc), "a successful commit deletes the experiment")
 }
 
@@ -71,8 +72,8 @@ func TestCommitExperiment_ConflictsMerge_FieldMerges(t *testing.T) {
 func TestCommitExperiment_NoConflictsSetting_StillRefuses(t *testing.T) {
 	svc, r := expConflictFork(t, "")
 	before := r.tip(testAgentBranch).Hash
-	_, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
-	var conflict *MergeConflictError
+	_, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 	require.Equal(t, []string{expF}, conflict.Paths)
 	require.Equal(t, before, r.tip(testAgentBranch).Hash)
@@ -89,15 +90,15 @@ func TestCommitExperiment_MergeConsensus_ParentIsConsensusSide(t *testing.T) {
 	// A field only the experiment changed (the title), so the merge is not
 	// simply the parent's version.
 	r.write("exp/x", expF, strings.Replace(cmFact(t, "experiment body", 0.9), "# Shared fact", "# Experiment title", 1))
-	res, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
+	res, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 	_, out := r.blob(r.tip(testAgentBranch), expF)
 	f := r.parse(out)
 	require.Equal(t, "Experiment title", f.Title, "a field only the experiment changed is kept")
 	require.Equal(t, "parent body", f.Body)
 	require.Equal(t, 0.6, f.Confidence)
-	require.Contains(t, TrailerValues(r.tip(testAgentBranch).Message, TrailerMerge)[0], "strategy=merge_consensus ")
+	require.Contains(t, merge.TrailerValues(r.tip(testAgentBranch).Message, merge.TrailerMerge)[0], "strategy=merge_consensus ")
 }
 
 // (R2) `facts: consensus`: the parent's whole version lands and the
@@ -105,11 +106,11 @@ func TestCommitExperiment_MergeConsensus_ParentIsConsensusSide(t *testing.T) {
 func TestCommitExperiment_FactsConsensus_ReportsTheDrop(t *testing.T) {
 	svc, r := expConflictFork(t, cmOntology("consensus"))
 	parentF := cmFact(t, "parent body", 0.6, "ParentAdded")
-	res, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
+	res, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
 	require.NoError(t, err)
 	_, out := r.blob(r.tip(testAgentBranch), expF)
 	require.Equal(t, parentF, out)
-	require.Equal(t, []SettledPath{{Path: expF, Kept: "dst", Dropped: "src-modify"}}, res.Settled)
+	require.Equal(t, []merge.SettledPath{{Path: expF, Kept: "dst", Dropped: "src-modify"}}, res.Settled)
 }
 
 // Deletion wins over an edit under `facts: merge`: the parent retracted F,
@@ -120,16 +121,16 @@ func TestCommitExperiment_ConflictsMerge_ParentDeletionWins(t *testing.T) {
 	r := &cmRepo{t: t, svc: svc}
 	r.write(testAgentBranch, expF, cmFact(t, "base", 0.7))
 	r.write("main", fact.OntologyFile, cmOntology("merge"))
-	_, err := svc.Experiments().OpenExperiment(context.Background(), "x", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(context.Background(), "x", "", testAgentBranch)
 	require.NoError(t, err)
 	r.write("exp/x", expF, cmFact(t, "experiment body", 0.9))
 	r.del(testAgentBranch, expF)
 
-	res, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
+	res, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
 	require.NoError(t, err)
 	h, _ := r.blob(r.tip(testAgentBranch), expF)
 	require.True(t, h.IsZero(), "the retraction wins")
-	require.Equal(t, []SettledPath{{Path: expF, Kept: "dst", Dropped: "src-modify", Deleted: true}}, res.Settled)
+	require.Equal(t, []merge.SettledPath{{Path: expF, Kept: "dst", Dropped: "src-modify", Deleted: true}}, res.Settled)
 }
 
 // (c)+(j) `facts: merge, state: off`, one fact conflict and one non-fact
@@ -147,26 +148,26 @@ func TestCommitExperiment_ConflictsMerge_RetryKeepsTheSetting(t *testing.T) {
 	r.write(testAgentBranch, "notes.txt", "parent\n")
 	before := r.tip(testAgentBranch).Hash
 
-	_, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
-	var conflict *MergeConflictError
+	_, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 	require.Equal(t, []string{"notes.txt"}, conflict.Paths, "the setting settled the fact; only the non-fact is left")
 	require.Equal(t, before, r.tip(testAgentBranch).Hash, "a refusal moves nothing")
 	require.True(t, expStillOpen(t, svc))
 
-	res, err := svc.Experiments().CommitExperiment(context.Background(), "x",
-		map[string]Resolution{"notes.txt": {Side: ResolveSrc}})
+	res, err := svc.Merge().CommitExperiment(context.Background(), "x",
+		map[string]merge.Resolution{"notes.txt": {Side: merge.ResolveSrc}})
 	require.NoError(t, err)
 	tip := r.tip(testAgentBranch)
 	_, notes := r.blob(tip, "notes.txt")
 	require.Equal(t, "experiment\n", notes)
 	_, out := r.blob(tip, expF)
 	require.Equal(t, "experiment body", r.parse(out).Body, "the fact is still field-merged by the setting")
-	require.Len(t, TrailerValues(tip.Message, TrailerMerge), 1)
-	conflicts := TrailerValues(tip.Message, TrailerConflict)
+	require.Len(t, merge.TrailerValues(tip.Message, merge.TrailerMerge), 1)
+	conflicts := merge.TrailerValues(tip.Message, merge.TrailerConflict)
 	require.Len(t, conflicts, 1)
 	require.Regexp(t, `^notes\.txt kept=src dropped=dst-add strategy=refuse base=none .* reason=chosen$`, conflicts[0])
-	require.Equal(t, []SettledPath{
+	require.Equal(t, []merge.SettledPath{
 		{Path: expF, Kept: "merged"},
 		{Path: "notes.txt", Kept: "src", Dropped: "dst-add", Chosen: true},
 	}, res.Settled)
@@ -181,13 +182,13 @@ func TestCommitExperiment_ConflictsMerge_RetryKeepsTheSetting(t *testing.T) {
 func TestCommitExperiment_ConflictsMerge_CallerResolutionWins(t *testing.T) {
 	svc, r := expConflictFork(t, cmOntology("merge"))
 	parentF := cmFact(t, "parent body", 0.6, "ParentAdded")
-	res, err := svc.Experiments().CommitExperiment(context.Background(), "x",
-		map[string]Resolution{expF: {Side: ResolveDst}})
+	res, err := svc.Merge().CommitExperiment(context.Background(), "x",
+		map[string]merge.Resolution{expF: {Side: merge.ResolveDst}})
 	require.NoError(t, err)
 	_, out := r.blob(r.tip(testAgentBranch), expF)
 	require.Equal(t, parentF, out)
-	require.Equal(t, ModeNoop, res.Mode, "every conflict resolved to the parent: nothing to commit")
-	require.Equal(t, []SettledPath{{Path: expF, Kept: "dst", Dropped: "src-modify", Chosen: true}}, res.Settled)
+	require.Equal(t, merge.ModeNoop, res.Mode, "every conflict resolved to the parent: nothing to commit")
+	require.Equal(t, []merge.SettledPath{{Path: expF, Kept: "dst", Dropped: "src-modify", Chosen: true}}, res.Settled)
 }
 
 // The overlay is the experiment commit's alone: any other caller of a
@@ -197,7 +198,7 @@ func TestCommitExperiment_ConflictsMerge_CallerResolutionWins(t *testing.T) {
 func TestConflictsStrategy_ResolutionsStillRefusedElsewhere(t *testing.T) {
 	svc, _ := expConflictFork(t, cmOntology("merge"))
 	_, err := svc.rh.MergeIntoBranchResolvedForTest(context.Background(), "exp/x", testAgentBranch, stratMerge,
-		map[string]Resolution{expF: {Side: ResolveSrc}})
+		map[string]merge.Resolution{expF: {Side: merge.ResolveSrc}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "computes its own resolutions")
 }
@@ -214,8 +215,8 @@ func TestCommitExperiment_SettingReadAtTheConsensusBranchOnly(t *testing.T) {
 			svc, r := expConflictFork(t, "")
 			r.write(where, fact.OntologyFile, cmOntology("merge/consensus"))
 			before := r.tip(testAgentBranch).Hash
-			_, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
-			var conflict *MergeConflictError
+			_, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
+			var conflict *merge.MergeConflictError
 			require.ErrorAs(t, err, &conflict, "a setting off the consensus branch must not apply")
 			require.Contains(t, conflict.Paths, expF)
 			require.Equal(t, before, r.tip(testAgentBranch).Hash)
@@ -231,15 +232,15 @@ func TestCommitExperiment_ConsensusAutoDefault(t *testing.T) {
 	auto := "id: x\nname: X\nattributes:\n  consensus: auto\n%s" + "topics:\n  notes:\n    description: d\n"
 	t.Run("absent conflicts merges", func(t *testing.T) {
 		svc, r := expConflictFork(t, strings.Replace(auto, "%s", "", 1))
-		res, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
+		res, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
 		require.NoError(t, err)
-		require.Equal(t, []SettledPath{{Path: expF, Kept: "merged"}}, res.Settled)
+		require.Equal(t, []merge.SettledPath{{Path: expF, Kept: "merged"}}, res.Settled)
 		require.Contains(t, r.tip(testAgentBranch).Message, "(conflicts:merge/consensus)")
 	})
 	t.Run("explicit off refuses", func(t *testing.T) {
 		svc, _ := expConflictFork(t, strings.Replace(auto, "%s", "  conflicts:\n    facts: off\n    state: off\n", 1))
-		_, err := svc.Experiments().CommitExperiment(context.Background(), "x", nil)
-		var conflict *MergeConflictError
+		_, err := svc.Merge().CommitExperiment(context.Background(), "x", nil)
+		var conflict *merge.MergeConflictError
 		require.ErrorAs(t, err, &conflict)
 	})
 }
