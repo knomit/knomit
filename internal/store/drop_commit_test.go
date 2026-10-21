@@ -22,7 +22,7 @@ func TestDrop_ReplaysTheOtherCommitsInOrder(t *testing.T) {
 		require.NoError(t, err)
 	}
 	write("kb/notes/x.md", testFactBody("x v1", 0.9, nil))
-	bad, err := h.svc.TestingCommitFiles(hostBranch, map[string]string{"kb/notes/bad.md": testFactBody("bad", 0.9, nil)}, "bad")
+	bad, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/bad.md": testFactBody("bad", 0.9, nil)}, "bad")
 	require.NoError(t, err)
 	write("kb/notes/x.md", testFactBody("x v2", 0.8, nil))
 	write("kb/notes/x.md", testFactBody("x v3", 0.7, nil))
@@ -45,7 +45,7 @@ func TestDrop_ReplaysTheOtherCommitsInOrder(t *testing.T) {
 func TestDrop_KeepsALaterEditOfTheDroppedCommitsFile(t *testing.T) {
 	ctx := context.Background()
 	h := newPushHost(t, VerifyOff, 0)
-	bad, err := h.svc.TestingCommitFiles(hostBranch, map[string]string{"kb/notes/x.md": testFactBody("x bad", 0.9, nil)}, "bad")
+	bad, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/x.md": testFactBody("x bad", 0.9, nil)}, "bad")
 	require.NoError(t, err)
 	_, err = h.svc.Facts().WriteFact(ctx, hostBranch, "kb/notes/x.md", testFactBody("x fixed", 0.5, nil), "fix", "updated")
 	require.NoError(t, err)
@@ -79,7 +79,7 @@ func TestDrop_ReplaysMergesAndLeavesOutTheOneThatBroughtTheDroppedCommit(t *test
 
 	// A side branch whose commit is the one to drop, merged in.
 	require.NoError(t, h.svc.Branches().CreateBranch(ctx, "agent/side", hostBranch))
-	bad, err := h.svc.TestingCommitFiles("agent/side", map[string]string{"kb/notes/bad.md": testFactBody("bad", 0.9, nil)}, "bad")
+	bad, err := h.svc.rh.CommitFilesForTest("agent/side", map[string]string{"kb/notes/bad.md": testFactBody("bad", 0.9, nil)}, "bad")
 	require.NoError(t, err)
 	_, err = h.svc.MergePushed(ctx, "agent/side", hostBranch, plumbing.NewHash(bad), "")
 	require.NoError(t, err)

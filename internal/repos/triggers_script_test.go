@@ -20,6 +20,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -640,7 +641,7 @@ func TestScript_LoopGuardOnRetract(t *testing.T) {
 	// not a descendant of the watermark).
 	keep := writeOn(t, ri, trigAgent, "kb/tasks/rt/keep.md") // title "keep": the script does nothing
 	settle(t, ri)
-	require.NoError(t, svc.TestingSetRef("refs/heads/"+trigAgent, base))
+	require.NoError(t, storetest.SetRef(svc, "refs/heads/"+trigAgent, base))
 	other := writeOn(t, ri, trigAgent, "kb/tasks/rt/other.md")
 	settle(t, ri)
 	var retracts []store.TriggerFire

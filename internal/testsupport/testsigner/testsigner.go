@@ -20,9 +20,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/crypto/ssh"
+	"knomit/internal/store/storetest"
 
-	"knomit/internal/store"
+	"golang.org/x/crypto/ssh"
 )
 
 // Signer returns the fixed fallback test signer.
@@ -36,11 +36,11 @@ func Signer() ssh.Signer {
 }
 
 // Install makes Signer the fallback for every signer-less store in this test
-// binary (store.SetTestFallbackSigner), and FixtureAgentID the agent id of
-// every store and repos.Manager given none (store.SetTestFallbackAgentID).
+// binary (storetest.SetFallbackSigner), and FixtureAgentID the agent id of
+// every store and repos.Manager given none (storetest.SetFallbackAgentID).
 func Install() {
-	store.SetTestFallbackSigner(Signer())
-	store.SetTestFallbackAgentID(FixtureAgentID)
+	storetest.SetFallbackSigner(Signer())
+	storetest.SetFallbackAgentID(FixtureAgentID)
 }
 
 // FixtureAgentID is the agent id a test fixture that names only an agent

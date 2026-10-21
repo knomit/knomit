@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/internal/sqlite"
+	"knomit/internal/store/internal/vcs"
+
 	"golang.org/x/crypto/ssh"
 )
 
@@ -30,13 +33,13 @@ func fallbackTestSigner() ssh.Signer {
 // internal/web does: a test that loses power mid-run has lost nothing worth
 // keeping. WAL stays on, so locking behaves as in production. A test of
 // durability itself must turn the switch off for its own duration; see
-// SetTestFastDurability.
+// sqlite.SetTestFastDurability.
 func TestMain(m *testing.M) {
-	SetTestFallbackSigner(fallbackTestSigner())
+	vcs.SetTestFallbackSigner(fallbackTestSigner())
 	// The same fixture convention internal/testsupport/testsigner installs
 	// (FixtureAgentID): a store given no agent id authors as its branch
 	// without "agent/". Test binaries only; production passes the persisted id.
-	SetTestFallbackAgentID(func(branch string) string { return strings.TrimPrefix(branch, "agent/") })
-	SetTestFastDurability(true)
+	vcs.SetTestFallbackAgentID(func(branch string) string { return strings.TrimPrefix(branch, "agent/") })
+	sqlite.SetTestFastDurability(true)
 	os.Exit(m.Run())
 }

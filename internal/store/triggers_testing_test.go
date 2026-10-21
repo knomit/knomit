@@ -13,7 +13,7 @@ import (
 	"knomit/internal/store/internal/vcs"
 )
 
-// TestingCommitFiles (vcs.Repo.CommitFilesForTest) builds its trees in one pass (vcs testingTree) instead of one
+// CommitFilesForTest (vcs.Repo.CommitFilesForTest) builds its trees in one pass (vcs testingTree) instead of one
 // BuildTree per path. The commit must still carry the SAME root tree that the
 // per-path build gives: untouched entries kept, files added in existing and in
 // new directories, an existing file replaced. Sabotage: drop the parent's
@@ -55,7 +55,7 @@ func TestTestingCommitFiles_TreeMatchesPerPathBuild(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	h, err := svc.TestingCommitFiles("main", files, "batch")
+	h, err := svc.rh.CommitFilesForTest("main", files, "batch")
 	require.NoError(t, err)
 	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(h))
 	require.NoError(t, err)
@@ -77,6 +77,6 @@ func TestTestingCommitFiles_TreeMatchesPerPathBuild(t *testing.T) {
 	require.NoError(t, err, "an untouched entry is kept")
 
 	// A path that is both a file and a directory in one batch is refused.
-	_, err = svc.TestingCommitFiles("main", map[string]string{"kb/x.md": "f", "kb/x.md/y.md": "d"}, "clash")
+	_, err = svc.rh.CommitFilesForTest("main", map[string]string{"kb/x.md": "f", "kb/x.md/y.md": "d"}, "clash")
 	require.ErrorContains(t, err, "both a file and a directory")
 }

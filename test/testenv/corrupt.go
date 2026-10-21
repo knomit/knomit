@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // Corruption helpers on RepoHandle. These exist ONLY for Verify-detection
@@ -34,7 +35,7 @@ func (r *RepoHandle) CorruptObject(hash string) {
 	t.Helper()
 	var err error
 	r.ri.WithRead(func(svc *store.Service) {
-		err = svc.DeleteObjectForTest(hash)
+		err = storetest.DeleteObject(svc, hash)
 	})
 	if err != nil {
 		t.Fatalf("CorruptObject(%s): %v", hash, err)
@@ -59,7 +60,7 @@ func (r *RepoHandle) CorruptObject(hash string) {
 func (r *RepoHandle) RawSQL() *sql.DB {
 	var db *sql.DB
 	r.ri.WithRead(func(svc *store.Service) {
-		db = svc.RawDBForTest()
+		db = storetest.RawDB(svc)
 	})
 	return db
 }
@@ -81,7 +82,7 @@ func (r *RepoHandle) RawGitWrite(branch, path, content, message string) string {
 	var commitHash string
 	var err error
 	r.ri.WithRead(func(svc *store.Service) {
-		commitHash, err = svc.RawWriteForTest(context.Background(), branch, path, content, message)
+		commitHash, err = storetest.RawWrite(context.Background(), svc, branch, path, content, message)
 	})
 	if err != nil {
 		t.Fatalf("RawGitWrite(%s on %s): %v", path, branch, err)

@@ -15,6 +15,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // The slow `if` in these tests is slowIf (triggers_test.go): a real 90 ms of
@@ -143,7 +144,7 @@ func TestDispatch_Tx1Bounded(t *testing.T) {
 	for i := 0; i < 12000; i++ {
 		files[fmt.Sprintf("kb/tasks/m/%03d/%05d.md", i%120, i)] = factBody(fmt.Sprintf("m%d", i))
 	}
-	// The advance is committed WITHOUT the index (TestingCommitFiles): what
+	// The advance is committed WITHOUT the index (storetest.CommitFiles): what
 	// this test measures is the dispatcher, and indexing 12,000 facts is the
 	// store's own cost (minutes). The next ordinary write kicks the run that
 	// covers both commits.
@@ -156,7 +157,7 @@ func TestDispatch_Tx1Bounded(t *testing.T) {
 	// build used to take longer than the debounce, which hid this.
 	waitObserverIdle(t, ri)
 	started := time.Now()
-	h, err := testService(t, ri).TestingCommitFiles(trigAgent, files, "a merge bringing 12,000 facts")
+	h, err := storetest.CommitFiles(testService(t, ri), trigAgent, files, "a merge bringing 12,000 facts")
 	require.NoError(t, err)
 	t.Logf("commit of 12,000 facts (no index): %s", time.Since(started))
 	started = time.Now()
@@ -522,9 +523,9 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 				entries = append(entries, trig(fmt.Sprintf("t%02d", i), "[learn, update, retract]", "tasks/**", cond))
 			}
 			files[OntologyPath] = triggerOntology("", entries...)
-			// The fixture commit skips the index (TestingCommitFiles): indexing
+			// The fixture commit skips the index (storetest.CommitFiles): indexing
 			// 2,000 facts is the store's cost, not the dispatcher's.
-			_, err = svc.TestingCommitFiles(trigAgent, files, "fixture")
+			_, err = storetest.CommitFiles(svc, trigAgent, files, "fixture")
 			must(err)
 			ri.triggers.triggerKick()
 			waitHead(headOf())

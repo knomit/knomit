@@ -92,7 +92,7 @@ func TestSkillsAt_SymlinkIsNotAFile(t *testing.T) {
 	putRaw(t, svc, "main", ".knomit/skills/real/SKILL.md", "R")
 	putRaw(t, svc, "main", ".knomit/skills/real/ref.md", "REF")
 	link := func(path, target string) plumbing.Hash {
-		h, err := svc.RawSymlinkForTest(ctx, "main", path, target, "symlink "+path)
+		h, err := svc.rh.RawSymlinkForTest(ctx, "main", path, target, "symlink "+path)
 		require.NoError(t, err)
 		return plumbing.NewHash(h)
 	}

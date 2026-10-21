@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // TestControlDB_HonoursTestFastDurability opens control.db through the REAL
@@ -22,7 +23,7 @@ func TestControlDB_HonoursTestFastDurability(t *testing.T) {
 	// Restore whatever TestMain set; reading it back through SyncDSNParam
 	// avoids a second accessor on store.
 	prev := store.SyncDSNParam() != ""
-	t.Cleanup(func() { store.SetTestFastDurability(prev) })
+	t.Cleanup(func() { storetest.SetFastDurability(prev) })
 
 	// synchronous: 0 = OFF, 1 = NORMAL.
 	check := func(t *testing.T, what string, db *sql.DB, wantSync int) {
@@ -44,7 +45,7 @@ func TestControlDB_HonoursTestFastDurability(t *testing.T) {
 		{name: "on", fast: true, wantSync: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store.SetTestFastDurability(tc.fast)
+			storetest.SetFastDurability(tc.fast)
 			dir := t.TempDir()
 
 			reg, err := OpenRegistryNoSchema(filepath.Join(dir, "registry-control.db"))

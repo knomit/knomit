@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/store/storetest"
 )
 
 // restartIn closes nothing: it builds and starts a NEW manager over home, the
@@ -197,7 +198,7 @@ func TestStart_SymlinkedOntologyIsArchivedBySystem(t *testing.T) {
 	member := createRepo(t, m, "member")
 	createRepo(t, m, "fine")
 	for _, ri := range []*RepoInstance{linked, member} {
-		_, err := testService(t, ri).RawSymlinkForTest(ctx, "agent/test", OntologyPath, craftedLinkOntology, "symlink the ontology")
+		_, err := storetest.RawSymlink(ctx, testService(t, ri), "agent/test", OntologyPath, craftedLinkOntology, "symlink the ontology")
 		require.NoError(t, err)
 	}
 	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: member.UID(), CreatedAt: 1, UpdatedAt: 1})

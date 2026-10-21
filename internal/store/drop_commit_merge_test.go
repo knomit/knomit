@@ -18,7 +18,7 @@ func (h *pushHost) sideMerge(t *testing.T, files ...string) []plumbing.Hash {
 	require.NoError(t, h.svc.Branches().CreateBranch(ctx, "agent/side", hostBranch))
 	var out []plumbing.Hash
 	for _, p := range files {
-		c, err := h.svc.TestingCommitFiles("agent/side", map[string]string{p: testFactBody(p, 0.9, nil)}, "side "+p)
+		c, err := h.svc.rh.CommitFilesForTest("agent/side", map[string]string{p: testFactBody(p, 0.9, nil)}, "side "+p)
 		require.NoError(t, err)
 		out = append(out, plumbing.NewHash(c))
 	}
@@ -58,7 +58,7 @@ func TestDrop_D5_ASideForkedAfterTheDroppedCommitKeepsItsWork(t *testing.T) {
 	ctx := context.Background()
 	h := newPushHost(t, VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
-	bad, err := h.svc.TestingCommitFiles(hostBranch, map[string]string{"kb/notes/bad.md": testFactBody("bad", 0.9, nil)}, "bad")
+	bad, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/bad.md": testFactBody("bad", 0.9, nil)}, "bad")
 	require.NoError(t, err)
 	ex, err := h.svc.Experiments().OpenExperiment(ctx, "e1", "d", hostBranch)
 	require.NoError(t, err)

@@ -8,6 +8,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // #428 follow-ups. N2: a fact's ref to a .knomit/ file that is not in the
@@ -21,7 +22,7 @@ const sysSymlink = ".knomit/skills/link.md" // -> program-knomit/SKILL.md, a reg
 func seedSysSymlink(t *testing.T, ri *repos.RepoInstance) {
 	t.Helper()
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, err := svc.RawSymlinkForTest(context.Background(), "agent/test", sysSymlink, "program-knomit/SKILL.md", "a symlink pushed through git")
+		_, err := storetest.RawSymlink(context.Background(), svc, "agent/test", sysSymlink, "program-knomit/SKILL.md", "a symlink pushed through git")
 		require.NoError(t, err)
 	}))
 }
@@ -59,7 +60,7 @@ func TestExplain_FileAbsentAtPinIsDeleted(t *testing.T) {
 	check("absent at pin and tip")
 
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, err := svc.RawWriteForTest(context.Background(), "agent/test", later, "now\n", "the file arrives through git")
+		_, err := storetest.RawWrite(context.Background(), svc, "agent/test", later, "now\n", "the file arrives through git")
 		require.NoError(t, err)
 	}))
 	check("absent at pin, present at tip")

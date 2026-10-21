@@ -4,20 +4,6 @@ import (
 	"context"
 )
 
-// TestingSetRef moves (or creates) a git reference WITHOUT a commit and without
-// NotifyCommit, for tests in sibling packages. See vcs.Repo.SetRefForTest.
-func (s *Service) TestingSetRef(name, hash string) error { return s.rh.SetRefForTest(name, hash) }
-
-// TestingDeleteRef removes a git reference WITHOUT NotifyCommit. See
-// vcs.Repo.DeleteRefForTest.
-func (s *Service) TestingDeleteRef(name string) error { return s.rh.DeleteRefForTest(name) }
-
-// TestingCommitFiles commits files onto branch as ONE signed commit, skipping
-// NotifyCommit. See vcs.Repo.CommitFilesForTest.
-func (s *Service) TestingCommitFiles(branch string, files map[string]string, message string) (string, error) {
-	return s.rh.CommitFilesForTest(branch, files, message)
-}
-
 // Triggers returns the trigger dispatcher's store surface.
 func (s *Service) Triggers() TriggerIndex { return s.rh }
 

@@ -74,7 +74,7 @@ func TestSystemFileAt_SymlinkIsNotAFile(t *testing.T) {
 	if err := svc.InitRepo(ctx, map[string]string{".knomit/skills/x/SKILL.md": "skill body\n"}, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
-	link, err := svc.RawSymlinkForTest(ctx, "agent/test", ".knomit/skills/link.md", "x/SKILL.md", "symlink")
+	link, err := svc.rh.RawSymlinkForTest(ctx, "agent/test", ".knomit/skills/link.md", "x/SKILL.md", "symlink")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // What GET /repos says about a repo's ontology, for each way it can be wrong
@@ -63,7 +64,7 @@ func TestGetRepos_OntologyErrorOnTheWire(t *testing.T) {
 	// or parsed it would mount the repo with no error.
 	const linkText = "id: crafted\nname: Crafted\ntopics:\n  notes:\n    description: N\n"
 	breakIt("linked", func(svc *store.Service) error {
-		_, err := svc.RawSymlinkForTest(ctx, agentBranch, fact.OntologyFile, linkText, "symlink the ontology")
+		_, err := storetest.RawSymlink(ctx, svc, agentBranch, fact.OntologyFile, linkText, "symlink the ontology")
 		return err
 	})
 	breakIt("missing", func(svc *store.Service) error {
@@ -72,11 +73,11 @@ func TestGetRepos_OntologyErrorOnTheWire(t *testing.T) {
 	})
 	breakIt("garbled", func(svc *store.Service) error {
 		// Valid YAML that is not an ontology: id is required.
-		_, err := svc.RawWriteForTest(ctx, agentBranch, fact.OntologyFile, "topics:\n  x:\n    description: y\n", "garble the ontology")
+		_, err := storetest.RawWrite(ctx, svc, agentBranch, fact.OntologyFile, "topics:\n  x:\n    description: y\n", "garble the ontology")
 		return err
 	})
 	breakIt("empty", func(svc *store.Service) error {
-		_, err := svc.RawWriteForTest(ctx, agentBranch, fact.OntologyFile, "", "empty the ontology")
+		_, err := storetest.RawWrite(ctx, svc, agentBranch, fact.OntologyFile, "", "empty the ontology")
 		return err
 	})
 	if err := m.Close(); err != nil {
@@ -173,8 +174,9 @@ func TestRestore_SymlinkedOntologyIs422AndStaysArchived(t *testing.T) {
 	ri := s.Manager.Get("linked")
 	var serr error
 	if err := ri.WithRead(func(svc *store.Service) {
-		_, serr = svc.RawSymlinkForTest(context.Background(), agentBranch, fact.OntologyFile,
+		_, serr = storetest.RawSymlink(context.Background(), svc, agentBranch, fact.OntologyFile,
 			"id: crafted\nname: C\ntopics:\n  n:\n    description: N\n", "symlink the ontology")
+
 	}); err != nil || serr != nil {
 		t.Fatalf("symlink the ontology: %v / %v", err, serr)
 	}

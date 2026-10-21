@@ -31,7 +31,7 @@ func TestDrop_TheForeignRefusalListsWhatLeavingTheMergeOutLosesAndTheConfirmedFa
 	h.svc.SetSigner(newTestSigner(t))
 	side := h.sideMerge(t, "kb/notes/bad.md", "kb/notes/other.md") // authored "side"
 	merge := h.ref(hostBranch)
-	_, err := h.svc.TestingCommitFiles(hostBranch, map[string]string{"kb/notes/mine.md": testFactBody("mine", 0.9, nil)}, "mine")
+	_, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/mine.md": testFactBody("mine", 0.9, nil)}, "mine")
 	require.NoError(t, err)
 	before := h.ref(hostBranch)
 
@@ -104,7 +104,7 @@ func TestDrop_AnUnfoldedSideIsReplayedParentsFirst(t *testing.T) {
 		{"kb/notes/other.md", "other first"},
 		{"kb/notes/other.md", "other second"},
 	} {
-		c, err := h.svc.TestingCommitFiles("agent/side", map[string]string{w.p: testFactBody(w.title, 0.9, nil)}, w.title)
+		c, err := h.svc.rh.CommitFilesForTest("agent/side", map[string]string{w.p: testFactBody(w.title, 0.9, nil)}, w.title)
 		require.NoError(t, err)
 		side = append(side, plumbing.NewHash(c))
 	}

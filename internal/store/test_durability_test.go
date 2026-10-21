@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/internal/sqlite"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -13,7 +15,7 @@ import (
 // synchronous=NORMAL and control.db's DSN gets nothing appended — production
 // durability. This package's TestMain turns the switch ON, so the "off" case
 // sets it off itself, for its own duration: it is the one test here that
-// observes real fsync behaviour (sabotage: drop its SetTestFastDurability call
+// observes real fsync behaviour (sabotage: drop its sqlite.SetTestFastDurability call
 // and the "off" case reads synchronous=0 and fails). With it on, every DB a
 // test binary opens runs synchronous=OFF, and every one is STILL in WAL: the
 // journal mode decides locking, which concurrency tests rely on, so a switch
@@ -24,7 +26,7 @@ func TestSetTestFastDurability_SyncOffWALKept(t *testing.T) {
 	// Restore whatever TestMain set, so the rest of the binary runs as it
 	// asked to whether or not this package enables the switch.
 	prev := SyncDSNParam() != ""
-	t.Cleanup(func() { SetTestFastDurability(prev) })
+	t.Cleanup(func() { sqlite.SetTestFastDurability(prev) })
 
 	// synchronous: 0 = OFF, 1 = NORMAL.
 	pragmas := func(t *testing.T, db *sql.DB) (journal string, sync int) {
@@ -44,7 +46,7 @@ func TestSetTestFastDurability_SyncOffWALKept(t *testing.T) {
 		{name: "on", fast: true, wantSync: 0, wantDSN: "&_synchronous=OFF"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			SetTestFastDurability(tc.fast)
+			sqlite.SetTestFastDurability(tc.fast)
 			dir := t.TempDir()
 
 			svc, err := Open(filepath.Join(dir, "k.db"))

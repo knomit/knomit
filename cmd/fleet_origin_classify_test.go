@@ -17,6 +17,7 @@ import (
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // requireCertOrigin: ri's origin is stored in control.db as the plain https
@@ -36,7 +37,7 @@ func requireCertOrigin(t *testing.T, mgr *repos.Manager, ri *repos.RepoInstance,
 		t.Fatal(err)
 	}
 	var got []string
-	if err := ri.WithRead(func(s *store.Service) { got = s.RemoteURLsForTest("origin") }); err != nil {
+	if err := ri.WithRead(func(s *store.Service) { got = storetest.RemoteURLs(s, "origin") }); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0] != want {

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/internal/vcs"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
@@ -29,8 +31,8 @@ func TestReplayCommit_NoSignerLeavesNoObjects(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, before.IsStrictlyClean(), "precondition: %v", before.Issues)
 
-	SetTestFallbackSigner(nil)
-	t.Cleanup(func() { SetTestFallbackSigner(fallbackTestSigner()) })
+	vcs.SetTestFallbackSigner(nil)
+	t.Cleanup(func() { vcs.SetTestFallbackSigner(fallbackTestSigner()) })
 	svc.SetSigner(nil)
 
 	_, err = svc.rh.ReconcileAgentForTest(context.Background(), "agent/test", "main", StrategyLocalWins, true)

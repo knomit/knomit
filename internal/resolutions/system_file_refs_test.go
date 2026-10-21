@@ -10,6 +10,7 @@ import (
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // #428 follow-up N1: a {body} resolution that ADDS a ref to a .knomit/ file
@@ -36,13 +37,13 @@ func resolutionRepo(t *testing.T) *repos.RepoInstance {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(ctx, map[string]string{resBoth: "both\n"}, resParent))
 	require.NoError(t, svc.Branches().CreateBranch(ctx, resExp, resParent))
-	_, err = svc.RawWriteForTest(ctx, resParent, resParentOnly, "parent\n", "parent side only")
+	_, err = storetest.RawWrite(ctx, svc, resParent, resParentOnly, "parent\n", "parent side only")
 	require.NoError(t, err)
-	_, err = svc.RawWriteForTest(ctx, resExp, resExpOnly, "experiment\n", "experiment side only")
+	_, err = storetest.RawWrite(ctx, svc, resExp, resExpOnly, "experiment\n", "experiment side only")
 	require.NoError(t, err)
-	_, err = svc.RawSymlinkForTest(ctx, resParent, resSymlink, "both.md", "a symlink pushed through git")
+	_, err = storetest.RawSymlink(ctx, svc, resParent, resSymlink, "both.md", "a symlink pushed through git")
 	require.NoError(t, err)
-	_, err = svc.RawSymlinkForTest(ctx, resExp, resSymlink, "both.md", "the same symlink on the experiment")
+	_, err = storetest.RawSymlink(ctx, svc, resExp, resSymlink, "both.md", "the same symlink on the experiment")
 	require.NoError(t, err)
 	return repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "res", UID: "res-test-repo", AgentBranch: resParent, Svc: svc,

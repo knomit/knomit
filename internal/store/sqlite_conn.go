@@ -12,7 +12,7 @@ import (
 // child owns the driver, vector codec, tx helpers and the other engine-level
 // primitives; this package keeps its old unexported spellings as forwards so
 // the sub-indices read as before, and re-exports the few names callers outside
-// store use (Crypt, CosineSim, SetTestFastDurability, SyncDSNParam,
+// store use (Crypt, CosineSim, SyncDSNParam,
 // WithPrecomputedEmbeddings) so the public surface is unchanged.
 
 func conn(ctx context.Context, db *sql.DB) storegit.CtxExecer {
@@ -46,10 +46,6 @@ func WithPrecomputedEmbeddings(ctx context.Context, byPath map[string][]float32)
 	return sqlite.WithPrecomputedEmbeddings(ctx, byPath)
 }
 
-// SetTestFastDurability turns SQLite's fsyncs off for every database this test
-// binary opens from then on. Test binaries only; it panics elsewhere.
-func SetTestFastDurability(on bool) { sqlite.SetTestFastDurability(on) }
-
-// SyncDSNParam is the DSN suffix that honours SetTestFastDurability ("" in
+// SyncDSNParam is the DSN suffix that honours storetest.SetFastDurability ("" in
 // production).
 func SyncDSNParam() string { return sqlite.SyncDSNParam() }

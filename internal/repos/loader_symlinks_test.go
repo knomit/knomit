@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/store/storetest"
 )
 
 // A symlinked ontology fails the repo with an error that names the path and
@@ -49,7 +50,7 @@ func TestLoadOntology_SymlinkedOntologyRefusesTheRepoNamingThePath(t *testing.T)
 				_, err := svc.Facts().DeleteFact(ctx, agentBranch, OntologyPath, "test: remove the canonical ontology")
 				require.NoError(t, err)
 			}
-			_, err := svc.RawSymlinkForTest(ctx, agentBranch, rung, craftedLinkOntology, "symlink the ontology")
+			_, err := storetest.RawSymlink(ctx, svc, agentBranch, rung, craftedLinkOntology, "symlink the ontology")
 			require.NoError(t, err)
 
 			has, err := branchHasOntology(ctx, svc, agentBranch)
@@ -109,7 +110,7 @@ func TestSwapStore_SymlinkedIncomingOntologyIsRefusedBeforeTheSwap(t *testing.T)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
 	other := createRepo(t, m, "other")
-	_, err := testService(t, other).RawSymlinkForTest(ctx, "agent/test", OntologyPath, craftedLinkOntology, "symlink the ontology")
+	_, err := storetest.RawSymlink(ctx, testService(t, other), "agent/test", OntologyPath, craftedLinkOntology, "symlink the ontology")
 	require.NoError(t, err)
 	otherPath := m.RepoPath(other.UID())
 	_, err = m.Archive("other")
@@ -141,7 +142,7 @@ func TestLoadOntology_EmptyCanonicalDoesNotFallBackToLegacy(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, agentBranch, LegacyOntologyPath, string(legacy), "seed legacy", "updated")
 	require.NoError(t, err)
-	_, err = svc.RawWriteForTest(ctx, agentBranch, OntologyPath, "", "empty the canonical ontology")
+	_, err = storetest.RawWrite(ctx, svc, agentBranch, OntologyPath, "", "empty the canonical ontology")
 	require.NoError(t, err)
 	p, data, err := svc.OntologyFileAt(ctx, agentBranch)
 	require.NoError(t, err)
@@ -209,7 +210,7 @@ func TestConsensusGuidance_Symlinks(t *testing.T) {
 	t.Run("symlinked ontology", func(t *testing.T) {
 		g := newGuidanceRepo(t)
 		w := captureGuidanceWarnings(t)
-		_, err := g.svc.RawSymlinkForTest(ctx, "main", OntologyPath, guidanceOntologyMain, "symlink")
+		_, err := storetest.RawSymlink(ctx, g.svc, "main", OntologyPath, guidanceOntologyMain, "symlink")
 		require.NoError(t, err)
 		require.Nil(t, g.ri.ConsensusGuidance(ctx))
 		require.Nil(t, g.ri.ConsensusGuidance(ctx))
@@ -221,7 +222,7 @@ func TestConsensusGuidance_Symlinks(t *testing.T) {
 		w := captureGuidanceWarnings(t)
 		g.put(t, "main", ".knomit/ontology.yaml", guidanceOntologyMain)
 		g.put(t, "main", ".knomit/guidance/forecast.md", "MAIN FORECAST\n")
-		_, err := g.svc.RawSymlinkForTest(ctx, "main", ".knomit/guidance/all.md", "MAIN ALL\n", "symlink")
+		_, err := storetest.RawSymlink(ctx, g.svc, "main", ".knomit/guidance/all.md", "MAIN ALL\n", "symlink")
 		require.NoError(t, err)
 		cg := g.ri.ConsensusGuidance(ctx)
 		require.NotNil(t, cg)

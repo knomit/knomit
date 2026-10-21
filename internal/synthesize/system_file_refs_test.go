@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // #428 follow-up (review §6): the synthesize gates resolve refs to .knomit/
@@ -46,11 +47,11 @@ func systemFileSynthRepo(t *testing.T) *store.Service {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(ctx, map[string]string{sfFile: "---\nname: program-knomit\n---\nskill\n"}, sfMain))
 	require.NoError(t, svc.Branches().CreateBranch(ctx, sfSide, sfMain))
-	_, err = svc.RawWriteForTest(ctx, sfSide, sfSideOnly, "side\n", "seed")
+	_, err = storetest.RawWrite(ctx, svc, sfSide, sfSideOnly, "side\n", "seed")
 	require.NoError(t, err)
-	_, err = svc.RawWriteForTest(ctx, sfMain, sfMainOnly, "main\n", "seed")
+	_, err = storetest.RawWrite(ctx, svc, sfMain, sfMainOnly, "main\n", "seed")
 	require.NoError(t, err)
-	_, err = svc.RawSymlinkForTest(ctx, sfSide, sfLink, "program-knomit/SKILL.md", "a symlink pushed through git")
+	_, err = storetest.RawSymlink(ctx, svc, sfSide, sfLink, "program-knomit/SKILL.md", "a symlink pushed through git")
 	require.NoError(t, err)
 	seedDated(t, svc, sfSide, "kb/technology/a.md", fact.Hypothesis, "")
 	seedDated(t, svc, sfSide, "kb/technology/b.md", fact.Observation, "")

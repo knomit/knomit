@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/pki"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // PR #537 re-review R1 (the reviewer's probe, kept as a regression test): a master switch while a revoke is
@@ -276,7 +277,7 @@ func TestFleetSwitch_TheRefusalOnAHeldHubMainPointsAtTheDrop(t *testing.T) {
 	var bad string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		// Past the store's write cores, which refuse it at the source.
-		h, err := svc.TestingCommitFiles(ri.AgentBranch(), map[string]string{"kb/members/" + m.AgentID() + "/note.md": notPolicy}, "a bad note")
+		h, err := storetest.CommitFiles(svc, ri.AgentBranch(), map[string]string{"kb/members/" + m.AgentID() + "/note.md": notPolicy}, "a bad note")
 		require.NoError(t, err)
 		bad = h
 	}))

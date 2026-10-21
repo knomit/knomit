@@ -19,6 +19,7 @@ import (
 	"knomit/internal/config"
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/storetest"
 )
 
 // ---- F07 PR 2: `on: due`.
@@ -216,7 +217,7 @@ func TestDue_RemovedBeforeItsDateNeverFires(t *testing.T) {
 			// The branch goes back to before the fact and a new commit lands on
 			// top: the path is scrubbed from the new history (the 1b rewind).
 			svc := testService(t, ri)
-			require.NoError(t, svc.TestingSetRef("refs/heads/"+trigAgent, base))
+			require.NoError(t, storetest.SetRef(svc, "refs/heads/"+trigAgent, base))
 			write(t, ri, "kb/tasks/after-rewind.md")
 			return 0
 		}},
@@ -676,17 +677,18 @@ func TestDue_PrivatePathNeverCandidate(t *testing.T) {
 	_, ri, clock := newDueRepo(t, trig("due", "due", "", ""))
 	svc := testService(t, ri)
 	past := clock.now().Add(-time.Hour).Format(time.RFC3339)
-	h, err := svc.TestingCommitFiles(trigAgent, map[string]string{
+	h, err := storetest.CommitFiles(svc, trigAgent, map[string]string{
 		"kb/tasks/.private/x.md": datedBody("private", past),
 		"kb/tasks/visible.md":    datedBody("visible", past),
 	}, "direct")
+
 	require.NoError(t, err)
 	require.NoError(t, svc.IndexManager().SyncLocked(context.Background(), trigAgent))
 	cands := dueCandidates(t, ri, trigAgent, farFuture)
 	require.NotContains(t, cands, "kb/tasks/.private/x.md")
 	require.Contains(t, cands, "kb/tasks/visible.md", "fixture: the sibling IS indexed")
 	require.Equal(t, h, head(t, ri))
-	kickAndWait(t, ri) // TestingCommitFiles skips the observer: a tick brings the run
+	kickAndWait(t, ri) // storetest.CommitFiles skips the observer: a tick brings the run
 	require.Equal(t, []string{"kb/tasks/visible.md"}, pathsOf(dueFiresOf(t, ri, "due")))
 }
 
