@@ -14,7 +14,7 @@ import (
 // an executable file under .knomit/ is still a file; knomit's writers only
 // write mode 100644.
 func (s *Service) RawExecutableForTest(ctx context.Context, branch, path, content, message string) (string, error) {
-	return s.rawEntryForTest(ctx, branch, path, content, message, filemode.Executable)
+	return s.rh.RawEntryForTest(ctx, branch, path, content, message, filemode.Executable)
 }
 
 // deleteBranchFactsRowForTest removes a branch_facts row for (branch, path).

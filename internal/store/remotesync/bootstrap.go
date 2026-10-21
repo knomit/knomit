@@ -287,6 +287,8 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 		agentBranch = vcs.DefaultAgentBranch()
 	}
 	if remoteAgent, rerr := rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", agentBranch)); rerr == nil {
+		// rh.Repo.Repo is the one shared *vcs.Repo, reached through
+		// remotesync.Repo -> merge.Repo -> vcs.Repo.
 		if e4err := verify.CheckOwnLineage(ctx, rh.Repo.Repo, agentBranch, remoteAgent.Hash(), originMainRef.Hash()); e4err != nil {
 			return "", false, fmt.Errorf("InitFromRemote: %w", e4err)
 		}
@@ -365,7 +367,8 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 	}
 
 	log.Info().Str("branch", agentBranch).Str("upstream", upstreamMain).Str("origin", originURL).Msg("git store initialized from remote")
-	// rh.repo is already published (set earlier so ConfigureRemote could run).
+	// The shared *vcs.Repo already has its go-git repository published (set
+	// earlier so ConfigureRemote could run).
 	if _, err := rh.EnsureBranch(ctx, agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: ensure agent branch %q: %w", agentBranch, err)
 	}

@@ -6,6 +6,7 @@
 package merge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -138,4 +139,73 @@ type PushedBranchInfo struct {
 	// between MergeBase (or nothing) and Tip — the changes list shows facts
 	// only.
 	OtherFilesChanged int
+}
+
+// PushedBranches reports each named branch against agentBranch. The caller
+// decides which branches are pushed ones (repos.RepoInstance.IsPushedBranch);
+// this only reads. The agent branch's history is walked once for all of them.
+func (rh *Repo) PushedBranches(ctx context.Context, names []string, agentBranch, ontologyRoot string) ([]PushedBranchInfo, error) {
+	agentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch))
+	if err != nil {
+		return nil, fmt.Errorf("pushed branches: agent branch %q: %w", agentBranch, err)
+	}
+	agentCommit, err := object.GetCommit(rh.Storer(), agentRef.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("pushed branches: agent tip: %w", err)
+	}
+	inAgent := map[plumbing.Hash]bool{}
+	if err := vcs.WalkHistory(rh.Storer(), agentRef.Hash(), nil, func(c *object.Commit) { inAgent[c.Hash] = true }); err != nil {
+		return nil, err
+	}
+	prefix := strings.TrimSuffix(ontologyRoot, "/") + "/"
+
+	out := make([]PushedBranchInfo, 0, len(names))
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(name))
+		if err != nil {
+			return nil, fmt.Errorf("pushed branches: %q: %w", name, err)
+		}
+		tip, err := object.GetCommit(rh.Storer(), ref.Hash())
+		if err != nil {
+			return nil, fmt.Errorf("pushed branches: %q tip: %w", name, err)
+		}
+		info := PushedBranchInfo{
+			Name: name, Tip: tip.Hash.String(),
+			TipTime: tip.Committer.When, TipAuthor: tip.Author.Name,
+		}
+		if !inAgent[tip.Hash] {
+			if err := vcs.WalkHistory(rh.Storer(), tip.Hash, inAgent, func(*object.Commit) { info.ToMerge++ }); err != nil {
+				return nil, err
+			}
+		}
+		var baseTree *object.Tree
+		if bases, err := tip.MergeBase(agentCommit); err == nil && len(bases) > 0 {
+			info.MergeBase = bases[0].Hash.String()
+			if baseTree, err = bases[0].Tree(); err != nil {
+				return nil, err
+			}
+		}
+		tipTree, err := tip.Tree()
+		if err != nil {
+			return nil, err
+		}
+		changes, err := object.DiffTree(baseTree, tipTree)
+		if err != nil {
+			return nil, fmt.Errorf("pushed branches: %q diff: %w", name, err)
+		}
+		for _, ch := range changes {
+			p := ch.To.Name
+			if p == "" {
+				p = ch.From.Name
+			}
+			if !strings.HasPrefix(p, prefix) {
+				info.OtherFilesChanged++
+			}
+		}
+		out = append(out, info)
+	}
+	return out, nil
 }

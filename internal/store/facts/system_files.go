@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -129,4 +130,47 @@ func (rh *Repo) SystemFileAt(ctx context.Context, branch, commit, path string, m
 		return SystemFile{}, false, fmt.Errorf("system file: read %q at %s: %w", path, commit, err)
 	}
 	return sf, true, nil
+}
+
+// WriteSystemTree writes files as ONE authored commit on branch, KEEPING THE
+// CASE of every path. It is the door F24's create-from-template writes a
+// template through: every fact door lowercases a nested path, which would
+// turn .knomit/skills/x/SKILL.md into skill.md and README.md into readme.md.
+//
+// Because it goes around that normalization, it accepts the narrowest set
+// that works and nothing else: README.md and paths under .knomit/
+// (fact.TemplatePathAllowed), no two paths that differ only by case. It is
+// never on the MCP surface. Otherwise it is batchWrite: read-only refused,
+// validatePath, the signer taken before any object is written, the ctx
+// trailers stamped, NotifyCommit under the branch lock.
+func (fi *Index) WriteSystemTree(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+	if fi.rh.ReadOnly() {
+		return "", nil, ErrRepoReadOnly
+	}
+	if len(files) == 0 {
+		return "", nil, fmt.Errorf("%w: nothing to write", ErrSystemTreePath)
+	}
+	seen := make(map[string]string, len(files))
+	for p := range files {
+		if !fact.TemplatePathAllowed(p) {
+			return "", nil, fmt.Errorf("%w: %q", ErrSystemTreePath, p)
+		}
+		if other, dup := seen[strings.ToLower(p)]; dup {
+			return "", nil, fmt.Errorf("%w: %q and %q differ only by case", ErrSystemTreePath, other, p)
+		}
+		seen[strings.ToLower(p)] = p
+		if err := ValidatePath(p); err != nil {
+			return "", nil, fmt.Errorf("store: WriteSystemTree: %w", err)
+		}
+	}
+	unlock := fi.rh.LockBranch(branch)
+	defer unlock()
+	cHash, blobHashes, err := fi.BatchWriteLocked(ctx, branch, files, nil, nil, message, operation)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := fi.rh.NotifyCommit(ctx, branch, cHash); err != nil {
+		return "", nil, err
+	}
+	return cHash.String(), blobHashes, nil
 }

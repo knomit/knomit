@@ -1,10 +1,12 @@
 package vcs
 
 import (
+	"context"
 	"fmt"
 	"knomit/internal/pki"
 	"strings"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -167,4 +169,57 @@ func ShortRefHash(h plumbing.Hash) string {
 		return "<zero>"
 	}
 	return h.String()[:8]
+}
+
+// HasSharedHistory checks whether localBranch of local shares any commits with
+// remoteBranch of remote. Uses a bounded walk (max 1000 commits) to avoid
+// scanning huge histories.
+func HasSharedHistory(ctx context.Context, local *Repo, localBranch string, remote *Repo, remoteBranch string) (bool, error) {
+	const maxCommits = 1000
+
+	localHash, err := local.ResolveRef(ctx, localBranch)
+	if err != nil {
+		return false, fmt.Errorf("HasSharedHistory: local ref: %w", err)
+	}
+	localHashes := make(map[plumbing.Hash]struct{})
+	localIter, err := local.Repository().Log(&gogit.LogOptions{From: localHash})
+	if err != nil {
+		return false, fmt.Errorf("HasSharedHistory: local log: %w", err)
+	}
+	count := 0
+	if err := localIter.ForEach(func(c *object.Commit) error {
+		if count >= maxCommits {
+			return storer.ErrStop
+		}
+		localHashes[c.Hash] = struct{}{}
+		count++
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
+	}
+
+	remoteHash, err := remote.ResolveRef(ctx, remoteBranch)
+	if err != nil {
+		return false, fmt.Errorf("HasSharedHistory: remote ref: %w", err)
+	}
+	remoteIter, err := remote.Repository().Log(&gogit.LogOptions{From: remoteHash})
+	if err != nil {
+		return false, fmt.Errorf("HasSharedHistory: remote log: %w", err)
+	}
+	count = 0
+	found := false
+	if err := remoteIter.ForEach(func(c *object.Commit) error {
+		if count >= maxCommits {
+			return storer.ErrStop
+		}
+		if _, ok := localHashes[c.Hash]; ok {
+			found = true
+			return storer.ErrStop
+		}
+		count++
+		return nil
+	}); err != nil && !found {
+		return false, fmt.Errorf("HasSharedHistory: remote walk: %w", err)
+	}
+	return found, nil
 }

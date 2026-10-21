@@ -17,8 +17,9 @@
 // peer_admit.go, local_reconcile.go) and the remote bootstrap (bootstrap.go:
 // CloneFrom, InitFromRemote, InitSubscription); replay.go, the thin Service
 // methods (service_sync.go, consensus_branch.go, repo.go) and the local
-// OpenRepo/InitRepo in repo.go stay in the parent and call the exported cores; the receive-pack handler is the gitserve child, which
-// calls AdvanceBranchTo.
+// OpenRepo/InitRepo in repo.go stay in the parent and call the exported
+// cores; the receive-pack handler is the gitserve child, which calls
+// AdvanceBranchTo.
 //
 // The package is named remotesync, not sync, so it does not collide with the
 // standard library's sync (the same collision that ruled out runtime for
