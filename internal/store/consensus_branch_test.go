@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/remotesync"
 )
 
 // The consensus branch of a repo with no origin is the RECORDED one, never a
@@ -50,7 +52,7 @@ func TestConsensusBranch_RecordedNotDefaulted(t *testing.T) {
 		require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "trunk", "agent/host-1"))
 		// Forget the record, as on a repo from an older binary; add a pushed
 		// peer branch and an experiment, which are never candidates.
-		_, err = svc.rh.DB().Exec(`DELETE FROM meta WHERE key = ?`, consensusBranchKey)
+		_, err = svc.rh.DB().Exec(`DELETE FROM meta WHERE key = ?`, remotesync.ConsensusBranchKey)
 		require.NoError(t, err)
 		svc.ri.SetConsensus("")
 		tip, err := svc.Branches().HeadCommit(ctx, "agent/host-1")

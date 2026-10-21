@@ -15,8 +15,13 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/rs/zerolog/log"
 
+	"knomit/internal/store/fleetrec"
+	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/verify"
 )
 
 const peerTrackingPrefix = "refs/remotes/origin/agent/"
@@ -93,4 +98,79 @@ func (rh *Repo) PromotePeer(ctx context.Context, branch, upstream string, tip pl
 		return rh.NotifyCommit(ctx, branch, tip)
 	}
 	return nil
+}
+
+// ReadMainHistory reads the consensus branch's tip and its history; the
+// contract is Service.MainHistory's. upstream is the consensus branch's name
+// (the Service resolves it and refuses "").
+func (rh *Repo) ReadMainHistory(ctx context.Context, upstream string) (*MainHistory, error) {
+	uh, err := rh.ResolveRef(ctx, upstream)
+	if err != nil {
+		return nil, fmt.Errorf("MainHistory: %s: %w", upstream, err)
+	}
+	onMain := map[plumbing.Hash]bool{}
+	if err := vcs.WalkHistory(rh.Storer(), uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
+		return nil, fmt.Errorf("MainHistory: %w", err)
+	}
+	return NewMainHistory(uh, onMain), nil
+}
+
+// JudgePeerBranch judges a member branch's tip without moving anything; the
+// contract is Service.JudgePeerBranch's. upstream is the consensus branch's
+// name, already resolved and checked non-empty by the Service. The fleet the
+// judge reads is the one at upstream in THIS store (fleetrec.At, which is what
+// Service.FleetAt reads).
+func (rh *Repo) JudgePeerBranch(ctx context.Context, upstream, branch, own string, tip plumbing.Hash, main *MainHistory) (string, error) {
+	switch {
+	case !strings.HasPrefix(branch, "agent/") || branch == upstream || branch == own:
+		return "", fmt.Errorf("JudgePeerBranch: %q is not a member's agent branch", branch)
+	case tip.IsZero():
+		return "", fmt.Errorf("JudgePeerBranch: the tip of %s is required", branch)
+	}
+	if main == nil {
+		var err error
+		if main, err = rh.ReadMainHistory(ctx, upstream); err != nil {
+			return "", err
+		}
+	}
+	var commits []*object.Commit
+	if err := vcs.WalkHistory(rh.Storer(), tip, main.OnMain(), func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+		return "", fmt.Errorf("JudgePeerBranch: %w", err)
+	}
+	if msg := verify.PrivatePathClosure(ctx, rh.Repo.Repo, rh.Storer(), upstream, commits); msg != "" {
+		return msg, nil
+	}
+	lg := log.With().Str("repo", rh.Name()).Str("branch", branch).Logger()
+	self := func(context.Context) (fleetrec.Fleet, error) {
+		return fleetrec.At(rh.Storer(), upstream, rh.FactRoot())
+	}
+	return verify.JudgeIncoming(ctx, rh.Repo.Repo, upstream, self, nil, tip, commits, lg), nil
+}
+
+// DemotePeerBranch removes the local refs/heads/<branch> when it is still at
+// tip; the contract is Service.DemotePeerBranch's. upstream is the consensus
+// branch's name as the Service resolved it.
+func (rh *Repo) DemotePeerBranch(ctx context.Context, upstream, branch, own string, tip plumbing.Hash) (bool, error) {
+	if !strings.HasPrefix(branch, "agent/") || branch == upstream || branch == own {
+		return false, fmt.Errorf("DemotePeerBranch: %q is not a member's agent branch", branch)
+	}
+	id, err := rh.BranchID(ctx, branch)
+	if err != nil {
+		return false, nil // not a registered branch: nothing to demote
+	}
+	defer rh.LockBranch(branch)()
+	ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("DemotePeerBranch: read %s: %w", branch, err)
+	}
+	if ref.Hash() != tip {
+		return false, nil
+	}
+	if err := rh.DropBranchLocked(context.WithoutCancel(ctx), branch, id); err != nil {
+		return false, fmt.Errorf("DemotePeerBranch: %w", err)
+	}
+	return true, nil
 }
