@@ -748,7 +748,7 @@ func (d *triggerDispatcher) flushOnStop() {
 // returns false when there is nothing to do (or the run should stop).
 func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *runState) bool {
 	tr := svc.FactsRepo()
-	headStr, err := svc.Branches().HeadCommit(ctx, d.branch)
+	headStr, err := svc.HeadCommit(ctx, d.branch)
 	if err != nil {
 		log.Warn().Err(err).Str("repo", d.repo).Str("branch", d.branch).Msg("trigger dispatcher: head unreadable")
 		return false

@@ -23,10 +23,10 @@ func TestConsensus_PrivatePathRevertRefusedOthersMerge(t *testing.T) {
 
 	// good forks before the host's ontology edit (carries the old one,
 	// unchanged); bad forks after it and puts the old one back.
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/good-33333333", cHostAgent))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/good-33333333", cHostAgent))
 	newer := old + "# host edit\n"
 	h.setOntology(t, newer)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/bad-22222222", cHostAgent))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/bad-22222222", cHostAgent))
 	_, err := svc.Facts().WriteFact(ctx, "agent/bad-22222222", OntologyPath, old, "revert", "updated")
 	require.NoError(t, err)
 	writeOn(t, h.ri, "agent/good-33333333", "kb/tasks/good.md")

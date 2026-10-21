@@ -13,6 +13,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // D18/P1b review F2: the origin wizard's replay store (handlers_origin_session
@@ -25,7 +26,7 @@ import (
 // handlers_origin_session.go → the replay commit is authored "test+…" → red.
 func TestConnect_ReplayAuthorsAsThePersistedAgentID(t *testing.T) {
 	const agentID = "opaque-web"
-	if store.TestFallbackAgentID("agent/test") == agentID {
+	if testsigner.FixtureAgentID("agent/test") == agentID {
 		t.Fatal("fixture: the id must differ from the fallback's")
 	}
 	home := t.TempDir()
@@ -80,7 +81,7 @@ func TestConnect_ReplayAuthorsAsThePersistedAgentID(t *testing.T) {
 	var email string
 	if err := ri.WithRead(func(svc *store.Service) {
 		ctx := context.Background()
-		tip, err := svc.Branches().HeadCommit(ctx, "agent/test")
+		tip, err := svc.HeadCommit(ctx, "agent/test")
 		if err != nil {
 			t.Errorf("head: %v", err)
 			return

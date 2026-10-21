@@ -188,7 +188,7 @@ func TestHypothesizer_ScopedNonEmptyWatermark_StillSeedsInScope(t *testing.T) {
 	writeTestFact(t, svc, "kb/arch/b.md", "b", fact.Synthesis, "auth")
 
 	// Simulate a prior unscoped run having advanced the watermark to HEAD.
-	head, err := svc.Branches().HeadCommit(ctx, "agent/test")
+	head, err := svc.HeadCommit(ctx, "agent/test")
 	require.NoError(t, err)
 	require.NotEmpty(t, head)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "hypothesize", "agent/test", head))

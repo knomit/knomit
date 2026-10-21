@@ -186,7 +186,7 @@ func TestAgentTrace_E2E_ParallelTasksOnOneSession(t *testing.T) {
 func commitsSince(t *testing.T, svc *store.Service, branch, stop string) []string {
 	t.Helper()
 	ctx := context.Background()
-	h, err := svc.Branches().HeadCommit(ctx, branch)
+	h, err := svc.HeadCommit(ctx, branch)
 	require.NoError(t, err)
 	var out []string
 	for h != stop {

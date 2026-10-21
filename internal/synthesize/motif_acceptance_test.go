@@ -54,7 +54,7 @@ func TestAcceptance_MotifField(t *testing.T) {
 
 	branch := os.Getenv("KNOMIT_PHASE1_BRANCH")
 	if branch == "" {
-		branch, err = svc.Branches().DefaultBranch(ctx)
+		branch, err = svc.DefaultBranch(ctx)
 		require.NoError(t, err)
 	}
 

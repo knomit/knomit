@@ -59,11 +59,11 @@ func TestFleetDrop_ALeftMembersTwoCommitsCanBeLeftOutWholeOnceConfirmed(t *testi
 	require.Equal(t, mainBefore, f.rev(t, "main"), "the fetch judge refused alpha's branch")
 	// The master's copy merges it past that judge.
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/alpha-held", f.mri.AgentBranch()))
+		require.NoError(t, svc.CreateBranch(ctx, "agent/alpha-held", f.mri.AgentBranch()))
 		require.NoError(t, storetest.SetRef(svc, "refs/heads/agent/alpha-held", side[1]))
 		_, err := svc.MergePushed(ctx, "agent/alpha-held", f.mri.AgentBranch(), plumbing.NewHash(side[1]), "")
 		require.NoError(t, err)
-		require.NoError(t, svc.Branches().DropBranch(ctx, "agent/alpha-held"))
+		require.NoError(t, svc.DropBranch(ctx, "agent/alpha-held"))
 	}))
 	f.masterRounds(t)
 	roundOnPush(t, f.mri, f.master.fleetPushed) // the sync loop records its push outcome

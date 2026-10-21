@@ -24,6 +24,10 @@ func fallbackTestSigner() ssh.Signer {
 	return s
 }
 
+// fixtureAgentID is the id a store in this package's tests authors as when it
+// was given none: its branch without "agent/".
+func fixtureAgentID(branch string) string { return strings.TrimPrefix(branch, "agent/") }
+
 // TestMain installs the fallback commit signer for this test binary: a
 // Service without SetSigner now refuses to commit (ErrNoSigner), and most
 // fixtures here predate that. TestSign_NoSignerIsRefused removes it for its
@@ -39,7 +43,7 @@ func TestMain(m *testing.M) {
 	// The same fixture convention internal/testsupport/testsigner installs
 	// (FixtureAgentID): a store given no agent id authors as its branch
 	// without "agent/". Test binaries only; production passes the persisted id.
-	vcs.SetTestFallbackAgentID(func(branch string) string { return strings.TrimPrefix(branch, "agent/") })
+	vcs.SetTestFallbackAgentID(fixtureAgentID)
 	sqlite.SetTestFastDurability(true)
 	os.Exit(m.Run())
 }

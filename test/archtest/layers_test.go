@@ -98,7 +98,7 @@ var sameLayerEdges = map[string]bool{
 	// sits above sqlite in the store's child order (proposal 4.3: sessions ->
 	// sqlite): the pipeline watermarks live in the MAIN db and are read
 	// through the ctx-carried tx helper (sqlite.Conn).
-	"store/internal/sessions -> store/internal/sqlite": true,
+	"store/sessions -> store/internal/sqlite": true,
 	// The vcs child (the git layer: branches, commits, locks, signing, commit
 	// log, path history) sits on the git storer and directly above sqlite in
 	// the store's child order (proposal 4.3); every higher cluster reaches up
@@ -216,14 +216,14 @@ var sameLayerEdges = map[string]bool{
 	// store/model is the leaf every store child may import: plain data types,
 	// sentinels and pure helpers. It imports nothing from the store
 	// (TestStoreModel_IsALeaf), so these edges can never close a cycle.
-	"store/facts -> store/model":             true,
-	"store/fsck -> store/model":              true,
-	"store/index -> store/model":             true,
-	"store/internal/sessions -> store/model": true,
-	"store/internal/sqlite -> store/model":   true,
-	"store/internal/vcs -> store/model":      true,
-	"store/merge -> store/model":             true,
-	"store/remotesync -> store/model":        true,
+	"store/facts -> store/model":           true,
+	"store/fsck -> store/model":            true,
+	"store/index -> store/model":           true,
+	"store/sessions -> store/model":        true,
+	"store/internal/sqlite -> store/model": true,
+	"store/internal/vcs -> store/model":    true,
+	"store/merge -> store/model":           true,
+	"store/remotesync -> store/model":      true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

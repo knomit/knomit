@@ -224,7 +224,7 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 		if !m.ri.actsAsFleetMaster(svc) {
 			return
 		}
-		mainTip, err := svc.Branches().HeadCommit(ctx, upstream)
+		mainTip, err := svc.HeadCommit(ctx, upstream)
 		if err != nil {
 			m.warnOnce("main:"+err.Error(), fmt.Sprintf("consensus: read %s: %v; nothing merged, the next kick retries", upstream, err))
 			return
@@ -238,7 +238,7 @@ func (m *consensusMerger) runOnce(ctx context.Context) {
 		return
 	}
 
-	branches, err := svc.Branches().ListBranches(ctx)
+	branches, err := svc.ListBranches(ctx)
 	if err != nil {
 		m.warnOnce("list:"+err.Error(), fmt.Sprintf("consensus: list branches: %v; the next kick retries", err))
 		return
@@ -315,7 +315,7 @@ func (m *consensusMerger) autoAt(ctx context.Context, svc *store.Service, upstre
 // merge commit. admit, when not nil, must accept that tip first; the merge
 // is then of exactly that tip (a branch that moved since is ErrBranchMoved).
 func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, branch string, admit func(string, plumbing.Hash) bool) bool {
-	tipStr, err := svc.Branches().HeadCommit(ctx, branch)
+	tipStr, err := svc.HeadCommit(ctx, branch)
 	if err != nil || tipStr == "" {
 		return false // gone since the list; nothing to merge
 	}

@@ -13,6 +13,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // commitFixture is a real Manager with a mounted repo "alpha" and an applied
@@ -38,10 +39,10 @@ func newCommitFixture(t *testing.T, keyPath string, hook func(repos.StageID, str
 	f.remoteURL = seedBareKBOn(t, filepath.Join(f.root, "remote.git"), "main")
 
 	f.m = repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: f.root},
-		AgentBranch: "machine/test",
-		KeyPath:     keyPath,
-		Machine:     repos.Options{Synchronous: true, Hook: hook},
+		Cfg:     config.Config{Home: t.TempDir(), LocalOriginRoot: f.root},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		KeyPath: keyPath,
+		Machine: repos.Options{Synchronous: true, Hook: hook},
 	})
 	t.Cleanup(func() { _ = f.m.Close() })
 	if err := f.m.Start(); err != nil {
@@ -99,10 +100,10 @@ func newDisjointSession(t *testing.T, keyPath string) (*Server, *repos.RepoInsta
 func newRegisteredManager(t *testing.T, keyPath, name, uid string) *repos.Manager {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "machine/test",
-		KeyPath:     keyPath,
-		Machine:     repos.Options{Synchronous: true},
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		KeyPath: keyPath,
+		Machine: repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {

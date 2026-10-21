@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -27,15 +28,15 @@ func handleHALEvents() http.HandlerFunc {
 		events, snapshot := ri.TaskHub().Subscribe(r.Context())
 
 		// Snapshot the initial head commit.
-		var branches store.BranchIndex
+		var headCommit func(ctx context.Context, branch string) (string, error)
 		ri.WithRead(func(svc *store.Service) {
 			if svc != nil {
-				branches = svc.Branches()
+				headCommit = svc.HeadCommit
 			}
 		})
 		head := ""
-		if branches != nil {
-			head, _ = branches.HeadCommit(r.Context(), branch)
+		if headCommit != nil {
+			head, _ = headCommit(r.Context(), branch)
 		}
 		if !stream.Write("event: status\ndata: {\"head\":\"%s\"}\n\n", head) {
 			return

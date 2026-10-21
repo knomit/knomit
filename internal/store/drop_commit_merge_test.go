@@ -19,7 +19,7 @@ import (
 func (h *pushHost) sideMerge(t *testing.T, files ...string) []plumbing.Hash {
 	t.Helper()
 	ctx := context.Background()
-	require.NoError(t, h.svc.Branches().CreateBranch(ctx, "agent/side", hostBranch))
+	require.NoError(t, h.svc.CreateBranch(ctx, "agent/side", hostBranch))
 	var out []plumbing.Hash
 	for _, p := range files {
 		c, err := h.svc.rh.CommitFilesForTest("agent/side", map[string]string{p: testFactBody(p, 0.9, nil)}, "side "+p)

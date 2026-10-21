@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/verify"
+	"knomit/internal/testsupport/testsigner"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -47,7 +48,7 @@ func TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable(t *testing.T) {
 	}
 	aBranch := "agent/alpha-" + pki.Short(aMember.Fingerprint())
 	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: aDir}},
-		KeyPath: aKey, Signer: keySigner(t, aKey), AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
+		KeyPath: aKey, Signer: keySigner(t, aKey), AgentID: testsigner.FixtureAgentID(aBranch), AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +69,7 @@ func TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable(t *testing.T) {
 		if _, err := s.Remote().Push(ctx, aBranch, nil); err != nil {
 			t.Fatalf("push to the host: %v", err)
 		}
-		aTip, err = s.Branches().HeadCommit(ctx, aBranch)
+		aTip, err = s.HeadCommit(ctx, aBranch)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -99,7 +100,7 @@ func TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable(t *testing.T) {
 		if err != nil || !strings.Contains(got.Content, "merged") {
 			t.Fatalf("B's agent branch lacks the peer's fact after the merge: %v", err)
 		}
-		tip, err := s.Branches().HeadCommit(ctx, fleetServerAgent)
+		tip, err := s.HeadCommit(ctx, fleetServerAgent)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -247,7 +247,7 @@ func TestUpdateHandler_CommitRecordsMomentName(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &out))
 	require.NotEmpty(t, out.Commit, "fixture: the update must report its commit")
 
-	head, err := svc.Branches().HeadCommit(context.Background(), "agent/test")
+	head, err := svc.HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err)
 	require.Equal(t, out.Commit, head, "fixture: the update's commit is the head")
 	info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(head))

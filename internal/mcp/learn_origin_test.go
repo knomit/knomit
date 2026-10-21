@@ -273,7 +273,7 @@ func TestLearnHandler_DedupMergeEmitsNoSelfCitation(t *testing.T) {
 	// Refs are stored canonical (kb://<own-id>/<path>) — bare paths are accepted
 	// on input and qualified on write, so an author never needs a repo id. The
 	// lineage ref is therefore the qualified form of firstPath.
-	br, berr := svc.Branches().DefaultBranch(context.Background())
+	br, berr := svc.DefaultBranch(context.Background())
 	require.NoError(t, berr)
 	root, rerr := svc.RootCommit(context.Background(), br)
 	require.NoError(t, rerr)

@@ -544,3 +544,165 @@ func TestStoreConsensusRecord_GuardDiscriminates(t *testing.T) {
 		}
 	}
 }
+
+// sessionsPlumbing is the part of internal/store/sessions that takes or opens
+// raw database handles. The package is importable (PipelineIndex and ToolIndex
+// are handed out by Service.Pipeline and Service.ToolSession), but a caller
+// that could open a session database or build an index over a *sql.DB of its
+// own would run session SQL outside the Service's lifetime (the Service closes
+// and deletes the session files on Close, and reaps idle rows on its own
+// schedule). Only package store wires these.
+var sessionsPlumbing = map[string]bool{
+	"Open": true, "NewPipelineIndex": true, "NewToolIndex": true, "ReapIdle": true,
+}
+
+const sessionsImport = "knomit/internal/store/sessions"
+
+// sessionsPlumbingUses returns one "line N: sessions.<name>" per selector
+// expression `<local>.<name>` where <local> is the local name this file
+// imports internal/store/sessions under and <name> is plumbing. A file that
+// does not import the package yields nothing, so store.Open, os.Open and a
+// method called Open are never flagged.
+func sessionsPlumbingUses(t *testing.T, fset *token.FileSet, name string, src any) []string {
+	t.Helper()
+	f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	local := ""
+	for _, imp := range f.Imports {
+		p, _ := strconv.Unquote(imp.Path.Value)
+		if p != sessionsImport {
+			continue
+		}
+		local = "sessions"
+		if imp.Name != nil {
+			local = imp.Name.Name
+		}
+	}
+	if local == "" {
+		return nil
+	}
+	var uses []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || !sessionsPlumbing[sel.Sel.Name] {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok && id.Name == local {
+			uses = append(uses, "line "+strconv.Itoa(fset.Position(sel.Sel.Pos()).Line)+": sessions."+sel.Sel.Name)
+		}
+		return true
+	})
+	return uses
+}
+
+// TestStoreSessionsPlumbing_OnlyInsideStore: sessions.Open, NewPipelineIndex,
+// NewToolIndex and ReapIdle are exported only because package store (the
+// parent of the sessions child) must call them. This parses every .go file in
+// the module, tests included, and fails on a use from anywhere but the
+// top-level files of internal/store and the sessions package itself.
+//
+// Non-vacuity: the walk must visit at least minFiles files, each of the four
+// must still be declared in internal/store/sessions, and internal/store/
+// service.go must still use each, so a rename cannot leave the scan matching
+// nothing.
+func TestStoreSessionsPlumbing_OnlyInsideStore(t *testing.T) {
+	const minFiles = 500
+	root := filepath.Join("..", "..")
+	fset := token.NewFileSet()
+	var offenders []string
+	scanned := 0
+	declared := map[string]bool{}
+	usedByService := map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch rel {
+			case ".git", "web", "dist", ".claude", "third_party":
+				return filepath.SkipDir
+			}
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".go") {
+			return nil
+		}
+		scanned++
+		dir := filepath.ToSlash(filepath.Dir(rel))
+		inSessions := dir == "internal/store/sessions"
+		if inSessions && !strings.HasSuffix(rel, "_test.go") {
+			f, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+			if perr != nil {
+				return perr
+			}
+			for _, decl := range f.Decls {
+				if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && sessionsPlumbing[fd.Name.Name] {
+					declared[fd.Name.Name] = true
+				}
+			}
+		}
+		for _, u := range sessionsPlumbingUses(t, fset, path, nil) {
+			if rel == "internal/store/service.go" {
+				usedByService[u[strings.Index(u, "sessions.")+len("sessions."):]] = true
+			}
+			if dir != "internal/store" && !inSessions {
+				offenders = append(offenders, rel+" "+u)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < minFiles {
+		t.Fatalf("scanned only %d .go files, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
+	}
+	for name := range sessionsPlumbing {
+		if !declared[name] {
+			t.Errorf("internal/store/sessions no longer declares a function %s: it was renamed or moved, so this guard checks nothing", name)
+		}
+		if !usedByService[name] {
+			t.Errorf("internal/store/service.go no longer uses sessions.%s: the caller moved or was renamed, so this guard's expectations are stale", name)
+		}
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("sessions.Open, NewPipelineIndex, NewToolIndex and ReapIdle take raw database handles and run on the Service's schedule; only package store may call them:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
+}
+
+// TestStoreSessionsPlumbing_GuardDiscriminates: a use through the import's
+// local name is flagged; the same names on another package, a method, a
+// declaration, a comment and a string are not, and a file that does not import
+// the package yields nothing even when it says sessions.Open.
+func TestStoreSessionsPlumbing_GuardDiscriminates(t *testing.T) {
+	imp := "package p\nimport \"" + sessionsImport + "\"\n"
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"open", imp + "func f() { sessions.Open(\"x\") }", 1},
+		{"constructor", imp + "func f() { _ = sessions.NewPipelineIndex(a, b) }", 1},
+		{"method value", imp + "func f() { g := sessions.ReapIdle; _ = g }", 1},
+		{"aliased import", "package p\nimport ss \"" + sessionsImport + "\"\nfunc f() { ss.NewToolIndex(db) }", 1},
+		{"handle method", imp + "func f(pi *sessions.PipelineIndex) { pi.Open() }", 0},
+		{"other package", imp + "func f() { os.Open(\"x\") }", 0},
+		{"not imported", "package p\nfunc f() { sessions.Open(\"x\") }", 0},
+		{"comment", imp + "// sessions.Open opens\nfunc f() {}", 0},
+		{"string", imp + "var s = \"sessions.Open\"", 0},
+	}
+	for _, c := range cases {
+		got := sessionsPlumbingUses(t, token.NewFileSet(), c.name+".go", c.src)
+		if len(got) != c.want {
+			t.Errorf("%s: %d uses, want %d (%v)", c.name, len(got), c.want, got)
+		}
+	}
+}

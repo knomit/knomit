@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestRepoMiddleware_PassesRepoToNestedHandler verifies that a handler
@@ -18,7 +19,7 @@ import (
 // if this breaks, the MCP handlers that read ri from ctx at call time
 // will blow up.
 func TestRepoMiddleware_PassesRepoToNestedHandler(t *testing.T) {
-	m := repos.New(context.Background(), repos.Deps{AgentBranch: "agent/test"})
+	m := repos.New(context.Background(), repos.Deps{AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test"})
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "testrepo",
 		AgentBranch: "agent/test",

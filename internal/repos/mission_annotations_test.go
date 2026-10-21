@@ -180,11 +180,11 @@ func skeletonFor(t *testing.T, tool, marker string, fill map[string]string) (map
 func tips(t *testing.T, n *missionNode) map[string]string {
 	t.Helper()
 	svc := n.svc(t)
-	bs, err := svc.Branches().ListBranches(context.Background())
+	bs, err := svc.ListBranches(context.Background())
 	require.NoError(t, err)
 	out := map[string]string{}
 	for _, b := range bs {
-		h, err := svc.Branches().HeadCommit(context.Background(), b.Name)
+		h, err := svc.HeadCommit(context.Background(), b.Name)
 		require.NoError(t, err)
 		out[b.Name] = h
 	}

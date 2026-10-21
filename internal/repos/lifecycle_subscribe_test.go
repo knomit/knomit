@@ -13,6 +13,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // newSubscribeTestManager builds Deps inline because these tests need BOTH a
@@ -23,9 +24,9 @@ import (
 func newSubscribeTestManager(t *testing.T, root string) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
-		AgentBranch: "machine/test",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -123,7 +124,7 @@ func TestSubscription_SyncFollowsUpstreamAndNeverPushes(t *testing.T) {
 
 	var before string
 	require.NoError(t, ri.WithRead(func(s *store.Service) {
-		before, _ = s.Branches().HeadCommit(context.Background(), "main")
+		before, _ = s.HeadCommit(context.Background(), "main")
 	}))
 	require.NotEmpty(t, before)
 
@@ -142,7 +143,7 @@ func TestSubscription_SyncFollowsUpstreamAndNeverPushes(t *testing.T) {
 
 	var after string
 	require.NoError(t, ri.WithRead(func(s *store.Service) {
-		after, _ = s.Branches().HeadCommit(context.Background(), "main")
+		after, _ = s.HeadCommit(context.Background(), "main")
 	}))
 	require.NotEqual(t, before, after, "read branch followed the upstream")
 	require.Equal(t, refsBefore, gitRefs(t, bare), "a subscription never pushes: the remote's refs are untouched")

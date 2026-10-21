@@ -46,11 +46,11 @@ func TestGitHandler_RepoIDSurvivesNewCommits(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, before, "knomit-repo-id="+root)
 
-	tipBefore, err := svc.Branches().HeadCommit(ctx, "main")
+	tipBefore, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/later.md", testFactBody("later", 0.9, nil), "later", "")
 	require.NoError(t, err)
-	tipAfter, err := svc.Branches().HeadCommit(ctx, "main")
+	tipAfter, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	require.NotEqual(t, tipBefore, tipAfter, "the fixture must actually move the tip")
 
@@ -106,7 +106,7 @@ func TestGitHandler_GoGitCloneWithProgressReceivesLines(t *testing.T) {
 // fixture that any encoder change would invalidate.
 func TestGitHandler_SidebandIsConditionalAndLosslessOverThePack(t *testing.T) {
 	svc, srv := servedStore(t, 4)
-	tip, err := svc.Branches().HeadCommit(context.Background(), "main")
+	tip, err := svc.HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
 
 	const nak = "0008NAK\n"

@@ -508,7 +508,7 @@ var commitHashRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // its bytes now, so a retry that re-reads there and sends if_commit=tip passes
 // unless yet another write lands first.
 func staleFactResult(ctx context.Context, s mcpStore, branch, reason string) *mcpgo.CallToolResult {
-	tip, err := s.branches.HeadCommit(ctx, branch)
+	tip, err := s.headCommit(ctx, branch)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("%s; nothing was written (current_commit unavailable: %v)", reason, err))
 	}

@@ -31,9 +31,9 @@ func TestCommitExperiment_RefusalCarriesTheThreeCommits(t *testing.T) {
 	writeMergeFact(t, svc, "exp/three", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	expHead, err := svc.Branches().HeadCommit(ctx, "exp/three")
+	expHead, err := svc.HeadCommit(ctx, "exp/three")
 	require.NoError(t, err)
-	agentHead, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentHead, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
 	_, err = svc.Merge().CommitExperiment(ctx, "three", nil)
@@ -130,7 +130,7 @@ func TestCommitExperiment_AllTheirsIsANoop(t *testing.T) {
 	writeMergeFact(t, svc, "exp/alltheirs", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentBefore, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
 	res, err := svc.Merge().CommitExperiment(ctx, "alltheirs", map[string]merge.Resolution{
@@ -140,11 +140,11 @@ func TestCommitExperiment_AllTheirsIsANoop(t *testing.T) {
 	require.Equal(t, merge.ModeNoop, res.Mode,
 		"an all-theirs resolution produces a tree identical to the parent's")
 
-	agentAfter, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentAfter, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, agentBefore, agentAfter, "no merge commit, so the parent must not move")
 
-	_, ok, err := svc.Branches().GetExperiment(ctx, "alltheirs")
+	_, ok, err := svc.GetExperiment(ctx, "alltheirs")
 	require.NoError(t, err)
 	require.False(t, ok, "the experiment is still deleted — the action did happen")
 }
@@ -160,7 +160,7 @@ func TestCommitExperiment_LeftoverResolutionOnACleanMerge(t *testing.T) {
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/clean", "kb/exp-only.md", "exp only", "body")
 
-	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentBefore, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
 	_, err = svc.Merge().CommitExperiment(ctx, "clean", map[string]merge.Resolution{
@@ -170,12 +170,12 @@ func TestCommitExperiment_LeftoverResolutionOnACleanMerge(t *testing.T) {
 	require.Contains(t, err.Error(), "did not conflict")
 	require.Contains(t, err.Error(), "kb/exp-only.md")
 
-	agentAfter, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentAfter, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, agentBefore, agentAfter,
 		"the rejection must happen BEFORE the fast-forward moves the branch")
 
-	_, ok, err := svc.Branches().GetExperiment(ctx, "clean")
+	_, ok, err := svc.GetExperiment(ctx, "clean")
 	require.NoError(t, err)
 	require.True(t, ok, "and the experiment must survive a rejected commit")
 }
@@ -208,9 +208,9 @@ func TestCommitExperiment_ResolutionForDstOnlyPathIsRefused(t *testing.T) {
 func mergeBaseOf(t *testing.T, svc *Service, a, b string) string {
 	t.Helper()
 	ctx := context.Background()
-	aHead, err := svc.Branches().HeadCommit(ctx, a)
+	aHead, err := svc.HeadCommit(ctx, a)
 	require.NoError(t, err)
-	bHead, err := svc.Branches().HeadCommit(ctx, b)
+	bHead, err := svc.HeadCommit(ctx, b)
 	require.NoError(t, err)
 	ac, err := svc.rh.Repository().CommitObject(plumbing.NewHash(aHead))
 	require.NoError(t, err)
@@ -244,7 +244,7 @@ func TestCommitExperiment_ResolveOurs_TakesTheExperimentVersion(t *testing.T) {
 	require.NotContains(t, got, "agent rewrite",
 		"ResolveSrc must REPLACE the parent's version, not merge into it")
 
-	_, ok, err := svc.Branches().GetExperiment(ctx, "ours")
+	_, ok, err := svc.GetExperiment(ctx, "ours")
 	require.NoError(t, err)
 	require.False(t, ok, "a resolved commit still deletes the experiment")
 }
@@ -324,7 +324,7 @@ func TestCommitExperiment_EmptyResolutionIsRefused(t *testing.T) {
 	writeMergeFact(t, svc, "exp/empty", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentBefore, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
 	_, err = svc.Merge().CommitExperiment(ctx, "empty", map[string]merge.Resolution{
@@ -333,7 +333,7 @@ func TestCommitExperiment_EmptyResolutionIsRefused(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "neither a side nor a body")
 
-	agentAfter, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentAfter, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, agentBefore, agentAfter, "a rejected resolution must move nothing")
 }
@@ -352,7 +352,7 @@ func TestCommitExperiment_ResolutionForNonConflictingPathIsRefused(t *testing.T)
 	writeMergeFact(t, svc, "exp/extra", "kb/exp-only.md", "exp only", "body")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentBefore, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	commitsBefore := countRows(t, svc, `SELECT count(*) FROM branch_commits`)
 
@@ -365,7 +365,7 @@ func TestCommitExperiment_ResolutionForNonConflictingPathIsRefused(t *testing.T)
 	require.Contains(t, err.Error(), "kb/exp-only.md",
 		"the error must name WHICH resolution adjudicated nothing")
 
-	agentAfter, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentAfter, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, agentBefore, agentAfter)
 	require.Equal(t, commitsBefore, countRows(t, svc, `SELECT count(*) FROM branch_commits`),
@@ -387,9 +387,9 @@ func TestCommitExperiment_PartialResolutionsRefuseOnlyTheRest(t *testing.T) {
 		writeMergeFact(t, svc, testAgentBranch, p, "base", "agent rewrite")
 	}
 
-	expBefore, err := svc.Branches().HeadCommit(ctx, "exp/partial")
+	expBefore, err := svc.HeadCommit(ctx, "exp/partial")
 	require.NoError(t, err)
-	agentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentBefore, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
 	_, err = svc.Merge().CommitExperiment(ctx, "partial", map[string]merge.Resolution{
@@ -403,9 +403,9 @@ func TestCommitExperiment_PartialResolutionsRefuseOnlyTheRest(t *testing.T) {
 
 	// Byte-identical tips: a partial resolution is still a refusal, and a
 	// refusal writes nothing at all.
-	expAfter, err := svc.Branches().HeadCommit(ctx, "exp/partial")
+	expAfter, err := svc.HeadCommit(ctx, "exp/partial")
 	require.NoError(t, err)
-	agentAfter, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	agentAfter, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, expBefore, expAfter)
 	require.Equal(t, agentBefore, agentAfter)
@@ -530,7 +530,7 @@ func TestResolvedCommit_IsSigned(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeMerge, res.Mode, "precondition: a real merge commit was synthesized")
 
-	hash, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	hash, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	commit, err := svc.rh.Repository().CommitObject(plumbing.NewHash(hash))
 	require.NoError(t, err)
@@ -562,7 +562,7 @@ func TestResolvedCommit_ReachesNotifyCommitOnDst(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeMerge, res.Mode)
 
-	newTip, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	newTip, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, newTip, res.NewTip, "the reported tip is the one the ref now holds")
 

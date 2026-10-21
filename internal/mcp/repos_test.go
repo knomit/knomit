@@ -17,6 +17,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 
 	"knomit/internal/config"
 )
@@ -311,8 +312,8 @@ func TestRepos_UnavailableRepoListed(t *testing.T) {
 	home := t.TempDir()
 	newMgr := func() *repos.Manager {
 		m := repos.New(context.Background(), repos.Deps{
-			Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-			AgentBranch: "agent/test",
+			Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+			AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 		})
 		t.Cleanup(func() { _ = m.Close() })
 		return m

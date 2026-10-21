@@ -37,7 +37,7 @@ func resolutionRepo(t *testing.T) *repos.RepoInstance {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(ctx, map[string]string{resBoth: "both\n"}, resParent))
-	require.NoError(t, svc.Branches().CreateBranch(ctx, resExp, resParent))
+	require.NoError(t, svc.CreateBranch(ctx, resExp, resParent))
 	_, err = storetest.RawWrite(ctx, svc, resParent, resParentOnly, "parent\n", "parent side only")
 	require.NoError(t, err)
 	_, err = storetest.RawWrite(ctx, svc, resExp, resExpOnly, "experiment\n", "experiment side only")

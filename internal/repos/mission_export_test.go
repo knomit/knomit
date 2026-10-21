@@ -56,7 +56,7 @@ func (ri *RepoInstance) KickTriggersForTest(t *testing.T) {
 
 func (ri *RepoInstance) agentHeadForTest(t *testing.T) string {
 	t.Helper()
-	h, err := testService(t, ri).Branches().HeadCommit(context.Background(), ri.agentBranch)
+	h, err := testService(t, ri).HeadCommit(context.Background(), ri.agentBranch)
 	require.NoError(t, err)
 	return h
 }

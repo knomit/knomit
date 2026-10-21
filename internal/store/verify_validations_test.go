@@ -294,7 +294,7 @@ func TestValidation_TheHubRefusesAMemberFactThatIsNotPolicy(t *testing.T) {
 // past the store's write cores (and so past validateWrite).
 func (h *pushHost) rawBranch(branch, from string, kv ...string) plumbing.Hash {
 	h.t.Helper()
-	require.NoError(h.t, h.svc.Branches().CreateBranch(context.Background(), branch, from))
+	require.NoError(h.t, h.svc.CreateBranch(context.Background(), branch, from))
 	for i := 0; i+1 < len(kv); i += 2 {
 		_, err := h.svc.rh.CommitFilesForTest(branch, map[string]string{kv[i]: kv[i+1]}, "write "+kv[i])
 		require.NoError(h.t, err)

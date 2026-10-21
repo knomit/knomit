@@ -52,7 +52,7 @@ func TestWritableBranch_RefusesExperimentWithForeignParent(t *testing.T) {
 	// A branch that is NOT this instance's agent branch, standing in for
 	// another machine's agent/* branch.
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/other", agent))
+		require.NoError(t, svc.CreateBranch(context.Background(), "agent/other", agent))
 	}))
 	foreign := openExperimentOn(t, ri, "theirs", "agent/other")
 
@@ -69,7 +69,7 @@ func TestWritableBranch_RefusesUnrecordedExperimentRef(t *testing.T) {
 	agent := ri.AgentBranch()
 
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(context.Background(), "exp/no-record", agent))
+		require.NoError(t, svc.CreateBranch(context.Background(), "exp/no-record", agent))
 	}))
 
 	require.False(t, ri.WritableBranch("exp/no-record"),
@@ -155,7 +155,7 @@ func TestWriteBranch_ForeignExperimentIsReadOnly(t *testing.T) {
 	ri := createRepo(t, m, "work")
 	agent := ri.AgentBranch()
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/other", agent))
+		require.NoError(t, svc.CreateBranch(context.Background(), "agent/other", agent))
 	}))
 	foreign := openExperimentOn(t, ri, "theirs", "agent/other")
 
@@ -245,7 +245,7 @@ func TestNewBindingOfLens_PinnedAtForeignExperimentFallsBack(t *testing.T) {
 	m := newLifecycleManager(t)
 	work := createRepo(t, m, "work")
 	require.NoError(t, work.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/other", work.AgentBranch()))
+		require.NoError(t, svc.CreateBranch(context.Background(), "agent/other", work.AgentBranch()))
 	}))
 	foreign := openExperimentOn(t, work, "theirs", "agent/other")
 

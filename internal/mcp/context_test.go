@@ -90,7 +90,7 @@ func learnItems(items ...map[string]any) mcpgo.CallToolRequest {
 
 func branchTip(t *testing.T, svc *store.Service) string {
 	t.Helper()
-	h, err := svc.Branches().HeadCommit(context.Background(), "agent/test")
+	h, err := svc.HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err)
 	return h
 }

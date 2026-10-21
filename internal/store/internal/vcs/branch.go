@@ -96,20 +96,22 @@ type Repo struct {
 	consensusBranch func() string
 
 	// acceptList is the operator's accept list (control.db), bound to this
-	// repository. Nil is empty. Set by Service.SetAcceptList at build/swap
-	// time, never mutated afterwards.
-	acceptList model.AcceptList
+	// repository: the entry waiving a commit, if any. Nil is empty. Set by
+	// Service.SetAcceptList at build/swap time, never mutated afterwards.
+	acceptList func(commit plumbing.Hash) (model.Accept, bool)
 
 	// ownKeys, when set, returns every key this instance's fleet member record
 	// has held (E4 accepts them as its own). Nil when standalone.
 	ownKeys func() []ssh.PublicKey
 
-	// im is the search-index manager. NotifyCommit calls im.Sync after every
-	// commit so branch_facts / facts_vec / graph stay in sync with the new
-	// tree at HEAD. Set by Service.Open (via bindIndexManager). If nil,
+	// syncIndex is index.Index.Sync (installed by Service.Open through
+	// SetIndexSync; vcs cannot import the index package, which sits above
+	// it). NotifyCommit calls it after every commit so branch_facts /
+	// facts_vec / graph stay in sync with the new tree at HEAD. It is
+	// lock-FREE: NotifyCommit runs under LockBranch(branch). If nil,
 	// NotifyCommit skips the sync — useful for bare Repo tests that
 	// don't exercise the index.
-	im model.IndexManager
+	syncIndex func(ctx context.Context, branch string) error
 
 	// readOnly refuses authored commits at the shared write seam — the
 	// structural half of a subscription (see Service.SetReadOnly). Set by

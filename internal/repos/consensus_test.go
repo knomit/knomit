@@ -74,11 +74,11 @@ func newConsensusHost(t *testing.T, ont string, o hostOpts) *cHost {
 	cfg := config.Config{Home: home, OntologyRoot: "kb", ReadOnly: o.readOnly}
 	cfg.Git.LocalReconcileInterval = time.Minute
 	m := New(context.Background(), Deps{
-		Cfg:         cfg,
-		AgentBranch: cHostAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Signer:      testsigner.Named("consensus-host"),
-		Machine:     Options{Synchronous: !o.background, CrashBackoff: testCrashBackoff},
+		Cfg:     cfg,
+		AgentID: testsigner.FixtureAgentID(cHostAgent), AgentBranch: cHostAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
+		Signer:  testsigner.Named("consensus-host"),
+		Machine: Options{Synchronous: !o.background, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	require.NoError(t, m.Start())
@@ -134,7 +134,7 @@ func (h *cHost) advance(t *testing.T) {
 
 func (h *cHost) tip(t *testing.T, branch string) string {
 	t.Helper()
-	c, err := h.svc(t).Branches().HeadCommit(context.Background(), branch)
+	c, err := h.svc(t).HeadCommit(context.Background(), branch)
 	if errors.Is(err, model.ErrBranchNotFound) {
 		return ""
 	}
@@ -203,11 +203,11 @@ func newConsensusPeer(t *testing.T, url string) *cPeer {
 	t.Helper()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: cPeerAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Signer:      testsigner.Named("consensus-peer"),
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID(cPeerAgent), AgentBranch: cPeerAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
+		Signer:  testsigner.Named("consensus-peer"),
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	require.NoError(t, m.Start())
@@ -236,7 +236,7 @@ func (p *cPeer) round(t *testing.T) {
 
 func (p *cPeer) tip(t *testing.T) string {
 	t.Helper()
-	c, err := testService(t, p.ri).Branches().HeadCommit(context.Background(), cPeerAgent)
+	c, err := testService(t, p.ri).HeadCommit(context.Background(), cPeerAgent)
 	require.NoError(t, err)
 	return c
 }
@@ -285,7 +285,7 @@ func TestConsensus_AutoMergesPushIntoAgentBranch(t *testing.T) {
 	require.Eventually(t, func() bool { return h.has(t, cHostAgent, "kb/tasks/peer.md") }, 2*time.Second, 10*time.Millisecond,
 		"the peer's fact must reach the host's AGENT branch")
 	svc := h.svc(t)
-	tip, err := svc.Branches().HeadCommit(context.Background(), cHostAgent)
+	tip, err := svc.HeadCommit(context.Background(), cHostAgent)
 	require.NoError(t, err)
 	commits := h.commitsOf(t)
 	mc := commits[plumbing.NewHash(tip)]
@@ -361,7 +361,7 @@ func TestConsensus_OriginRepoUnaffected(t *testing.T) {
 	up := h.upstream(t)
 	require.Equal(t, "develop", up)
 	require.NotEqual(t, "main", up, "this test's consensus branch is not main")
-	require.NoError(t, svc.Branches().CreateBranch(context.Background(), up, cHostAgent))
+	require.NoError(t, svc.CreateBranch(context.Background(), up, cHostAgent))
 	_, err := svc.Facts().WriteFact(context.Background(), up, OntologyPath, triggerOntology(autoAttrs), "ontology", "updated")
 	require.NoError(t, err)
 
@@ -753,10 +753,10 @@ func TestConsensus_EnabledAtRuntime(t *testing.T) {
 func TestConsensus_ReadOnlyHasNoMerger(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
-		AgentBranch: cHostAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
+		AgentID: testsigner.FixtureAgentID(cHostAgent), AgentBranch: cHostAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	require.NoError(t, m.Start())

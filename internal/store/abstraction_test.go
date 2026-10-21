@@ -195,7 +195,7 @@ func TestAbstraction_EmbedIdentityChangeClearsTheAxis(t *testing.T) {
 func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
 	ctx := context.Background()
 	svc := openAbstractionTestService(t)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/doomed", "agent/test"))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/doomed", "agent/test"))
 
 	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
 	targets, err := svc.Abstraction().LiveFactsMissingTitleVector(ctx, "agent/test", 10)
@@ -223,10 +223,10 @@ func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
 			"precondition: %s holds the doomed branch's state", table)
 	}
 
-	require.NoError(t, svc.Branches().DropBranch(ctx, "agent/doomed"),
+	require.NoError(t, svc.DropBranch(ctx, "agent/doomed"),
 		"a branch carrying shortlist state must still drop cleanly")
 
-	branches, err := svc.Branches().ListBranches(ctx)
+	branches, err := svc.ListBranches(ctx)
 	require.NoError(t, err)
 	for _, b := range branches {
 		require.NotEqual(t, "agent/doomed", b.Name)
@@ -249,12 +249,12 @@ func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
 func TestAbstraction_DropBranchRefusesWithoutRowsHook(t *testing.T) {
 	ctx := context.Background()
 	svc := openAbstractionTestService(t)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/kept", "agent/test"))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/kept", "agent/test"))
 	head, err := svc.rh.HeadCommit(ctx, "agent/kept")
 	require.NoError(t, err)
 
 	svc.rh.SetOnDropBranchRows(nil)
-	err = svc.Branches().DropBranch(ctx, "agent/kept")
+	err = svc.DropBranch(ctx, "agent/kept")
 	require.ErrorIs(t, err, vcs.ErrNoDropBranchRowsHook)
 
 	// Nothing was removed: the ref still resolves and the branches row stays.

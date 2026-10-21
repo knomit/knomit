@@ -12,6 +12,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // newRenameTestRepo stands up a started Manager with one registered repo
@@ -25,8 +26,8 @@ func newRenameTestRepo(t *testing.T) (m *repos.Manager, ri *repos.RepoInstance, 
 
 	dir := t.TempDir()
 	m = repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

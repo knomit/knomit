@@ -86,7 +86,7 @@ func (o *e4Origin) cloneErr(agentBranch string, signer ssh.Signer, ownKeys []ssh
 		svc.SetOwnKeys(func() []ssh.PublicKey { return ownKeys })
 	}
 	if len(accept) > 0 {
-		svc.SetAcceptList(fixedAccepts(accept))
+		svc.SetAcceptList(fixedAccepts(accept).lookup)
 	}
 	_, _, err = svc.Remote().InitFromRemote(context.Background(), fileuri.New(o.bare), nil, "main", agentBranch, nil, nil)
 	return svc, err
@@ -198,10 +198,10 @@ func TestE4_OwnRecordKeysAreOwn(t *testing.T) {
 }
 
 // fixedAccepts is an accept list holding exactly these commits (control.db's
-// list is repos.VerifyAccepts; store sees only the interface).
+// list is repos.VerifyAccepts; store sees only a lookup func).
 type fixedAccepts []plumbing.Hash
 
-func (f fixedAccepts) Lookup(h plumbing.Hash) (model.Accept, bool) {
+func (f fixedAccepts) lookup(h plumbing.Hash) (model.Accept, bool) {
 	for _, x := range f {
 		if x == h {
 			return model.Accept{Commit: h.String()}, true

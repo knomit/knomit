@@ -134,7 +134,7 @@ func (defaultFactReader) Read(
 		}
 		f = parsed
 		if a.IsHEAD() {
-			h, herr := svc.Branches().HeadCommit(ctx, a.Branch)
+			h, herr := svc.HeadCommit(ctx, a.Branch)
 			if herr != nil {
 				log.Error().Err(herr).Str("branch", a.Branch).Msg("HeadCommit failed")
 				err = herr

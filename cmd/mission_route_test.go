@@ -49,6 +49,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/testsupport/playbooks"
+	"knomit/internal/testsupport/testsigner"
 	"knomit/internal/web"
 )
 
@@ -182,7 +183,7 @@ func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
 			hCfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: filepath.Join(hCfg.Home, "pki")}
 			hKey, _ := pkitest.NewKey(t)
 			newHost := func() *repos.Manager {
-				m := repos.New(ctx, repos.Deps{Cfg: hCfg, KeyPath: hKey, AgentBranch: fleetServerAgent, Machine: repos.Options{Synchronous: true}})
+				m := repos.New(ctx, repos.Deps{Cfg: hCfg, KeyPath: hKey, AgentID: testsigner.FixtureAgentID(fleetServerAgent), AgentBranch: fleetServerAgent, Machine: repos.Options{Synchronous: true}})
 				if err := m.Start(); err != nil {
 					t.Fatal(err)
 				}
@@ -223,7 +224,7 @@ func TestMission_ReadmeKnomitHostedRoute(t *testing.T) {
 				t.Fatalf("install transport: %v", err)
 			}
 			pMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: pDir}},
-				KeyPath: pKey, AgentBranch: "agent/alpha-" + pki.Short(pMember.Fingerprint()), Machine: repos.Options{Synchronous: true}})
+				KeyPath: pKey, AgentID: testsigner.FixtureAgentID("agent/alpha-" + pki.Short(pMember.Fingerprint())), AgentBranch: "agent/alpha-" + pki.Short(pMember.Fingerprint()), Machine: repos.Options{Synchronous: true}})
 			if err := pMgr.Start(); err != nil {
 				t.Fatal(err)
 			}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"knomit/internal/store/model"
+	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
@@ -35,8 +36,8 @@ type reviewE2E struct {
 func newReviewE2E(t *testing.T) *reviewE2E {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

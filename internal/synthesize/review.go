@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"knomit/internal/store/model"
+	"knomit/internal/store/sessions"
 
 	"github.com/rs/zerolog/log"
 
@@ -26,7 +27,6 @@ import (
 
 	"knomit/internal/llm"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // Reviewer orchestrates multi-turn review sessions.
@@ -297,15 +297,15 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 // testing behaviour rather than being rewritten around the new seam.
 
 // storeIndices returns the store indices under the repo read lock.
-func (r *Reviewer) storeIndices() (*facts.Index, SearchQuery, store.PipelineIndex, store.BranchIndex) {
-	gs, _, idx, pipelineIdx, branches, _, _ := r.p.storeIndices()
-	return gs, idx, pipelineIdx, branches
+func (r *Reviewer) storeIndices() (*facts.Index, SearchQuery, *sessions.PipelineIndex, func(ctx context.Context, branch string) (string, error)) {
+	gs, _, idx, pipelineIdx, headCommit, _, _ := r.p.storeIndices()
+	return gs, idx, pipelineIdx, headCommit
 }
 
 // dirtyFacts returns the review seed facts (changed since watermark, or the
 // whole epistemic corpus on a full scan), projected onto the prompt-facing
 // shape the review path works in.
-func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
+func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx SearchQuery, pipelineIdx *sessions.PipelineIndex) ([]factForLLM, error) {
 	seeds, _, err := r.p.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, err

@@ -21,6 +21,7 @@ import (
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 	"knomit/internal/web"
 )
 
@@ -234,7 +235,7 @@ func newFleetServerOpts(t *testing.T, f *pkitest.Fleet, signed bool) *fleetServe
 	if signed {
 		bSigner = keySigner(t, bKey)
 	}
-	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, Signer: bSigner, AgentBranch: fleetServerAgent, Machine: repos.Options{Synchronous: true}})
+	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, Signer: bSigner, AgentID: testsigner.FixtureAgentID(fleetServerAgent), AgentBranch: fleetServerAgent, Machine: repos.Options{Synchronous: true}})
 	if err := bMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestFleetOrigin_ReinstallPresentsTheNewPrincipal(t *testing.T) {
 			t.Fatalf("install %s: %v", host, err)
 		}
 		mgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: dir}},
-			KeyPath: key, AgentBranch: "agent/" + host + "-00000000", Machine: repos.Options{Synchronous: true}})
+			KeyPath: key, AgentID: testsigner.FixtureAgentID("agent/" + host + "-00000000"), AgentBranch: "agent/" + host + "-00000000", Machine: repos.Options{Synchronous: true}})
 		if err := mgr.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -339,7 +340,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverTheFleetTransport(t *testing
 	}
 	aCfg := config.Config{Home: aHome, OntologyRoot: "kb", TLS: config.TLSConfig{Dir: aDir},
 		Remote: config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_global_forge_token"}}
-	aMgr := repos.New(ctx, repos.Deps{Cfg: aCfg, KeyPath: aKey, AgentBranch: "agent/alpha-00000000", Machine: repos.Options{Synchronous: true}})
+	aMgr := repos.New(ctx, repos.Deps{Cfg: aCfg, KeyPath: aKey, AgentID: testsigner.FixtureAgentID("agent/alpha-00000000"), AgentBranch: "agent/alpha-00000000", Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +491,7 @@ func TestFleetOrigin_PeerPushesOwnBranchOverTheFleetTransport(t *testing.T) {
 	}
 	aBranch := "agent/alpha-" + pki.Short(aMember.Fingerprint())
 	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: aDir}},
-		KeyPath: aKey, AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
+		KeyPath: aKey, AgentID: testsigner.FixtureAgentID(aBranch), AgentBranch: aBranch, Machine: repos.Options{Synchronous: true}})
 	if err := aMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -525,7 +526,7 @@ func TestFleetOrigin_PeerPushesOwnBranchOverTheFleetTransport(t *testing.T) {
 		if err != nil || !strings.Contains(got.Content, "pushed") {
 			t.Fatalf("the host has no %s at the peer's branch: %v", "kb/pushed.md", err)
 		}
-		branches, err := s.Branches().ListBranches(ctx)
+		branches, err := s.ListBranches(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}

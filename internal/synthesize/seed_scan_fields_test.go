@@ -45,7 +45,7 @@ func TestSeedScan_ReportsPathScopeAndWatermark(t *testing.T) {
 	t.Run("watermark without scope takes the incremental path", func(t *testing.T) {
 		r, svc := newPhaseTestReviewer(t)
 		writeKindFact(t, svc, branch, "kb/technology/base.md", fact.Epistemic, fact.Observation)
-		head, err := svc.Branches().HeadCommit(ctx, branch)
+		head, err := svc.HeadCommit(ctx, branch)
 		require.NoError(t, err)
 		require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
 		writeKindFact(t, svc, branch, "kb/technology/b.md", fact.Epistemic, fact.Observation)
@@ -67,7 +67,7 @@ func TestSeedScan_ReportsPathScopeAndWatermark(t *testing.T) {
 	t.Run("scope forces a full scan even with a watermark", func(t *testing.T) {
 		r, svc := newPhaseTestReviewer(t)
 		writeKindFact(t, svc, branch, "kb/technology/base.md", fact.Epistemic, fact.Observation)
-		head, err := svc.Branches().HeadCommit(ctx, branch)
+		head, err := svc.HeadCommit(ctx, branch)
 		require.NoError(t, err)
 		require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
 

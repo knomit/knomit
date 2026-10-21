@@ -11,8 +11,9 @@ package store
 
 import (
 	context "context"
-	"knomit/internal/embeddings/params"
 	reflect "reflect"
+
+	"knomit/internal/embeddings/params"
 
 	gomock "go.uber.org/mock/gomock"
 )

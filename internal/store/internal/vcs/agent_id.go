@@ -23,14 +23,14 @@ func (rh *Repo) OwnAgentID(branch string) (string, error) {
 	if rh.agentID != "" {
 		return rh.agentID, nil
 	}
-	if id := TestFallbackAgentID(branch); id != "" {
+	if id := testFallbackAgentID(branch); id != "" {
 		return id, nil
 	}
 	return "", ErrNoAgentID
 }
 
 // testFallbackAgent holds the function SetTestFallbackAgentID installed. It
-// is read only inside a test binary; see TestFallbackAgentID.
+// is read only inside a test binary; see testFallbackAgentID.
 var testFallbackAgent atomic.Pointer[func(branch string) string]
 
 // SetTestFallbackAgentID installs the agent id a store without SetAgentID
@@ -40,8 +40,11 @@ var testFallbackAgent atomic.Pointer[func(branch string) string]
 // the fallback is; production code has no fallback at all. Pass nil to remove
 // it.
 //
-// It panics outside a test binary, and TestFallbackAgentID ignores it there
-// too, so a production knomit can never author as a fallback id.
+// It panics outside a test binary, and testFallbackAgentID ignores it there
+// too, so a production knomit can never author as a fallback id. Nothing
+// outside this package reads the fallback: a caller that needs the id a
+// fixture store authors as is given it explicitly (repos.Deps.AgentID,
+// store.SetAgentID), so no production file reads a test seam.
 func SetTestFallbackAgentID(f func(branch string) string) {
 	if !testing.Testing() {
 		panic("store.SetTestFallbackAgentID called outside a test binary")
@@ -53,12 +56,10 @@ func SetTestFallbackAgentID(f func(branch string) string) {
 	testFallbackAgent.Store(&f)
 }
 
-// TestFallbackAgentID is the installed test fallback's id for branch, or ""
-// outside a test binary or when none is installed. It is the READ side of
-// SetTestFallbackAgentID, for a caller outside this package that must name
-// the same id its stores author as when it was given none (repos.Manager in
-// a test). Outside a test binary it always returns "".
-func TestFallbackAgentID(branch string) string {
+// testFallbackAgentID is the installed test fallback's id for branch, or ""
+// outside a test binary or when none is installed: the READ side of
+// SetTestFallbackAgentID, used by OwnAgentID alone.
+func testFallbackAgentID(branch string) string {
 	if !testing.Testing() {
 		return ""
 	}

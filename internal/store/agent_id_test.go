@@ -21,10 +21,10 @@ func TestCommitAuthor_IsThePersistedAgentIDNotTheBranchName(t *testing.T) {
 	svc := newExperimentTestStore(t)
 	svc.SetSigner(newTestSigner(t))
 	const persisted = "opaque-7f00" // not "test", which testAgentBranch would derive to
-	require.NotEqual(t, TestFallbackAgentID(testAgentBranch), persisted, "fixture: the id must differ from the name-derived one")
+	require.NotEqual(t, fixtureAgentID(testAgentBranch), persisted, "fixture: the id must differ from the name-derived one")
 	svc.SetAgentID(persisted)
-	require.NoError(t, svc.Branches().SetAgentBranchOwner(ctx, testAgentBranch))
-	base, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	require.NoError(t, svc.SetAgentBranchOwner(ctx, testAgentBranch))
+	base, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
 	content := "---\ntype: observation\n---\n# a\n\nbody\n"
@@ -35,14 +35,14 @@ func TestCommitAuthor_IsThePersistedAgentIDNotTheBranchName(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "exp/e", "kb/b.md", content, "learn: b", "learn")
 	require.NoError(t, err)
 
-	tip, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	tip, err := svc.HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 	onAgent := commitsSince(t, svc, tip, base)
 	require.Len(t, onAgent, 1, "fixture: one write on the agent branch")
 	requireAuthoredBy(t, onAgent, persisted)
 	require.Equal(t, persisted+"+learn@agents.knomit.io", onAgent[0].Author.Email)
 
-	expTip, err := svc.Branches().HeadCommit(ctx, "exp/e")
+	expTip, err := svc.HeadCommit(ctx, "exp/e")
 	require.NoError(t, err)
 	onExp := commitsSince(t, svc, expTip, tip)
 	require.Len(t, onExp, 1, "fixture: one write on the experiment")

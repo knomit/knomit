@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
@@ -53,9 +54,11 @@ func (rh *Repo) SetOnDropBranchRows(f func(ctx context.Context, branchID int64) 
 	rh.onDropBranchRows = f
 }
 
-// SetIndexManager installs the index manager NotifyCommit syncs after every
-// commit (nil: NotifyCommit skips the sync).
-func (rh *Repo) SetIndexManager(im model.IndexManager) { rh.im = im }
+// SetIndexSync installs the index's Sync (index.Index.Sync), which
+// NotifyCommit calls after every commit under the branch lock (nil:
+// NotifyCommit skips the sync). A func value because the index package imports
+// vcs and cannot be named here.
+func (rh *Repo) SetIndexSync(f func(ctx context.Context, branch string) error) { rh.syncIndex = f }
 
 // SetOnCommit installs the external commit observer NotifyCommit calls last.
 func (rh *Repo) SetOnCommit(f func(branch, hash string)) { rh.onCommit = f }
@@ -92,11 +95,16 @@ func (rh *Repo) SetSigner(s ssh.Signer) { rh.signer = s }
 // SetAgentID sets this instance's persisted agent id.
 func (rh *Repo) SetAgentID(id string) { rh.agentID = id }
 
-// AcceptList is the operator's accept list (nil is empty).
-func (rh *Repo) AcceptList() model.AcceptList { return rh.acceptList }
+// AcceptList is the operator's accept list as a lookup: the entry waiving
+// commit, if any (nil is empty).
+func (rh *Repo) AcceptList() func(commit plumbing.Hash) (model.Accept, bool) {
+	return rh.acceptList
+}
 
 // SetAcceptList sets AcceptList.
-func (rh *Repo) SetAcceptList(a model.AcceptList) { rh.acceptList = a }
+func (rh *Repo) SetAcceptList(a func(commit plumbing.Hash) (model.Accept, bool)) {
+	rh.acceptList = a
+}
 
 // OwnKeys returns every key this instance's fleet member record has held, or
 // nil when no source is installed (standalone).

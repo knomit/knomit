@@ -38,7 +38,7 @@ func TestVerifyAccepts_Scope(t *testing.T) {
 		{"uid-a", scoped, true, "uid-a"},
 		{"uid-b", scoped, false, ""},
 	} {
-		got, ok := a.For(c.uid).Lookup(c.hash)
+		got, ok := a.For(c.uid)(c.hash)
 		require.Equal(t, c.want, ok, "uid=%s hash=%s", c.uid, c.hash.String()[:4])
 		if ok {
 			require.Equal(t, c.wantIn, got.RepoUID)
@@ -84,7 +84,7 @@ func TestVerifyAccepts_UnblockAnE4Refusal(t *testing.T) {
 	require.NoError(t, err, "accepted on this instance, the lineage is adopted")
 	var head string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		h, herr := svc.Branches().HeadCommit(context.Background(), m.deps.AgentBranch)
+		h, herr := svc.HeadCommit(context.Background(), m.deps.AgentBranch)
 		require.NoError(t, herr)
 		head = h
 	}))

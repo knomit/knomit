@@ -16,7 +16,7 @@ func (b *BranchHandle) WithRead(fn func(*store.Service)) {
 	b.repo.ri.WithRead(fn)
 }
 
-// Drop removes the branch from the repo. Wraps store.Branches().DropBranch
+// Drop removes the branch from the repo. Wraps store.Service.DropBranch
 // which (after production fix in commit ae8c684) deletes both the git ref
 // and the SQLite branches / branch_facts / branch_commits rows. Also
 // removes the branch from the parent RepoHandle's internal map so future
@@ -28,7 +28,7 @@ func (b *BranchHandle) Drop() {
 	t.Helper()
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		err = svc.Branches().DropBranch(context.Background(), b.name)
+		err = svc.DropBranch(context.Background(), b.name)
 	})
 	if err != nil {
 		t.Fatalf("Drop(%s): %v", b.name, err)
@@ -51,7 +51,7 @@ func (b *BranchHandle) HeadCommit() string {
 	var hash string
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		hash, err = svc.Branches().HeadCommit(context.Background(), b.name)
+		hash, err = svc.HeadCommit(context.Background(), b.name)
 	})
 	if err != nil {
 		t.Fatalf("HeadCommit(%s): %v", b.name, err)
@@ -120,7 +120,7 @@ func (b *BranchHandle) CommitCount() int {
 	t.Helper()
 	var count int
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		hash, err := svc.Branches().HeadCommit(context.Background(), b.name)
+		hash, err := svc.HeadCommit(context.Background(), b.name)
 		if err != nil {
 			t.Fatalf("CommitCount(%s): HeadCommit: %v", b.name, err)
 		}

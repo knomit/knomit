@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/model"
+	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
@@ -76,8 +77,8 @@ func (traceEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
 func newTraceReviewE2E(t *testing.T) *reviewE2E {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -133,7 +134,7 @@ func seedTraceCorpus(t *testing.T, svc *store.Service, round string) {
 
 func (e *reviewE2E) head() string {
 	e.t.Helper()
-	h, err := e.svc.Branches().HeadCommit(context.Background(), "agent/test")
+	h, err := e.svc.HeadCommit(context.Background(), "agent/test")
 	require.NoError(e.t, err)
 	return h
 }

@@ -16,7 +16,7 @@ import (
 
 func restHead(t *testing.T, svc *store.Service) string {
 	t.Helper()
-	h, err := svc.Branches().HeadCommit(context.Background(), "agent/test")
+	h, err := svc.HeadCommit(context.Background(), "agent/test")
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}

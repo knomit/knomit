@@ -72,7 +72,7 @@ func TestFactWrite_RESTRefusesAFactThatFailsTheOntology(t *testing.T) {
 		return rec
 	}
 	tip := func() string {
-		h, err := svc.Branches().HeadCommit(ctx, "agent/test")
+		h, err := svc.HeadCommit(ctx, "agent/test")
 		require.NoError(t, err)
 		return h
 	}

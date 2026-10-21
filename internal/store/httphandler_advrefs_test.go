@@ -31,7 +31,7 @@ func TestGitHandler_AdvertisesCuratedView(t *testing.T) {
 	ctx := context.Background()
 	_, err = svc.Facts().WriteFact(ctx, "agent/host-1", "kb/a.md", testFactBody("a", 0.9, nil), "a", "")
 	require.NoError(t, err)
-	tip, err := svc.Branches().HeadCommit(ctx, "agent/host-1")
+	tip, err := svc.HeadCommit(ctx, "agent/host-1")
 	require.NoError(t, err)
 
 	// Private refs that must NOT be advertised.
@@ -93,12 +93,12 @@ func headlessServed(t *testing.T) (*httptest.Server, plumbing.Hash) {
 	ctx := context.Background()
 	_, err = svc.Facts().WriteFact(ctx, "agent/host-1", "kb/a.md", testFactBody("a", 0.9, nil), "a", "")
 	require.NoError(t, err)
-	agentTip, err := svc.Branches().HeadCommit(ctx, "agent/host-1")
+	agentTip, err := svc.HeadCommit(ctx, "agent/host-1")
 	require.NoError(t, err)
 
 	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: "master"})
 	require.Equal(t, "master", svc.Remote().UpstreamBranch())
-	_, err = svc.Branches().HeadCommit(ctx, "master")
+	_, err = svc.HeadCommit(ctx, "master")
 	require.Error(t, err, "the fixture must really lack the configured consensus branch")
 
 	srv := httptest.NewServer(svc.Handler())
@@ -182,7 +182,7 @@ func TestGitHandler_DoesNotAdvertiseExperiments(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, exp.Branch(), "kb/secret.md", testFactBody("secret", 0.9, nil), "s", "")
 	require.NoError(t, err)
-	expTip, err := svc.Branches().HeadCommit(ctx, exp.Branch())
+	expTip, err := svc.HeadCommit(ctx, exp.Branch())
 	require.NoError(t, err)
 	require.NotEmpty(t, expTip, "fixture precondition: the experiment ref really exists")
 

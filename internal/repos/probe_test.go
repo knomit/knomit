@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // newProbeTestManager returns an unstarted Manager whose LocalOriginRoot is
@@ -27,9 +28,9 @@ import (
 func newProbeTestManager(t *testing.T, root string) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
-		AgentBranch: "agent/test",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	return m
@@ -107,8 +108,8 @@ func TestProbeOrigin_UnresolvableCredentialIsAuthNotUnreachable(t *testing.T) {
 	// KeyPath "" is the no-key-on-this-machine case; the URL is SSH-style so
 	// ResolveAuth auto-detects ssh and then fails for want of a key.
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "agent/test", KeyPath: "", Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test", KeyPath: "", Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 
@@ -230,8 +231,8 @@ func TestProbeOrigin_HonoursNetworkTimeout(t *testing.T) {
 	t.Cleanup(func() { close(block) })
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir(), Git: config.GitConfig{NetworkTimeout: 150 * time.Millisecond}},
-		AgentBranch: "agent/test", Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: t.TempDir(), Git: config.GitConfig{NetworkTimeout: 150 * time.Millisecond}},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test", Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/fsck"
+	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
@@ -39,8 +40,8 @@ func adoptFact(body string) string {
 func bootHome(t *testing.T, dir, agentBranch string) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -95,7 +96,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 		"test: write after restore", "created")
 	require.NoError(t, err, "write path must work on the restored home; issue #32")
 
-	head, err := svc.Branches().HeadCommit(context.Background(), newAgent)
+	head, err := svc.HeadCommit(context.Background(), newAgent)
 	require.NoError(t, err, "new agent branch must exist after restore; issue #32")
 	require.NotEmpty(t, head)
 
@@ -114,7 +115,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 	// The orphan is RETAINED, not garbage-collected (design decision: it may
 	// hold the only copy of the previous machine's data). Nothing writes to it
 	// and it is outside the fetch refspec, so keeping it is harmless.
-	orphanHead, err := svc.Branches().HeadCommit(context.Background(), oldAgent)
+	orphanHead, err := svc.HeadCommit(context.Background(), oldAgent)
 	require.NoError(t, err, "the previous machine's agent branch must be retained, not GC'd")
 	require.NotEmpty(t, orphanHead)
 	orphanFact, err := svc.Facts().ReadFact(context.Background(), oldAgent, "kb/notes/local-only.md", nil)
@@ -124,7 +125,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 	// Taking over must also claim ownership, so the NEXT takeover seeds from
 	// this branch rather than from the one it replaced — see
 	// TestEnsureBranch_ChainedRestoreAdoptsMostRecentBranch.
-	owner, err := svc.Branches().AgentBranchOwner(context.Background())
+	owner, err := svc.AgentBranchOwner(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, newAgent, owner,
 		"taking over must record the new agent branch as the repo's owner")
@@ -235,12 +236,12 @@ func TestEnsureBranch_DoesNotTakeOverAnotherAgentsBranch(t *testing.T) {
 
 	// A second agent's branch, as a fetch from the shared origin would leave it:
 	// present in refs/heads, carrying work that is not ours. Park HEAD on it.
-	require.NoError(t, svcA.Branches().CreateBranch(context.Background(), foreign, ours))
+	require.NoError(t, svcA.CreateBranch(context.Background(), foreign, ours))
 	_, err := svcA.Facts().WriteFact(context.Background(), foreign, "kb/notes/from-them.md",
 		adoptFact("written by a DIFFERENT agent sharing this origin"),
 		"test: foreign agent write", "created")
 	require.NoError(t, err)
-	require.NoError(t, svcA.Branches().SetDefaultBranch(foreign))
+	require.NoError(t, svcA.SetDefaultBranch(foreign))
 	_ = mA.Close()
 
 	// Reboot with a regenerated key. The takeover must seed from the recorded
@@ -291,7 +292,7 @@ func TestEnsureBranch_NoRecordedOwnerFailsLoudly(t *testing.T) {
 	// from. The branch must not be conjured out of some other lineage.
 	mB := bootHome(t, dir, agentB)
 	_, err = testService(t, mB.Get(testRepoName)).
-		Branches().HeadCommit(context.Background(), agentB)
+		HeadCommit(context.Background(), agentB)
 	require.Error(t, err,
 		"with no recorded owner there is no trustworthy seed; the branch must not be created")
 	_ = mB.Close()

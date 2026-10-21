@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestStart_freshHomeHasNoRepos pins the first-run contract: Start succeeds on
@@ -16,8 +17,8 @@ import (
 func TestStart_freshHomeHasNoRepos(t *testing.T) {
 	dir := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	require.NoError(t, m.Start(), "an empty home must boot, not error")
 	t.Cleanup(func() { _ = m.Close() })
@@ -61,9 +62,9 @@ func TestStart_reopensExistingReposOnly(t *testing.T) {
 	dir := t.TempDir()
 	boot := func() *Manager {
 		m := New(context.Background(), Deps{
-			Cfg:         config.Config{Home: dir},
-			AgentBranch: "machine/test",
-			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+			Cfg:     config.Config{Home: dir},
+			AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+			Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		return m

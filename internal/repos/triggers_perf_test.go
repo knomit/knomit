@@ -17,6 +17,7 @@ import (
 	"knomit/internal/store/facts"
 	"knomit/internal/store/merge"
 	"knomit/internal/store/storetest"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // The slow `if` in these tests is slowIf (triggers_test.go): a real 90 ms of
@@ -28,7 +29,7 @@ func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoIn
 	home := t.TempDir()
 	cfg := config.Config{Home: home, OntologyRoot: "kb"}
 	cfg.Log.SlowTriggerMS = slowMS
-	m := New(context.Background(), Deps{Cfg: cfg, AgentBranch: trigAgent,
+	m := New(context.Background(), Deps{Cfg: cfg, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}})
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)
@@ -128,7 +129,7 @@ func TestDispatch_SlowTriggerThresholdFromConfig(t *testing.T) {
 	home := t.TempDir()
 	cfg := config.Defaults()
 	cfg.Home = home
-	m := New(context.Background(), Deps{Cfg: cfg, AgentBranch: trigAgent,
+	m := New(context.Background(), Deps{Cfg: cfg, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}})
 	t.Cleanup(func() { _ = m.Close() })
 	ri2 := bootRepo(t, m)
@@ -468,7 +469,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			home := b.TempDir()
-			m := New(context.Background(), Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
+			m := New(context.Background(), Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 				KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}})
 			defer m.Close()
 			if err := m.Start(); err != nil {
@@ -490,7 +491,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 				}
 			}
 			headOf := func() string {
-				h, err := svc.Branches().HeadCommit(ctx, trigAgent)
+				h, err := svc.HeadCommit(ctx, trigAgent)
 				must(err)
 				return h
 			}
@@ -536,7 +537,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 			src := trigAgent
 			if tc.merge {
 				src = "peer"
-				must(svc.Branches().CreateBranch(ctx, "peer", trigAgent))
+				must(svc.CreateBranch(ctx, "peer", trigAgent))
 			}
 			for i := 0; i < 8; i++ {
 				writeB(src, fmt.Sprintf("kb/tasks/adv/%d.md", i))

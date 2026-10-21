@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 
 	"knomit/internal/store/model"
+	"knomit/internal/store/sessions"
 
 	"knomit/internal/store/index"
 
@@ -66,8 +67,10 @@ type Deps struct {
 	// ref against, from the same Service as Facts.
 	Files    *facts.Repo
 	Search   SearchQuery
-	Pipeline store.PipelineIndex
-	Branches store.BranchIndex
+	Pipeline *sessions.PipelineIndex
+	// HeadCommit is the tip of a branch (Service.HeadCommit), the one branch
+	// read the engine makes: the review watermark advances to it.
+	HeadCommit func(ctx context.Context, branch string) (string, error)
 	// Abstraction is the title-embedding axis and the restatement shortlist
 	// built on it (the consolidation-scope fix). Review-pipeline only.
 	Abstraction store.AbstractionIndex

@@ -42,7 +42,7 @@ func mergeDeliveredHistory(t *testing.T, ctx context.Context, ri *repos.RepoInst
 	t.Helper()
 	writes := []string{writeExplainFact(t, ctx, ri, path, "Slot v0", 0.5, nil)}
 	ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(ctx, "main", explainTestBranch))
+		require.NoError(t, svc.CreateBranch(ctx, "main", explainTestBranch))
 	})
 	for k := range prs {
 		for j := range perPR {
@@ -104,7 +104,7 @@ func TestExplain_HistoryCursorWalksMergeDeliveredWrites(t *testing.T) {
 	// PR merge), even though the newest CHANGE is the write behind it.
 	var live []model.RevisionMeta
 	ri.WithRead(func(svc *store.Service) {
-		head, err := svc.Branches().HeadCommit(ctx, explainTestBranch)
+		head, err := svc.HeadCommit(ctx, explainTestBranch)
 		require.NoError(t, err)
 		live, err = svc.Search().RevisionsBefore(ctx, explainTestBranch, path, head, 1)
 		require.NoError(t, err)
@@ -284,14 +284,14 @@ func TestExplain_HistoryCursorAfterRewindIsHistoryChanged(t *testing.T) {
 	ctx := repos.WithRepoInstance(context.Background(), ri)
 	writeVersions(t, ctx, ri, "kb/r.md", 7)
 	ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(ctx, "old", explainTestBranch))
+		require.NoError(t, svc.CreateBranch(ctx, "old", explainTestBranch))
 	})
 	writeVersions(t, ctx, ri, "kb/r.md", 1) // the anchor: the only commit the rewind drops
 	hc := firstHistoryCursor(t, ctx, "kb/r.md")
 
 	ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().DropBranch(ctx, explainTestBranch))
-		require.NoError(t, svc.Branches().CreateBranch(ctx, explainTestBranch, "old"))
+		require.NoError(t, svc.DropBranch(ctx, explainTestBranch))
+		require.NoError(t, svc.CreateBranch(ctx, explainTestBranch, "old"))
 	})
 	text, isErr := callExplain(t, ctx, map[string]any{"file": "kb/r.md", "history_cursor": hc})
 	require.True(t, isErr, text)
@@ -314,7 +314,7 @@ func TestExplain_HistoryCursorFrontierOffBranchIsHistoryChanged(t *testing.T) {
 	writeVersions(t, ctx, ri, "kb/f.md", 6)
 	var side string
 	ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(ctx, "side", explainTestBranch))
+		require.NoError(t, svc.CreateBranch(ctx, "side", explainTestBranch))
 		r, err := svc.Facts().WriteFact(ctx, "side", "kb/f.md", mustSerializeConf(t, "kb/f.md", "Side", 0.5), "side", "")
 		require.NoError(t, err)
 		side = r.CommitHash

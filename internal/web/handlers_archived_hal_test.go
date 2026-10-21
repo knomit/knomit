@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // createViaAPI POSTs a preset-create and polls the returned create job to
@@ -208,8 +209,8 @@ func TestArchived_ReportsSizeBytes(t *testing.T) {
 func newRealManagerInHome(t *testing.T, home string) *repos.Manager {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/fsck"
+	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
@@ -18,8 +19,8 @@ func TestRepoInstance_Verify(t *testing.T) {
 	t.Log("Scenario: boot a fresh manager, call ri.Verify, expect clean report with Repo name stamped")
 	dir := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	// Release the control.db handle before t.TempDir removes the home:
 	// Windows refuses to unlink an open file.

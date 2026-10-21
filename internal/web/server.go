@@ -296,7 +296,7 @@ func defaultBranchesLister(ctx context.Context, ri *repos.RepoInstance) ([]model
 		if svc == nil {
 			return
 		}
-		out, err = svc.Branches().ListBranches(ctx)
+		out, err = svc.ListBranches(ctx)
 	})
 	return out, err
 }
@@ -313,7 +313,7 @@ func defaultBranchRootReader(ctx context.Context, ri *repos.RepoInstance, branch
 		if svc == nil {
 			return
 		}
-		head, herr := svc.Branches().HeadCommit(ctx, branch)
+		head, herr := svc.HeadCommit(ctx, branch)
 		if herr != nil {
 			err = herr
 			return

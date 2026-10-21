@@ -18,6 +18,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/storetest"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // requireCertOrigin: ri's origin is stored in control.db as the plain https
@@ -87,7 +88,7 @@ func newFetcher(t *testing.T, f *pkitest.Fleet) *fetcher {
 	}
 	cfg := config.Config{Home: t.TempDir(), OntologyRoot: "kb", TLS: config.TLSConfig{Dir: dir},
 		Remote: config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_global_forge_token"}}
-	mgr := repos.New(context.Background(), repos.Deps{Cfg: cfg, KeyPath: key, AgentBranch: "agent/alpha-00000000", Machine: repos.Options{Synchronous: true}})
+	mgr := repos.New(context.Background(), repos.Deps{Cfg: cfg, KeyPath: key, AgentID: testsigner.FixtureAgentID("agent/alpha-00000000"), AgentBranch: "agent/alpha-00000000", Machine: repos.Options{Synchronous: true}})
 	if err := mgr.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 	"knomit/internal/web/hal"
 )
 
@@ -25,9 +26,9 @@ func newTestLensManager(t *testing.T, names ...string) (*repos.Manager, string) 
 	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
-		Machine:     repos.Options{Synchronous: true},
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Machine: repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)

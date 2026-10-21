@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // newIndexTestServer brings up a real Manager with one created repo,
@@ -17,8 +18,8 @@ func newIndexTestServer(t *testing.T, repo string) (http.Handler, *repos.RepoIns
 	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)

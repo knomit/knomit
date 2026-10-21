@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -22,7 +21,7 @@ const pathsAgentID = "opaque-1"
 
 func pathsManager(t *testing.T, root string) *Manager {
 	t.Helper()
-	require.NotEqual(t, pathsAgentID, store.TestFallbackAgentID(tmplAgent), "fixture: the id must differ from the fallback's")
+	require.NotEqual(t, pathsAgentID, testsigner.FixtureAgentID(tmplAgent), "fixture: the id must differ from the fallback's")
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: root},
@@ -45,7 +44,7 @@ func writeAndAuthor(t *testing.T, ri *RepoInstance) string {
 	_, err := svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/notes/paths.md",
 		"---\ntype: observation\nconfidence: 0.9\n---\n# p\n\nbody\n", "learn: p", "learn")
 	require.NoError(t, err)
-	tip, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+	tip, err := svc.HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
 	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(tip))
 	require.NoError(t, err)

@@ -261,7 +261,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		sendEvent(map[string]string{"phase": "analyzing"})
 
 		// Get default branch.
-		defaultBranch, err := remoteSvc.Branches().DefaultBranch(r.Context())
+		defaultBranch, err := remoteSvc.DefaultBranch(r.Context())
 		if err != nil {
 			defaultBranch = agentBranch
 		}
@@ -298,7 +298,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		// Collect all branch info in a single pass over refs.
-		branches, agentBranches, matchedAgent := remoteSvc.Branches().BranchInfo(agentBranch)
+		branches, agentBranches, matchedAgent := remoteSvc.BranchInfo(agentBranch)
 
 		// Check shared history.
 		history := "disjoint"

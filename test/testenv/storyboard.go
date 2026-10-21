@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"knomit/internal/store/model"
+	"knomit/internal/testsupport/testsigner"
 
 	"knomit/internal/store/fsck"
 
@@ -213,6 +214,7 @@ func (sb *Storyboard) repoConfig(name string) config.Config {
 func (sb *Storyboard) bootManager(cfg config.Config, keyPath string) (*repos.Manager, error) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:         cfg,
+		AgentID:     testsigner.FixtureAgentID("agent/test"),
 		AgentBranch: "agent/test",
 		Embedder:    sb.embedder,
 		KeyPath:     keyPath,
@@ -391,7 +393,7 @@ func (r *RepoHandle) BranchFrom(name, fromBranch string) *BranchHandle {
 	}
 	var createErr error
 	r.ri.WithRead(func(svc *store.Service) {
-		createErr = svc.Branches().CreateBranch(context.Background(), name, fromBranch)
+		createErr = svc.CreateBranch(context.Background(), name, fromBranch)
 	})
 	if createErr != nil {
 		t.Fatalf("BranchFrom(%s from %s): %v", name, fromBranch, createErr)

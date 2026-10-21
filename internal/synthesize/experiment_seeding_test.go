@@ -49,7 +49,7 @@ func TestExperiment_ReviewSeedsOnlyTheDelta(t *testing.T) {
 	for _, name := range []string{"alpha", "beta", "gamma", "delta"} {
 		writeFactOn(t, svc, agent, "kb/observations/"+name+".md", name, fact.Observation)
 	}
-	agentHead, err := svc.Branches().HeadCommit(ctx, agent)
+	agentHead, err := svc.HeadCommit(ctx, agent)
 	require.NoError(t, err)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, reviewTool, agent, agentHead))
 
@@ -87,7 +87,7 @@ func TestExperiment_ReviewWithoutInheritedWatermarkFullScans(t *testing.T) {
 	for _, name := range []string{"alpha", "beta", "gamma", "delta"} {
 		writeFactOn(t, svc, agent, "kb/observations/"+name+".md", name, fact.Observation)
 	}
-	agentHead, err := svc.Branches().HeadCommit(ctx, agent)
+	agentHead, err := svc.HeadCommit(ctx, agent)
 	require.NoError(t, err)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, reviewTool, agent, agentHead))
 

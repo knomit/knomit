@@ -17,12 +17,12 @@ import (
 	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/index"
-	"knomit/internal/store/internal/sessions"
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
 	"knomit/internal/store/migrate"
 	"knomit/internal/store/model"
 	"knomit/internal/store/remotesync"
+	"knomit/internal/store/sessions"
 	"knomit/internal/store/vocab"
 )
 
@@ -146,7 +146,7 @@ func Open(path string) (*Service, error) {
 	}
 
 	rh.SetOnDrop(si.GC)
-	rh.SetIndexManager(si) // notifyCommit delegates to im.Sync after every commit.
+	rh.SetIndexSync(si.Sync) // NotifyCommit syncs the index after every commit.
 	fi := facts.NewIndex(rh.factsRepo)
 	ri := remotesync.NewIndex(rh.syncRepo)
 	fq := index.NewFactQuery(rh.Repo)
@@ -301,20 +301,19 @@ func (s *Service) Abstraction() AbstractionIndex { return s.ax }
 // Motifs is alias resolution over the corpus's motif vocabulary.
 func (s *Service) Motifs() MotifIndex { return s.mo }
 
-// IndexManager returns the IndexManager for search index lifecycle operations.
-func (s *Service) IndexManager() model.IndexManager { return s.si }
+// IndexManager returns the search index for its lifecycle operations (Sync,
+// SyncLocked, Rebuild, SyncWatermark, NeedsRebuild).
+func (s *Service) IndexManager() *index.Index { return s.si }
 
 // SetEmbedder configures the embedder used by the search index for vector operations.
 func (s *Service) SetEmbedder(e model.BatchEmbedder) { s.rh.SetEmbedder(e) }
 
-// Pipeline returns the PipelineIndex for pipeline session management.
-func (s *Service) Pipeline() PipelineIndex { return s.pi }
+// Pipeline returns the pipeline session index (sessions, work items and the
+// pipeline watermarks).
+func (s *Service) Pipeline() *sessions.PipelineIndex { return s.pi }
 
-// ToolSession returns the ToolSessionIndex for tool session persistence.
-func (s *Service) ToolSession() ToolSessionIndex { return s.ti }
-
-// Branches returns the branch index.
-func (s *Service) Branches() BranchIndex { return s.rh }
+// ToolSession returns the tool session index (paging cursors and queues).
+func (s *Service) ToolSession() *sessions.ToolIndex { return s.ti }
 
 // Merge is the merge child's handle: branch merges (MergeBranch), the pushed
 // branches report (PushedBranches) and the experiment lifecycle (open, list,

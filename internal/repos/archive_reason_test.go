@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store/storetest"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // restartIn closes nothing: it builds and starts a NEW manager over home, the
@@ -64,9 +65,9 @@ func TestArchive_UnopenableRepoArchivesAndUnblocksReAdd(t *testing.T) {
 	url := sourceRepo(t, root, "remote", sourceSpec{})
 	home := t.TempDir()
 	deps := Deps{
-		Cfg:         config.Config{OntologyRoot: "kb", LocalOriginRoot: root},
-		AgentBranch: "agent/test-abc",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{OntologyRoot: "kb", LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID("agent/test-abc"), AgentBranch: "agent/test-abc",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	}
 	m := restartIn(t, home, deps)
 	ri, err := m.Create(ctx, CreateSpec{Name: "kb1", Mode: "clone", Origin: &OriginSpec{URL: url}}, nil)

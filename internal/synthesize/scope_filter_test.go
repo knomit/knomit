@@ -232,7 +232,7 @@ func TestScopedReview_NonEmptyWatermark_StillSeedsInScope(t *testing.T) {
 	})
 
 	// Simulate a prior unscoped review having advanced the watermark to HEAD.
-	head, err := svc.Branches().HeadCommit(context.Background(), branch)
+	head, err := svc.HeadCommit(context.Background(), branch)
 	require.NoError(t, err)
 	require.NotEmpty(t, head)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(context.Background(), "review", branch, head))

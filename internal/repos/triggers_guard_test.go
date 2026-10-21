@@ -25,7 +25,7 @@ import (
 var triggersRepoAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// the store: reads, and the three tables
-		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.Branches", "?.HeadCommit", "svc.Remote", "remote.UpstreamBranch", "tr.SignerFingerprint",
+		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.HeadCommit", "svc.Remote", "remote.UpstreamBranch", "tr.SignerFingerprint",
 		"tr.OntologyAtCommit", "tr.TriggerWatermarks", "tr.IsAncestor", "svc.DiffFacts", "tr.TreeReader",
 		"tr.UpstreamTip", "tr.AncestorSet", "tr.RecordTriggerRuns", "tr.AdvanceTriggerWatermarks",
 		"tr.DueCandidates", "tr.DueMarks",

@@ -69,7 +69,7 @@ func TestRebuild_DoesNotDestroyConcurrentCrossBranchSimilarityEdges(t *testing.T
 	require.Greater(t, baseline, 0, "similarity layer must be populated for this test to mean anything")
 
 	// A second branch, sharing the graph, not the branch lock.
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 
 	const racePath = "kb/raced.md"
 	var racedBlob string

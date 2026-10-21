@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestOpen_StoredUpstreamWithNoLocalRef regresses PR #73 review finding #1: a
@@ -40,9 +41,9 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 
 	boot := func() (*Manager, func()) {
 		m := New(context.Background(), Deps{
-			Cfg:         cfg,
-			AgentBranch: "agent/test-abc",
-			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+			Cfg:     cfg,
+			AgentID: testsigner.FixtureAgentID("agent/test-abc"), AgentBranch: "agent/test-abc",
+			Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		// Start opens what the registry says exists — a reboot over an

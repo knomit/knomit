@@ -121,9 +121,9 @@ func (rh *Repo) NotifyCommit(ctx context.Context, branch string, hash plumbing.H
 	if err := rh.AppendCommitLog(ctx, branch, hash.String()); err != nil {
 		return fmt.Errorf("notifyCommit: AppendCommitLog(%s): %w", branch, err)
 	}
-	if rh.im != nil {
-		if err := rh.im.Sync(ctx, branch); err != nil {
-			return fmt.Errorf("notifyCommit: im.Sync(%s): %w", branch, err)
+	if rh.syncIndex != nil {
+		if err := rh.syncIndex(ctx, branch); err != nil {
+			return fmt.Errorf("notifyCommit: index sync(%s): %w", branch, err)
 		}
 	}
 	// An experiment's "last activity" is defined as any commit on it, and this

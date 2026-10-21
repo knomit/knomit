@@ -149,7 +149,7 @@ func snapshotStore(t *testing.T, svc *Service) storeSnapshot {
 		snap.Refs[r.Name().String()] = r.Hash().String() + " " + r.Target().String()
 		return nil
 	}))
-	bs, err := svc.Branches().ListBranches(context.Background())
+	bs, err := svc.ListBranches(context.Background())
 	require.NoError(t, err)
 	for _, b := range bs {
 		snap.Branches = append(snap.Branches, b.Name)

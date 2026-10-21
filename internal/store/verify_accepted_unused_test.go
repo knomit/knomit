@@ -9,13 +9,13 @@ import (
 )
 
 // TestRepoVerifyAcceptedTableIsNeverUsed: user ruling for PR 4. The accept
-// list lives in control.db (per instance), injected as an AcceptList; the
+// list lives in control.db (per instance), injected as a lookup func (Service.SetAcceptList); the
 // repo-database table verify_accepted (repo migration 000027) stays empty. No
 // non-test source in the store may read or write it.
 func TestRepoVerifyAcceptedTableIsNeverUsed(t *testing.T) {
 	sqlUse := regexp.MustCompile(`(?i)(INTO|FROM|UPDATE|TABLE)\s+verify_accepted\b`)
-	// The store's children (internal/sqlite, internal/sessions, internal/vcs,
-	// where the accept list's type lives, and the siblings of git and migrate
+	// The store's children (internal/sqlite, sessions, internal/vcs,
+	// where the accept list's lookup is held, and the siblings of git and migrate
 	// such as fleetrec) are the store too. WALKED, not globbed: a glob at a
 	// fixed depth silently drops every new child that sits elsewhere.
 	var files []string

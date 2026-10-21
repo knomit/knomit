@@ -27,7 +27,7 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 
 	// feature branch carries BOTH facts: B, then A→B (the edge is created on
 	// feature, anchored to feature's write-commits).
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 	_, err := svc.Facts().WriteFact(ctx, "feature", "kb/b.md", testFactBody("b", 0.9, nil), "b", "")
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, "feature", "kb/a.md", testFactBody("a", 0.8, []string{"kb/b.md"}), "a->b", "")
@@ -40,7 +40,7 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyLocalWins))
 	require.NoError(t, svc.IndexManager().Sync(ctx, "main"))
 
-	head, err := svc.Branches().HeadCommit(ctx, "main")
+	head, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
 	si := svc.si

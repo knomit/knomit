@@ -219,7 +219,7 @@ func (e *restatementEnv) deps() Deps {
 		Files:       e.svc.FactsRepo(),
 		Search:      e.svc.Search(),
 		Pipeline:    e.svc.Pipeline(),
-		Branches:    e.svc.Branches(),
+		HeadCommit:  e.svc.HeadCommit,
 		Abstraction: e.svc.Abstraction(),
 		Motifs:      e.svc.Motifs(),
 		Effort:      EffortNormal,

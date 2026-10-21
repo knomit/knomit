@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestRenameRepo_RekeysWithoutClosingTheStore is the whole point of choosing
@@ -34,7 +35,7 @@ func TestRenameRepo_RekeysWithoutClosingTheStore(t *testing.T) {
 	// The store is still usable — a REAL read, not just a successful Acquire.
 	// This is what Remove+Add would have broken (a closed store fails here).
 	require.NoError(t, after.WithRead(func(svc *store.Service) {
-		_, err := svc.Branches().HeadCommit(context.Background(), after.AgentBranch())
+		_, err := svc.HeadCommit(context.Background(), after.AgentBranch())
 		require.NoError(t, err)
 	}))
 }
@@ -119,9 +120,9 @@ func TestRenameRepo_PersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	boot := func() *Manager {
 		m := New(context.Background(), Deps{
-			Cfg:         config.Config{Home: dir},
-			AgentBranch: "machine/test",
-			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+			Cfg:     config.Config{Home: dir},
+			AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+			Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		return m

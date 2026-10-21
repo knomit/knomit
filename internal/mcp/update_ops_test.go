@@ -68,7 +68,7 @@ func readBody(t *testing.T, svc *store.Service, path string) string {
 
 func headCommit(t *testing.T, svc *store.Service) string {
 	t.Helper()
-	h, err := svc.Branches().HeadCommit(context.Background(), "agent/test")
+	h, err := svc.HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err)
 	return h
 }

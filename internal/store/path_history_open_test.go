@@ -102,7 +102,7 @@ func TestOpenHistory_UnresolvableBranchIsSkippedAndLogged(t *testing.T) {
 	svc, dbPath := openPathHistoryStoreAt(t)
 	ctx := context.Background()
 	c := writeVersionsStore(t, svc, 2)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "broken", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "broken", "main"))
 	b, err := svc.Facts().WriteFact(ctx, "broken", "kb/t.md", testFactBody("broken only", 0.5, nil), "b", "")
 	require.NoError(t, err)
 	clearDerived(t, svc, "") // an upgraded database
@@ -272,7 +272,7 @@ func TestPathHistory_SwapIsProportional(t *testing.T) {
 func TestRebuild_ReplacesEveryCommitLogRowOfTheBranch(t *testing.T) {
 	svc, ctx := openPathHistoryStore(t)
 	c := writeVersionsStore(t, svc, 3)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "other", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "other", "main"))
 	y, err := svc.Facts().WriteFact(ctx, "other", "kb/y.md", testFactBody("y", 0.5, nil), "y", "")
 	require.NoError(t, err)
 	t0 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)

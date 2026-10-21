@@ -117,7 +117,7 @@ func refOf(t *testing.T, ri *repos.RepoInstance, branch string) plumbing.Hash {
 	t.Helper()
 	h := plumbing.ZeroHash
 	require.NoError(t, ri.WithRead(func(s *store.Service) {
-		if c, err := s.Branches().HeadCommit(context.Background(), branch); err == nil {
+		if c, err := s.HeadCommit(context.Background(), branch); err == nil {
 			h = plumbing.NewHash(c)
 		}
 	}))

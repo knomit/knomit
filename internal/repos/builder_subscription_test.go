@@ -11,6 +11,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // subscriptionStore opens a bare remote and initialises a subscription store
@@ -24,9 +25,9 @@ func subscriptionStore(t *testing.T, uid string) (m *Manager, url, dbPath, upstr
 	t.Helper()
 	root := t.TempDir()
 	m = New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
-		AgentBranch: "machine/test",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

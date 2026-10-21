@@ -52,9 +52,9 @@ func TestInitSubscription_NilProgressStillClones(t *testing.T) {
 	require.Equal(t, "main", upstream)
 
 	ctx := context.Background()
-	want, err := origin.Branches().HeadCommit(ctx, "main")
+	want, err := origin.HeadCommit(ctx, "main")
 	require.NoError(t, err)
-	got, err := sub.Branches().HeadCommit(ctx, "main")
+	got, err := sub.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 }
@@ -66,7 +66,7 @@ func TestHasObject(t *testing.T) {
 	svc, _ := servedStore(t, 2)
 	ctx := context.Background()
 
-	tip, err := svc.Branches().HeadCommit(ctx, "main")
+	tip, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	root, err := svc.RootCommit(ctx, "main")
 	require.NoError(t, err)

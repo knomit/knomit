@@ -169,7 +169,7 @@ func localTip(t *testing.T, ri *RepoInstance, branch string) string {
 	t.Helper()
 	var tip string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		tip, _ = svc.Branches().HeadCommit(context.Background(), branch)
+		tip, _ = svc.HeadCommit(context.Background(), branch)
 	}))
 	return tip
 }
@@ -226,7 +226,7 @@ func TestFleetMaster_ForgeAdmitsMergesAndPublishesMain(t *testing.T) {
 		_, hasBeta := tips["agent/beta"]
 		require.False(t, hasBeta, "a member's round fetches no other agent branch")
 		require.NotEqual(t, f.rev(t, "agent/master"), tips["agent/master"].String(), "the master's branch is not re-fetched")
-		main, err := svc.Branches().HeadCommit(context.Background(), "main")
+		main, err := svc.HeadCommit(context.Background(), "main")
 		require.NoError(t, err)
 		require.Equal(t, f.rev(t, "main"), main, "the member follows main")
 	}))
@@ -700,7 +700,7 @@ func TestFleetMaster_ABranchDeletedOnTheForgeIsForgotten(t *testing.T) {
 		tips, err := svc.Remote().PeerTips(f.mri.AgentBranch())
 		require.NoError(t, err)
 		require.NotContains(t, tips, "agent/beta", "the tracking ref is pruned")
-		main, err := svc.Branches().HeadCommit(context.Background(), "main")
+		main, err := svc.HeadCommit(context.Background(), "main")
 		require.NoError(t, err)
 		require.Equal(t, f.rev(t, "main"), main, "the prune kept main")
 	}))
@@ -756,7 +756,7 @@ func TestFleetMaster_ARejudgedRefusalDemotesTheAdmittedBranch(t *testing.T) {
 			installFleetRoot(t, f.master, f.root)
 			require.NoError(t, ri.WithRead(func(svc *store.Service) {
 				require.True(t, ri.isFleetMaster(svc), "fixture: the master again")
-				main, err := svc.Branches().HeadCommit(ctx, "main")
+				main, err := svc.HeadCommit(ctx, "main")
 				require.NoError(t, err)
 				require.Equal(t, f.rev(t, "main"), main, "fixture: main moved here")
 			}))

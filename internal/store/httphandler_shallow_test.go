@@ -247,7 +247,7 @@ func uploadPackRaw(t *testing.T, url string, wants ...plumbing.Hash) string {
 // tip's hash must not be enough to fetch it.
 func TestGitHandler_RefusesWantOutsideAdvertisedTips(t *testing.T) {
 	svc, srv := servedStore(t, 3)
-	tip, err := svc.Branches().HeadCommit(context.Background(), "main")
+	tip, err := svc.HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
 	tipHash := plumbing.NewHash(tip)
 	c, err := svc.rh.Repository().CommitObject(tipHash)

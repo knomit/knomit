@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestPostRepoCreateCancel_DoneJobIs202AndTheRepoIsGone pins the contract the
@@ -151,8 +152,8 @@ func TestPostRepoCreateCancel_UnknownIs404(t *testing.T) {
 // itself back; cancel has nothing to do and says so rather than pretending.
 func TestPostRepoCreateCancel_FailedJobIs409(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:           config.Config{Home: t.TempDir()},
-		AgentBranch:   "machine/test",
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 		CreateTimeout: time.Nanosecond, // expired before the worker runs
 	})
 	if err := m.Start(); err != nil {

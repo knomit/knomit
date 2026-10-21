@@ -149,7 +149,7 @@ func TestRebuild_BumpsOnlyItsOwnBranch(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 	ctx := context.Background()
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/x", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/x", "main"))
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
 

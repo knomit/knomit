@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"knomit/internal/store/fsck"
+	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
@@ -22,9 +23,9 @@ import (
 func newLifetimeTestManager(t *testing.T) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "agent/test",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	bootRepo(t, m)
@@ -78,7 +79,7 @@ func TestClose_WaitsForInFlightAcquire(t *testing.T) {
 	}
 
 	// The store must still be fully usable while held.
-	_, err = svc.Branches().HeadCommit(context.Background(), "agent/test")
+	_, err = svc.HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err, "store must stay open while acquired")
 
 	release()
@@ -112,7 +113,7 @@ func TestWithRead_ConcurrentWithClose_NeverSeesClosedStore(t *testing.T) {
 				default:
 				}
 				err := ri.WithRead(func(svc *store.Service) {
-					if _, herr := svc.Branches().HeadCommit(context.Background(), "agent/test"); herr != nil {
+					if _, herr := svc.HeadCommit(context.Background(), "agent/test"); herr != nil {
 						sqlErrs.Add(1)
 					}
 				})
@@ -162,7 +163,7 @@ func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	}
 
 	// Old service must still work while held.
-	_, err = oldSvc.Branches().HeadCommit(context.Background(), "agent/test")
+	_, err = oldSvc.HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err, "old store must stay open until released")
 
 	release()
@@ -178,6 +179,6 @@ func TestSwapStore_DrainsInFlightUsers(t *testing.T) {
 	require.NoError(t, err)
 	defer release2()
 	require.NotSame(t, oldSvc, newSvc, "post-swap Acquire must return the new service")
-	_, err = newSvc.Branches().HeadCommit(context.Background(), "agent/test")
+	_, err = newSvc.HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err)
 }

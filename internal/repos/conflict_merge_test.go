@@ -49,7 +49,7 @@ func cmDelete(t *testing.T, ri *RepoInstance, branch string) {
 func headCommit(t *testing.T, ri *RepoInstance, branch string) facts.CommitInfo {
 	t.Helper()
 	svc := testService(t, ri)
-	h, err := svc.Branches().HeadCommit(context.Background(), branch)
+	h, err := svc.HeadCommit(context.Background(), branch)
 	require.NoError(t, err)
 	c, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(h))
 	require.NoError(t, err)

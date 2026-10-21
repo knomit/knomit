@@ -269,7 +269,7 @@ func demote(ctx context.Context, svc *store.Service, branch, own string, local p
 
 // localHead is refs/heads/<branch>'s commit, zero when there is none.
 func localHead(ctx context.Context, svc *store.Service, branch string) plumbing.Hash {
-	h, err := svc.Branches().HeadCommit(ctx, branch)
+	h, err := svc.HeadCommit(ctx, branch)
 	if err != nil || h == "" {
 		return plumbing.ZeroHash
 	}
@@ -425,7 +425,7 @@ func (p *fleetPeers) admit(ctx context.Context, svc *store.Service, own string, 
 		lg.Warn().Err(err).Msg("fleet master: list the fetched member branches")
 		return
 	}
-	mainTip, err := svc.Branches().HeadCommit(ctx, svc.Remote().UpstreamBranch())
+	mainTip, err := svc.HeadCommit(ctx, svc.Remote().UpstreamBranch())
 	if err != nil {
 		lg.Warn().Err(err).Msg("fleet master: read main; member branches not judged this round")
 		return

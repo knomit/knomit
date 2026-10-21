@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/index"
 	"knomit/internal/store/model"
 
 	"github.com/rs/zerolog/log"
@@ -238,7 +239,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 		r.machine.pendingBak = ""
 	}
 	if r.hub != nil {
-		if head, herr := svc.Branches().HeadCommit(context.Background(), read); herr == nil {
+		if head, herr := svc.HeadCommit(context.Background(), read); herr == nil {
 			r.hub.broadcastStatus(head)
 		}
 	}
@@ -386,7 +387,7 @@ func (r *RepoInstance) ensureBranch(ctx context.Context, svc *store.Service) {
 	if r.agentBranch == "" {
 		return // a subscription has no agent branch
 	}
-	if err := svc.Branches().CreateBranch(ctx, r.agentBranch, r.seedSourceForAgentBranch(ctx, svc)); err != nil {
+	if err := svc.CreateBranch(ctx, r.agentBranch, r.seedSourceForAgentBranch(ctx, svc)); err != nil {
 		log.Warn().Err(err).Str("repo", r.Name()).Msg("branch create/ensure failed")
 		return
 	}
@@ -400,10 +401,10 @@ func (r *RepoInstance) ensureBranch(ctx context.Context, svc *store.Service) {
 // the agent branch whenever no usable record exists, so CreateBranch fails
 // loudly rather than seeding from a broken source.
 func (r *RepoInstance) seedSourceForAgentBranch(ctx context.Context, svc *store.Service) string {
-	if _, err := svc.Branches().HeadCommit(ctx, r.agentBranch); err == nil {
+	if _, err := svc.HeadCommit(ctx, r.agentBranch); err == nil {
 		return r.agentBranch
 	}
-	owner, err := svc.Branches().AgentBranchOwner(ctx)
+	owner, err := svc.AgentBranchOwner(ctx)
 	if err != nil {
 		log.Warn().Err(err).Str("repo", r.Name()).
 			Msg("could not read the recorded agent branch owner; not taking over")
@@ -412,7 +413,7 @@ func (r *RepoInstance) seedSourceForAgentBranch(ctx context.Context, svc *store.
 	if owner == "" || owner == r.agentBranch {
 		return r.agentBranch
 	}
-	if _, err := svc.Branches().HeadCommit(ctx, owner); err != nil {
+	if _, err := svc.HeadCommit(ctx, owner); err != nil {
 		log.Warn().Err(err).Str("repo", r.Name()).Str("recorded_owner", owner).
 			Msg("recorded agent branch owner no longer exists; not taking over")
 		return r.agentBranch
@@ -425,10 +426,10 @@ func (r *RepoInstance) seedSourceForAgentBranch(ctx context.Context, svc *store.
 // recordAgentBranchOwner claims this repo database for this instance's agent
 // branch, once CreateBranch has reported success.
 func (r *RepoInstance) recordAgentBranchOwner(ctx context.Context, svc *store.Service) {
-	if owner, err := svc.Branches().AgentBranchOwner(ctx); err == nil && owner == r.agentBranch {
+	if owner, err := svc.AgentBranchOwner(ctx); err == nil && owner == r.agentBranch {
 		return
 	}
-	if err := svc.Branches().SetAgentBranchOwner(ctx, r.agentBranch); err != nil {
+	if err := svc.SetAgentBranchOwner(ctx, r.agentBranch); err != nil {
 		log.Warn().Err(err).Str("repo", r.Name()).Str("branch", r.agentBranch).
 			Msg("could not record the agent branch owner; a later takeover would have nothing to seed from")
 	}
@@ -561,7 +562,7 @@ func (r *RepoInstance) seedWatermarks(ctx context.Context, svc *store.Service) {
 	}
 	for _, tool := range []string{"review", "hypothesize"} {
 		if wm, _ := svc.Pipeline().GetPipelineWatermark(ctx, tool, r.agentBranch); wm == "" {
-			if head, err := svc.Branches().HeadCommit(ctx, r.agentBranch); err == nil {
+			if head, err := svc.HeadCommit(ctx, r.agentBranch); err == nil {
 				if err := svc.Pipeline().SetPipelineWatermark(ctx, tool, r.agentBranch, head); err != nil {
 					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
 				}
@@ -680,7 +681,7 @@ func (r *RepoInstance) dropUnresolvableBranches(ctx context.Context, svc *store.
 	out := make([]string, 0, len(names))
 	for i, name := range names {
 		if i > 0 {
-			if _, err := svc.Branches().HeadCommit(ctx, name); err != nil {
+			if _, err := svc.HeadCommit(ctx, name); err != nil {
 				log.Warn().Err(err).Str("repo", r.Name()).Str("branch", name).
 					Msg("stored upstream branch does not exist in this repo; skipping its index heal " +
 						"(check the origin's default branch against the remotes row)")
@@ -705,7 +706,7 @@ type healBranch struct {
 // failed; an upstream-only failure is logged but not fatal — the sync loop
 // owns upstream convergence. Nothing here re-arms a retry: Rebuild drops a
 // failed branch's schema version key, so it reports stale again next time.
-func healIndexBranches(ctx context.Context, im model.IndexManager, repo string, branches []healBranch, progress model.RebuildProgress) (ok bool) {
+func healIndexBranches(ctx context.Context, im *index.Index, repo string, branches []healBranch, progress model.RebuildProgress) (ok bool) {
 	healFailed := false
 	for i, branch := range branches {
 		if branch.stale {

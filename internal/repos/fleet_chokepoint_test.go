@@ -210,10 +210,10 @@ func TestFleetReserved_SwapRefused(t *testing.T) {
 // manager on the same home.
 func fleetTestDeps(dir string) Deps {
 	return Deps{
-		Cfg:         config.Config{Home: filepath.Join(dir, "home"), OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch: "agent/test-fleet",
-		Signer:      testsigner.Named("fleet-test"),
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: filepath.Join(dir, "home"), OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentID: testsigner.FixtureAgentID("agent/test-fleet"), AgentBranch: "agent/test-fleet",
+		Signer:  testsigner.Named("fleet-test"),
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	}
 }
 

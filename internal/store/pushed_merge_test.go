@@ -37,8 +37,8 @@ func newPushedFixture(t *testing.T) *pushedFixture {
 	f.svc.SetSigner(f.host)
 	writeMergeFact(t, f.svc, "main", "kb/base.md", "base", "base")
 	ctx := context.Background()
-	require.NoError(t, f.svc.Branches().CreateBranch(ctx, pmAgent, "main"))
-	require.NoError(t, f.svc.Branches().CreateBranch(ctx, pmPeer, "main"))
+	require.NoError(t, f.svc.CreateBranch(ctx, pmAgent, "main"))
+	require.NoError(t, f.svc.CreateBranch(ctx, pmPeer, "main"))
 	return f
 }
 
@@ -319,7 +319,7 @@ func TestMergeConsensus_SkipsMergeOnlyNoChange(t *testing.T) {
 	require.Equal(t, h2, f.tip(pmAgent))
 
 	// A merge-only tip that CHANGES something (an edited merge) is recorded.
-	require.NoError(t, f.svc.Branches().CreateBranch(ctx, "scratch", pmAgent))
+	require.NoError(t, f.svc.CreateBranch(ctx, "scratch", pmAgent))
 	scratch := plumbing.NewHash(writeMergeFact(t, f.svc, "scratch", "kb/evil.md", "evil", "evil"))
 	pm3 := f.noFFMerge(h2, f.commit(scratch).TreeHash)
 	require.Equal(t, merge.ModeMerge, mergeC(pm3).Mode, "a merge commit that brings a change is merged")

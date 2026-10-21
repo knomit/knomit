@@ -39,7 +39,7 @@ func expConflictFork(t *testing.T, ontology string) (*Service, *cmRepo) {
 
 func expStillOpen(t *testing.T, svc *Service) bool {
 	t.Helper()
-	_, ok, err := svc.Branches().GetExperiment(context.Background(), "x")
+	_, ok, err := svc.GetExperiment(context.Background(), "x")
 	require.NoError(t, err)
 	return ok
 }

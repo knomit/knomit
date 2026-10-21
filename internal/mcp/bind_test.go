@@ -17,6 +17,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // bindFixture stands up a started Manager carrying a normal repo, a
@@ -24,8 +25,8 @@ import (
 func bindFixture(t *testing.T) (*repos.Manager, *sessions.Store, *mcpserver.MCPServer) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

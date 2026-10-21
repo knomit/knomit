@@ -17,6 +17,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store/remotesync"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // F21 S2: the `sync: {push, pull}` root attribute.
@@ -253,7 +254,7 @@ func TestSyncMode_OnlyAgentBranchWakes(t *testing.T) {
 	_, err := svc.Merge().OpenExperiment(ctx, "x", "", trigAgent)
 	require.NoError(t, err)
 	writeOn(t, ri, "exp/x", "kb/tasks/exp.md")
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/peer-0badc0de", trigAgent))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/peer-0badc0de", trigAgent))
 	writeOn(t, ri, "agent/peer-0badc0de", "kb/tasks/peer.md")
 	writeOn(t, ri, "main", "kb/tasks/consensus.md")
 	time.Sleep(pushQuiet)
@@ -332,7 +333,7 @@ func TestSyncMode_OwnBranchOnly(t *testing.T) {
 	base := ticks.Load()
 
 	svc := testService(t, ri)
-	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/peer-0badc0de", trigAgent))
+	require.NoError(t, svc.CreateBranch(context.Background(), "agent/peer-0badc0de", trigAgent))
 	h := write(t, ri, "kb/tasks/a.md")
 	require.Eventually(t, func() bool { return bareRef(t, bare, "refs/heads/"+trigAgent) == h },
 		20*time.Second, 10*time.Millisecond, "the woken round pushes the new head")
@@ -379,7 +380,7 @@ func TestSyncMode_FlagIsCached(t *testing.T) {
 func TestSyncMode_ReadAtConsensusTip(t *testing.T) {
 	_, ri := newTriggerRepo(t)
 	svc := testService(t, ri)
-	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "trunk", trigAgent))
+	require.NoError(t, svc.CreateBranch(context.Background(), "trunk", trigAgent))
 	ont := triggerOntology(syncRoot(fact.SyncRealtime, ""))
 	setOntology(t, ri, ont) // the agent branch only
 
@@ -539,7 +540,7 @@ func TestSyncMode_LocalLoop(t *testing.T) {
 	waitOpens(t, win, 1)
 	win.releaseAll()
 	require.Eventually(t, func() bool {
-		m, err := svc.Branches().HeadCommit(context.Background(), svc.Remote().UpstreamBranch())
+		m, err := svc.HeadCommit(context.Background(), svc.Remote().UpstreamBranch())
 		return err == nil && m == h
 	}, 20*time.Second, 10*time.Millisecond, "the woken local round moves the consensus branch to the agent head")
 	require.Equal(t, int64(2), ticks.Load())
@@ -589,8 +590,8 @@ func TestSyncMode_SyncStageWiresLocalLoop(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{Home: home, OntologyRoot: "kb",
 			Git: config.GitConfig{LocalReconcileInterval: time.Hour, RealtimePullInterval: 5 * time.Second}},
-		AgentBranch: trigAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
 		// Machine.Synchronous deliberately NOT set: the stage's loop is the point.
 	})
 	t.Cleanup(func() { _ = m.Close() })
@@ -642,8 +643,8 @@ func TestSyncMode_SyncStageWiresOriginLoop(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir,
 			Git: config.GitConfig{RealtimePullInterval: 7 * time.Second}},
-		AgentBranch: trigAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

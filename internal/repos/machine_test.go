@@ -19,6 +19,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // ---------------------------------------------------------------- fixtures
@@ -97,11 +98,11 @@ func newMFix(t *testing.T, stage StageID, point string, synchronous bool) *mfix 
 	f := &mfix{root: t.TempDir(), emb: newGatedEmbedder(), hk: &armedHook{g: newGate(stage, point)}}
 	home := t.TempDir()
 	f.m = New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: f.root},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Embedder:    f.emb,
-		Machine:     Options{Synchronous: synchronous, CrashBackoff: testCrashBackoff, Hook: f.hk.hook},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: f.root},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath:  filepath.Join(home, "agent.key"),
+		Embedder: f.emb,
+		Machine:  Options{Synchronous: synchronous, CrashBackoff: testCrashBackoff, Hook: f.hk.hook},
 	})
 	require.NoError(t, f.m.Start())
 	t.Cleanup(func() { f.hk.g.open(); f.emb.unblock(); _ = f.m.Close() })
@@ -328,9 +329,9 @@ func TestWalkthrough_Boot(t *testing.T) {
 	var armed atomic.Bool
 	boot := func() *Manager {
 		m := New(context.Background(), Deps{
-			Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-			AgentBranch: "agent/test",
-			KeyPath:     filepath.Join(home, "agent.key"),
+			Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+			AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+			KeyPath: filepath.Join(home, "agent.key"),
 			Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff, Hook: func(s StageID, p string, ctx context.Context) {
 				if armed.Load() {
 					g.hook(s, p, ctx)
@@ -562,9 +563,9 @@ func TestWalkthrough_RebuildPanic(t *testing.T) {
 	var panicNext atomic.Bool
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
 		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff, Hook: func(_ StageID, p string, _ context.Context) {
 			if p == "index-job" && panicNext.CompareAndSwap(true, false) {
 				panic("index job blew up")
@@ -625,11 +626,11 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	home := t.TempDir()
 	cfg := config.Config{Home: home, OntologyRoot: "kb"}
 	m := New(context.Background(), Deps{
-		Cfg:         cfg,
-		AgentBranch: cHostAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Embedder:    emb,
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     cfg,
+		AgentID: testsigner.FixtureAgentID(cHostAgent), AgentBranch: cHostAgent,
+		KeyPath:  filepath.Join(home, "agent.key"),
+		Embedder: emb,
+		Machine:  Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { emb.unblock(); _ = m.Close() })
@@ -794,9 +795,9 @@ func TestMachine_NoStageSends(t *testing.T) {
 	var ri atomic.Pointer[RepoInstance]
 	home := t.TempDir()
 	m = New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
 		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff, Hook: func(s StageID, p string, ctx context.Context) {
 			self := ri.Load()
 			if s != StageServe || p != "enter" || self == nil {

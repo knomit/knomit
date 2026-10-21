@@ -233,8 +233,8 @@ func newMissionManager(t *testing.T, agent, signer string, extra func(*config.Co
 	}
 	tools := &crashableTools{real: mcp.NewScriptTools(nil)}
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         cfg,
-		AgentBranch: agent,
+		Cfg:     cfg,
+		AgentID: testsigner.FixtureAgentID(agent), AgentBranch: agent,
 		KeyPath:     filepath.Join(home, "agent.key"),
 		Signer:      testsigner.Named(signer),
 		Machine:     repos.Options{Synchronous: true},
@@ -290,7 +290,7 @@ func newMissionHost(t *testing.T, edit mutate) (*missionNode, string) {
 		if edit != nil {
 			break
 		}
-		head, err := h.svc(t).Branches().HeadCommit(context.Background(), h.branch)
+		head, err := h.svc(t).HeadCommit(context.Background(), h.branch)
 		require.NoError(t, err)
 		got, ok, err := h.svc(t).FactsRepo().BlobAt(context.Background(), plumbing.NewHash(head), p)
 		require.NoError(t, err)

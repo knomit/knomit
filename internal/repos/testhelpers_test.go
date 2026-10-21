@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // testRepoName is the repo these tests create when they need one. It carries no
@@ -43,10 +44,10 @@ func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { m.Close() })
 	return m

@@ -77,7 +77,7 @@ func restFleetManager(t *testing.T, dir string) (*repos.Manager, string) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg: config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir,
 			TLS: config.TLSConfig{Dir: filepath.Join(home, "pki")}},
-		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), KeyPath: key, Machine: repos.Options{Synchronous: true},
+		AgentID: testsigner.FixtureAgentID("agent/rest-fleet"), AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), KeyPath: key, Machine: repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -206,8 +206,8 @@ func TestFleetREST_ListenerIsShownOnlyLocally(t *testing.T) {
 	key, err := testsigner.WriteNamedKey(home, "rest-fleet")
 	require.NoError(t, err)
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", TLS: config.TLSConfig{Dir: filepath.Join(home, "pki"), Addr: "0.0.0.0:7443"}},
-		AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), KeyPath: key, Machine: repos.Options{Synchronous: true},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", TLS: config.TLSConfig{Dir: filepath.Join(home, "pki"), Addr: "0.0.0.0:7443"}},
+		AgentID: testsigner.FixtureAgentID("agent/rest-fleet"), AgentBranch: "agent/rest-fleet", Signer: testsigner.Named("rest-fleet"), KeyPath: key, Machine: repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

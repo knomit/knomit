@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestCreate_localWritesOntologyToAgentBranch verifies that a brand new repo
@@ -18,8 +19,8 @@ import (
 func TestCreate_localWritesOntologyToAgentBranch(t *testing.T) {
 	dir := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: "agent/test-abc",
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID("agent/test-abc"), AgentBranch: "agent/test-abc",
 	})
 	// Release the control.db handle before t.TempDir removes the home.
 	// Windows refuses to unlink an open file, so a manager left open fails
@@ -64,8 +65,8 @@ func TestCreate_LocalOriginRejectedWithoutRoot(t *testing.T) {
 			Home: dir,
 			// LocalOriginRoot intentionally empty → filesystem origins disabled.
 		},
-		AgentBranch: "agent/test-abc",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		AgentID: testsigner.FixtureAgentID("agent/test-abc"), AgentBranch: "agent/test-abc",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	// Release the control.db handle before t.TempDir removes the home:
 	// Windows refuses to unlink an open file.
@@ -95,8 +96,8 @@ func TestCreate_LocalOriginRejectedOutsideRoot(t *testing.T) {
 			Home:            dir,
 			LocalOriginRoot: filepath.Join(dir, "allowed"),
 		},
-		AgentBranch: "agent/test-abc",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		AgentID: testsigner.FixtureAgentID("agent/test-abc"), AgentBranch: "agent/test-abc",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	// Release the control.db handle before t.TempDir removes the home:
 	// Windows refuses to unlink an open file.

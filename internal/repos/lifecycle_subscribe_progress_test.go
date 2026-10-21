@@ -16,6 +16,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // servedKnomitOrigin stands up a knomit store with an ontology and n facts on
@@ -75,10 +76,10 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	g := newGate(StageIndex, "index-job")
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     Options{Hook: g.hook},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: Options{Hook: g.hook},
 	})
 	require.NoError(t, m.Start())
 	// Registered AFTER the server's own cleanup so it runs BEFORE it (LIFO):
@@ -225,8 +226,8 @@ func TestCreatePreflight_RefusesAnOriginOutsideTheGate(t *testing.T) {
 			// A root that exists but does NOT contain the origin below.
 			LocalOriginRoot: filepath.Join(home, "allowed"),
 		},
-		AgentBranch: "agent/test",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

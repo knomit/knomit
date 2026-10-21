@@ -15,6 +15,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // The origin-connect session is the ONE flow that can change a repo's
@@ -118,9 +119,9 @@ func newIdentitySessionServer(t *testing.T) (*Server, *repos.Manager, string) {
 			OntologyRoot:    "kb",
 			LocalOriginRoot: remotesRoot,
 		},
-		AgentBranch: "agent/test",
-		KeyPath:     keyPath,
-		Machine:     repos.Options{Synchronous: true},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: keyPath,
+		Machine: repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {

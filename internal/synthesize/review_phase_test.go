@@ -412,7 +412,7 @@ func seedHypothesisTransition(t *testing.T, svc *store.Service, branch string) {
 	_, err = svc.Facts().WriteFact(ctx, branch, path, hyp, "seed-hypothesis", "")
 	require.NoError(t, err)
 
-	head, err := svc.Branches().HeadCommit(ctx, branch)
+	head, err := svc.HeadCommit(ctx, branch)
 	require.NoError(t, err)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
 

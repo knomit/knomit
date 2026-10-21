@@ -10,6 +10,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/store/storetest"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // A symlinked ontology fails the repo with an error that names the path and
@@ -41,7 +42,7 @@ func TestLoadOntology_SymlinkedOntologyRefusesTheRepoNamingThePath(t *testing.T)
 			ctx := context.Background()
 			dir := t.TempDir()
 			agentBranch := "agent/test-link"
-			m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+			m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch})
 			ri := bootRepo(t, m)
 			uid := ri.UID()
 			svc := testService(t, ri)
@@ -58,7 +59,7 @@ func TestLoadOntology_SymlinkedOntologyRefusesTheRepoNamingThePath(t *testing.T)
 			require.False(t, has)
 			require.NoError(t, m.Close())
 
-			m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+			m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch})
 			require.NoError(t, m2.Start(), "one refused repo does not fail the boot")
 			t.Cleanup(func() { _ = m2.Close() })
 			require.Nil(t, m2.Get(testRepoName), "a symlinked ontology refuses the repo: it is not mounted")
@@ -84,11 +85,11 @@ func TestLoadOntology_RegularOntologyMounts(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	agentBranch := "agent/test-regular"
-	m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+	m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch})
 	bootRepo(t, m)
 	require.NoError(t, m.Close())
 
-	m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+	m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch})
 	require.NoError(t, m2.Start())
 	t.Cleanup(func() { _ = m2.Close() })
 	ri := m2.Get(testRepoName)
@@ -135,7 +136,7 @@ func TestLoadOntology_EmptyCanonicalDoesNotFallBackToLegacy(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	agentBranch := "agent/test-empty"
-	m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+	m := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch})
 	ri := bootRepo(t, m)
 	svc := testService(t, ri)
 	legacy, err := fact.DefaultOntology().Serialize()
@@ -150,7 +151,7 @@ func TestLoadOntology_EmptyCanonicalDoesNotFallBackToLegacy(t *testing.T) {
 	require.Empty(t, data)
 	require.NoError(t, m.Close())
 
-	m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentBranch: agentBranch})
+	m2 := New(ctx, Deps{Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch})
 	require.NoError(t, m2.Start())
 	t.Cleanup(func() { _ = m2.Close() })
 	ri = m2.Get(testRepoName)

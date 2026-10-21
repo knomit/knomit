@@ -21,7 +21,7 @@ import (
 // treeOf returns the root tree hash at branch's tip.
 func treeOf(t *testing.T, svc *Service, branch string) string {
 	t.Helper()
-	head, err := svc.Branches().HeadCommit(context.Background(), branch)
+	head, err := svc.HeadCommit(context.Background(), branch)
 	require.NoError(t, err)
 	c, err := svc.rh.Repository().CommitObject(plumbing.NewHash(head))
 	require.NoError(t, err)
@@ -89,12 +89,12 @@ func TestDelete_SameLastFactTwice(t *testing.T) {
 	deleteF(t, svc, "main", "kb/x/y/only.md")
 	require.False(t, folderPresent(t, svc, "main", "kb/x"), "first delete drops the folder")
 	tree := treeOf(t, svc, "main")
-	head, err := svc.Branches().HeadCommit(ctx, "main")
+	head, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
 	_, err = svc.Facts().DeleteFact(ctx, "main", "kb/x/y/only.md", "again")
 	require.ErrorIs(t, err, model.ErrPathNotFound, "DeleteFact keeps its own existence check, wrapped as ErrPathNotFound (F25 follow-up) so a REST DELETE of a missing path can answer 404 instead of 500")
-	after, err := svc.Branches().HeadCommit(ctx, "main")
+	after, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, head, after, "a refused DeleteFact writes nothing")
 
@@ -108,7 +108,7 @@ func TestMergeBranch_SrcDeleteDropsEmptiedFolder(t *testing.T) {
 	svc := newMergeTestStore(t)
 	writeMergeFact(t, svc, "main", "kb/other/seed.md", "seed", "body")
 	writeMergeFact(t, svc, "main", "kb/lane/only.md", "only", "body")
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 
 	// feature deletes the lane's last file; main moves on elsewhere, so the
 	// merge is a real three-way merge, not a fast-forward.

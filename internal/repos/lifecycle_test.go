@@ -16,6 +16,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 func newLifecycleManager(t *testing.T) *Manager {
@@ -29,8 +30,8 @@ func newLifecycleManagerWithRoot(t *testing.T, originRoot string) *Manager {
 	t.Helper()
 	dir := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir, LocalOriginRoot: originRoot},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: dir, LocalOriginRoot: originRoot},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -965,10 +966,10 @@ func TestCreate_CloneMode_SyncRunsWhileTheIndexJobIsHeld(t *testing.T) {
 	root := t.TempDir()
 	g := newGate(StageIndex, "index-job")
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
-		AgentBranch: "machine/test",
-		Embedder:    testEmbedder{},
-		Machine:     Options{Hook: g.hook},
+		Cfg:     config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: testEmbedder{},
+		Machine:  Options{Hook: g.hook},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -1027,8 +1028,8 @@ func newSweepingCloneManager(t *testing.T, root string) *Manager {
 			LocalOriginRoot: root,
 			Experiments:     config.ExperimentsConfig{ExpiryDays: 30},
 		},
-		AgentBranch: "machine/test",
-		Embedder:    testEmbedder{},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: testEmbedder{},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

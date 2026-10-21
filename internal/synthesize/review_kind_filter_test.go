@@ -49,7 +49,7 @@ func TestDirtyFacts_ExcludesPragmaticFacts(t *testing.T) {
 		// so the two facts written next are visible as "changed since
 		// watermark" via DiffFiles.
 		writeKindFact(t, svc, branch, "kb/technology/baseline.md", fact.Epistemic, fact.Observation)
-		head, err := svc.Branches().HeadCommit(ctx, branch)
+		head, err := svc.HeadCommit(ctx, branch)
 		require.NoError(t, err)
 		require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
 
@@ -144,7 +144,7 @@ func TestDirtyFacts_ExcludesSignalFacts(t *testing.T) {
 	t.Run("incremental (diff path)", func(t *testing.T) {
 		r, svc := newPhaseTestReviewer(t)
 		writeKindFact(t, svc, branch, "kb/technology/baseline2.md", fact.Epistemic, fact.Observation)
-		head, err := svc.Branches().HeadCommit(ctx, branch)
+		head, err := svc.HeadCommit(ctx, branch)
 		require.NoError(t, err)
 		require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
 
@@ -216,7 +216,7 @@ func TestDirtyFacts_LearnDedupOffDoesNotAffectSeeds(t *testing.T) {
 		OntologyRoot: "kb",
 	}), nil)
 
-	head, err := svc.Branches().HeadCommit(ctx, branch)
+	head, err := svc.HeadCommit(ctx, branch)
 	require.NoError(t, err)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
 	writeKindFact(t, svc, branch, path, fact.Epistemic, fact.Observation)

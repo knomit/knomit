@@ -3,9 +3,10 @@ package store
 import (
 	"context"
 	"errors"
-	"knomit/internal/store/facts"
 	"path/filepath"
 	"testing"
+
+	"knomit/internal/store/facts"
 
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func newInvalidPathTestStore(t *testing.T) *Service {
 
 func headOfBranch(t *testing.T, svc *Service, branch string) string {
 	t.Helper()
-	h, err := svc.Branches().HeadCommit(context.Background(), branch)
+	h, err := svc.HeadCommit(context.Background(), branch)
 	require.NoError(t, err)
 	return h
 }

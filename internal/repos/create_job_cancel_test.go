@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // requireNoTrace asserts the three faces of "the repo is not there" plus the
@@ -66,8 +67,8 @@ func TestCancelCreate_DoneJobDeletesTheRepoWithoutATrace(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -115,8 +116,8 @@ func TestCancelCreate_DoneJobDeletesTheRepoWithoutATrace(t *testing.T) {
 func TestCancelCreate_RunningJobEndsCancelledAndLeavesNoTrace(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -149,8 +150,8 @@ func TestCancelCreate_RefusesWhatItCannotUndo(t *testing.T) {
 	t.Parallel()
 	t.Run("failed job", func(t *testing.T) {
 		m := New(context.Background(), Deps{
-			Cfg:           config.Config{Home: t.TempDir()},
-			AgentBranch:   "machine/test",
+			Cfg:     config.Config{Home: t.TempDir()},
+			AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 			CreateTimeout: time.Nanosecond, // expired before the worker runs
 		})
 		require.NoError(t, m.Start())
@@ -167,8 +168,8 @@ func TestCancelCreate_RefusesWhatItCannotUndo(t *testing.T) {
 
 	t.Run("unknown id", func(t *testing.T) {
 		m := New(context.Background(), Deps{
-			Cfg:         config.Config{Home: t.TempDir()},
-			AgentBranch: "machine/test",
+			Cfg:     config.Config{Home: t.TempDir()},
+			AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 		})
 		require.NoError(t, m.Start())
 		t.Cleanup(func() { _ = m.Close() })
@@ -177,8 +178,8 @@ func TestCancelCreate_RefusesWhatItCannotUndo(t *testing.T) {
 
 	t.Run("done job whose repo was replaced", func(t *testing.T) {
 		m := New(context.Background(), Deps{
-			Cfg:         config.Config{Home: t.TempDir()},
-			AgentBranch: "machine/test",
+			Cfg:     config.Config{Home: t.TempDir()},
+			AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 		})
 		require.NoError(t, m.Start())
 		t.Cleanup(func() { _ = m.Close() })
@@ -240,9 +241,9 @@ func TestCancelCreate_LeavesNoOriginOrSubscriptionRow(t *testing.T) {
 
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
 	})
 	require.NoError(t, m.Start())
 	// Registered AFTER the origin server's own cleanup so it runs BEFORE it
@@ -304,8 +305,8 @@ func TestCancelCreate_LeavesNoOriginOrSubscriptionRow(t *testing.T) {
 func TestCancelCreate_RunningJobReportsCancellingBeforeCancelled(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -341,8 +342,8 @@ func TestCancelCreate_RunningJobReportsCancellingBeforeCancelled(t *testing.T) {
 func TestCreateJobs_OmitsCancelledButKeepsFailed(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -378,8 +379,8 @@ func TestCreateJobs_OmitsCancelledButKeepsFailed(t *testing.T) {
 	// A FAILED job stays in the list: its error is the only place the reason
 	// for it lives.
 	fm := New(context.Background(), Deps{
-		Cfg:           config.Config{Home: t.TempDir()},
-		AgentBranch:   "machine/test",
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 		CreateTimeout: time.Nanosecond,
 	})
 	require.NoError(t, fm.Start())
@@ -411,9 +412,9 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

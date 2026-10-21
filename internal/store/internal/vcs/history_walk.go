@@ -3,8 +3,9 @@ package vcs
 import (
 	"context"
 	"fmt"
-	"knomit/internal/pki"
 	"strings"
+
+	"knomit/internal/pki"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"

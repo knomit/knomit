@@ -90,7 +90,7 @@ func TestReceivePack_UpstreamRefusedEvenUnderAgentPrefix(t *testing.T) {
 	h := newPushHost(t, "", 1)
 	ctx := context.Background()
 	const upstream = "agent/consensus"
-	require.NoError(t, h.svc.Branches().CreateBranch(ctx, upstream, "main"))
+	require.NoError(t, h.svc.CreateBranch(ctx, upstream, "main"))
 	upstreamFn := func() string { return upstream }
 	req := packp.NewReferenceUpdateRequest()
 	req.Commands = []*packp.Command{{Name: plumbing.NewBranchReferenceName(upstream), Old: h.ref(upstream), New: h.ref("main")}}

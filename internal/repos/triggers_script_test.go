@@ -142,7 +142,7 @@ func newScriptRepo(t *testing.T, rate int, entries ...string) (*Manager, *RepoIn
 	cfg := config.Config{Home: home, OntologyRoot: "kb"}
 	cfg.Triggers.ScriptRatePerMinute = rate
 	tools := &stubTools{}
-	m := New(context.Background(), Deps{Cfg: cfg, AgentBranch: trigAgent,
+	m := New(context.Background(), Deps{Cfg: cfg, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}, ScriptTools: tools})
 	t.Cleanup(func() { _ = m.Close() })
 	// What a booted server records once its listeners are bound; a recipe's
