@@ -34,7 +34,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// the compiled triggers
 		"d.cache.Get", "ct.OnEpisode", "ct.Matches", "p.trig.EvalIf",
 		"fact.ReadVerifySettings", "fact.ParseFact", "fact.FactGlobal", "fact.ExpiresUnix",
-		"store.TrailerValue",
+		"model.TrailerValue",
 		// the hub and the log
 		"hub.broadcastTrigger", "log.Warn", "log.Error", "log.Info", "log.Debug", "?.Err", "?.Str", "?.Dur", "?.Int64", "?.Interface", "?.Msg",
 		// the push action (F07 PR 4): a non-blocking send on the sync wake,
@@ -82,7 +82,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// its row handed to the fire (or the late inbox), the counter
 		"fact.ValidRecipeName", "h.d.startRecipe", "h.onRow", "?.recordRecipe", "rs.fireRange",
 		// the binding and the trailers the handlers see
-		"NewBindingOfRepo", "WithBinding", "store.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
+		"NewBindingOfRepo", "WithBinding", "model.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
 		// the sandbox
 		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath", "fact.IsUnderArtifactsRoot",
 		// F25 follow-up (user ruling 2026-10-06): the same artifact-shape
@@ -117,7 +117,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"os.Stat", "os.ReadFile", "filepath.Join", "fi.Mode", "?.IsRegular", "fi.ModTime", "fi.Size", "cur.mtime.Equal",
 		"sha256.Sum256", "hex.EncodeToString",
 		// the sandbox and the host
-		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "WithBinding", "NewBindingOfRepo", "store.WithTrailers",
+		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "WithBinding", "NewBindingOfRepo", "model.WithTrailers",
 		"recipeHostFunctions", "recipeMCP", "serverkey.ServerKey", "json.Marshal", "os.Environ", "mergeEnv",
 		"d.recipeGlobals", "d.recipeEnv",
 		// F5: which result outcomes are failures (their text in `error`, else
