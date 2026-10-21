@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"knomit/internal/store/model"
-	"knomit/internal/testsupport/testsigner"
 
 	"knomit/internal/store/fsck"
 
@@ -214,7 +213,7 @@ func (sb *Storyboard) repoConfig(name string) config.Config {
 func (sb *Storyboard) bootManager(cfg config.Config, keyPath string) (*repos.Manager, error) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:         cfg,
-		AgentID:     testsigner.FixtureAgentID("agent/test"),
+		AgentID:     "test", // the id the test fixture derives from agent/test; Manager.AgentID has no fallback
 		AgentBranch: "agent/test",
 		Embedder:    sb.embedder,
 		KeyPath:     keyPath,
