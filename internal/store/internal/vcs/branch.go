@@ -95,7 +95,8 @@ type Repo struct {
 
 	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 
-	// consensusBranch is Service.UpstreamBranch: the branch whose tip carries
+	// consensusBranch is remotesync.Index.UpstreamBranch (which
+	// Service.UpstreamBranch forwards to): the branch whose tip carries
 	// the repo's `conflicts` setting, the one every other merge site reads it
 	// at. Set by Open; nil only on a Repo built bare in a test.
 	consensusBranch func() string

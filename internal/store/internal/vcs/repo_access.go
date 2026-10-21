@@ -3,6 +3,8 @@ package vcs
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"os"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -122,3 +124,30 @@ func (rh *Repo) RLockConfig() func() {
 
 // OntologyCache is the cache of the ontology validateWrite last parsed.
 func (rh *Repo) OntologyCache() *OntCache { return &rh.writeOnt }
+
+// InitRepoConfig stamps the repo config with the knomit identity and disables
+// GPG signing, which must be done for both fresh and remote-initialized repos.
+func InitRepoConfig(repo *gogit.Repository, label string) error {
+	cfg, err := repo.Config()
+	if err != nil {
+		return fmt.Errorf("%s: read config: %w", label, err)
+	}
+	cfg.User.Name = "knomit"
+	cfg.User.Email = "knomit@local"
+	if cfg.Raw != nil {
+		cfg.Raw.Section("commit").SetOption("gpgsign", "false")
+	}
+	if err := repo.SetConfig(cfg); err != nil {
+		return fmt.Errorf("%s: set config: %w", label, err)
+	}
+	return nil
+}
+
+// DefaultAgentBranch returns "agent/<hostname>", falling back to "agent/local".
+func DefaultAgentBranch() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "local"
+	}
+	return "agent/" + hostname
+}

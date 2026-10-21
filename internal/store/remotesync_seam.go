@@ -12,8 +12,8 @@ import (
 // and the publish-time judge of this instance's own commits. The child reads
 // a store only through the merge handle (which wraps *vcs.Repo) and verify.
 // The callers that drive it stay in this package: the Service methods in
-// service_sync.go and consensus_branch.go (thin forwards that keep the contract docs), Open/Clone/Init (repo.go) and
-// replay.go. The receive-pack handler lives in internal/store/gitserve and
+// service_sync.go and consensus_branch.go (thin forwards that keep the contract docs), the Clone/Init forwards and local
+// OpenRepo/InitRepo (repo.go) and replay.go. The receive-pack handler lives in internal/store/gitserve and
 // calls the exported AdvanceBranchTo.
 //
 // repoHandler embeds *remotesync.Repo next to *vcs.Repo, *facts.Repo and
@@ -52,8 +52,21 @@ const (
 	OwnCommitRefusedText = remotesync.OwnCommitRefusedText
 )
 
+// Bootstrap names that callers outside store use (repos: InitOption,
+// OwnBranchesOnly, BranchACreateReads; web: ErrEmptyRemote).
+type InitOption = remotesync.InitOption
+
+// OwnBranchesOnly is remotesync.OwnBranchesOnly.
+func OwnBranchesOnly() InitOption { return remotesync.OwnBranchesOnly() }
+
+// BranchACreateReads is remotesync.BranchACreateReads.
+func BranchACreateReads(remoteHasAgentBranch bool, agentBranch, consensusBranch string) string {
+	return remotesync.BranchACreateReads(remoteHasAgentBranch, agentBranch, consensusBranch)
+}
+
 // Sentinel errors: the same values, so errors.Is matches across the seam.
 var (
+	ErrEmptyRemote      = remotesync.ErrEmptyRemote
 	ErrDropMerge        = remotesync.ErrDropMerge
 	ErrNoAgentBranch    = remotesync.ErrNoAgentBranch
 	ErrNotUnpublished   = remotesync.ErrNotUnpublished

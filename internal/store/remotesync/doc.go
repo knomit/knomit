@@ -14,9 +14,10 @@
 // Embedding is not virtual: nothing here calls a method declared on the
 // parent. The consensus-branch record and the bodies of the Service's peer
 // admission and local-upstream methods live here (consensus_branch.go,
-// peer_admit.go, local_reconcile.go); replay.go, the thin Service methods
-// (service_sync.go, consensus_branch.go) and Open/Clone/Init in repo.go stay
-// in the parent and call the exported cores; the receive-pack handler is the gitserve child, which
+// peer_admit.go, local_reconcile.go) and the remote bootstrap (bootstrap.go:
+// CloneFrom, InitFromRemote, InitSubscription); replay.go, the thin Service
+// methods (service_sync.go, consensus_branch.go, repo.go) and the local
+// OpenRepo/InitRepo in repo.go stay in the parent and call the exported cores; the receive-pack handler is the gitserve child, which
 // calls AdvanceBranchTo.
 //
 // The package is named remotesync, not sync, so it does not collide with the
