@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // codeOntologyYAML is the baked code preset, whose principles topic declares
@@ -112,9 +113,9 @@ func TestValidateWrite_TheStoreRefusesAnInvalidFactAtTheSource(t *testing.T) {
 			before := svc.rh.resolveRefMust(t, "agent/test")
 			err := r.w(t)(svc)
 			if r.refused {
-				var fe *FactInvalidError
+				var fe *facts.FactInvalidError
 				require.True(t, errors.As(err, &fe), "want a validation refusal, got %v", err)
-				require.ErrorIs(t, err, ErrFactInvalid)
+				require.ErrorIs(t, err, facts.ErrFactInvalid)
 				require.Contains(t, err.Error(), "must-have-designer-entity")
 				require.Contains(t, err.Error(), "principles must be authored via /knomit-principle")
 				require.Equal(t, before, svc.rh.resolveRefMust(t, "agent/test"), "nothing was written")

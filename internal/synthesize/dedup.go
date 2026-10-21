@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
@@ -181,7 +182,8 @@ func applyGreedyMerges(pairs []mergePair) []mergePair {
 func dedupCluster(
 	ctx context.Context,
 	cluster []factForLLM,
-	gs store.FactIndex,
+	gs *facts.Index,
+	sysFiles *facts.Repo,
 	idx SearchQuery,
 	threshold float64,
 	recipeName string,
@@ -196,7 +198,7 @@ func dedupCluster(
 
 	// The one gate the merged winners below go through, built once for the
 	// whole cluster rather than per merge.
-	gate := writeGate(localRepoID, idx, gs, agentBranch)
+	gate := writeGate(localRepoID, idx, sysFiles, agentBranch)
 
 	// Build a set for fast path lookup.
 	clusterByPath := make(map[string]factForLLM, len(cluster))

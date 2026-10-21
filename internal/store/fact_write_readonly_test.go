@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/facts"
 )
 
 // A read-only store refuses every AUTHORED commit on every branch, at the seam
@@ -27,18 +29,18 @@ func TestReadOnlyStore_RefusesAuthoredWritesOnEveryBranch(t *testing.T) {
 	tips := map[string]plumbing.Hash{"main": mustHeadHash(t, svc, "main"), "agent/test": mustHeadHash(t, svc, "agent/test")}
 	for _, branch := range []string{"main", "agent/test"} {
 		_, err := svc.Facts().WriteFact(ctx, branch, "kb/x.md", "---\ntype: observation\n---\n# x\n", "m", "created")
-		require.ErrorIs(t, err, ErrRepoReadOnly, "WriteFact on %s", branch)
+		require.ErrorIs(t, err, facts.ErrRepoReadOnly, "WriteFact on %s", branch)
 		_, err = svc.Facts().WriteRootFile(ctx, branch, "README.md", "hi", "m", "updated")
-		require.ErrorIs(t, err, ErrRepoReadOnly, "WriteRootFile on %s", branch)
+		require.ErrorIs(t, err, facts.ErrRepoReadOnly, "WriteRootFile on %s", branch)
 		_, err = svc.Facts().DeleteFact(ctx, branch, "kb/x.md", "m")
-		require.ErrorIs(t, err, ErrRepoReadOnly, "DeleteFact on %s", branch)
+		require.ErrorIs(t, err, facts.ErrRepoReadOnly, "DeleteFact on %s", branch)
 		_, _, err = svc.Facts().BatchWriteFacts(ctx, branch, map[string]string{"kb/y.md": "y"}, nil, "m", "created")
-		require.ErrorIs(t, err, ErrRepoReadOnly, "BatchWriteFacts on %s", branch)
+		require.ErrorIs(t, err, facts.ErrRepoReadOnly, "BatchWriteFacts on %s", branch)
 		// WriteSystemTree calls batchWriteLocked directly, below the seam,
 		// so its own gate is the only thing between a subscription and a
 		// commit through this door (N3, #433 review).
-		_, _, err = svc.WriteSystemTree(ctx, branch, map[string]string{".knomit/ontology.yaml": "id: x\n"}, "m", "created")
-		require.ErrorIs(t, err, ErrRepoReadOnly, "WriteSystemTree on %s", branch)
+		_, _, err = svc.Facts().WriteSystemTree(ctx, branch, map[string]string{".knomit/ontology.yaml": "id: x\n"}, "m", "created")
+		require.ErrorIs(t, err, facts.ErrRepoReadOnly, "WriteSystemTree on %s", branch)
 	}
 
 	// Nothing was committed: neither tip moved.
@@ -80,7 +82,7 @@ func TestReadOnlyStore_RefusesBeforeTakingTheBranchLock(t *testing.T) {
 
 	select {
 	case werr := <-done:
-		require.ErrorIs(t, werr, ErrRepoReadOnly)
+		require.ErrorIs(t, werr, facts.ErrRepoReadOnly)
 	case <-time.After(2 * time.Second):
 		t.Fatal("WriteFact blocked on the branch lock: the read-only gate is inside the locked region, not before it")
 	}

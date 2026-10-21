@@ -11,6 +11,7 @@ import (
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -18,17 +19,17 @@ import (
 // Both methods receive the RepoInstance so they can call through WithRead.
 // Production wires these via defaultTopicLister; tests inject stubs.
 type TopicLister interface {
-	ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error)
-	GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error)
+	ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]facts.DirEntry, error)
+	GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*facts.FactWithBody, error)
 }
 
 // defaultTopicLister is the production TopicLister that calls through
 // ri.WithRead to access the real store.
 type defaultTopicLister struct{}
 
-func (defaultTopicLister) ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]store.DirEntry, error) {
+func (defaultTopicLister) ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]facts.DirEntry, error) {
 	var (
-		out []store.DirEntry
+		out []facts.DirEntry
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -40,9 +41,9 @@ func (defaultTopicLister) ListDir(ctx context.Context, ri *repos.RepoInstance, b
 	return out, err
 }
 
-func (defaultTopicLister) GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*store.FactWithBody, error) {
+func (defaultTopicLister) GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*facts.FactWithBody, error) {
 	var (
-		out *store.FactWithBody
+		out *facts.FactWithBody
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {

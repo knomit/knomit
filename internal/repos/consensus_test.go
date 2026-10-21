@@ -31,6 +31,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -659,10 +660,10 @@ func TestConsensus_HostTriggersFireOnMergedFacts(t *testing.T) {
 	p.write(t, "kb/tasks/peer.md", "peer")
 	p.round(t)
 
-	hostFires := func() []store.TriggerFire {
-		rows, err := h.svc(t).Triggers().RecentTriggerFires(context.Background(), cHostAgent, 1000)
+	hostFires := func() []facts.TriggerFire {
+		rows, err := h.svc(t).FactsRepo().RecentTriggerFires(context.Background(), cHostAgent, 1000)
 		require.NoError(t, err)
-		var out []store.TriggerFire
+		var out []facts.TriggerFire
 		for _, f := range rows {
 			if f.Trigger == "seen" && f.Path == "kb/tasks/peer.md" {
 				out = append(out, f)

@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // F24: create a repo from a template held by another MOUNTED repo.
@@ -43,12 +44,12 @@ var (
 	ErrTemplateName = errors.New("invalid template name: lowercase kebab-case only")
 	// ErrTemplateNotFound: no such template folder at the source's consensus
 	// tip (or no consensus branch yet), or no folder behind a listed fact.
-	ErrTemplateNotFound = store.ErrTemplateNotFound
+	ErrTemplateNotFound = facts.ErrTemplateNotFound
 	// ErrTemplateNotRegular, ErrTemplateTooLarge, ErrTemplateLayout: see the
 	// store sentinels.
-	ErrTemplateNotRegular = store.ErrTemplateNotRegular
-	ErrTemplateTooLarge   = store.ErrTemplateTooLarge
-	ErrTemplateLayout     = store.ErrTemplateLayout
+	ErrTemplateNotRegular = facts.ErrTemplateNotRegular
+	ErrTemplateTooLarge   = facts.ErrTemplateTooLarge
+	ErrTemplateLayout     = facts.ErrTemplateLayout
 	// ErrTemplateDescribedTwice: two `part: template` facts describe the same
 	// template name. Neither is listed, and the name is not creatable until
 	// one is removed: which one is right is not knomit's call.
@@ -104,7 +105,7 @@ func (m *Manager) templateSource(ctx context.Context, ref TemplateRef, fn func(s
 		return fmt.Errorf("%w: %q has no identity yet", ErrTemplateSourceUnavailable, ref.Repo)
 	}
 	branch := svc.UpstreamBranch()
-	tip, err := svc.Triggers().UpstreamTip(ctx, branch)
+	tip, err := svc.FactsRepo().UpstreamTip(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("template source %q: read %s: %w", ref.Repo, branch, err)
 	}
@@ -125,7 +126,7 @@ func (m *Manager) ResolveTemplate(ctx context.Context, ref TemplateRef) (*Resolv
 		if tip.IsZero() {
 			return fmt.Errorf("%w: %q in %q (the repo has no consensus branch yet)", ErrTemplateNotFound, ref.Name, ref.Repo)
 		}
-		files, err := svc.Templates().TemplateFilesAt(ctx, tip, ref.Name)
+		files, err := svc.FactsRepo().TemplateFilesAt(ctx, tip, ref.Name)
 		if err != nil {
 			return fmt.Errorf("template %s/%s: %w", ref.Repo, ref.Name, err)
 		}
@@ -199,7 +200,7 @@ type describedTemplate struct {
 // templateFactsAt reads the `part: template` facts at tip, by template name.
 // A malformed one is logged and skipped, as a malformed skill is.
 func (m *Manager) templateFactsAt(ctx context.Context, svc *store.Service, tip plumbing.Hash) (map[string]*describedTemplate, error) {
-	files, err := svc.Templates().TemplateFactsAt(ctx, tip, m.deps.Cfg.OntologyRoot)
+	files, err := svc.FactsRepo().TemplateFactsAt(ctx, tip, m.deps.Cfg.OntologyRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +253,7 @@ func (m *Manager) ListTemplates(ctx context.Context, repo string) ([]TemplateInf
 						Msg("templates: two template facts describe one template; neither is listed")
 					continue
 				}
-				ok, err := svc.Templates().TemplateExistsAt(ctx, tip, tname)
+				ok, err := svc.FactsRepo().TemplateExistsAt(ctx, tip, tname)
 				if err != nil {
 					return err
 				}

@@ -8,6 +8,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // FactState classifies the result of resolving a fact at (branch, commit).
@@ -186,11 +187,11 @@ func resolveFactAtCommit(t *testing.T, b *BranchHandle, commit, path string) *Fa
 	t.Helper()
 	fh := &FactHandle{t: t, branch: b, commit: commit, path: path}
 
-	var res store.ReadFactResult
+	var res facts.ReadFactResult
 	var readErr error
 	b.repo.ri.WithRead(func(svc *store.Service) {
 		res, readErr = svc.Facts().ReadFact(
-			context.Background(), b.name, path, &store.ReadFactOpts{AtCommit: commit})
+			context.Background(), b.name, path, &facts.ReadFactOpts{AtCommit: commit})
 	})
 	if readErr != nil {
 		if isNotFoundErr(readErr) {

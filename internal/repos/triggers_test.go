@@ -18,6 +18,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -146,17 +147,17 @@ func head(t *testing.T, ri *RepoInstance) string {
 	return h
 }
 
-func fires(t *testing.T, ri *RepoInstance) []store.TriggerFire {
+func fires(t *testing.T, ri *RepoInstance) []facts.TriggerFire {
 	t.Helper()
-	rows, err := testService(t, ri).Triggers().RecentTriggerFires(context.Background(), trigAgent, 20000)
+	rows, err := testService(t, ri).FactsRepo().RecentTriggerFires(context.Background(), trigAgent, 20000)
 	require.NoError(t, err)
 	return rows
 }
 
 // firesOf is the fire rows of one trigger (run rows excluded), newest first.
-func firesOf(t *testing.T, ri *RepoInstance, name string) []store.TriggerFire {
+func firesOf(t *testing.T, ri *RepoInstance, name string) []facts.TriggerFire {
 	t.Helper()
-	var out []store.TriggerFire
+	var out []facts.TriggerFire
 	for _, f := range fires(t, ri) {
 		if f.Trigger == name {
 			out = append(out, f)
@@ -165,11 +166,11 @@ func firesOf(t *testing.T, ri *RepoInstance, name string) []store.TriggerFire {
 	return out
 }
 
-func runRows(t *testing.T, ri *RepoInstance) []store.TriggerFire {
+func runRows(t *testing.T, ri *RepoInstance) []facts.TriggerFire {
 	t.Helper()
-	var out []store.TriggerFire
+	var out []facts.TriggerFire
 	for _, f := range fires(t, ri) {
-		if f.Outcome == store.TriggerOutcomeRun {
+		if f.Outcome == facts.TriggerOutcomeRun {
 			out = append(out, f)
 		}
 	}
@@ -178,12 +179,12 @@ func runRows(t *testing.T, ri *RepoInstance) []store.TriggerFire {
 
 func watermarks(t *testing.T, ri *RepoInstance) map[string]string {
 	t.Helper()
-	wms, err := testService(t, ri).Triggers().TriggerWatermarks(context.Background(), trigAgent)
+	wms, err := testService(t, ri).FactsRepo().TriggerWatermarks(context.Background(), trigAgent)
 	require.NoError(t, err)
 	return wms
 }
 
-func pathsOf(rows []store.TriggerFire) []string {
+func pathsOf(rows []facts.TriggerFire) []string {
 	out := []string{}
 	for _, r := range rows {
 		out = append(out, r.Path)
@@ -308,7 +309,7 @@ func TestDispatch_MergeAddModifyDeleteOncePerPath(t *testing.T) {
 	waitTriggerHead(t, ri, h)
 
 	got := firesOf(t, ri, "all")[:len(firesOf(t, ri, "all"))-before]
-	byPath := map[string]store.TriggerFire{}
+	byPath := map[string]facts.TriggerFire{}
 	for _, f := range got {
 		byPath[f.Path] = f
 	}
@@ -765,7 +766,7 @@ func TestDispatch_OneRunRowPerRun(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	all := fires(t, ri)
 	require.Len(t, all, 1, "exactly one row: the run row; got %+v", all)
-	require.Equal(t, store.TriggerOutcomeRun, all[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeRun, all[0].Outcome)
 	require.Equal(t, h0, all[0].RangeFrom)
 	require.Equal(t, last, all[0].RangeTo)
 	require.Equal(t, 5, all[0].Paths)
@@ -825,11 +826,11 @@ func TestDispatch_NonlinearRewindDiffs(t *testing.T) {
 	// history) and a new commit lands on top.
 	require.NoError(t, storetest.SetRef(svc, "refs/heads/"+trigAgent, base))
 	hC := write(t, ri, "kb/tasks/new.md")
-	linear, err := svc.Triggers().IsAncestor(context.Background(), plumbing.NewHash(hA), plumbing.NewHash(hC))
+	linear, err := svc.FactsRepo().IsAncestor(context.Background(), plumbing.NewHash(hA), plumbing.NewHash(hC))
 	require.NoError(t, err)
 	require.False(t, linear, "fixture: the advance must be nonlinear")
 
-	got := map[string]store.TriggerFire{}
+	got := map[string]facts.TriggerFire{}
 	for _, f := range firesOf(t, ri, "all") {
 		if f.RangeFrom == hA {
 			got[f.Path] = f
@@ -953,11 +954,11 @@ func TestDispatch_IfThrowsOrTimesOutIsFalse(t *testing.T) {
 	require.Equal(t, h, watermarks(t, ri)["loops"])
 	th := firesOf(t, ri, "throws")
 	require.Len(t, th, 1)
-	require.Equal(t, store.TriggerOutcomeIfError, th[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeIfError, th[0].Outcome)
 	require.Contains(t, th[0].Error, "deeper", "the JS error is recorded verbatim")
 	lo := firesOf(t, ri, "loops")
 	require.Len(t, lo, 1)
-	require.Equal(t, store.TriggerOutcomeIfTimeout, lo[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeIfTimeout, lo[0].Outcome)
 	require.Len(t, firesOf(t, ri, "all"), 1)
 	st := ri.triggers.stats.view("throws")
 	require.Equal(t, int64(1), st.IfError)
@@ -977,10 +978,10 @@ func TestDispatch_UnparseableFact(t *testing.T) {
 	waitTriggerHead(t, ri, r.CommitHash)
 	all := firesOf(t, ri, "all")
 	require.Len(t, all, 1)
-	require.Equal(t, store.TriggerOutcomeUnparseable, all[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeUnparseable, all[0].Outcome)
 	rf := firesOf(t, ri, "reads-fact")
 	require.Len(t, rf, 1)
-	require.Equal(t, store.TriggerOutcomeIfError, rf[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeIfError, rf[0].Outcome)
 }
 
 // ---- emit

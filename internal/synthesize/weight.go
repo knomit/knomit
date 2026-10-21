@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // SourceWeight holds the confidence and sources count from a single source fact,
@@ -71,7 +71,7 @@ const derivedSourcesFloor = 1
 // reads nothing and reports a fact resting on no evidence at all. readable is
 // returned so a destructive caller can tell "these facts had no corroborations"
 // apart from "I could not read the facts I am about to delete".
-func computeTransfer(ctx context.Context, gs store.FactIndex, agentBranch, localRepoID string, sourcePaths []string) (weight float64, pooled int, readable int) {
+func computeTransfer(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) (weight float64, pooled int, readable int) {
 	// pooled and readable describe the DIRECT sources only — those are the
 	// facts a merge is about to delete, and the lineage beneath them is not
 	// being deleted with them. The weight, by contrast, composes through that
@@ -139,7 +139,7 @@ const evidenceMaxDepth = 10
 //
 // Each path is visited at most once, which is what makes shared ancestry count
 // once and also breaks ref cycles.
-func collectEvidence(ctx context.Context, gs store.FactIndex, agentBranch, localRepoID string, sourcePaths []string) []SourceWeight {
+func collectEvidence(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) []SourceWeight {
 	var out []SourceWeight
 	// resolved memoizes each path's OUTCOME, not merely that it was visited.
 	// Caching the visit alone conflates "already counted" with "resolved": a
@@ -227,7 +227,7 @@ func localLineageRefs(f fact.Fact, localRepoID string) []string {
 // readFactAt reads and parses one fact, reporting whether it resolved. A
 // source that cannot be read or parsed contributes nothing — the same
 // tolerance the pre-walk implementation had.
-func readFactAt(ctx context.Context, gs store.FactIndex, agentBranch, path string) (fact.Fact, bool) {
+func readFactAt(ctx context.Context, gs *facts.Index, agentBranch, path string) (fact.Fact, bool) {
 	readResult, err := gs.ReadFact(ctx, agentBranch, path, nil)
 	if err != nil {
 		return fact.Fact{}, false
@@ -242,7 +242,7 @@ func readFactAt(ctx context.Context, gs store.FactIndex, agentBranch, path strin
 // computeWeight returns only the evidence weight, for SHARE-type writes: a
 // derivation whose sources stay alive sets its own sources to 1 and has no
 // count to pool (see computeTransfer for why).
-func computeWeight(ctx context.Context, gs store.FactIndex, agentBranch, localRepoID string, sourcePaths []string) float64 {
+func computeWeight(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) float64 {
 	w, _, _ := computeTransfer(ctx, gs, agentBranch, localRepoID, sourcePaths)
 	return w
 }
@@ -252,7 +252,7 @@ func computeWeight(ctx context.Context, gs store.FactIndex, agentBranch, localRe
 // machine origin after previewing discovery/synthesis proposals) carries the
 // same provenance weight the auto-apply pipeline would have computed.
 // sourcePaths must be local fact paths.
-func ComputeEvidenceWeight(ctx context.Context, gs store.FactIndex, agentBranch, localRepoID string, sourcePaths []string) float64 {
+func ComputeEvidenceWeight(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) float64 {
 	return computeWeight(ctx, gs, agentBranch, localRepoID, sourcePaths)
 }
 

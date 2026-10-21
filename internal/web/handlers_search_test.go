@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -35,8 +36,8 @@ func TestHandleSearch_ReturnsHALCollection(t *testing.T) {
 	provider := &stubSearchProvider{
 		results: []store.SearchResult{
 			{
-				FactWithBody: store.FactWithBody{
-					FactRecord: store.FactRecord{
+				FactWithBody: facts.FactWithBody{
+					FactRecord: facts.FactRecord{
 						Path:       "know/ai/ml/abc123.md",
 						Title:      "Attention Is All You Need",
 						Type:       "observation",
@@ -48,8 +49,8 @@ func TestHandleSearch_ReturnsHALCollection(t *testing.T) {
 				Score: 87.5,
 			},
 			{
-				FactWithBody: store.FactWithBody{
-					FactRecord: store.FactRecord{
+				FactWithBody: facts.FactWithBody{
+					FactRecord: facts.FactRecord{
 						Path:       "know/ai/nlp/def456.md",
 						Title:      "BERT Overview",
 						Type:       "claim",
@@ -331,8 +332,8 @@ func TestHandleSearch_MotifsOnTheWire(t *testing.T) {
 	provider := &stubSearchProvider{
 		results: []store.SearchResult{
 			{
-				FactWithBody: store.FactWithBody{
-					FactRecord: store.FactRecord{
+				FactWithBody: facts.FactWithBody{
+					FactRecord: facts.FactRecord{
 						Path:   "kb/a.md",
 						Title:  "Carries a motif",
 						Motifs: []string{"a-b"},
@@ -340,8 +341,8 @@ func TestHandleSearch_MotifsOnTheWire(t *testing.T) {
 				},
 			},
 			{
-				FactWithBody: store.FactWithBody{
-					FactRecord: store.FactRecord{
+				FactWithBody: facts.FactWithBody{
+					FactRecord: facts.FactRecord{
 						Path:  "kb/b.md",
 						Title: "Carries none",
 					},

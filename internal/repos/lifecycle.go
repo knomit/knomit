@@ -987,7 +987,7 @@ func (m *Manager) initTemplate(ctx context.Context, spec CreateSpec, dbPath stri
 // inherits it (WithAgentTrace refuses a ctx that already carries a set).
 func writeTemplate(ctx context.Context, svc *store.Service, branch string, rt *ResolvedTemplate) error {
 	tctx := store.WithTrailers(ctx, rt.Trailers())
-	if _, _, err := svc.WriteSystemTree(tctx, branch, rt.Files,
+	if _, _, err := svc.Facts().WriteSystemTree(tctx, branch, rt.Files,
 		"init: create knowledge base from template "+rt.Ref.Name, "created"); err != nil {
 		return fmt.Errorf("write template %s/%s: %w", rt.Ref.Repo, rt.Ref.Name, err)
 	}

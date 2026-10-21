@@ -13,6 +13,11 @@ import (
 	"knomit/internal/store/vocab"
 )
 
+// factsRepo is the embedded facts.Repo; the alias gives the embedded field a
+// name that does not collide with the embedded *vcs.Repo's `Repo`. Unexported
+// parent naming, not a re-export; E7 replaces the embed with a named field.
+type factsRepo = facts.Repo
+
 // This file is the parent's seam to the vcs child (internal/vcs): the git
 // layer every cluster above it reaches UP to — branches, commits, the branch
 // locks, signing, trailers, the commit log and path history.
@@ -30,7 +35,7 @@ import (
 // the public surface of package store does not move.
 type repoHandler struct {
 	*vcs.Repo
-	*factsRepo // the facts child's methods on the same handle; see facts_seam.go
+	*factsRepo // the facts child's methods on the same handle; see the factsRepo alias above
 	*mergeRepo // the merge child's methods on the same handle; see merge_seam.go
 	*syncRepo  // the remotesync child's methods on the same handle; see remotesync_seam.go
 }

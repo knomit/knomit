@@ -9,13 +9,14 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // makeSearchResult builds a store.SearchResult for test fixtures.
 func makeSearchResult(path, title, body, typ, origin string, domains, entities []string, confidence float64, sources int) store.SearchResult {
 	return store.SearchResult{
-		FactWithBody: store.FactWithBody{
-			FactRecord: store.FactRecord{
+		FactWithBody: facts.FactWithBody{
+			FactRecord: facts.FactRecord{
 				Path:       path,
 				Title:      title,
 				Type:       typ,

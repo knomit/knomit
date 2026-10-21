@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -108,8 +109,8 @@ func TestHandleHALDomains_UnknownRepo_Returns404(t *testing.T) {
 func TestHandleHALDomainFacts_ReturnsCollection(t *testing.T) {
 	provider := &stubDomainsProvider{
 		facts: []store.SearchResult{
-			{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "know/ai/a.md", Title: "AI Fact", Type: "observation", Confidence: 0.9}}},
-			{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "know/ai/b.md", Title: "AI Fact 2", Type: "hypothesis", Confidence: 0.7}}},
+			{FactWithBody: facts.FactWithBody{FactRecord: facts.FactRecord{Path: "know/ai/a.md", Title: "AI Fact", Type: "observation", Confidence: 0.9}}},
+			{FactWithBody: facts.FactWithBody{FactRecord: facts.FactRecord{Path: "know/ai/b.md", Title: "AI Fact 2", Type: "hypothesis", Confidence: 0.7}}},
 		},
 	}
 	s := &Server{

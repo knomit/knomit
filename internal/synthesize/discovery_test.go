@@ -84,7 +84,7 @@ func TestApplyDiscoveredProposals_ConfidenceGate(t *testing.T) {
 		{Path: "kb/at.md", Title: "at", Body: "at", Type: "synthesis", Domain: []string{"x"}, Confidence: 0.6, Refs: []string{"kb/a.md", "kb/b.md"}},
 	}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, gates, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, gates, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "only the proposal at-threshold should survive: %v", written)
 	// Path normalization rewrites the basename to a UUID; the surviving fact is
@@ -128,7 +128,7 @@ func TestApplyDiscoveredProposals_RefsMustCiteAtLeastTwoSeeds(t *testing.T) {
 		Path: "kb/skipped.md", Title: "x", Body: "x", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "a proposal citing one seed of two must be rejected")
 }
@@ -158,7 +158,7 @@ func TestApplyDiscoveredProposals_OriginDiscovered(t *testing.T) {
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 
@@ -194,7 +194,7 @@ func TestApplyDiscoveredProposals_TypeMustMatchDirection(t *testing.T) {
 		Path: "kb/bad.md", Title: "h", Body: "h", Type: "hypothesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "type/direction mismatch must reject the proposal")
 }
@@ -416,12 +416,12 @@ func TestApplyDiscoveredProposals_BackwardBlastGate(t *testing.T) {
 	}}
 
 	// Threshold=1 → reject (a and b have zero dependents).
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 1}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 1}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "backward proposal must be rejected when seed has no live dependents")
 
 	// Threshold=0 → accept.
-	written, err = applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 0}, branch, bareRefFixture, "kb", nil)
+	written, err = applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 0}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "with threshold=0 the proposal should land: %v", written)
 }
@@ -483,7 +483,7 @@ func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
 		}
 	}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(),
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		mockEmb, payload, proposals, gates, branch, bareRefFixture, "kb", onProgress)
 	require.NoError(t, err)
 	require.Len(t, written, 1,
@@ -520,7 +520,7 @@ func TestApplyDiscoveredProposals_NoEmbedder_NoDedup(t *testing.T) {
 		Path: "kb/d.md", Title: "d", Body: "d", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, DiscoveryGates{ConfidenceThreshold: 0.5, DedupThreshold: 999}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{ConfidenceThreshold: 0.5, DedupThreshold: 999}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 }

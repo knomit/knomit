@@ -113,7 +113,7 @@ func TestApplyDistillDecisions_SourcesIsOne_NotPooled(t *testing.T) {
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md", "kb/technology/c.md"},
 	}
-	stats, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.Search(), []distillFact{df}, nil,
+	stats, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []distillFact{df}, nil,
 		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Synthesized)
@@ -144,7 +144,7 @@ func TestApplyDistillDecisions_EvidenceWeightStillPoolsRefs(t *testing.T) {
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.Search(), []distillFact{df}, nil,
+	_, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []distillFact{df}, nil,
 		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 
@@ -180,7 +180,7 @@ func TestApplyDiscoveredProposals_SourcesIsOne(t *testing.T) {
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
 
-	written, err := applyDiscoveredProposals(ctx, svc.Facts(), svc.Search(), nil,
+	written, err := applyDiscoveredProposals(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil,
 		payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
@@ -209,7 +209,7 @@ func TestApplyReflectDecisions_ProposeSourcesIsOne(t *testing.T) {
 		TransitionPaths: []string{"kb/technology/a.md"},
 		Refs:            []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}}}
-	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.Search(), result, sess,
+	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), result, sess,
 		bareRefFixture, ri.OntologyRoot(), 0.95, nil))
 
 	found := methodologyFactPaths(t, svc, branch)
@@ -253,7 +253,7 @@ func TestApplyPruneDecisions_MergePoolsSubsumedSources(t *testing.T) {
 			Sources: 1, // the model lowballs; the server must not trust it
 		},
 	}}
-	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
+	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
 		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged)
@@ -282,7 +282,7 @@ func TestApplyPruneDecisions_MergeExcludesHypothesisSources(t *testing.T) {
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
 		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
@@ -305,7 +305,7 @@ func TestApplyPruneDecisions_MergeWarnsWhenSourcesUnreadable(t *testing.T) {
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb", nil)
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
@@ -423,7 +423,7 @@ func TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable(t *testing
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb", nil)
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // TestCorruptObject_ProducesReachabilityError asserts that
@@ -20,11 +21,11 @@ func TestCorruptObject_ProducesReachabilityError(t *testing.T) {
 	agent.Write("kb/x.md", Fact("x"), "add x")
 
 	// Look up the blob hash via the production API.
-	var res store.ReadFactResult
+	var res facts.ReadFactResult
 	var err error
 	r.ri.WithRead(func(svc *store.Service) {
 		res, err = svc.Facts().ReadFact(context.Background(), "agent/test", "kb/x.md",
-			&store.ReadFactOpts{WithHash: true})
+			&facts.ReadFactOpts{WithHash: true})
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, res.BlobHash)

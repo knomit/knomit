@@ -51,6 +51,7 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 	stats, err := ApplyPruneDecisions(
 		context.Background(),
 		svc.Facts(),
+		svc.FactsRepo(),
 		svc.Search(),
 		nil,    // no per-fact decisions
 		merges, // the hypothesis-type merge
@@ -113,6 +114,7 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 	stats, err := ApplyPruneDecisions(
 		context.Background(),
 		svc.Facts(),
+		svc.FactsRepo(),
 		svc.Search(),
 		nil, merges,
 		"review-test",

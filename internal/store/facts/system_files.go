@@ -14,24 +14,6 @@ import (
 	"knomit/internal/fact"
 )
 
-// SystemFileIndex reads one file under fact.PrivateRoot (.knomit/) by its
-// exact path, out of one commit's own tree. It is the READ side of the system
-// root that the fact tools open (user ruling 2026-10-06): knomit_explain, the
-// REST fact GET and the refs gate use it. Nothing here writes, lists or
-// indexes: a system file is reachable by exact path only.
-type SystemFileIndex interface {
-	// SystemFileAt reads path at commit, or at the tip of branch when commit
-	// is "". found is false when the path is absent there OR names a
-	// directory or a symlink — only a file is a system file, and a symlink is
-	// never followed. Content is read only when the
-	// blob is at most maxContent bytes (pass 0 for none); a larger file comes
-	// back with Truncated set and no Content.
-	//
-	// path must satisfy fact.IsSystemFilePath; anything else is an error, so a
-	// caller cannot turn this into a reader for kb/.drafts/ or .github/.
-	SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (sf SystemFile, found bool, err error)
-}
-
 // isSystemFileMode is THE test for "this tree entry under .knomit/ is a file
 // knomit reads": SystemFileAt, the skill loader (skills.go), and in
 // triggers.go OntologyAtCommit, privateFileAt (ScriptAt, RecipeAt) and
@@ -57,13 +39,17 @@ type SystemFile struct {
 	Truncated bool
 }
 
-// SystemFileAt implements SystemFileIndex for FactIndex: the same reader as
-// Service.SystemFiles, over the same repo handle.
-func (fi *Index) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {
-	return fi.rh.SystemFileAt(ctx, branch, commit, path, maxContent)
-}
-
-// SystemFileAt implements SystemFileIndex.
+// SystemFileAt reads path at commit, or at the tip of branch when commit is
+// "". found is false when the path is absent there OR names a directory or a
+// symlink: only a file is a system file, and a symlink is never followed.
+// Content is read only when the blob is at most maxContent bytes (pass 0 for
+// none); a larger file comes back with Truncated set and no Content.
+//
+// path must satisfy fact.IsSystemFilePath; anything else is an error, so a
+// caller cannot turn this into a reader for kb/.drafts/ or .github/. This is
+// the READ side of the system root that the fact tools open (user ruling
+// 2026-10-06): knomit_explain, the REST fact GET and the refs gate use it.
+// Nothing here writes, lists or indexes.
 func (rh *Repo) SystemFileAt(ctx context.Context, branch, commit, path string, maxContent int64) (SystemFile, bool, error) {
 	if !fact.IsSystemFilePath(path) {
 		return SystemFile{}, false, fmt.Errorf("%w: system file: %q is not a file path under %s/", ErrInvalidPath, path, fact.PrivateRoot)

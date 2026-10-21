@@ -18,7 +18,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -278,7 +278,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// 4. Read and parse existing fact.
 		// WithHash: the blob read here is the precondition the write below
 		// commits against, so nothing that lands in between is overwritten.
-		readResult, err := s.facts.ReadFact(ctx, writeBranch, file, &store.ReadFactOpts{WithHash: true})
+		readResult, err := s.facts.ReadFact(ctx, writeBranch, file, &facts.ReadFactOpts{WithHash: true})
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 		}
@@ -306,7 +306,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if ifCommit != "" {
-			at, rerr := s.facts.ReadFact(ctx, writeBranch, file, &store.ReadFactOpts{AtCommit: ifCommit})
+			at, rerr := s.facts.ReadFact(ctx, writeBranch, file, &facts.ReadFactOpts{AtCommit: ifCommit})
 			if rerr != nil || at.Content != content {
 				reason := "the file changed since that commit"
 				if rerr != nil {
@@ -454,7 +454,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// line (checkMomentName above), so it cannot open a paragraph.
 		commitMsg := fmt.Sprintf("update(%s): %s", momentName, fact.Title)
 		writeRes, err := s.facts.WriteFactIfUnchanged(ctx, writeBranch, file, serialized, commitMsg, "update", readResult.BlobHash)
-		if errors.Is(err, store.ErrFactChanged) {
+		if errors.Is(err, facts.ErrFactChanged) {
 			reason := "the fact changed while this update was being applied"
 			if ifCommit != "" {
 				reason = fmt.Sprintf("if_commit %s does not match: %s", ifCommit, reason)

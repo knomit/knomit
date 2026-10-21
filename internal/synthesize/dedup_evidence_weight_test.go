@@ -87,7 +87,7 @@ func TestDedupCluster_MergeRecomputesEvidenceWeightFromPooledRefs(t *testing.T) 
 			"'greater than stale' is not the assertion")
 
 	d := env.deps()
-	surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.Search(),
+	surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 		env.dedupThreshold(), reviewTool, d.OnProgress, env.branch, fact.ID12(env.ri.ID()))
 	require.NoError(t, err)
 

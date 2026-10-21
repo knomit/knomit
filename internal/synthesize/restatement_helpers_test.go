@@ -212,6 +212,7 @@ func (e *restatementEnv) deps() Deps {
 	return Deps{
 		RI:          e.ri,
 		Facts:       e.svc.Facts(),
+		Files:       e.svc.FactsRepo(),
 		Search:      e.svc.Search(),
 		Pipeline:    e.svc.Pipeline(),
 		Branches:    e.svc.Branches(),

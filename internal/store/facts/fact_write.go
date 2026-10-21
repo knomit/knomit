@@ -552,6 +552,11 @@ func (fi *Index) WriteRootFile(ctx context.Context, branch, path, content, messa
 // DeleteFact deletes a fact. Index sync happens inside deleteFile via
 // rh.NotifyCommit.
 func (fi *Index) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
+	if h := fi.deleteFault.Load(); h != nil {
+		if err := (*h)(path); err != nil {
+			return "", err
+		}
+	}
 	commitHash, err := fi.deleteFile(ctx, branch, path, message, "retract")
 	if err != nil {
 		return "", fmt.Errorf("DeleteFact git: %w", err)

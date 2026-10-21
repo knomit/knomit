@@ -60,7 +60,7 @@ func TestReview_AWriteThatFailsTheOntologyIsRefusedAtTheSource(t *testing.T) {
 	before := read(legacy)
 
 	sink, warns := collectWarns()
-	_, err = ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(),
+	_, err = ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(),
 		[]PruneDecision{{Path: legacy, Action: "update", Confidence: 0.5}},
 		[]MergeEntry{{
 			Paths:  []string{a, b},

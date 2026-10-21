@@ -69,7 +69,7 @@ func TestDedupCluster_SurvivorDoesNotCiteItself(t *testing.T) {
 				results:     []store.SearchResult{searchHit(winnerPath), searchHit(loserPath)},
 			}
 
-			surviving, err := dedupCluster(ctx, cluster, svc.Facts(), idx, 0.92, "test",
+			surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",
 				func(ProgressEvent) {}, branch, selfRefRepoID)
 			require.NoError(t, err)
 			require.Len(t, surviving, 1)

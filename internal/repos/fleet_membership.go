@@ -1158,7 +1158,7 @@ func (m *Manager) fleetBranchPublished(ctx context.Context, ri *RepoInstance) (b
 			rerr = err
 			return
 		}
-		ok, rerr = svc.Triggers().IsAncestor(ctx, plumbing.NewHash(agent), plumbing.NewHash(main))
+		ok, rerr = svc.FactsRepo().IsAncestor(ctx, plumbing.NewHash(agent), plumbing.NewHash(main))
 	}); err != nil {
 		return false, err
 	}

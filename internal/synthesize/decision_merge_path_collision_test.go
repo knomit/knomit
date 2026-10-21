@@ -63,7 +63,7 @@ func TestApplyPruneDecisions_MergeDoesNotOverwriteAnExistingFact(t *testing.T) {
 		},
 	}}
 
-	_, err = ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
+	_, err = ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
 		"review-test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
@@ -135,7 +135,7 @@ func TestApplyPruneDecisions_MergeStillWritesUnderANormalizedPath(t *testing.T) 
 		},
 	}}
 
-	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
+	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
 		"review-test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged, "the merge must still commit")

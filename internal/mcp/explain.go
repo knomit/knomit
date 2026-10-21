@@ -13,6 +13,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
@@ -164,7 +165,7 @@ const explainKindSystemFile = "system_file"
 
 // readFileNode reads a system file at commit and relates it to the branch
 // tip. ok is false when the file is not in commit's tree.
-func readFileNode(ctx context.Context, s mcpStore, branch, path, commit string, maxContent int64) (sf store.SystemFile, superseded, deleted, ok bool, err error) {
+func readFileNode(ctx context.Context, s mcpStore, branch, path, commit string, maxContent int64) (sf facts.SystemFile, superseded, deleted, ok bool, err error) {
 	sf, ok, err = s.files.SystemFileAt(ctx, branch, commit, path, maxContent)
 	if err != nil || !ok {
 		return sf, false, false, false, err
@@ -343,9 +344,9 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 // version before `commit` so the node still surfaces its content. ok is false
 // only when no version can be read or parsed.
 func readFactVersion(ctx context.Context, s mcpStore, branch, path, commit string) (fact.Fact, bool) {
-	res, err := s.facts.ReadFact(ctx, branch, path, &store.ReadFactOpts{AtCommit: commit})
+	res, err := s.facts.ReadFact(ctx, branch, path, &facts.ReadFactOpts{AtCommit: commit})
 	if err != nil {
-		res, err = s.facts.ReadFact(ctx, branch, path, &store.ReadFactOpts{BeforeCommit: commit})
+		res, err = s.facts.ReadFact(ctx, branch, path, &facts.ReadFactOpts{BeforeCommit: commit})
 		if err != nil {
 			return fact.Fact{}, false
 		}
@@ -715,8 +716,8 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 		return mcpgo.NewToolResultError(fmt.Sprintf("seen paths error: %v", err)), nil
 	}
 
-	// facts holds explainFactEntry and explainFileEntry nodes, in walk order.
-	var facts []any
+	// factEntries holds explainFactEntry and explainFileEntry nodes, in walk order.
+	var factEntries []any
 	var newSeen []string
 	var newQueue []store.QueueItem
 
@@ -800,9 +801,9 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 					// the citation rather than drop it: deleted, no blob,
 					// whatever the tip holds — there is no pinned version to
 					// compare with the tip.
-					sf, fsup, fdel = store.SystemFile{}, false, true
+					sf, fsup, fdel = facts.SystemFile{}, false, true
 				}
-				facts = append(facts, explainFileEntry{
+				factEntries = append(factEntries, explainFileEntry{
 					Path: item.Path, Commit: item.CommitHash, Depth: item.SortKey,
 					Kind: explainKindSystemFile, Blob: sf.Blob, Size: sf.Size,
 					Superseded: fsup, Deleted: fdel, Summary: true,
@@ -843,7 +844,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 				}
 			}
 
-			facts = append(facts, explainFactEntry{
+			factEntries = append(factEntries, explainFactEntry{
 				Path:       item.Path,
 				Commit:     item.CommitHash,
 				Depth:      item.SortKey,
@@ -861,7 +862,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 			})
 		}
 
-		if len(facts) > 0 {
+		if len(factEntries) > 0 {
 			break
 		}
 		// All items failed — retry.
@@ -889,7 +890,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 		cursorOut = nil
 	}
 	out, err := json.Marshal(map[string]any{
-		"facts":    facts,
+		"facts":    factEntries,
 		"cursor":   cursorOut,
 		"has_more": hasMore,
 	})

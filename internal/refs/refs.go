@@ -55,6 +55,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // ResolveFunc reports whether a ref target resolves at the commit this write
@@ -109,10 +110,10 @@ func (g Gate) WithFiles(fileExists ResolveFunc) Gate {
 }
 
 // FromSystemFiles is the file resolver for a caller holding the store's
-// SystemFileIndex: the path must name a FILE (not a directory) under .knomit/
+// facts.Repo: the path must name a FILE (not a directory) under .knomit/
 // at the tip of branch — the commit this write is about to become the child
 // of, i.e. the referrer's own commit, exactly as FromFactQuery.
-func FromSystemFiles(sf store.SystemFileIndex, branch string) ResolveFunc {
+func FromSystemFiles(sf *facts.Repo, branch string) ResolveFunc {
 	return func(ctx context.Context, path string) (bool, error) {
 		_, found, err := sf.SystemFileAt(ctx, branch, "", path, 0)
 		return found, err

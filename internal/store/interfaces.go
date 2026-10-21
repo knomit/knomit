@@ -7,47 +7,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
+	"knomit/internal/store/facts"
 	"knomit/internal/store/vocab"
 )
-
-// FactIndex is the interface for fact storage. Implemented by *facts.Index.
-type FactIndex interface {
-	// SystemFileIndex is here so a holder of the fact store can resolve a
-	// ref to a .knomit/ file against the SAME Service (and so the same branch
-	// tip) it resolves facts with — the synthesize pipelines' ref gates take
-	// both from one FactIndex resolved under one read lock.
-	SystemFileIndex
-	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
-	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
-	// WriteFactIfUnchanged is WriteFact that commits only if path's blob on
-	// the branch tip is still expectBlob, checked inside the write lock;
-	// otherwise it writes nothing and returns an error wrapping ErrFactChanged.
-	WriteFactIfUnchanged(ctx context.Context, branch, path, content, message, operation, expectBlob string) (WriteFactResult, error)
-	// WriteRootFile writes a root-level non-fact file (e.g. README.md)
-	// PRESERVING CASE. WriteFact lowercases, which is correct for fact paths
-	// and wrong for a filename an external reader looks for by exact name.
-	WriteRootFile(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
-	// BatchWriteFacts applies writes and deletions as ONE commit. Pass deletes
-	// to retract facts atomically with the writes that supersede them — a
-	// separate DeleteFact call would be a second commit that can land without
-	// its partner (see the learn-subsume path in internal/mcp/learn.go).
-	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
-	// BatchWriteFactsMustExist is BatchWriteFacts with a precondition: every
-	// path in mustExist must exist at the branch tip, checked INSIDE the
-	// branch write lock; otherwise nothing is written and the error is a
-	// *RetractMissingError. The F04 move (knomit_learn `retract`) uses it.
-	BatchWriteFactsMustExist(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
-	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
-	FactExists(ctx context.Context, branch, path string) (bool, error)
-	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)
-	ListAll(ctx context.Context, branch string) ([]string, error)
-	ListAllWithHash(ctx context.Context, branch string) (paths []string, blobHashes []string, err error)
-	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
-	// ChangesUnder reports each fact path under a folder that differs between
-	// the tree at q.Since and the tree at head: a read of two trees, no clock,
-	// no write (changes.go).
-	ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error)
-}
 
 //go:generate go run go.uber.org/mock/mockgen -destination=../synthesize/mock_search_index_test.go -package=synthesize knomit/internal/store SearchIndex
 
@@ -69,7 +31,7 @@ type FactQuery interface {
 	// CTE over the whole corpus to do it; callers that want only the integer
 	// should not buy the aggregate.
 	LiveFactCount(ctx context.Context, branch string) (int, error)
-	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
+	GetByPath(ctx context.Context, branch, path string) (*facts.FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
 	Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error)
 	// Highlights returns only the highlight rows Stats would have returned,

@@ -248,7 +248,7 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 			epistemicSeed(kindObs),
 			{File: kindPol, Kind: string(fact.Pragmatic), Type: string(fact.Policy)},
 		}
-		surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.Search(),
+		surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 			env.dedupThreshold(), reviewTool, func(ProgressEvent) {}, env.branch, testLocalRepoID)
 		require.NoError(t, err)
 		require.Len(t, surviving, 2, "an observation and a policy are never near-duplicates to mechanical dedup")
@@ -272,7 +272,7 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 		}
 		require.NotNil(t, mixed, "PREMISE: the widened cluster must hold the policy")
 
-		surviving, err := dedupCluster(ctx, mixed, env.svc.Facts(), env.svc.Search(),
+		surviving, err := dedupCluster(ctx, mixed, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 			env.dedupThreshold(), reviewTool, func(ProgressEvent) {}, env.branch, testLocalRepoID)
 		require.NoError(t, err)
 		requireParsedOnBranch(t, env.svc, env.branch, kindPol, fact.Pragmatic, fact.Policy)
@@ -298,7 +298,7 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 		env := kindEnv(t, widenedNeighborKinds)
 		rec := &recordingSearch{SearchQuery: env.svc.Search()}
 		_, err := dedupCluster(ctx, []factForLLM{epistemicSeed(kindObs), epistemicSeed(kindObs2)},
-			env.svc.Facts(), rec, env.dedupThreshold(), reviewTool, func(ProgressEvent) {}, env.branch, testLocalRepoID)
+			env.svc.Facts(), env.svc.FactsRepo(), rec, env.dedupThreshold(), reviewTool, func(ProgressEvent) {}, env.branch, testLocalRepoID)
 		require.NoError(t, err)
 		require.NotEmpty(t, rec.kinds)
 		for _, k := range rec.kinds {
@@ -323,7 +323,7 @@ func TestSameKnownKind_FailsClosed(t *testing.T) {
 		env := kindEnv(t, nil)
 		requireUnfilteredSearchFinds(t, env, kindObs, kindObs2, store.SearchOptions{MinSimilarity: env.dedupThreshold()})
 		surviving, err := dedupCluster(context.Background(),
-			[]factForLLM{{File: kindObs}, {File: kindObs2}}, env.svc.Facts(), env.svc.Search(),
+			[]factForLLM{{File: kindObs}, {File: kindObs2}}, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 			env.dedupThreshold(), reviewTool, func(ProgressEvent) {}, env.branch, testLocalRepoID)
 		require.NoError(t, err)
 		require.Len(t, surviving, 2)

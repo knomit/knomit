@@ -239,97 +239,11 @@ type CommitInfo struct {
 	Parents     []plumbing.Hash
 }
 
-// TriggerIndex is the store surface of the trigger dispatcher.
-type TriggerIndex interface {
-	// DiffFacts is the two-tree diff of the whole ontology root between two
-	// commits with NO ancestry check (changes.go): the dispatcher's advance
-	// may be a rewind replay, which ChangesUnder refuses.
-	DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]vcs.PathChange, error)
-	// OntologyAtCommit reads the ontology file from the commit's own tree,
-	// choosing the path exactly as the store does (the first of
-	// fact.OntologyPathsNewestFirst that exists as a file), and returns its
-	// path, blob hash and content.
-	OntologyAtCommit(ctx context.Context, commit plumbing.Hash) (path, blob string, data []byte, err error)
-	// ScriptAt reads `.knomit/triggers/<name>.js` from the commit's own tree
-	// (the same rule as OntologyAtCommit: a directory or an unreadable blob is
-	// an error, never "absent"), returning its blob hash — the script cache's
-	// key — and content. ErrNoScriptAtCommit when the file is not there.
-	ScriptAt(ctx context.Context, commit plumbing.Hash, name string) (blob string, data []byte, err error)
-	// RecipeAt reads `.knomit/recipes/<name>.js` from the commit's own tree —
-	// the dispatcher passes the tip of main, never the agent branch (user
-	// ruling D1) — with the same rules as ScriptAt. ErrNoRecipeAtCommit when
-	// the file is not there.
-	RecipeAt(ctx context.Context, commit plumbing.Hash, name string) (blob string, data []byte, err error)
-	// GuidanceAt reads one guidance file (F23), file being the repository
-	// path fact.GuidanceFile returns, from the commit's own tree — callers
-	// pass the tip of the consensus branch, the commit they read the ontology
-	// at, never the agent branch. ErrNoGuidanceAtCommit when absent;
-	// ErrGuidanceUnusable (wrapped, naming why) unless it is a regular UTF-8
-	// text file of at most fact.MaxGuidanceBytes.
-	GuidanceAt(ctx context.Context, commit plumbing.Hash, file string) (blob string, data []byte, err error)
-	// Toucher finds the commit that introduced the blob path carries at head:
-	// git's own history simplification, with no clock. See the method.
-	Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error)
-	// TreeReader returns a reader that caches decoded trees across calls, for
-	// a run that reads many paths of the same few commits (see TriggerTrees).
-	TreeReader() TriggerTrees
-	CommitInfo(ctx context.Context, hash plumbing.Hash) (CommitInfo, error)
-	// CommitSignerOf returns the verified SSHSIG signer of a commit; the
-	// fingerprint is set ONLY when the signature verifies over the payload.
-	CommitSignerOf(ctx context.Context, hash plumbing.Hash) (verify.CommitSigner, error)
-	// BlobAt reads path's content at commit; ok is false when absent.
-	BlobAt(ctx context.Context, commit plumbing.Hash, path string) (content string, ok bool, err error)
-	IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool, error)
-	// UpstreamTip is the local consensus branch's head (ZeroHash when the
-	// branch does not exist). Since F09 PR 5 verification happens ONCE at the
-	// gate that advances main, and main is trusted afterwards: a commit is
-	// "verified" when it is reachable from that tip. There is no anchor ref
-	// and no fold cache any more.
-	UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash, error)
-	// AncestorSet is every commit reachable from tip, tip included. The
-	// dispatcher walks it once per run per distinct tip and reuses it.
-	AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error)
-
-	// TriggerWatermarks returns trigger name → commit hash for branch.
-	TriggerWatermarks(ctx context.Context, branch string) (map[string]string, error)
-	// RecordTriggerRun is tx1 for one run: the run's fire rows, capped at
-	// TriggerFireRetention (the newest paths kept, the rest counted in the run
-	// row's fires_not_logged), plus exactly ONE run row. Returns how many fire
-	// rows were written.
-	RecordTriggerRun(ctx context.Context, run TriggerRun) (int, error)
-	// RecordTriggerRuns is tx1 for several buffered runs in ONE transaction,
-	// each with its own cap and its own run row. The dispatcher defers tx1
-	// while the writer is busy and flushes the runs together.
-	RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, error)
-	// AdvanceTriggerWatermarks is tx2: upserts set, deletes del (their
-	// bookmarks AND their due marks), upserts the due marks (chunked, never
-	// capped by TriggerFireRetention), then prunes trigger_fires to the newest
-	// TriggerFireRetention rows.
-	AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error
-	// RecordTriggerResults is the write of a recipe's LATE result rows (F07
-	// PR 5): each row as given, with its own branch and range (copied from the
-	// fire that started it), and NO run row — a result is not a dispatcher run.
-	// One transaction; the retention prune runs in the same transaction.
-	RecordTriggerResults(ctx context.Context, rows []TriggerFire) error
-	// RecentTriggerFires returns the newest limit rows for branch, newest first.
-	RecentTriggerFires(ctx context.Context, branch string, limit int) ([]TriggerFire, error)
-	// TriggerFiresByRun returns branch's rows carrying run_id id, oldest
-	// first: the `started` row, then the result row once it is logged.
-	TriggerFiresByRun(ctx context.Context, branch, id string) ([]TriggerFire, error)
-
-	// DueCandidates is the `on: due` sweep's candidate set: the dated facts
-	// LIVE on branch (branch_facts ⋈ fact_expires) whose expires_at is at or
-	// before nowUnix (F03's inclusive rule). A fact retracted, deleted,
-	// merged away, rewound or replaced has no branch_facts row for that
-	// version and cannot be a candidate; fact_expires alone (one row per dated
-	// fact VERSION, shared by every branch, orphans kept) is never read alone.
-	DueCandidates(ctx context.Context, branch string, nowUnix int64) ([]DueCandidate, error)
-	// DueMarks returns (trigger, path) → expires_at already processed on
-	// branch (trigger_due_fires); an index range on the primary key.
-	DueMarks(ctx context.Context, branch string) (map[DueKey]int64, error)
-}
-
-// OntologyAtCommit implements TriggerIndex. A path present as a directory or a
+// OntologyAtCommit reads the ontology file from the commit's own tree,
+// choosing the path exactly as the store does (the first of
+// fact.OntologyPathsNewestFirst that exists as a file), and returns its
+// path, blob hash and content.
+// A path present as a directory or a
 // blob that cannot be read is an error, never "try the next path", so a
 // shadowing directory cannot fall through (the same rule as verify_fold's
 // settingsAt).
@@ -371,20 +285,34 @@ func (rh *Repo) OntologyAtCommit(ctx context.Context, commit plumbing.Hash) (str
 	return "", "", nil, ErrNoOntologyAtCommit
 }
 
-// ScriptAt implements TriggerIndex. The path is fact.TriggerScriptPath(name);
+// ScriptAt reads `.knomit/triggers/<name>.js` from the commit's own tree
+// (the same rule as OntologyAtCommit: a directory or an unreadable blob is
+// an error, never "absent"), returning its blob hash — the script cache's
+// key — and content. ErrNoScriptAtCommit when the file is not there.
+// The path is fact.TriggerScriptPath(name);
 // the name was validated kebab-case at compile time, so it names a file
 // directly under .knomit/triggers/ and nothing else.
 func (rh *Repo) ScriptAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
 	return rh.privateFileAt(commit, "script", fact.TriggerScriptPath(name), ErrNoScriptAtCommit)
 }
 
-// RecipeAt implements TriggerIndex. The path is fact.TriggerRecipePath(name);
+// RecipeAt reads `.knomit/recipes/<name>.js` from the commit's own tree —
+// the dispatcher passes the tip of main, never the agent branch (user
+// ruling D1) — with the same rules as ScriptAt. ErrNoRecipeAtCommit when
+// the file is not there.
+// The path is fact.TriggerRecipePath(name);
 // the name is validated kebab-case by every caller.
 func (rh *Repo) RecipeAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
 	return rh.privateFileAt(commit, "recipe", fact.TriggerRecipePath(name), ErrNoRecipeAtCommit)
 }
 
-// GuidanceAt implements TriggerIndex. A symlink (whose blob is only its
+// GuidanceAt reads one guidance file (F23), file being the repository
+// path fact.GuidanceFile returns, from the commit's own tree — callers
+// pass the tip of the consensus branch, the commit they read the ontology
+// at, never the agent branch. ErrNoGuidanceAtCommit when absent;
+// ErrGuidanceUnusable (wrapped, naming why) unless it is a regular UTF-8
+// text file of at most fact.MaxGuidanceBytes.
+// A symlink (whose blob is only its
 // target's name) is never followed: it reads as absent,
 // ErrNoGuidanceAtCommit, like privateFileAt's. The size is checked BEFORE
 // reading the blob, so an oversized file is never loaded.
@@ -485,7 +413,8 @@ type triggerTrees struct {
 	trees   map[plumbing.Hash]*object.Tree
 }
 
-// TreeReader implements TriggerIndex.
+// TreeReader returns a reader that caches decoded trees across calls, for
+// a run that reads many paths of the same few commits (see TriggerTrees).
 func (rh *Repo) TreeReader() TriggerTrees {
 	return &triggerTrees{rh: rh, commits: map[plumbing.Hash]*object.Commit{}, trees: map[plumbing.Hash]*object.Tree{}}
 }
@@ -616,12 +545,14 @@ func (tt *triggerTrees) BlobAt(ctx context.Context, commit plumbing.Hash, path s
 	return content, true, nil
 }
 
-// Toucher implements TriggerIndex with a one-shot reader (see TriggerTrees).
+// Toucher finds the commit that introduced the blob path carries at head:
+// git's own history simplification, with no clock, over a one-shot reader
+// (see TriggerTrees).
 func (rh *Repo) Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error) {
 	return rh.TreeReader().Toucher(ctx, head, path)
 }
 
-// CommitInfo implements TriggerIndex.
+// CommitInfo reads one commit's author, message and parents.
 func (rh *Repo) CommitInfo(ctx context.Context, hash plumbing.Hash) (CommitInfo, error) {
 	c, err := rh.vr.Repository().CommitObject(hash)
 	if err != nil {
@@ -636,7 +567,8 @@ func (rh *Repo) CommitInfo(ctx context.Context, hash plumbing.Hash) (CommitInfo,
 	}, nil
 }
 
-// CommitSignerOf implements TriggerIndex.
+// CommitSignerOf returns the verified SSHSIG signer of a commit; the
+// fingerprint is set ONLY when the signature verifies over the payload.
 func (rh *Repo) CommitSignerOf(ctx context.Context, hash plumbing.Hash) (verify.CommitSigner, error) {
 	c, err := rh.vr.Repository().CommitObject(hash)
 	if err != nil {
@@ -645,12 +577,13 @@ func (rh *Repo) CommitSignerOf(ctx context.Context, hash plumbing.Hash) (verify.
 	return verify.VerifyCommitSignature(c)
 }
 
-// BlobAt implements TriggerIndex with a one-shot reader (see TriggerTrees).
+// BlobAt reads path's content at commit; ok is false when absent. It reads
+// through a one-shot reader (see TriggerTrees).
 func (rh *Repo) BlobAt(ctx context.Context, commit plumbing.Hash, path string) (string, bool, error) {
 	return rh.TreeReader().BlobAt(ctx, commit, path)
 }
 
-// IsAncestor implements TriggerIndex: a is b or an ancestor of b.
+// IsAncestor reports whether a is b or an ancestor of b.
 func (rh *Repo) IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool, error) {
 	if a == b {
 		return true, nil
@@ -669,7 +602,11 @@ func (rh *Repo) IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool, error
 	return ac.IsAncestor(bc)
 }
 
-// UpstreamTip implements TriggerIndex.
+// UpstreamTip is the local consensus branch's head (ZeroHash when the
+// branch does not exist). Since F09 PR 5 verification happens ONCE at the
+// gate that advances main, and main is trusted afterwards: a commit is
+// "verified" when it is reachable from that tip. There is no anchor ref
+// and no fold cache any more.
 func (rh *Repo) UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash, error) {
 	ref, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(upstream))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
@@ -681,9 +618,10 @@ func (rh *Repo) UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash
 	return ref.Hash(), nil
 }
 
-// AncestorSet implements TriggerIndex, with F09's own history walk
-// (verify_walk.go). Nothing is re-verified here: the gate that advanced main
-// did that, and reachability from main IS acceptance.
+// AncestorSet is every commit reachable from tip, tip included. The
+// dispatcher walks it once per run per distinct tip and reuses it. It uses
+// F09's own history walk (verify_walk.go). Nothing is re-verified here: the
+// gate that advanced main did that, and reachability from main IS acceptance.
 func (rh *Repo) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error) {
 	set := map[plumbing.Hash]bool{}
 	if err := vcs.WalkHistory(rh.vr.Storer(), tip, nil, func(c *object.Commit) { set[c.Hash] = true }); err != nil {
@@ -692,7 +630,7 @@ func (rh *Repo) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbin
 	return set, nil
 }
 
-// TriggerWatermarks implements TriggerIndex.
+// TriggerWatermarks returns trigger name → commit hash for branch.
 func (rh *Repo) TriggerWatermarks(ctx context.Context, branch string) (map[string]string, error) {
 	rows, err := sqlite.Conn(ctx, rh.vr.DB()).QueryContext(ctx,
 		`SELECT trigger, commit_hash FROM trigger_watermarks WHERE branch = ?`, branch)
@@ -731,12 +669,17 @@ const triggerFireSelect = `SELECT id, trigger, branch, path, episode, source, co
 // statement per row, and that lock is the one fact writes wait on.
 const fireRowBatch = 400
 
-// RecordTriggerRun implements TriggerIndex (tx1 for one run).
+// RecordTriggerRun is tx1 for one run: the run's fire rows, capped at
+// TriggerFireRetention (the newest paths kept, the rest counted in the run
+// row's fires_not_logged), plus exactly ONE run row. Returns how many fire
+// rows were written.
 func (rh *Repo) RecordTriggerRun(ctx context.Context, run TriggerRun) (int, error) {
 	return rh.RecordTriggerRuns(ctx, []TriggerRun{run})
 }
 
-// RecordTriggerRuns implements TriggerIndex (tx1). One transaction, so the
+// RecordTriggerRuns is tx1 for several buffered runs in ONE transaction,
+// each with its own cap and its own run row. The dispatcher defers tx1
+// while the writer is busy and flushes the runs together. One transaction, so the
 // process-wide write lock (_txlock=immediate) is taken once, for a few
 // multi-row inserts, never across `if` or emit.
 func (rh *Repo) RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, error) {
@@ -790,10 +733,11 @@ func (rh *Repo) RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, 
 	return logged, nil
 }
 
-// RecordTriggerResults implements TriggerIndex (F07 PR 5 [M1]): the late
-// result rows of recipes, each with its own branch and range, no run row, and
-// the retention prune in the same transaction (the prune otherwise rides tx2,
-// which a result-only flush does not run).
+// RecordTriggerResults is the write of a recipe's LATE result rows (F07
+// PR 5): each row as given, with its own branch and range (copied from the
+// fire that started it), and NO run row — a result is not a dispatcher run.
+// One transaction; the retention prune runs in it too (the prune otherwise
+// rides tx2, which a result-only flush does not run).
 func (rh *Repo) RecordTriggerResults(ctx context.Context, rows []TriggerFire) error {
 	if len(rows) == 0 {
 		return nil
@@ -840,7 +784,10 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// AdvanceTriggerWatermarks implements TriggerIndex (tx2).
+// AdvanceTriggerWatermarks is tx2: upserts set, deletes del (their
+// bookmarks AND their due marks), upserts the due marks (chunked, never
+// capped by TriggerFireRetention), then prunes trigger_fires to the newest
+// TriggerFireRetention rows.
 func (rh *Repo) AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error {
 	tx, err := rh.vr.DB().BeginTx(ctx, nil)
 	if err != nil {
@@ -923,7 +870,7 @@ func (rh *Repo) AdvanceTriggerWatermarks(ctx context.Context, branch string, set
 	return nil
 }
 
-// RecentTriggerFires implements TriggerIndex.
+// RecentTriggerFires returns the newest limit rows for branch, newest first.
 func (rh *Repo) RecentTriggerFires(ctx context.Context, branch string, limit int) ([]TriggerFire, error) {
 	if limit <= 0 {
 		return []TriggerFire{}, nil
@@ -932,7 +879,8 @@ func (rh *Repo) RecentTriggerFires(ctx context.Context, branch string, limit int
 		triggerFireSelect+` WHERE branch = ? ORDER BY id DESC LIMIT ?`, branch, limit)
 }
 
-// TriggerFiresByRun implements TriggerIndex.
+// TriggerFiresByRun returns branch's rows carrying run_id id, oldest
+// first: the `started` row, then the result row once it is logged.
 func (rh *Repo) TriggerFiresByRun(ctx context.Context, branch, id string) ([]TriggerFire, error) {
 	if id == "" {
 		return []TriggerFire{}, nil
@@ -974,7 +922,13 @@ func UTCStamp(unix int64) string {
 	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
 }
 
-// DueCandidates implements TriggerIndex. The plan is a range on the covering
+// DueCandidates is the `on: due` sweep's candidate set: the dated facts
+// LIVE on branch (branch_facts ⋈ fact_expires) whose expires_at is at or
+// before nowUnix (F03's inclusive rule). A fact retracted, deleted,
+// merged away, rewound or replaced has no branch_facts row for that
+// version and cannot be a candidate; fact_expires alone (one row per dated
+// fact VERSION, shared by every branch, orphans kept) is never read alone.
+// The plan is a range on the covering
 // index fact_expires_at then a probe of branch_facts_fact per row, so the cost
 // is linear in the number of PAST-DATED fact versions in the table (every
 // branch's, orphans included), independent of the KB's size: measured 5–11 µs
@@ -1014,7 +968,8 @@ func (rh *Repo) DueCandidates(ctx context.Context, branch string, nowUnix int64)
 	return out, rows.Err()
 }
 
-// DueMarks implements TriggerIndex.
+// DueMarks returns (trigger, path) → expires_at already processed on
+// branch (trigger_due_fires); an index range on the primary key.
 func (rh *Repo) DueMarks(ctx context.Context, branch string) (map[DueKey]int64, error) {
 	rows, err := sqlite.Conn(ctx, rh.vr.DB()).QueryContext(ctx,
 		`SELECT trigger, path, expires_at FROM trigger_due_fires WHERE branch = ?`, branch)

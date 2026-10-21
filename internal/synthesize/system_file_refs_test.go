@@ -104,7 +104,7 @@ func TestApplyReflectDecisions_SystemFileRefs(t *testing.T) {
 
 	for _, bad := range sfBad {
 		before := sfTip(t, svc)
-		err := ApplyReflectDecisions(ctx, svc.Facts(), svc.Search(), propose("bad "+bad, sfFile, bad), sess,
+		err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), propose("bad "+bad, sfFile, bad), sess,
 			sfRepoID, "kb", 0.95, nil)
 		require.Errorf(t, err, "reflect citing %s", bad)
 		requireFileRefusal(t, err.Error(), bad)
@@ -112,7 +112,7 @@ func TestApplyReflectDecisions_SystemFileRefs(t *testing.T) {
 		require.Equalf(t, before, sfTip(t, svc), "an aborted reflect writes nothing (%s)", bad)
 	}
 
-	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.Search(), propose("good", sfGood...), sess,
+	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), propose("good", sfGood...), sess,
 		sfRepoID, "kb", 0.95, nil))
 	found := methodologyFactPaths(t, svc, sfSide)
 	require.Len(t, found, 1, "the reflect wrote its methodology")
@@ -140,7 +140,7 @@ func TestApplyDistillDecisions_SystemFileRefs(t *testing.T) {
 		in = append(in, synth("bad"+string(rune('a'+i)), bad))
 	}
 	sink, warns := collectWarns()
-	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.Search(), in, nil,
+	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), in, nil,
 		"test", sink, sfSide, sfRepoID, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1, "only the good fact lands: %v", *warns)
@@ -173,7 +173,7 @@ func TestApplyPruneDecisions_MergeSystemFileRefs(t *testing.T) {
 				require.Empty(t, readFactForTest(t, svc, sfSide, m).Refs, "fixture: no member carries the ref, so prior cannot exempt it")
 			}
 			sink, warns := collectWarns()
-			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(), nil, []MergeEntry{{
+			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []MergeEntry{{
 				Paths: members,
 				Merged: mergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation",
 					Refs: flexStrings{tc.ref}},

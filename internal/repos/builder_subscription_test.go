@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // subscriptionStore opens a bare remote and initialises a subscription store
@@ -85,7 +86,7 @@ func TestMount_SubscriptionBuildsAgentlessReadOnlyInstance(t *testing.T) {
 	// The store refuses authored writes.
 	require.NoError(t, ri.WithRead(func(s *store.Service) {
 		_, werr := s.Facts().WriteRootFile(context.Background(), upstream, "README.md", "x", "m", "updated")
-		require.ErrorIs(t, werr, store.ErrRepoReadOnly)
+		require.ErrorIs(t, werr, facts.ErrRepoReadOnly)
 	}))
 
 	// The index heals the upstream and reaches ready.
@@ -109,7 +110,7 @@ func TestSwapStore_SubscriptionStaysReadOnly(t *testing.T) {
 
 	require.NoError(t, ri.WithRead(func(s *store.Service) {
 		_, werr := s.Facts().WriteRootFile(context.Background(), upstream, "README.md", "x", "m", "updated")
-		require.ErrorIs(t, werr, store.ErrRepoReadOnly,
+		require.ErrorIs(t, werr, facts.ErrRepoReadOnly,
 			"a reopened subscription store must still refuse authored writes")
 	}))
 }

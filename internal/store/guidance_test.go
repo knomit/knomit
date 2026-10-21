@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/internal/vcs"
 )
 
@@ -57,7 +58,7 @@ func commitGuidanceEntry(t *testing.T, svc *Service, branch, name string, mode f
 func TestGuidanceAt_ReadsOnlyUsableFilesAtTheCommit(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	tr := svc.Triggers()
+	tr := svc.FactsRepo()
 
 	putRaw(t, svc, "main", ".knomit/guidance/ok.md", "Write a Claim: line.\n")
 	putRaw(t, svc, "main", ".knomit/guidance/exact.md", strings.Repeat("a", fact.MaxGuidanceBytes))
@@ -81,18 +82,18 @@ func TestGuidanceAt_ReadsOnlyUsableFilesAtTheCommit(t *testing.T) {
 	require.Len(t, data, fact.MaxGuidanceBytes)
 
 	_, _, err = tr.GuidanceAt(ctx, tip, ".knomit/guidance/missing.md")
-	require.ErrorIs(t, err, ErrNoGuidanceAtCommit)
+	require.ErrorIs(t, err, facts.ErrNoGuidanceAtCommit)
 	// A symlink is never followed and reads as ABSENT, not unusable (user
 	// ruling 2026-10-08), even though the file it names is a usable one.
 	_, data, err = tr.GuidanceAt(ctx, tip, ".knomit/guidance/link.md")
-	require.ErrorIs(t, err, ErrNoGuidanceAtCommit)
+	require.ErrorIs(t, err, facts.ErrNoGuidanceAtCommit)
 	require.Nil(t, data)
 	// An executable (+x) guidance file is a file.
 	_, data, err = tr.GuidanceAt(ctx, tip, ".knomit/guidance/exec.md")
 	require.NoError(t, err)
 	require.Equal(t, "EXEC", string(data))
 	_, _, err = tr.GuidanceAt(ctx, tip, ".knomit/guidance/agent-only.md")
-	require.ErrorIs(t, err, ErrNoGuidanceAtCommit, "the agent branch's file is not in main's commit")
+	require.ErrorIs(t, err, facts.ErrNoGuidanceAtCommit, "the agent branch's file is not in main's commit")
 	_, data, err = tr.GuidanceAt(ctx, agent, ".knomit/guidance/agent-only.md")
 	require.NoError(t, err, "the reader reads exactly the commit it is given")
 	require.Equal(t, "AGENT", string(data))
@@ -109,7 +110,7 @@ func TestGuidanceAt_ReadsOnlyUsableFilesAtTheCommit(t *testing.T) {
 		"kb/x.md":                              "not under",
 	} {
 		_, data, err := tr.GuidanceAt(ctx, tip, file)
-		require.Truef(t, errors.Is(err, ErrGuidanceUnusable), "%s: %v", file, err)
+		require.Truef(t, errors.Is(err, facts.ErrGuidanceUnusable), "%s: %v", file, err)
 		require.Containsf(t, err.Error(), why, "%s", file)
 		require.Nil(t, data)
 	}

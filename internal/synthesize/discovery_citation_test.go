@@ -199,7 +199,7 @@ func TestApplyDiscoveredProposals_AcceptsTwoOfThreeSeeds(t *testing.T) {
 		Refs: []string{"kb/a.md", "kb/b.md"}, // kb/c.md genuinely does not fit
 	}}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(),
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "a two-of-three derivation must be recorded, not discarded")
@@ -229,7 +229,7 @@ func TestApplyDiscoveredProposals_DiscardsRefsOutsideTheBridge(t *testing.T) {
 	}}
 
 	var warned []string
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(),
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb",
 		func(e ProgressEvent) {
 			if e.Phase == "warn" {
@@ -257,7 +257,7 @@ func TestApplyDiscoveredProposals_RejectsOneOfThreeSeeds(t *testing.T) {
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md"},
 	}}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(),
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "one citation is not a derivation path")

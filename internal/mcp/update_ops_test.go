@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 const opsSlot = "artifacts/jobs/x/y.md"
@@ -155,7 +156,7 @@ func TestUpdateOps_SequentialAnchoringOneCommit(t *testing.T) {
 	require.False(t, res.IsError, resultText(t, res))
 	require.Equal(t, "one two three", readBody(t, svc, opsSlot))
 
-	at, err := svc.Facts().ReadFact(ctx, "agent/test", opsSlot, &store.ReadFactOpts{AtCommit: head})
+	at, err := svc.Facts().ReadFact(ctx, "agent/test", opsSlot, &facts.ReadFactOpts{AtCommit: head})
 	require.NoError(t, err)
 	parsed, err := fact.ParseFact(opsSlot, at.Content)
 	require.NoError(t, err)

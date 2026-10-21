@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/facts"
 )
 
 // TestReadFact_ReturnsErrPathNotFound_HEAD: a path that has never been written
@@ -38,7 +40,7 @@ func TestReadFact_ReturnsErrPathNotFound_AtCommit(t *testing.T) {
 	c0, err := svc.Facts().WriteFact(ctx, "main", "kb/e.md", testFactBody("e", 0.9, nil), "init", "")
 	require.NoError(t, err)
 
-	_, err = svc.Facts().ReadFact(ctx, "main", "kb/never.md", &ReadFactOpts{AtCommit: c0.CommitHash})
+	_, err = svc.Facts().ReadFact(ctx, "main", "kb/never.md", &facts.ReadFactOpts{AtCommit: c0.CommitHash})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrPathNotFound),
 		"expected ErrPathNotFound for missing path at commit, got %v", err)
@@ -60,7 +62,7 @@ func TestReadFact_BeforeCommit_NoPrior_ReturnsErrPathNotFound(t *testing.T) {
 	c0, err := svc.Facts().WriteFact(ctx, "main", "kb/e.md", testFactBody("e", 0.9, nil), "init", "")
 	require.NoError(t, err)
 
-	_, err = svc.Facts().ReadFact(ctx, "main", "kb/e.md", &ReadFactOpts{BeforeCommit: c0.CommitHash})
+	_, err = svc.Facts().ReadFact(ctx, "main", "kb/e.md", &facts.ReadFactOpts{BeforeCommit: c0.CommitHash})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrPathNotFound),
 		"expected ErrPathNotFound for path with no prior version, got %v", err)

@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -30,7 +30,7 @@ type triggersView struct {
 	Blob     string                `json:"ontology_blob,omitempty"`
 	Runs     repos.TriggerRunStats `json:"runs"`
 	Triggers []repos.TriggerView   `json:"triggers"`
-	Fires    []store.TriggerFire   `json:"fires"`
+	Fires    []facts.TriggerFire   `json:"fires"`
 	Links    hal.LinkMap           `json:"_links"`
 }
 
@@ -39,7 +39,7 @@ type triggersView struct {
 type triggerRunView struct {
 	Branch string              `json:"branch"`
 	Run    string              `json:"run"`
-	Fires  []store.TriggerFire `json:"fires"`
+	Fires  []facts.TriggerFire `json:"fires"`
 	Links  hal.LinkMap         `json:"_links"`
 }
 

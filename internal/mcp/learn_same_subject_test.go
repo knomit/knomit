@@ -8,6 +8,7 @@ import (
 	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	"github.com/stretchr/testify/require"
 )
@@ -34,8 +35,8 @@ func (f *fakeSearcher) Search(_ context.Context, _ string, q store.SearchOptions
 // instead would make every band comparison pass for the wrong reason.
 func hit(path, title string, cosine float64, entities ...string) store.SearchResult {
 	return store.SearchResult{
-		FactWithBody: store.FactWithBody{
-			FactRecord: store.FactRecord{
+		FactWithBody: facts.FactWithBody{
+			FactRecord: facts.FactRecord{
 				Path:     path,
 				Title:    title,
 				Entities: entities,

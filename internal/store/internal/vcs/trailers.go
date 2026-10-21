@@ -104,7 +104,7 @@ type trailersCtxKey struct{}
 // ctx set in explicitly through mergeOpts.trace (AppendTrailersToParagraph).
 //
 // The transport is a ctx value (precedent: WithPrecomputedEmbeddings) so the
-// four FactIndex write methods and their callers keep their signatures; the
+// four facts.Index write methods and their callers keep their signatures; the
 // MCP handlers pass their ctx to the write, which is how a script host stamps
 // a write it makes through an UNCHANGED handler. A caller that sets nothing
 // gets no paragraph. The value survives context.WithoutCancel (NotifyCommit

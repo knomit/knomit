@@ -18,6 +18,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -529,8 +530,8 @@ func (s *lensSearchStub) Search(
 // by; RRF ignores it and orders by per-mount rank instead.
 func sr(path, title string, score float64) store.SearchResult {
 	return store.SearchResult{
-		FactWithBody: store.FactWithBody{
-			FactRecord: store.FactRecord{Path: path, Title: title, Type: "observation"},
+		FactWithBody: facts.FactWithBody{
+			FactRecord: facts.FactRecord{Path: path, Title: title, Type: "observation"},
 		},
 		Score: score,
 	}
@@ -1727,8 +1728,8 @@ func (s *motifResolvingLensStub) Search(
 	var out []store.SearchResult
 	for _, e := range s.carriers(ri.Name(), opts) {
 		out = append(out, store.SearchResult{
-			FactWithBody: store.FactWithBody{
-				FactRecord: store.FactRecord{Path: e.Path, Title: e.Title, Type: "observation", Motifs: e.Motifs},
+			FactWithBody: facts.FactWithBody{
+				FactRecord: facts.FactRecord{Path: e.Path, Title: e.Title, Type: "observation", Motifs: e.Motifs},
 			},
 			Score: float64(e.CommittedAt),
 		})

@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // F22: a trigger condition sees fact.context (the same map the validation
@@ -33,5 +33,5 @@ func TestDispatch_IfSeesFactContext(t *testing.T) {
 	got := firesOf(t, ri, "disagree")
 	require.Len(t, got, 1, "one fire for three learns: %+v", got)
 	require.Equal(t, "kb/tasks/a.md", got[0].Path)
-	require.Equal(t, store.TriggerOutcomeEmitted, got[0].Outcome, "no if-error: a fact without context reads {}")
+	require.Equal(t, facts.TriggerOutcomeEmitted, got[0].Outcome, "no if-error: a fact without context reads {}")
 }

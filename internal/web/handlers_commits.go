@@ -10,6 +10,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -97,14 +98,14 @@ func (defaultCommitsProvider) CommitDetail(
 		}
 		// Fallback: read the fact as it was at this commit.
 		if gs != nil {
-			if result, rerr := gs.ReadFact(ctx, branch, f.Path, &store.ReadFactOpts{AtCommit: hash}); rerr == nil && result.Content != "" {
+			if result, rerr := gs.ReadFact(ctx, branch, f.Path, &facts.ReadFactOpts{AtCommit: hash}); rerr == nil && result.Content != "" {
 				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 					continue
 				}
 			}
 			// Last resort: find last commit where the file existed (covers deletions).
-			if result, rerr := gs.ReadFact(ctx, branch, f.Path, &store.ReadFactOpts{BeforeCommit: hash}); rerr == nil && result.Content != "" {
+			if result, rerr := gs.ReadFact(ctx, branch, f.Path, &facts.ReadFactOpts{BeforeCommit: hash}); rerr == nil && result.Content != "" {
 				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 				}

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // ---- F08 PR A, M4 (ruling R9): inline `js:` trigger scripts, dispatcher
@@ -36,7 +36,7 @@ func TestTriggers_InlineJS(t *testing.T) {
 	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 	settle(t, ri)
 
-	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "inline")))
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "inline")))
 	require.Len(t, tools.recorded(), 1)
 	commits := commitsAfter(t, ri, base)
 	require.Len(t, commits, 2, "the write and the inline script's learn")
@@ -88,5 +88,5 @@ func TestTriggers_InlineJSCacheBySource(t *testing.T) {
 	ps = sink.wait(t, 3)
 	require.Equal(t, float64(2), ps[2]["v"], "the EDITED code runs on the next fire")
 	require.Equal(t, compiles+1, fact.InlineJSCompilesForTest(), "a changed js compiles once")
-	require.Equal(t, []string{store.TriggerOutcomeRan, store.TriggerOutcomeRan, store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "ver")))
+	require.Equal(t, []string{facts.TriggerOutcomeRan, facts.TriggerOutcomeRan, facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "ver")))
 }

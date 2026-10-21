@@ -26,7 +26,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // ---- helpers
@@ -167,7 +167,7 @@ func (n *missionNode) ack(t *testing.T, copyPath, task string) {
 func waitRecipeDone(t *testing.T, n *missionNode, trigger, path string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		return firesOf(t, n, trigger, path, store.TriggerOutcomeDone) > 0
+		return firesOf(t, n, trigger, path, facts.TriggerOutcomeDone) > 0
 	}, 30*time.Second, 20*time.Millisecond, "the %s recipe for %s finished", trigger, path)
 }
 
@@ -421,9 +421,9 @@ func TestMission_LeaseWakesDroppedCopy(t *testing.T) {
 	dropped := p.post(t, signal("inbox", mPeerID+"/working", "Dropped", "x", "task-dropped", clock.now().Add(lease)))
 	acked := p.post(t, signal("inbox", mPeerID+"/working", "Acked", "x", "task-acked", clock.now().Add(lease)))
 	p.ri.QuiesceTriggersForTest(t)
-	require.Equal(t, 1, firesOf(t, p, "wake", first, store.TriggerOutcomeStarted))
-	require.Equal(t, 1, firesOf(t, p, "wake", dropped, store.TriggerOutcomeBusy), "the wake was dropped: no queue")
-	require.Equal(t, 1, firesOf(t, p, "wake", acked, store.TriggerOutcomeBusy))
+	require.Equal(t, 1, firesOf(t, p, "wake", first, facts.TriggerOutcomeStarted))
+	require.Equal(t, 1, firesOf(t, p, "wake", dropped, facts.TriggerOutcomeBusy), "the wake was dropped: no queue")
+	require.Equal(t, 1, firesOf(t, p, "wake", acked, facts.TriggerOutcomeBusy))
 
 	// A draining session takes one of them and acknowledges it.
 	active, isErr, text := p.take(t, acked, mPeerID, clock.now().Add(time.Hour))
@@ -436,7 +436,7 @@ func TestMission_LeaseWakesDroppedCopy(t *testing.T) {
 	clock.add(lease + time.Second)
 	tick(t, p)
 	require.Eventually(t, func() bool {
-		return firesOf(t, p, "lease", dropped, store.TriggerOutcomeStarted) == 1
+		return firesOf(t, p, "lease", dropped, facts.TriggerOutcomeStarted) == 1
 	}, 20*time.Second, 20*time.Millisecond, "the lease started a session for the dropped copy")
 	require.Eventually(t, func() bool { _, ok := sessionFor(t, dropped); return ok }, 20*time.Second, 20*time.Millisecond)
 	waitRecipeDone(t, p, "lease", dropped)
@@ -470,13 +470,13 @@ func TestMission_ActiveCopyLockAndLease(t *testing.T) {
 	require.True(t, isErr, "a second session's take of the same copy is refused")
 	require.Equal(t, []string{active}, p.paths(t, p.branch, "kb/inbox/"), "one copy, the taker's active one")
 	p.ri.QuiesceTriggersForTest(t)
-	require.Zero(t, firesOf(t, p, "wake", active, store.TriggerOutcomeStarted), "a take does not wake a session")
+	require.Zero(t, firesOf(t, p, "wake", active, facts.TriggerOutcomeStarted), "a take does not wake a session")
 
 	// The taker dies: its active copy's lease runs out.
 	clock.add(time.Minute + time.Second)
 	tick(t, p)
 	require.Eventually(t, func() bool {
-		return firesOf(t, p, "lease", active, store.TriggerOutcomeStarted) == 1
+		return firesOf(t, p, "lease", active, facts.TriggerOutcomeStarted) == 1
 	}, 20*time.Second, 20*time.Millisecond, "the dead session's copy wakes a session")
 	require.Eventually(t, func() bool { _, ok := sessionFor(t, active); return ok }, 20*time.Second, 20*time.Millisecond)
 	waitRecipeDone(t, p, "lease", active)
@@ -484,7 +484,7 @@ func TestMission_ActiveCopyLockAndLease(t *testing.T) {
 	p.ack(t, active, "task-locked")
 	clock.add(2 * time.Hour)
 	tick(t, p)
-	require.Equal(t, 1, firesOf(t, p, "lease", active, store.TriggerOutcomeStarted), "an acknowledged copy never fires again")
+	require.Equal(t, 1, firesOf(t, p, "lease", active, facts.TriggerOutcomeStarted), "an acknowledged copy never fires again")
 	requireNoFailedFires(t, p)
 }
 
@@ -586,7 +586,7 @@ func TestMission_DupCheckSeesActiveCopy(t *testing.T) {
 		require.Equal(t, []string{active}, at.n.paths(t, at.branch, "kb/inbox/"),
 			"%s: the lower-ranked holder backed off; P's active copy stays", at.where)
 	}
-	require.Positive(t, firesOf(t, h, "dup-check", active, store.TriggerOutcomeRan),
+	require.Positive(t, firesOf(t, h, "dup-check", active, facts.TriggerOutcomeRan),
 		"H's dup-check ran on P's active copy, the only copy of P's it ever saw")
 	for _, f := range h.fires(t) {
 		require.NotEqual(t, pWC[0], f.Path, "H never saw P's working copy: %+v", f)

@@ -129,12 +129,12 @@ func requireMissionLoaded(t *testing.T, who string, ri *repos.RepoInstance, want
 		if ub != wantBranch {
 			t.Errorf("%s: consensus branch %q, want %q (the branch the repository was created on)", who, ub, wantBranch)
 		}
-		tip, err := s.Triggers().UpstreamTip(ctx, ub)
+		tip, err := s.FactsRepo().UpstreamTip(ctx, ub)
 		if err != nil || tip.IsZero() {
 			t.Errorf("%s: consensus branch %q has no tip (err %v): skills, recipes and settings would read nothing", who, ub, err)
 			return
 		}
-		ents, err := s.Skills().SkillsAt(ctx, tip)
+		ents, err := s.FactsRepo().SkillsAt(ctx, tip)
 		if err != nil || len(ents) != 2 {
 			t.Errorf("%s: skills at the consensus tip: %v (err %v), want 2", who, ents, err)
 		}

@@ -14,6 +14,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // ConsensusGuidance is the repository's guidance (F23) as its consensus branch
@@ -103,7 +104,7 @@ func (ri *RepoInstance) ConsensusGuidance(ctx context.Context) *ConsensusGuidanc
 
 func (c *guidanceCache) at(ctx context.Context, repo string, svc *store.Service) *ConsensusGuidance {
 	branch := svc.UpstreamBranch()
-	tr := svc.Triggers()
+	tr := svc.FactsRepo()
 	tip, err := tr.UpstreamTip(ctx, branch)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -135,11 +136,11 @@ func (c *guidanceCache) at(ctx context.Context, repo string, svc *store.Service)
 // build reads the ontology and every guidance file at tip. complete is false
 // when a read failed for a reason other than the file's own state (a store
 // error), so the next call retries instead of keeping the gap for this commit.
-func (c *guidanceCache) build(ctx context.Context, repo string, tr store.TriggerIndex, branch string, tip plumbing.Hash) (*ConsensusGuidance, bool) {
+func (c *guidanceCache) build(ctx context.Context, repo string, tr *facts.Repo, branch string, tip plumbing.Hash) (*ConsensusGuidance, bool) {
 	at := branch + "@" + tip.String()[:7]
 	_, blob, data, err := tr.OntologyAtCommit(ctx, tip)
 	switch {
-	case errors.Is(err, store.ErrNoOntologyAtCommit):
+	case errors.Is(err, facts.ErrNoOntologyAtCommit):
 		c.warn(repo, "ontology", fmt.Sprintf("guidance: no ontology at %s; no guidance", at))
 		return nil, true
 	case err != nil:
@@ -161,9 +162,9 @@ func (c *guidanceCache) build(ctx context.Context, repo string, tr store.Trigger
 			continue
 		}
 		why := err.Error()
-		if errors.Is(err, store.ErrNoGuidanceAtCommit) {
+		if errors.Is(err, facts.ErrNoGuidanceAtCommit) {
 			why = "the file does not exist there"
-		} else if !errors.Is(err, store.ErrGuidanceUnusable) {
+		} else if !errors.Is(err, facts.ErrGuidanceUnusable) {
 			complete = false
 		}
 		c.warn(repo, "path:"+p, fmt.Sprintf("guidance: %s (declared by %s) skipped at %s: %s",

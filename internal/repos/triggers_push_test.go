@@ -19,6 +19,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // F07 PR 4: `do: push` and knomit.push() wake this machine's sync loop.
@@ -212,11 +213,11 @@ func holdsAt(t *testing.T, l *countingLoop, ticks int64, w *windowSeam, opens in
 	require.Equal(t, opens, w.opened(), "countdowns: %s", msg)
 }
 
-func kickedOf(t *testing.T, ri *RepoInstance, name string) []store.TriggerFire {
+func kickedOf(t *testing.T, ri *RepoInstance, name string) []facts.TriggerFire {
 	t.Helper()
-	var out []store.TriggerFire
+	var out []facts.TriggerFire
 	for _, f := range firesOf(t, ri, name) {
-		if f.Outcome == store.TriggerOutcomeKicked {
+		if f.Outcome == facts.TriggerOutcomeKicked {
 			out = append(out, f)
 		}
 	}
@@ -424,7 +425,7 @@ func TestPush_ScriptKnomitPushKicks(t *testing.T) {
 	require.Equal(t, kicked, p["a"])
 	require.Equal(t, kicked, p["b"])
 	require.Equal(t, kicked, p["c"], "arguments are ignored: nothing can name a branch")
-	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "pusher")), "one fire, ran")
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "pusher")), "one fire, ran")
 
 	waitOpens(t, w, 1)
 	w.releaseAll()
@@ -449,7 +450,7 @@ func TestPush_StatisticsAndLog(t *testing.T) {
 	last := write(t, ri, "kb/tasks/b.md")
 
 	rows := firesOf(t, ri, "fast")
-	require.Equal(t, []string{store.TriggerOutcomeKicked, store.TriggerOutcomeKicked}, outcomesOf(rows))
+	require.Equal(t, []string{facts.TriggerOutcomeKicked, facts.TriggerOutcomeKicked}, outcomesOf(rows))
 	require.ElementsMatch(t, []string{"kb/tasks/a.md", "kb/tasks/b.md"}, pathsOf(rows))
 	for _, r := range rows {
 		require.Empty(t, r.Error)

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/test/testenv"
 )
 
@@ -69,11 +70,11 @@ func TestHistory_BeforeCommitAcrossDelete(t *testing.T) {
 	delSnap := agent.Delete("kb/x.md", "retract")
 
 	// Read the version that existed JUST BEFORE the delete commit.
-	var res store.ReadFactResult
+	var res facts.ReadFactResult
 	var err error
 	r.Instance().WithRead(func(svc *store.Service) {
 		res, err = svc.Facts().ReadFact(context.Background(), "agent/test", "kb/x.md",
-			&store.ReadFactOpts{BeforeCommit: delSnap.Commit})
+			&facts.ReadFactOpts{BeforeCommit: delSnap.Commit})
 	})
 	require.NoError(t, err)
 	require.Contains(t, res.Content, "second version",

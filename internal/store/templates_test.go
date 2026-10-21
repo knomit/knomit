@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // WriteSystemTree keeps the case of every path, writes ONE commit signed by
@@ -21,7 +22,7 @@ import (
 func TestWriteSystemTree_ExactCaseOneSignedCommitNarrowPaths(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	before, err := svc.Triggers().UpstreamTip(ctx, "agent/a")
+	before, err := svc.FactsRepo().UpstreamTip(ctx, "agent/a")
 	require.NoError(t, err)
 
 	for _, bad := range []map[string]string{
@@ -33,10 +34,10 @@ func TestWriteSystemTree_ExactCaseOneSignedCommitNarrowPaths(t *testing.T) {
 		{".knomit/": "x"},
 		{"README.md": "a", ".knomit/x.md": "b", ".knomit/X.md": "c"},
 	} {
-		_, _, err := svc.WriteSystemTree(ctx, "agent/a", bad, "w", "created")
-		require.ErrorIs(t, err, ErrSystemTreePath, "%v", bad)
+		_, _, err := svc.Facts().WriteSystemTree(ctx, "agent/a", bad, "w", "created")
+		require.ErrorIs(t, err, facts.ErrSystemTreePath, "%v", bad)
 	}
-	tip, err := svc.Triggers().UpstreamTip(ctx, "agent/a")
+	tip, err := svc.FactsRepo().UpstreamTip(ctx, "agent/a")
 	require.NoError(t, err)
 	require.Equal(t, before, tip, "a refused write must not move the branch")
 
@@ -46,25 +47,25 @@ func TestWriteSystemTree_ExactCaseOneSignedCommitNarrowPaths(t *testing.T) {
 		".knomit/skills/work-task/SKILL.md": "S",
 	}
 	tctx := WithTrailers(ctx, Trailers{Template: "mission", TemplateSource: "kb://abc@def"})
-	h, blobs, err := svc.WriteSystemTree(tctx, "agent/a", files, "init: from template mission", "created")
+	h, blobs, err := svc.Facts().WriteSystemTree(tctx, "agent/a", files, "init: from template mission", "created")
 	require.NoError(t, err)
 	require.Len(t, blobs, 3)
 	hash := plumbing.NewHash(h)
-	info, err := svc.Triggers().CommitInfo(ctx, hash)
+	info, err := svc.FactsRepo().CommitInfo(ctx, hash)
 	require.NoError(t, err)
 	require.Equal(t, []plumbing.Hash{before}, info.Parents, "ONE commit on top of the branch tip")
 	require.Equal(t, "mission", TrailerValue(info.Message, TrailerTemplate))
 	require.Equal(t, "kb://abc@def", TrailerValue(info.Message, TrailerTemplateSource))
-	signer, err := svc.Triggers().CommitSignerOf(ctx, hash)
+	signer, err := svc.FactsRepo().CommitSignerOf(ctx, hash)
 	require.NoError(t, err)
-	require.Equal(t, svc.SignerFingerprint(), signer.Fingerprint)
+	require.Equal(t, svc.FactsRepo().SignerFingerprint(), signer.Fingerprint)
 	for p, want := range files {
-		got, ok, err := svc.Triggers().BlobAt(ctx, hash, p)
+		got, ok, err := svc.FactsRepo().BlobAt(ctx, hash, p)
 		require.NoError(t, err)
 		require.True(t, ok, "%s must exist with its exact case", p)
 		require.Equal(t, want, got)
 	}
-	_, ok, err := svc.Triggers().BlobAt(ctx, hash, ".knomit/skills/work-task/skill.md")
+	_, ok, err := svc.FactsRepo().BlobAt(ctx, hash, ".knomit/skills/work-task/skill.md")
 	require.NoError(t, err)
 	require.False(t, ok, "the path must not have been lowercased")
 }
@@ -90,7 +91,7 @@ func TestTemplateFilesAt_ReadsAndRefuses(t *testing.T) {
 	putRaw(t, svc, "main", "kb/templates/ok/files/readme/bbbb2222.md", "nested: not a candidate")
 	tip := putRaw(t, svc, "main", "kb/templates/ok/notes.txt", "not md")
 
-	got, err := svc.Templates().TemplateFilesAt(ctx, tip, "ok")
+	got, err := svc.FactsRepo().TemplateFilesAt(ctx, tip, "ok")
 	require.NoError(t, err)
 	var paths []string
 	for _, f := range got {
@@ -100,25 +101,25 @@ func TestTemplateFilesAt_ReadsAndRefuses(t *testing.T) {
 	require.Equal(t, "S", string(got[1].Data))
 
 	for name, want := range map[string]error{
-		"absent": ErrTemplateNotFound,
-		"layout": ErrTemplateLayout,
-		"root":   ErrTemplateLayout,
-		"case":   ErrTemplateLayout,
-		"big":    ErrTemplateTooLarge,
-		"../x":   ErrTemplateNotFound,
+		"absent": facts.ErrTemplateNotFound,
+		"layout": facts.ErrTemplateLayout,
+		"root":   facts.ErrTemplateLayout,
+		"case":   facts.ErrTemplateLayout,
+		"big":    facts.ErrTemplateTooLarge,
+		"../x":   facts.ErrTemplateNotFound,
 	} {
-		_, err := svc.Templates().TemplateFilesAt(ctx, tip, name)
+		_, err := svc.FactsRepo().TemplateFilesAt(ctx, tip, name)
 		require.True(t, errors.Is(err, want), "%s: want %v, got %v", name, want, err)
 	}
 
-	ok, err := svc.Templates().TemplateExistsAt(ctx, tip, "ok")
+	ok, err := svc.FactsRepo().TemplateExistsAt(ctx, tip, "ok")
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = svc.Templates().TemplateExistsAt(ctx, tip, "absent")
+	ok, err = svc.FactsRepo().TemplateExistsAt(ctx, tip, "absent")
 	require.NoError(t, err)
 	require.False(t, ok)
 
-	facts, err := svc.Templates().TemplateFactsAt(ctx, tip, "kb")
+	facts, err := svc.FactsRepo().TemplateFactsAt(ctx, tip, "kb")
 	require.NoError(t, err)
 	require.Len(t, facts, 1)
 	require.Equal(t, "ok", facts[0].Folder)
@@ -148,21 +149,21 @@ func TestTemplateFilesAt_LimitBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	tip := plumbing.NewHash(h)
 
-	got, err := svc.Templates().TemplateFilesAt(ctx, tip, "files-at")
+	got, err := svc.FactsRepo().TemplateFilesAt(ctx, tip, "files-at")
 	require.NoError(t, err, "exactly %d files is accepted", fact.TemplateMaxFiles)
 	require.Len(t, got, fact.TemplateMaxFiles)
-	_, err = svc.Templates().TemplateFilesAt(ctx, tip, "files-over")
-	require.ErrorIs(t, err, ErrTemplateTooLarge)
+	_, err = svc.FactsRepo().TemplateFilesAt(ctx, tip, "files-over")
+	require.ErrorIs(t, err, facts.ErrTemplateTooLarge)
 	require.ErrorContains(t, err, "files")
 
-	got, err = svc.Templates().TemplateFilesAt(ctx, tip, "bytes-at")
+	got, err = svc.FactsRepo().TemplateFilesAt(ctx, tip, "bytes-at")
 	require.NoError(t, err, "exactly %d bytes is accepted", fact.TemplateMaxBytes)
 	total := 0
 	for _, f := range got {
 		total += len(f.Data)
 	}
 	require.Equal(t, fact.TemplateMaxBytes, total, "fixture: the files sum to the limit")
-	_, err = svc.Templates().TemplateFilesAt(ctx, tip, "bytes-over")
-	require.ErrorIs(t, err, ErrTemplateTooLarge)
+	_, err = svc.FactsRepo().TemplateFilesAt(ctx, tip, "bytes-over")
+	require.ErrorIs(t, err, facts.ErrTemplateTooLarge)
 	require.ErrorContains(t, err, "bytes")
 }

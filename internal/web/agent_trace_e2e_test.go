@@ -29,7 +29,7 @@ func commitMessageIn(t *testing.T, m *repos.Manager, repo, hash string) string {
 	t.Helper()
 	var msg string
 	require.NoError(t, m.Get(repo).WithRead(func(svc *store.Service) {
-		info, err := svc.Triggers().CommitInfo(context.Background(), plumbing.NewHash(hash))
+		info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(hash))
 		require.NoError(t, err)
 		msg = info.Message
 	}))
@@ -188,7 +188,7 @@ func commitsSince(t *testing.T, svc *store.Service, branch, stop string) []strin
 	require.NoError(t, err)
 	var out []string
 	for h != stop {
-		info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(h))
+		info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(h))
 		require.NoError(t, err)
 		out = append([]string{info.Message}, out...)
 		require.NotEmpty(t, info.Parents, "walked past the root looking for %s", stop)

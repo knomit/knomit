@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -106,7 +107,8 @@ type ReviewStats struct {
 // path falls outside this root or whose epistemic type is empty/invalid are
 // rejected with a warn rather than written.
 func ApplyPruneDecisions(ctx context.Context,
-	gs store.FactIndex,
+	gs *facts.Index,
+	sysFiles *facts.Repo,
 	// idx supplies FactExistsAt — the same resolution predicate every READER
 	// uses, which the ref gate must match exactly.
 	idx SearchQuery,
@@ -134,7 +136,7 @@ func ApplyPruneDecisions(ctx context.Context,
 	rewrittenPaths := make(map[string]bool)
 	// mergeGate is the one gate the merge outputs below go through, built once
 	// for the whole call.
-	mergeGate := writeGate(localRepoID, idx, gs, agentBranch)
+	mergeGate := writeGate(localRepoID, idx, sysFiles, agentBranch)
 	// Each merge's prior: its members' refs, SNAPSHOTTED NOW, before the
 	// decision loop's retracts and the earlier merges below delete members on
 	// this branch. Read at the tip later, a member retracted or consumed
@@ -428,7 +430,8 @@ func ApplyPruneDecisions(ctx context.Context,
 // whose path falls outside this root or whose epistemic type is
 // empty/invalid are rejected with a warn rather than written.
 func ApplyDistillDecisions(ctx context.Context,
-	gs store.FactIndex,
+	gs *facts.Index,
+	sysFiles *facts.Repo,
 	// idx supplies FactExistsAt — the reader's resolution predicate.
 	idx SearchQuery,
 	synthesized []distillFact,
@@ -444,7 +447,7 @@ func ApplyDistillDecisions(ctx context.Context,
 ) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
 	var written []distillFact
-	gate := writeGate(localRepoID, idx, gs, agentBranch)
+	gate := writeGate(localRepoID, idx, sysFiles, agentBranch)
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -562,7 +565,8 @@ func ApplyDistillDecisions(ctx context.Context,
 // onProgress is tolerated as nil.
 func ApplyReflectDecisions(
 	ctx context.Context,
-	gs store.FactIndex,
+	gs *facts.Index,
+	sysFiles *facts.Repo,
 	idx SearchQuery,
 	result ReflectResult,
 	sess *store.PipelineSession,
@@ -590,7 +594,7 @@ func ApplyReflectDecisions(
 	// ref. Everything it already cited resolved at its own commit and is not
 	// re-judged here.
 	priorRefsByPath := make(map[string][]string)
-	reflectGate := writeGate(localRepoID, idx, gs, branch)
+	reflectGate := writeGate(localRepoID, idx, sysFiles, branch)
 
 	// Phase 1 — validate reinforce targets resolve to methodology facts and
 	// stage transition-fact updates appending the methodology path to refs.
@@ -785,7 +789,7 @@ func splitTopicPath(topicPath, ontologyRoot string) (topic, category string, err
 // before deleting anything. A member that cannot be read or parsed contributes
 // nothing, which errs strict — its refs, if the judge kept them, are then
 // judged as new rather than waved through.
-func memberRefs(ctx context.Context, gs store.FactIndex, branch string, paths []string) []string {
+func memberRefs(ctx context.Context, gs *facts.Index, branch string, paths []string) []string {
 	var out []string
 	seen := make(map[string]bool)
 	for _, p := range paths {
@@ -815,7 +819,7 @@ func memberRefs(ctx context.Context, gs store.FactIndex, branch string, paths []
 // allowed at the merged fact's OWN topic (the judge chooses its directory, and
 // review runs no other ontology check): a key that is not is dropped too, so a
 // prune merge can never write an undeclared key. A nil ontology allows none.
-func agreedContext(ctx context.Context, gs store.FactIndex, branch string, members []string,
+func agreedContext(ctx context.Context, gs *facts.Index, branch string, members []string,
 	o *fact.Ontology, mergedTopic string) (carried map[string]any, dropped []string) {
 	memberMaps := make([]map[string]any, 0, len(members))
 	allKeys := map[string]bool{}
@@ -864,7 +868,7 @@ func agreedContext(ctx context.Context, gs store.FactIndex, branch string, membe
 // memberExpiries names each merge member that carries an expires, as
 // "<path> (expires <value>)", read before the merge retracts them. An
 // unreadable member contributes nothing: this is a report, not a gate.
-func memberExpiries(ctx context.Context, gs store.FactIndex, branch string, paths []string) []string {
+func memberExpiries(ctx context.Context, gs *facts.Index, branch string, paths []string) []string {
 	var out []string
 	for _, p := range paths {
 		res, err := gs.ReadFact(ctx, branch, p, nil)

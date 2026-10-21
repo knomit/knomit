@@ -7,20 +7,20 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
 func TestHandleTopicFacts_ReturnsOnlyFiles(t *testing.T) {
 	lister := &stubTopicLister{
-		dirs: []store.DirEntry{
+		dirs: []facts.DirEntry{
 			{Name: "sub", IsDir: true},
 			{Name: "fact1.md", IsDir: false},
 			{Name: "fact2.md", IsDir: false},
 		},
-		byPath: map[string]*store.FactWithBody{
-			"ontology/ai/fact1.md": {FactRecord: store.FactRecord{Title: "Fact One", Type: "observation"}},
-			"ontology/ai/fact2.md": {FactRecord: store.FactRecord{Title: "Fact Two", Type: "concept"}},
+		byPath: map[string]*facts.FactWithBody{
+			"ontology/ai/fact1.md": {FactRecord: facts.FactRecord{Title: "Fact One", Type: "observation"}},
+			"ontology/ai/fact2.md": {FactRecord: facts.FactRecord{Title: "Fact Two", Type: "concept"}},
 		},
 	}
 	s := &Server{
@@ -197,11 +197,11 @@ func TestHandleTopicStats_EmptyHighlightsSerializeAsArrayNotNull(t *testing.T) {
 // not just whether a parent listing exposes it.
 func TestHandleTopicFacts_HidesPrivateTopic(t *testing.T) {
 	lister := &stubTopicLister{
-		dirs: []store.DirEntry{
+		dirs: []facts.DirEntry{
 			{Name: "secret.md", IsDir: false},
 		},
-		byPath: map[string]*store.FactWithBody{
-			"ontology/.drafts/secret.md": {FactRecord: store.FactRecord{Title: "Secret", Type: "observation"}},
+		byPath: map[string]*facts.FactWithBody{
+			"ontology/.drafts/secret.md": {FactRecord: facts.FactRecord{Title: "Secret", Type: "observation"}},
 		},
 	}
 	s := &Server{
@@ -241,7 +241,7 @@ func TestHandleTopicFacts_HidesPrivateTopic(t *testing.T) {
 // behaviour is unaffected when no sub-resource suffix is present.
 func TestHandleTopicNode_StillWorksAfterDispatch(t *testing.T) {
 	lister := &stubTopicLister{
-		dirs: []store.DirEntry{{Name: "ml", IsDir: true}},
+		dirs: []facts.DirEntry{{Name: "ml", IsDir: true}},
 	}
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),

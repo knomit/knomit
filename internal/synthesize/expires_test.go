@@ -54,7 +54,7 @@ func TestApplyPruneDecisions_MergedFactCarriesNoExpires(t *testing.T) {
 		Paths:  []string{"kb/technology/a.md", "kb/technology/b.md"},
 		Merged: mergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
 	}}
-	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges,
+	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
 		"review-test", sink, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged, "fixture: the merge must have happened")
@@ -79,7 +79,7 @@ func TestApplyPruneDecisions_UndatedMembersNoWarn(t *testing.T) {
 	seedDated(t, svc, branch, "kb/technology/a.md", fact.Observation, "")
 	seedDated(t, svc, branch, "kb/technology/b.md", fact.Observation, "")
 	sink, warns := collectWarns()
-	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(), nil, []MergeEntry{{
+	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []MergeEntry{{
 		Paths:  []string{"kb/technology/a.md", "kb/technology/b.md"},
 		Merged: mergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
 	}}, "review-test", sink, branch, bareRefFixture, "kb", nil)
@@ -100,7 +100,7 @@ func TestApplyDistillDecisions_NewClaimInheritsNoExpires(t *testing.T) {
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.Search(), []distillFact{df}, nil,
+	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []distillFact{df}, nil,
 		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1)
@@ -122,7 +122,7 @@ func TestApplyReflectDecisions_NewMethodologyInheritsNoExpires(t *testing.T) {
 		TransitionPaths: []string{"kb/technology/a.md"},
 		Refs:            []string{"kb/technology/a.md"},
 	}}}
-	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.Search(), result, sess,
+	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), result, sess,
 		bareRefFixture, ri.OntologyRoot(), 0.95, nil))
 	found := methodologyFactPaths(t, svc, branch)
 	require.Len(t, found, 1, "precondition: the propose arm must have written one methodology")
@@ -139,7 +139,7 @@ func TestApplyDiscoveredProposals_NewClaimInheritsNoExpires(t *testing.T) {
 		Domain: []string{"x"}, Confidence: 0.9,
 		Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(),
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
@@ -179,7 +179,7 @@ func TestDedupCluster_WinnerKeepsItsOwnExpires(t *testing.T) {
 				{File: loserPath, Kind: "epistemic", Title: "Widget fails closed again", Body: "recording", Type: "observation", Confidence: 0.5, Sources: 1},
 			}
 			d := env.deps()
-			surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.Search(),
+			surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 				env.dedupThreshold(), reviewTool, d.OnProgress, env.branch, fact.ID12(env.ri.ID()))
 			require.NoError(t, err)
 			require.Len(t, surviving, 1, "fixture: the pair must have merged")

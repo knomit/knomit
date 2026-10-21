@@ -10,6 +10,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -80,7 +81,7 @@ func serveLensSystemFileRead(w http.ResponseWriter, r *http.Request, bind *repos
 // route answers an absent file in its own shape.
 func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch, commit, path string, notFound func()) {
 	var (
-		sf    store.SystemFile
+		sf    facts.SystemFile
 		found bool
 		err   error
 	)
@@ -89,7 +90,7 @@ func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInsta
 			err = errFactNotFound
 			return
 		}
-		sf, found, err = svc.SystemFiles().SystemFileAt(r.Context(), branch, commit, path, systemFileReadMax)
+		sf, found, err = svc.FactsRepo().SystemFileAt(r.Context(), branch, commit, path, systemFileReadMax)
 	}); werr != nil && err == nil {
 		err = werr
 	}

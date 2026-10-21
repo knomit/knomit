@@ -154,7 +154,7 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 		t.Fatalf("found %d test-seam uses in the allowed files, want at least %d: the seam names changed shape, so the pattern matches nothing", allowedUses, minAllowedUses)
 	}
 	for _, want := range []string{
-		"ServiceRepoForTest", "ServiceIndexForTest", "SetRefForTest", "DeleteRefForTest",
+		"ServiceRepoForTest", "SetRefForTest", "DeleteRefForTest",
 		"CommitFilesForTest", "RawSymlinkForTest", "WriteFileExactForTest", "FetchRefspecsForTest",
 		"RemoteURLsForTest", "DeleteObjectForTest", "SetExperimentActivityForTest",
 	} {

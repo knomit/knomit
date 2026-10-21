@@ -24,9 +24,9 @@ func TestSkillsAt_ReadsTheCommitsOwnTree(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 
-	root, err := svc.Triggers().UpstreamTip(ctx, "main")
+	root, err := svc.FactsRepo().UpstreamTip(ctx, "main")
 	require.NoError(t, err)
-	got, err := svc.Skills().SkillsAt(ctx, root)
+	got, err := svc.FactsRepo().SkillsAt(ctx, root)
 	require.NoError(t, err)
 	require.Empty(t, got, "no .knomit/skills folder is an empty list, not an error")
 
@@ -41,7 +41,7 @@ func TestSkillsAt_ReadsTheCommitsOwnTree(t *testing.T) {
 	tip := putRaw(t, svc, "main", ".knomit/skills/loose.md", "L")
 	agent := putRaw(t, svc, "agent/a", ".knomit/skills/agent-only/SKILL.md", "X")
 
-	got, err = svc.Skills().SkillsAt(ctx, tip)
+	got, err = svc.FactsRepo().SkillsAt(ctx, tip)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, "alpha", got[0].Dir)
@@ -50,7 +50,7 @@ func TestSkillsAt_ReadsTheCommitsOwnTree(t *testing.T) {
 	require.Equal(t, "zeta", got[1].Dir)
 	require.Equal(t, "Z", string(got[1].Data))
 
-	files, err := svc.Skills().SkillFilesAt(ctx, tip, "alpha")
+	files, err := svc.FactsRepo().SkillFilesAt(ctx, tip, "alpha")
 	require.NoError(t, err)
 	require.Len(t, files, 2)
 	require.Equal(t, "ref.md", files[0].Path)
@@ -60,18 +60,18 @@ func TestSkillsAt_ReadsTheCommitsOwnTree(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "S", string(data))
 
-	lower, err := svc.Skills().SkillFilesAt(ctx, tip, "zeta")
+	lower, err := svc.FactsRepo().SkillFilesAt(ctx, tip, "zeta")
 	require.NoError(t, err)
 	require.Empty(t, lower, "a lowercase skill.md is the skill file, not a bundled file")
 
-	none, err := svc.Skills().SkillFilesAt(ctx, tip, "absent")
+	none, err := svc.FactsRepo().SkillFilesAt(ctx, tip, "absent")
 	require.NoError(t, err)
 	require.Empty(t, none)
-	_, err = svc.Skills().SkillFilesAt(ctx, tip, "../x")
+	_, err = svc.FactsRepo().SkillFilesAt(ctx, tip, "../x")
 	require.Error(t, err)
 
 	// The agent branch's commit has its own tree: the reader never mixes.
-	onAgent, err := svc.Skills().SkillsAt(ctx, agent)
+	onAgent, err := svc.FactsRepo().SkillsAt(ctx, agent)
 	require.NoError(t, err)
 	require.Len(t, onAgent, 1)
 	require.Equal(t, "agent-only", onAgent[0].Dir)
@@ -100,7 +100,7 @@ func TestSkillsAt_SymlinkIsNotAFile(t *testing.T) {
 	link(".knomit/skills/shadow/SKILL.md", "skill.md")
 	tip := link(".knomit/skills/real/link.md", "ref.md")
 
-	got, err := svc.Skills().SkillsAt(ctx, tip)
+	got, err := svc.FactsRepo().SkillsAt(ctx, tip)
 	require.NoError(t, err)
 	dirs := make([]string, len(got))
 	for i, e := range got {
@@ -109,12 +109,12 @@ func TestSkillsAt_SymlinkIsNotAFile(t *testing.T) {
 	require.Equal(t, []string{"real", "shadow"}, dirs, "a symlinked SKILL.md is no skill")
 	require.Equal(t, "REGULAR", string(got[1].Data), "the regular skill.md, not the symlink's target name")
 
-	files, err := svc.Skills().SkillFilesAt(ctx, tip, "real")
+	files, err := svc.FactsRepo().SkillFilesAt(ctx, tip, "real")
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 	require.Equal(t, "ref.md", files[0].Path, "the symlinked link.md is not a bundled file")
 
-	shadow, err := svc.Skills().SkillFilesAt(ctx, tip, "shadow")
+	shadow, err := svc.FactsRepo().SkillFilesAt(ctx, tip, "shadow")
 	require.NoError(t, err)
 	require.Empty(t, shadow, "the skill.md is the skill file, and the SKILL.md symlink is not a file")
 }

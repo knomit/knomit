@@ -43,7 +43,7 @@ func messageOf(t *testing.T, ri *repos.RepoInstance, hash string) string {
 	svc, release, err := ri.Acquire()
 	require.NoError(t, err)
 	defer release()
-	info, err := svc.Triggers().CommitInfo(context.Background(), plumbing.NewHash(hash))
+	info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(hash))
 	require.NoError(t, err)
 	return info.Message
 }

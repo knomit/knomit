@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/facts"
 )
 
 // ---- F07 PR 2: the `on: due` store surface (migration 000030).
@@ -27,7 +29,7 @@ func TestMigration000030_TableExists(t *testing.T) {
 
 func dueAt(t *testing.T, svc *Service, branch string, nowUnix int64) map[string]int64 {
 	t.Helper()
-	rows, err := svc.Triggers().DueCandidates(context.Background(), branch, nowUnix)
+	rows, err := svc.FactsRepo().DueCandidates(context.Background(), branch, nowUnix)
 	require.NoError(t, err)
 	out := map[string]int64{}
 	for _, r := range rows {
@@ -96,40 +98,40 @@ func TestDueCandidates_LivenessJoinAndBoundary(t *testing.T) {
 func TestDueMarks_RoundTripAndForgottenWithTheName(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	tr := svc.Triggers()
-	marks := func(branch string) map[DueKey]int64 {
+	tr := svc.FactsRepo()
+	marks := func(branch string) map[facts.DueKey]int64 {
 		m, err := tr.DueMarks(ctx, branch)
 		require.NoError(t, err)
 		return m
 	}
 	require.Empty(t, marks("agent/a"))
 
-	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"x": "h1", "y": "h1"}, nil, []DueMark{
+	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"x": "h1", "y": "h1"}, nil, []facts.DueMark{
 		{Trigger: "x", Path: "kb/a.md", ExpiresAt: 100, FiredAt: 500},
 		{Trigger: "x", Path: "kb/b.md", ExpiresAt: 200, FiredAt: 500},
 		{Trigger: "y", Path: "kb/a.md", ExpiresAt: 100, FiredAt: 500},
 	}))
-	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/b", nil, nil, []DueMark{{Trigger: "x", Path: "kb/a.md", ExpiresAt: 100, FiredAt: 500}}))
-	require.Equal(t, map[DueKey]int64{
+	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/b", nil, nil, []facts.DueMark{{Trigger: "x", Path: "kb/a.md", ExpiresAt: 100, FiredAt: 500}}))
+	require.Equal(t, map[facts.DueKey]int64{
 		{Trigger: "x", Path: "kb/a.md"}: 100,
 		{Trigger: "x", Path: "kb/b.md"}: 200,
 		{Trigger: "y", Path: "kb/a.md"}: 100,
 	}, marks("agent/a"))
 
 	// Re-arm: the same key with a new instant replaces the row.
-	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", nil, nil, []DueMark{{Trigger: "x", Path: "kb/a.md", ExpiresAt: 150, FiredAt: 600}}))
-	require.EqualValues(t, 150, marks("agent/a")[DueKey{Trigger: "x", Path: "kb/a.md"}])
+	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", nil, nil, []facts.DueMark{{Trigger: "x", Path: "kb/a.md", ExpiresAt: 150, FiredAt: 600}}))
+	require.EqualValues(t, 150, marks("agent/a")[facts.DueKey{Trigger: "x", Path: "kb/a.md"}])
 	var n int
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM trigger_due_fires`).Scan(&n))
 	require.Equal(t, 4, n, "three keys on agent/a and one on agent/b")
 
 	// The name x leaves: its bookmark and its marks go, y's stay, agent/b's stay.
 	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", nil, []string{"x"}, nil))
-	require.Equal(t, map[DueKey]int64{{Trigger: "y", Path: "kb/a.md"}: 100}, marks("agent/a"))
+	require.Equal(t, map[facts.DueKey]int64{{Trigger: "y", Path: "kb/a.md"}: 100}, marks("agent/a"))
 	wms, err := tr.TriggerWatermarks(ctx, "agent/a")
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"y": "h1"}, wms)
-	require.Equal(t, map[DueKey]int64{{Trigger: "x", Path: "kb/a.md"}: 100}, marks("agent/b"), "another branch's marks are untouched")
+	require.Equal(t, map[facts.DueKey]int64{{Trigger: "x", Path: "kb/a.md"}: 100}, marks("agent/b"), "another branch's marks are untouched")
 }
 
 // [T24] The marks are never capped and never hit SQLite's bound-parameter
@@ -140,15 +142,15 @@ func TestAdvanceTriggerWatermarks_DueMarksUnbounded(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 	const n = 12000
-	due := make([]DueMark, 0, n)
+	due := make([]facts.DueMark, 0, n)
 	for i := 0; i < n; i++ {
-		due = append(due, DueMark{Trigger: "big", Path: fmt.Sprintf("kb/big/%05d.md", i), ExpiresAt: 100, FiredAt: 500})
+		due = append(due, facts.DueMark{Trigger: "big", Path: fmt.Sprintf("kb/big/%05d.md", i), ExpiresAt: 100, FiredAt: 500})
 	}
-	logged, err := svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "h", RangeTo: "h", Paths: n, Evaluated: n, Fires: n, Rows: fireRows(n, "big")})
+	logged, err := svc.FactsRepo().RecordTriggerRun(ctx, facts.TriggerRun{Branch: "agent/a", RangeFrom: "h", RangeTo: "h", Paths: n, Evaluated: n, Fires: n, Rows: fireRows(n, "big")})
 	require.NoError(t, err)
-	require.Equal(t, TriggerFireRetention, logged, "fixture: the fire rows ARE capped")
-	require.NoError(t, svc.Triggers().AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"big": "h"}, nil, due))
-	marks, err := svc.Triggers().DueMarks(ctx, "agent/a")
+	require.Equal(t, facts.TriggerFireRetention, logged, "fixture: the fire rows ARE capped")
+	require.NoError(t, svc.FactsRepo().AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"big": "h"}, nil, due))
+	marks, err := svc.FactsRepo().DueMarks(ctx, "agent/a")
 	require.NoError(t, err)
 	require.Len(t, marks, n, "every processed fact is marked, whatever the log kept")
 	var rows int
@@ -164,7 +166,7 @@ func TestAdvanceTriggerWatermarks_DueMarksUnbounded(t *testing.T) {
 func TestTriggerFires_FiredAtIsUTCWithZ(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	_, err := svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "h", RangeTo: "h", Paths: 1, Evaluated: 1, Fires: 1, Rows: fireRows(1, "z")})
+	_, err := svc.FactsRepo().RecordTriggerRun(ctx, facts.TriggerRun{Branch: "agent/a", RangeFrom: "h", RangeTo: "h", Paths: 1, Evaluated: 1, Fires: 1, Rows: fireRows(1, "z")})
 	require.NoError(t, err)
 	var stored int64
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT fired_at FROM trigger_fires WHERE outcome = 'run'`).Scan(&stored))
@@ -176,7 +178,7 @@ func TestTriggerFires_FiredAtIsUTCWithZ(t *testing.T) {
 	for name, loc := range map[string]*time.Location{"utc": time.UTC, "new-york": ny} {
 		orig := time.Local
 		time.Local = loc
-		fires, err := svc.Triggers().RecentTriggerFires(ctx, "agent/a", 5)
+		fires, err := svc.FactsRepo().RecentTriggerFires(ctx, "agent/a", 5)
 		time.Local = orig
 		require.NoError(t, err)
 		require.Len(t, fires, 2)
@@ -185,12 +187,12 @@ func TestTriggerFires_FiredAtIsUTCWithZ(t *testing.T) {
 			parsed, err := time.Parse(time.RFC3339, f.FiredAt)
 			require.NoError(t, err)
 			require.Equal(t, stored, parsed.Unix())
-			require.Equal(t, UTCStamp(stored), f.FiredAt)
+			require.Equal(t, facts.UTCStamp(stored), f.FiredAt)
 		}
 		rendered[name] = fires[0].FiredAt
 	}
 	require.Equal(t, rendered["utc"], rendered["new-york"], "the local zone must not leak into the rendering")
-	require.Equal(t, "2026-09-28T12:34:56Z", UTCStamp(time.Date(2026, 9, 28, 14, 34, 56, 0, time.FixedZone("x", 2*3600)).Unix()))
+	require.Equal(t, "2026-09-28T12:34:56Z", facts.UTCStamp(time.Date(2026, 9, 28, 14, 34, 56, 0, time.FixedZone("x", 2*3600)).Unix()))
 }
 
 // BenchmarkDueCandidates [T20, report-only]: the sweep's one query over N live
@@ -221,7 +223,7 @@ func BenchmarkDueCandidates(b *testing.B) {
 				if i < tc.due {
 					at = now - 3600 // past
 				}
-				_, err = tx.ExecContext(ctx, `INSERT INTO fact_expires(fact_id, expires, expires_at) VALUES (?, ?, ?)`, id, UTCStamp(at), at)
+				_, err = tx.ExecContext(ctx, `INSERT INTO fact_expires(fact_id, expires, expires_at) VALUES (?, ?, ?)`, id, facts.UTCStamp(at), at)
 				require.NoError(b, err)
 				_, err = tx.ExecContext(ctx, `INSERT INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, '')`, branchID, path, id)
 				require.NoError(b, err)
@@ -231,7 +233,7 @@ func BenchmarkDueCandidates(b *testing.B) {
 			require.NoError(b, err)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				rows, err := svc.Triggers().DueCandidates(ctx, "agent/a", now)
+				rows, err := svc.FactsRepo().DueCandidates(ctx, "agent/a", now)
 				if err != nil || len(rows) != tc.due {
 					b.Fatalf("rows=%d err=%v", len(rows), err)
 				}

@@ -88,7 +88,7 @@ func newReinforceEnv(t *testing.T) *reinforceEnv {
 
 func (e *reinforceEnv) apply(rs ...FactReinforcement) []string {
 	e.t.Helper()
-	return applyReinforcements(context.Background(), e.svc.Facts(), e.svc.Search(),
+	return applyReinforcements(context.Background(), e.svc.Facts(), e.svc.FactsRepo(), e.svc.Search(),
 		e.payload, rs, e.branch, e.repoID, func(ProgressEvent) {})
 }
 
@@ -370,7 +370,7 @@ func TestApplyReinforcements_SkipsALossyTarget(t *testing.T) {
 	// asserted: "rewritten outside the permitted lines" would send a reader
 	// hunting a formatting problem instead of a deleted motif.
 	var warnings []string
-	applyReinforcements(context.Background(), env.svc.Facts(), env.svc.Search(),
+	applyReinforcements(context.Background(), env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 		env.payload, []FactReinforcement{goodReinforcement()}, env.branch, env.repoID,
 		func(e ProgressEvent) {
 			if e.Phase == "warn" {
@@ -507,7 +507,7 @@ func TestApplyReinforcements_DoesNotRewriteExistingRefs(t *testing.T) {
 // that something did.
 func warnsOf(env *reinforceEnv, rs ...FactReinforcement) ([]string, []string) {
 	var warns []string
-	written := applyReinforcements(context.Background(), env.svc.Facts(), env.svc.Search(),
+	written := applyReinforcements(context.Background(), env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 		env.payload, rs, env.branch, env.repoID, func(e ProgressEvent) {
 			if e.Phase == "warn" {
 				warns = append(warns, e.Message)

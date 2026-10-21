@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // #533 review B2, the reviewer's probe made a test: connecting a repository
@@ -52,7 +53,7 @@ func TestValidateWrite_ACopyOfALegacyInvalidFactIsCarriedOver(t *testing.T) {
 	// An ordinary write is still judged: an edit of the carried-over fact
 	// that does not fix it is refused.
 	_, err = clone.Facts().WriteFact(ctx, agent, "kb/notes/legacy.md", note("legacy, edited"), "edit", "")
-	require.ErrorIs(t, err, ErrFactInvalid)
+	require.ErrorIs(t, err, facts.ErrFactInvalid)
 }
 
 // #533 re-review N2: a legacy invalid fact whose content Replay ALTERS (a
@@ -88,6 +89,6 @@ func TestValidateWrite_AReplayThatAltersALegacyInvalidFactJudgesIt(t *testing.T)
 	iter, err := local.Search().FactsIter(ctx, agent)
 	require.NoError(t, err)
 	_, err = Replay(ctx, local, agent, iter, clone, ReplayConfig{Strategy: StrategyLocalWins, AgentBranch: agent, DefaultBranch: "main"})
-	require.ErrorIs(t, err, ErrFactInvalid, "the altered fact is judged")
+	require.ErrorIs(t, err, facts.ErrFactInvalid, "the altered fact is judged")
 	require.Contains(t, err.Error(), "kb/notes/legacy.md")
 }

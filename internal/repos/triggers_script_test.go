@@ -20,6 +20,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -193,7 +194,7 @@ func settle(t *testing.T, ri *RepoInstance) string {
 // commitMessage reads a commit's message; commitSigner its verified signer.
 func commitMessage(t *testing.T, ri *RepoInstance, h string) string {
 	t.Helper()
-	info, err := testService(t, ri).Triggers().CommitInfo(context.Background(), plumbing.NewHash(h))
+	info, err := testService(t, ri).FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(h))
 	require.NoError(t, err)
 	return info.Message
 }
@@ -215,7 +216,7 @@ func commitsAfter(t *testing.T, ri *RepoInstance, stop string) []string {
 	h := head(t, ri)
 	for h != stop {
 		out = append([]string{h}, out...)
-		info, err := testService(t, ri).Triggers().CommitInfo(context.Background(), plumbing.NewHash(h))
+		info, err := testService(t, ri).FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(h))
 		require.NoError(t, err)
 		require.NotEmpty(t, info.Parents, "walked past the root looking for %s", stop)
 		h = info.Parents[0].String()
@@ -272,7 +273,7 @@ func (s *payloadSink) wait(t *testing.T, n int) []map[string]any {
 	return out
 }
 
-func outcomesOf(rows []store.TriggerFire) []string {
+func outcomesOf(rows []facts.TriggerFire) []string {
 	out := []string{}
 	for _, r := range rows {
 		out = append(out, r.Outcome)
@@ -328,7 +329,7 @@ knomit.emit({q: q, e: e, l: l, u: u, r: r, push: knomit.push(), run: knomit.run(
 	require.Equal(t, "trigger:t1", calls[4].Args["moment_name"])
 
 	rows := firesOf(t, ri, "t1")
-	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(rows))
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(rows))
 	require.Equal(t, int64(1), ri.triggers.stats.view("t1").Fires)
 	// The script made three commits (learn, update, retract) after c0.
 	require.Len(t, commitsAfter(t, ri, c0), 3)
@@ -394,14 +395,14 @@ func TestScript_WritesAsThisMachine(t *testing.T) {
 	commits := commitsAfter(t, ri, before)
 	scriptCommit := commits[len(commits)-1]
 	require.Contains(t, commitMessage(t, ri, scriptCommit), "Knomit-Trigger: t1")
-	info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(scriptCommit))
+	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(scriptCommit))
 	require.NoError(t, err)
 	require.Equal(t, "test", info.AuthorName, "the author is derived from the agent branch")
 	require.Contains(t, info.AuthorEmail, "@agents.knomit.io")
-	own, err := svc.Triggers().CommitSignerOf(ctx, plumbing.NewHash(scriptCommit))
+	own, err := svc.FactsRepo().CommitSignerOf(ctx, plumbing.NewHash(scriptCommit))
 	require.NoError(t, err)
-	require.Equal(t, svc.SignerFingerprint(), own.Fingerprint, "signed by this store's key")
-	peerSig, err := svc.Triggers().CommitSignerOf(ctx, plumbing.NewHash(peer))
+	require.Equal(t, svc.FactsRepo().SignerFingerprint(), own.Fingerprint, "signed by this store's key")
+	peerSig, err := svc.FactsRepo().CommitSignerOf(ctx, plumbing.NewHash(peer))
 	require.NoError(t, err)
 	require.NotEqual(t, peerSig.Fingerprint, own.Fingerprint, "never the firing author's key")
 	rows := firesOf(t, ri, "t1")
@@ -429,9 +430,9 @@ func TestScript_TrailersStamped(t *testing.T) {
 		msg := commitMessage(t, ri, h)
 		require.True(t, strings.HasSuffix(msg, "\n\nKnomit-Trace: "+c0+"\nKnomit-Cause: "+c0+"\nKnomit-Trigger: t1\n"), "%q", msg)
 		require.Equal(t, store.Trailers{Trace: c0, Cause: c0, Trigger: "t1"}, trailersOf(t, ri, h))
-		sig, err := testService(t, ri).Triggers().CommitSignerOf(context.Background(), plumbing.NewHash(h))
+		sig, err := testService(t, ri).FactsRepo().CommitSignerOf(context.Background(), plumbing.NewHash(h))
 		require.NoError(t, err)
-		require.Equal(t, testService(t, ri).SignerFingerprint(), sig.Fingerprint)
+		require.Equal(t, testService(t, ri).FactsRepo().SignerFingerprint(), sig.Fingerprint)
 	}
 	require.Equal(t, store.Trailers{}, trailersOf(t, ri, c0), "the firing commit itself carries none")
 }
@@ -503,7 +504,7 @@ func TestScript_ChainAcrossTriggers(t *testing.T) {
 	svc.SetSigner(nil)
 	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "main", trigAgent, store.StrategyRemoteWins))
 	merge := settle(t, ri)
-	info, err := svc.Triggers().CommitInfo(context.Background(), plumbing.NewHash(merge))
+	info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(merge))
 	require.NoError(t, err)
 	require.Len(t, info.Parents, 2, "fixture: the head is the merge commit")
 	require.NotContains(t, info.Message, "Knomit-")
@@ -563,7 +564,7 @@ func TestScript_LoopGuard(t *testing.T) {
 	commits := commitsAfter(t, ri, before)
 	require.Len(t, commits, 2, "the human write and ONE script update")
 	require.Equal(t, "t", trailersOf(t, ri, commits[1]).Trigger)
-	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")), "exactly one run: the update it made is self-caused")
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")), "exactly one run: the update it made is self-caused")
 	st := ri.triggers.stats.view("t")
 	require.Equal(t, int64(1), st.SelfCaused)
 	require.Equal(t, int64(1), st.Evaluations, "a self-caused fire is not an evaluation")
@@ -610,7 +611,7 @@ func TestScript_LoopGuardNeverOnDue(t *testing.T) {
 		"the re-armed fact fires again at its new instant: a due fire is never self-caused")
 	settle(t, ri)
 	for _, f := range firesOf(t, ri, "t") {
-		require.Equal(t, store.TriggerOutcomeRan, f.Outcome)
+		require.Equal(t, facts.TriggerOutcomeRan, f.Outcome)
 	}
 }
 
@@ -632,7 +633,7 @@ func TestScript_LoopGuardOnRetract(t *testing.T) {
 	commits := commitsAfter(t, ri, base)
 	require.Len(t, commits, 2, "the write and the script's retract")
 	require.Equal(t, "t", trailersOf(t, ri, commits[1]).Trigger)
-	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
 	require.Equal(t, int64(1), ri.triggers.stats.view("t").SelfCaused, "the linear retract is self-caused")
 	_ = r
 
@@ -644,7 +645,7 @@ func TestScript_LoopGuardOnRetract(t *testing.T) {
 	require.NoError(t, storetest.SetRef(svc, "refs/heads/"+trigAgent, base))
 	other := writeOn(t, ri, trigAgent, "kb/tasks/rt/other.md")
 	settle(t, ri)
-	var retracts []store.TriggerFire
+	var retracts []facts.TriggerFire
 	for _, f := range firesOf(t, ri, "t") {
 		if f.Episode == "retract" {
 			retracts = append(retracts, f)
@@ -687,7 +688,7 @@ func TestScript_RateCap(t *testing.T) {
 	for _, r := range rows {
 		counts[r.Outcome]++
 	}
-	require.Equal(t, map[string]int{store.TriggerOutcomeRan: 3, store.TriggerOutcomeRateLimited: 7}, counts)
+	require.Equal(t, map[string]int{facts.TriggerOutcomeRan: 3, facts.TriggerOutcomeRateLimited: 7}, counts)
 	require.Equal(t, int64(7), ri.triggers.stats.view("t").RateLimited)
 	require.Equal(t, 1, strings.Count(logs.String(), "rate cap reached"), "%s", logs.String())
 	require.Equal(t, last, watermarks(t, ri)["t"], "dropped fires are not retried: the bookmark moved past them")
@@ -739,7 +740,7 @@ func TestScript_RuntimeErrorIsOutcome(t *testing.T) {
 	th := firesOf(t, ri, "throws")
 	require.Len(t, th, 5)
 	for _, f := range th {
-		require.Equal(t, store.TriggerOutcomeScriptError, f.Outcome)
+		require.Equal(t, facts.TriggerOutcomeScriptError, f.Outcome)
 		require.Contains(t, f.Error, "boom")
 	}
 	require.Equal(t, int64(5), ri.triggers.stats.view("throws").ScriptError)
@@ -759,7 +760,7 @@ func TestScript_RuntimeErrorIsOutcome(t *testing.T) {
 
 	pa := firesOf(t, ri, "panics")
 	require.Len(t, pa, 5)
-	require.Equal(t, store.TriggerOutcomeScriptError, pa[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeScriptError, pa[0].Outcome)
 	require.Contains(t, pa[0].Error, "knomit.learn: panic: stub exploded")
 	p := sink.wait(t, 1)[0]
 	require.Equal(t, true, p["isError"], "a host failure is a real JavaScript Error")
@@ -812,18 +813,18 @@ func TestScript_TimeoutIsOutcome(t *testing.T) {
 
 	lo := firesOf(t, ri, "loops")
 	require.Len(t, lo, 1)
-	require.Equal(t, store.TriggerOutcomeScriptTimeout, lo[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeScriptTimeout, lo[0].Outcome)
 	require.Contains(t, lo[0].Error, "exceeded")
 	require.Equal(t, int64(1), ri.triggers.stats.view("loops").ScriptTimeout)
 
 	sc := firesOf(t, ri, "slowcall")
-	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(sc), "a 100 ms host call under a 300 ms budget completes")
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(sc), "a 100 ms host call under a 300 ms budget completes")
 	require.Equal(t, true, sinkSlow.wait(t, 1)[0]["done"])
 	require.Less(t, ri.triggers.stats.view("slowcall").Duration.MaxMS, 50.0, "host time is not the script's own time")
 
 	bl := firesOf(t, ri, "blocks")
 	require.Len(t, bl, 1)
-	require.Equal(t, store.TriggerOutcomeScriptTimeout, bl[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeScriptTimeout, bl[0].Outcome)
 	require.ErrorIs(t, blockedErr, context.DeadlineExceeded, "the host ctx carried the budget as its deadline, not the handler's 60 s")
 	require.Less(t, blockedAt, 1500*time.Millisecond, "released at the budget (300 ms), not the handler's own timeout")
 	sinkBlock.mu.Lock()
@@ -898,7 +899,7 @@ func TestScript_CompileErrorAndMissingAreInvalid(t *testing.T) {
 		rows := firesOf(t, ri, name)
 		require.Len(t, rows, 5, name)
 		for _, f := range rows {
-			require.Equal(t, store.TriggerOutcomeScriptError, f.Outcome)
+			require.Equal(t, facts.TriggerOutcomeScriptError, f.Outcome)
 		}
 		require.Equal(t, last, watermarks(t, ri)[name], "%s: the bookmark advances", name)
 		require.Equal(t, int64(5), ri.triggers.stats.view(name).ScriptError)
@@ -919,8 +920,8 @@ func TestScript_CompileErrorAndMissingAreInvalid(t *testing.T) {
 	}
 	writeOn(t, ri, trigAgent, "kb/tasks/in/after.md")
 	settle(t, ri)
-	require.Equal(t, store.TriggerOutcomeRan, firesOf(t, ri, "broken")[0].Outcome)
-	require.Equal(t, store.TriggerOutcomeRan, firesOf(t, ri, "missing")[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeRan, firesOf(t, ri, "broken")[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeRan, firesOf(t, ri, "missing")[0].Outcome)
 }
 
 // ---- T17, T18: sequencing
@@ -1002,7 +1003,7 @@ knomit.emit(out);`)
 	}
 	require.Empty(t, tools.recorded(), "refused before any tool ran")
 	require.Equal(t, []string{c0}, commitsAfter(t, ri, before), "nothing was committed")
-	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
 }
 
 // ArtifactsHostAccepts (F25 follow-up, user ruling 2026-10-06): a script's
@@ -1074,7 +1075,7 @@ knomit.learn([], {retract: [change.path, "kb/tasks/in/other.md"], moment_name: "
 	require.Equal(t, []any{}, calls[1].Args["facts"])
 	require.Equal(t, []any{"kb/tasks/in/a.md", "kb/tasks/in/other.md"}, calls[1].Args["retract"])
 	require.Equal(t, "drop", calls[1].Args["moment_name"])
-	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
 }
 
 // LearnRetractPrivateRefused [T-A7, script half]: a retract path under a

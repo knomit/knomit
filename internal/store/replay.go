@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // Replay copies local facts into a target service's agent branch.
@@ -89,7 +90,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		path     string
 		blobHash string
 	}
-	var facts []localFact
+	var localFacts []localFact
 	for {
 		row, err := iter.Next()
 		if err != nil {
@@ -98,7 +99,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		if row == nil {
 			break
 		}
-		facts = append(facts, localFact{path: row.Path, blobHash: row.BlobHash})
+		localFacts = append(localFacts, localFact{path: row.Path, blobHash: row.BlobHash})
 	}
 
 	// 3. Count remote facts for stats.
@@ -112,8 +113,8 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	}
 
 	// Also build a set of local fact paths for dead ref resolution.
-	localPathSet := make(map[string]bool, len(facts))
-	for _, f := range facts {
+	localPathSet := make(map[string]bool, len(localFacts))
+	for _, f := range localFacts {
 		localPathSet[f.path] = true
 	}
 
@@ -130,12 +131,12 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	}
 
 	result := &ReplayResult{
-		TotalFacts: len(facts) + len(remotePaths),
+		TotalFacts: len(localFacts) + len(remotePaths),
 		FromRemote: len(remotePaths),
 	}
 
 	// 4. For each local fact, replay into target.
-	for i, f := range facts {
+	for i, f := range localFacts {
 		// Read blob content from local git store.
 		content, err := readBlobByHash(local, f.blobHash)
 		if err != nil {
@@ -149,7 +150,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 			case StrategyRemoteWins:
 				// Skip — remote version is kept.
 				if cfg.OnProgress != nil {
-					cfg.OnProgress(i+1, len(facts))
+					cfg.OnProgress(i+1, len(localFacts))
 				}
 				continue
 			case StrategyLocalWins:
@@ -175,7 +176,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		// never marked carried over).
 		wctx := ctx
 		if resolvedContent == content {
-			wctx = WithCarriedOver(ctx)
+			wctx = facts.WithCarriedOver(ctx)
 		}
 		if _, err := target.fi.WriteFact(wctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
 			return nil, fmt.Errorf("Replay: write %s to target: %w", f.path, err)
@@ -183,7 +184,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		result.FromLocal++
 
 		if cfg.OnProgress != nil {
-			cfg.OnProgress(i+1, len(facts))
+			cfg.OnProgress(i+1, len(localFacts))
 		}
 	}
 

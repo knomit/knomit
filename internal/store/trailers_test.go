@@ -44,7 +44,7 @@ func TestWithTrailers_StampedAtThreeSitesInsideTheSignature(t *testing.T) {
 	r, err := svc.Facts().WriteFact(stamped, "agent/test", "kb/t/a.md", trailerFactBody, "learn: a", "learn")
 	require.NoError(t, err)
 	msgOf := func(h string) string {
-		info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(h))
+		info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(h))
 		require.NoError(t, err)
 		return info.Message
 	}
@@ -72,7 +72,7 @@ func TestWithTrailers_StampedAtThreeSitesInsideTheSignature(t *testing.T) {
 	require.NoError(t, err)
 	signer, err := verify.VerifyCommitSignature(c)
 	require.NoError(t, err)
-	require.Equal(t, svc.SignerFingerprint(), signer.Fingerprint)
+	require.Equal(t, svc.FactsRepo().SignerFingerprint(), signer.Fingerprint)
 	altered := *c
 	altered.Message = strings.Replace(c.Message, "Knomit-Trace: t-1", "Knomit-Trace: t-2", 1)
 	_, err = verify.VerifyCommitSignature(&altered)
@@ -96,7 +96,7 @@ func TestWithAgentTrace_RefusesOverKnomitsSet(t *testing.T) {
 	require.NoError(t, err)
 	r, err := svc.Facts().WriteFact(stamped, "agent/test", "kb/t/a.md", trailerFactBody, "learn: a", "learn")
 	require.NoError(t, err)
-	info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(r.CommitHash))
+	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(r.CommitHash))
 	require.NoError(t, err)
 	require.Equal(t, "learn: a\n\nKnomit-Trace: task-7\nKnomit-Run: "+run+"\nTicket: ABC-12\n", info.Message)
 

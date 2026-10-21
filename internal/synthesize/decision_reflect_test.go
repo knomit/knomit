@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // stubSearch returns a MockSearchIndex whose Search returns the given
@@ -62,7 +63,7 @@ func TestApplyReflect_AppliesReinforce(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, nil),
 		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
@@ -95,7 +96,7 @@ func TestApplyReflect_ReinforceIsIdempotent(t *testing.T) {
 	}
 
 	for range 3 {
-		err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
+		err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, nil),
 			result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 		require.NoError(t, err)
 	}
@@ -132,7 +133,7 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, nil),
 		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
@@ -168,8 +169,8 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 	writeMethodologyForTest(t, svc, sess.Branch, conflictPath, "Existing", "Already on file")
 
 	stub := stubSearch(t, []store.SearchResult{{
-		FactWithBody: store.FactWithBody{
-			FactRecord: store.FactRecord{Path: conflictPath, Title: "Existing", Type: "methodology"},
+		FactWithBody: facts.FactWithBody{
+			FactRecord: facts.FactRecord{Path: conflictPath, Title: "Existing", Type: "methodology"},
 		},
 		Score: 91.0, // 0.91 cosine — well above the 0.85 threshold
 	}})
@@ -186,7 +187,7 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), stub,
+	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stub,
 		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), conflictPath, "rejection must name the conflicting methodology so the agent can reinforce it")
@@ -216,7 +217,7 @@ func TestApplyReflect_RejectsReinforceUnknownPath(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, nil),
 		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does-not-exist.md")
@@ -249,7 +250,7 @@ func TestApplyReflect_RejectsReinforceNonMethodologyTarget(t *testing.T) {
 		}},
 	}
 
-	err = ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
+	err = ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, nil),
 		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "methodology")
@@ -263,7 +264,7 @@ func TestApplyReflect_AcceptsAllEmpty(t *testing.T) {
 	svc, sess := newReflectTestEnv(t)
 	ctx := context.Background()
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, nil),
 		ReflectResult{Reasoning: "no lessons today"}, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 }

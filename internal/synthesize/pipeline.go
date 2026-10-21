@@ -35,6 +35,7 @@ import (
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	"github.com/rs/zerolog/log"
 )
@@ -112,8 +113,9 @@ func errf(tool string, format string, args ...any) error {
 }
 
 // storeIndices returns the store indices under the repo read lock.
-func (p *Pipeline) storeIndices() (store.FactIndex, SearchQuery, store.PipelineIndex, store.BranchIndex, store.AbstractionIndex, store.MotifIndex) {
-	var gs store.FactIndex
+func (p *Pipeline) storeIndices() (*facts.Index, *facts.Repo, SearchQuery, store.PipelineIndex, store.BranchIndex, store.AbstractionIndex, store.MotifIndex) {
+	var gs *facts.Index
+	var files *facts.Repo
 	var idx SearchQuery
 	var pipelineIdx store.PipelineIndex
 	var branches store.BranchIndex
@@ -121,23 +123,25 @@ func (p *Pipeline) storeIndices() (store.FactIndex, SearchQuery, store.PipelineI
 	var motifs store.MotifIndex
 	p.ri.WithRead(func(svc *store.Service) {
 		gs = svc.Facts()
+		files = svc.FactsRepo()
 		idx = svc.Search()
 		pipelineIdx = svc.Pipeline()
 		branches = svc.Branches()
 		abstraction = svc.Abstraction()
 		motifs = svc.Motifs()
 	})
-	return gs, idx, pipelineIdx, branches, abstraction, motifs
+	return gs, files, idx, pipelineIdx, branches, abstraction, motifs
 }
 
 // deps resolves the per-call dependency bundle handed to Strategy methods.
 // Resolved once per engine entry point (and once per dispatch hop) rather than
 // cached on the struct, so a store swap between turns is picked up.
 func (p *Pipeline) deps() Deps {
-	gs, idx, pipelineIdx, branches, abstraction, motifs := p.storeIndices()
+	gs, files, idx, pipelineIdx, branches, abstraction, motifs := p.storeIndices()
 	return Deps{
 		RI:          p.ri,
 		Facts:       gs,
+		Files:       files,
 		Search:      idx,
 		Pipeline:    pipelineIdx,
 		Branches:    branches,
@@ -854,7 +858,7 @@ const (
 // load-bearing: discovery seeding excludes origin=discovered facts, and
 // dropping Origin here previously let a discovered fact seed its own
 // discovery.
-func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]fact.Fact, seedScan, error) {
+func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]fact.Fact, seedScan, error) {
 	tool := p.strategy.Tool()
 
 	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, tool, branch)
@@ -1184,7 +1188,7 @@ func (p *Pipeline) handlePhase(ctx context.Context, sess *store.PipelineSession,
 // fetched row, so no caller needs a defensive re-read of its own.
 func (p *Pipeline) refetchAndDispatch(ctx context.Context, sessionID string) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
-	_, _, pipelineIdx, _, _, _ := p.storeIndices()
+	_, _, _, pipelineIdx, _, _, _ := p.storeIndices()
 	fresh, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, wrapf(tool, err, "refetch session")

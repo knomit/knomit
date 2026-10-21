@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 
 	"knomit/internal/llm"
 	"knomit/internal/repos"
@@ -294,15 +295,15 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 // testing behaviour rather than being rewritten around the new seam.
 
 // storeIndices returns the store indices under the repo read lock.
-func (r *Reviewer) storeIndices() (store.FactIndex, SearchQuery, store.PipelineIndex, store.BranchIndex) {
-	gs, idx, pipelineIdx, branches, _, _ := r.p.storeIndices()
+func (r *Reviewer) storeIndices() (*facts.Index, SearchQuery, store.PipelineIndex, store.BranchIndex) {
+	gs, _, idx, pipelineIdx, branches, _, _ := r.p.storeIndices()
 	return gs, idx, pipelineIdx, branches
 }
 
 // dirtyFacts returns the review seed facts (changed since watermark, or the
 // whole epistemic corpus on a full scan), projected onto the prompt-facing
 // shape the review path works in.
-func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
+func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
 	seeds, _, err := r.p.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, err

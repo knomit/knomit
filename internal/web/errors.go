@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -19,13 +20,13 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error, defaultT
 			`no branch named "`+branch+`"`, r.URL.Path)
 		return
 	}
-	if errors.Is(err, store.ErrInvalidPath) {
+	if errors.Is(err, facts.ErrInvalidPath) {
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid path", err.Error(), r.URL.Path)
 		return
 	}
 	// RuleValidation at the source (store validateWrite): the content fails
 	// the ontology's validations; the detail is the ontology's own message.
-	var invalid *store.FactInvalidError
+	var invalid *facts.FactInvalidError
 	if errors.As(err, &invalid) {
 		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Fact fails the ontology's validations",
 			invalid.Error(), r.URL.Path)

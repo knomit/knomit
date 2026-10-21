@@ -16,6 +16,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // DiscoverDirection distinguishes the two emergent-fact shapes the discovery
@@ -304,7 +305,8 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 // are dropped, good ones land.
 func applyDiscoveredProposals(
 	ctx context.Context,
-	gs store.FactIndex,
+	gs *facts.Index,
+	sysFiles *facts.Repo,
 	idx SearchQuery,
 	emb store.Embedder,
 	payload DiscoverWorkPayload,
@@ -332,7 +334,7 @@ func applyDiscoveredProposals(
 		seedPaths[m.File] = struct{}{}
 	}
 
-	gate := writeGate(localRepoID, idx, gs, branch)
+	gate := writeGate(localRepoID, idx, sysFiles, branch)
 
 	var written []string
 	for _, p := range proposals {

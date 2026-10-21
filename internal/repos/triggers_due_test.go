@@ -19,6 +19,7 @@ import (
 	"knomit/internal/config"
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 )
 
@@ -109,9 +110,9 @@ func kickAndWait(t *testing.T, ri *RepoInstance) {
 }
 
 // dueFiresOf is the DUE fire rows of one trigger, newest first.
-func dueFiresOf(t *testing.T, ri *RepoInstance, name string) []store.TriggerFire {
+func dueFiresOf(t *testing.T, ri *RepoInstance, name string) []facts.TriggerFire {
 	t.Helper()
-	var out []store.TriggerFire
+	var out []facts.TriggerFire
 	for _, f := range firesOf(t, ri, name) {
 		if f.Episode == "due" {
 			out = append(out, f)
@@ -120,9 +121,9 @@ func dueFiresOf(t *testing.T, ri *RepoInstance, name string) []store.TriggerFire
 	return out
 }
 
-func dueMarks(t *testing.T, ri *RepoInstance) map[store.DueKey]int64 {
+func dueMarks(t *testing.T, ri *RepoInstance) map[facts.DueKey]int64 {
 	t.Helper()
-	m, err := testService(t, ri).Triggers().DueMarks(context.Background(), trigAgent)
+	m, err := testService(t, ri).FactsRepo().DueMarks(context.Background(), trigAgent)
 	require.NoError(t, err)
 	return m
 }
@@ -130,7 +131,7 @@ func dueMarks(t *testing.T, ri *RepoInstance) map[store.DueKey]int64 {
 // dueCandidates is the sweep's join at instant `at`, as path → expires_at.
 func dueCandidates(t *testing.T, ri *RepoInstance, branch string, at time.Time) map[string]int64 {
 	t.Helper()
-	rows, err := testService(t, ri).Triggers().DueCandidates(context.Background(), branch, at.Unix())
+	rows, err := testService(t, ri).FactsRepo().DueCandidates(context.Background(), branch, at.Unix())
 	require.NoError(t, err)
 	out := map[string]int64{}
 	for _, r := range rows {
@@ -232,8 +233,8 @@ func TestDue_RemovedBeforeItsDateNeverFires(t *testing.T) {
 			_, ri, clock := newDueRepo(t, trig("due", "due", "", ""))
 			due := clock.now().Add(time.Hour)
 			// Every run is also fed the removed version as a STALE candidate.
-			dueHooks(t, clock, triggerHooks{dueCandidates: func(c []store.DueCandidate) []store.DueCandidate {
-				return append(c, store.DueCandidate{Path: path, ExpiresAt: due.Unix()})
+			dueHooks(t, clock, triggerHooks{dueCandidates: func(c []facts.DueCandidate) []facts.DueCandidate {
+				return append(c, facts.DueCandidate{Path: path, ExpiresAt: due.Unix()})
 			}})
 			base := head(t, ri)
 			writeDatedAndWait(t, ri, path, due)
@@ -261,7 +262,7 @@ func TestDue_RemovedBeforeItsDateNeverFires(t *testing.T) {
 				rows := dueFiresOf(t, ri, "due")
 				require.Len(t, rows, 1, "%s: the new version fires once", tc.name)
 				require.Equal(t, path, rows[0].Path)
-				require.Equal(t, keep, dueMarks(t, ri)[store.DueKey{Trigger: "due", Path: path}], "the mark holds the new instant")
+				require.Equal(t, keep, dueMarks(t, ri)[facts.DueKey{Trigger: "due", Path: path}], "the mark holds the new instant")
 			}
 		})
 	}
@@ -325,7 +326,7 @@ func TestDue_ChangingExpiresRearms(t *testing.T) {
 	clock.add(2 * time.Hour)
 	kickAndWait(t, ri)
 	require.Len(t, dueFiresOf(t, ri, "due"), 1)
-	require.Equal(t, a.Unix(), dueMarks(t, ri)[store.DueKey{Trigger: "due", Path: "kb/tasks/x.md"}])
+	require.Equal(t, a.Unix(), dueMarks(t, ri)[facts.DueKey{Trigger: "due", Path: "kb/tasks/x.md"}])
 
 	b := clock.now().Add(time.Hour)
 	writeDatedAndWait(t, ri, "kb/tasks/x.md", b) // knomit_update sets the new date
@@ -336,7 +337,7 @@ func TestDue_ChangingExpiresRearms(t *testing.T) {
 	kickAndWait(t, ri)
 	rows := dueFiresOf(t, ri, "due")
 	require.Len(t, rows, 2, "the fact re-armed at B")
-	require.Equal(t, b.Unix(), dueMarks(t, ri)[store.DueKey{Trigger: "due", Path: "kb/tasks/x.md"}])
+	require.Equal(t, b.Unix(), dueMarks(t, ri)[facts.DueKey{Trigger: "due", Path: "kb/tasks/x.md"}])
 	kickAndWait(t, ri)
 	require.Len(t, dueFiresOf(t, ri, "due"), 2, "once per due instant")
 }
@@ -508,7 +509,7 @@ func TestDue_ClockReadOncePerRun(t *testing.T) {
 	clock.add(3 * time.Second)
 	kickAndWait(t, ri)
 	require.Len(t, dueFiresOf(t, ri, "due"), 1)
-	require.Equal(t, soon.Unix(), dueMarks(t, ri)[store.DueKey{Trigger: "due", Path: "kb/tasks/soon.md"}])
+	require.Equal(t, soon.Unix(), dueMarks(t, ri)[facts.DueKey{Trigger: "due", Path: "kb/tasks/soon.md"}])
 
 	edge := clock.now().Add(time.Hour)
 	writeDatedAndWait(t, ri, "kb/tasks/edge.md", edge)
@@ -659,7 +660,7 @@ func TestDue_NothingElseHappensOnExpiry(t *testing.T) {
 	require.Len(t, dueFiresOf(t, ri, "due"), 1)
 	require.Equal(t, h, head(t, ri), "no commit was made")
 	svc := testService(t, ri)
-	_, ok, err := svc.Triggers().BlobAt(context.Background(), plumbing.NewHash(h), "kb/tasks/x.md")
+	_, ok, err := svc.FactsRepo().BlobAt(context.Background(), plumbing.NewHash(h), "kb/tasks/x.md")
 	require.NoError(t, err)
 	require.True(t, ok, "the fact is still in the tree")
 	got, err := svc.FactQuery().GetByPath(context.Background(), trigAgent, "kb/tasks/x.md")
@@ -787,7 +788,7 @@ func TestDue_MarkedCandidatesCostNothing(t *testing.T) {
 	require.Len(t, dueMarks(t, ri), n)
 
 	var blobReads atomic.Int64
-	dueHooks(t, clock, triggerHooks{trees: func(inner store.TriggerTrees) store.TriggerTrees {
+	dueHooks(t, clock, triggerHooks{trees: func(inner facts.TriggerTrees) facts.TriggerTrees {
 		return countingTrees{inner: inner, reads: &blobReads}
 	}})
 	before := ri.triggers.stats.runView()
@@ -802,11 +803,11 @@ func TestDue_MarkedCandidatesCostNothing(t *testing.T) {
 
 // countingTrees counts BlobAt calls through a TriggerTrees.
 type countingTrees struct {
-	inner store.TriggerTrees
+	inner facts.TriggerTrees
 	reads *atomic.Int64
 }
 
-func (c countingTrees) Toucher(ctx context.Context, head plumbing.Hash, path string) (store.TouchResult, error) {
+func (c countingTrees) Toucher(ctx context.Context, head plumbing.Hash, path string) (facts.TouchResult, error) {
 	return c.inner.Toucher(ctx, head, path)
 }
 
@@ -958,7 +959,7 @@ func TestDue_UTCEverywhere(t *testing.T) {
 				_, err := time.Parse(time.RFC3339, f.FiredAt)
 				require.NoError(t, err)
 			}
-			mark := dueMarks(t, ri)[store.DueKey{Trigger: "due", Path: "kb/tasks/x.md"}]
+			mark := dueMarks(t, ri)[facts.DueKey{Trigger: "due", Path: "kb/tasks/x.md"}]
 			got[name] = observed{
 				stored:  due.UTC().Format(time.RFC3339),
 				indexed: fmt.Sprint(indexed),

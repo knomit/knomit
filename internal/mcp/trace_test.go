@@ -283,7 +283,7 @@ func TestTrace_HypothesizeAnswerStampsItsWrite(t *testing.T) {
 	headMsg := func() (string, string) {
 		h, err := svc.Branches().HeadCommit(context.Background(), "agent/test")
 		require.NoError(t, err)
-		info, err := svc.Triggers().CommitInfo(context.Background(), plumbing.NewHash(h))
+		info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(h))
 		require.NoError(t, err)
 		return h, info.Message
 	}

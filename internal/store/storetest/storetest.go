@@ -10,7 +10,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store"
-	"knomit/internal/store/facts"
 	"knomit/internal/store/internal/sqlite"
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
@@ -45,7 +44,7 @@ func CommitFiles(s *store.Service, branch string, files map[string]string, messa
 // it; the commit is signed and commit_log and the index are synced, so only the
 // FACT FORMAT is broken. Returns the commit hash.
 func RawWrite(ctx context.Context, s *store.Service, branch, path, content, message string) (string, error) {
-	commitHash, _, err := facts.ServiceIndexForTest(s).WriteFileExactForTest(ctx, branch, strings.ToLower(path), content, message, "raw-write-test", "")
+	commitHash, _, err := s.Facts().WriteFileExactForTest(ctx, branch, strings.ToLower(path), content, message, "raw-write-test", "")
 	if err != nil {
 		return "", err
 	}
