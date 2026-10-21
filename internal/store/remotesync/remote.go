@@ -23,7 +23,7 @@ type Index struct {
 	// without a lock those are a bare read/write race on the same field.
 	originMu sync.RWMutex
 	origin   *Origin // injected from control.db; nil = this repo has no origin
-	// consensus caches the recorded consensus branch (consensus_branch.go),
+	// consensus caches the recorded consensus branch (consensus_branch.go in this package),
 	// under originMu.
 	consensus string
 	// warnAmbiguousOnce: an unrecorded repo with several candidate branches.
@@ -40,7 +40,7 @@ func NewIndex(rh *Repo) *Index { return &Index{rh: rh} }
 func (ri *Index) WarnAmbiguousOnce(f func()) { ri.warnAmbiguousOnce.Do(f) }
 
 // SetConsensus caches the recorded consensus branch (consensus_branch.go in
-// the parent decides it), under originMu.
+// this package decides it), under originMu.
 func (ri *Index) SetConsensus(b string) {
 	ri.originMu.Lock()
 	ri.consensus = b

@@ -12,7 +12,7 @@ import (
 // and the publish-time judge of this instance's own commits. The child reads
 // a store only through the merge handle (which wraps *vcs.Repo) and verify.
 // The callers that drive it stay in this package: the Service methods in
-// service_sync.go and consensus_branch.go, Open/Clone/Init (repo.go) and
+// service_sync.go and consensus_branch.go (thin forwards that keep the contract docs), Open/Clone/Init (repo.go) and
 // replay.go. The receive-pack handler lives in internal/store/gitserve and
 // calls the exported AdvanceBranchTo.
 //

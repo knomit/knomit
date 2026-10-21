@@ -187,7 +187,7 @@ func Open(path string) (*Service, error) {
 		sessionDB:     sessionDB,
 		sessionDBPath: sessionPath,
 	}
-	rh.SetConsensusBranchFunc(s.UpstreamBranch)
+	rh.SetConsensusBranchFunc(ri.UpstreamBranch)
 	return s, nil
 }
 
@@ -214,7 +214,7 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 // bare field assignment (see Index.SetOrigin).
 //
 // A non-nil origin with a branch also RECORDS that branch as the repo's
-// consensus branch (consensus_branch.go), so removing the origin later
+// consensus branch (remotesync/consensus_branch.go), so removing the origin later
 // (SetOrigin(nil)) leaves the repo on the branch it had, never on a default.
 func (s *Service) SetOrigin(o *Origin) {
 	s.ri.SetOrigin(o)
