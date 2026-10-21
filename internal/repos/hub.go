@@ -10,8 +10,8 @@ import (
 	"github.com/ysmood/goob"
 
 	"knomit/internal/platform/crashdump"
-	"knomit/internal/store"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 )
 
 // TaskEvent is the event payload broadcast to SSE clients via TaskHub.
@@ -201,18 +201,18 @@ func (h *TaskHub) broadcastStatus(head string) {
 // respectively (the same shapes store.Sync returns). On error, Error is
 // set and Main/Agent are nil.
 type SyncEvent struct {
-	Remote string                      `json:"remote"`
-	Status string                      `json:"status"` // "sync_ok" or "sync_error"
-	Main   *store.MainReconcileResult  `json:"main,omitempty"`
-	Agent  *merge.AgentReconcileResult `json:"agent,omitempty"`
-	Error  string                      `json:"error,omitempty"`
+	Remote string                          `json:"remote"`
+	Status string                          `json:"status"` // "sync_ok" or "sync_error"
+	Main   *remotesync.MainReconcileResult `json:"main,omitempty"`
+	Agent  *merge.AgentReconcileResult     `json:"agent,omitempty"`
+	Error  string                          `json:"error,omitempty"`
 }
 
 // broadcastSyncOK publishes a successful sync event carrying the full
 // SyncResult so frontends can render which side of the reconcile actually
 // changed (main fast-forward / rewound, agent merge / ff / rebase / noop)
 // rather than collapsing both into a single merge-commit hash.
-func (h *TaskHub) broadcastSyncOK(remote string, result store.SyncResult) {
+func (h *TaskHub) broadcastSyncOK(remote string, result remotesync.SyncResult) {
 	main := result.Main
 	agent := result.Agent
 	h.ob.Publish(SyncEvent{

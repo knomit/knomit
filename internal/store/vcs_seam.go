@@ -33,15 +33,21 @@ type factsRepo = facts.Repo
 //
 // The names callers outside store use are re-exported below unchanged, so
 // the public surface of package store does not move.
+
 // mergeRepo names the embedded merge.Repo field (the alias keeps it apart from
 // the embedded *vcs.Repo's `Repo`). A parent-private name, not an export.
 type mergeRepo = merge.Repo
+
+// syncRepo names the embedded remotesync.Repo field, for the same reason as
+// mergeRepo. A parent-private name, not an export; E7 replaces the embed with
+// a named field.
+type syncRepo = remotesync.Repo
 
 type repoHandler struct {
 	*vcs.Repo
 	*factsRepo // the facts child's methods on the same handle; see the factsRepo alias above
 	*mergeRepo // the merge child's methods on the same handle; Service.Merge hands it out
-	*syncRepo  // the remotesync child's methods on the same handle; see remotesync_seam.go
+	*syncRepo  // the remotesync child's methods on the same handle; Service.Remote hands out its Index
 }
 
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {

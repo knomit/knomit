@@ -146,7 +146,7 @@ func publish(t *testing.T, ri *repos.RepoInstance, agent, name string) {
 		if _, err := s.Facts().WriteFact(ctx, agent, "kb/"+name+".md", factBody(name), name, ""); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.AdvanceLocalUpstream(ctx, agent, "main"); err != nil {
+		if _, err := s.Remote().AdvanceLocalUpstream(ctx, agent, "main"); err != nil {
 			t.Fatal(err)
 		}
 	}); err != nil {

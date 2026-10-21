@@ -12,7 +12,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -467,7 +467,7 @@ func TestAttachOrigin_RefusesARemoteGovernedByADifferentOntology(t *testing.T) {
 	// written straight into the store so no handler is involved.
 	url := seedBareRemote(t, filepath.Join(root, "remote.git")) // carries the DEFAULT ontology
 	svc := testService(t, ri)
-	svc.SetOrigin(&store.Origin{URL: url, Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: url, Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote(url, "main", ri.AgentBranch()))
 
 	_, err = m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))

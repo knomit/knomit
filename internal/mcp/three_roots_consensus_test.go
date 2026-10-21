@@ -20,7 +20,7 @@ func reconcile(t *testing.T, ri *repos.RepoInstance) {
 		rem, err := svc.Remote().GetRemote("origin")
 		require.NoError(t, err)
 		require.Nil(t, rem, "the case under test is a repo with no origin")
-		_, err = svc.AdvanceLocalUpstream(context.Background(), "agent/test", svc.UpstreamBranch())
+		_, err = svc.Remote().AdvanceLocalUpstream(context.Background(), "agent/test", svc.Remote().UpstreamBranch())
 		require.NoError(t, err)
 	}))
 }
@@ -30,7 +30,7 @@ func onConsensus(t *testing.T, ri *repos.RepoInstance, path string) (string, boo
 	var out string
 	var ok bool
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		f, err := svc.Facts().ReadFact(context.Background(), svc.UpstreamBranch(), path, nil)
+		f, err := svc.Facts().ReadFact(context.Background(), svc.Remote().UpstreamBranch(), path, nil)
 		if err == nil {
 			out, ok = f.Content, true
 		}

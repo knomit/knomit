@@ -54,10 +54,10 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 
 	// A configured remote — the bogus URL is fine: the fetch fails, but only
 	// AFTER acquiring the read lock, which is the behaviour under test.
-	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*remotesync.Index)
+	ri := svc.Remote()
 
 	// Simulate ConfigureRemote mid-rewrite by holding the write lock.
 	unlockConfig := svc.rh.LockConfigForTest()
@@ -169,7 +169,7 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 
 	// Empty upstreamMain → detection must find "master", and must REPORT it:
 	// the caller persists the returned name into control.db's origin.
-	upstream, wasEmpty, err := svc.InitFromRemote(context.Background(), fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
+	upstream, wasEmpty, err := svc.Remote().InitFromRemote(context.Background(), fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "master", upstream, "InitFromRemote must return the branch it resolved")
 	require.False(t, wasEmpty, "a remote with refs must be reported as the CLONE path, not the empty one")
@@ -220,7 +220,7 @@ func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 
 	// Empty upstreamMain → the one non-agent branch, NOT the agent-branch HEAD.
-	upstream, wasEmpty, err := svc.InitFromRemote(context.Background(), fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
+	upstream, wasEmpty, err := svc.Remote().InitFromRemote(context.Background(), fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "main", upstream, "InitFromRemote must return the branch it resolved")
 	require.False(t, wasEmpty, "a remote with refs must be reported as the CLONE path, not the empty one")
@@ -281,7 +281,7 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	upstream, err := svc.InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
+	upstream, err := svc.Remote().InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "main", upstream)
 
@@ -348,7 +348,7 @@ func TestInitSubscription_EmptyRemoteIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	_, err = svc.InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
+	_, err = svc.Remote().InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
 	require.ErrorIs(t, err, transport.ErrEmptyRemoteRepository)
 }
 
@@ -373,7 +373,7 @@ func TestInitSubscription_ResolvesRemoteHEADWhenNoMain(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	upstream, err := svc.InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
+	upstream, err := svc.Remote().InitSubscription(context.Background(), fileuri.New(bareDir), nil, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "master", upstream)
 	_, mainErr := svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("main"))

@@ -22,6 +22,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/pki"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // Fleet create (POST /api/v1/fleet/create, local listener only): this
@@ -708,7 +709,7 @@ func (m *Manager) publishFleetMainNow(ctx context.Context, ri *RepoInstance) err
 			_, perr = publishFleetMainOn(ctx, svc, ri.AgentBranch(), auth)
 			return
 		}
-		if _, err := svc.AdvanceLocalUpstream(ctx, ri.AgentBranch(), svc.UpstreamBranch()); err != nil {
+		if _, err := svc.Remote().AdvanceLocalUpstream(ctx, ri.AgentBranch(), svc.Remote().UpstreamBranch()); err != nil {
 			perr = err
 		}
 	}); werr != nil && perr == nil {
@@ -724,12 +725,12 @@ func (m *Manager) publishFleetMainNow(ctx context.Context, ri *RepoInstance) err
 // PublishUpstream (main = from's tip, never forced), then local main
 // fast-forwarded to from. A local main that cannot follow yet is only
 // warned: main is on the forge, and the next fetch brings it here.
-func publishFleetMainOn(ctx context.Context, svc *store.Service, from string, auth transport.AuthMethod) (store.PushResult, error) {
+func publishFleetMainOn(ctx context.Context, svc *store.Service, from string, auth transport.AuthMethod) (remotesync.PushResult, error) {
 	res, err := svc.Remote().PublishUpstream(ctx, from, auth)
 	if err != nil {
 		return res, fmt.Errorf("publish main: %w", err)
 	}
-	if _, err := svc.AdvanceLocalUpstream(ctx, from, svc.UpstreamBranch()); err != nil {
+	if _, err := svc.Remote().AdvanceLocalUpstream(ctx, from, svc.Remote().UpstreamBranch()); err != nil {
 		log.Warn().Err(err).Str("from", from).Msg("fleet: local main did not follow the published main yet")
 	}
 	return res, nil

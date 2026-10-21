@@ -1,6 +1,7 @@
-// Repo constructors: OpenRepo, InitRepo (local creation) and the Service
-// methods that forward to remote bootstrap (CloneFrom, InitFromRemote,
-// InitSubscription), whose bodies live in internal/store/remotesync/bootstrap.go.
+// Repo constructors: OpenRepo and InitRepo (local creation). The remote
+// bootstrap (CloneFrom, InitFromRemote, InitSubscription) is on
+// remotesync.Index (internal/store/remotesync/bootstrap.go), reached as
+// svc.Remote().
 package store
 
 import (
@@ -13,7 +14,6 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
@@ -75,7 +75,7 @@ func (s *Service) InitRepo(ctx context.Context, initFiles map[string]string, age
 // InitFromRemote, which takes the name from the remote.
 func (s *Service) InitRepoWithUpstream(ctx context.Context, initFiles map[string]string, upstreamMain, agentBranch string) error {
 	if upstreamMain == "" {
-		upstreamMain = DefaultConsensusBranch
+		upstreamMain = remotesync.DefaultConsensusBranch
 	}
 	repo, err := gogit.Init(s.rh.Storer(), memfs.New())
 	if err != nil {
@@ -131,8 +131,8 @@ func (s *Service) InitRepoWithUpstream(ctx context.Context, initFiles map[string
 		return fmt.Errorf("InitRepo: set %s ref: %w", upstreamMain, err)
 	}
 	// Local init records the consensus branch it created: with no origin,
-	// UpstreamBranch answers this name (consensus_branch.go).
-	s.recordConsensusBranch(upstreamMain)
+	// UpstreamBranch answers this name (remotesync/consensus_branch.go).
+	s.ri.RecordConsensusBranch(upstreamMain)
 
 	// Seed the per-agent watermark to the initial commit (which is exactly
 	// the local-upstream hash at this point). On the next reconcileAgent the
@@ -161,64 +161,4 @@ func (s *Service) InitRepoWithUpstream(ctx context.Context, initFiles map[string
 		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: initial populate (upstream) failed")
 	}
 	return nil
-}
-
-// CloneFrom clones a remote URL into the Service's storer.
-// Returns ErrEmptyRemote when the remote exists but has no branches yet —
-// knomit's sync model requires at least one branch on the remote.
-func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func(string)) error {
-	return remotesync.CloneFrom(s.rh.syncRepo, url, auth, progress)
-}
-
-// InitFromRemote initializes a knomit git repo by fetching from a remote origin.
-//
-// upstreamMain selects the remote's consensus branch. When empty, it is
-// resolved from the remote after the initial fetch by ChooseConsensusBranch
-// (its HEAD unless that is an agent branch, else its one other branch), and a
-// remote that answers neither is refused with ErrNoConsensusBranch.
-//
-// The resolved upstream is RETURNED so the caller can persist the branch the
-// clone actually adopted rather than the one it asked for. Callers that pass
-// "" and then persist their own fallback would silently rewrite a trunk- or
-// master-convention remote to some other name: the refspecs and remotes row
-// would disagree with the branch this function created locally.
-//
-// If the remote has an existing agent branch for this hostname, it is used.
-// Otherwise a new agent branch is created from origin/<upstreamMain>.
-// If the remote is empty (no refs), falls back to creating initial content
-// inline — initFiles are written as seed files on the new agent branch in
-// that case, and are ignored when the remote already has branches.
-//
-// remoteWasEmpty REPORTS WHICH OF THOSE TWO PATHS RAN, and is the only way a
-// caller can know: the dispatch happens inside, on the fetch's
-// transport.ErrEmptyRemoteRepository, long after any pre-check the caller ran.
-// true means the empty path (initFiles were written, the remote had no refs at
-// FETCH time); false means the clone path (the remote had refs, initFiles were
-// ignored). A caller whose meaning depends on which path ran must ACT on this
-// rather than trust its own pre-check, which was taken strictly earlier in
-// time. Both repos-layer remote modes do: repos.initClone and
-// repos.initInitialize each refuse when this comes back true, because the
-// empty path mints a fresh ROOT COMMIT — and therefore a repo identity no
-// other machine sharing that remote would agree with. On a non-nil error the
-// value is meaningless.
-func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string, progress func(string), opts ...InitOption) (upstream string, remoteWasEmpty bool, err error) {
-	return remotesync.InitFromRemote(ctx, s.rh.syncRepo, s.ri, originURL, auth, upstreamMain, agentBranch, initFiles, progress, opts...)
-}
-
-// InitSubscription initialises a repo that FOLLOWS a remote branch read-only.
-//
-// It is InitFromRemote without the agent half: fetch, resolve the consensus
-// branch by the same rule, track that branch alone, and set the local branch
-// and HEAD to its tip. No agent branch is cut, no watermark is written, and
-// nothing here ever pushes. Sync for such a repo is the consensus branch's
-// reconcile alone (an empty agent branch).
-//
-// The resolved upstream is RETURNED for the same reason InitFromRemote returns
-// it: the caller persists what was adopted, never what it asked for.
-//
-// A remote with no refs is refused with transport.ErrEmptyRemoteRepository:
-// there is no branch to follow, and unlike InitFromRemote there is no
-// seed-locally fallback because a subscription owns no content.
-func (s *Service) InitSubscription(ctx context.Context, originURL string, auth transport.AuthMethod, upstreamMain string, progress func(string)) (string, error) {
-	return remotesync.InitSubscription(ctx, s.rh.syncRepo, s.ri, originURL, auth, upstreamMain, progress)
 }

@@ -38,7 +38,7 @@ func TestStore_InitFromRemote_HonoursCtx(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, _, ierr := svc.InitFromRemote(ctx, srv.URL+"/kb.git", nil, "", "agent/x", nil, nil)
+		_, _, ierr := svc.Remote().InitFromRemote(ctx, srv.URL+"/kb.git", nil, "", "agent/x", nil, nil)
 		done <- ierr
 	}()
 

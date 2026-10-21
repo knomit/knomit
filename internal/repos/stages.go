@@ -34,6 +34,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // StageID indexes the stage list. StageReady is the cursor past the last
@@ -170,7 +171,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 	// The origin before OpenRepo: rehydrating the upstream and the fetch
 	// refspec read it. control.db owns it; the store holds no credential.
 	if origin != nil {
-		svc.SetOrigin(&store.Origin{URL: origin.URL, Branch: origin.Branch, AuthMethod: origin.AuthMethod, AuthToken: origin.AuthToken})
+		svc.Remote().SetOrigin(&remotesync.Origin{URL: origin.URL, Branch: origin.Branch, AuthMethod: origin.AuthMethod, AuthToken: origin.AuthToken})
 	}
 	if env.embedder != nil {
 		svc.SetEmbedder(env.embedder)
@@ -830,7 +831,7 @@ func (syncStage) Exit(r *RepoInstance) { r.syncOrigin = "" }
 // fetch gets an advertisement with no HEAD. reconcileMain remains the
 // authoritative repair; a failure here is logged and the loop retries.
 func (r *RepoInstance) ensureLocalUpstream(ctx context.Context, svc *store.Service) {
-	created, err := svc.EnsureLocalUpstream(ctx, r.upstreamMain)
+	created, err := svc.Remote().EnsureLocalUpstream(ctx, r.upstreamMain)
 	if err != nil {
 		log.Warn().Err(err).Str("repo", r.Name()).
 			Msg("ensureLocalUpstream: bootstrap failed; the reconcile loop will repair it")

@@ -951,7 +951,7 @@ func TestSync_OrchestratesMainAndAgent(t *testing.T) {
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 
 	// Use the in-process reconcile entry point that skips fetch (no real remote).
-	res, err := svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), "agent/test", "main")
+	res, err := svc.Remote().ReconcileNowForTest(context.Background(), "agent/test", "main")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeMerge, res.Agent.Mode, "steady-state Sync merges local main into agent (one merge commit)")
 	require.Equal(t, plumbing.NewHash(originMain), mustHeadHash(t, svc, "main"))
@@ -985,7 +985,7 @@ func TestReconcileNow_UpstreamEqualsAgentIsPushOnly(t *testing.T) {
 	))
 
 	// upstreamMain == agentBranch (the degenerate config).
-	res, err := svc.Remote().(*remotesync.Index).ReconcileNowForTest(context.Background(), "agent/test", "agent/test")
+	res, err := svc.Remote().ReconcileNowForTest(context.Background(), "agent/test", "agent/test")
 	require.NoError(t, err)
 	require.Empty(t, res.Main.Mode, "no main reconcile must run when upstream == agent branch")
 	require.Empty(t, res.Agent.Mode, "no agent reconcile must run when upstream == agent branch")

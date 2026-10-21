@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/test/testenv"
 	"knomit/test/testenv/gitserver"
 )
@@ -81,19 +81,19 @@ func TestContract_TokenExpiry_SurfacesVisibleError(t *testing.T) {
 			statusStr(st), syncErr)
 	}
 	if st.LastError == nil || *st.LastError == "" {
-		t.Fatalf("CONTRACT VIOLATION (symptom #4): last_status is \"error\" but "+
+		t.Fatalf("CONTRACT VIOLATION (symptom #4): last_status is \"error\" but " +
 			"last_error is empty — the reason for the auth failure is not visible")
 	}
 	// The Sync call itself must also have returned the error (not swallowed it).
 	if syncErr == nil {
-		t.Fatalf("CONTRACT VIOLATION (symptom #4): Sync returned nil against a 401 "+
+		t.Fatalf("CONTRACT VIOLATION (symptom #4): Sync returned nil against a 401 " +
 			"remote — the auth failure was silently swallowed / downgraded to anonymous")
 	}
 	t.Logf("token expiry surfaced: last_status=%q last_error=%q sync_err=%v",
 		*st.LastStatus, *st.LastError, syncErr)
 }
 
-func statusStr(r *store.Remote) string {
+func statusStr(r *remotesync.Remote) string {
 	if r == nil || r.LastStatus == nil {
 		return "<nil>"
 	}

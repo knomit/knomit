@@ -22,13 +22,23 @@ import (
 )
 
 // EnsureLocalUpstream creates refs/heads/<upstream> from
-// refs/remotes/origin/<upstream> when the local ref is missing; the contract
-// is Service.EnsureLocalUpstream's. This is the body of that method, moved
-// statement for statement.
-func (rh *Repo) EnsureLocalUpstream(ctx context.Context, upstream string) (bool, error) {
+// refs/remotes/origin/<upstream> when the local ref is missing — a store moved
+// between machines, or one written before local init bootstrapped it. This is
+// reconcileMain's "create" branch, callable at open without a fetch, so the
+// served advertisement has a HEAD to point at from the first request. A live
+// instance was found in exactly this state: no refs/heads/main at all, only
+// refs/remotes/origin/main.
+//
+// It never MOVES an existing upstream: advancing one is reconcileMain's
+// decision and needs the ancestry check this function does not make.
+// Nothing to bootstrap from is not an error — the reconcile loop's first
+// fetch creates it. An empty upstream is not an error either: it creates
+// nothing and answers (false, nil).
+func (ri *Index) EnsureLocalUpstream(ctx context.Context, upstream string) (bool, error) {
 	if upstream == "" {
 		return false, nil
 	}
+	rh := ri.rh
 	unlock := rh.vr.LockBranch(upstream)
 	defer unlock()
 
@@ -61,13 +71,23 @@ func (rh *Repo) EnsureLocalUpstream(ctx context.Context, upstream string) (bool,
 }
 
 // AdvanceLocalUpstream fast-forwards refs/heads/<upstream> to the agent tip on
-// a repo that has NO origin; the contract (it NEVER resets) is
-// Service.AdvanceLocalUpstream's. This is the body of that method, moved
-// statement for statement.
-func (rh *Repo) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstream string) (MainReconcileResult, error) {
+// a repo that has NO origin, so main is a real consensus branch there too.
+// Same shape as reconcileMain's fast-forward — SetReference, PopulateCommitLog,
+// NotifyCommit under the branch lock — with the agent branch in
+// origin/<upstream>'s role.
+//
+// It NEVER resets. Diverged history is logged and skipped: a repo whose
+// consensus branch is not an ancestor of its agent branch carries something on
+// main that the agent branch does not, and force-updating it is exactly the
+// failure recorded in kb/gotchas/repos/remote-sync — a degenerate upstream
+// destroyed just-written, unpushed facts. The degenerate configuration itself
+// (upstream IS the agent branch) is a no-op here for the same reason, as is an
+// empty agentBranch or upstream.
+func (ri *Index) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstream string) (MainReconcileResult, error) {
 	if agentBranch == "" || upstream == "" || agentBranch == upstream {
 		return MainReconcileResult{Mode: merge.ModeNoop}, nil
 	}
+	rh := ri.rh
 	// Only the upstream is written; the agent branch is read. One lock, the
 	// same one reconcileMain runs under.
 	unlock := rh.vr.LockBranch(upstream)

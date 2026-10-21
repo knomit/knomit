@@ -3,9 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/stretchr/testify/require"
 	"io"
 	"net"
 	"path/filepath"
@@ -13,6 +10,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/remotesync"
 )
@@ -88,7 +89,7 @@ func newSnapshotPushFixture(t *testing.T) (*Service, string) {
 	bare := filepath.Join(dir, "origin.git")
 	_, err = gogit.PlainInit(bare, true)
 	require.NoError(t, err)
-	svc.SetOrigin(&Origin{URL: bare, Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: bare, Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote(bare, "main", snapBranch))
 	writeTestFact(t, svc, "kb/notes/seed.md", "seed", "seed")
 	return svc, bare
@@ -120,7 +121,7 @@ func originTip(t *testing.T, bare string) plumbing.Hash {
 }
 
 type pushOutcome struct {
-	res PushResult
+	res remotesync.PushResult
 	err error
 }
 
@@ -332,7 +333,7 @@ func TestPush_HungOriginDoesNotStallWrites(t *testing.T) {
 		}
 	}()
 	hung := "http://" + ln.Addr().String() + "/kb.git"
-	svc.SetOrigin(&Origin{URL: hung, Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: hung, Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote(hung, "main", snapBranch))
 
 	// The watchdog stands in for network_timeout: it ends the push whatever

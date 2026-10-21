@@ -273,7 +273,7 @@ func newGHInstance(t *testing.T, root string, o *ghOrigin, agent, signer string)
 	require.NoError(t, m.Start())
 	ri, err := m.Create(context.Background(), CreateSpec{Name: "kb", Mode: "clone", Origin: &OriginSpec{URL: o.url, Branch: o.branch}}, nil)
 	require.NoError(t, err)
-	require.Equal(t, o.branch, testService(t, ri).UpstreamBranch(), "the consensus branch is the origin's, not main")
+	require.Equal(t, o.branch, testService(t, ri).Remote().UpstreamBranch(), "the consensus branch is the origin's, not main")
 	return &ghInstance{ri: ri, branch: agent}
 }
 

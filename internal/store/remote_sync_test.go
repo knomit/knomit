@@ -2,10 +2,11 @@ package store
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/remotesync"
 )
@@ -30,10 +31,10 @@ func TestSync_CallerCancellationLeavesStatusAlone(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*remotesync.Index)
+	ri := svc.Remote()
 	// What the last completed sync established.
 	require.NoError(t, ri.UpdateRemoteStatusForTest("origin", "ok", nil))
 
@@ -58,10 +59,10 @@ func TestPush_CallerCancellationLeavesStatusAlone(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*remotesync.Index)
+	ri := svc.Remote()
 	require.NoError(t, ri.UpdateRemotePushStatusForTest("origin", "ok", nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,10 +92,10 @@ func TestSync_CallerDeadlineIsRecorded(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/repo.git", "main", "agent/test"))
 
-	ri := svc.Remote().(*remotesync.Index)
+	ri := svc.Remote()
 	require.NoError(t, ri.UpdateRemoteStatusForTest("origin", "ok", nil))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
@@ -116,5 +117,5 @@ func TestPush_EmptyBranchIsRefused(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	_, err = svc.ri.Push(context.Background(), "", nil)
-	require.ErrorIs(t, err, ErrNoAgentBranch)
+	require.ErrorIs(t, err, remotesync.ErrNoAgentBranch)
 }

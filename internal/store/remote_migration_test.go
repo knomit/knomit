@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/migrate"
+	"knomit/internal/store/remotesync"
 )
 
 // TestMigration017_UpgradesPreMigrationDatabase runs migration 000017 against a
@@ -97,7 +98,7 @@ func TestMigration017_UpgradesPreMigrationDatabase(t *testing.T) {
 
 	// The status the rebuild had to carry across survives, and reassembles onto
 	// the injected origin exactly as a never-migrated repo's would.
-	svc2.SetOrigin(&Origin{URL: "https://control.test/kb.git", Branch: "master"})
+	svc2.Remote().SetOrigin(&remotesync.Origin{URL: "https://control.test/kb.git", Branch: "master"})
 	got, err = svc2.Remote().GetRemote("origin")
 	require.NoError(t, err)
 	require.NotNil(t, got)

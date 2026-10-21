@@ -131,7 +131,8 @@ func (d *triggerDispatcher) mainRecipe(ctx context.Context, name string) (*compi
 	}
 	defer release()
 	tr := svc.FactsRepo()
-	tip, err := tr.UpstreamTip(ctx, svc.UpstreamBranch())
+	remote := svc.Remote()
+	tip, err := tr.UpstreamTip(ctx, remote.UpstreamBranch())
 	if err != nil {
 		return &compiledRecipe{name: name, err: fmt.Errorf("recipe %s: main unreadable: %w", name, err)}, true
 	}

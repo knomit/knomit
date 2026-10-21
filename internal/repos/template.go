@@ -104,7 +104,7 @@ func (m *Manager) templateSource(ctx context.Context, ref TemplateRef, fn func(s
 	if id == "" {
 		return fmt.Errorf("%w: %q has no identity yet", ErrTemplateSourceUnavailable, ref.Repo)
 	}
-	branch := svc.UpstreamBranch()
+	branch := svc.Remote().UpstreamBranch()
 	tip, err := svc.FactsRepo().UpstreamTip(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("template source %q: read %s: %w", ref.Repo, branch, err)

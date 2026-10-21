@@ -17,7 +17,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/pki"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // TestAuthConfigFromSpec_BasicSplitsUserPassword is the regression test for the
@@ -230,7 +230,7 @@ func TestResolveAuthWithOrigin_MethodKeyedGitURL(t *testing.T) {
 func TestRemoteAuthFromRecord_CertOriginIgnoresGlobalCredential(t *testing.T) {
 	global := config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_global"}
 
-	fleet := &store.Remote{URL: "https://h:8443/git/kb", AuthMethod: "cert"}
+	fleet := &remotesync.Remote{URL: "https://h:8443/git/kb", AuthMethod: "cert"}
 	cfg := remoteAuthFromRecord(fleet, global)
 	require.Empty(t, cfg.Token, "the global token was copied into a fleet origin's config")
 	require.Equal(t, "cert", cfg.AuthMethod)
@@ -241,7 +241,7 @@ func TestRemoteAuthFromRecord_CertOriginIgnoresGlobalCredential(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, gitURL)
 
-	forge := &store.Remote{URL: "https://h:8443/git/kb"}
+	forge := &remotesync.Remote{URL: "https://h:8443/git/kb"}
 	_, auth, err = resolveAuthWithOrigin(remoteAuthFromRecord(forge, global), "", forge.URL)
 	require.NoError(t, err)
 	ba, ok := auth.(*githttp.BasicAuth)

@@ -72,7 +72,7 @@ func localRev(src string) string {
 func putMainRecipe(t *testing.T, ri *RepoInstance, name, src string) string {
 	t.Helper()
 	svc := testService(t, ri)
-	upstream := svc.UpstreamBranch()
+	upstream := svc.Remote().UpstreamBranch()
 	_, err := svc.Facts().WriteFact(context.Background(), upstream, fact.TriggerRecipePath(name), src, "recipe: "+name, "updated")
 	require.NoError(t, err)
 	tip, err := svc.FactsRepo().UpstreamTip(context.Background(), upstream)
@@ -194,8 +194,8 @@ func TestRun_AgentBranchRecipeNeverRuns(t *testing.T) {
 
 	// No upstream branch: the repo tier is skipped, the local recipe runs.
 	svc := testService(t, ri)
-	require.NoError(t, storetest.DeleteRef(svc, "refs/heads/"+svc.UpstreamBranch()))
-	tip, err := svc.FactsRepo().UpstreamTip(context.Background(), svc.UpstreamBranch())
+	require.NoError(t, storetest.DeleteRef(svc, "refs/heads/"+svc.Remote().UpstreamBranch()))
+	tip, err := svc.FactsRepo().UpstreamTip(context.Background(), svc.Remote().UpstreamBranch())
 	require.NoError(t, err)
 	require.True(t, tip.IsZero(), "the fixture must really have no main")
 	write(t, ri, "kb/tasks/in/no-main.md")

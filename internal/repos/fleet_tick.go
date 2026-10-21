@@ -70,7 +70,7 @@ func (m *Manager) installMainLeaf(svc *store.Service) (string, error) {
 	if err != nil {
 		return "", nil // nothing installed: nothing to renew
 	}
-	f, err := svc.FleetAt(svc.UpstreamBranch())
+	f, err := svc.FleetAt(svc.Remote().UpstreamBranch())
 	if err != nil {
 		return "", err
 	}
@@ -115,7 +115,7 @@ func (m *Manager) installMainCRL(svc *store.Service) (*big.Int, error) {
 		// round (#536 review nit 2).
 		return nil, nil
 	}
-	f, err := svc.FleetAt(svc.UpstreamBranch())
+	f, err := svc.FleetAt(svc.Remote().UpstreamBranch())
 	if err != nil {
 		return nil, err
 	}

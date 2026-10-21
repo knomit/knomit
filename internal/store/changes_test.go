@@ -314,7 +314,7 @@ func TestChangesUnder_DeletionSurvivesFastForwardOverOlderCommit(t *testing.T) {
 	writeF(t, svc, "agent/a", "kb/tasks/a/t0.md")
 	writeF(t, svc, "agent/a", "kb/tasks/a/t1.md")
 	c0 := restamp(t, svc, "agent/a", nil, t0.Add(1000*time.Second))
-	_, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
+	_, err := svc.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
 
 	// Main moves on: m (the reader's bookmark) adds t2 at t=1010.
@@ -330,7 +330,7 @@ func TestChangesUnder_DeletionSurvivesFastForwardOverOlderCommit(t *testing.T) {
 	y := restamp(t, svc, "agent/a", []plumbing.Hash{plumbing.NewHash(x), plumbing.NewHash(m)}, t0.Add(1011*time.Second))
 	_ = c0
 
-	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
+	res, err := svc.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeFF, res.Mode, "fixture: main must FAST-FORWARD to y, the path that hides x")
 	tip, err := svc.rh.ResolveRef(ctx, "main")

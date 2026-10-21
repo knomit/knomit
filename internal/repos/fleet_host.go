@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // The host record (artifacts/fleet/host, fact.FleetHostPath) is where the
@@ -265,7 +266,7 @@ func (m *Manager) fleetHostAtMain(ri *RepoInstance) ([]string, error) {
 	var upstream string
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc != nil {
-			upstream = svc.UpstreamBranch()
+			upstream = svc.Remote().UpstreamBranch()
 		}
 	}); err != nil {
 		return nil, err
@@ -297,7 +298,7 @@ func (m *Manager) fleetMasterAt(ri *RepoInstance, branch string) (string, error)
 			return
 		}
 		if branch == "" {
-			branch = svc.UpstreamBranch()
+			branch = svc.Remote().UpstreamBranch()
 		}
 		raw, ok, rerr = svc.FileAt(branch, fact.FleetMasterPath, maxFleetMasterSize)
 	}); err != nil {
@@ -427,7 +428,7 @@ func (ri *RepoInstance) fleetCandidate(svc *store.Service) bool {
 	if !m.holdsFleetRoot(svc) || m.fleetMasterPause(ri) != "" {
 		return false
 	}
-	named, err := fleetMasterOn(svc, svc.UpstreamBranch())
+	named, err := fleetMasterOn(svc, svc.Remote().UpstreamBranch())
 	return err == nil && named == ""
 }
 
@@ -452,7 +453,7 @@ func (m *Manager) claimFleetMaster(ctx context.Context, ri *RepoInstance) {
 		if err := m.publishMarkerChange(ctx, ri, &body, "fleet: "+id+" is the fleet's acting master"); err != nil {
 			switch {
 			case ctx.Err() != nil:
-			case errors.Is(err, store.ErrUpstreamMoved):
+			case errors.Is(err, remotesync.ErrUpstreamMoved):
 				// The race lost: the forge's main moved since this copy's
 				// fetch, so another publish came first. The next fetch shows
 				// who main names.

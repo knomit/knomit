@@ -125,7 +125,7 @@ func requireMissionLoaded(t *testing.T, who string, ri *repos.RepoInstance, want
 		t.Errorf("%s: %d/%d triggers active", who, active, missionTriggers)
 	}
 	err := ri.WithRead(func(s *store.Service) {
-		ub := s.UpstreamBranch()
+		ub := s.Remote().UpstreamBranch()
 		if ub != wantBranch {
 			t.Errorf("%s: consensus branch %q, want %q (the branch the repository was created on)", who, ub, wantBranch)
 		}

@@ -92,7 +92,7 @@ func (m *Manager) FleetActivity(ctx context.Context, limit int) ([]FleetEvent, e
 			lerr = errors.New("fleet repository is not open")
 			return
 		}
-		commits, lerr = svc.FleetMainLog(svc.UpstreamBranch(), layout.Root, maxFleetWalk, limit)
+		commits, lerr = svc.FleetMainLog(svc.Remote().UpstreamBranch(), layout.Root, maxFleetWalk, limit)
 	}); err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (m *Manager) revokedEvents(ri *RepoInstance, f store.Fleet) []FleetEvent {
 		if svc == nil {
 			return
 		}
-		upstream := svc.UpstreamBranch()
+		upstream := svc.Remote().UpstreamBranch()
 		for _, e := range f.PKI.CRL.RevokedCertificateEntries {
 			serial := e.SerialNumber.Text(16)
 			ev := FleetEvent{At: e.RevocationTime.UTC(), Kind: FleetEventRevoked, Serial: serial,

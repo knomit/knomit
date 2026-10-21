@@ -252,7 +252,7 @@ func TestProbeInitialized_IgnoresAnotherMachinesAgentBranch(t *testing.T) {
 
 // THE AGREEMENT TEST.
 //
-// store.BranchACreateReads is one function, but it is applied to two different
+// remotesync.BranchACreateReads is one function, but it is applied to two different
 // inputs: the refs a remote advertises (here, before any fetch) and the
 // remote-tracking refs InitFromRemote has just pulled. Sharing the function
 // removes one way for those to disagree; it does not remove the possibility

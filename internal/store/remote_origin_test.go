@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/remotesync"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +31,7 @@ func TestGetRemote_NoOriginIsNilNil(t *testing.T) {
 // An injected origin surfaces through GetRemote exactly as a stored row did.
 func TestSetOrigin_SurfacesThroughGetRemote(t *testing.T) {
 	svc := openOriginTestService(t)
-	svc.SetOrigin(&Origin{URL: "https://x.test/kb.git", Branch: "master", AuthMethod: "token", AuthToken: "s3cret"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://x.test/kb.git", Branch: "master", AuthMethod: "token", AuthToken: "s3cret"})
 
 	got, err := svc.Remote().GetRemote("origin")
 	require.NoError(t, err)
@@ -44,7 +46,7 @@ func TestSetOrigin_SurfacesThroughGetRemote(t *testing.T) {
 // caller sees ONE record.
 func TestGetRemote_MergesInjectedOriginWithLocalStatus(t *testing.T) {
 	svc := openOriginTestService(t)
-	svc.SetOrigin(&Origin{URL: "https://x.test/kb.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://x.test/kb.git", Branch: "main"})
 	require.NoError(t, svc.Remote().RecordSyncError("origin", "boom"))
 
 	got, err := svc.Remote().GetRemote("origin")
@@ -61,10 +63,10 @@ func TestGetRemote_MergesInjectedOriginWithLocalStatus(t *testing.T) {
 // row survives — "has an origin" is control.db's answer, not the row's.
 func TestSetOrigin_NilClears(t *testing.T) {
 	svc := openOriginTestService(t)
-	svc.SetOrigin(&Origin{URL: "https://x.test/kb.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://x.test/kb.git", Branch: "main"})
 	require.NoError(t, svc.Remote().RecordSyncError("origin", "boom"))
 
-	svc.SetOrigin(nil)
+	svc.Remote().SetOrigin(nil)
 	got, err := svc.Remote().GetRemote("origin")
 	require.NoError(t, err)
 	require.Nil(t, got)

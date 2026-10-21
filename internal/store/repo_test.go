@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/store/remotesync"
 
 	"github.com/stretchr/testify/require"
 )
@@ -44,9 +45,9 @@ func TestCloneFrom_EmptyRemoteReturnsErrEmptyRemote(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 
-	err = svc.CloneFrom(fileuri.New(remoteDir), nil, nil)
+	err = svc.Remote().CloneFrom(fileuri.New(remoteDir), nil, nil)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrEmptyRemote), "empty remote must return ErrEmptyRemote, got: %v", err)
+	require.True(t, errors.Is(err, remotesync.ErrEmptyRemote), "empty remote must return ErrEmptyRemote, got: %v", err)
 }
 
 // TestCloneFrom_ErrorOnBadURL verifies that CloneFrom returns a non-nil
@@ -56,9 +57,9 @@ func TestCloneFrom_ErrorOnBadURL(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 
-	err = svc.CloneFrom("file:///nonexistent/repo.git", nil, nil)
+	err = svc.Remote().CloneFrom("file:///nonexistent/repo.git", nil, nil)
 	require.Error(t, err)
-	require.False(t, errors.Is(err, ErrEmptyRemote))
+	require.False(t, errors.Is(err, remotesync.ErrEmptyRemote))
 }
 
 // TestCloneFrom_BareLocalPathAnonymous verifies that a populated local repo
@@ -84,5 +85,5 @@ func TestCloneFrom_BareLocalPathAnonymous(t *testing.T) {
 	defer svc.Close()
 
 	// Bare absolute path, no scheme, nil auth.
-	require.NoError(t, svc.CloneFrom(remoteDir, nil, nil))
+	require.NoError(t, svc.Remote().CloneFrom(remoteDir, nil, nil))
 }

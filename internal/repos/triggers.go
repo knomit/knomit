@@ -839,7 +839,8 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 	verifyOn := d.verifyModeOn(blob, data, oerr == nil)
 	var verifiedSet map[plumbing.Hash]bool
 	if verifyOn {
-		verifiedSet = d.verifiedBelow(ctx, tr, svc.UpstreamBranch())
+		remote := svc.Remote()
+		verifiedSet = d.verifiedBelow(ctx, tr, remote.UpstreamBranch())
 	}
 	instanceFP := tr.SignerFingerprint()
 	root := d.ri.ontologyRoot

@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // RemoteEvent reports a repo's remote health: the two persisted status columns
@@ -38,7 +39,7 @@ func RemoteStatusValue(status *string) string {
 // RemoteHealth is the (sync, push) pair of a remote record, in the wire
 // vocabulary. GET /repos and RemoteEvent both read it, so the listing and the
 // stream cannot spell the same row two ways.
-func RemoteHealth(r *store.Remote) (sync, push string) {
+func RemoteHealth(r *remotesync.Remote) (sync, push string) {
 	return RemoteStatusValue(r.LastStatus), RemoteStatusValue(r.LastPushStatus)
 }
 

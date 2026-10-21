@@ -677,7 +677,7 @@ func TestDispatch_NoFireOnMainOrExp(t *testing.T) {
 	write(t, ri, "kb/tasks/own.md")
 	_, seq := ri.triggers.runSequence()
 
-	_, err := svc.AdvanceLocalUpstream(ctx, trigAgent, "main")
+	_, err := svc.Remote().AdvanceLocalUpstream(ctx, trigAgent, "main")
 	require.NoError(t, err)
 	_, err = svc.Merge().OpenExperiment(ctx, "e", "", trigAgent)
 	require.NoError(t, err)

@@ -75,11 +75,11 @@ func swConsumeOwn(t *testing.T, svc *Service, bare string) plumbing.Hash {
 func swPoint(t *testing.T, svc *Service, url string) {
 	t.Helper()
 	require.NoError(t, svc.ConfigureRemote(url, "main", "agent/test"))
-	svc.SetOrigin(&Origin{URL: url, Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: url, Branch: "main"})
 }
 
-func swTrySync(svc *Service) (SyncResult, error) {
-	return svc.Remote().(*remotesync.Index).Sync(context.Background(), "agent/test", nil)
+func swTrySync(svc *Service) (remotesync.SyncResult, error) {
+	return svc.Remote().Sync(context.Background(), "agent/test", nil)
 }
 
 // A switch to an origin whose main is BEHIND local main: nothing is dropped
@@ -99,7 +99,7 @@ func TestSync_SwitchToAnOriginBehindDropsNothing(t *testing.T) {
 			w := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "own, unsynced"))
 			if detach {
 				require.NoError(t, svc.Remote().DeleteRemote("origin"))
-				svc.SetOrigin(nil)
+				svc.Remote().SetOrigin(nil)
 			}
 
 			swPoint(t, svc, fileuri.New(b))
@@ -231,7 +231,7 @@ func TestSync_AnotherSpellingOrCredentialIsNotASwitch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, a, r := wmFixture(t)
 			f := swConsumeOwn(t, svc, a)
-			svc.SetOrigin(&Origin{URL: tc.url(a), Branch: "main"}) // the git remote stays A
+			svc.Remote().SetOrigin(&remotesync.Origin{URL: tc.url(a), Branch: "main"}) // the git remote stays A
 			wmSetOriginMain(t, a, r)
 			wmSync(t, svc)
 			require.False(t, reachableFrom(t, svc, "agent/test", f), "the same origin's scrub still holds")
@@ -257,7 +257,7 @@ func TestSync_SwitchPushesTheBranchTheNewOriginLacks(t *testing.T) {
 	wmSync(t, svc)
 	_, err := svc.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", "agent/test"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "the tracking ref mirrors B, which has no agent branch")
-	pres, err := svc.Remote().(*remotesync.Index).Push(context.Background(), "agent/test", nil)
+	pres, err := svc.Remote().Push(context.Background(), "agent/test", nil)
 	require.NoError(t, err)
 	require.True(t, pres.Pushed)
 	require.True(t, swBareHasFile(t, b, "agent/test", "kb/own.md"))

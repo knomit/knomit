@@ -5,11 +5,13 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/store/remotesync"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
 
-func lostHashes(l []LostCommit) []string {
+func lostHashes(l []remotesync.LostCommit) []string {
 	var out []string
 	for _, c := range l {
 		out = append(out, c.Commit)
@@ -35,8 +37,8 @@ func TestDrop_TheForeignRefusalListsWhatLeavingTheMergeOutLosesAndTheConfirmedFa
 	require.NoError(t, err)
 	before := h.ref(hostBranch)
 
-	_, _, err = h.svc.DropUnpublishedCommit(ctx, hostBranch, side[0], true)
-	var fe *DropForeignError
+	_, _, err = h.svc.Remote().DropUnpublishedCommit(ctx, hostBranch, side[0], true)
+	var fe *remotesync.DropForeignError
 	require.True(t, errors.As(err, &fe), "want a foreign refusal, got %v", err)
 	require.ElementsMatch(t, []string{merge.String(), side[0].String(), side[1].String()}, lostHashes(fe.LeaveOut))
 	for _, l := range fe.LeaveOut {
@@ -49,12 +51,12 @@ func TestDrop_TheForeignRefusalListsWhatLeavingTheMergeOutLosesAndTheConfirmedFa
 	require.Equal(t, before, h.ref(hostBranch), "the refusal changes nothing")
 
 	// A stale confirmation changes nothing either.
-	_, _, err = h.svc.DropUnpublishedCommitLeavingOutMerges(ctx, hostBranch, side[0], []string{merge.String()})
-	var ch *LeaveOutChangedError
+	_, _, err = h.svc.Remote().DropUnpublishedCommitLeavingOutMerges(ctx, hostBranch, side[0], []string{merge.String()})
+	var ch *remotesync.LeaveOutChangedError
 	require.True(t, errors.As(err, &ch), "want leave-out-changed, got %v", err)
 	require.Equal(t, before, h.ref(hostBranch))
 
-	replayed, left, err := h.svc.DropUnpublishedCommitLeavingOutMerges(ctx, hostBranch, side[0], lostHashes(fe.LeaveOut))
+	replayed, left, err := h.svc.Remote().DropUnpublishedCommitLeavingOutMerges(ctx, hostBranch, side[0], lostHashes(fe.LeaveOut))
 	require.NoError(t, err)
 	require.Equal(t, 1, replayed, "mine.md's commit")
 	require.ElementsMatch(t, lostHashes(fe.LeaveOut), lostHashes(left))
@@ -74,14 +76,14 @@ func TestDrop_TheMergeRefusalOffersLeavingTheMergeOut(t *testing.T) {
 	h.svc.SetSigner(newTestSigner(t))
 	side := h.sideMerge(t, "kb/notes/bad.md")
 	m := h.ref(hostBranch)
-	_, _, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, m, true)
-	var me *DropMergeError
+	_, _, err := h.svc.Remote().DropUnpublishedCommit(ctx, hostBranch, m, true)
+	var me *remotesync.DropMergeError
 	require.True(t, errors.As(err, &me), "want a merge refusal, got %v", err)
-	require.ErrorIs(t, err, ErrDropMerge)
+	require.ErrorIs(t, err, remotesync.ErrDropMerge)
 	require.ElementsMatch(t, []string{m.String(), side[0].String()}, lostHashes(me.LeaveOut))
 	require.Equal(t, m, h.ref(hostBranch))
 
-	_, left, err := h.svc.DropUnpublishedCommitLeavingOutMerges(ctx, hostBranch, m, lostHashes(me.LeaveOut))
+	_, left, err := h.svc.Remote().DropUnpublishedCommitLeavingOutMerges(ctx, hostBranch, m, lostHashes(me.LeaveOut))
 	require.NoError(t, err)
 	require.Len(t, left, 2)
 	require.NotContains(t, h.branchFiles(hostBranch), "kb/notes/bad.md")
@@ -111,7 +113,7 @@ func TestDrop_AnUnfoldedSideIsReplayedParentsFirst(t *testing.T) {
 	_, err := h.svc.MergePushed(ctx, "agent/side", hostBranch, side[2], "")
 	require.NoError(t, err)
 
-	replayed, merges, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, side[0], false)
+	replayed, merges, err := h.svc.Remote().DropUnpublishedCommit(ctx, hostBranch, side[0], false)
 	require.NoError(t, err)
 	require.Equal(t, 1, merges)
 	require.Equal(t, 2, replayed)

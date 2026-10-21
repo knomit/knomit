@@ -37,7 +37,7 @@ func TestBridge_ProxiesPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := "---\nname: work-task\ndescription: Work one task.\n---\nWORK BODY\n"
-	if _, err := svc.Facts().WriteFact(context.Background(), svc.UpstreamBranch(), fact.SkillPath("work-task"), src, "skill", "updated"); err != nil {
+	if _, err := svc.Facts().WriteFact(context.Background(), svc.Remote().UpstreamBranch(), fact.SkillPath("work-task"), src, "skill", "updated"); err != nil {
 		t.Fatal(err)
 	}
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{

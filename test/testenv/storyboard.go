@@ -15,6 +15,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // StoryboardOpts controls Storyboard behavior. Zero value uses sensible
@@ -298,8 +299,8 @@ func (r *RepoHandle) remoteAuth() transport.AuthMethod {
 // / last_error on every return), so after calling it a contract cell can read
 // RemoteStatus() to assert the failure was recorded rather than silently
 // swallowed.
-func (r *RepoHandle) SyncAuthed(agentBranch string) (store.SyncResult, error) {
-	var result store.SyncResult
+func (r *RepoHandle) SyncAuthed(agentBranch string) (remotesync.SyncResult, error) {
+	var result remotesync.SyncResult
 	var err error
 	auth := r.remoteAuth()
 	r.ri.WithRead(func(svc *store.Service) {
@@ -311,8 +312,8 @@ func (r *RepoHandle) SyncAuthed(agentBranch string) (store.SyncResult, error) {
 // RemoteStatus reads the persisted remote record for "origin" via the store,
 // exposing LastStatus / LastError so contract cells can assert the visible
 // sync status after a reconcile. Returns nil if no origin is configured.
-func (r *RepoHandle) RemoteStatus() *store.Remote {
-	var rec *store.Remote
+func (r *RepoHandle) RemoteStatus() *remotesync.Remote {
+	var rec *remotesync.Remote
 	r.ri.WithRead(func(svc *store.Service) {
 		rec, _ = svc.Remote().GetRemote("origin")
 	})
@@ -352,7 +353,7 @@ func (r *RepoHandle) SetOriginAuth(method, token string) {
 		t.Fatalf("SetOriginAuth(%q): persist origin: %v", r.name, err)
 	}
 	r.ri.WithRead(func(svc *store.Service) {
-		svc.SetOrigin(&store.Origin{
+		svc.Remote().SetOrigin(&remotesync.Origin{
 			URL:        cur.URL,
 			Branch:     cur.Branch,
 			AuthMethod: cur.AuthMethod,

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // #533 review 3 SF1: a refused drop's problem body carries leave_out, what
@@ -19,7 +19,7 @@ func TestFleetError_ADropRefusalCarriesLeaveOut(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeFleetError(rec, httptest.NewRequest(http.MethodPost, "/fleet/drop-commit", nil), &repos.FleetError{
 		Status: http.StatusConflict, Code: "foreign_commit", Msg: "m",
-		LeaveOut: []store.LostCommit{{Commit: strings.Repeat("a", 40), Agent: "alpha", Author: "alpha", Subject: "alpha work one"}},
+		LeaveOut: []remotesync.LostCommit{{Commit: strings.Repeat("a", 40), Agent: "alpha", Author: "alpha", Subject: "alpha work one"}},
 	})
 	require.Equal(t, http.StatusConflict, rec.Code)
 	require.Contains(t, rec.Body.String(), `"leave_out":[{"commit":"`+strings.Repeat("a", 40)+`","agent":"alpha","author":"alpha","subject":"alpha work one"}]`)

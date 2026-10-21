@@ -55,7 +55,7 @@ func servedPeer(t *testing.T) *httptest.Server {
 		_, werr := s.Facts().WriteFact(ctx, "agent/a", "kb/first.md",
 			originFactBody("first"), "first", "")
 		require.NoError(t, werr)
-		_, rerr := s.AdvanceLocalUpstream(ctx, "agent/a", "main")
+		_, rerr := s.Remote().AdvanceLocalUpstream(ctx, "agent/a", "main")
 		require.NoError(t, rerr)
 	}))
 	srv := httptest.NewServer(GitRemoteHandler(m))

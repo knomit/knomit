@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // TestHandleCommit_SharedHistory_DoesNotSwapLocalStore pins the contract that
@@ -67,7 +68,7 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	}
 
 	// 2. Origin must be persisted and injected.
-	var origin *store.Remote
+	var origin *remotesync.Remote
 	var err error
 	f.ri.WithRead(func(s *store.Service) {
 		origin, err = s.Remote().GetRemote("origin")

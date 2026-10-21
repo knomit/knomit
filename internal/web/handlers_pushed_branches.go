@@ -117,7 +117,7 @@ var fullHash = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // commit or refuses. resolution is the whole-set answer to a refused merge:
 // "host" keeps this host's version of every conflicting fact, "peer" takes the
 // pushed branch's. Deliberately NOT ours/theirs: which side is "ours" depends
-// on who is asking (store.ResolutionSide), and here the asker is the host's
+// on who is asking (merge.ResolutionSide), and here the asker is the host's
 // operator, for whom git's "ours" is the host — the opposite of
 // knomit_experiment's.
 type mergeRequest struct {

@@ -19,19 +19,20 @@ import (
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/store/storetest"
 	"knomit/internal/web/hal"
 )
 
 // stubOriginProvider implements originProvider for tests.
 type stubOriginProvider struct {
-	remote         *store.Remote
+	remote         *remotesync.Remote
 	getErr         error
 	upstreamErr    error
 	upstreamBranch string // captures the branch passed to SetOriginUpstream
 }
 
-func (s *stubOriginProvider) GetOrigin(_ context.Context, _ *repos.RepoInstance) (*store.Remote, error) {
+func (s *stubOriginProvider) GetOrigin(_ context.Context, _ *repos.RepoInstance) (*remotesync.Remote, error) {
 	return s.remote, s.getErr
 }
 
@@ -42,7 +43,7 @@ func (s *stubOriginProvider) SetOriginUpstream(_ context.Context, _ *repos.Manag
 
 func TestHandleHALGetOrigin_ReturnsOriginData(t *testing.T) {
 	op := &stubOriginProvider{
-		remote: &store.Remote{
+		remote: &remotesync.Remote{
 			Name:       "origin",
 			URL:        "https://github.com/example/repo.git",
 			Branch:     "main",
@@ -94,7 +95,7 @@ func TestHandleHALGetOrigin_ReturnsOriginData(t *testing.T) {
 func TestHandleHALGetOrigin_CarriesBreakers(t *testing.T) {
 	s := &Server{
 		Manager:   newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{origin: &stubOriginProvider{remote: &store.Remote{Name: "origin", URL: "https://x.test/kb.git", Branch: "main"}}},
+		providers: storeProviders{origin: &stubOriginProvider{remote: &remotesync.Remote{Name: "origin", URL: "https://x.test/kb.git", Branch: "main"}}},
 	}
 	rec := httptest.NewRecorder()
 	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin", nil))
@@ -658,7 +659,7 @@ func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
 
 	// The injected origin (and thus the next GetRemote) reflects it too,
 	// without a restart.
-	var remote *store.Remote
+	var remote *remotesync.Remote
 	var refspecs []string
 	ri.WithRead(func(svc *store.Service) {
 		remote, err = svc.Remote().GetRemote("origin")
@@ -725,7 +726,7 @@ func TestDeleteOrigin_RemovesFromControlDB(t *testing.T) {
 		t.Errorf("expected no origin in control.db after delete, got %+v", origin)
 	}
 
-	var remote *store.Remote
+	var remote *remotesync.Remote
 	ri.WithRead(func(svc *store.Service) {
 		remote, err = svc.Remote().GetRemote("origin")
 	})
@@ -841,7 +842,7 @@ func TestSetOrigin_FailedPersistRestoresTheGitRemote(t *testing.T) {
 	}
 
 	var urls []string
-	var remote *store.Remote
+	var remote *remotesync.Remote
 	ri.WithRead(func(svc *store.Service) {
 		urls = storetest.RemoteURLs(svc, "origin")
 		remote, _ = svc.Remote().GetRemote("origin")

@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/remotesync"
 )
 
 // ownHost is a fleet repository on a knomit host whose own agent branch
@@ -147,16 +148,16 @@ func TestJudgeOwn_TheMastersOwnCommitsAreJudgedBeforeMainMoves(t *testing.T) {
 			r.act(h, boss, x)
 			tip := h.ref(hostBranch)
 			require.NotEqual(t, before, tip, "fixture: the branch moved")
-			_, err := h.svc.AdvanceLocalUpstream(context.Background(), hostBranch, "main")
+			_, err := h.svc.Remote().AdvanceLocalUpstream(context.Background(), hostBranch, "main")
 			if r.want == "" {
 				require.NoError(t, err)
 				require.Equal(t, tip, h.ref("main"), "main followed the branch")
 			} else {
-				var oe *OwnCommitRefusedError
+				var oe *remotesync.OwnCommitRefusedError
 				require.True(t, errors.As(err, &oe), "want the judge's refusal, got %v", err)
-				require.ErrorIs(t, err, ErrOwnCommitRefused)
+				require.ErrorIs(t, err, remotesync.ErrOwnCommitRefused)
 				require.Equal(t, r.want, oe.Rule, oe.Text)
-				require.Contains(t, err.Error(), OwnCommitRefusedText)
+				require.Contains(t, err.Error(), remotesync.OwnCommitRefusedText)
 				require.Equal(t, before, h.ref("main"), "main did not move")
 			}
 			ran++
@@ -176,7 +177,7 @@ func TestJudgeOwn_AKnowledgeBaseMainFollowsUnjudged(t *testing.T) {
 	_, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/n.md": note("n")}, "n")
 	require.NoError(t, err)
 	tip := h.ref(hostBranch)
-	_, err = h.svc.AdvanceLocalUpstream(context.Background(), hostBranch, "main")
+	_, err = h.svc.Remote().AdvanceLocalUpstream(context.Background(), hostBranch, "main")
 	require.NoError(t, err)
 	require.Equal(t, tip, h.ref("main"))
 }

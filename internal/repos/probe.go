@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // ProbeResult is what a pre-create look at a remote can establish.
@@ -463,14 +464,14 @@ func classifyProbeError(err error) (empty bool, authRequired bool) {
 // (store.ErrNoConsensusBranch) until a branch is named.
 //
 // The empty-remote case (branches empty) is the seed path, which CREATES the
-// consensus branch: the requested name, else store.DefaultConsensusBranch,
+// consensus branch: the requested name, else remotesync.DefaultConsensusBranch,
 // exactly as initFromEmptyRemote does.
 func resolveUpstream(requested, head string, branches []string) string {
 	if len(branches) == 0 {
 		if requested != "" {
 			return requested
 		}
-		return store.DefaultConsensusBranch
+		return remotesync.DefaultConsensusBranch
 	}
 	return store.ChooseConsensusBranch(requested, head, branches)
 }

@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // A repository is a knomit knowledge base IF AND ONLY IF it has an ontology at
@@ -188,12 +189,12 @@ func (m *Manager) ProbeInitialized(ctx context.Context, o OriginSpec) (Initializ
 // createReadsBranch names the branch a create against this remote will
 // actually READ — which is not always the one the caller asked about.
 //
-// store.BranchACreateReads is the rule ITSELF, the same function InitFromRemote
+// remotesync.BranchACreateReads is the rule ITSELF, the same function InitFromRemote
 // applies to decide what to adopt, so the prediction and the act cannot drift.
 // A remote with no refs at all has no agent branch either, and that is the
 // caller's own ErrRemoteNoBranches case, not a failure to look.
 func createReadsBranch(adv *packp.AdvRefs, agentBranch, requested string) string {
-	return store.BranchACreateReads(advHasBranch(adv, agentBranch), agentBranch, requested)
+	return remotesync.BranchACreateReads(advHasBranch(adv, agentBranch), agentBranch, requested)
 }
 
 // ProbeInitializedOn is ProbeInitialized for a caller that already knows

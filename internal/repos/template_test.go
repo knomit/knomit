@@ -213,7 +213,7 @@ func TestCreateFromTemplate_CopiesTreeSignedWithTrailers(t *testing.T) {
 	srcID := src.ID()
 	srcSvc, release, err := src.Acquire()
 	require.NoError(t, err)
-	srcTip, err := srcSvc.FactsRepo().UpstreamTip(context.Background(), srcSvc.UpstreamBranch())
+	srcTip, err := srcSvc.FactsRepo().UpstreamTip(context.Background(), srcSvc.Remote().UpstreamBranch())
 	release()
 	require.NoError(t, err)
 
@@ -308,7 +308,7 @@ func TestTemplateSource_Inert(t *testing.T) {
 	require.NoError(t, err)
 	defer release()
 	ctx := context.Background()
-	tip, err := svc.FactsRepo().UpstreamTip(ctx, svc.UpstreamBranch())
+	tip, err := svc.FactsRepo().UpstreamTip(ctx, svc.Remote().UpstreamBranch())
 	require.NoError(t, err)
 	skills, err := svc.FactsRepo().SkillsAt(ctx, tip)
 	require.NoError(t, err)

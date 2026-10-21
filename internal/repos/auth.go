@@ -14,6 +14,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/pki"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // resolveAuth returns a go-git transport.AuthMethod based on the remote config.
@@ -102,7 +103,7 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 // ResolveOrigin when it was set) inherits NOTHING from the fallback: the
 // global [remote] credential is a forge credential, and a fleet peer must
 // never receive it. It is keyed on the stored method, never on the URL.
-func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
+func remoteAuthFromRecord(remote *remotesync.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
 	if remote.AuthMethod == "cert" {
 		return config.RemoteAuthConfig{AuthMethod: "cert"}
 	}

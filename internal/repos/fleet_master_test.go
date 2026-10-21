@@ -353,7 +353,7 @@ func TestFleetMaster_MergerGateIsTheMasterPredicate(t *testing.T) {
 				require.NoError(t, err)
 				require.Nil(t, r, "fixture: no origin")
 				require.Equal(t, !tc.stray, ri.isFleetMaster(svc), "fixture: master or not")
-				reason, err := svc.AdmitPeerBranch(context.Background(), "agent/alpha", ri.AgentBranch(), tip, nil)
+				reason, err := svc.Remote().AdmitPeerBranch(context.Background(), "agent/alpha", ri.AgentBranch(), tip, nil)
 				require.NoError(t, err)
 				require.Empty(t, reason)
 			}))
@@ -444,7 +444,7 @@ func TestFleetMaster_FetchedEditOfAnotherMembersFolderIsRefused(t *testing.T) {
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
 		_, err := svc.Remote().SyncWithPeers(ctx, f.mri.AgentBranch(), nil)
 		require.NoError(t, err)
-		reason, err := svc.AdmitPeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), plumbing.NewHash(admitted), nil)
+		reason, err := svc.Remote().AdmitPeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), plumbing.NewHash(admitted), nil)
 		require.NoError(t, err)
 		require.Empty(t, reason, "fixture: the record alone is admitted")
 	}))
@@ -595,7 +595,7 @@ func TestFleetMaster_ARefusedCommitUnderAnAdmissibleTipIsRefused(t *testing.T) {
 	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
 		_, err := svc.Remote().SyncWithPeers(ctx, f.mri.AgentBranch(), nil)
 		require.NoError(t, err)
-		reason, err := svc.JudgePeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), plumbing.NewHash(f.rev(t, "agent/alpha")), nil)
+		reason, err := svc.Remote().JudgePeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), plumbing.NewHash(f.rev(t, "agent/alpha")), nil)
 		require.NoError(t, err)
 		require.Empty(t, reason, "control: the record and an own-record edit are admissible")
 	}))
@@ -736,7 +736,7 @@ func TestFleetMaster_ARejudgedRefusalDemotesTheAdmittedBranch(t *testing.T) {
 			require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
 				_, err := svc.Remote().SyncWithPeers(ctx, f.mri.AgentBranch(), nil)
 				require.NoError(t, err)
-				reason, err := svc.AdmitPeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), tip, nil)
+				reason, err := svc.Remote().AdmitPeerBranch(ctx, "agent/alpha", f.mri.AgentBranch(), tip, nil)
 				require.NoError(t, err)
 				require.Empty(t, reason, "fixture: admitted while main holds the leaf")
 			}))

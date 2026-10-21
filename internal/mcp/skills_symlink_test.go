@@ -26,7 +26,7 @@ func putSymlink(t *testing.T, ri *repos.RepoInstance, name, file, target string)
 	svc, release, err := ri.Acquire()
 	require.NoError(t, err)
 	defer release()
-	_, err = storetest.RawSymlink(context.Background(), svc, svc.UpstreamBranch(),
+	_, err = storetest.RawSymlink(context.Background(), svc, svc.Remote().UpstreamBranch(),
 		fact.SkillsDir+"/"+name+"/"+file, target, "symlink "+name+"/"+file)
 
 	require.NoError(t, err)

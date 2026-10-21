@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/store/remotesync"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +41,7 @@ func TestDrop_D1_TheCarryingMergesOtherCommitsAreKept(t *testing.T) {
 	h := newPushHost(t, VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 	side := h.sideMerge(t, "kb/notes/bad.md", "kb/notes/other.md")
-	replayed, merges, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, side[0], false)
+	replayed, merges, err := h.svc.Remote().DropUnpublishedCommit(ctx, hostBranch, side[0], false)
 	require.NoError(t, err)
 	require.Equal(t, 1, merges, "the carrying merge was unfolded")
 	require.Equal(t, 1, replayed, "other.md's commit was replayed")
@@ -69,7 +71,7 @@ func TestDrop_D5_ASideForkedAfterTheDroppedCommitKeepsItsWork(t *testing.T) {
 	_, err = h.svc.Merge().CommitExperiment(ctx, "e1", nil)
 	require.NoError(t, err)
 	// ownOnly: the experiment's commit is this instance's own.
-	_, merges, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, plumbing.NewHash(bad), true)
+	_, merges, err := h.svc.Remote().DropUnpublishedCommit(ctx, hostBranch, plumbing.NewHash(bad), true)
 	require.NoError(t, err)
 	require.Equal(t, 1, merges)
 	files := h.branchFiles(hostBranch)
@@ -90,8 +92,8 @@ func TestDrop_D2_AMergeCannotBeDropped(t *testing.T) {
 	h.svc.SetSigner(newTestSigner(t))
 	h.sideMerge(t, "kb/notes/bad.md")
 	m := h.ref(hostBranch)
-	_, _, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, m, false)
-	require.ErrorIs(t, err, ErrDropMerge)
+	_, _, err := h.svc.Remote().DropUnpublishedCommit(ctx, hostBranch, m, false)
+	require.ErrorIs(t, err, remotesync.ErrDropMerge)
 	require.Equal(t, m, h.ref(hostBranch), "nothing changed")
 }
 
@@ -108,8 +110,8 @@ func TestDrop_ARemainingCommitOfAnotherAgentRefusesWithOwnOnly(t *testing.T) {
 	h.svc.SetSigner(newTestSigner(t))
 	side := h.sideMerge(t, "kb/notes/bad.md", "kb/notes/other.md") // authored "side"
 	before := h.ref(hostBranch)
-	_, _, err := h.svc.DropUnpublishedCommit(ctx, hostBranch, side[0], true)
-	var fe *DropForeignError
+	_, _, err := h.svc.Remote().DropUnpublishedCommit(ctx, hostBranch, side[0], true)
+	var fe *remotesync.DropForeignError
 	require.True(t, errors.As(err, &fe), "want a foreign refusal, got %v", err)
 	require.Equal(t, "side", fe.Agent)
 	require.Equal(t, side[1].String(), fe.Commit)

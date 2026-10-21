@@ -11,6 +11,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -45,7 +46,7 @@ func TestProbeResolveUpstream(t *testing.T) {
 	require.Equal(t, "trunk", resolveUpstream("", "trunk", []string{"main", "trunk"}))
 	require.Equal(t, "", resolveUpstream("", "agent/x", []string{"agent/x", "main", "trunk"}), "undecidable: the create would refuse")
 	require.Equal(t, "develop", resolveUpstream("develop", "", nil), "an empty remote seeds the requested branch")
-	require.Equal(t, store.DefaultConsensusBranch, resolveUpstream("", "", nil), "and only an unnamed one gets the named default")
+	require.Equal(t, remotesync.DefaultConsensusBranch, resolveUpstream("", "", nil), "and only an unnamed one gets the named default")
 }
 
 // An origin row never gets a branch nobody chose.
@@ -114,8 +115,8 @@ func TestFleet_TrunkWithoutOriginReadsTheRecordedBranch(t *testing.T) {
 	ri := m.fleetRepo()
 	require.NoError(t, m.Origins().Delete(ri.UID()))
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		svc.SetOrigin(nil)
-		require.Equal(t, "trunk", svc.UpstreamBranch())
+		svc.Remote().SetOrigin(nil)
+		require.Equal(t, "trunk", svc.Remote().UpstreamBranch())
 	}))
 
 	members, err := m.FleetMembers(ctx)

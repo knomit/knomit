@@ -170,6 +170,7 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 			return mcpgo.NewToolResultError(errStoreUnavailable.Error()), nil
 		}
 		defer release()
+		remote := svc.Remote()
 
 		// The branch: the cursor's, else the argument, else consensus on
 		// request, else the branch this binding reads the repo at.
@@ -180,9 +181,9 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		case args.branch != "":
 			branch = args.branch
 		case args.consensus:
-			branch, fromConsensus = svc.UpstreamBranch(), true
+			branch, fromConsensus = remote.UpstreamBranch(), true
 		}
-		if cursor != "" && (args.branch != "" && args.branch != branch || args.consensus && svc.UpstreamBranch() != branch) {
+		if cursor != "" && (args.branch != "" && args.branch != branch || args.consensus && remote.UpstreamBranch() != branch) {
 			return mcpgo.NewToolResultError(fmt.Sprintf("cursor is for branch %q of repo %s; pass the cursor alone", branch, repo12)), nil
 		}
 

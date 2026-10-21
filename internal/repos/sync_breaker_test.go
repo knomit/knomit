@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/remotesync"
+
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/store"
 )
 
 // F21 S1: the sync circuit breaker. Rounds are driven by ri.wakeSync() with an
@@ -156,7 +156,7 @@ func startBreakerLoop(t *testing.T, ri *RepoInstance, originRoot string, pre fun
 			return nil
 		},
 	})
-	auth := func(*store.Remote) (transport.AuthMethod, error) {
+	auth := func(*remotesync.Remote) (transport.AuthMethod, error) {
 		if l.authFail.Load() {
 			return nil, errors.New("no credential")
 		}
@@ -200,7 +200,7 @@ func newFailingOriginRepo(t *testing.T) *RepoInstance {
 	t.Helper()
 	_, ri := newTriggerRepo(t)
 	svc := testService(t, ri)
-	svc.SetOrigin(&store.Origin{URL: "https://example.invalid/kb.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote("https://example.invalid/kb.git", "main", trigAgent))
 	return ri
 }

@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/remotesync"
 )
 
 // F07 PR 4: `do: push` and knomit.push() wake this machine's sync loop.
@@ -163,12 +163,12 @@ func (l *countingLoop) parkTick(n int64) (release func()) {
 func startCountingLoop(t *testing.T, ri *RepoInstance, pre func(*countingLoop)) *countingLoop {
 	t.Helper()
 	svc := testService(t, ri)
-	svc.SetOrigin(&store.Origin{URL: "https://example.invalid/kb.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: "main"})
 	l := &countingLoop{}
 	if pre != nil {
 		pre(l)
 	}
-	auth := func(*store.Remote) (transport.AuthMethod, error) {
+	auth := func(*remotesync.Remote) (transport.AuthMethod, error) {
 		n := l.ticks.Add(1)
 		if g, ok := l.gates.Load(n); ok {
 			<-g.(chan struct{})
@@ -526,7 +526,7 @@ func newOriginTriggerRepo(t *testing.T, entries ...string) (ri *RepoInstance, ba
 func startOriginLoop(t *testing.T, ri *RepoInstance, originRoot string) *atomic.Int64 {
 	t.Helper()
 	var ticks atomic.Int64
-	auth := func(*store.Remote) (transport.AuthMethod, error) { ticks.Add(1); return nil, nil }
+	auth := func(*remotesync.Remote) (transport.AuthMethod, error) { ticks.Add(1); return nil, nil }
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -680,7 +680,7 @@ func TestPush_SyncStageWiresLocalLoop(t *testing.T) {
 	require.Len(t, kickedOf(t, ri, "fast"), 1)
 	svc := testService(t, ri)
 	require.Eventually(t, func() bool {
-		m, err := svc.Branches().HeadCommit(context.Background(), svc.UpstreamBranch())
+		m, err := svc.Branches().HeadCommit(context.Background(), svc.Remote().UpstreamBranch())
 		return err == nil && m == h && localTicks.Load() == 2
 	}, 10*time.Second, 10*time.Millisecond, "a push fire must move main to the agent head within the countdown, not the hour")
 }

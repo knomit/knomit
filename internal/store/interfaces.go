@@ -4,9 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-
 	"knomit/internal/store/facts"
 	"knomit/internal/store/vocab"
 )
@@ -129,56 +126,6 @@ type SearchIndex interface {
 	GraphStore
 	HistoryQuery
 	MethodologyMatcher
-}
-
-// RemoteIndex is the interface for git remote configuration and synchronization.
-// Implemented by *remoteIndex, exposed on Service via Remote().
-type RemoteIndex interface {
-	// GetRemote assembles the INJECTED origin (Service.SetOrigin, sourced from
-	// control.db) with this repo's own sync/push status row. There is no writer
-	// for connection identity here: control.db's repo_origins owns it.
-	GetRemote(name string) (*Remote, error)
-	DeleteRemote(name string) error
-	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
-	// SyncWithPeers is Sync that also fetches every agent/* branch into
-	// refs/remotes/origin/agent/* (the fleet master on a forge).
-	SyncWithPeers(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
-	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
-	// PublishUpstream pushes the tip of the local branch from to the origin's
-	// consensus branch WITHOUT force: the fleet master's write of the fleet
-	// repository's main. A main on the origin that is not an ancestor of the
-	// tip is refused by the origin, as an ordinary push error.
-	PublishUpstream(ctx context.Context, from string, auth transport.AuthMethod) (PushResult, error)
-	// PublishUpstreamChange commits one change (path set to *content, or
-	// deleted when nil) on top of the local upstream tip and pushes that
-	// commit to the origin's upstream WITHOUT force; the agent branch is not
-	// touched, and the local upstream follows only a push the origin took.
-	// from is this instance's agent branch: on the fleet repository the
-	// commit is judged before the push (JudgeOwnRange), and from's tip is
-	// the state that vouches for its author when main does not yet.
-	PublishUpstreamChange(ctx context.Context, from, path string, content *string, message string, auth transport.AuthMethod) (plumbing.Hash, error)
-	// PublishTo pushes from's tip to gitURL, which need not be the origin:
-	// refs/heads/<upstream> WITHOUT force and refs/heads/<from> with force,
-	// in one push, through a remote that exists for this call only (the git
-	// config is not touched). The fleet master's move onto a forge uses it
-	// to seed the forge before the origin is attached.
-	PublishTo(ctx context.Context, gitURL, from, upstream string, auth transport.AuthMethod) error
-	// PeerTips lists the fetched agent/* branches (refs/remotes/origin/agent/*)
-	// other than own, by branch name.
-	PeerTips(own string) (map[string]plumbing.Hash, error)
-	// RecordPushError persists a push failure on the named remote without
-	// pushing (a refused PublishUpstream, which records nothing itself).
-	RecordPushError(name, msg string) error
-	// RetractPushedBranch deletes branch on the origin with a lease on the
-	// hash this instance last pushed there, then removes the origin remote
-	// from the git config so that no later push recreates it. It is for a
-	// repository about to be deleted (a rolled-back fleet create). A tip
-	// someone else pushed is left alone, as an error.
-	RetractPushedBranch(ctx context.Context, branch string, auth transport.AuthMethod) error
-	// RecordSyncError persists a sync failure (last_status="error",
-	// last_error=msg) on the named remote without performing a fetch. Used to
-	// surface an auth-resolution failure that never reaches Sync().
-	RecordSyncError(name, msg string) error
 }
 
 // BranchIndex is the interface for branch lifecycle operations. Implemented by *repoHandler.

@@ -21,6 +21,7 @@ import (
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/store/storetest"
 )
 
@@ -197,7 +198,7 @@ func TestDue_RemovedBeforeItsDateNeverFires(t *testing.T) {
 		{"merge_delete", func(t *testing.T, ri *RepoInstance, _ string, _ time.Time) int64 {
 			svc := testService(t, ri)
 			ctx := context.Background()
-			_, err := svc.AdvanceLocalUpstream(ctx, trigAgent, "main") // main holds the fact too
+			_, err := svc.Remote().AdvanceLocalUpstream(ctx, trigAgent, "main") // main holds the fact too
 			require.NoError(t, err)
 			_, err = svc.Facts().DeleteFact(ctx, "main", path, "peer retract")
 			require.NoError(t, err)
@@ -208,7 +209,7 @@ func TestDue_RemovedBeforeItsDateNeverFires(t *testing.T) {
 		{"merge_rewrite", func(t *testing.T, ri *RepoInstance, _ string, due time.Time) int64 {
 			svc := testService(t, ri)
 			ctx := context.Background()
-			_, err := svc.AdvanceLocalUpstream(ctx, trigAgent, "main")
+			_, err := svc.Remote().AdvanceLocalUpstream(ctx, trigAgent, "main")
 			require.NoError(t, err)
 			writeDated(t, ri, "main", path, due.Add(3*time.Hour))
 			require.NoError(t, svc.Merge().MergeBranch(ctx, "main", trigAgent, merge.StrategyRemoteWins))
@@ -472,12 +473,12 @@ func TestDue_SweepRunsOnReconcileTick_FailedRemoteTick(t *testing.T) {
 	writeDatedAndWait(t, ri, "kb/tasks/x.md", clock.now().Add(time.Hour))
 	clock.add(2 * time.Hour)
 	svc := testService(t, ri)
-	svc.SetOrigin(&store.Origin{URL: "https://example.invalid/kb.git", Branch: "main"})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git", Branch: "main"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var authCalls atomic.Int64
-	failingAuth := func(*store.Remote) (transport.AuthMethod, error) {
+	failingAuth := func(*remotesync.Remote) (transport.AuthMethod, error) {
 		authCalls.Add(1)
 		return nil, errors.New("no credential")
 	}

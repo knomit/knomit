@@ -202,26 +202,6 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 	return sessions.ReapIdle(ctx, s.sessionDB, toolTTL, pipelineTTL)
 }
 
-// SetOrigin supplies the repo's remote connection from control.db. A nil
-// origin means this repo has none, which GetRemote reports as (nil, nil) — the
-// contract every sync path branches on. Must be called before OpenRepo so
-// rehydrateUpstreamMain and the fetch refspec see it.
-//
-// Safe to call on a running repo: the origin HAL handlers re-point a live
-// repo's origin while the background reconcile loop concurrently calls
-// GetRemote, so the write goes through remoteIndex's originMu rather than a
-// bare field assignment (see Index.SetOrigin).
-//
-// A non-nil origin with a branch also RECORDS that branch as the repo's
-// consensus branch (remotesync/consensus_branch.go), so removing the origin later
-// (SetOrigin(nil)) leaves the repo on the branch it had, never on a default.
-func (s *Service) SetOrigin(o *Origin) {
-	s.ri.SetOrigin(o)
-	if o != nil && o.Branch != "" {
-		s.recordConsensusBranch(o.Branch)
-	}
-}
-
 // ConfigureRemote wires the git remote named "origin" so go-git can fetch and
 // push by name, with refspecs tracking both upstreamMain and agentBranch. The
 // git config is a DERIVED CACHE of control.db, rewritten at open; it is never
@@ -280,8 +260,9 @@ func (s *Service) SetOntologyRoot(root string) { s.rh.SetFactRoot(strings.Trim(r
 // mutated afterwards, which is why the bool needs no lock.
 func (s *Service) SetReadOnly(ro bool) { s.rh.SetReadOnly(ro) }
 
-// Remote returns the RemoteIndex for git remote configuration and sync.
-func (s *Service) Remote() RemoteIndex { return s.ri }
+// Remote returns the remotesync index for git remote configuration and sync,
+// the origin and the consensus-branch record.
+func (s *Service) Remote() *remotesync.Index { return s.ri }
 
 // Facts is the fact index: git-backed fact reads and writes, and the one
 // system-tree write door (WriteSystemTree, callable only from internal/repos;

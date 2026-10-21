@@ -16,6 +16,7 @@ import (
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -511,7 +512,7 @@ func TestFleetReserved_RefusedRestoreOnTheMasterWritesNothing(t *testing.T) {
 		require.NoError(t, err)
 		defer svc.Close()
 		svc.SetOntologyRoot("kb")
-		svc.SetOrigin(&store.Origin{URL: origin, Branch: "main"})
+		svc.Remote().SetOrigin(&remotesync.Origin{URL: origin, Branch: "main"})
 		require.NoError(t, svc.OpenRepo())
 		got, err := svc.Facts().ReadFact(context.Background(), "agent/test-fleet", OntologyPath, nil)
 		require.NoError(t, err)

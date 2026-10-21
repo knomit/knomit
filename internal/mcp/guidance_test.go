@@ -37,7 +37,7 @@ func putRawOn(t *testing.T, ri *repos.RepoInstance, branch, path, content string
 	t.Helper()
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		if branch == "" {
-			branch = svc.UpstreamBranch()
+			branch = svc.Remote().UpstreamBranch()
 		}
 		_, err := svc.Facts().WriteFact(context.Background(), branch, path, content, "git "+path, "updated")
 		require.NoError(t, err)

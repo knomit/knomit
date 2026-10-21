@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 )
 
 // F23: the guidance reader. Everything is read at ONE commit, the tip of the
@@ -218,8 +219,8 @@ func TestConsensusGuidance_NoOntologyOrNoBranch(t *testing.T) {
 	t.Run("no consensus branch yet", func(t *testing.T) {
 		g := newGuidanceRepo(t)
 		w := captureGuidanceWarnings(t)
-		g.svc.SetOrigin(&store.Origin{URL: "https://example.invalid/g.git", Branch: "release"})
-		require.Equal(t, "release", g.svc.UpstreamBranch())
+		g.svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/g.git", Branch: "release"})
+		require.Equal(t, "release", g.svc.Remote().UpstreamBranch())
 		g.put(t, "agent/test", ".knomit/ontology.yaml", guidanceOntologyAgent)
 		require.Nil(t, g.ri.ConsensusGuidance(ctx))
 		require.Nil(t, g.ri.ConsensusGuidance(ctx))

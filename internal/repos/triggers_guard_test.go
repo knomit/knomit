@@ -25,7 +25,7 @@ import (
 var triggersRepoAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// the store: reads, and the three tables
-		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.Branches", "?.HeadCommit", "svc.UpstreamBranch", "tr.SignerFingerprint",
+		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.Branches", "?.HeadCommit", "svc.Remote", "remote.UpstreamBranch", "tr.SignerFingerprint",
 		"tr.OntologyAtCommit", "tr.TriggerWatermarks", "tr.IsAncestor", "svc.DiffFacts", "tr.TreeReader",
 		"tr.UpstreamTip", "tr.AncestorSet", "tr.RecordTriggerRuns", "tr.AdvanceTriggerWatermarks",
 		"tr.DueCandidates", "tr.DueMarks",
@@ -112,7 +112,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 	// TestRecipe_OSExecOnlyInExecFile), never from here.
 	"trigger_recipe.go": {
 		// the store: main's tip and the recipe blob at it
-		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.UpstreamBranch", "tr.UpstreamTip", "tr.RecipeAt", "tip.IsZero",
+		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.Remote", "remote.UpstreamBranch", "tr.UpstreamTip", "tr.RecipeAt", "tip.IsZero",
 		// the local tier
 		"os.Stat", "os.ReadFile", "filepath.Join", "fi.Mode", "?.IsRegular", "fi.ModTime", "fi.Size", "cur.mtime.Equal",
 		"sha256.Sum256", "hex.EncodeToString",

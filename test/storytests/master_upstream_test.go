@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/store"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/remotesync"
 	"knomit/test/testenv"
 )
 
@@ -48,7 +49,7 @@ func TestReconcile_G11_MasterUpstreamEndToEnd(t *testing.T) {
 
 	// Verify Remote.Branch round-tripped through the connect flow
 	// (Origins.Set in control.db → the injected origin GetRemote assembles).
-	var stored *store.Remote
+	var stored *remotesync.Remote
 	a.Instance().WithRead(func(svc *store.Service) {
 		var err error
 		stored, err = svc.Remote().GetRemote("origin")

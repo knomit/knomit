@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"knomit/internal/store"
+	"knomit/internal/store/remotesync"
 	"knomit/test/testenv"
 )
 
@@ -42,7 +43,7 @@ func TestContract_WrongMain_MasterOnlyRemoteAdopted(t *testing.T) {
 
 	// The remotes table must record "master" as the adopted upstream — not a
 	// silent rewrite to "main".
-	var stored *store.Remote
+	var stored *remotesync.Remote
 	repo.Instance().WithRead(func(svc *store.Service) {
 		stored, _ = svc.Remote().GetRemote("origin")
 	})
