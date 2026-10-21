@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/federate"
@@ -24,7 +26,7 @@ type changesView struct {
 	Head     string                        `json:"head"`
 	HasMore  bool                          `json:"has_more"`
 	Links    hal.LinkMap                   `json:"_links"`
-	Embedded map[string][]store.PathChange `json:"_embedded"`
+	Embedded map[string][]model.PathChange `json:"_embedded"`
 }
 
 // handleHALChanges serves GET /repos/{repo}/branches/{branch}/changes: each
@@ -59,13 +61,13 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		}
 		repo12 := federate.ID12(ri.ID())
 
-		var q store.ChangesQuery
+		var q model.ChangesQuery
 		if c := qp.Get("cursor"); c != "" {
 			var (
-				scope store.ChangesScope
+				scope model.ChangesScope
 				err   error
 			)
-			if q, scope, err = store.DecodeChangesCursor(c); err != nil {
+			if q, scope, err = model.DecodeChangesCursor(c); err != nil {
 				writeChangesError(w, r, err, branch)
 				return
 			}
@@ -79,13 +81,13 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 				return
 			}
 		} else {
-			q = store.ChangesQuery{Since: qp.Get("since"), Prefix: qp.Get("prefix")}
+			q = model.ChangesQuery{Since: qp.Get("since"), Prefix: qp.Get("prefix")}
 		}
 		q.Limit = limit
 
 		// since may be the MCP tool's bookmark (<repo12>:<commit40>); it must
 		// name this repo.
-		sinceRepo, sinceCommit, err := store.ParseChangesSince(q.Since)
+		sinceRepo, sinceCommit, err := model.ParseChangesSince(q.Since)
 		if err != nil {
 			writeChangesError(w, r, err, branch)
 			return
@@ -97,7 +99,7 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		}
 		q.Since = sinceCommit
 
-		var res store.ChangesResult
+		var res model.ChangesResult
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			res, err = svc.Facts().ChangesUnder(r.Context(), branch, q)
 		}); aerr != nil {
@@ -112,7 +114,7 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		base := b.Branch(repoName, hal.Anchor{Branch: branch}) + "/changes"
 		links := hal.LinkMap{"self": {Href: selfWithQuery(base, r)}}
 		if res.HasMore {
-			next := store.EncodeChangesCursor(store.ChangesScope{Repo: repo12, Branch: branch}, q.Since, res.Head, q.Prefix, res.Changes[len(res.Changes)-1].Path)
+			next := model.EncodeChangesCursor(model.ChangesScope{Repo: repo12, Branch: branch}, q.Since, res.Head, q.Prefix, res.Changes[len(res.Changes)-1].Path)
 			nq := r.URL.Query()
 			nq.Del("since")
 			nq.Del("prefix")
@@ -124,7 +126,7 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 			Head:     res.Head,
 			HasMore:  res.HasMore,
 			Links:    links,
-			Embedded: map[string][]store.PathChange{"changes": res.Changes},
+			Embedded: map[string][]model.PathChange{"changes": res.Changes},
 		})
 	}
 }
@@ -133,13 +135,13 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 // them may become an empty page: an empty page reads as "nothing changed".
 func writeChangesError(w http.ResponseWriter, r *http.Request, err error, branch string) {
 	switch {
-	case errors.Is(err, store.ErrSinceNotBehind):
+	case errors.Is(err, model.ErrSinceNotBehind):
 		hal.WriteProblem(w, http.StatusConflict, "since is not behind head", err.Error(), r.URL.Path)
-	case errors.Is(err, store.ErrUnknownSince):
+	case errors.Is(err, model.ErrUnknownSince):
 		hal.WriteProblem(w, http.StatusBadRequest, "Unknown since", err.Error(), r.URL.Path)
-	case errors.Is(err, store.ErrInvalidPrefix):
+	case errors.Is(err, model.ErrInvalidPrefix):
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid prefix", err.Error(), r.URL.Path)
-	case errors.Is(err, store.ErrInvalidChangesCursor):
+	case errors.Is(err, model.ErrInvalidChangesCursor):
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid cursor", err.Error(), r.URL.Path)
 	default:
 		writeStoreError(w, r, err, "Failed to compute changes", branch)

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -272,7 +274,7 @@ func (m *Manager) fleetHostAtMain(ri *RepoInstance) ([]string, error) {
 		return nil, err
 	}
 	if upstream == "" {
-		return nil, fmt.Errorf("fleet repository: %w", store.ErrNoConsensusBranch)
+		return nil, fmt.Errorf("fleet repository: %w", model.ErrNoConsensusBranch)
 	}
 	raw, ok, err := m.fleetHostAt(ri, upstream)
 	if err != nil || !ok {

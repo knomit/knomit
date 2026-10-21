@@ -1,7 +1,8 @@
-package vcs
+package model
 
 import (
 	"context"
+
 	"knomit/internal/embeddings/params"
 )
 

@@ -14,13 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
@@ -507,7 +508,7 @@ type lensSearchStub struct {
 
 func (s *lensSearchStub) Search(
 	_ context.Context,
-	ri *repos.RepoInstance, emb store.Embedder, _ string, opts index.SearchOptions,
+	ri *repos.RepoInstance, emb model.Embedder, _ string, opts index.SearchOptions,
 ) ([]index.SearchResult, error) {
 	s.mu.Lock()
 	if s.lastOpts == nil {
@@ -1726,7 +1727,7 @@ func (s *motifResolvingLensStub) RecentFacts(
 
 func (s *motifResolvingLensStub) Search(
 	_ context.Context,
-	ri *repos.RepoInstance, _ store.Embedder, _ string, opts index.SearchOptions,
+	ri *repos.RepoInstance, _ model.Embedder, _ string, opts index.SearchOptions,
 ) ([]index.SearchResult, error) {
 	var out []index.SearchResult
 	for _, e := range s.carriers(ri.Name(), opts) {

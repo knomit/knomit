@@ -68,7 +68,7 @@ func TestCommitAuthor_NoAgentIDRefuses(t *testing.T) {
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&objs))
 	_, err := svc.Facts().WriteFact(ctx, testAgentBranch, "kb/a.md", "---\ntype: observation\n---\n# a\n\nbody\n", "learn: a", "learn")
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrNoAgentID), "err = %v", err)
+	require.True(t, errors.Is(err, vcs.ErrNoAgentID), "err = %v", err)
 	var after int
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&after))
 	require.Equal(t, objs, after, "a refused write leaves no object")

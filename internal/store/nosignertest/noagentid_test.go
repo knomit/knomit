@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store"
+	"knomit/internal/store/internal/vcs"
 )
 
 // TestNoAgentID_AuthoredWriteIsRefused (D18): this binary installs no test
@@ -37,7 +38,7 @@ func TestNoAgentID_AuthoredWriteIsRefused(t *testing.T) {
 		t.Fatalf("fixture: this binary must have no fallback agent id, got %q", got)
 	}
 	_, err = svc.Facts().WriteFact(ctx, "agent/test-deadbeef", "kb/notes/a.md", factBody, "learn: a", "created")
-	if !errors.Is(err, store.ErrNoAgentID) {
+	if !errors.Is(err, vcs.ErrNoAgentID) {
 		t.Fatalf("WriteFact without an agent id: got %v, want ErrNoAgentID", err)
 	}
 }

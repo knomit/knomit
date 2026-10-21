@@ -171,7 +171,7 @@ func plainPath(u string) string {
 // ontology-LESS agent branch (a forge whose default branch was set to one,
 // the #82 case), alongside a "trunk" that IS a knowledge base. The two differ,
 // which is the only way to tell whether a caller resolves the branch by the
-// create's rule (store.ChooseConsensusBranch skips an agent-branch HEAD) or
+// create's rule (model.ChooseConsensusBranch skips an agent-branch HEAD) or
 // just follows HEAD.
 func seedBareRemoteHeadIsAgentBranch(t *testing.T, bare string) string {
 	t.Helper()
@@ -203,7 +203,7 @@ func seedBareRemoteHeadIsAgentBranch(t *testing.T, bare string) string {
 }
 
 // With no branch requested, the preflight must resolve the branch by the SAME
-// rule the create uses (store.ChooseConsensusBranch), not by the remote's raw
+// rule the create uses (model.ChooseConsensusBranch), not by the remote's raw
 // HEAD. Otherwise a remote whose HEAD is an agent branch but whose consensus
 // branch is a knowledge base gets a confident, wrong "not a knowledge base" —
 // and the create that follows would have succeeded.
@@ -258,7 +258,7 @@ func seedBareRemoteMasterOnly(t *testing.T, bare string) string {
 // The preflight and the create resolve the branch from different data: the
 // preflight in probe.go (from an ls-remote listing), the create in
 // store/repo.go (from a fetched repo). Both now call one rule,
-// store.ChooseConsensusBranch, but they still gather its inputs separately,
+// model.ChooseConsensusBranch, but they still gather its inputs separately,
 // and Task 7 shipped a bug that existed precisely because they disagreed.
 //
 // This asserts they agree on every shape that distinguishes them: the branch

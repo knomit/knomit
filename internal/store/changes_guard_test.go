@@ -6,7 +6,10 @@ import (
 	"go/parser"
 	"go/token"
 	"sort"
+	"strings"
 	"testing"
+
+	"knomit/internal/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -24,17 +27,22 @@ var changesAllowedCalls = map[string][]string{
 	"internal/vcs/changes.go": {
 		// git reads
 		"?.CommitObject", "c.IsAncestor", "sinceCommit.IsAncestor", "c.Tree", "root.Tree", "object.DiffTree",
-		"rh.ResolveRef", "rh.OntologyRoot", "plumbing.NewHash", "?.String",
+		"rh.ResolveRef", "rh.OntologyRoot", "?.String",
 		// pure helpers
-		"NormalizeChangesPrefix", "diffSubtrees", "subtreeOrEmpty", "parseFullHash", "isFact", "isHex",
-		"fact.IsPrivatePath", "strings.Contains", "strings.ToLower", "strings.Trim", "strings.Cut", "sort.Slice",
-		"errors.Is", "errors.New", "fmt.Errorf",
-		"json.Marshal", "json.Unmarshal", "?.EncodeToString", "?.DecodeString",
+		"NormalizeChangesPrefix", "diffSubtrees", "subtreeOrEmpty", "model.ParseFullHash", "isFact",
+		"fact.IsPrivatePath", "strings.Contains", "strings.ToLower", "strings.Trim", "sort.Slice",
+		"errors.Is", "fmt.Errorf",
 		"append", "len", "make",
+	},
+	// the pure cursor and bookmark codecs moved out of vcs into the model leaf;
+	// they stay under the same allowlist.
+	"model/changes.go": {
+		"plumbing.NewHash", "strings.Cut", "strings.ToLower", "errors.New", "fmt.Errorf", "ParseFullHash", "isHex",
+		"json.Marshal", "json.Unmarshal", "?.EncodeToString", "?.DecodeString", "len",
 	},
 	"../mcp/changes.go": {
 		"repos.RequireBinding", "b.Write", "?.Acquire", "release", "svc.Remote", "remote.UpstreamBranch", "svc.Facts", "?.ChangesUnder",
-		"store.DecodeChangesCursor", "store.EncodeChangesCursor",
+		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"req.GetInt", "req.GetString", "req.GetBool", "context.WithTimeout", "cancel",
 		"mcpgo.NewTool", "mcpgo.WithDescription", "mcpgo.WithString", "mcpgo.WithNumber", "mcpgo.WithBoolean",
 		"mcpgo.Description", "mcpgo.NewToolResultError", "mcpgo.NewToolResultText", "bindingArg",
@@ -45,17 +53,17 @@ var changesAllowedCalls = map[string][]string{
 		// cached in memory); ?.Name is the repo's display name.
 		"b.ByID", "b.WriteMountBranch", "?.ID", "?.Name", "federate.ID12", "wirePath",
 		"resolveChangesRepo", "describeChangesRepo", "kbPrefixRefusal", "isHexDigits",
-		"store.ParseChangesSince", "store.ChangesBookmark",
+		"model.ParseChangesSince", "model.ChangesBookmark",
 		"strings.Cut", "strings.EqualFold", "strings.HasPrefix", "strings.ToLower",
 	},
 	"../web/handlers_changes.go": {
 		"repos.RepoFromContext", "BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",
-		"store.DecodeChangesCursor", "store.EncodeChangesCursor",
+		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"?.Query", "qp.Get", "r.Context", "nq.Del", "nq.Set", "nq.Encode", "strconv.Atoi", "strconv.Itoa",
 		"b.Branch", "selfWithQuery", "hal.WriteHAL", "hal.WriteProblem", "writeChangesError", "writeStoreError",
 		"aerr.Error", "err.Error", "errors.Is", "len",
 		// the repo's id for cursor and bookmark scope (a git read, cached)
-		"ri.ID", "federate.ID12", "store.ParseChangesSince", "strconv.Quote",
+		"ri.ID", "federate.ID12", "model.ParseChangesSince", "strconv.Quote",
 	},
 }
 
@@ -103,7 +111,11 @@ func TestChanges_CallsAreAllowlisted(t *testing.T) {
 		}
 		sort.Strings(unused)
 		require.Empty(t, unused, "%s: allowlist entries no longer called — remove them", f)
-		require.Greater(t, len(seen), 15, "%s: the guard must actually have walked the file", f)
+		minSeen := 15
+		if strings.HasPrefix(f, "model/") {
+			minSeen = 8 // the codecs are a small file; 12 distinct calls today
+		}
+		require.Greater(t, len(seen), minSeen, "%s: the guard must actually have walked the file", f)
 	}
 }
 
@@ -161,7 +173,7 @@ func TestChangesUnder_WritesNothing(t *testing.T) {
 	before := snapshotStore(t, svc)
 	require.NotEmpty(t, before.Refs)
 	require.Greater(t, before.CommitLog, 0, "fixture: the commit log must be populated to show it does not grow")
-	for _, q := range []ChangesQuery{
+	for _, q := range []model.ChangesQuery{
 		{Prefix: "tasks/a"},
 		{Prefix: "tasks/a", Since: since},
 		{Prefix: "tasks/a", Since: since, Limit: 1},
@@ -171,6 +183,6 @@ func TestChangesUnder_WritesNothing(t *testing.T) {
 	} {
 		_, _ = svc.Facts().ChangesUnder(ctx, "main", q)
 	}
-	_, _ = svc.Facts().ChangesUnder(ctx, "no-such-branch", ChangesQuery{})
+	_, _ = svc.Facts().ChangesUnder(ctx, "no-such-branch", model.ChangesQuery{})
 	require.Equal(t, before, snapshotStore(t, svc))
 }

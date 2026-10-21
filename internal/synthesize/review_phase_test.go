@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -358,7 +360,7 @@ func newPhaseTestReviewer(t *testing.T) (*Reviewer, *store.Service) {
 // manualSession creates a planned pipeline_sessions row directly via the
 // index, bypassing StartSession (which clusters dirty facts and is heavy for tests
 // that just want to exercise the dispatcher).
-func manualSession(t *testing.T, svc *store.Service, branch string) *store.PipelineSession {
+func manualSession(t *testing.T, svc *store.Service, branch string) *model.PipelineSession {
 	t.Helper()
 	sess, err := svc.Pipeline().CreatePipelineSession(context.Background(), "review", branch, "")
 	require.NoError(t, err)
@@ -379,7 +381,7 @@ func insertManualPruneItem(t *testing.T, svc *store.Service, sessionID, factPath
 	facts := []factForLLM{{File: factPath, Title: "x", Body: "x", Type: "observation"}}
 	body, err := json.Marshal(facts)
 	require.NoError(t, err)
-	err = svc.Pipeline().InsertPipelineWorkItem(context.Background(), store.PipelineWorkItem{
+	err = svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
 		SessionID:  sessionID,
 		StepType:   "prune",
 		ClusterKey: "test-cluster",

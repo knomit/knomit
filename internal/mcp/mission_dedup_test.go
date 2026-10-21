@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -63,7 +65,7 @@ func missionOntology(t *testing.T, topic string, dedupOff bool) *fact.Ontology {
 	return o
 }
 
-func newMissionDedupRepo(t *testing.T, o *fact.Ontology) (context.Context, store.BatchEmbedder, *store.Service) {
+func newMissionDedupRepo(t *testing.T, o *fact.Ontology) (context.Context, model.BatchEmbedder, *store.Service) {
 	t.Helper()
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)

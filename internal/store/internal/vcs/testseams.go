@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/model"
 )
 
 // Test seams for the parent store's white-box tests, which drive the
@@ -155,8 +156,7 @@ func MetaGetForTest(ctx context.Context, q storegit.CtxExecer, key string) (stri
 // HasTrailersForTest reports whether ctx carries a Trailers value at all.
 func HasTrailersForTest(ctx context.Context) bool {
 	mustBeTest()
-	_, set := ctx.Value(trailersCtxKey{}).(Trailers)
-	return set
+	return model.HasTrailers(ctx)
 }
 
 // TestFallbackAgentForTest is the installed test fallback agent-id function,

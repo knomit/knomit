@@ -47,6 +47,8 @@ import (
 	"strings"
 	"sync"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/verify"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -287,7 +289,7 @@ func (m *consensusMerger) mayMerge(ctx context.Context, svc *store.Service, upst
 func (m *consensusMerger) autoAt(ctx context.Context, svc *store.Service, upstream string) bool {
 	data, err := svc.OntologyAt(ctx, upstream)
 	if err != nil {
-		if errors.Is(err, store.ErrBranchNotFound) {
+		if errors.Is(err, model.ErrBranchNotFound) {
 			return false // no consensus branch yet: nothing is on
 		}
 		m.warnOnce("ontology:"+err.Error(), fmt.Sprintf("consensus: read the ontology at %s: %v; read as off", upstream, err))
@@ -374,7 +376,7 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 		m.refuse(branch, tip, fmt.Sprintf(
 			"consensus: auto-merge of %s at %s into %s refused: %s; the branch's author must fix that fact",
 			branch, shortHash(tipStr), m.agentBranch, invalid.Reason))
-	case errors.Is(err, merge.ErrUnrelatedHistories), errors.Is(err, store.ErrNoSigner):
+	case errors.Is(err, merge.ErrUnrelatedHistories), errors.Is(err, model.ErrNoSigner):
 		m.refuse(branch, tip, fmt.Sprintf(
 			"consensus: auto-merge of %s at %s into %s refused: %v; left for a human", branch, shortHash(tipStr), m.agentBranch, err))
 	default:

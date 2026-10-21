@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +24,7 @@ func TestAnsweredDistillResponses(t *testing.T) {
 	require.NoError(t, err)
 
 	insert := func(sessionID, step, key string) int64 {
-		require.NoError(t, pi.InsertPipelineWorkItem(ctx, PipelineWorkItem{
+		require.NoError(t, pi.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 			SessionID: sessionID, StepType: step, ClusterKey: key, FactsJSON: "[]",
 		}))
 		items, err := pi.PendingPipelineWorkItems(ctx, sessionID)

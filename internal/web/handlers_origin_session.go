@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
@@ -226,7 +228,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		// This store is where the disjoint-history commit REPLAYS this
 		// instance's facts (store.Replay), and SwapStore then installs it and
 		// pushes the result as our agent branch. Those commits must be signed:
-		// without a signer they went out unsigned (now store.ErrNoSigner).
+		// without a signer they went out unsigned (now model.ErrNoSigner).
 		remoteSvc.SetSigner(rm.Signer())
 		remoteSvc.SetAgentID(rm.AgentID())
 		if ri := repos.RepoFromContext(r.Context()); ri != nil {
@@ -922,7 +924,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			// control.db held before. Refused while refusing is still free.
 			if upstreamMain == "" {
 				hal.WriteProblem(w, http.StatusBadRequest, "No consensus branch",
-					"save remote config: "+store.ErrNoConsensusBranch.Error()+"; choose the remote branch to follow and commit again",
+					"save remote config: "+model.ErrNoConsensusBranch.Error()+"; choose the remote branch to follow and commit again",
 					r.URL.Path)
 				return
 			}
@@ -966,7 +968,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		} else {
 			stream.event(map[string]string{"phase": "configuring"})
 			stream.event(map[string]any{"phase": "done", "index_state": ri.Status().Index.State,
-				"warning": "save remote config: " + store.ErrNoConsensusBranch.Error()})
+				"warning": "save remote config: " + model.ErrNoConsensusBranch.Error()})
 		}
 
 		sess.mu.Lock()

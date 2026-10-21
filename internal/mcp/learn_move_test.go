@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
@@ -26,7 +28,7 @@ import (
 // near-duplicate at cosine 1.0.
 
 // seedTask learns one templated fact under topic and returns its path.
-func seedTask(t *testing.T, ctx context.Context, emb store.BatchEmbedder, topic string) string {
+func seedTask(t *testing.T, ctx context.Context, emb model.BatchEmbedder, topic string) string {
 	t.Helper()
 	r, err := LearnHandler(emb)(ctx, taskFactReq(topic))
 	require.NoError(t, err)

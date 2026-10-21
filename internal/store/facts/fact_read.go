@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
-
-	"knomit/internal/store/internal/vcs"
 )
 
 // ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
@@ -25,7 +25,7 @@ func (fi *Index) readFileLastCommit(ctx context.Context, branch, path, beforeCom
 		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
 	if parent == "" {
-		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, vcs.ErrPathNotFound)
+		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, model.ErrPathNotFound)
 	}
 
 	// Resolve, via the index, the last commit ≤ parent on the first-parent
@@ -40,7 +40,7 @@ func (fi *Index) readFileLastCommit(ctx context.Context, branch, path, beforeCom
 		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
 	if !ok {
-		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, vcs.ErrPathNotFound)
+		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, model.ErrPathNotFound)
 	}
 
 	content, err = fi.rh.vr.ReadFileAtCommit(ctx, path, hash)

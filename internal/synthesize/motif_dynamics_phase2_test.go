@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/vocab"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/store"
 )
 
 // Phase-2 multi-session dynamics.
@@ -40,8 +40,8 @@ func (e *restatementEnv) vocabSession() sessionOutcome {
 }
 
 // itemsOfType returns this session's work items of one step type.
-func (o sessionOutcome) itemsOfType(step string) []store.PipelineWorkItem {
-	var out []store.PipelineWorkItem
+func (o sessionOutcome) itemsOfType(step string) []model.PipelineWorkItem {
+	var out []model.PipelineWorkItem
 	for _, i := range o.restatementItems {
 		if i.StepType == step {
 			out = append(out, i)

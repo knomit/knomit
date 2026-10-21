@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/merge"
+	"knomit/internal/store/model"
 )
 
 // newChangesService opens a fresh store with "main" as the consensus branch and
@@ -99,7 +100,7 @@ func folderPresent(t *testing.T, svc *Service, branch, dir string) bool {
 	return true
 }
 
-func changes(t *testing.T, svc *Service, branch string, q ChangesQuery) ChangesResult {
+func changes(t *testing.T, svc *Service, branch string, q model.ChangesQuery) model.ChangesResult {
 	t.Helper()
 	res, err := svc.Facts().ChangesUnder(context.Background(), branch, q)
 	require.NoError(t, err)
@@ -113,8 +114,8 @@ func TestChangesUnder_DeletionAppears(t *testing.T) {
 	c0 := writeF(t, svc, "main", "kb/tasks/a/y.md")
 	deleteF(t, svc, "main", "kb/tasks/a/x.md")
 
-	res := changes(t, svc, "main", ChangesQuery{Since: c0, Prefix: "tasks/a"})
-	require.Equal(t, []PathChange{{Path: "kb/tasks/a/x.md", Change: ChangeDeleted}}, res.Changes)
+	res := changes(t, svc, "main", model.ChangesQuery{Since: c0, Prefix: "tasks/a"})
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/x.md", Change: model.ChangeDeleted}}, res.Changes)
 }
 
 // Test 2: strictly after since — the state AT since is the baseline, so a path
@@ -125,22 +126,22 @@ func TestChangesUnder_StrictlyAfterSince(t *testing.T) {
 	writeF(t, svc, "main", "kb/tasks/a/a2.md")
 	c3 := modifyF(t, svc, "main", "kb/tasks/a/a1.md")
 
-	res := changes(t, svc, "main", ChangesQuery{Since: c1, Prefix: "tasks/a"})
-	require.Equal(t, []PathChange{
-		{Path: "kb/tasks/a/a1.md", Change: ChangeModified},
-		{Path: "kb/tasks/a/a2.md", Change: ChangeAdded},
+	res := changes(t, svc, "main", model.ChangesQuery{Since: c1, Prefix: "tasks/a"})
+	require.Equal(t, []model.PathChange{
+		{Path: "kb/tasks/a/a1.md", Change: model.ChangeModified},
+		{Path: "kb/tasks/a/a2.md", Change: model.ChangeAdded},
 	}, res.Changes)
 
-	res = changes(t, svc, "main", ChangesQuery{Since: c3, Prefix: "tasks/a"})
+	res = changes(t, svc, "main", model.ChangesQuery{Since: c3, Prefix: "tasks/a"})
 	require.Empty(t, res.Changes)
 	require.NotNil(t, res.Changes, "an empty page is [] on the wire, not null")
 	require.Equal(t, c3, res.Head, "head is always returned, including on an empty page")
 
 	// Omitted since = the folder as it is now, all "added".
-	res = changes(t, svc, "main", ChangesQuery{Prefix: "tasks/a"})
-	require.Equal(t, []PathChange{
-		{Path: "kb/tasks/a/a1.md", Change: ChangeAdded},
-		{Path: "kb/tasks/a/a2.md", Change: ChangeAdded},
+	res = changes(t, svc, "main", model.ChangesQuery{Prefix: "tasks/a"})
+	require.Equal(t, []model.PathChange{
+		{Path: "kb/tasks/a/a1.md", Change: model.ChangeAdded},
+		{Path: "kb/tasks/a/a2.md", Change: model.ChangeAdded},
 	}, res.Changes)
 }
 
@@ -175,13 +176,13 @@ func TestChangesUnder_ClockFreeAndIdenticalAcrossInstances(t *testing.T) {
 	require.Equal(t, sinceA, sinceB, "fixture: both instances must hold the same commits")
 	require.Equal(t, headA, headB, "fixture: both instances must hold the same commits")
 
-	want := []PathChange{
-		{Path: "kb/tasks/a/p.md", Change: ChangeDeleted},
-		{Path: "kb/tasks/a/q.md", Change: ChangeAdded},
-		{Path: "kb/tasks/a/r.md", Change: ChangeAdded},
+	want := []model.PathChange{
+		{Path: "kb/tasks/a/p.md", Change: model.ChangeDeleted},
+		{Path: "kb/tasks/a/q.md", Change: model.ChangeAdded},
+		{Path: "kb/tasks/a/r.md", Change: model.ChangeAdded},
 	}
-	ra := changes(t, a, "main", ChangesQuery{Since: sinceA, Prefix: "tasks/a"})
-	rb := changes(t, b, "main", ChangesQuery{Since: sinceB, Prefix: "tasks/a"})
+	ra := changes(t, a, "main", model.ChangesQuery{Since: sinceA, Prefix: "tasks/a"})
+	rb := changes(t, b, "main", model.ChangesQuery{Since: sinceB, Prefix: "tasks/a"})
 	require.Equal(t, want, ra.Changes, "every commit after since counts, whatever its timestamp says")
 
 	ja, err := json.Marshal(ra)
@@ -204,7 +205,7 @@ func TestChangesUnder_PageBoundaryPinsHead(t *testing.T) {
 	_, _, err := svc.Facts().BatchWriteFacts(ctx, "main", files, nil, "bulk", "learn")
 	require.NoError(t, err)
 
-	p1 := changes(t, svc, "main", ChangesQuery{Since: since, Prefix: "tasks/a", Limit: 100})
+	p1 := changes(t, svc, "main", model.ChangesQuery{Since: since, Prefix: "tasks/a", Limit: 100})
 	require.Len(t, p1.Changes, 100)
 	require.True(t, p1.HasMore)
 	last := p1.Changes[len(p1.Changes)-1].Path
@@ -213,8 +214,8 @@ func TestChangesUnder_PageBoundaryPinsHead(t *testing.T) {
 	// A commit lands between the pages. Page 2 compares the SAME two trees.
 	writeF(t, svc, "main", "kb/tasks/a/zz-late.md")
 
-	p2 := changes(t, svc, "main", ChangesQuery{Since: since, Head: p1.Head, Prefix: "tasks/a", After: last, Limit: 100})
-	require.Equal(t, []PathChange{{Path: "kb/tasks/a/t100.md", Change: ChangeAdded}}, p2.Changes)
+	p2 := changes(t, svc, "main", model.ChangesQuery{Since: since, Head: p1.Head, Prefix: "tasks/a", After: last, Limit: 100})
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/t100.md", Change: model.ChangeAdded}}, p2.Changes)
 	require.False(t, p2.HasMore)
 	require.Equal(t, p1.Head, p2.Head)
 }
@@ -228,14 +229,14 @@ func TestChangesUnder_SinceNotBehindHeadRefused(t *testing.T) {
 	// machine whose main was further along would.
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(c1))))
 
-	res, err := svc.Facts().ChangesUnder(context.Background(), "main", ChangesQuery{Since: c2, Prefix: "tasks/a"})
-	require.ErrorIs(t, err, ErrSinceNotBehind)
+	res, err := svc.Facts().ChangesUnder(context.Background(), "main", model.ChangesQuery{Since: c2, Prefix: "tasks/a"})
+	require.ErrorIs(t, err, model.ErrSinceNotBehind)
 	require.Empty(t, res.Changes, "a refusal carries no rows — above all, no fabricated deletion")
 
 	// Sideways: a commit on another line of history is refused too.
 	side := writeF(t, svc, "agent/a", "kb/tasks/a/side.md")
-	_, err = svc.Facts().ChangesUnder(context.Background(), "main", ChangesQuery{Since: side, Prefix: "tasks/a"})
-	require.ErrorIs(t, err, ErrSinceNotBehind)
+	_, err = svc.Facts().ChangesUnder(context.Background(), "main", model.ChangesQuery{Since: side, Prefix: "tasks/a"})
+	require.ErrorIs(t, err, model.ErrSinceNotBehind)
 }
 
 // Test 4c: a folder missing at either end is the empty tree.
@@ -245,8 +246,8 @@ func TestChangesUnder_MissingFolderIsEmptyTree(t *testing.T) {
 
 	// The lane's first post: tasks/new/ did not exist at since.
 	post := writeF(t, svc, "main", "kb/tasks/new/first.md")
-	res := changes(t, svc, "main", ChangesQuery{Since: before, Prefix: "tasks/new"})
-	require.Equal(t, []PathChange{{Path: "kb/tasks/new/first.md", Change: ChangeAdded}}, res.Changes)
+	res := changes(t, svc, "main", model.ChangesQuery{Since: before, Prefix: "tasks/new"})
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/new/first.md", Change: model.ChangeAdded}}, res.Changes)
 
 	// The lane's last task goes. Like git itself (a GitHub merge, a hand
 	// commit), knomit's own DeleteFact drops the emptied folder rather than
@@ -254,11 +255,11 @@ func TestChangesUnder_MissingFolderIsEmptyTree(t *testing.T) {
 	// missing folder must read as a deletion, not as "no change".
 	deleteF(t, svc, "main", "kb/tasks/new/first.md")
 	require.False(t, folderPresent(t, svc, "main", "kb/tasks/new"), "an emptied folder is dropped, never kept as an empty tree")
-	res = changes(t, svc, "main", ChangesQuery{Since: post, Prefix: "tasks/new"})
-	require.Equal(t, []PathChange{{Path: "kb/tasks/new/first.md", Change: ChangeDeleted}}, res.Changes)
+	res = changes(t, svc, "main", model.ChangesQuery{Since: post, Prefix: "tasks/new"})
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/new/first.md", Change: model.ChangeDeleted}}, res.Changes)
 
 	// Missing at both ends: empty, not an error.
-	res = changes(t, svc, "main", ChangesQuery{Since: before, Prefix: "tasks/never"})
+	res = changes(t, svc, "main", model.ChangesQuery{Since: before, Prefix: "tasks/never"})
 	require.Empty(t, res.Changes)
 }
 
@@ -266,9 +267,9 @@ func TestChangesUnder_PrefixSpellingsAgree(t *testing.T) {
 	svc := newChangesService(t)
 	since := writeF(t, svc, "main", "kb/other/seed.md")
 	writeF(t, svc, "main", "kb/tasks/a/t1.md")
-	want := []PathChange{{Path: "kb/tasks/a/t1.md", Change: ChangeAdded}}
+	want := []model.PathChange{{Path: "kb/tasks/a/t1.md", Change: model.ChangeAdded}}
 	for _, p := range []string{"tasks/a", "tasks/a/", "/tasks/a", "Tasks/A"} {
-		require.Equal(t, want, changes(t, svc, "main", ChangesQuery{Since: since, Prefix: p}).Changes, p)
+		require.Equal(t, want, changes(t, svc, "main", model.ChangesQuery{Since: since, Prefix: p}).Changes, p)
 	}
 }
 
@@ -281,8 +282,8 @@ func TestChangesUnder_PrefixExcludesSiblingsAndPrivate(t *testing.T) {
 	writeF(t, svc, "main", "kb/tasks/a-old/sib.md")
 	writeF(t, svc, "main", "kb/tasks/a/.drafts/x.md")
 
-	res := changes(t, svc, "main", ChangesQuery{Since: since, Prefix: "tasks/a"})
-	require.Equal(t, []PathChange{{Path: "kb/tasks/a/in.md", Change: ChangeAdded}}, res.Changes)
+	res := changes(t, svc, "main", model.ChangesQuery{Since: since, Prefix: "tasks/a"})
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/in.md", Change: model.ChangeAdded}}, res.Changes)
 }
 
 // A rename is a deletion plus an addition: DiffTree does no rename detection.
@@ -294,10 +295,10 @@ func TestChangesUnder_RenameIsDeletedPlusAdded(t *testing.T) {
 	_, _, err := svc.Facts().BatchWriteFacts(ctx, "main", map[string]string{"kb/tasks/b/new.md": body}, []string{"kb/tasks/a/old.md"}, "move", "learn")
 	require.NoError(t, err)
 
-	res := changes(t, svc, "main", ChangesQuery{Since: since, Prefix: "tasks"})
-	require.Equal(t, []PathChange{
-		{Path: "kb/tasks/a/old.md", Change: ChangeDeleted},
-		{Path: "kb/tasks/b/new.md", Change: ChangeAdded},
+	res := changes(t, svc, "main", model.ChangesQuery{Since: since, Prefix: "tasks"})
+	require.Equal(t, []model.PathChange{
+		{Path: "kb/tasks/a/old.md", Change: model.ChangeDeleted},
+		{Path: "kb/tasks/b/new.md", Change: model.ChangeAdded},
 	}, res.Changes)
 }
 
@@ -337,8 +338,8 @@ func TestChangesUnder_DeletionSurvivesFastForwardOverOlderCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, y, tip.String())
 
-	got := changes(t, svc, "main", ChangesQuery{Since: m, Prefix: "tasks/a"})
-	require.Equal(t, []PathChange{{Path: "kb/tasks/a/t1.md", Change: ChangeDeleted}}, got.Changes)
+	got := changes(t, svc, "main", model.ChangesQuery{Since: m, Prefix: "tasks/a"})
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/t1.md", Change: model.ChangeDeleted}}, got.Changes)
 }
 
 // Test 6: explicit failures, never an empty page.
@@ -352,23 +353,23 @@ func TestChangesUnder_ExplicitFailures(t *testing.T) {
 		"abc123", // short
 		"not-a-hash-not-a-hash-not-a-hash-not-a-h", // 40 chars, not hex
 	} {
-		res, err := svc.Facts().ChangesUnder(ctx, "main", ChangesQuery{Since: since, Prefix: "tasks/a"})
-		require.ErrorIs(t, err, ErrUnknownSince, since)
+		res, err := svc.Facts().ChangesUnder(ctx, "main", model.ChangesQuery{Since: since, Prefix: "tasks/a"})
+		require.ErrorIs(t, err, model.ErrUnknownSince, since)
 		require.Empty(t, res.Changes)
 		require.Contains(t, err.Error(), "omit since")
 	}
 
-	_, err := svc.Facts().ChangesUnder(ctx, "no-such-branch", ChangesQuery{Prefix: "tasks/a"})
-	require.ErrorIs(t, err, ErrBranchNotFound, "an unknown branch is an error, never a read across every branch")
+	_, err := svc.Facts().ChangesUnder(ctx, "no-such-branch", model.ChangesQuery{Prefix: "tasks/a"})
+	require.ErrorIs(t, err, model.ErrBranchNotFound, "an unknown branch is an error, never a read across every branch")
 
-	_, err = svc.Facts().ChangesUnder(ctx, "main", ChangesQuery{Head: "0123456789abcdef0123456789abcdef01234567", Prefix: "tasks/a"})
-	require.ErrorIs(t, err, ErrInvalidChangesCursor)
+	_, err = svc.Facts().ChangesUnder(ctx, "main", model.ChangesQuery{Head: "0123456789abcdef0123456789abcdef01234567", Prefix: "tasks/a"})
+	require.ErrorIs(t, err, model.ErrInvalidChangesCursor)
 
 	// A cursor head from another line of history is not this branch's.
 	side := writeF(t, svc, "agent/a", "kb/tasks/a/side.md")
-	_, err = svc.Facts().ChangesUnder(ctx, "main", ChangesQuery{Head: side, Prefix: "tasks/a"})
-	require.ErrorIs(t, err, ErrInvalidChangesCursor)
+	_, err = svc.Facts().ChangesUnder(ctx, "main", model.ChangesQuery{Head: side, Prefix: "tasks/a"})
+	require.ErrorIs(t, err, model.ErrInvalidChangesCursor)
 
-	_, err = svc.Facts().ChangesUnder(ctx, "main", ChangesQuery{Prefix: "../x"})
-	require.True(t, errors.Is(err, ErrInvalidPrefix))
+	_, err = svc.Facts().ChangesUnder(ctx, "main", model.ChangesQuery{Prefix: "../x"})
+	require.True(t, errors.Is(err, model.ErrInvalidPrefix))
 }

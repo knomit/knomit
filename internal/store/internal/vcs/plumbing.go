@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/model"
 )
 
 // WriteBlobToStore stores content as a loose blob and returns its hash.
@@ -361,14 +362,14 @@ func treeEntryInsensitiveVia(load func(plumbing.Hash) (*object.Tree, error), tre
 			}
 		}
 		if matched == nil {
-			return nil, fmt.Errorf("component %q: %w", part, ErrPathNotFound)
+			return nil, fmt.Errorf("component %q: %w", part, model.ErrPathNotFound)
 		}
 		if i == len(parts)-1 {
 			return matched, nil
 		}
 		if matched.Mode != filemode.Dir {
 			// A file where the path expects a directory: the path is absent.
-			return nil, fmt.Errorf("component %q is not a directory: %w", part, ErrPathNotFound)
+			return nil, fmt.Errorf("component %q is not a directory: %w", part, model.ErrPathNotFound)
 		}
 		sub, err := load(matched.Hash)
 		if err != nil {

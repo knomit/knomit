@@ -7,11 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/client/sessions"
 	"knomit/internal/repos"
-	knomitstore "knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -244,7 +245,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 						mounts = append(mounts, clientSessionMountRow{
 							Mount: mr.MountUID, Kind: mKind, UID: mUID, Name: mNamePtr,
 							Experiment: mr.Experiment,
-							Branch:     knomitstore.ExperimentBranch(mr.Experiment),
+							Branch:     model.ExperimentBranch(mr.Experiment),
 							SetAt:      mr.SetAt.UTC().Format(time.RFC3339),
 						})
 					}

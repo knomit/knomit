@@ -21,5 +21,6 @@
 //
 // It must not import its parent package store. The parent embeds *Repo in its
 // repoHandler, so the sub-indices reach Repo's exported methods by promotion,
-// and re-exports the public names callers outside store use.
+// and callers outside store import the plain data types and sentinels from
+// store/model, not from the parent.
 package vcs

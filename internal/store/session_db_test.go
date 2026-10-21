@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -106,7 +108,7 @@ func TestReapIdleSessions_RemovesIdleKeepsActive(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give the idle session some queued rows so we can confirm cascade cleanup.
-	require.NoError(t, ti.EnqueuePaths(ctx, idle.ID, []QueueItem{
+	require.NoError(t, ti.EnqueuePaths(ctx, idle.ID, []model.QueueItem{
 		{Path: "kb/a.md", CommitHash: "c1", SortKey: 0, State: "{}"},
 		{Path: "kb/b.md", CommitHash: "c2", SortKey: 1, State: "{}"},
 	}))
@@ -201,7 +203,7 @@ func TestDequeuePaths_PreservesSortOrderAndState(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue out of sort order; expect dequeue to return sorted by sort_key.
-	require.NoError(t, ti.EnqueuePaths(ctx, sess.ID, []QueueItem{
+	require.NoError(t, ti.EnqueuePaths(ctx, sess.ID, []model.QueueItem{
 		{Path: "kb/c.md", CommitHash: "c", SortKey: 2, State: `{"n":2}`},
 		{Path: "kb/a.md", CommitHash: "a", SortKey: 0, State: `{"n":0}`},
 		{Path: "kb/b.md", CommitHash: "b", SortKey: 1, State: `{"n":1}`},

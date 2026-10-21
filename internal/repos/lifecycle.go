@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
@@ -216,7 +218,7 @@ func (s CreateSpec) joinsRemoteOntology() bool { return s.Mode == "clone" || s.M
 // actually adopt.
 //
 // Those must agree. InitSubscription resolves an unrequested branch through
-// store.ChooseConsensusBranch (the remote's HEAD unless it is an agent branch,
+// model.ChooseConsensusBranch (the remote's HEAD unless it is an agent branch,
 // else the one other branch); answering the shape question about HEAD instead
 // would refuse a remote whose HEAD is an agent branch but whose consensus
 // branch IS a knowledge base — a confident wrong "no" in front of a create
@@ -442,7 +444,7 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 			// The consensus branch, never the adopted one: see ProbeInitializedOn.
 			//
 			// With no branch requested this must resolve the SAME way the create
-			// will. InitSubscription runs store.ChooseConsensusBranch (the
+			// will. InitSubscription runs model.ChooseConsensusBranch (the
 			// remote's HEAD unless it is an agent branch, else the one other
 			// branch); passing "" here would instead inspect whatever HEAD
 			// points at, so a remote whose HEAD is an agent branch but whose
@@ -987,7 +989,7 @@ func (m *Manager) initTemplate(ctx context.Context, spec CreateSpec, dbPath stri
 // ctx is built here and never returned, so no later write on any path
 // inherits it (WithAgentTrace refuses a ctx that already carries a set).
 func writeTemplate(ctx context.Context, svc *store.Service, branch string, rt *ResolvedTemplate) error {
-	tctx := store.WithTrailers(ctx, rt.Trailers())
+	tctx := model.WithTrailers(ctx, rt.Trailers())
 	if _, _, err := svc.Facts().WriteSystemTree(tctx, branch, rt.Files,
 		"init: create knowledge base from template "+rt.Ref.Name, "created"); err != nil {
 		return fmt.Errorf("write template %s/%s: %w", rt.Ref.Repo, rt.Ref.Name, err)
@@ -1054,7 +1056,7 @@ func rejectOntologySpecForClone(spec CreateSpec) error {
 // into control.db, once initClone returns.
 //
 // The returned upstream is the branch the clone ACTUALLY adopted, resolved by
-// svc.InitFromRemote against the remote (store.ChooseConsensusBranch: its
+// svc.InitFromRemote against the remote (model.ChooseConsensusBranch: its
 // symbolic HEAD unless that is an agent branch, else its one other branch)
 // whenever spec.Origin.Branch is empty. Create MUST persist exactly this
 // value, never the requested spec.Origin.Branch and never a defaulted name:
@@ -1261,7 +1263,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 	// The ontology commit below is an AUTHORED write on the agent branch and is
 	// pushed: it must be signed like every later one. Without this it went out
-	// unsigned (and now fails with store.ErrNoSigner).
+	// unsigned (and now fails with model.ErrNoSigner).
 	svc.SetSigner(m.deps.Signer)
 	svc.SetAgentID(m.deps.AgentID)
 	svc.SetOwnKeys(m.ownFleetKeys)
@@ -1714,7 +1716,7 @@ func (m *Manager) archive(name string, why ArchiveReason) (ArchiveInfo, error) {
 	}
 
 	// The session sidecar is ephemeral — drop it so a restore starts clean.
-	sess := store.SessionDBPathFor(m.RepoPath(uid))
+	sess := model.SessionDBPathFor(m.RepoPath(uid))
 	os.Remove(sess)
 	os.Remove(sess + "-wal")
 	os.Remove(sess + "-shm")

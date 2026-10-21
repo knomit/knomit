@@ -29,9 +29,9 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/rs/zerolog/log"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store/internal/vcs"
+	"github.com/rs/zerolog/log"
 )
 
 // ConsensusBranchKey is the meta key holding the recorded consensus branch.
@@ -145,7 +145,7 @@ func (ri *Index) consensusCandidates() []string {
 			continue
 		}
 		b := ref.Name().Short()
-		if vcs.IsRoleBranch(b) {
+		if model.IsRoleBranch(b) {
 			continue
 		}
 		out = append(out, b)

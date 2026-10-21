@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/store"
+	"knomit/internal/store/model"
 )
 
 // ReadTarget is one read mount of a binding: a repo at a pinned branch, with
@@ -69,7 +69,7 @@ func (b *Binding) WriteBranch() string {
 // experiment" has ONE definition; a second copy would be free to disagree
 // about, say, whether an unrecorded exp/* ref counts.
 func experimentPin(ri *RepoInstance, branch string) string {
-	if store.IsExperimentBranch(branch) && ri.WritableBranch(branch) {
+	if model.IsExperimentBranch(branch) && ri.WritableBranch(branch) {
 		return branch
 	}
 	return ""
@@ -288,7 +288,7 @@ func newBindingOfLens(m *Manager, l Lens, experiment string) (*Binding, error) {
 	// — a real contract, since mount 0 wins an RRF tie — cannot depend on
 	// whether an experiment is active.
 	if experiment != "" {
-		expBranch := store.ExperimentBranch(experiment)
+		expBranch := model.ExperimentBranch(experiment)
 		if write.WritableBranch(expBranch) {
 			for i := range reads {
 				if reads[i].RI == write {

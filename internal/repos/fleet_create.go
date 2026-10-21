@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -344,7 +346,7 @@ func (m *Manager) refuseFleetRootDir() error {
 // ownEd25519Key is this instance's signing key, the key its leaf names.
 func (m *Manager) ownEd25519Key() (ed25519.PublicKey, error) {
 	if m.deps.Signer == nil {
-		return nil, store.ErrNoSigner
+		return nil, model.ErrNoSigner
 	}
 	cpk, ok := m.deps.Signer.PublicKey().(ssh.CryptoPublicKey)
 	if !ok {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/fsck"
+	"knomit/internal/store/model"
 
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
@@ -39,7 +40,7 @@ func TestReplayCommit_NoSignerLeavesNoObjects(t *testing.T) {
 	svc.SetSigner(nil)
 
 	_, err = svc.rh.ReconcileAgentForTest(context.Background(), "agent/test", "main", merge.StrategyLocalWins, true)
-	require.True(t, errors.Is(err, ErrNoSigner), "a signer-less replay must be ErrNoSigner, got %v", err)
+	require.True(t, errors.Is(err, model.ErrNoSigner), "a signer-less replay must be ErrNoSigner, got %v", err)
 	after, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, after.IsStrictlyClean(), "a refused replay must leave nothing behind: %v", after.Issues)

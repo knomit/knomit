@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -108,14 +110,14 @@ func TestPlan_MediumEffortDoesNotClaimASkip(t *testing.T) {
 // how a session happens to be planned. Both halves: it speaks when the gate is
 // closed and stays silent when it is open.
 func TestRecordVocabularySkipHealth_SpeaksOnlyWhenTheGateIsClosed(t *testing.T) {
-	closed := &store.PipelineSession{}
+	closed := &model.PipelineSession{}
 	recordVocabularySkipHealth(closed, EffortNormal)
 	require.Len(t, closed.Health, 1, "the closed gate is stated")
 	require.Contains(t, closed.Health[0], string(EffortNormal),
 		"the line names the effort it was called at, so a reader can tell which "+
 			"dial to move")
 
-	open := &store.PipelineSession{}
+	open := &model.PipelineSession{}
 	recordVocabularySkipHealth(open, EffortMedium)
 	require.Empty(t, open.Health,
 		"an OPEN gate says nothing here — the passes report for themselves, and "+

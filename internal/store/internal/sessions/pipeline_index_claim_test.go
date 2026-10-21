@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +28,7 @@ func TestAnswerPipelineWorkItem_ClaimsExactlyOnce(t *testing.T) {
 
 	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)
-	require.NoError(t, pi.InsertPipelineWorkItem(ctx, PipelineWorkItem{
+	require.NoError(t, pi.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: "c0", FactsJSON: "[]",
 	}))
 
@@ -82,11 +84,11 @@ func TestNextPipelineWorkItem_TiebreakByIDAscending(t *testing.T) {
 	// Three items at the same priority, plus one strictly higher that must
 	// still be served first (the tiebreak may not override priority).
 	for _, key := range []string{"tie-a", "tie-b", "tie-c"} {
-		require.NoError(t, pi.InsertPipelineWorkItem(ctx, PipelineWorkItem{
+		require.NoError(t, pi.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 			SessionID: sess.ID, StepType: "distill", ClusterKey: key, FactsJSON: "[]", Priority: 0,
 		}))
 	}
-	require.NoError(t, pi.InsertPipelineWorkItem(ctx, PipelineWorkItem{
+	require.NoError(t, pi.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: "high", FactsJSON: "[]", Priority: 5,
 	}))
 
@@ -105,10 +107,10 @@ func TestNextPipelineWorkItem_TiebreakByIDAscending(t *testing.T) {
 	// Repeated peeks of an unchanged queue must be stable, not merely
 	// eventually-correct: that stability is what makes the item_id echo
 	// meaningful to a client.
-	require.NoError(t, pi.InsertPipelineWorkItem(ctx, PipelineWorkItem{
+	require.NoError(t, pi.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "distill", ClusterKey: "stable-1", FactsJSON: "[]", Priority: 0,
 	}))
-	require.NoError(t, pi.InsertPipelineWorkItem(ctx, PipelineWorkItem{
+	require.NoError(t, pi.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "distill", ClusterKey: "stable-2", FactsJSON: "[]", Priority: 0,
 	}))
 	first, err := pi.NextPipelineWorkItem(ctx, sess.ID)

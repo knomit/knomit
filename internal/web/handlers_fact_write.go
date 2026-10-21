@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-chi/chi/v5"
 
 	knomitfact "knomit/internal/fact"
@@ -101,7 +103,7 @@ func (defaultFactWriter) PriorRefs(ctx context.Context, ri *repos.RepoInstance, 
 		if rerr != nil {
 			// No prior version (a create, or a PUT to a fresh path) means
 			// nothing is carried forward — not an error.
-			if errors.Is(rerr, store.ErrPathNotFound) {
+			if errors.Is(rerr, model.ErrPathNotFound) {
 				return
 			}
 			err = rerr
@@ -151,12 +153,12 @@ func (defaultFactWriter) Delete(ctx context.Context, ri *repos.RepoInstance, bra
 		}
 		h, derr := svc.Facts().DeleteFact(ctx, branch, path, message)
 		if derr != nil {
-			// DeleteFact wraps store.ErrPathNotFound for a path that is not
+			// DeleteFact wraps model.ErrPathNotFound for a path that is not
 			// there to delete (deleteFile's own existence check, inside the
 			// branch lock). Mapped to the same sentinel the read path uses,
 			// so handleFactDelete answers 404 exactly as a GET of the same
 			// missing path does — any other error still propagates to 500.
-			if errors.Is(derr, store.ErrPathNotFound) {
+			if errors.Is(derr, model.ErrPathNotFound) {
 				err = errFactNotFound
 				return
 			}

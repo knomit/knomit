@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/utils/merkletrie"
@@ -131,7 +133,7 @@ type MergeOpts struct {
 	// call — so every other merge (agent sync, reconcile, the peer merge)
 	// stays a transport commit with no trace, as before. A fast-forward or a
 	// no-op writes no commit and so stamps nothing.
-	Trace vcs.Trailers
+	Trace model.Trailers
 	// overlayResolutions lets a `conflicts` strategy take the caller's
 	// resolutions as well: each path the caller named takes the caller's
 	// resolution, and the setting settles every other conflicting path. ONLY
@@ -420,7 +422,7 @@ func (rh *Repo) MergeIntoBranchLockedOpts(
 	mc := &object.Commit{
 		Author:       author,
 		Committer:    committer,
-		Message:      vcs.AppendTrailersToParagraph(AppendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.Trace),
+		Message:      model.AppendTrailersToParagraph(AppendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.Trace),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},
 	}

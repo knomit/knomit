@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/vocab"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/store"
 )
 
 // knomit#117b. The throttle told an operator three things it had not earned:
@@ -26,7 +26,7 @@ import (
 // of bugs this file covers.
 
 // throttleHealthLine returns the throttle line as the operator sees it.
-func throttleHealthLine(sess *store.PipelineSession) string {
+func throttleHealthLine(sess *model.PipelineSession) string {
 	for _, line := range sess.Health {
 		if strings.HasPrefix(line, "shortlist throttle:") {
 			return line
@@ -36,7 +36,7 @@ func throttleHealthLine(sess *store.PipelineSession) string {
 }
 
 // emittedHealthLine returns the emission line as the operator sees it.
-func emittedHealthLine(sess *store.PipelineSession) string {
+func emittedHealthLine(sess *model.PipelineSession) string {
 	for _, line := range sess.Health {
 		if strings.HasPrefix(line, "restatement candidates emitted:") {
 			return line
@@ -45,7 +45,7 @@ func emittedHealthLine(sess *store.PipelineSession) string {
 	return ""
 }
 
-func healthLineSaysProbing(sess *store.PipelineSession) bool {
+func healthLineSaysProbing(sess *model.PipelineSession) bool {
 	return strings.Contains(throttleHealthLine(sess), "(probing)")
 }
 

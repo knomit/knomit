@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // ── the over-merge guard ──────────────────────────────────────────────────
@@ -269,16 +269,16 @@ func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 func TestHealthRecorders_NeverDestroyExistingLines(t *testing.T) {
 	const seed = "seeded by another producer"
 
-	for name, record := range map[string]func(*store.PipelineSession){
-		"restatement": func(s *store.PipelineSession) {
+	for name, record := range map[string]func(*model.PipelineSession){
+		"restatement": func(s *model.PipelineSession) {
 			recordRestatementHealth(s, restatementHealth{StandingPairs: 3})
 		},
-		"motif-alias": func(s *store.PipelineSession) {
+		"motif-alias": func(s *model.PipelineSession) {
 			recordMotifAliasHealth(s, motifAliasHealth{Vocabulary: 20, Emitted: 2})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			sess := &store.PipelineSession{Health: []string{seed}}
+			sess := &model.PipelineSession{Health: []string{seed}}
 			record(sess)
 			require.Contains(t, sess.Health, seed,
 				"%s destroyed a line it did not write — health recorders must append, "+

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
 
@@ -233,7 +235,7 @@ func ExperimentHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolR
 			// body.
 			expName := pickExperiment(name, active)
 			adjudications, nerr := resolutions.Normalize(ctx, b.Write(),
-				b.Write().AgentBranch(), store.ExperimentBranch(expName), adjudications)
+				b.Write().AgentBranch(), model.ExperimentBranch(expName), adjudications)
 			if nerr != nil {
 				return mcpgo.NewToolResultError(nerr.Error()), nil
 			}
@@ -364,7 +366,7 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 			if urlBranch == "" {
 				urlBranch = b.WriteBranch()
 			}
-			if store.ExperimentBranch(exp.Name) == urlBranch {
+			if model.ExperimentBranch(exp.Name) == urlBranch {
 				res.Summary = fmt.Sprintf(
 					"experiment %q is open on branch %q, which is the experiment this endpoint already addresses — nothing changed.",
 					exp.Name, exp.Branch())
@@ -549,7 +551,7 @@ func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, n
 	}
 	if result.Mode == merge.ModeRebase {
 		return experimentResult{
-			Branch: store.ExperimentBranch(name), Active: name,
+			Branch: model.ExperimentBranch(name), Active: name,
 			Summary: fmt.Sprintf(
 				"experiment %q rebuilt on %q: the agent branch was rebuilt by an upstream rewind since the fork, so the experiment's own %d commit(s) were squashed into one commit on it and nothing the rewind removed was kept. "+
 					"You are still inside the experiment",
@@ -557,7 +559,7 @@ func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, n
 		}, nil
 	}
 	return experimentResult{
-		Branch: store.ExperimentBranch(name), Active: name,
+		Branch: model.ExperimentBranch(name), Active: name,
 		Summary: fmt.Sprintf(
 			"experiment %q updated from %q (%s); where both had changed a fact, the agent branch's version won. "+
 				"You are still inside the experiment",

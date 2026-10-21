@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -263,7 +265,7 @@ func insertManualDistillItem(t *testing.T, svc *store.Service, sessionID string)
 	}
 	body, err := json.Marshal(facts)
 	require.NoError(t, err)
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sessionID,
 		StepType:   "distill",
 		ClusterKey: "distill-all",

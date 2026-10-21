@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"knomit/internal/store"
+	"knomit/internal/store/model"
 )
 
 // lapsedExperimentKey is the private context key for an experiment that was
@@ -49,7 +49,7 @@ func ActiveExperiment(b *Binding) string {
 	if b == nil || !b.WriteOK() {
 		return ""
 	}
-	name, _ := store.ExperimentNameOf(b.WriteBranch())
+	name, _ := model.ExperimentNameOf(b.WriteBranch())
 	return name
 }
 
@@ -94,7 +94,7 @@ func ResolveSessionBindingOnExperiment(ctx context.Context, m *Manager, pin, bra
 		// rather than inventing a second wording for the same failure.
 		return ResolveSessionBinding(ctx, m, pin, branch)
 	}
-	expBranch := store.ExperimentBranch(experiment)
+	expBranch := model.ExperimentBranch(experiment)
 
 	switch kind {
 	case "repo":

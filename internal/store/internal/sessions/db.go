@@ -2,7 +2,8 @@
 // file holding in-flight tool-session paging state and the review/hypothesize
 // work-stealing pipeline, plus the pipeline watermarks that live in the MAIN
 // database. It is a child of the store package; the store facade wires these
-// types into its Service and re-exports the public names.
+// types into its Service; the row shapes callers outside store use live in
+// store/model.
 package sessions
 
 import (
@@ -11,11 +12,9 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"knomit/internal/store/model"
 )
 
 // schema is the full DDL for the ephemeral session database, applied wholesale
@@ -26,35 +25,11 @@ import (
 //go:embed session_schema.sql
 var schema string
 
-// DBSuffix is the filename suffix of a Service's ephemeral session database,
-// written as a sibling of the main DB at "<name>.sessions.db". Repo discovery
-// uses IsDBFile to skip these sidecars, which share the repos directory with
-// real repo DBs.
-const DBSuffix = ".sessions.db"
-
-// IsDBFile reports whether base names a session sidecar database (a
-// "<name>.sessions.db" file). Repo names can never contain a '.', so this
-// suffix unambiguously identifies a session DB rather than a repo DB.
-func IsDBFile(base string) bool {
-	return strings.HasSuffix(base, DBSuffix)
-}
-
-// PathFor derives the ephemeral session DB path from the main DB path.
-// For a file DB it is a sibling "<name>.sessions.db"; for the :memory: fallback
-// (tests, DB-only mode) it is a unique temp file so multiple in-memory Services
-// don't collide on one session file.
-func PathFor(mainPath string) string {
-	if mainPath == ":memory:" || mainPath == "" {
-		return filepath.Join(os.TempDir(), "knomit-sessions-"+uuid.New().String()+".db")
-	}
-	return strings.TrimSuffix(mainPath, ".db") + DBSuffix
-}
-
 // Open removes any leftover session files (so the DB starts empty) and opens a
 // fresh one with the stock sqlite3 driver, then applies the schema. Returns the
 // opened DB and the resolved path.
 func Open(mainPath string) (*sql.DB, string, error) {
-	sessionPath := PathFor(mainPath)
+	sessionPath := model.SessionDBPathFor(mainPath)
 	// Start empty: a session cursor from a previous run is dead anyway.
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		_ = os.Remove(sessionPath + suffix)

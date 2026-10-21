@@ -11,9 +11,9 @@ import (
 // This file is the parent's seam to the sqlite child (internal/sqlite). The
 // child owns the driver, vector codec, tx helpers and the other engine-level
 // primitives; this package keeps its old unexported spellings as forwards so
-// the sub-indices read as before, and re-exports the few names callers outside
-// store use (Crypt, CosineSim, SyncDSNParam,
-// WithPrecomputedEmbeddings) so the public surface is unchanged.
+// the sub-indices read as before. The one exported name left is SyncDSNParam,
+// which reads sqlite package state; Crypt, CosineSim and
+// WithPrecomputedEmbeddings moved to store/model.
 
 func conn(ctx context.Context, db *sql.DB) storegit.CtxExecer {
 	return sqlite.Conn(ctx, db)
@@ -28,23 +28,6 @@ var (
 	float32SliceToBytes = sqlite.Float32SliceToBytes
 	groupingKey         = sqlite.GroupingKey
 )
-
-// Crypt provides AES-256-GCM encryption for credential storage (see the
-// sqlite child).
-type Crypt = sqlite.Crypt
-
-// NewCrypt derives a Crypt from SSH private key material.
-func NewCrypt(keyMaterial []byte) (*Crypt, error) { return sqlite.NewCrypt(keyMaterial) }
-
-// CosineSim is the cosine similarity of two vectors, 0 when undefined.
-func CosineSim(a, b []float32) float64 { return sqlite.CosineSim(a, b) }
-
-// WithPrecomputedEmbeddings returns a context carrying a path → vector lookup
-// the indexer consults before invoking the embedder. See the sqlite child for
-// the trust contract on donated vectors.
-func WithPrecomputedEmbeddings(ctx context.Context, byPath map[string][]float32) context.Context {
-	return sqlite.WithPrecomputedEmbeddings(ctx, byPath)
-}
 
 // SyncDSNParam is the DSN suffix that honours storetest.SetFastDurability ("" in
 // production).

@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"github.com/ysmood/goob"
@@ -37,7 +39,7 @@ type Deps struct {
 	// AgentHost is the host label persisted with the identity ({host} in a
 	// trigger match). Empty when the identity predates it.
 	AgentHost string
-	Embedder  store.BatchEmbedder // nil if unavailable
+	Embedder  model.BatchEmbedder // nil if unavailable
 	// ScriptTools is the in-process MCP tool set a `do: script` trigger's
 	// host calls (F07 PR 3). Injected — internal/mcp imports this package —
 	// by internal/app as mcp.NewScriptTools(embedder). Nil means every host
@@ -369,7 +371,7 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		// bad lens spec (ErrLensBranchUnknown → 4xx), but a lookup that fails for
 		// any OTHER reason (ctx cancellation, transient store error) must NOT be
 		// conflated with it — that would blame the caller for our failure. The
-		// store preserves the distinction via store.ErrBranchNotFound (which wraps
+		// store preserves the distinction via model.ErrBranchNotFound (which wraps
 		// plumbing.ErrReferenceNotFound); everything else propagates as-is so the
 		// web layer's default arm maps it to 500, not 422.
 		var lookupErr error
@@ -383,7 +385,7 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		switch {
 		case lookupErr == nil:
 			// Branch resolves — pin is valid.
-		case errors.Is(lookupErr, store.ErrBranchNotFound):
+		case errors.Is(lookupErr, model.ErrBranchNotFound):
 			return fmt.Errorf("%w: %q in repo %q", ErrLensBranchUnknown, branch, uid)
 		default:
 			return fmt.Errorf("validateLens: branch %q in repo %q: %w", branch, uid, lookupErr)
@@ -540,7 +542,7 @@ func (m *Manager) LensRegistry() *LensRegistry {
 // Signer returns this instance's commit signer, for a caller that opens a
 // Service of its own and writes through it (the origin wizard's clone store).
 // Every Service that commits must carry it: a signer-less write is
-// store.ErrNoSigner. Set at construction and never changed, so no lock.
+// model.ErrNoSigner. Set at construction and never changed, so no lock.
 func (m *Manager) Signer() ssh.Signer { return m.deps.Signer }
 
 // AgentID returns this instance's persisted agent id (Deps.AgentID), for a
@@ -564,13 +566,13 @@ func (m *Manager) VerifyAccepts() *VerifyAccepts {
 }
 
 // acceptListFor is the accept list bound to repository uid (nil before Start).
-func (m *Manager) acceptListFor(uid string) store.AcceptList {
+func (m *Manager) acceptListFor(uid string) model.AcceptList {
 	return m.VerifyAccepts().For(uid)
 }
 
 // AcceptListFor is acceptListFor for a caller outside the package that opens
 // a Service of its own (the origin wizard's clone store).
-func (m *Manager) AcceptListFor(uid string) store.AcceptList { return m.acceptListFor(uid) }
+func (m *Manager) AcceptListFor(uid string) model.AcceptList { return m.acceptListFor(uid) }
 
 // Origins returns the per-repo origin store, or nil before Start.
 func (m *Manager) Origins() *Origins {
@@ -1001,11 +1003,11 @@ func (m *Manager) Start() error {
 	// One Crypt for the whole registry, from the same agent key each repo used
 	// to derive its own. NewCrypt has no per-repo salt, so existing ciphertext
 	// stays readable. A nil crypt disables credential STORAGE, not the server.
-	var crypt *store.Crypt
+	var crypt *model.Crypt
 	if keyData, kerr := os.ReadFile(m.deps.KeyPath); kerr != nil {
 		log.Warn().Err(kerr).Str("key_path", m.deps.KeyPath).
 			Msg("credential encryption unavailable: agent key unreadable; remote auth tokens cannot be stored")
-	} else if c, cerr := store.NewCrypt(keyData); cerr != nil {
+	} else if c, cerr := model.NewCrypt(keyData); cerr != nil {
 		log.Warn().Err(cerr).Msg("credential encryption unavailable: cannot derive key; remote auth tokens cannot be stored")
 	} else {
 		crypt = c
@@ -1340,7 +1342,7 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 	var orphans []string
 	for _, p := range dbFiles {
 		base := filepath.Base(p)
-		if store.IsSessionDBFile(base) {
+		if model.IsSessionDBFile(base) {
 			continue
 		}
 		if _, ok := registered[strings.TrimSuffix(base, ".db")]; ok {

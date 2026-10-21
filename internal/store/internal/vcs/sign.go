@@ -1,7 +1,6 @@
 package vcs
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -12,20 +11,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/model"
 )
-
-// ErrNoSigner is returned by every authored write on a Service that has no
-// commit signer. It used to be a silent no-op: a Service opened without
-// SetSigner committed UNSIGNED, and those commits were pushed as this
-// instance's agent branch (the origin wizard's replay store and the
-// initialize flow did exactly that). Under F09 an unsigned commit is refused
-// by every verifying peer, so the store refuses to make one.
-//
-// The init commits of a new repository (README and ontology, repo.go) are not
-// affected: they are written by the plumbing layer, which never signs. They
-// precede any agent-branch work and lie below every F09 anchor, so they are
-// never verified.
-var ErrNoSigner = errors.New("store has no commit signer: refusing to write an unsigned commit")
 
 // CommitSigner returns the signer an AUTHORED commit must carry: this store's
 // signer, else (inside a test binary only) the test fallback, else
@@ -38,7 +25,7 @@ func (rh *Repo) CommitSigner() (ssh.Signer, error) {
 	if fb := testFallbackSigner(); fb != nil {
 		return fb, nil
 	}
-	return nil, ErrNoSigner
+	return nil, model.ErrNoSigner
 }
 
 // StoreCommit encodes c and stores it as exactly ONE object. When signer is

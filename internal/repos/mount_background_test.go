@@ -234,21 +234,21 @@ func TestMount_FailedBackgroundIndexReportsError(t *testing.T) {
 	require.NotEmpty(t, st.Index.Reason, "and say why")
 }
 
-// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// EmbedShortStrings satisfies model.BatchEmbedder. Short strings render
 // through the model's short-string template in production; a stub has no
 // template, so it embeds each string as a title-only document.
 func (e *blockingEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
 	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
 }
 
-// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// EmbedShortStrings satisfies model.BatchEmbedder. Short strings render
 // through the model's short-string template in production; a stub has no
 // template, so it embeds each string as a title-only document.
 func (e testEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
 	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
 }
 
-// EmbedShortStrings satisfies store.BatchEmbedder for the failing stub too.
+// EmbedShortStrings satisfies model.BatchEmbedder for the failing stub too.
 func (e failingEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
 	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
 }

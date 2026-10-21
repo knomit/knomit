@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -86,7 +87,7 @@ func changesTool() mcpgo.Tool {
 // changesResponse is the knomit_changes envelope. Cursor is non-nil only while
 // more pages remain.
 type changesResponse struct {
-	Changes  []store.PathChange `json:"changes"`
+	Changes  []model.PathChange `json:"changes"`
 	Repo     string             `json:"repo"`
 	Branch   string             `json:"branch"`
 	Head     string             `json:"head"`
@@ -127,16 +128,16 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		}
 
 		var (
-			q      store.ChangesQuery
-			scope  store.ChangesScope
+			q      model.ChangesQuery
+			scope  model.ChangesScope
 			cursor = req.GetString("cursor", "")
 		)
 		if cursor != "" {
-			if q, scope, err = store.DecodeChangesCursor(cursor); err != nil {
+			if q, scope, err = model.DecodeChangesCursor(cursor); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 		} else {
-			q = store.ChangesQuery{Since: req.GetString("since", ""), Prefix: req.GetString("prefix", "")}
+			q = model.ChangesQuery{Since: req.GetString("since", ""), Prefix: req.GetString("prefix", "")}
 			if strings.HasPrefix(strings.ToLower(q.Prefix), "kb://") {
 				return mcpgo.NewToolResultError(kbPrefixRefusal(q.Prefix)), nil
 			}
@@ -188,7 +189,7 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		}
 
 		// A bookmark names its repo; a bare hash means this one.
-		sinceRepo, sinceCommit, err := store.ParseChangesSince(q.Since)
+		sinceRepo, sinceCommit, err := model.ParseChangesSince(q.Since)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -204,19 +205,19 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		}
 
 		out := changesResponse{
-			Changes:  make([]store.PathChange, 0, len(res.Changes)),
+			Changes:  make([]model.PathChange, 0, len(res.Changes)),
 			Repo:     repo12,
 			Branch:   branch,
 			Head:     res.Head,
-			Bookmark: store.ChangesBookmark(repo12, res.Head),
+			Bookmark: model.ChangesBookmark(repo12, res.Head),
 			HasMore:  res.HasMore,
 		}
 		for _, c := range res.Changes {
-			out.Changes = append(out.Changes, store.PathChange{Path: wirePath(b, rt, c.Path), Change: c.Change})
+			out.Changes = append(out.Changes, model.PathChange{Path: wirePath(b, rt, c.Path), Change: c.Change})
 		}
 		if res.HasMore {
 			// After stays repo-relative: it is compared against store rows.
-			cur := store.EncodeChangesCursor(store.ChangesScope{Repo: repo12, Branch: branch},
+			cur := model.EncodeChangesCursor(model.ChangesScope{Repo: repo12, Branch: branch},
 				q.Since, res.Head, q.Prefix, res.Changes[len(res.Changes)-1].Path)
 			out.Cursor = &cur
 		}
@@ -286,7 +287,7 @@ func isHexDigits(s string) bool {
 // carry their remedy already; an unknown branch names the repo and branch,
 // and a missing consensus branch says when it will exist.
 func changesErrorText(err error, repo12, branch string, consensus bool) string {
-	if errors.Is(err, store.ErrBranchNotFound) {
+	if errors.Is(err, model.ErrBranchNotFound) {
 		if consensus {
 			return fmt.Sprintf("repo %s has no branch %q (its consensus branch appears after the first sync); nothing to compare", repo12, branch)
 		}

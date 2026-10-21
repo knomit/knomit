@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -44,7 +46,7 @@ topics:
 
 // newContextRepo is newDedupAttrRepo with the context ontology (or none when
 // ont is nil and noOntology is set).
-func newContextRepo(t *testing.T, ontYAML string) (*repos.RepoInstance, *store.Service, context.Context, store.BatchEmbedder) {
+func newContextRepo(t *testing.T, ontYAML string) (*repos.RepoInstance, *store.Service, context.Context, model.BatchEmbedder) {
 	t.Helper()
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-billy/v5/memfs"
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -145,7 +147,7 @@ func OwnBranchesOnly() InitOption { return func(o *initOptions) { o.ownBranchesO
 // objects) and returns one exact refspec per branch that is not an agent/*
 // branch, plus own when the remote has it. A remote with no ref answers
 // transport.ErrEmptyRemoteRepository; one whose only branches are other
-// agents' answers vcs.ErrNoConsensusBranch (an empty list would fall back to the
+// agents' answers model.ErrNoConsensusBranch (an empty list would fall back to the
 // wildcard).
 func ownBranchesRefspecs(ctx context.Context, originURL string, auth transport.AuthMethod, own string, timeout time.Duration) ([]gogitconfig.RefSpec, error) {
 	rem := gogit.NewRemote(memory.NewStorage(), &gogitconfig.RemoteConfig{Name: "origin", URLs: []string{originURL}})
@@ -170,7 +172,7 @@ func ownBranchesRefspecs(ctx context.Context, originURL string, auth transport.A
 		return nil, transport.ErrEmptyRemoteRepository
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("%w: the remote holds only other agents' branches", vcs.ErrNoConsensusBranch)
+		return nil, fmt.Errorf("%w: the remote holds only other agents' branches", model.ErrNoConsensusBranch)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out, nil
@@ -428,7 +430,7 @@ func (ri *Index) InitFromRemote(ctx context.Context, originURL string, auth tran
 // symbolic HEAD when it is not an agent/experiment/generated branch (a remote
 // whose HEAD points at an agent branch must NOT make that our consensus); else
 // the one fetched branch with no other role. Anything else is refused with
-// vcs.ErrNoConsensusBranch naming the candidates, never resolved by a branch's
+// model.ErrNoConsensusBranch naming the candidates, never resolved by a branch's
 // name. Must run AFTER the wildcard fetch so the remote-tracking refs exist.
 func resolveUpstream(ctx context.Context, rh *Repo, repo *gogit.Repository, auth transport.AuthMethod, requested string) (string, error) {
 	if requested != "" {
@@ -436,11 +438,11 @@ func resolveUpstream(ctx context.Context, rh *Repo, repo *gogit.Repository, auth
 	}
 	branches := remoteTrackingBranches(repo)
 	head := detectRemoteUpstream(ctx, repo, auth, rh.vr.NetTimeout())
-	if b := vcs.ChooseConsensusBranch("", head, branches); b != "" {
+	if b := model.ChooseConsensusBranch("", head, branches); b != "" {
 		log.Info().Str("upstream", b).Str("remote_head", head).Msg("resolveUpstream: adopted the remote's consensus branch")
 		return b, nil
 	}
-	return "", fmt.Errorf("%w: the remote's HEAD is %q and its branches are %v; name the consensus branch", vcs.ErrNoConsensusBranch, head, branches)
+	return "", fmt.Errorf("%w: the remote's HEAD is %q and its branches are %v; name the consensus branch", model.ErrNoConsensusBranch, head, branches)
 }
 
 // remoteTrackingBranches lists the branches the wildcard fetch brought in, by

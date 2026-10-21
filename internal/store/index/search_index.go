@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -467,7 +469,7 @@ func (si *Index) SyncLocked(ctx context.Context, branch string) error {
 // corrupt branch_facts (the PR #82 background-index race). No current caller
 // holds LockBranch before calling Rebuild, so self-locking cannot deadlock;
 // normal reads don't take branchMu, so they remain non-blocking.
-func (si *Index) Rebuild(ctx context.Context, branch string, progress vcs.RebuildProgress) (err error) {
+func (si *Index) Rebuild(ctx context.Context, branch string, progress model.RebuildProgress) (err error) {
 	defer si.rh.LockBranch(branch)()
 
 	// Any failure below leaves this branch half-rebuilt — last_commit is cleared
@@ -719,7 +721,7 @@ func (si *Index) gcOrphanedGraphNodes(ctx context.Context, label, edgeType strin
 
 // rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact(),
 // then populates branch_facts for the given branch.
-func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress vcs.RebuildProgress) (int, error) {
+func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress model.RebuildProgress) (int, error) {
 	branchID, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: ensure branch: %w", err)
@@ -1016,13 +1018,13 @@ func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress
 // Raising it is therefore safe for INFERENCE memory specifically. It is not
 // free: raw bodies, the tokenized rows encodeAll retains, and the result slice
 // all scale linearly with it. It stays at 32 until a raise is measured.
-func (si *Index) rebuildEmbeddings(ctx context.Context, progress vcs.RebuildProgress) (int, error) {
+func (si *Index) rebuildEmbeddings(ctx context.Context, progress model.RebuildProgress) (int, error) {
 	emb := si.rh.Embedder()
 	if emb == nil {
 		return 0, nil
 	}
 
-	batcher, hasBatch := emb.(vcs.BatchEmbedder)
+	batcher, hasBatch := emb.(model.BatchEmbedder)
 
 	var total int
 	if err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `SELECT COUNT(*) FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`).Scan(&total); err != nil {
@@ -1188,7 +1190,7 @@ func (si *Index) rebuildEmbeddings(ctx context.Context, progress vcs.RebuildProg
 
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
-func (si *Index) rebuildGraph(ctx context.Context, branch string, progress vcs.RebuildProgress) (int, error) {
+func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model.RebuildProgress) (int, error) {
 	// P2 git-read dedupe: Phase A.5 (historical Fact-node restore) and Phase B
 	// (DERIVED_FROM edges) both walk the identical commit_log ref-event list,
 	// and each historically re-read every (commit, path) from git
@@ -1437,7 +1439,7 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress vcs.R
 	if si.rh.Embedder() != nil {
 		type simEdge struct{ fromPath, fromBH, toPath, toBH string }
 		var edges []simEdge
-		simFloor := vcs.EmbedderThresholds(si.rh.Embedder()).SimilarTo
+		simFloor := model.EmbedderThresholds(si.rh.Embedder()).SimilarTo
 
 		for _, rec := range recs {
 			emb, err := si.getEmbeddingByFact(ctx, rec.Path, rec.BlobHash)

@@ -9,10 +9,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"knomit/internal/client/sessions"
-	"knomit/internal/store"
 )
 
 // The `trace` argument (#349): an agent attaches a few short `Key: value`
@@ -94,15 +95,15 @@ func applyTrace(ctx context.Context, req mcpgo.CallToolRequest) (context.Context
 	if err != nil {
 		return ctx, err
 	}
-	return store.WithAgentTrace(ctx, t)
+	return model.WithAgentTrace(ctx, t)
 }
 
 // parseTrace applies the rules above to the `trace` argument's value. Keys
 // are checked in sorted order so the error for a call is deterministic.
-func parseTrace(raw any) (store.Trailers, error) {
+func parseTrace(raw any) (model.Trailers, error) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
-		return store.Trailers{}, fmt.Errorf("trace: must be an object of string values, got %T", raw)
+		return model.Trailers{}, fmt.Errorf("trace: must be an object of string values, got %T", raw)
 	}
 	keys := make([]string, 0, len(obj))
 	for k := range obj {
@@ -110,38 +111,38 @@ func parseTrace(raw any) (store.Trailers, error) {
 	}
 	sort.Strings(keys)
 
-	var t store.Trailers
+	var t model.Trailers
 	seen := make(map[string]string, len(keys))
 	for _, key := range keys {
 		lower := strings.ToLower(key)
 		if prev, dup := seen[lower]; dup {
-			return store.Trailers{}, fmt.Errorf("trace: %q and %q are the same key (keys are matched case-insensitively)", prev, key)
+			return model.Trailers{}, fmt.Errorf("trace: %q and %q are the same key (keys are matched case-insensitively)", prev, key)
 		}
 		seen[lower] = key
 
 		value, ok := obj[key].(string)
 		if !ok {
-			return store.Trailers{}, fmt.Errorf("trace.%s: value must be a string, got %T", key, obj[key])
+			return model.Trailers{}, fmt.Errorf("trace.%s: value must be a string, got %T", key, obj[key])
 		}
 		if strings.HasPrefix(lower, reservedTracePrefix) {
 			if err := knomitTraceEntry(&t, key, lower, value); err != nil {
-				return store.Trailers{}, err
+				return model.Trailers{}, err
 			}
 			continue
 		}
 		if len(key) > MaxTraceKeyLen {
-			return store.Trailers{}, fmt.Errorf("trace: key %q is longer than %d characters", key, MaxTraceKeyLen)
+			return model.Trailers{}, fmt.Errorf("trace: key %q is longer than %d characters", key, MaxTraceKeyLen)
 		}
 		if !traceKeyRE.MatchString(key) {
-			return store.Trailers{}, fmt.Errorf("trace: key %q must be letters, digits and hyphens, starting with a letter or digit", key)
+			return model.Trailers{}, fmt.Errorf("trace: key %q must be letters, digits and hyphens, starting with a letter or digit", key)
 		}
 		if err := traceValueRule(key, value, MaxTraceValueLen); err != nil {
-			return store.Trailers{}, err
+			return model.Trailers{}, err
 		}
-		t.Extra = append(t.Extra, store.TrailerEntry{Key: key, Value: value})
+		t.Extra = append(t.Extra, model.TrailerEntry{Key: key, Value: value})
 	}
 	if len(t.Extra) > MaxTraceEntries {
-		return store.Trailers{}, fmt.Errorf("trace: %d entries of your own; at most %d (plus Knomit-Trace, Knomit-Cause and Knomit-Run)", len(t.Extra), MaxTraceEntries)
+		return model.Trailers{}, fmt.Errorf("trace: %d entries of your own; at most %d (plus Knomit-Trace, Knomit-Cause and Knomit-Run)", len(t.Extra), MaxTraceEntries)
 	}
 	return t, nil
 }
@@ -149,24 +150,24 @@ func parseTrace(raw any) (store.Trailers, error) {
 // knomitTraceEntry accepts one of the three supported Knomit- names in its
 // exact form, written in knomit's canonical spelling; every other Knomit- name
 // — Knomit-Trigger included — is refused.
-func knomitTraceEntry(t *store.Trailers, key, lower, value string) error {
+func knomitTraceEntry(t *model.Trailers, key, lower, value string) error {
 	switch lower {
-	case strings.ToLower(store.TrailerTrace):
+	case strings.ToLower(model.TrailerTrace):
 		if err := traceValueRule(key, value, sessions.MaxFieldLen); err != nil {
 			return err
 		}
 		t.Trace = value
-	case strings.ToLower(store.TrailerCause):
+	case strings.ToLower(model.TrailerCause):
 		if !traceCauseRE.MatchString(value) {
 			return fmt.Errorf("trace.%s: must be a full commit hash in lowercase hex (40 or 64 characters)", key)
 		}
 		t.Cause = value
-	case strings.ToLower(store.TrailerRun):
+	case strings.ToLower(model.TrailerRun):
 		if !traceRunRE.MatchString(value) {
 			return fmt.Errorf("trace.%s: must be run- followed by 32 lowercase hex characters, as knomit mints it", key)
 		}
 		t.Run = value
-	case strings.ToLower(store.TrailerTrigger):
+	case strings.ToLower(model.TrailerTrigger):
 		return fmt.Errorf("trace: %s is reserved: only knomit sets it (it switches the trigger loop guard)", key)
 	default:
 		return fmt.Errorf("trace: %s is reserved: names starting with Knomit- are knomit's; pass only Knomit-Trace, Knomit-Cause and Knomit-Run", key)

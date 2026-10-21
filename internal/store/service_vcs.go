@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
@@ -11,7 +13,7 @@ import (
 // rewind replay, which ChangesUnder refuses. It is a read of the git layer
 // (vcs.Repo.DiffFacts), so it is the store's own operation and not a facts
 // forward: the facts handles hold no vcs methods.
-func (s *Service) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]PathChange, error) {
+func (s *Service) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]model.PathChange, error) {
 	return s.rh.DiffFacts(ctx, from, to)
 }
 

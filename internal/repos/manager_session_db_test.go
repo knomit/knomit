@@ -8,12 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
 )
 
 // TestStart_skipsSessionSidecarDB is a regression test for the boot-time
@@ -43,7 +44,7 @@ func TestStart_skipsSessionSidecarDB(t *testing.T) {
 	// and not one this test invented.
 	m := newManager()
 	ri := bootRepo(t, m)
-	sidecar := strings.TrimSuffix(m.RepoPath(ri.UID()), ".db") + store.SessionDBSuffix
+	sidecar := strings.TrimSuffix(m.RepoPath(ri.UID()), ".db") + model.SessionDBSuffix
 	_, statErr := os.Stat(sidecar)
 	require.NoError(t, statErr, "session sidecar DB should exist while the repo is open")
 	require.NoError(t, m.Close())

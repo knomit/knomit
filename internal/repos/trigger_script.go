@@ -22,7 +22,7 @@
 //     the store's, so a script writes as THIS machine, never as the author
 //     whose change fired it; an experiment a session has open is never
 //     pinned (the script writes the agent branch);
-//   - the trailer set (store.WithTrailers): Knomit-Trace = the fire's derived
+//   - the trailer set (model.WithTrailers): Knomit-Trace = the fire's derived
 //     trace, Knomit-Cause = the firing commit, Knomit-Trigger = this
 //     trigger's name, set ONCE per fire — a script cannot pass its own.
 //
@@ -57,6 +57,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/dop251/goja"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
@@ -64,7 +66,6 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/platform/crashdump"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 )
 
@@ -275,7 +276,7 @@ func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendi
 	hostCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	hostCtx = WithBinding(hostCtx, NewBindingOfRepo(d.ri, d.branch))
-	hostCtx = store.WithTrailers(hostCtx, store.Trailers{Trace: p.trace, Cause: p.commit, Trigger: p.trig.Name})
+	hostCtx = model.WithTrailers(hostCtx, model.Trailers{Trace: p.trace, Cause: p.commit, Trigger: p.trig.Name})
 	rf, rt := rs.fireRange()
 	h := &scriptHost{d: d, p: p, cs: cs, ctx: hostCtx, globals: globals, rangeFrom: rf, rangeTo: rt}
 	h.onRow = func(r facts.TriggerFire) { h.rows = append(h.rows, r) }

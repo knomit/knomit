@@ -13,11 +13,12 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/test/testenv"
 )
 
@@ -142,14 +143,14 @@ func TestCreate_MirrorCloneRejected(t *testing.T) {
 	// ...and no file: a rollback that unregisters the row but leaves the
 	// .db behind is the failure mode most likely to be lurking in the
 	// rollback path. Filter out each repo's own "<uid>.sessions.db" sidecar
-	// (store.SessionDBSuffix, itself created eagerly by store.Open) — it also
+	// (model.SessionDBSuffix, itself created eagerly by store.Open) — it also
 	// matches "*.db" and would otherwise double-count alpha's own files as a
 	// false leftover.
 	allDBFiles, err := filepath.Glob(filepath.Join(home, "repos", "*.db"))
 	require.NoError(t, err)
 	dbFiles := make([]string, 0, len(allDBFiles))
 	for _, p := range allDBFiles {
-		if store.IsSessionDBFile(filepath.Base(p)) {
+		if model.IsSessionDBFile(filepath.Base(p)) {
 			continue
 		}
 		dbFiles = append(dbFiles, p)

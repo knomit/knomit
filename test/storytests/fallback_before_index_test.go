@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/test/testenv"
@@ -80,7 +82,7 @@ func TestFallbackBeforeReadsIndex(t *testing.T) {
 		agent := sb.Repo("alpha").Branch("main")
 		c := agent.Write("kb/x.md", testenv.Fact("x"), "add x")
 
-		if _, err := readBefore(t, agent, "kb/never.md", c.Commit); !errors.Is(err, store.ErrPathNotFound) {
+		if _, err := readBefore(t, agent, "kb/never.md", c.Commit); !errors.Is(err, model.ErrPathNotFound) {
 			t.Errorf("want ErrPathNotFound, got %v", err)
 		}
 	})

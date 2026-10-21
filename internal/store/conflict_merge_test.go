@@ -14,6 +14,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/model"
 	"knomit/internal/store/remotesync"
 )
 
@@ -405,7 +406,7 @@ func TestReplay_MergeFacts(t *testing.T) {
 	seed := r.write(agent, "kb/notes/f.md", cmFact(t, "base", 0.7))
 	require.NoError(t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
 	require.NoError(t, r.svc.rh.WriteAgentBase(agent, seed))
-	ctx := WithTrailers(context.Background(), Trailers{Trace: "t-123"})
+	ctx := model.WithTrailers(context.Background(), model.Trailers{Trace: "t-123"})
 	_, err := r.svc.Facts().WriteFact(ctx, agent, "kb/notes/f.md", cmFact(t, "agent body", 0.9), "learn: f", "learn")
 	require.NoError(t, err)
 	onto := r.write("main", "kb/notes/f.md", cmFact(t, "main body", 0.5, "MainAdded"))
@@ -424,7 +425,7 @@ func TestReplay_MergeFacts(t *testing.T) {
 	lines := merge.TrailerValues(tip.Message, merge.TrailerMerge)
 	require.Len(t, lines, 1, tip.Message)
 	require.Contains(t, lines[0], "decided=body,confidence")
-	require.Equal(t, "t-123", TrailerValue(tip.Message, TrailerTrace), "the trace trailer still reads")
+	require.Equal(t, "t-123", model.TrailerValue(tip.Message, model.TrailerTrace), "the trace trailer still reads")
 }
 
 // replayFork is the rebase-fallback shape: the agent and the rewound

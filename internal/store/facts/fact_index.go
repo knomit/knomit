@@ -4,8 +4,9 @@ import (
 	"context"
 	"sync/atomic"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/fact"
-	"knomit/internal/store/internal/vcs"
 )
 
 // ParseFactRecord parses a fact file into the stored record (no blob hash).
@@ -41,6 +42,6 @@ func (fi *Index) DiffFiles(ctx context.Context, branch, fromCommit string) (adde
 
 // ChangesUnder reports what differs under a folder between two commits. See
 // changes.go: a read of two trees, no clock, no write.
-func (fi *Index) ChangesUnder(ctx context.Context, branch string, q vcs.ChangesQuery) (vcs.ChangesResult, error) {
+func (fi *Index) ChangesUnder(ctx context.Context, branch string, q model.ChangesQuery) (model.ChangesResult, error) {
 	return fi.rh.vr.ChangesUnder(ctx, branch, q)
 }

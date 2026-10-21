@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // NewScriptTools is the in-process tool set a `do: script` trigger's host
@@ -22,8 +23,8 @@ import (
 // is what lets an unchanged handler stamp the trailers on the commit it
 // writes. It lives here, not in internal/repos, because internal/mcp imports
 // internal/repos; internal/app wires it into repos.Deps.
-func NewScriptTools(embedder store.BatchEmbedder) repos.ScriptTools {
-	var embedders []store.BatchEmbedder
+func NewScriptTools(embedder model.BatchEmbedder) repos.ScriptTools {
+	var embedders []model.BatchEmbedder
 	if embedder != nil {
 		embedders = append(embedders, embedder)
 	}
