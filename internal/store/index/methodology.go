@@ -49,6 +49,7 @@ func (mm *MethodologyMatcher) RelevantMethodologyForFact(
 	k int,
 	minScore float64,
 ) ([]MethodologyMatch, error) {
+	mm.probe("RelevantMethodologyForFact")
 	branchID, err := mm.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("RelevantMethodologyForFact: branchID: %w", err)

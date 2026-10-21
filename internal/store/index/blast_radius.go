@@ -72,8 +72,8 @@ SELECT DISTINCT np.value
 // Membership among live members is the consumer's responsibility.
 // It is a thin exported wrapper over the private reverseDependentPaths.
 func (gs *GraphStore) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
-	if ov := gs.ov; ov != nil && ov.ReverseDependentPaths != nil {
-		return ov.ReverseDependentPaths(ctx, path)
+	if err := gs.probe("ReverseDependentPaths"); err != nil {
+		return nil, err
 	}
 	return gs.reverseDependentPaths(ctx, path)
 }
@@ -84,6 +84,7 @@ func (gs *GraphStore) ReverseDependentPaths(ctx context.Context, path string) (m
 // false. Returns 0 for a leaf fact (nothing depends on it), or for a path
 // whose dependents are all retracted at HEAD.
 func (gs *GraphStore) BlastRadius(ctx context.Context, branch, path string) (int, error) {
+	gs.probe("BlastRadius")
 	deps, err := gs.reverseDependentPaths(ctx, path)
 	if err != nil {
 		return 0, err

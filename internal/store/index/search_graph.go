@@ -38,6 +38,7 @@ type ExplainResult struct {
 // commit-anchored methods. This unifies the HEAD and commit-anchored read
 // paths on a single underlying query.
 func (gs *GraphStore) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
+	gs.probe("ExplainFact")
 	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("ExplainFact: branchID: %w", err)

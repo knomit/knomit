@@ -27,13 +27,11 @@ import (
 func fixedPairSearch(t *testing.T, svc *store.Service, results []index.SearchResult) *index.Facade {
 	t.Helper()
 	idx := svc.Search()
-	t.Cleanup(idx.SetOverridesForTest(index.Overrides{
-		Search: func(index.SearchFunc) index.SearchFunc {
-			return func(context.Context, string, index.SearchOptions) ([]index.SearchResult, error) {
-				return results, nil
-			}
-		},
-	}))
+	overridesOf(t, idx).search(func(index.SearchFunc) index.SearchFunc {
+		return func(context.Context, string, index.SearchOptions) ([]index.SearchResult, error) {
+			return results, nil
+		}
+	})
 	return idx
 }
 

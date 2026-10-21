@@ -1,40 +1,5 @@
 package synthesize
 
-import (
-	"context"
-
-	"knomit/internal/store/index"
-
-	"go.uber.org/mock/gomock"
-)
-
-// expectScopedClusterPartition wires a scripted search index so ScopedCluster
-// reproduces the given community partition in-process, replacing the old
-// CachedClusterFacts mock seam now that clustering is scoped+in-process.
-//
-// Neighbor searches (Search with QueryByPath set) return no extra neighbors, so
-// the clustered subgraph is exactly the seed set. SubgraphEdges returns a star
-// of edges WITHIN each community and none across, so gonum Louvain recovers
-// `comms` as separate connected components. Facts meant to be in distinct
-// communities are given no connecting edge; bridgePathCommunities resolves such
-// facts to distinct synthetic ids even when filterSmallClusters drops them as
-// sub-floor singletons — so the partition holds for any minCommunitySize.
-//
-// pool feeds the pool-load Search (no QueryByPath) that BridgeComponentReport
-// issues; pass nil for callers like BuildBackwardBridges that receive their seed
-// pool directly and never issue a pool-load Search.
-func expectScopedClusterPartition(idx *index.Facade, pool []index.SearchResult, comms [][]string) {
-	scripted(idx).Search(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, opts index.SearchOptions) ([]index.SearchResult, error) {
-			if opts.QueryByPath != "" {
-				return nil, nil // neighbor search: subgraph stays the seed set
-			}
-			return pool, nil // pool-load search
-		}).AnyTimes()
-	scripted(idx).SubgraphEdges(gomock.Any(), gomock.Any()).
-		Return(intraCommunityEdges(comms), nil).AnyTimes()
-}
-
 // intraCommunityEdges returns a star of SIMILAR_TO edges within each community
 // (first member linked to the rest) and no cross-community edge, so Louvain
 // recovers exactly the given partition. Singleton communities contribute no

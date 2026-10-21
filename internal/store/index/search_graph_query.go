@@ -31,6 +31,7 @@ import (
 // merge-carry-forward that TestGraphAtCommit_ResolvesThroughMergeCommit pins,
 // where the edge's target_commit likewise differs from the resolved anchor.
 func (gs *GraphStore) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+	gs.probe("IncomingAtCommit")
 	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: branchID: %w", err)
@@ -144,6 +145,7 @@ func (gs *GraphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 // returning them would expose self-links that 404. This is the only filter
 // applied — branch reachability is intentionally not enforced here.
 func (gs *GraphStore) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+	gs.probe("OutgoingAtCommit")
 	// Sparse-history walk-back: edges are stored anchored to the source's
 	// actual write-commit. Resolve `commitHash` (the query anchor) into the
 	// source path's effective write-commit ≤ commitHash. Without this, queries

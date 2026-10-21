@@ -43,25 +43,23 @@ func captureSearchCtx(t *testing.T) (*index.Facade, *ctxCapture) {
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
 	c := &ctxCapture{}
-	t.Cleanup(svc.Search().SetOverridesForTest(index.Overrides{
-		Search: func(index.SearchFunc) index.SearchFunc {
-			return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
-				c.mu.Lock()
-				c.called++
-				// First write wins. The doc comment above has always promised "the
-				// first context passed to Search"; last-write-wins never actually
-				// delivered it, and with a fan-out there is no defined last.
-				if c.gotCtx == nil {
-					c.gotCtx = ctx
-				}
-				c.mu.Unlock()
-				if err := ctx.Err(); err != nil {
-					return nil, err
-				}
-				return nil, nil
+	overridesOf(t, svc.Search()).search(func(index.SearchFunc) index.SearchFunc {
+		return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+			c.mu.Lock()
+			c.called++
+			// First write wins. The doc comment above has always promised "the
+			// first context passed to Search"; last-write-wins never actually
+			// delivered it, and with a fan-out there is no defined last.
+			if c.gotCtx == nil {
+				c.gotCtx = ctx
 			}
-		},
-	}))
+			c.mu.Unlock()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}
+	})
 	return svc.Search(), c
 }
 

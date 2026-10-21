@@ -51,6 +51,7 @@ var contextBlobColumn = fmt.Sprintf(
 // Entities, EpisodeOps) are applied; vector-search-only fields (QueryVec,
 // QueryByPath, MinSimilarity) are inert here.
 func (fq *FactQuery) RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
+	fq.probe("RecentFacts")
 	if opts.Text != "" {
 		return fq.recentFactsSearch(ctx, branch, opts)
 	}
@@ -222,6 +223,7 @@ func (fq *FactQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 // entry for the given path, provided that entry's action is not 'deleted'.
 // Returns ("", false) if the path is not found or its latest action is deleted.
 func (fq *FactQuery) LastCommitForPath(ctx context.Context, branch, path string) (string, bool) {
+	fq.probe("LastCommitForPath")
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", false
@@ -813,6 +815,7 @@ func (fq *FactQuery) filterByEpisodeOps(ctx context.Context, results []SearchRes
 // branch), exactly as TokenDF and SubjectLabelDF do, so this and the df values
 // a caller compares against it are counted over the same population.
 func (fq *FactQuery) LiveFactCount(ctx context.Context, branch string) (int, error) {
+	fq.probe("LiveFactCount")
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("LiveFactCount: %w", err)
@@ -885,7 +888,8 @@ func CutoffNotice(text bool, minSimilarity float64, diags ...SearchDiag) string 
 }
 
 func (fq *FactQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
-	if ov := fq.ov; ov != nil && ov.Search != nil {
+	fq.probe("Search")
+	if ov := fq.ov.Load(); ov != nil && ov.Search != nil {
 		return ov.Search(fq.search)(ctx, branch, q)
 	}
 	return fq.search(ctx, branch, q)

@@ -42,8 +42,8 @@ import (
 // Liveness + branch scoping come from branch_facts (UNIQUE(branch_id, path) =>
 // one row per live path per branch), exactly as BlastRadius does.
 func (gs *GraphStore) TokenDF(ctx context.Context, branch, token, kind string) (int, error) {
-	if ov := gs.ov; ov != nil && ov.TokenDF != nil {
-		return ov.TokenDF(ctx, branch, token, kind)
+	if err := gs.probe("TokenDF"); err != nil {
+		return 0, err
 	}
 	var table, col string
 	switch kind {

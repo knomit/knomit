@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"knomit/internal/store/index"
+	"github.com/stretchr/testify/require"
 
-	"go.uber.org/mock/gomock"
+	"knomit/internal/store/index"
 )
 
 // --- separation tests ---
@@ -207,23 +207,17 @@ func TestCohesion_DelegatesToDensity(t *testing.T) {
 // Memoization proof: ReverseDependentPaths must be called exactly once per
 // distinct member path (3 calls total), not once per pair.
 func TestDerivationGap_ThreeMembers_OnePairLinked(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	// kb/b.md cites kb/a.md, so the real reverse dependents of a are {b} and of
+	// b and c are {}. Pairs: (a,b)=linked, (a,c)=unlinked, (b,c)=unlinked →
+	// 2 unlinked / 3 total = 2/3.
+	idx := newGraphEnv(t, "main").seed(
+		seedFact{path: "kb/a.md"},
+		seedFact{path: "kb/b.md", refs: []string{"kb/a.md"}},
+		seedFact{path: "kb/c.md"},
+	).idx()
+	reads := guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths"}})
 
-	idx := newScriptedSearch(t)
-
-	// revdeps("a.md") = {b.md} → pair (a,b) is linked (b ∈ revdeps(a)).
-	// revdeps("b.md") = {} → no additional links from b's side.
-	// revdeps("c.md") = {} → c links to nobody.
-	// Pairs: (a,b)=linked, (a,c)=unlinked, (b,c)=unlinked → 2 unlinked / 3 total = 2/3.
-	scripted(idx).ReverseDependentPaths(gomock.Any(), "a.md").
-		Return(map[string]struct{}{"b.md": {}}, nil).Times(1)
-	scripted(idx).ReverseDependentPaths(gomock.Any(), "b.md").
-		Return(map[string]struct{}{}, nil).Times(1)
-	scripted(idx).ReverseDependentPaths(gomock.Any(), "c.md").
-		Return(map[string]struct{}{}, nil).Times(1)
-
-	members := []string{"a.md", "b.md", "c.md"}
+	members := []string{"kb/a.md", "kb/b.md", "kb/c.md"}
 	got, err := derivationGap(context.Background(), members, idx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -233,16 +227,14 @@ func TestDerivationGap_ThreeMembers_OnePairLinked(t *testing.T) {
 	if diff := got - want; diff > epsilon || diff < -epsilon {
 		t.Fatalf("derivationGap = %v, want %v", got, want)
 	}
+	require.Equal(t, 3, reads.CountOf("ReverseDependentPaths"), "one read per distinct member, not per pair")
 }
 
 // TestDerivationGap_LessThanTwoMembers verifies that fewer than 2 members
 // returns 0, nil without calling the index.
 func TestDerivationGap_LessThanTwoMembers(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
-	// No expectations set — any call to idx would fail the test.
+	idx := newGraphEnv(t, "main").idx()
+	guardReads(t, idx, readPolicy{}) // no read of any kind is allowed
 
 	got, err := derivationGap(context.Background(), []string{"a.md"}, idx)
 	if err != nil {
@@ -264,15 +256,10 @@ func TestDerivationGap_LessThanTwoMembers(t *testing.T) {
 // TestDerivationGap_ErrorPropagation verifies the first error from
 // ReverseDependentPaths is returned immediately.
 func TestDerivationGap_ErrorPropagation(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
+	idx := newGraphEnv(t, "main").idx()
 	boom := errors.New("index unavailable")
-	// At least one call will error; use AnyTimes so order of member iteration
-	// doesn't matter (implementation fetches in slice order, first error wins).
-	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).
-		Return(nil, boom).AnyTimes()
+	guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths"},
+		Fail: map[string]error{"ReverseDependentPaths": boom}})
 
 	_, err := derivationGap(context.Background(), []string{"x.md", "y.md"}, idx)
 	if !errors.Is(err, boom) {
@@ -284,11 +271,11 @@ func TestDerivationGap_ErrorPropagation(t *testing.T) {
 
 // TestSpecificity_DF1_ReturnsOne verifies df=1 → spec=1.0 (maximally specific).
 func TestSpecificity_DF1_ReturnsOne(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
-	scripted(idx).TokenDF(gomock.Any(), "main", "auth", "entity").Return(1, nil).Times(1)
+	// Exactly one live fact carries the entity.
+	idx := newGraphEnv(t, "main").seed(
+		seedFact{path: "kb/one.md", entities: []string{"auth"}},
+		seedFact{path: "kb/other.md", entities: []string{"unrelated"}},
+	).idx()
 
 	got, err := specificity(context.Background(), "main", "auth", "entity", idx)
 	if err != nil {
@@ -303,11 +290,14 @@ func TestSpecificity_DF1_ReturnsOne(t *testing.T) {
 
 // TestSpecificity_DF4_Returns0_25 verifies df=4 → spec=0.25.
 func TestSpecificity_DF4_Returns0_25(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
-	scripted(idx).TokenDF(gomock.Any(), "main", "cache", "domain").Return(4, nil).Times(1)
+	// Four live facts carry the domain.
+	idx := newGraphEnv(t, "main").seed(
+		seedFact{path: "kb/c1.md", domains: []string{"cache"}},
+		seedFact{path: "kb/c2.md", domains: []string{"cache"}},
+		seedFact{path: "kb/c3.md", domains: []string{"cache"}},
+		seedFact{path: "kb/c4.md", domains: []string{"cache"}},
+		seedFact{path: "kb/d1.md", domains: []string{"other"}},
+	).idx()
 
 	got, err := specificity(context.Background(), "main", "cache", "domain", idx)
 	if err != nil {
@@ -323,11 +313,8 @@ func TestSpecificity_DF4_Returns0_25(t *testing.T) {
 // TestSpecificity_DF0_ReturnsOne verifies df=0 is treated as 1 via max(df,1),
 // yielding spec=1.0.
 func TestSpecificity_DF0_ReturnsOne(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
-	scripted(idx).TokenDF(gomock.Any(), "main", "rare", "entity").Return(0, nil).Times(1)
+	// No live fact carries the entity: the real document frequency is 0.
+	idx := newGraphEnv(t, "main").seed(seedFact{path: "kb/x.md", entities: []string{"common"}}).idx()
 
 	got, err := specificity(context.Background(), "main", "rare", "entity", idx)
 	if err != nil {
@@ -342,12 +329,9 @@ func TestSpecificity_DF0_ReturnsOne(t *testing.T) {
 
 // TestSpecificity_ErrorPropagation verifies TokenDF errors are returned as-is.
 func TestSpecificity_ErrorPropagation(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
+	idx := newGraphEnv(t, "main").idx()
 	boom := errors.New("token df unavailable")
-	scripted(idx).TokenDF(gomock.Any(), "main", "tok", "domain").Return(0, boom).Times(1)
+	guardReads(t, idx, readPolicy{Allow: []string{"TokenDF"}, Fail: map[string]error{"TokenDF": boom}})
 
 	_, err := specificity(context.Background(), "main", "tok", "domain", idx)
 	if !errors.Is(err, boom) {
@@ -367,22 +351,17 @@ func TestSpecificity_ErrorPropagation(t *testing.T) {
 //	Q = 1*1.0 + 1*1.0 + 0.5*0.5 = 2.25, Kept=true.
 func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
 	paths := []string{"kb/a.md", "kb/b.md"}
 	clusterOf := map[string]int{"kb/a.md": 0, "kb/b.md": 1}
 	g := index.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
 
-	// No derivation links between members → Gap = 1.0.
-	scripted(idx).ReverseDependentPaths(ctx, "kb/a.md").
-		Return(map[string]struct{}{}, nil).Times(1)
-	scripted(idx).ReverseDependentPaths(ctx, "kb/b.md").
-		Return(map[string]struct{}{}, nil).Times(1)
-	// TokenDF for entity kind (BridgeEntity → token used as-is).
-	scripted(idx).TokenDF(ctx, "branch/test", "bridgeTok", string(BridgeEntity)).
-		Return(2, nil).Times(1)
+	// No derivation links between members → Gap = 1.0 (nothing cites anything).
+	// Two live facts carry the entity "bridgeTok" → df 2, Spec 0.5.
+	idx := newGraphEnv(t, "branch/test").seed(
+		seedFact{path: "kb/a.md", entities: []string{"bridgeTok"}},
+		seedFact{path: "kb/b.md", entities: []string{"bridgeTok"}},
+	).idx()
+	reads := guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths", "TokenDF"}})
 
 	cfg := QualityConfig{
 		CohFloor:     0.5,
@@ -420,6 +399,8 @@ func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
 	if diff := q - wantQ; diff > epsilon || diff < -epsilon {
 		t.Errorf("Q = %v, want %v", q, wantQ)
 	}
+	require.Equal(t, 2, reads.CountOf("ReverseDependentPaths"), "one read per member")
+	require.Equal(t, 1, reads.CountOf("TokenDF"))
 }
 
 // TestScoreBridgeCandidate_ErrorPropagation_DerivationGap verifies that an
@@ -427,17 +408,14 @@ func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
 // scoreBridgeCandidate.
 func TestScoreBridgeCandidate_ErrorPropagation_DerivationGap(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
+	idx := newGraphEnv(t, "branch/test").idx()
 	paths := []string{"kb/x.md", "kb/y.md"}
 	clusterOf := map[string]int{"kb/x.md": 0, "kb/y.md": 1}
 	g := index.NewSimilarityGraph([][2]string{{"kb/x.md", "kb/y.md"}})
 
 	boom := errors.New("revdeps unavailable")
-	scripted(idx).ReverseDependentPaths(ctx, gomock.Any()).
-		Return(nil, boom).AnyTimes()
+	guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths"},
+		Fail: map[string]error{"ReverseDependentPaths": boom}})
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 
@@ -451,18 +429,14 @@ func TestScoreBridgeCandidate_ErrorPropagation_DerivationGap(t *testing.T) {
 // from TokenDF (inside specificity) is propagated by scoreBridgeCandidate.
 func TestScoreBridgeCandidate_ErrorPropagation_Specificity(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := newScriptedSearch(t)
-	// Only one member → derivationGap returns (0, nil) without calling idx.
+	idx := newGraphEnv(t, "branch/test").idx()
+	// Only one member → derivationGap returns (0, nil) without reading the index.
 	paths := []string{"kb/z.md"}
 	clusterOf := map[string]int{"kb/z.md": 0}
 	g := index.NewSimilarityGraph(nil)
 
 	boom := errors.New("tokendf unavailable")
-	scripted(idx).TokenDF(ctx, gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(0, boom).Times(1)
+	guardReads(t, idx, readPolicy{Allow: []string{"TokenDF"}, Fail: map[string]error{"TokenDF": boom}})
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 

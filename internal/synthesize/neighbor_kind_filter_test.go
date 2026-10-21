@@ -128,32 +128,26 @@ func requireUnfilteredSearchFinds(t *testing.T, env *restatementEnv, from, want 
 	require.Failf(t, "PREMISE", "an unfiltered search from %s must return %s, or the filter is credited for nothing", from, want)
 }
 
-// completeEdges stands in for the SIMILAR_TO edge read. The test store builds
-// no SIMILAR_TO edges, so the real SubgraphEdges returns none; Louvain then
+// completeEdges seeds the SIMILAR_TO edges the test store does not build. With
+// none, the real SubgraphEdges returns none; Louvain then
 // returns one SINGLETON per node — non-empty, so ScopedCluster's category
 // fallback never fires — and filterSmallClusters drops every singleton: ZERO
 // clusters, over which a "pol is in no cluster" assertion is vacuous. Every
-// pair of collected paths is an edge instead, so membership is decided by
+// pair of the store's facts gets an edge instead (through the graph test seams,
+// so the real SubgraphEdges reads them back), so membership is decided by
 // exactly one thing: which paths the neighbour search let into the subgraph.
 // The tests also pass resolution 1.0, because the production 4.0 splits even a
 // connected 2-node graph.
-func completeEdges(t *testing.T, svc *store.Service) *index.Facade {
+func completeEdges(t *testing.T, svc *store.Service, branch string) *index.Facade {
 	t.Helper()
-	idx := svc.Search()
-	t.Cleanup(idx.SetOverridesForTest(index.Overrides{
-		SubgraphEdges: func(_ context.Context, paths []string) ([][2]string, error) {
-			sorted := append([]string(nil), paths...)
-			sort.Strings(sorted)
-			var out [][2]string
-			for i := range sorted {
-				for j := i + 1; j < len(sorted); j++ {
-					out = append(out, [2]string{sorted[i], sorted[j]})
-				}
-			}
-			return out, nil
-		},
-	}))
-	return idx
+	e := &graphEnv{t: t, svc: svc, branch: branch}
+	paths := make([]string, 0)
+	for p := range e.nodeIDs() {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	e.similarAll(paths)
+	return svc.Search()
 }
 
 // recordingSearch records every path a QueryByPath search returned, and the
@@ -171,25 +165,23 @@ func recordSearch(t *testing.T, svc *store.Service) (*index.Facade, *recordingSe
 	t.Helper()
 	r := &recordingSearch{}
 	idx := svc.Search()
-	t.Cleanup(idx.SetOverridesForTest(index.Overrides{
-		Search: func(next index.SearchFunc) index.SearchFunc {
-			return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
-				res, err := next(ctx, branch, q)
-				if q.QueryByPath != "" {
-					r.mu.Lock()
-					defer r.mu.Unlock()
-					if r.returned == nil {
-						r.returned = map[string]bool{}
-					}
-					for _, h := range res {
-						r.returned[h.Path] = true
-					}
-					r.kinds = append(r.kinds, append([]string(nil), q.IncludeKinds...))
+	overridesOf(t, idx).search(func(next index.SearchFunc) index.SearchFunc {
+		return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+			res, err := next(ctx, branch, q)
+			if q.QueryByPath != "" {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				if r.returned == nil {
+					r.returned = map[string]bool{}
 				}
-				return res, err
+				for _, h := range res {
+					r.returned[h.Path] = true
+				}
+				r.kinds = append(r.kinds, append([]string(nil), q.IncludeKinds...))
 			}
-		},
-	}))
+			return res, err
+		}
+	})
 	return idx, r
 }
 
@@ -217,7 +209,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, index.SearchOptions{Path: kindDir})
 		require.Equal(t, []string{"epistemic"}, env.ri.ClusterNeighborKinds())
 
-		clusters, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc),
+		clusters, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc, env.branch),
 			1.0, 2, env.ri.ClusterNeighborKinds(), nil, env.branch)
 		require.NoError(t, err)
 		require.True(t, clustersHoldTogether(clusters, kindObs, kindObs2),
@@ -228,7 +220,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 
 	t.Run("widened list admits it as a neighbour", func(t *testing.T) {
 		env := kindEnv(t, widenedNeighborKinds)
-		clusters, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc),
+		clusters, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc, env.branch),
 			1.0, 2, env.ri.ClusterNeighborKinds(), nil, env.branch)
 		require.NoError(t, err)
 		require.True(t, clusterPaths(clusters)[kindPol],
@@ -245,7 +237,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 
 	t.Run("empty list is refused, not read as every kind", func(t *testing.T) {
 		env := kindEnv(t, nil)
-		_, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc), 1.0, 2, nil, nil, env.branch)
+		_, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc, env.branch), 1.0, 2, nil, nil, env.branch)
 		require.ErrorContains(t, err, "neighbour kinds must not be empty")
 	})
 }
@@ -280,7 +272,7 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 		// review_strategy hands it over.
 		env := kindEnv(t, widenedNeighborKinds)
 		clusters, err := ScopedCluster(ctx, []factForLLM{epistemicSeed(kindObs), epistemicSeed(kindObs2)},
-			completeEdges(t, env.svc), 1.0, 2, env.ri.ClusterNeighborKinds(), nil, env.branch)
+			completeEdges(t, env.svc, env.branch), 1.0, 2, env.ri.ClusterNeighborKinds(), nil, env.branch)
 		require.NoError(t, err)
 		var mixed []factForLLM
 		for _, c := range clusters {

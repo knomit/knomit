@@ -27,6 +27,7 @@ func extractBody(raw []byte) string {
 // scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
 func (fq *FactQuery) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
+	fq.probe("Completions")
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
@@ -187,6 +188,7 @@ type StatsResult struct {
 // own DefaultAxis, because the whole point of the call is to pin a mount to an
 // axis it did not choose; NormalizeAxis is the caller's to apply.
 func (fq *FactQuery) Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]Highlight, bool, error) {
+	fq.probe("Highlights")
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, false, fmt.Errorf("highlights: %w", err)
@@ -199,6 +201,7 @@ func (fq *FactQuery) Highlights(ctx context.Context, branch, pathPrefix, axis st
 // selects the Highlights ranking (see NormalizeAxis); it does not affect
 // DefaultAxis, which is the server's own recommendation.
 func (fq *FactQuery) Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error) {
+	fq.probe("Stats")
 	res := StatsResult{
 		Domains:    make(map[string]int),
 		Entities:   make(map[string]int),

@@ -261,7 +261,7 @@ func TestMotifRankLess_EntityOverlapIsPopulatedByTheBuilder(t *testing.T) {
 		4: {"kb/eps/5.md", "kb/zeta/6.md"},
 	}}
 
-	near, far, health, err := buildMotifBridges(context.Background(), newMotifIndex(t, nil),
+	near, far, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil),
 		"main", seeds, clusters, EffortHigh, motifQualityConfig(),
 		identityResolver, labels, nil)
 	require.NoError(t, err)
@@ -294,7 +294,7 @@ func TestMotifRankLess_EntityOverlapIsPopulatedByTheBuilder(t *testing.T) {
 			seeds[i].Motifs = []string{"a-disjoint-shape"}
 		}
 	}
-	near, far, _, err = buildMotifBridges(context.Background(), newMotifIndex(t, nil),
+	near, far, _, err = buildMotifBridges(context.Background(), motifIdx(t, seeds, nil),
 		"main", seeds, clusters, EffortHigh, motifQualityConfig(),
 		identityResolver, labels, nil)
 	require.NoError(t, err)

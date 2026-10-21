@@ -110,7 +110,7 @@ func TestBuildMotifBridges_BelowFloorLineCarriesTheSeedCount(t *testing.T) {
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
-	_, _, health, err := buildMotifBridges(context.Background(), newMotifIndex(t, nil), "main",
+	_, _, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
 		seeds, clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 	require.False(t, health.Activation.Active, "precondition: below the floor")

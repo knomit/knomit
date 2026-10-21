@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 )
 
 // ScopedCluster builds its node list by ranging over a map, and Go randomises
@@ -63,7 +62,6 @@ func TestScopedCluster_NodeOrderIsSorted(t *testing.T) {
 // to SubgraphEdges — the exact ordering that becomes Louvain's node numbering.
 func capturePathOrder(t *testing.T) []string {
 	t.Helper()
-	idx := newScriptedSearch(t)
 	branch := "agent/x"
 
 	seeds := make([]factForLLM, 0, determinismSeedCount)
@@ -77,17 +75,21 @@ func capturePathOrder(t *testing.T) []string {
 		})
 	}
 
-	scripted(idx).Search(gomock.Any(), branch, gomock.Any()).Return(nil, nil).AnyTimes()
-
+	// No seeded facts or edges: the neighbour searches find nothing, and the
+	// edge read only has to report the node list it was handed.
+	env := newGraphEnv(t, branch)
+	idx := env.idx()
 	var captured []string
-	scripted(idx).SubgraphEdges(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) ([][2]string, error) {
-			captured = append([]string(nil), paths...)
-			return nil, nil
-		}).Times(1)
+	calls := 0
+	overridesOf(t, idx).subgraphEdges(func(_ context.Context, paths []string) ([][2]string, error) {
+		calls++
+		captured = append([]string(nil), paths...)
+		return nil, nil
+	})
 
 	_, err := ScopedCluster(context.Background(), seeds, idx, 1.0, 2, testNeighborKinds, nil, branch)
 	require.NoError(t, err)
+	require.Equal(t, 1, calls, "the edge read happens once")
 	require.NotEmpty(t, captured, "SubgraphEdges must have been called with the node list")
 	return captured
 }

@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 
-	"knomit/internal/store"
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
 )
@@ -232,16 +229,14 @@ func TestLaneOf_SplitsOnSimilarityAdjacency(t *testing.T) {
 		"no SIMILAR_TO edge means cohesion 0 by construction — the far lane")
 }
 
-// motifScoreEnv builds the scripted index a scoring test needs: no DERIVED_FROM
-// links between members (Gap = 1.0), and no TokenDF call, since the shared-motif
-// specificity is passed in already summed.
+// motifScoreEnv builds the index a scoring test needs: a real empty store, so
+// there are no DERIVED_FROM links between members (Gap = 1.0), with a strict
+// read policy that allows only the reverse-dependent reads of derivationGap: no
+// TokenDF read, since the shared-motif specificity is passed in already summed.
 func motifScoreEnv(t *testing.T, paths ...string) (context.Context, *index.Facade) {
 	t.Helper()
-	idx := newScriptedSearch(t)
-	for _, p := range paths {
-		scripted(idx).ReverseDependentPaths(gomock.Any(), p).
-			Return(map[string]struct{}{}, nil).AnyTimes()
-	}
+	idx := newGraphEnv(t, "main").idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths"}})
 	return context.Background(), idx
 }
 
@@ -360,11 +355,11 @@ func constPairCos(v float64) pairCosFn {
 
 func TestSharedMotifSpecificity_SecondSharedMotifBoostsNeverGates(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	idx := newScriptedSearch(t)
-	scripted(idx).TokenDF(gomock.Any(), "main", gomock.Any(), string(BridgeMotif)).
-		Return(2, nil).AnyTimes()
+	// alpha-shape and bravo-shape are each carried by exactly two live facts.
+	idx := newGraphEnv(t, "main").seed(
+		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "bravo-shape"}},
+		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape", "bravo-shape"}},
+	).idx()
 
 	one := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape"}},
@@ -384,11 +379,11 @@ func TestSharedMotifSpecificity_SecondSharedMotifBoostsNeverGates(t *testing.T) 
 
 func TestSharedMotifSpecificity_OnlyMotifsEveryMemberCarriesCount(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	idx := newScriptedSearch(t)
-	scripted(idx).TokenDF(gomock.Any(), "main", gomock.Any(), string(BridgeMotif)).
-		Return(2, nil).AnyTimes()
+	// alpha-shape is carried by exactly two live facts.
+	idx := newGraphEnv(t, "main").seed(
+		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "bravo-shape"}},
+		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape"}},
+	).idx()
 
 	cand := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
@@ -401,11 +396,15 @@ func TestSharedMotifSpecificity_OnlyMotifsEveryMemberCarriesCount(t *testing.T) 
 
 // Rarity is what the term measures: a motif on fewer facts contributes more.
 func TestSharedMotifSpecificity_IsInverseInDF(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	idx := newScriptedSearch(t)
-	scripted(idx).TokenDF(gomock.Any(), "main", "rare-shape", string(BridgeMotif)).Return(2, nil)
-	scripted(idx).TokenDF(gomock.Any(), "main", "common-shape", string(BridgeMotif)).Return(10, nil)
+	// rare-shape is carried by 2 live facts, common-shape by 10.
+	specs := []seedFact{
+		{path: "kb/alpha/1.md", motifs: []string{"rare-shape", "common-shape"}},
+		{path: "kb/beta/2.md", motifs: []string{"rare-shape", "common-shape"}},
+	}
+	for i := 0; i < 8; i++ {
+		specs = append(specs, seedFact{path: fmt.Sprintf("kb/more/%d.md", i), motifs: []string{"common-shape"}})
+	}
+	idx := newGraphEnv(t, "main").seed(specs...).idx()
 
 	mk := func(m string) BridgeSeedSet {
 		return BridgeSeedSet{Token: m, Members: []factForLLM{
@@ -421,11 +420,11 @@ func TestSharedMotifSpecificity_IsInverseInDF(t *testing.T) {
 // One member spelling the same cluster two ways must not vote twice — that
 // would be a member reinforcing a group on its own authorship habit.
 func TestSharedMotifSpecificity_OneMemberCannotVoteTwiceForACluster(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	idx := newScriptedSearch(t)
-	scripted(idx).TokenDF(gomock.Any(), "main", "alpha-shape", string(BridgeMotif)).
-		Return(2, nil).AnyTimes()
+	// alpha-shape (in either spelling) is carried by exactly two live facts.
+	idx := newGraphEnv(t, "main").seed(
+		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "alpha-shaped"}},
+		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape"}},
+	).idx()
 
 	// Both spellings resolve to one canonical id.
 	resolve := func(string) string { return "alpha-shape" }
@@ -511,8 +510,8 @@ func TestMotifCandidates_AreMonotoneAcrossEffort(t *testing.T) {
 // later gates: on a corpus with no motifs the tier does nothing and costs
 // nothing — which is why the EffortNormal contract test passes vacuously.
 func TestBuildMotifBridges_MotifFreeCorpusDoesNoWork(t *testing.T) {
-	idx, calls := newCountedMotifIndex(t, nil)
 	seeds := []factForLLM{{File: "kb/alpha/1.md"}, {File: "kb/beta/2.md"}}
+	idx, reads := countedMotifIdx(t, seeds, nil)
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
 		twoCommunities("kb/alpha/1.md", "kb/beta/2.md"), EffortNormal, motifQualityConfig(),
@@ -522,7 +521,7 @@ func TestBuildMotifBridges_MotifFreeCorpusDoesNoWork(t *testing.T) {
 	require.Empty(t, near)
 	require.Empty(t, far)
 	require.Zero(t, health.Candidates)
-	require.Zero(t, calls.Load(), "a motif-free corpus must not cost a single index call")
+	require.Zero(t, reads.Count(), "a motif-free corpus must not cost a single index call")
 }
 
 // saturatedMotifCorpus builds n verbatim-matching, subject-disjoint,
@@ -558,7 +557,7 @@ func saturatedMotifCorpus(n int) ([]factForLLM, ClusterResult, index.SubjectLabe
 
 func TestBuildMotifBridges_NormalEmitsAtMostTwoNearAndNoFar(t *testing.T) {
 	seeds, clusters, labels := saturatedMotifCorpus(6)
-	idx := newMotifIndex(t, allPairsAdjacent) // every group is a near-lane group
+	idx := motifIdx(t, seeds, motifGroupEdges(seeds)) // every group is a near-lane group
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0))
@@ -575,7 +574,7 @@ func TestBuildMotifBridges_NormalEmitsAtMostTwoNearAndNoFar(t *testing.T) {
 // never produced a far group.
 func TestBuildMotifBridges_NormalEmitsNothingForFarLaneGroups(t *testing.T) {
 	seeds, clusters, labels := saturatedMotifCorpus(6)
-	idx := newMotifIndex(t, nil) // no adjacency: every group is far
+	idx := motifIdx(t, seeds, nil) // no adjacency: every group is far
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
@@ -588,7 +587,7 @@ func TestBuildMotifBridges_NormalEmitsNothingForFarLaneGroups(t *testing.T) {
 
 func TestBuildMotifBridges_HighOpensBothLanesWithinTheirBudgets(t *testing.T) {
 	seeds, clusters, labels := saturatedMotifCorpus(20)
-	idx := newMotifIndex(t, nil) // no SIMILAR_TO edges => every group is far
+	idx := motifIdx(t, seeds, nil) // no SIMILAR_TO edges => every group is far
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
@@ -606,7 +605,7 @@ func TestBuildMotifBridges_HighOpensBothLanesWithinTheirBudgets(t *testing.T) {
 func TestBuildMotifBridges_LanesCannotStarveEachOther(t *testing.T) {
 	seeds, clusters, labels := saturatedMotifCorpus(20)
 	// Give the first pair a SIMILAR_TO edge, so exactly one group is near.
-	idx := newMotifIndex(t, onlyPairAdjacent([2]string{"kb/a00/fa00.md", "kb/b00/fb00.md"}))
+	idx := motifIdx(t, seeds, [][2]string{[2]string{"kb/a00/fa00.md", "kb/b00/fb00.md"}})
 
 	near, far, _, err := buildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
@@ -618,90 +617,45 @@ func TestBuildMotifBridges_LanesCannotStarveEachOther(t *testing.T) {
 	require.LessOrEqual(t, len(near), nearBudget)
 }
 
-// newMotifIndex returns a real (in-memory) store's *index.Facade whose three
-// graph reads buildMotifBridges makes are overridden: no DERIVED_FROM links
-// between members (derivation gap 1.0), a document frequency of 2 for every
-// token, and adjacency from the given function (nil: no SIMILAR_TO edges, so
-// every group is far). Every other read is the real one on an empty store.
-func newMotifIndex(t *testing.T, adjacency func(paths []string) index.SimilarityGraph) *index.Facade {
-	idx, _ := newCountedMotifIndex(t, adjacency)
+// motifIdx returns the search handle of a real store seeded with the seeds as
+// facts (their motifs, entities and domains, so the document frequency of a
+// motif is the number of seeds carrying it) and one real SIMILAR_TO edge per
+// pair of edges (none: every group is far). Nothing cites anything, so the
+// derivation gap is 1.
+//
+// The read policy is strict: buildMotifBridges may read the adjacency, the
+// reverse dependents and the token document frequency, and nothing else.
+func motifIdx(t *testing.T, seeds []factForLLM, edges [][2]string) *index.Facade {
+	idx, _ := countedMotifIdx(t, seeds, edges)
 	return idx
 }
 
-// newCountedMotifIndex is newMotifIndex plus a counter of every overridden read
-// made, for a test that asserts the builder touched the index not at all.
-func newCountedMotifIndex(t *testing.T, adjacency func(paths []string) index.SimilarityGraph) (*index.Facade, *atomic.Int64) {
+// countedMotifIdx is motifIdx plus the log of the reads made, for a test that
+// asserts the builder touched the index not at all.
+func countedMotifIdx(t *testing.T, seeds []factForLLM, edges [][2]string) (*index.Facade, *readLog) {
 	t.Helper()
-	svc, err := store.Open(":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { svc.Close() })
-	calls := &atomic.Int64{}
-	restore := svc.Search().SetOverridesForTest(index.Overrides{
-		TokenDF: func(context.Context, string, string, string) (int, error) {
-			calls.Add(1)
-			return 2, nil
-		},
-		ReverseDependentPaths: func(context.Context, string) (map[string]struct{}, error) {
-			calls.Add(1)
-			return map[string]struct{}{}, nil
-		},
-		SimilarityAdjacency: func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
-			calls.Add(1)
-			if adjacency == nil {
-				return index.NewSimilarityGraph(nil), nil
-			}
-			return adjacency(paths), nil
-		},
-	})
-	t.Cleanup(restore)
-	return svc.Search(), calls
+	idx := newGraphEnv(t, "main").seedAll(seeds).similar(edges...).idx()
+	return idx, guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths", "TokenDF"}})
 }
 
-// allPairsAdjacent reports every member set as mutually adjacent, so every
-// group lands in the near lane.
-func allPairsAdjacent(paths []string) index.SimilarityGraph {
-	var pairs [][2]string
-	for i := 0; i < len(paths); i++ {
-		for j := i + 1; j < len(paths); j++ {
-			pairs = append(pairs, [2]string{paths[i], paths[j]})
+// motifGroupEdges connects every pair of seeds that share a motif, so every
+// group is fully adjacent (cohesion 1) and lands in the near lane.
+func motifGroupEdges(seeds []factForLLM) [][2]string {
+	byMotif := map[string][]string{}
+	for _, f := range seeds {
+		for _, m := range f.Motifs {
+			byMotif[m] = append(byMotif[m], f.File)
 		}
 	}
-	return index.NewSimilarityGraph(pairs)
-}
-
-// onlyPairAdjacent reports adjacency for exactly one pair.
-func onlyPairAdjacent(nearPair [2]string) func([]string) index.SimilarityGraph {
-	return func(paths []string) index.SimilarityGraph {
-		hits := 0
-		for _, p := range paths {
-			if p == nearPair[0] || p == nearPair[1] {
-				hits++
+	var out [][2]string
+	for _, members := range byMotif {
+		for i := 0; i < len(members); i++ {
+			for j := i + 1; j < len(members); j++ {
+				out = append(out, [2]string{members[i], members[j]})
 			}
 		}
-		if hits == 2 {
-			return index.NewSimilarityGraph([][2]string{nearPair})
-		}
-		return index.NewSimilarityGraph(nil)
 	}
-}
-
-// edgesAdjacent reports adjacency for an explicit edge list.
-func edgesAdjacent(edges [][2]string) func([]string) index.SimilarityGraph {
-	return func(paths []string) index.SimilarityGraph {
-		in := make(map[string]struct{}, len(paths))
-		for _, path := range paths {
-			in[path] = struct{}{}
-		}
-		var kept [][2]string
-		for _, e := range edges {
-			_, a := in[e[0]]
-			_, b := in[e[1]]
-			if a && b {
-				kept = append(kept, e)
-			}
-		}
-		return index.NewSimilarityGraph(kept)
-	}
+	return out
 }
 
 // permissiveMotifConfig keeps the quality gates out of the way so that budget
@@ -835,7 +789,7 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 	clusters := ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a/one.md"}, 1: {"kb/b/two.md"}, 2: {"kb/c/three.md"}}}
 	labels := labelsWith(200, map[string]int{"alpha": 2, "beta": 2, "gamma": 2})
-	idx := newMotifIndex(t, onlyPairAdjacent([2]string{"kb/a/one.md", "kb/b/two.md"}))
+	idx := motifIdx(t, seeds, [][2]string{[2]string{"kb/a/one.md", "kb/b/two.md"}})
 	cfg := motifQualityConfig() // CohFloor 0.5
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
@@ -883,13 +837,13 @@ func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 		labels.DF[strings.ToLower(f.Entities[0])] = 2
 	}
 
-	idx := newMotifIndex(t, edgesAdjacent([][2]string{
+	idx := motifIdx(t, seeds, [][2]string{
 		{"kb/a/one.md", "kb/b/two.md"}, // group A: one edge among three
 		// group B: all six pairs, so cohesion is 1.0 and only the cap bites
 		{"kb/d/four.md", "kb/e/five.md"}, {"kb/d/four.md", "kb/f/six.md"},
 		{"kb/d/four.md", "kb/g/seven.md"}, {"kb/e/five.md", "kb/f/six.md"},
 		{"kb/e/five.md", "kb/g/seven.md"}, {"kb/f/six.md", "kb/g/seven.md"},
-	}))
+	})
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3 // group B has four
 
@@ -930,7 +884,7 @@ func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
 		clusters.Clusters[i] = []string{f.File}
 		labels.DF[strings.ToLower(f.Entities[0])] = 2
 	}
-	idx := newMotifIndex(t, nil) // no edges at all
+	idx := motifIdx(t, seeds, nil) // no edges at all
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3
 
@@ -973,7 +927,7 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 		clusters.Clusters[i] = []string{f.File}
 		labels.DF[strings.ToLower(f.Entities[0])] = 2
 	}
-	idx := newMotifIndex(t, nil)
+	idx := motifIdx(t, seeds, nil)
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3
 	cfg.QualityFloor = 99 // nothing can reach it
@@ -1128,13 +1082,13 @@ func laneMixtureFixture(t *testing.T) ([]factForLLM, ClusterResult, index.Subjec
 		clusters.Clusters[i] = []string{f.File}
 		labels.DF[strings.ToLower(f.Entities[0])] = 2
 	}
-	idx := newMotifIndex(t, edgesAdjacent([][2]string{
+	idx := motifIdx(t, seeds, [][2]string{
 		{"kb/a/1.md", "kb/b/2.md"}, // tight-shape: the only pair, so cohesion 1.0
 		{"kb/c/3.md", "kb/d/4.md"}, // sparse-shape: one of three pairs
 		// dense-shape: all three pairs, so cohesion is 1.0 at three members
 		{"kb/l/12.md", "kb/m/13.md"}, {"kb/l/12.md", "kb/n/14.md"},
 		{"kb/m/13.md", "kb/n/14.md"},
-	}))
+	})
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3
 	return seeds, clusters, labels, idx, cfg
@@ -1153,7 +1107,7 @@ func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T
 		{File: "kb/d/4.md", Motifs: []string{"second-shape"}, Entities: []string{"Delta"}},
 	}
 	clusters, labels := oneCommunityEach(seeds)
-	idx, calls := newCountedMotifIndex(t, nil)
+	idx, reads := countedMotifIdx(t, seeds, nil)
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
@@ -1164,7 +1118,7 @@ func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T
 	require.Empty(t, near)
 	require.Empty(t, far)
 	require.Zero(t, health.Candidates, "an inactive corpus enumerates nothing")
-	require.Zero(t, calls.Load(), "and costs no index call to decide it")
+	require.Zero(t, reads.Count(), "and costs no index call to decide it")
 
 	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
 	require.Contains(t, lines, "motif bridging inactive")
@@ -1183,7 +1137,7 @@ func TestBuildMotifBridges_AtTheActivationFloorEnumeratesNormally(t *testing.T) 
 		{File: "kb/f/6.md", Motifs: []string{"third-shape"}, Entities: []string{"Zeta"}},
 	}
 	clusters, labels := oneCommunityEach(seeds)
-	idx := newMotifIndex(t, nil)
+	idx := motifIdx(t, seeds, nil)
 
 	_, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
@@ -1368,7 +1322,7 @@ func TestBuildMotifBridges_DiscoveredRecurrenceDoesNotActivateTheAxis(t *testing
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
-	near, far, health, err := buildMotifBridges(context.Background(), newMotifIndex(t, nil), "main", seeds,
+	near, far, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main", seeds,
 		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -1455,7 +1409,7 @@ func TestBuildMotifBridgesWithRows_KeptEqualsServedPlusBudgetDropped(t *testing.
 	clusters, labels := oneCommunityEach(seeds)
 
 	near, far, rows, health, err := buildMotifBridgesWithRows(context.Background(),
-		newMotifIndex(t, nil), "main", seeds, clusters, EffortHigh, motifQualityConfig(),
+		motifIdx(t, seeds, nil), "main", seeds, clusters, EffortHigh, motifQualityConfig(),
 		identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 	require.True(t, health.Activation.Active, "precondition: the axis ran")
@@ -1490,7 +1444,7 @@ func TestBuildMotifBridgesWithRows_SuppressionReportsIntoTheRow(t *testing.T) {
 	clusters, labels := oneCommunityEach(seeds)
 
 	_, _, rows, _, err := buildMotifBridgesWithRows(context.Background(),
-		newMotifIndex(t, nil), "main", seeds, clusters, EffortHigh, motifQualityConfig(),
+		motifIdx(t, seeds, nil), "main", seeds, clusters, EffortHigh, motifQualityConfig(),
 		identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 
@@ -1584,7 +1538,7 @@ func TestBuildMotifBridges_MotifFreeCorpusIsNotEvaluatedAtAll(t *testing.T) {
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
-	near, far, health, err := buildMotifBridges(context.Background(), newMotifIndex(t, nil), "main",
+	near, far, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
 		seeds, clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -1609,7 +1563,7 @@ func TestBuildMotifBridges_BelowFloorCorpusIsEvaluatedAndSpeaks(t *testing.T) {
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
-	_, _, health, err := buildMotifBridges(context.Background(), newMotifIndex(t, nil), "main",
+	_, _, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
 		seeds, clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)

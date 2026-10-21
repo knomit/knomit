@@ -232,29 +232,53 @@ func GraphDetachDeleteNodeForTest(ctx context.Context, ex storegit.CtxExecer, no
 // SearchFunc is the signature of FactQuery.Search.
 type SearchFunc = func(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
 
-// Overrides replaces individual read-service methods for a test that needs a
-// hand-made answer (a similarity graph, a canned search hit, a forced read
-// failure) the test corpus cannot produce. A nil field leaves the real method
-// in place. Search is a wrapper: it receives the real method, so a test can
-// observe the real answer or substitute its own; every other field replaces
-// the method outright.
+// Overrides is the test-only way to observe, fail or fake the READ services of
+// one store. It exists for two needs a seeded corpus cannot meet: proving a
+// code path made NO read (or only the expected ones), and forcing a read to
+// fail. It deliberately cannot supply canned answers for graph reads: a test
+// that needs a similarity graph, a document frequency or a reverse-dependency
+// set seeds real facts and graph edges instead.
+//
+//   - Reads is called with the method name at the top of every public read of
+//     FactQuery, GraphStore, HistoryQuery and MethodologyMatcher (28 methods),
+//     before any work. A test can record it, fail the test on an unexpected
+//     one (strict mode), or return an error: the four reads that return an
+//     error (SimilarityAdjacency, ReverseDependentPaths, TokenDF,
+//     SubgraphEdges) return it to the caller; for every other read the return
+//     value is ignored and the hook is an observer only.
+//   - Search wraps FactQuery.Search: it receives the real method, so a test can
+//     capture the context or substitute scored hits where no embedder exists.
+//   - SubgraphEdges replaces the edge read ScopedCluster feeds to Louvain. It is
+//     the one canned graph answer allowed, for a test that must fix a community
+//     PARTITION while the same SIMILAR_TO table (read by SimilarityAdjacency for
+//     cohesion) holds edges ACROSS those communities: one real table cannot be
+//     both, so the clustering read is scripted and cohesion is seeded.
+//
+// SCOPE: an Overrides is installed on the whole *Service's query services, not
+// on one handle. Service.Search(), FactQuery(), GraphStore(), HistoryQuery()
+// and Methodology() all hand out the same services, so installing through any
+// of them affects every caller of the store, including other goroutines. Install
+// it before concurrent use and restore it when the test ends.
 type Overrides struct {
-	Search                func(next SearchFunc) SearchFunc
-	FactExistsAt          func(ctx context.Context, branch, path, commit string) (bool, error)
-	SimilarityAdjacency   func(ctx context.Context, paths []string) (SimilarityGraph, error)
-	ReverseDependentPaths func(ctx context.Context, path string) (map[string]struct{}, error)
-	TokenDF               func(ctx context.Context, branch, token, kind string) (int, error)
-	SubgraphEdges         func(ctx context.Context, paths []string) ([][2]string, error)
+	Reads         func(method string) error
+	Search        func(next SearchFunc) SearchFunc
+	SubgraphEdges func(ctx context.Context, paths []string) ([][2]string, error)
 }
 
-// SetOverridesForTest installs o on the query services this Facade composes
-// (and so on the accessors Service.FactQuery and Service.GraphStore, which
-// hand out the same services) and returns a func that restores the previous
-// set. Install it before any concurrent use and restore it after. It panics
-// outside a test binary.
+// SetOverridesForTest installs o on all four query services of this Facade and
+// returns a func that restores the previous set (see Overrides for the scope).
+// It panics outside a test binary.
 func (f *Facade) SetOverridesForTest(o Overrides) (restore func()) {
 	mustBeTest("SetOverridesForTest")
-	prevF, prevG := f.FactQuery.ov, f.GraphStore.ov
-	f.FactQuery.ov, f.GraphStore.ov = &o, &o
-	return func() { f.FactQuery.ov, f.GraphStore.ov = prevF, prevG }
+	prevF, prevG, prevH, prevM := f.FactQuery.ov.Load(), f.GraphStore.ov.Load(), f.HistoryQuery.ov.Load(), f.MethodologyMatcher.ov.Load()
+	f.FactQuery.ov.Store(&o)
+	f.GraphStore.ov.Store(&o)
+	f.HistoryQuery.ov.Store(&o)
+	f.MethodologyMatcher.ov.Store(&o)
+	return func() {
+		f.FactQuery.ov.Store(prevF)
+		f.GraphStore.ov.Store(prevG)
+		f.HistoryQuery.ov.Store(prevH)
+		f.MethodologyMatcher.ov.Store(prevM)
+	}
 }

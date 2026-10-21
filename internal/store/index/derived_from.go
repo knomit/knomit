@@ -72,9 +72,7 @@ func (si *Index) resolveTargetCommit(ctx context.Context, branch, sourcePath, re
 // before the source's commit still has a navigable last-valid blob, so
 // the ref is not broken from the user's perspective.
 func (fq *FactQuery) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
-	if ov := fq.ov; ov != nil && ov.FactExistsAt != nil {
-		return ov.FactExistsAt(ctx, branch, path, commit)
-	}
+	fq.probe("FactExistsAt")
 	// Fact paths are lowercase-canonical, but both branches below compare
 	// case-sensitively: branch_facts.path is plain TEXT (no COLLATE NOCASE), and
 	// the commit-anchored walk matches commit_log paths literally. Normalize
@@ -136,6 +134,7 @@ func (fq *FactQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 // Returns false (not an error) when the path was never written in the
 // ancestry of `commit`. Errors propagate.
 func (fq *FactQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error) {
+	fq.probe("FactLiveAtCommit")
 	if commit == "" {
 		return false, nil
 	}

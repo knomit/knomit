@@ -12,6 +12,7 @@ import (
 // Log returns up to 50 log entries for commits that modified path on branch.
 // Queries commit_log directly; branch is accepted for interface compatibility.
 func (hq *HistoryQuery) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
+	hq.probe("Log")
 	rows, _, err := hq.rh.CommitLogQuery(ctx, branch, path, "", "", "", 50)
 	if err != nil {
 		return nil, fmt.Errorf("Log: %w", err)
@@ -29,6 +30,7 @@ func (hq *HistoryQuery) Log(ctx context.Context, branch, path string) ([]LogEntr
 
 // LogPaginated returns paginated log entries with file-count tags.
 func (hq *HistoryQuery) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
+	hq.probe("LogPaginated")
 	rows, hasMore, err := hq.rh.CommitLogQuery(ctx, branch, path, after, from, before, limit)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("LogPaginated: %w", err)
@@ -99,6 +101,7 @@ func (hq *HistoryQuery) enrichFileCounts(entries []LogEntryWithTags) {
 // queried from commit_log. When pathPrefix is non-empty, only files under
 // that directory are returned.
 func (hq *HistoryQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error) {
+	hq.probe("CommitDetail")
 	db := conn(ctx, hq.rh.DB())
 
 	var committedAt int64
@@ -152,6 +155,7 @@ func (hq *HistoryQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix
 
 // Activity returns commit-activity metrics for path using SQL aggregates.
 func (hq *HistoryQuery) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
+	hq.probe("Activity")
 	cutoff7 := vcs.CommitLogAge(7)
 	cutoff30 := vcs.CommitLogAge(30)
 	cutoff90 := vcs.CommitLogAge(90)
@@ -177,6 +181,7 @@ func (hq *HistoryQuery) Activity(ctx context.Context, branch, path string) (Acti
 // FactsIter opens a cursor over facts for the given branch ordered by fact_id DESC.
 // The caller must call Close() when done to release the underlying database cursor.
 func (fq *FactQuery) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
+	fq.probe("FactsIter")
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, err

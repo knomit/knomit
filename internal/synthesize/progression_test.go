@@ -376,11 +376,8 @@ func TestProgression_ShortlistItemPromotesNothingThroughApply(t *testing.T) {
 func edgeReadFails(t *testing.T, svc *store.Service) *index.Facade {
 	t.Helper()
 	idx := svc.Search()
-	t.Cleanup(idx.SetOverridesForTest(index.Overrides{
-		SubgraphEdges: func(context.Context, []string) ([][2]string, error) {
-			return nil, errors.New("test: forced subgraph edge-read failure")
-		},
-	}))
+	guardReads(t, idx, readPolicy{AllowAll: true,
+		Fail: map[string]error{"SubgraphEdges": errors.New("test: forced subgraph edge-read failure")}})
 	return idx
 }
 
