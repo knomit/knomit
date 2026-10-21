@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	knomitfact "knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -19,7 +20,7 @@ const contextParamPrefix = "context."
 // of knomit_query's `context` object and shares its store filter. Returns false
 // after writing a 400 for a key that is not a legal context key, a repeated
 // key, or a value that could never be stored (not one line, too long).
-func applyContextParams(w http.ResponseWriter, r *http.Request, q *store.SearchOptions) bool {
+func applyContextParams(w http.ResponseWriter, r *http.Request, q *index.SearchOptions) bool {
 	for name, vals := range r.URL.Query() {
 		key, ok := strings.CutPrefix(name, contextParamPrefix)
 		if !ok {

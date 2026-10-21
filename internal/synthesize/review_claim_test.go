@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -279,9 +281,9 @@ func insertManualDistillItem(t *testing.T, svc *store.Service, sessionID string)
 // writes each synthesized fact under a freshly minted UUID filename, so a
 // duplicated apply shows up as an extra element here rather than as an
 // overwritten one.
-func synthesisFacts(t *testing.T, svc *store.Service, branch string) []store.SearchResult {
+func synthesisFacts(t *testing.T, svc *store.Service, branch string) []index.SearchResult {
 	t.Helper()
-	results, err := svc.Search().Search(context.Background(), branch, store.SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		IncludeTypes: []string{"synthesis"},
 		Limit:        1000,
 	})

@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
 )
 
 // TestRepoInstance_Verify asserts that the wrapper delegates to Service.Verify
@@ -26,7 +27,7 @@ func TestRepoInstance_Verify(t *testing.T) {
 	ri := bootRepo(t, m)
 	require.NotNil(t, ri)
 
-	report, err := ri.Verify(context.Background(), store.VerifyOpts{Deep: true})
+	report, err := ri.Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "fresh repo Verify must be clean: %v", report.Issues)
 	require.Equal(t, testRepoName, report.Repo)

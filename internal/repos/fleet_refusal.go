@@ -5,10 +5,11 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/pki"
-	"knomit/internal/store"
 )
 
 // A refused sync of the fleet repository, classified (fleet design S2; GET
@@ -58,7 +59,7 @@ const tlsBadCertificateAlert = "tls: bad certificate"
 // quotes.
 func classifyFleetRefusal(lastErr string, own pki.Standing) string {
 	switch {
-	case lastErr == "" || strings.Contains(lastErr, store.CommitRefusedByJudge) || strings.Contains(lastErr, store.CommitRefusedByValidation):
+	case lastErr == "" || strings.Contains(lastErr, verify.CommitRefusedByJudge) || strings.Contains(lastErr, verify.CommitRefusedByValidation):
 		return ""
 	case strings.Contains(lastErr, pki.ErrRefusedByPeer.Error()):
 		if own == pki.StandingRevoked || own == pki.StandingValid && strings.Contains(lastErr, tlsBadCertificateAlert) {

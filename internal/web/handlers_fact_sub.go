@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
@@ -17,19 +19,19 @@ import (
 // search index; tests inject stubs.
 type factSubProvider interface {
 	// LogPaginatedForPath returns a paged commit log for a specific fact path.
-	LogPaginatedForPath(ctx context.Context, ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
+	LogPaginatedForPath(ctx context.Context, ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]index.LogEntryWithTags, string, string, error)
 
 	// ExplainFact returns the incoming and outgoing ref graph for a fact.
-	ExplainFact(ctx context.Context, ri *repos.RepoInstance, branch, path string) (store.ExplainResult, error)
+	ExplainFact(ctx context.Context, ri *repos.RepoInstance, branch, path string) (index.ExplainResult, error)
 
 	// IncomingAtCommit returns the version-aware incoming refs for a fact at
 	// a specific commit: every (path, commit) whose ref resolved to this path
 	// at that version.
-	IncomingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
+	IncomingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]index.RefSummary, error)
 
 	// OutgoingAtCommit returns the version-aware outgoing refs for a fact at
 	// a specific commit: the refs written by this version of the fact.
-	OutgoingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
+	OutgoingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]index.RefSummary, error)
 
 	// FactLiveAtCommit reports whether the fact is live (present, not
 	// retracted) as of the pinned commit — the delete-RESPECTING check. Used
@@ -52,9 +54,9 @@ type defaultFactSubProvider struct{}
 func (defaultFactSubProvider) LogPaginatedForPath(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string, limit int, after, from, before string,
-) ([]store.LogEntryWithTags, string, string, error) {
+) ([]index.LogEntryWithTags, string, string, error) {
 	var (
-		entries []store.LogEntryWithTags
+		entries []index.LogEntryWithTags
 		next    string
 		prev    string
 		err     error
@@ -71,9 +73,9 @@ func (defaultFactSubProvider) LogPaginatedForPath(
 func (defaultFactSubProvider) ExplainFact(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string,
-) (store.ExplainResult, error) {
+) (index.ExplainResult, error) {
 	var (
-		result store.ExplainResult
+		result index.ExplainResult
 		err    error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -85,9 +87,9 @@ func (defaultFactSubProvider) ExplainFact(
 	return result, err
 }
 
-func (defaultFactSubProvider) IncomingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error) {
+func (defaultFactSubProvider) IncomingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]index.RefSummary, error) {
 	var (
-		out []store.RefSummary
+		out []index.RefSummary
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -99,9 +101,9 @@ func (defaultFactSubProvider) IncomingAtCommit(ctx context.Context, ri *repos.Re
 	return out, err
 }
 
-func (defaultFactSubProvider) OutgoingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error) {
+func (defaultFactSubProvider) OutgoingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path, commitHash string) ([]index.RefSummary, error) {
 	var (
-		out []store.RefSummary
+		out []index.RefSummary
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -190,8 +192,8 @@ type commitEntry struct {
 	Date      string             `json:"date"`
 	Message   string             `json:"message"`
 	Operation string             `json:"operation,omitempty"`
-	Author    store.CommitAuthor `json:"author"`
-	Files     store.FileCounts   `json:"files,omitempty"`
+	Author    index.CommitAuthor `json:"author"`
+	Files     index.FileCounts   `json:"files,omitempty"`
 	Links     hal.LinkMap        `json:"_links"`
 }
 
@@ -226,7 +228,7 @@ func handleFactCommits(b hal.URLBuilder, provider factSubProvider, ri *repos.Rep
 		return
 	}
 	if entries == nil {
-		entries = []store.LogEntryWithTags{}
+		entries = []index.LogEntryWithTags{}
 	}
 
 	a := hal.Anchor{Branch: branch}
@@ -315,7 +317,7 @@ func handleFactOutgoing(b hal.URLBuilder, provider factSubProvider, ri *repos.Re
 // item's _links.self is anchored to the entry's own commit (incoming → the
 // source's commit; outgoing → the target's commit) so callers can navigate
 // directly to the version that produced or received the ref-event.
-func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []store.RefSummary) []graphRefEntry {
+func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []index.RefSummary) []graphRefEntry {
 	items := make([]graphRefEntry, 0, len(refs))
 	for _, ref := range refs {
 		item := graphRefEntry{

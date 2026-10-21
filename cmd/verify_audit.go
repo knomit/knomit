@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/spf13/cobra"
+	"knomit/internal/store/verify"
 
-	"knomit/internal/store"
+	"github.com/spf13/cobra"
 )
 
 // ExitCodeError carries the process exit code a command wants, for the one
@@ -50,7 +50,7 @@ Exit codes: 0 clean, 1 findings, 2 could not run.`,
 			if fleet == "" {
 				return &ExitCodeError{Code: exitFailed, Err: fmt.Errorf("--fleet is required: the fleet repository checkout")}
 			}
-			rep, err := store.Audit(store.AuditInput{KBDir: dir, Branch: branch, FleetDir: fleet, FleetRev: fleetRev, FleetRoot: fleetRoot, Key: key})
+			rep, err := verify.Audit(verify.AuditInput{KBDir: dir, Branch: branch, FleetDir: fleet, FleetRev: fleetRev, FleetRoot: fleetRoot, Key: key})
 			if err != nil {
 				return &ExitCodeError{Code: exitFailed, Err: err}
 			}

@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -44,8 +46,8 @@ func (reviewStrategy) Tool() string { return reviewTool }
 // The kind restriction is pushed into SQL here purely as an efficiency measure;
 // AcceptSeed repeats it, and AcceptSeed is the authoritative statement of the
 // rule (see conventions/synthesize/dirty-facts-excludes-pragmatic).
-func (reviewStrategy) SeedQuery() store.SearchOptions {
-	return store.SearchOptions{
+func (reviewStrategy) SeedQuery() index.SearchOptions {
+	return index.SearchOptions{
 		Limit:        100_000,
 		IncludeKinds: []string{string(fact.Epistemic)},
 	}
@@ -1180,14 +1182,14 @@ func reflectMethodologySection(ctx context.Context, ri *repos.RepoInstance, bran
 		return ""
 	}
 
-	var merged []store.MethodologyMatch
+	var merged []index.MethodologyMatch
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			log.Error().Str("branch", branch).Msg("loadReflectMethodology: nil store service; methodology disabled")
 			return
 		}
 		minScore := ri.MethodologyMinScore()
-		seen := map[string]store.MethodologyMatch{}
+		seen := map[string]index.MethodologyMatch{}
 		for _, t := range ts {
 			if err := ctx.Err(); err != nil {
 				log.Warn().Err(err).Str("branch", branch).Str("path", t.Path).
@@ -1219,7 +1221,7 @@ func reflectMethodologySection(ctx context.Context, ri *repos.RepoInstance, bran
 		}
 		merged = topKByScore(seen, methodologyTopK)
 	})
-	return store.FormatMethodologySection(merged)
+	return index.FormatMethodologySection(merged)
 }
 
 // distillMethodologySection retrieves methodology relevant to each input fact
@@ -1232,14 +1234,14 @@ func distillMethodologySection(ctx context.Context, ri *repos.RepoInstance, bran
 		return ""
 	}
 
-	var merged []store.MethodologyMatch
+	var merged []index.MethodologyMatch
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			log.Error().Str("branch", branch).Msg("loadDistillMethodology: nil store service; methodology disabled")
 			return
 		}
 		minScore := ri.MethodologyMinScore()
-		seen := map[string]store.MethodologyMatch{}
+		seen := map[string]index.MethodologyMatch{}
 		for _, f := range facts {
 			if err := ctx.Err(); err != nil {
 				log.Warn().Err(err).Str("branch", branch).Str("path", f.File).
@@ -1262,17 +1264,17 @@ func distillMethodologySection(ctx context.Context, ri *repos.RepoInstance, bran
 		}
 		merged = topKByScore(seen, methodologyTopK)
 	})
-	return store.FormatMethodologySection(merged)
+	return index.FormatMethodologySection(merged)
 }
 
 // topKByScore returns the up-to-k MethodologyMatch values from seen,
 // sorted descending by Score. SQL row order is not preserved across the
 // map iteration; ties are broken by Path for determinism.
-func topKByScore(seen map[string]store.MethodologyMatch, k int) []store.MethodologyMatch {
+func topKByScore(seen map[string]index.MethodologyMatch, k int) []index.MethodologyMatch {
 	if len(seen) == 0 {
 		return nil
 	}
-	out := make([]store.MethodologyMatch, 0, len(seen))
+	out := make([]index.MethodologyMatch, 0, len(seen))
 	for _, m := range seen {
 		out = append(out, m)
 	}

@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -94,7 +96,7 @@ func realRepo(t *testing.T, emb failEmb) (*repos.RepoInstance, *store.Service) {
 // behaviour on a store failure is what is under test (not a stub's).
 type storeBackedProvider struct{ svc *store.Service }
 
-func (p storeBackedProvider) Search(ctx context.Context, _ *repos.RepoInstance, _ store.Embedder, _ string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (p storeBackedProvider) Search(ctx context.Context, _ *repos.RepoInstance, _ store.Embedder, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
 	return p.svc.FactQuery().Search(ctx, "agent/test", q)
 }
 
@@ -121,7 +123,7 @@ func TestHandleSearch_EmbedderFailureIsServerError(t *testing.T) {
 func TestDefaultSearchProvider_EmbedErrorPropagates(t *testing.T) {
 	emb := newFailEmb(1)
 	ri, _ := realRepo(t, emb)
-	res, err := defaultSearchProvider{}.Search(context.Background(), ri, emb, "agent/test", store.SearchOptions{Text: "x"})
+	res, err := defaultSearchProvider{}.Search(context.Background(), ri, emb, "agent/test", index.SearchOptions{Text: "x"})
 	if err == nil {
 		t.Fatalf("want the embedder's error, got results=%v err=nil", res)
 	}
@@ -161,18 +163,18 @@ func TestLensSearchAndFacts_EmbedFailureFailsOnceUpFront(t *testing.T) {
 // diagSearchProvider / diagFactsProvider report a fixed vector-step result
 // through SearchOptions.Diag and return no rows — a mount whose text query came
 // back empty.
-type diagSearchProvider struct{ d store.SearchDiag }
+type diagSearchProvider struct{ d index.SearchDiag }
 
-func (p diagSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ store.Embedder, _ string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (p diagSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ store.Embedder, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
 	if q.Diag != nil {
 		*q.Diag = p.d
 	}
 	return nil, nil
 }
 
-type diagFactsProvider struct{ d store.SearchDiag }
+type diagFactsProvider struct{ d index.SearchDiag }
 
-func (p diagFactsProvider) RecentFacts(_ context.Context, _ *repos.RepoInstance, _ string, q store.SearchOptions) ([]store.RecentFactEntry, int, error) {
+func (p diagFactsProvider) RecentFacts(_ context.Context, _ *repos.RepoInstance, _ string, q index.SearchOptions) ([]index.RecentFactEntry, int, error) {
 	if q.Diag != nil {
 		*q.Diag = p.d
 	}
@@ -183,11 +185,11 @@ func (p diagFactsProvider) RecentFacts(_ context.Context, _ *repos.RepoInstance,
 // the notice (cutoff, best cosine); an empty result with another cause, or no
 // caller cutoff, does not.
 func TestLensSearchAndFacts_CutoffNotice(t *testing.T) {
-	emptied := store.SearchDiag{Text: true, VecHits: 9, BestCosine: 0.54, Cutoff: 0.7}
-	keptThenFiltered := store.SearchDiag{Text: true, VecHits: 9, BestCosine: 0.54, Cutoff: 0.3, Candidates: 4}
+	emptied := index.SearchDiag{Text: true, VecHits: 9, BestCosine: 0.54, Cutoff: 0.7}
+	keptThenFiltered := index.SearchDiag{Text: true, VecHits: 9, BestCosine: 0.54, Cutoff: 0.3, Candidates: 4}
 
 	for _, ep := range []string{"search", "facts"} {
-		get := func(d store.SearchDiag, query string) map[string]any {
+		get := func(d index.SearchDiag, query string) map[string]any {
 			m, _ := newTestLensManager(t, "alpha", "beta")
 			s := &Server{Manager: m, providers: storeProviders{
 				search: diagSearchProvider{d}, factsCollection: diagFactsProvider{d}}}

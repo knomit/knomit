@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
@@ -33,7 +35,7 @@ func TestAbstraction_TitleVectorLifecycle(t *testing.T) {
 	require.Equal(t, "kb/a.md", targets[0].Path)
 	require.Equal(t, "Alpha", targets[0].Title)
 
-	require.NoError(t, ax.PutTitleVectors(ctx, []TitleVector{{
+	require.NoError(t, ax.PutTitleVectors(ctx, []vocab.TitleVector{{
 		FactID: targets[0].FactID,
 		Vec:    unitVectorAt(0, 768),
 	}}))
@@ -102,7 +104,7 @@ func TestAbstraction_TopTitleNeighbours(t *testing.T) {
 	// Place the vectors on a ring so similarity order is known: index i sits at
 	// angle i, so neighbours of 0 are 1, then 2, then 3...
 	for i, tgt := range targets {
-		require.NoError(t, ax.PutTitleVectors(ctx, []TitleVector{{
+		require.NoError(t, ax.PutTitleVectors(ctx, []vocab.TitleVector{{
 			FactID: tgt.FactID, Vec: ringVector(i, len(targets), 768),
 		}}))
 	}
@@ -164,7 +166,7 @@ func TestAbstraction_EmbedIdentityChangeClearsTheAxis(t *testing.T) {
 	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
 	targets, err := svc.Abstraction().LiveFactsMissingTitleVector(ctx, "agent/test", 10)
 	require.NoError(t, err)
-	require.NoError(t, svc.Abstraction().PutTitleVectors(ctx, []TitleVector{{
+	require.NoError(t, svc.Abstraction().PutTitleVectors(ctx, []vocab.TitleVector{{
 		FactID: targets[0].FactID, Vec: unitVectorAt(0, 768),
 	}}))
 	require.NoError(t, svc.Close())
@@ -201,16 +203,16 @@ func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
 
 	// Give the doomed branch a full set of shortlist state.
 	require.NoError(t, svc.Abstraction().ReplaceRestatementPairs(ctx, "agent/doomed", nil,
-		[]RestatementPair{{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2, TitleCos: 0.9}},
+		[]vocab.RestatementPair{{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2, TitleCos: 0.9}},
 		[]int64{1, 2}))
 	require.NoError(t, svc.Abstraction().RecordRestatementVerdict(ctx, "agent/doomed",
-		RestatementVerdict{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2}))
+		vocab.RestatementVerdict{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2}))
 	require.NoError(t, svc.Abstraction().SetProbeSessionsWaited(ctx, "agent/doomed", 3))
 	// The verdict retires the judged pair, so stand a second one up: every
 	// table must hold a row for the doomed branch before the drop, or the
 	// assertion after it proves nothing.
 	require.NoError(t, svc.Abstraction().ReplaceRestatementPairs(ctx, "agent/doomed", nil,
-		[]RestatementPair{{APath: "kb/a.md", BPath: "kb/c.md", AFactID: 1, BFactID: 3, TitleCos: 0.9}},
+		[]vocab.RestatementPair{{APath: "kb/a.md", BPath: "kb/c.md", AFactID: 1, BFactID: 3, TitleCos: 0.9}},
 		[]int64{1, 3}))
 
 	doomedID, err := svc.rh.BranchID(ctx, "agent/doomed")
@@ -297,7 +299,7 @@ func TestAbstraction_TitleVecWidthIsValidatedUnderEveryModel(t *testing.T) {
 
 	vec := make([]float32, 512)
 	vec[0] = 1
-	require.NoError(t, svc.Abstraction().PutTitleVectors(ctx, []TitleVector{{
+	require.NoError(t, svc.Abstraction().PutTitleVectors(ctx, []vocab.TitleVector{{
 		FactID: targets[0].FactID, Vec: vec,
 	}}), "the axis must accept vectors at the ACTIVE model's dimension")
 
@@ -318,7 +320,7 @@ func TestAbstraction_EmbedIdentityChangeClearsVerdictsToo(t *testing.T) {
 	svc := openAbstractionTestServiceAt(t, path, &stub768Embedder{})
 	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
 	require.NoError(t, svc.Abstraction().RecordRestatementVerdict(ctx, "agent/test",
-		RestatementVerdict{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2, Resolved: true}))
+		vocab.RestatementVerdict{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2, Resolved: true}))
 	require.NoError(t, svc.Abstraction().SetProbeSessionsWaited(ctx, "agent/test", 4))
 	require.NoError(t, svc.Close())
 
@@ -390,7 +392,7 @@ func TestAbstraction_TitleVecWidthFixedOnAnUpgradedDatabase(t *testing.T) {
 
 	vec := make([]float32, 512)
 	vec[0] = 1
-	require.NoError(t, svc2.Abstraction().PutTitleVectors(ctx, []TitleVector{{
+	require.NoError(t, svc2.Abstraction().PutTitleVectors(ctx, []vocab.TitleVector{{
 		FactID: targets[0].FactID, Vec: vec,
 	}}), "the axis must have been rebuilt at the active model's width")
 }

@@ -6,11 +6,12 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // Neighbour-kind filtering (knomit#308).
@@ -110,7 +111,7 @@ func writeKindedFact(t *testing.T, env *restatementEnv, path, title string, kind
 
 // requireUnfilteredSearchFinds is the premise every test here rests on: with
 // no kind filter, a QueryByPath search from `from` returns `want`.
-func requireUnfilteredSearchFinds(t *testing.T, env *restatementEnv, from, want string, opts store.SearchOptions) {
+func requireUnfilteredSearchFinds(t *testing.T, env *restatementEnv, from, want string, opts index.SearchOptions) {
 	t.Helper()
 	opts.QueryByPath = from
 	if opts.Limit == 0 {
@@ -159,7 +160,7 @@ type recordingSearch struct {
 	kinds    [][]string
 }
 
-func (r *recordingSearch) Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (r *recordingSearch) Search(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 	res, err := r.SearchQuery.Search(ctx, branch, q)
 	if q.QueryByPath != "" {
 		r.mu.Lock()
@@ -196,7 +197,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 
 	t.Run("default keeps the policy out", func(t *testing.T) {
 		env := kindEnv(t, nil)
-		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, store.SearchOptions{Path: kindDir})
+		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, index.SearchOptions{Path: kindDir})
 		require.Equal(t, []string{"epistemic"}, env.ri.ClusterNeighborKinds())
 
 		clusters, err := ScopedCluster(ctx, seeds(), completeEdges{env.svc.Search()},
@@ -241,8 +242,8 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 		// Bypasses ScopedCluster entirely, so the cluster.go filter cannot be
 		// what keeps these two apart.
 		env := kindEnv(t, widenedNeighborKinds)
-		requireUnfilteredSearchFinds(t, env, kindPol, kindObs, store.SearchOptions{MinSimilarity: env.dedupThreshold()})
-		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, store.SearchOptions{MinSimilarity: env.dedupThreshold()})
+		requireUnfilteredSearchFinds(t, env, kindPol, kindObs, index.SearchOptions{MinSimilarity: env.dedupThreshold()})
+		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, index.SearchOptions{MinSimilarity: env.dedupThreshold()})
 
 		cluster := []factForLLM{
 			epistemicSeed(kindObs),
@@ -321,7 +322,7 @@ func TestSameKnownKind_FailsClosed(t *testing.T) {
 
 	t.Run("dedupCluster merges nothing without kinds", func(t *testing.T) {
 		env := kindEnv(t, nil)
-		requireUnfilteredSearchFinds(t, env, kindObs, kindObs2, store.SearchOptions{MinSimilarity: env.dedupThreshold()})
+		requireUnfilteredSearchFinds(t, env, kindObs, kindObs2, index.SearchOptions{MinSimilarity: env.dedupThreshold()})
 		surviving, err := dedupCluster(context.Background(),
 			[]factForLLM{{File: kindObs}, {File: kindObs2}}, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 			env.dedupThreshold(), reviewTool, func(ProgressEvent) {}, env.branch, testLocalRepoID)
@@ -338,7 +339,7 @@ func TestNeighborKinds_CousinSweep(t *testing.T) {
 		env := kindEnv(t, kinds)
 		writeKindedFact(t, env, cousinKindObs, cousinObsTt, fact.Epistemic, fact.Observation)
 		writeKindedFact(t, env, cousinKindPol, cousinPolTt, fact.Pragmatic, fact.Policy)
-		requireUnfilteredSearchFinds(t, env, kindObs, cousinKindPol, store.SearchOptions{MinSimilarity: env.dedupThreshold()})
+		requireUnfilteredSearchFinds(t, env, kindObs, cousinKindPol, index.SearchOptions{MinSimilarity: env.dedupThreshold()})
 		// A prune cluster in kindDir that neither cousin belongs to.
 		prune := [][]factForLLM{{epistemicSeed(kindObs), epistemicSeed(kindObs2)}}
 		return env, prune
@@ -383,7 +384,7 @@ func TestNeighborKinds_BackwardBridgesThreadTheList(t *testing.T) {
 			require.NoError(t, err)
 			synth = append(synth, f)
 		}
-		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, store.SearchOptions{Path: kindDir})
+		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, index.SearchOptions{Path: kindDir})
 		rec := &recordingSearch{SearchQuery: env.svc.Search()}
 		_, err := BuildBackwardBridges(ctx, rec, synth, env.branch, testLocalRepoID, EffortHigh,
 			BridgeBoth, 1.0, 2, env.ri.ClusterNeighborKinds(), QualityConfigFromRepo(env.ri), ScopeFilter{})

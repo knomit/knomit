@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -59,7 +61,7 @@ func TestSearchOptions_IncludeOrigins_DiscoveredOnly(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedOriginFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		IncludeOrigins: []string{"discovered"},
 	})
 	require.NoError(t, err)
@@ -74,7 +76,7 @@ func TestSearchOptions_IncludeOrigins_Multi(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedOriginFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		IncludeOrigins: []string{"distilled", "discovered"},
 	})
 	require.NoError(t, err)
@@ -89,7 +91,7 @@ func TestSearchOptions_IncludeOrigins_Empty(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedOriginFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{})
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{})
 	require.NoError(t, err)
 	require.Equal(t,
 		[]string{"kb/obs/a.md", "kb/synth/d.md", "kb/synth/e.md"},

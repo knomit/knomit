@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/vocab"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // knomit#117(a). The emission loop counted candidates and THEN inserted them,
@@ -30,7 +30,7 @@ func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 	require.NoError(t, err)
 
 	ids := env.factIDs()
-	pairs := []store.RestatementPair{
+	pairs := []vocab.RestatementPair{
 		// Servable: both halves resolve.
 		{AFactID: ids["kb/f0.md"], BFactID: ids["kb/f1.md"], APath: "kb/f0.md", BPath: "kb/f1.md"},
 		// Not servable: kb/gone.md does not exist. This is the silent drop.
@@ -123,7 +123,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 	// computed candidate whose half is gone by the time the queue is built.
 	ids := env.factIDs()
 	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, nil,
-		[]store.RestatementPair{
+		[]vocab.RestatementPair{
 			{
 				APath: "kb/f0.md", BPath: "kb/gone.md",
 				AFactID: ids["kb/f0.md"], BFactID: 999999,

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
@@ -46,7 +48,7 @@ func TestAcquire_AfterClose_ReturnsErrRepoClosed(t *testing.T) {
 	require.ErrorIs(t, err, ErrRepoClosed)
 	require.False(t, called, "WithRead must not invoke fn on a closed instance")
 
-	_, err = ri.Verify(context.Background(), store.VerifyOpts{})
+	_, err = ri.Verify(context.Background(), fsck.VerifyOpts{})
 	require.ErrorIs(t, err, ErrRepoClosed)
 }
 

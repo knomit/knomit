@@ -24,7 +24,7 @@ func (o *e4Origin) forgeMerge(files map[string]string, parents ...*object.Commit
 	got, err := object.GetCommit(o.repo.Storer, h)
 	require.NoError(o.t, err)
 	_, serr := verify.VerifyCommitSignature(got)
-	require.ErrorIs(o.t, serr, ErrNotSSHSIG, "fixture: the forge merge must carry a non-SSH signature")
+	require.ErrorIs(o.t, serr, verify.ErrNotSSHSIG, "fixture: the forge merge must carry a non-SSH signature")
 	return got
 }
 
@@ -69,7 +69,7 @@ func TestE4_TipAlreadyOnUpstream(t *testing.T) {
 		foreign := o.commit(with(o.files, "kb/x.md", "x"), nil, mainTip)
 		o.setBranch(branch, foreign)
 		svc, err := o.cloneErr(branch, namedSigner(t, "me"), nil)
-		var fl *ForeignLineageError
+		var fl *verify.ForeignLineageError
 		require.ErrorAs(t, err, &fl)
 		require.Equal(t, []string{foreign.Hash.String()}, fl.Commits, "only the commit beyond main is judged")
 		requireNoLocalBranches(t, svc, "main", branch)

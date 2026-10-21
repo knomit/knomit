@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -150,7 +152,7 @@ func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testin
 
 	key, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, env.svc.Motifs().PutDefinition(ctx, env.branch, key, "A generic sentence.", store.DefinitionStamp{}))
+	require.NoError(t, env.svc.Motifs().PutDefinition(ctx, env.branch, key, "A generic sentence.", vocab.DefinitionStamp{}))
 
 	// Sessions 2 and 3: unrelated corpus growth. The definition must stay off
 	// the queue.
@@ -172,7 +174,7 @@ func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testin
 
 	need, err := env.svc.Motifs().ClustersNeedingDefinition(ctx, env.branch)
 	require.NoError(t, err)
-	var queued *store.DefinitionTarget
+	var queued *vocab.DefinitionTarget
 	for i := range need {
 		if need[i].ClusterKey == key {
 			queued = &need[i]

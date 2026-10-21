@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/gitserve"
+
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -100,7 +102,7 @@ func serveConsensusGit(t *testing.T, ri *RepoInstance) string {
 			return
 		}
 		defer release()
-		ctx := store.WithPushPolicy(r.Context(), store.PushPolicy{Pusher: cPeerFP, OwnBranch: ri.AgentBranch()})
+		ctx := gitserve.WithPushPolicy(r.Context(), gitserve.PushPolicy{Pusher: cPeerFP, OwnBranch: ri.AgentBranch()})
 		svc.Handler().ServeHTTP(w, r.WithContext(ctx))
 	}))
 	t.Cleanup(srv.Close)

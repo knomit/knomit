@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/fleetrec"
+
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -99,8 +101,8 @@ func (ri *RepoInstance) fleetRenewRound(ctx context.Context, svc *store.Service)
 }
 
 // fleetPKIAt is the fleet's PKI at branch of ri, and its members.
-func fleetAtBranch(ri *RepoInstance, branch string) (store.Fleet, error) {
-	var out store.Fleet
+func fleetAtBranch(ri *RepoInstance, branch string) (fleetrec.Fleet, error) {
+	var out fleetrec.Fleet
 	var ferr error
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -109,7 +111,7 @@ func fleetAtBranch(ri *RepoInstance, branch string) (store.Fleet, error) {
 		}
 		out, ferr = svc.FleetAt(branch)
 	}); err != nil {
-		return store.Fleet{}, err
+		return fleetrec.Fleet{}, err
 	}
 	return out, ferr
 }
@@ -167,7 +169,7 @@ func (m *Manager) resignFleetCRL(ctx context.Context, ri *RepoInstance) (string,
 // surely as one on main (PR #537 review B1, B2). Otherwise the round would
 // publish the revocation or the `left` record together with a fresh,
 // unrevoked leaf, and nothing would ever revoke that one.
-func leafRenewalDue(f, own store.Fleet, id string, now time.Time) (*x509.Certificate, ed25519.PublicKey) {
+func leafRenewalDue(f, own fleetrec.Fleet, id string, now time.Time) (*x509.Certificate, ed25519.PublicKey) {
 	leaf, err := f.PKI.Cert(id)
 	if err != nil || leaf == nil || !pki.NeedsRenewal(leaf, now) {
 		return nil, nil
@@ -197,11 +199,11 @@ func leafRenewalDue(f, own store.Fleet, id string, now time.Time) (*x509.Certifi
 // fl holds exactly ONE member record for id (what the leaf-renewal artifact
 // rule requires), and that record is not `left` (the leave duty revokes those)
 // and names key.
-func renewableAt(fl store.Fleet, id string, leaf *x509.Certificate, key ssh.PublicKey) bool {
+func renewableAt(fl fleetrec.Fleet, id string, leaf *x509.Certificate, key ssh.PublicKey) bool {
 	if fl.PKI == nil || fl.PKI.CRL == nil || pki.IsRevoked(fl.PKI.CRL, leaf.SerialNumber) {
 		return false
 	}
-	var recs []store.FleetMember
+	var recs []fleetrec.Member
 	for _, mem := range fl.Members {
 		if mem.Agent == id {
 			recs = append(recs, mem)

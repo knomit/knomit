@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,7 +75,7 @@ func TestMotifsReadBack_SearchFilterPath(t *testing.T) {
 
 	// No Text/QueryVec/QueryByPath — the text-less branch of Search, which
 	// scans through scanFactWithBodyFromRowsWithCommittedAt.
-	res, err := svc.FactQuery().Search(context.Background(), branch, SearchOptions{Limit: 10})
+	res, err := svc.FactQuery().Search(context.Background(), branch, index.SearchOptions{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, res, 1)
 	require.Equal(t, wantMotifs, res[0].Motifs)
@@ -87,7 +89,7 @@ func TestMotifsReadBack_SearchVectorPath(t *testing.T) {
 	// QueryByPath drives the KNN branch, whose metadata rows are scanned by
 	// scanFactRecordFromRowsWithCommittedAt — a different scanner from the
 	// filter path above, with its own column list to keep in agreement.
-	res, err := svc.FactQuery().Search(context.Background(), branch, SearchOptions{
+	res, err := svc.FactQuery().Search(context.Background(), branch, index.SearchOptions{
 		QueryByPath: "kb/alpha/two.md",
 		Limit:       10,
 	})
@@ -107,7 +109,7 @@ func TestMotifsReadBack_RecentFacts(t *testing.T) {
 	writeMotifFact(t, svc, branch, "kb/alpha/one.md", wantMotifs)
 
 	entries, total, err := svc.FactQuery().RecentFacts(context.Background(), branch,
-		SearchOptions{Limit: 10})
+		index.SearchOptions{Limit: 10})
 	require.NoError(t, err)
 	require.Equal(t, 1, total)
 	require.Len(t, entries, 1)
@@ -121,7 +123,7 @@ func TestMotifsReadBack_RecentFactsSearch(t *testing.T) {
 	// Text non-empty routes RecentFacts through recentFactsSearch, which runs
 	// its own SELECT and its own inline scan rather than reusing either.
 	entries, _, err := svc.FactQuery().RecentFacts(context.Background(), branch,
-		SearchOptions{Text: "body", Limit: 10})
+		index.SearchOptions{Text: "body", Limit: 10})
 	require.NoError(t, err)
 	require.NotEmpty(t, entries,
 		"the search path must return rows, or this test asserts nothing")

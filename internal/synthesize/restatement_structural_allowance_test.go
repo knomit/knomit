@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/vocab"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // The structural allowance (knomit#155).
@@ -52,7 +52,7 @@ func structuralDefundedEnv(t *testing.T, a, b string) (*restatementEnv, Deps) {
 		// the very thing under test.
 		var declined bool
 		for _, p := range pairs {
-			if p.MatchKind == store.MatchTitleKNN {
+			if p.MatchKind == vocab.MatchTitleKNN {
 				env.recordVerdict(p.APath, p.BPath, false)
 				declined = true
 				break
@@ -145,10 +145,10 @@ func TestStructural_SweepIsOldestFirstNotHighestCosine(t *testing.T) {
 	ax := env.svc.Abstraction()
 
 	byCos, err := ax.RestatementPairsByMatchKind(ctx, env.branch,
-		[]string{store.MatchPathIdentity}, 100_000)
+		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
 	byAge, err := ax.RestatementPairsByMatchKindOldest(ctx, env.branch,
-		[]string{store.MatchPathIdentity}, 100_000)
+		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
 
 	// Fixture assertion: the two orderings can only DISAGREE if the population
@@ -190,7 +190,7 @@ func TestStructural_RareTokenStaysClosed(t *testing.T) {
 
 	// Fixture assertion: the pair must actually have been DETECTED as
 	// rare-token, or "not offered" says nothing about the gate under test.
-	require.Equal(t, store.MatchRareToken, pairKindIn(t, env, a, b),
+	require.Equal(t, vocab.MatchRareToken, pairKindIn(t, env, a, b),
 		"fixture must produce a rare-token match, or the gate is not being tested")
 
 	sweep, err := selectStructuralSweep(ctx, env.deps(), env.branch, map[string]struct{}{})
@@ -199,7 +199,7 @@ func TestStructural_RareTokenStaysClosed(t *testing.T) {
 		"rare-token is the weaker, wider net and stays closed until the "+
 			"path-identity sample says what a structural offer is worth")
 	for _, p := range sweep {
-		require.Equal(t, store.MatchPathIdentity, p.MatchKind,
+		require.Equal(t, vocab.MatchPathIdentity, p.MatchKind,
 			"the sweep offers path-identity only while the sample is running")
 	}
 }
@@ -345,7 +345,7 @@ func TestStructural_AllowanceCapsTheSweep(t *testing.T) {
 	// Fixture assertion: the corpus must hold MORE structural pairs than the
 	// allowance, or the cap is never reached and this measures nothing.
 	standing, err := env.svc.Abstraction().RestatementPairsByMatchKindOldest(ctx, env.branch,
-		[]string{store.MatchPathIdentity}, 100_000)
+		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
 	require.Greater(t, len(standing), structuralAllowance,
 		"fixture must hold more standing path-identity pairs than the allowance, "+
@@ -472,7 +472,7 @@ func sweepOrderEnv(t *testing.T) *restatementEnv {
 }
 
 // orderOf renders a pair list as a comparable order key.
-func orderOf(pairs []store.RestatementPair) string {
+func orderOf(pairs []vocab.RestatementPair) string {
 	keys := make([]string, 0, len(pairs))
 	for _, p := range pairs {
 		keys = append(keys, pathPairKey(p.APath, p.BPath))
@@ -482,7 +482,7 @@ func orderOf(pairs []store.RestatementPair) string {
 
 // isDescendingByCos reports whether a pair list is sorted by descending title
 // cosine — i.e. whether it is the RANKING rather than the sweep.
-func isDescendingByCos(pairs []store.RestatementPair) bool {
+func isDescendingByCos(pairs []vocab.RestatementPair) bool {
 	for i := 1; i < len(pairs); i++ {
 		if pairs[i].TitleCos > pairs[i-1].TitleCos {
 			return false

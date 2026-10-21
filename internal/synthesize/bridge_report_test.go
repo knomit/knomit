@@ -5,16 +5,17 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 )
 
 // makeSearchResult builds a store.SearchResult for test fixtures.
-func makeSearchResult(path, title, body, typ, origin string, domains, entities []string, confidence float64, sources int) store.SearchResult {
-	return store.SearchResult{
+func makeSearchResult(path, title, body, typ, origin string, domains, entities []string, confidence float64, sources int) index.SearchResult {
+	return index.SearchResult{
 		FactWithBody: facts.FactWithBody{
 			FactRecord: facts.FactRecord{
 				Path:       path,
@@ -43,7 +44,7 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 
 	// Two synthesis facts in different clusters sharing entity "bridgeTok".
 	// Two synthesis facts sharing entity "singleClusterTok" in same cluster.
-	searchResults := []store.SearchResult{
+	searchResults := []index.SearchResult{
 		makeSearchResult("kb/a.md", "A", "body a", "synthesis", "authored", nil, []string{"bridgeTok"}, 0.9, 2),
 		makeSearchResult("kb/b.md", "B", "body b", "synthesis", "authored", nil, []string{"bridgeTok"}, 0.8, 1),
 		makeSearchResult("kb/c.md", "C", "body c", "synthesis", "authored", nil, []string{"singleClusterTok"}, 0.7, 1),
@@ -58,16 +59,16 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 	})
 
 	// a↔b are connected → cohesion = 1.0 (one pair, one edge)
-	graphAB := store.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
+	graphAB := index.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
 
 	// c↔d: no edges → cohesion = 0
-	graphEmpty := store.NewSimilarityGraph(nil)
+	graphEmpty := index.NewSimilarityGraph(nil)
 
 	// SimilarityAdjacency: for bridgeTok members (a,b) → return graph with a↔b edge.
 	// For singleClusterTok: enumerateBridgeCandidates won't produce a candidate (same community),
 	// but allow AnyTimes to not over-constrain.
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 			for _, p := range paths {
 				if p == "kb/a.md" {
 					return graphAB, nil
@@ -125,7 +126,7 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 	branch := "agent/test"
 
 	// Two facts sharing entity "shared" but both in community 0 → no bridge.
-	searchResults := []store.SearchResult{
+	searchResults := []index.SearchResult{
 		makeSearchResult("kb/x.md", "X", "body x", "synthesis", "authored", nil, []string{"shared"}, 0.8, 1),
 		makeSearchResult("kb/y.md", "Y", "body y", "synthesis", "authored", nil, []string{"shared"}, 0.8, 1),
 	}
@@ -169,7 +170,7 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 
 	// Two facts sharing entity "gappy" in DIFFERENT communities → a real
 	// cross-community bridge candidate that enumerateBridgeCandidates keeps.
-	searchResults := []store.SearchResult{
+	searchResults := []index.SearchResult{
 		makeSearchResult("kb/p.md", "P", "body p", "synthesis", "authored", nil, []string{"gappy"}, 0.9, 1),
 		makeSearchResult("kb/q.md", "Q", "body q", "synthesis", "authored", nil, []string{"gappy"}, 0.8, 1),
 	}
@@ -182,7 +183,7 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 
 	// No SIMILAR_TO edges between members → cohesion 0 < CohFloor (0.5).
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		Return(store.NewSimilarityGraph(nil), nil).AnyTimes()
+		Return(index.NewSimilarityGraph(nil), nil).AnyTimes()
 	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
 		Return(map[string]struct{}{}, nil).AnyTimes()
 	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
@@ -225,7 +226,7 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 	branch := "agent/test"
 
 	// Two tokens across different clusters: "alpha" (cohesive) and "beta" (not cohesive)
-	searchResults := []store.SearchResult{
+	searchResults := []index.SearchResult{
 		makeSearchResult("kb/a1.md", "A1", "b", "synthesis", "authored", nil, []string{"alpha"}, 0.9, 1),
 		makeSearchResult("kb/a2.md", "A2", "b", "synthesis", "authored", nil, []string{"alpha"}, 0.9, 1),
 		makeSearchResult("kb/b1.md", "B1", "b", "synthesis", "authored", nil, []string{"beta"}, 0.9, 1),
@@ -239,13 +240,13 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 
 	// alpha has edges → cohesion 1.0; beta has no edges → cohesion 0 (gated out by CohFloor=0.5)
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 			for _, p := range paths {
 				if p == "kb/a1.md" {
-					return store.NewSimilarityGraph([][2]string{{"kb/a1.md", "kb/a2.md"}}), nil
+					return index.NewSimilarityGraph([][2]string{{"kb/a1.md", "kb/a2.md"}}), nil
 				}
 			}
-			return store.NewSimilarityGraph(nil), nil
+			return index.NewSimilarityGraph(nil), nil
 		}).AnyTimes()
 
 	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
@@ -288,7 +289,7 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 	idx := NewMockSearchIndex(ctrl)
 	branch := "agent/test"
 
-	searchResults := []store.SearchResult{
+	searchResults := []index.SearchResult{
 		makeSearchResult("kb/a.md", "A", "b", "synthesis", "authored", nil, []string{"tok"}, 0.9, 1),
 		makeSearchResult("kb/b.md", "B", "b", "synthesis", "authored", nil, []string{"tok"}, 0.8, 1),
 	}
@@ -299,7 +300,7 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 		{"kb/b.md"},
 	})
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		Return(store.SimilarityGraph{}, boom).AnyTimes()
+		Return(index.SimilarityGraph{}, boom).AnyTimes()
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 
@@ -318,7 +319,7 @@ func TestBridgeComponentReport_NormalEffort_Empty(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	branch := "agent/test"
 
-	searchResults := []store.SearchResult{
+	searchResults := []index.SearchResult{
 		makeSearchResult("kb/a.md", "A", "b", "synthesis", "authored", nil, []string{"tok"}, 0.9, 1),
 		makeSearchResult("kb/b.md", "B", "b", "synthesis", "authored", nil, []string{"tok"}, 0.8, 1),
 	}

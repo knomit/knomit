@@ -3,6 +3,8 @@ package testenv
 import (
 	"context"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
@@ -160,10 +162,10 @@ func (b *BranchHandle) MustHaveCommitCount(n int) {
 
 // Log returns the production Log entries for a path on this branch.
 // Wraps svc.HistoryQuery().Log — the path-history view from commit_log.
-func (b *BranchHandle) Log(path string) []store.LogEntry {
+func (b *BranchHandle) Log(path string) []index.LogEntry {
 	t := b.repo.sb.t
 	t.Helper()
-	var entries []store.LogEntry
+	var entries []index.LogEntry
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
 		entries, err = svc.HistoryQuery().Log(context.Background(), b.name, path)

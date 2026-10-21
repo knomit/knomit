@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +18,7 @@ import (
 // its first version -> red.
 func TestDrop_ReplaysTheOtherCommitsInOrder(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	write := func(p, c string) {
 		_, err := h.svc.Facts().WriteFact(ctx, hostBranch, p, c, "w "+p, "learn")
 		require.NoError(t, err)
@@ -44,7 +46,7 @@ func TestDrop_ReplaysTheOtherCommitsInOrder(t *testing.T) {
 // replayed commit -> the later edit is lost and x.md is gone -> red.
 func TestDrop_KeepsALaterEditOfTheDroppedCommitsFile(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	bad, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/x.md": testFactBody("x bad", 0.9, nil)}, "bad")
 	require.NoError(t, err)
 	_, err = h.svc.Facts().WriteFact(ctx, hostBranch, "kb/notes/x.md", testFactBody("x fixed", 0.5, nil), "fix", "updated")
@@ -64,7 +66,7 @@ func TestDrop_KeepsALaterEditOfTheDroppedCommitsFile(t *testing.T) {
 // included -> the dropped fact comes back -> red.
 func TestDrop_ReplaysMergesAndLeavesOutTheOneThatBroughtTheDroppedCommit(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 
 	ex, err := h.svc.Merge().OpenExperiment(ctx, "e1", "d", hostBranch)

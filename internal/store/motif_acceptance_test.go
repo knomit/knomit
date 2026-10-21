@@ -9,6 +9,8 @@ import (
 	"sort"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -128,8 +130,8 @@ func TestAcceptance_Pack2CrossAuthorRecall(t *testing.T) {
 	// property rather than a coincidence: the alias layer's grouping key IS the
 	// stemmed token multiset, so the two tiers can differ only where a judge
 	// merged clusters the mechanical layer kept apart — and no judge runs here.
-	for _, tier := range []MotifMatchTier{
-		MotifMatchExact, MotifMatchStem, MotifMatchToken2, MotifMatchToken1,
+	for _, tier := range []index.MotifMatchTier{
+		index.MotifMatchExact, index.MotifMatchStem, index.MotifMatchToken2, index.MotifMatchToken1,
 	} {
 		rate, hits, pairs := crossAuthorRecall(t, svc, branch, groups, tier)
 		t.Logf("tier %-8s cross-author recall %.0f%% (%d/%d author pairs)",
@@ -148,7 +150,7 @@ func TestAcceptance_Pack2CrossAuthorRecall(t *testing.T) {
 	// pinning 72% would turn an acceptance criterion into a change-detector
 	// that fails on any harmless drift, and the question the GATE asks is
 	// whether the target is met, not whether the number moved.
-	rate, hits, pairs := crossAuthorRecall(t, svc, branch, groups, MotifMatchToken1)
+	rate, hits, pairs := crossAuthorRecall(t, svc, branch, groups, index.MotifMatchToken1)
 	t.Logf("ACCEPTANCE: cross-author recall at the permissive tier = %.0f%% (%d/%d), target >= 60%%",
 		100*rate, hits, pairs)
 	require.GreaterOrEqual(t, rate, 0.60,
@@ -163,7 +165,7 @@ func TestAcceptance_Pack2CrossAuthorRecall(t *testing.T) {
 // misses: a model that declined to name a mechanism has not failed to MATCH
 // one, and counting it would measure write-side willingness under a
 // read-side heading.
-func crossAuthorRecall(t *testing.T, svc *Service, branch string, groups []packGroup, tier MotifMatchTier) (rate float64, hits, pairs int) {
+func crossAuthorRecall(t *testing.T, svc *Service, branch string, groups []packGroup, tier index.MotifMatchTier) (rate float64, hits, pairs int) {
 	t.Helper()
 	for _, g := range groups {
 		authors := make([]string, 0, len(g.byAuth))
@@ -191,14 +193,14 @@ func crossAuthorRecall(t *testing.T, svc *Service, branch string, groups []packG
 }
 
 // anyMatch reports whether any of a's motifs matches any of b's at the tier.
-func anyMatch(t *testing.T, svc *Service, branch string, a, b []string, tier MotifMatchTier) bool {
+func anyMatch(t *testing.T, svc *Service, branch string, a, b []string, tier index.MotifMatchTier) bool {
 	t.Helper()
 	want := map[string]struct{}{}
 	for _, m := range b {
 		want[m] = struct{}{}
 	}
 	for _, m := range a {
-		res, err := svc.FactQuery().Search(context.Background(), branch, SearchOptions{
+		res, err := svc.FactQuery().Search(context.Background(), branch, index.SearchOptions{
 			Motifs:     []string{m},
 			MotifMatch: tier,
 			Limit:      500,

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +30,7 @@ func countSimilarOn(t *testing.T, db *sql.DB, ctx context.Context) int {
 	t.Helper()
 	var n int
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeSimilarTo).Scan(&n))
+		`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeSimilarTo).Scan(&n))
 	return n
 }
 

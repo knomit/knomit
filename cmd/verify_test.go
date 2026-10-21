@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 func TestVerifyCmd_FlagsRegistered(t *testing.T) {
@@ -79,19 +80,19 @@ func TestReportSkippedArchived_SaysNothingWhenThereAreNone(t *testing.T) {
 // The JSON shape is a contract for anything consuming this from CI, so its
 // field names are pinned rather than left to drift with the store struct.
 func TestToJSON_ShapeIsStable(t *testing.T) {
-	r := store.IntegrityReport{
+	r := fsck.IntegrityReport{
 		Repo:      "kb",
 		CheckedAt: time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC),
 		Branches:  []string{"main"},
 		Skipped:   []string{"okf/main"},
-		Issues: []store.IntegrityIssue{{
-			Severity: store.SeverityWarning,
-			Category: store.CategoryGeneratedRefs,
+		Issues: []fsck.IntegrityIssue{{
+			Severity: fsck.SeverityWarning,
+			Category: fsck.CategoryGeneratedRefs,
 			Branch:   "okf/main",
 			Detail:   "residue",
 		}},
 	}
-	raw, err := json.Marshal(toJSON(r, store.PruneResult{Refs: []string{"okf/main"}, Markers: 2}))
+	raw, err := json.Marshal(toJSON(r, fsck.PruneResult{Refs: []string{"okf/main"}, Markers: 2}))
 	require.NoError(t, err)
 
 	var got map[string]any
@@ -107,7 +108,7 @@ func TestToJSON_ShapeIsStable(t *testing.T) {
 	issues := got["issues"].([]any)
 	first := issues[0].(map[string]any)
 	require.Equal(t, "WARN", first["severity"], "severity must serialize as a name, not an int")
-	require.Equal(t, store.CategoryGeneratedRefs, first["category"])
+	require.Equal(t, fsck.CategoryGeneratedRefs, first["category"])
 }
 
 // A clean report must not carry empty issue noise, so consumers can branch on
@@ -115,7 +116,7 @@ func TestToJSON_ShapeIsStable(t *testing.T) {
 // marshals to null, and a consumer looping over report["issues"] then fails on
 // the one case that should be easiest: a healthy repo.
 func TestToJSON_CleanReportEncodesEmptyArraysNotNull(t *testing.T) {
-	out := toJSON(store.IntegrityReport{Repo: "kb", Branches: []string{"main"}}, store.PruneResult{})
+	out := toJSON(fsck.IntegrityReport{Repo: "kb", Branches: []string{"main"}}, fsck.PruneResult{})
 	require.Empty(t, out.Issues)
 	require.True(t, out.Clean)
 
@@ -148,14 +149,14 @@ func TestVerifyCmd_FlagParseErrorsAreWiredToExitTwo(t *testing.T) {
 // --max-issues truncates the human rendering only. Truncating JSON would hand a
 // CI job a report that looks complete and is not.
 func TestToJSON_IsNeverTruncated(t *testing.T) {
-	r := store.IntegrityReport{Repo: "kb"}
+	r := fsck.IntegrityReport{Repo: "kb"}
 	for i := range 150 {
-		r.Issues = append(r.Issues, store.IntegrityIssue{
-			Severity: store.SeverityError,
-			Category: store.CategoryCommitLog,
+		r.Issues = append(r.Issues, fsck.IntegrityIssue{
+			Severity: fsck.SeverityError,
+			Category: fsck.CategoryCommitLog,
 			Detail:   fmt.Sprintf("issue %d", i),
 		})
 	}
-	require.Len(t, toJSON(r, store.PruneResult{}).Issues, 150)
+	require.Len(t, toJSON(r, fsck.PruneResult{}).Issues, 150)
 	require.Contains(t, verifyCmd().Flags().Lookup("max-issues").Usage, "--json is never truncated")
 }

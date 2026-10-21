@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -37,8 +39,8 @@ func verdictsFixture(t *testing.T) (*Service, string) {
 	return svc, branch
 }
 
-func ctxQ(path string, kv ...string) SearchOptions {
-	q := SearchOptions{Path: path, Limit: 100, Context: map[string]string{}}
+func ctxQ(path string, kv ...string) index.SearchOptions {
+	q := index.SearchOptions{Path: path, Limit: 100, Context: map[string]string{}}
 	for i := 0; i+1 < len(kv); i += 2 {
 		q.Context[kv[i]] = kv[i+1]
 	}

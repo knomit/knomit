@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/fleetrec"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -85,7 +87,7 @@ func (m *Manager) FleetActivity(ctx context.Context, limit int) ([]FleetEvent, e
 	layout, _ := ont.PKILayout()
 
 	var events []FleetEvent
-	var commits []store.FleetMainCommit
+	var commits []fleetrec.MainCommit
 	var lerr error
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -159,7 +161,7 @@ func sortFleetEvents(events []FleetEvent) {
 // mainEvents is what one first-parent commit of main says, in the order a
 // reader reads it newest first: the host change, the merge, then each
 // record's turn (left before joined), then the creation.
-func mainEvents(c store.FleetMainCommit, branchOf map[string]string) []FleetEvent {
+func mainEvents(c fleetrec.MainCommit, branchOf map[string]string) []FleetEvent {
 	var out []FleetEvent
 	if c.HostChanged {
 		d := "the host record is removed"
@@ -216,7 +218,7 @@ func (m *Manager) enrolledEvents() []FleetEvent {
 // lists: the agent from the issued leaf on main (issued/<serial>.pem, when
 // the root's signature on it holds), the reason from the root-signed
 // statement (revocations/<serial>.txt) when it verifies.
-func (m *Manager) revokedEvents(ri *RepoInstance, f store.Fleet) []FleetEvent {
+func (m *Manager) revokedEvents(ri *RepoInstance, f fleetrec.Fleet) []FleetEvent {
 	if f.PKI == nil || f.PKI.CRL == nil {
 		return nil
 	}

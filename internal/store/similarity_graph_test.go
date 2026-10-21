@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,7 +82,7 @@ func TestSimilarityAdjacency_QuoteInPathDoesNotInject(t *testing.T) {
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
 
 	// Injection-shaped paths: a single-quote attempt to break the SQL literal and
 	// force a tautology, and a double-quote attempt to break the Cypher literal.

@@ -5,10 +5,11 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // --- specificityWithinScope tests ---
@@ -275,7 +276,7 @@ var filteredCfg = QualityConfig{
 // buildTwoClusterSeeds returns four seeds in two disjoint communities.
 // {a,b} are in community 0 and 1 respectively; {c,d} in communities 2 and 3.
 // No edges connect the {a,b} group to the {c,d} group — they are disjoint.
-func buildTwoClusterSeeds() (seeds []factForLLM, clusters ClusterResult, g store.SimilarityGraph) {
+func buildTwoClusterSeeds() (seeds []factForLLM, clusters ClusterResult, g index.SimilarityGraph) {
 	seeds = []factForLLM{
 		{File: "a.md", Domain: []string{"auth"}, Entities: []string{"UserService"}},
 		{File: "b.md", Domain: []string{"auth"}, Entities: []string{"TokenStore"}},
@@ -283,7 +284,7 @@ func buildTwoClusterSeeds() (seeds []factForLLM, clusters ClusterResult, g store
 		{File: "d.md", Domain: []string{"billing"}, Entities: []string{"Payment"}},
 	}
 	// a↔b connected; c↔d connected; no cross-group edges.
-	g = store.NewSimilarityGraph([][2]string{
+	g = index.NewSimilarityGraph([][2]string{
 		{"a.md", "b.md"},
 		{"c.md", "d.md"},
 	})
@@ -414,7 +415,7 @@ func TestBuildFilteredBridges_RareSharedToken_TokenSet(t *testing.T) {
 		},
 	}
 	// Only e↔f are connected; g2, h2 have no edges → reshape finds {e,f} first.
-	g := store.NewSimilarityGraph([][2]string{{"e.md", "f.md"}})
+	g := index.NewSimilarityGraph([][2]string{{"e.md", "f.md"}})
 
 	idx := NewMockSearchIndex(ctrl)
 	allPaths := []string{"e.md", "f.md", "g2.md", "h2.md"}
@@ -477,7 +478,7 @@ func TestBuildFilteredBridges_ScopeTokenExcluded_EmptyToken(t *testing.T) {
 			1: {"h.md"},
 		},
 	}
-	g := store.NewSimilarityGraph([][2]string{{"g.md", "h.md"}})
+	g := index.NewSimilarityGraph([][2]string{{"g.md", "h.md"}})
 
 	idx := NewMockSearchIndex(ctrl)
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder([]string{"g.md", "h.md"})).Return(g, nil)
@@ -557,7 +558,7 @@ func TestBuildFilteredBridges_SimilarityAdjacencyError(t *testing.T) {
 	wantErr := errors.New("adjacency failed")
 
 	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(store.SimilarityGraph{}, wantErr)
+	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(index.SimilarityGraph{}, wantErr)
 
 	_, err := buildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, ScopeFilter{}, EffortHigh, filteredCfg,
@@ -580,7 +581,7 @@ func TestBuildFilteredBridges_DerivationGapError(t *testing.T) {
 	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"x.md"}, 1: {"y.md"}},
 	}
-	g := store.NewSimilarityGraph([][2]string{{"x.md", "y.md"}})
+	g := index.NewSimilarityGraph([][2]string{{"x.md", "y.md"}})
 	wantErr := errors.New("revdeps failed")
 
 	idx := NewMockSearchIndex(ctrl)
@@ -613,7 +614,7 @@ func TestBuildFilteredBridges_NoCrossCommunitySeam_NilResult(t *testing.T) {
 		Clusters: map[int][]string{0: {"p.md", "q.md", "r.md", "s.md"}},
 	}
 	// Connect everything — but all same-community so no bridge seam.
-	g := store.NewSimilarityGraph([][2]string{
+	g := index.NewSimilarityGraph([][2]string{
 		{"p.md", "q.md"}, {"p.md", "r.md"}, {"p.md", "s.md"},
 		{"q.md", "r.md"}, {"q.md", "s.md"}, {"r.md", "s.md"},
 	})

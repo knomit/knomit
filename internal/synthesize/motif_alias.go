@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store"
@@ -102,7 +104,7 @@ const carrierTitlesPerCluster = 4
 
 // motifJudgePair is one comparison offered to the judge.
 type motifJudgePair struct {
-	A, B   store.MotifCluster
+	A, B   vocab.MotifCluster
 	ATitle []string
 	BTitle []string
 	Cos    float64

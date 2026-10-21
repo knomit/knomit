@@ -16,6 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/fleetrec"
+	"knomit/internal/store/fsck"
+	"knomit/internal/store/verify"
+
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -49,14 +53,14 @@ type pushHost struct {
 	svc *Service
 	srv *httptest.Server
 	mu  sync.Mutex
-	pol PushPolicy
+	pol gitserve.PushPolicy
 	// cancelOnRegister, when set, cancels the request's own context at the
 	// point register reaches (pushRegisterHook) — a client that went away.
 	cancelOnRegister bool
 	membersCalls     atomic.Int32
 }
 
-func (h *pushHost) setPolicy(p PushPolicy) { h.mu.Lock(); h.pol = p; h.mu.Unlock() }
+func (h *pushHost) setPolicy(p gitserve.PushPolicy) { h.mu.Lock(); h.pol = p; h.mu.Unlock() }
 
 func newPushHost(t *testing.T, mode string, facts int) *pushHost {
 	t.Helper()
@@ -77,7 +81,7 @@ func newPushHostWith(t *testing.T, files map[string]string, facts int) *pushHost
 		require.NoError(t, err)
 	}
 	h := &pushHost{t: t, svc: svc}
-	h.pol = PushPolicy{Pusher: pushFP, OwnBranch: hostBranch}
+	h.pol = gitserve.PushPolicy{Pusher: pushFP, OwnBranch: hostBranch}
 	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		pol, cancelReg := h.pol, h.cancelOnRegister
@@ -88,20 +92,20 @@ func newPushHostWith(t *testing.T, files map[string]string, facts int) *pushHost
 			gitserve.SetPushRegisterHookForTest(cancel)
 			defer gitserve.SetPushRegisterHookForTest(nil)
 		}
-		svc.Handler().ServeHTTP(w, r.WithContext(WithPushPolicy(ctx, pol)))
+		svc.Handler().ServeHTTP(w, r.WithContext(gitserve.WithPushPolicy(ctx, pol)))
 	}))
 	t.Cleanup(h.srv.Close)
 	return h
 }
 
 // members makes the policy's fleet answer ms and no PKI (counting calls).
-func (h *pushHost) members(ms []FleetMember, err error) func(context.Context) (Fleet, error) {
-	return h.fleet(Fleet{Members: ms}, err)
+func (h *pushHost) members(ms []fleetrec.Member, err error) func(context.Context) (fleetrec.Fleet, error) {
+	return h.fleet(fleetrec.Fleet{Members: ms}, err)
 }
 
 // fleet makes the policy's fleet answer f (counting calls).
-func (h *pushHost) fleet(f Fleet, err error) func(context.Context) (Fleet, error) {
-	return func(context.Context) (Fleet, error) {
+func (h *pushHost) fleet(f fleetrec.Fleet, err error) func(context.Context) (fleetrec.Fleet, error) {
+	return func(context.Context) (fleetrec.Fleet, error) {
 		h.membersCalls.Add(1)
 		return f, err
 	}
@@ -272,7 +276,7 @@ func TestReceivePack_OwnBranchRegisteredAndIndexed(t *testing.T) {
 	for _, bad := range []string{"force-updated", "rewind", "DISJOINT", `"level":"warn"`} {
 		require.NotContains(t, out, bad, "a first registration must not read as a rewind")
 	}
-	rep, err := h.svc.Verify(context.Background(), VerifyOpts{})
+	rep, err := h.svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, rep.IsClean(), rep.String())
 	require.Contains(t, rep.Branches, peerBranch, "the pushed branch is a maintained, indexed branch")
@@ -378,8 +382,8 @@ func TestReceivePack_RefusesStaleOldHash(t *testing.T) {
 // off is now refused earlier still, by the content closure —
 // TestReceivePack_ClosureRefusesKnomitChange).
 func TestReceivePack_EnforceRefusesUnacceptedSigner(t *testing.T) {
-	h := newPushHost(t, VerifyEnforce, 1)
-	h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Fleet: h.members([]FleetMember{}, nil)})
+	h := newPushHost(t, verify.VerifyEnforce, 1)
+	h.setPolicy(gitserve.PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Fleet: h.members([]fleetrec.Member{}, nil)})
 	p := newPeer(t, h.srv.URL)
 	k := newTestSigner(t)
 	c1 := p.commit(p.head(), k, "kb/notes/w.md", testFactBody("w", 0.9, nil))
@@ -389,7 +393,7 @@ func TestReceivePack_EnforceRefusesUnacceptedSigner(t *testing.T) {
 
 	err := p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "refused by verify_signatures=enforce: "+RuleNoRecord)
+	require.Contains(t, err.Error(), "refused by verify_signatures=enforce: "+verify.RuleNoRecord)
 	require.Contains(t, err.Error(), c2.Hash.String(), "the refusal names the commit")
 	require.Equal(t, plumbing.ZeroHash, h.ref(peerBranch))
 	require.Equal(t, objs, h.objects())
@@ -398,11 +402,11 @@ func TestReceivePack_EnforceRefusesUnacceptedSigner(t *testing.T) {
 // T3 positive control: the same push, signed by the key the member record
 // names, is accepted under enforce — the judge is really judging.
 func TestReceivePack_EnforceAcceptsMemberKey(t *testing.T) {
-	h := newPushHost(t, VerifyEnforce, 1)
+	h := newPushHost(t, verify.VerifyEnforce, 1)
 	k := newTestSigner(t)
-	m := FleetMember{Member: fact.Member{Agent: "peer-abcd1234", State: fact.MemberActive, Key: k.PublicKey()}}
+	m := fleetrec.Member{Member: fact.Member{Agent: "peer-abcd1234", State: fact.MemberActive, Key: k.PublicKey()}}
 	fp, branch := pusherOf(t, k)
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: h.members([]FleetMember{m}, nil)})
+	h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: h.members([]fleetrec.Member{m}, nil)})
 	p := newPeer(t, h.srv.URL)
 	c := p.commit(p.head(), k, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	p.setBranch("work", c)
@@ -412,17 +416,17 @@ func TestReceivePack_EnforceAcceptsMemberKey(t *testing.T) {
 
 // T4: off never touches the fleet; log judges, logs and accepts.
 func TestReceivePack_OffAndLogAccept(t *testing.T) {
-	for _, mode := range []string{"", VerifyOff, VerifyLog} {
+	for _, mode := range []string{"", verify.VerifyOff, verify.VerifyLog} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			h := newPushHost(t, mode, 1)
-			h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Fleet: h.members([]FleetMember{}, nil)})
+			h.setPolicy(gitserve.PushPolicy{Pusher: pushFP, OwnBranch: hostBranch, Fleet: h.members([]fleetrec.Member{}, nil)})
 			p := newPeer(t, h.srv.URL)
 			c := p.commit(p.head(), nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 			p.setBranch("work", c)
 			logs := captureLog(t)
 			require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch))
 			require.Equal(t, c.Hash, h.ref(peerBranch))
-			if mode == VerifyLog {
+			if mode == verify.VerifyLog {
 				require.Equal(t, int32(1), h.membersCalls.Load())
 				require.Contains(t, logs.String(), "would be refused (verify_signatures=log)")
 				require.Contains(t, logs.String(), c.Hash.String())
@@ -435,8 +439,8 @@ func TestReceivePack_OffAndLogAccept(t *testing.T) {
 
 // T5: enforce with no fleet repository refuses (the gate could not run).
 func TestReceivePack_EnforceWithoutFleetRefuses(t *testing.T) {
-	h := newPushHost(t, VerifyEnforce, 1)
-	h.setPolicy(PushPolicy{Pusher: pushFP, OwnBranch: hostBranch,
+	h := newPushHost(t, verify.VerifyEnforce, 1)
+	h.setPolicy(gitserve.PushPolicy{Pusher: pushFP, OwnBranch: hostBranch,
 		Fleet: h.members(nil, fmt.Errorf("this instance is standalone"))})
 	p := newPeer(t, h.srv.URL)
 	c := p.commit(p.head(), newTestSigner(t), "kb/notes/x.md", testFactBody("x", 0.9, nil))
@@ -474,7 +478,7 @@ func TestReceivePack_NonFastForwardIndexFollows(t *testing.T) {
 	require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits
 		WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND commit_hash = ?`, peerBranch, a1.Hash.String()).Scan(&n))
 	require.Equal(t, 0, n, "the dropped commit is no longer on the branch")
-	rep, err := h.svc.Verify(context.Background(), VerifyOpts{})
+	rep, err := h.svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, rep.IsClean(), rep.String())
 }
@@ -523,7 +527,7 @@ func TestReceivePack_Advertisement(t *testing.T) {
 // advertisement with an ERR a client renders.
 func TestReceivePack_AdvertisementRefusals(t *testing.T) {
 	h := newPushHost(t, "", 1)
-	h.setPolicy(PushPolicy{Refusal: "knomit: nope for a reason"})
+	h.setPolicy(gitserve.PushPolicy{Refusal: "knomit: nope for a reason"})
 	p := newPeer(t, h.srv.URL)
 	c := p.commit(p.head(), nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	p.setBranch("work", c)
@@ -627,7 +631,7 @@ func TestReceivePack_CancelAfterAcceptStillRegistersWhole(t *testing.T) {
 	require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_facts
 		WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND path = ?`, peerBranch, "kb/notes/x.md").Scan(&n))
 	require.Equal(t, 1, n, "branch_facts describes the tip")
-	rep, err := h.svc.Verify(context.Background(), VerifyOpts{})
+	rep, err := h.svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, rep.IsClean(), rep.String())
 }

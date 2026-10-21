@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -281,7 +283,7 @@ func TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnResolution(t *t
 	_, state = throttleState(keepVerdicts(throttleMinVerdicts))
 	require.Equal(t, throttleDefunded, state, "enough judged, none resolved")
 
-	withResolution := append(keepVerdicts(throttleMinVerdicts), store.RestatementVerdict{Resolved: true})
+	withResolution := append(keepVerdicts(throttleMinVerdicts), vocab.RestatementVerdict{Resolved: true})
 	rate, state = throttleState(withResolution)
 	require.Equal(t, throttleFunded, state, "one resolution restores funding")
 	require.Positive(t, rate)

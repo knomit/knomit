@@ -5,8 +5,9 @@ import (
 	"strconv"
 	"time"
 
+	"knomit/internal/store/index"
+
 	knomitfact "knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -22,7 +23,7 @@ import (
 //
 // "Expiring within w" is expires_after=<now>&expires_before=<now+w>. Returns
 // false after writing a 400 for a malformed value.
-func applyExpiryParams(w http.ResponseWriter, r *http.Request, q *store.SearchOptions, now time.Time) bool {
+func applyExpiryParams(w http.ResponseWriter, r *http.Request, q *index.SearchOptions, now time.Time) bool {
 	q.Now = now
 	qp := r.URL.Query()
 	if v := qp.Get("expired"); v != "" {

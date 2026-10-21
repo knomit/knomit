@@ -8,7 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
+
 	"knomit/internal/web/hal"
 )
 
@@ -17,7 +18,7 @@ import (
 // embedded refs carry their own commit-pinned self links.
 func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 	provider := &stubFactSubProvider{
-		incoming: []store.RefSummary{
+		incoming: []index.RefSummary{
 			{Path: "know/b.md", Title: "Fact B", Type: "principle", Commit: "dead001"},
 			{Path: "know/c.md", Title: "Fact C (deleted)", Type: "concept", Commit: "dead002", Deleted: true},
 		},
@@ -130,7 +131,7 @@ func TestCommitAnchoredIncoming_UnknownRepo(t *testing.T) {
 func TestCommitAnchoredIncoming_FactNotLiveAtCommit(t *testing.T) {
 	provider := &stubFactSubProvider{
 		notLive:     true,
-		incoming:    []store.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
+		incoming:    []index.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
 		incomingErr: errors.New("IncomingAtCommit must not be called for a non-live fact"),
 	}
 	s := &Server{
@@ -215,7 +216,7 @@ func TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves(t *testing
 	provider := &stubFactSubProvider{
 		notLive:  true, // retracted as of the commit (no-fallback would 404)
 		notExist: false,
-		incoming: []store.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
+		incoming: []index.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
 	}
 	s := &Server{
 		Manager: newTestManagerWithRepos(t, "alpha"),

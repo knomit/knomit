@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -169,7 +171,7 @@ func TestExplainFact_MatchesIncomingAtCommit_AtHEAD(t *testing.T) {
 	require.ElementsMatch(t, refSummaryPaths(headExplain.Incoming), refSummaryPaths(atC0))
 }
 
-func refSummaryPaths(rs []RefSummary) []string {
+func refSummaryPaths(rs []index.RefSummary) []string {
 	out := make([]string, len(rs))
 	for i, r := range rs {
 		out[i] = r.Path
@@ -232,7 +234,7 @@ func TestExplainFact_RetractedAtHEAD(t *testing.T) {
 
 	_, err = svc.Search().ExplainFact(ctx, branch, "kb/gone.md")
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrFactNotLive),
+	require.True(t, errors.Is(err, index.ErrFactNotLive),
 		"expected ErrFactNotLive for retracted path, got %v", err)
 }
 
@@ -247,7 +249,7 @@ func TestExplainFact_NeverIndexed(t *testing.T) {
 
 	_, err = svc.Search().ExplainFact(context.Background(), "main", "kb/never.md")
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrFactNotLive),
+	require.True(t, errors.Is(err, index.ErrFactNotLive),
 		"expected ErrFactNotLive for never-indexed path, got %v", err)
 }
 
@@ -367,7 +369,7 @@ func TestOutgoingAtCommit_FiltersStaleSelfLoop(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, nodeID, "graph node for the written fact must exist")
 
-	edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, nodeID, nodeID, EdgeDerivedFrom)
+	edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, nodeID, nodeID, index.EdgeDerivedFrom)
 	require.NoError(t, err)
 	require.NoError(t, si.GraphSetEdgePropsForTest(ctx, edgeID, map[string]string{
 		"source_commit": xRes.CommitHash,

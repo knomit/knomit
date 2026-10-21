@@ -35,6 +35,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -272,7 +274,7 @@ func TestConcurrency_ParallelReadsDuringWrites(t *testing.T) {
 					return
 				default:
 				}
-				rep, err := repo.Instance().Verify(context.Background(), store.VerifyOpts{Deep: true})
+				rep, err := repo.Instance().Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 				if err != nil {
 					t.Errorf("reader %d: Verify error: %v", id, err)
 					return

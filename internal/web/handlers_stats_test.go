@@ -9,20 +9,21 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
 // stubStatsProvider implements statsProvider for tests.
 type stubStatsProvider struct {
-	result     store.StatsResult
+	result     index.StatsResult
 	err        error
 	pathPrefix string // captured from the last call so tests can assert routing.
 	axis       string // captured from the last call so tests can assert axis passthrough.
 }
 
-func (s *stubStatsProvider) Stats(_ context.Context, _ *repos.RepoInstance, _, pathPrefix, axis string) (store.StatsResult, error) {
+func (s *stubStatsProvider) Stats(_ context.Context, _ *repos.RepoInstance, _, pathPrefix, axis string) (index.StatsResult, error) {
 	s.pathPrefix = pathPrefix
 	s.axis = axis
 	return s.result, s.err
@@ -31,7 +32,7 @@ func (s *stubStatsProvider) Stats(_ context.Context, _ *repos.RepoInstance, _, p
 // The repo-scoped /stats handler never calls Highlights — only the lens union's
 // axis correction does. Served from the same fixture so the two paths cannot
 // disagree if a future handler starts using it.
-func (s *stubStatsProvider) Highlights(_ context.Context, _ *repos.RepoInstance, _, pathPrefix, axis string) ([]store.Highlight, bool, error) {
+func (s *stubStatsProvider) Highlights(_ context.Context, _ *repos.RepoInstance, _, pathPrefix, axis string) ([]index.Highlight, bool, error) {
 	s.pathPrefix = pathPrefix
 	s.axis = axis
 	return s.result.Highlights, s.result.HighlightsFallback, s.err
@@ -39,7 +40,7 @@ func (s *stubStatsProvider) Highlights(_ context.Context, _ *repos.RepoInstance,
 
 func TestHandleHALStats_ReturnsHAL(t *testing.T) {
 	provider := &stubStatsProvider{
-		result: store.StatsResult{
+		result: index.StatsResult{
 			Total:         42,
 			AvgConfidence: 0.85,
 			Domains:       map[string]int{"ai": 10, "go": 5},
@@ -120,7 +121,7 @@ func TestHandleHALStats_UnknownRepo_Returns404(t *testing.T) {
 // counts in the right panel never updated when the user navigated into a
 // subdirectory.
 func TestHandleHALStats_ForwardsPathQuery(t *testing.T) {
-	provider := &stubStatsProvider{result: store.StatsResult{Total: 7}}
+	provider := &stubStatsProvider{result: index.StatsResult{Total: 7}}
 	s := &Server{
 		Manager: newTestManagerWithRepos(t, "alpha"),
 		providers: storeProviders{
@@ -163,11 +164,11 @@ func TestHandleHALStats_StoreError_Returns500(t *testing.T) {
 
 func TestHandleHALStats_EmitsHighlightsTypesAndAxis(t *testing.T) {
 	provider := &stubStatsProvider{
-		result: store.StatsResult{
+		result: index.StatsResult{
 			Total:       2,
 			Types:       map[string]int{"synthesis": 1, "observation": 1},
 			DefaultAxis: "impact",
-			Highlights: []store.Highlight{{
+			Highlights: []index.Highlight{{
 				Path: "kb/s/a.md", Title: "A synthesis", Type: "synthesis",
 				Confidence: 0.8, Impact: 7, CommittedAt: 1780000000,
 			}},
@@ -217,7 +218,7 @@ func TestHandleHALStats_EmitsHighlightsTypesAndAxis(t *testing.T) {
 }
 
 func TestHandleHALStats_EmptyHighlightsSerializeAsArrayNotNull(t *testing.T) {
-	provider := &stubStatsProvider{result: store.StatsResult{Total: 0}}
+	provider := &stubStatsProvider{result: index.StatsResult{Total: 0}}
 	s := &Server{
 		Manager:   newTestManagerWithRepos(t, "alpha"),
 		providers: storeProviders{stats: provider},
@@ -239,7 +240,7 @@ func TestHandleHALStats_EmptyHighlightsSerializeAsArrayNotNull(t *testing.T) {
 }
 
 func TestHandleHALStats_PassesAxisToProvider(t *testing.T) {
-	provider := &stubStatsProvider{result: store.StatsResult{Total: 1}}
+	provider := &stubStatsProvider{result: index.StatsResult{Total: 1}}
 	s := &Server{
 		Manager:   newTestManagerWithRepos(t, "alpha"),
 		providers: storeProviders{stats: provider},
@@ -257,7 +258,7 @@ func TestHandleHALStats_PassesAxisToProvider(t *testing.T) {
 }
 
 func TestHandleHALStats_PassesPathPrefixToProvider(t *testing.T) {
-	provider := &stubStatsProvider{result: store.StatsResult{Total: 1}}
+	provider := &stubStatsProvider{result: index.StatsResult{Total: 1}}
 	s := &Server{
 		Manager:   newTestManagerWithRepos(t, "alpha"),
 		providers: storeProviders{stats: provider},

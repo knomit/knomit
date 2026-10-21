@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/fleetrec"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
@@ -995,7 +997,7 @@ func TestFleetMembership_NoBundleCarriesUserinfo(t *testing.T) {
 // record on main holds (every writer strips it today; the read does too).
 // SABOTAGE: mainEvents joins c.Host as read -> red.
 func TestFleetActivity_HostChangedDetailCarriesNoUserinfo(t *testing.T) {
-	evs := mainEvents(store.FleetMainCommit{At: time.Now(), Author: "master", HostChanged: true,
+	evs := mainEvents(fleetrec.MainCommit{At: time.Now(), Author: "master", HostChanged: true,
 		Host: []string{"https://u:ghp_tok@hub.example/git/fleet", "https://hub2.example/git/fleet"}}, nil)
 	require.Len(t, evs, 1)
 	require.Equal(t, FleetEventHostChanged, evs[0].Kind)

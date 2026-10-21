@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -105,7 +107,7 @@ func TestJudgeOwn_TheMastersOwnCommitsAreJudgedBeforeMainMoves(t *testing.T) {
 			// hand edit, or a writer from before this rule.
 			_, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/members/boss/note.md": "---\ntype: observation\n---\n# note\n\nnot a policy\n"}, "bad")
 			require.NoError(h.t, err)
-		}, RuleValidation},
+		}, verify.RuleValidation},
 		{"the host record, main naming it (control)", "boss", func(h *pushHost, _, _ ssh.Signer) {
 			h.write(fact.FleetHostPath, "# knomit fleet host v1\nurl: https://hub2.example/git/fleet\n")
 		}, ""},
@@ -114,10 +116,10 @@ func TestJudgeOwn_TheMastersOwnCommitsAreJudgedBeforeMainMoves(t *testing.T) {
 		}, ""},
 		{"the marker naming another agent", "boss", func(h *pushHost, _, _ ssh.Signer) {
 			h.write(fact.FleetMasterPath, fact.RenderFleetMaster("agent-x"))
-		}, RuleHostRecord},
+		}, verify.RuleHostRecord},
 		{"the host record while main names another master", "agent-x", func(h *pushHost, _, _ ssh.Signer) {
 			h.write(fact.FleetHostPath, "# knomit fleet host v1\nurl: https://hub2.example/git/fleet\n")
-		}, RuleHostRecord},
+		}, verify.RuleHostRecord},
 		{"Host here: the marker naming itself, then the host record, main naming another (control)", "agent-x", func(h *pushHost, _, _ ssh.Signer) {
 			h.write(fact.FleetMasterPath, fact.RenderFleetMaster("boss"))
 			h.write(fact.FleetHostPath, "# knomit fleet host v1\nurl: https://hub2.example/git/fleet\n")
@@ -127,7 +129,7 @@ func TestJudgeOwn_TheMastersOwnCommitsAreJudgedBeforeMainMoves(t *testing.T) {
 		}, ""},
 		{"a fact outside its own folder", "boss", func(h *pushHost, _, _ ssh.Signer) {
 			h.write("kb/notes/x.md", "---\nkind: pragmatic\ntype: policy\n---\n# x\n\nx\n")
-		}, RuleNotOwner},
+		}, verify.RuleNotOwner},
 		{"the ontology refreshed (control)", "boss", func(h *pushHost, _, _ ssh.Signer) {
 			_, err := h.svc.Facts().WriteFact(context.Background(), hostBranch, fact.OntologyFile, fleetEnforceOntology+"# refreshed\n", "refresh", "updated")
 			require.NoError(h.t, err)
@@ -135,10 +137,10 @@ func TestJudgeOwn_TheMastersOwnCommitsAreJudgedBeforeMainMoves(t *testing.T) {
 		{"its own id signed by a key that is not this instance's", "boss", func(h *pushHost, boss, _ ssh.Signer) {
 			h.write(own, policy(h))
 			h.svc.SetSigner(namedSigner(h.t, "rotated"))
-		}, RuleNotPusher},
+		}, verify.RuleNotPusher},
 		{"a member's commit on its branch that changes the host record", "boss", func(h *pushHost, _, x ssh.Signer) {
 			h.rawCommit(hostBranch, "agent-x", x, fact.FleetHostPath, "# knomit fleet host v1\nurl: https://evil.example/git/fleet\n")
-		}, RuleHostRecord},
+		}, verify.RuleHostRecord},
 	}
 	ran := 0
 	for _, r := range rows {
@@ -173,7 +175,7 @@ func TestJudgeOwn_TheMastersOwnCommitsAreJudgedBeforeMainMoves(t *testing.T) {
 // SABOTAGE: make judgeOwnRange judge every repository -> the invalid note
 // (and the unsigned host write) holds main -> red.
 func TestJudgeOwn_AKnowledgeBaseMainFollowsUnjudged(t *testing.T) {
-	h := newPushHostWith(t, map[string]string{fact.OntologyFile: validatedOntology(VerifyEnforce)}, 0)
+	h := newPushHostWith(t, map[string]string{fact.OntologyFile: validatedOntology(verify.VerifyEnforce)}, 0)
 	_, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/n.md": note("n")}, "n")
 	require.NoError(t, err)
 	tip := h.ref(hostBranch)

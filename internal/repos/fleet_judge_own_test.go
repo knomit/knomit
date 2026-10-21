@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
@@ -167,7 +169,7 @@ func TestFleetJudgeOwn_TheFetchJudgeRefusesAMemberInvalidFact(t *testing.T) {
 	round(t, f.mri)
 	r := f.mri.peers.Refusals()["agent/alpha"]
 	require.Equal(t, tip, r.Tip, "the refusal is of the pushed tip")
-	require.Contains(t, r.Reason, store.CommitRefusedByValidation)
+	require.Contains(t, r.Reason, verify.CommitRefusedByValidation)
 	require.Contains(t, r.Reason, "kb/members/alpha/note.md")
 	require.Contains(t, r.Reason, `"members-are-policy"`)
 	require.NotEqual(t, tip, localTip(t, f.mri, "agent/alpha"), "the refused tip never becomes the local branch")

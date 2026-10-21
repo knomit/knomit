@@ -7,18 +7,19 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
 // stubCommitsProvider implements commitsProvider for tests.
 type stubCommitsProvider struct {
-	entries     []store.LogEntryWithTags
+	entries     []index.LogEntryWithTags
 	next        string
 	prev        string
 	err         error
-	detail      *store.CommitDetailResult
+	detail      *index.CommitDetailResult
 	detailFiles []commitFileView
 	detailErr   error
 }
@@ -26,34 +27,34 @@ type stubCommitsProvider struct {
 func (s *stubCommitsProvider) LogPaginated(
 	_ context.Context,
 	_ *repos.RepoInstance, _, _ string, _ int, _, _, _ string,
-) ([]store.LogEntryWithTags, string, string, error) {
+) ([]index.LogEntryWithTags, string, string, error) {
 	return s.entries, s.next, s.prev, s.err
 }
 
 func (s *stubCommitsProvider) CommitDetail(
 	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
-) (*store.CommitDetailResult, []commitFileView, error) {
+) (*index.CommitDetailResult, []commitFileView, error) {
 	return s.detail, s.detailFiles, s.detailErr
 }
 
 func TestHandleCommitsList_ReturnsHALCollection(t *testing.T) {
 	provider := &stubCommitsProvider{
-		entries: []store.LogEntryWithTags{
+		entries: []index.LogEntryWithTags{
 			{
 				Commit:    "abc123",
 				Date:      "2024-01-01T10:00:00Z",
 				Message:   "add fact about Go",
 				Operation: "learn",
-				Author:    store.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"},
-				Files:     store.FileCounts{Added: 1},
+				Author:    index.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"},
+				Files:     index.FileCounts{Added: 1},
 			},
 			{
 				Commit:    "def456",
 				Date:      "2024-01-02T10:00:00Z",
 				Message:   "update fact",
 				Operation: "update",
-				Files:     store.FileCounts{Modified: 2},
+				Files:     index.FileCounts{Modified: 2},
 			},
 		},
 		next: "def456",
@@ -90,8 +91,8 @@ func TestHandleCommitsList_ReturnsHALCollection(t *testing.T) {
 				Date      string             `json:"date"`
 				Message   string             `json:"message"`
 				Operation string             `json:"operation"`
-				Author    store.CommitAuthor `json:"author"`
-				Files     store.FileCounts   `json:"files"`
+				Author    index.CommitAuthor `json:"author"`
+				Files     index.FileCounts   `json:"files"`
 				Links     hal.LinkMap        `json:"_links"`
 			} `json:"commits"`
 		} `json:"_embedded"`
@@ -147,13 +148,13 @@ func TestHandleCommitsList_ReturnsHALCollection(t *testing.T) {
 
 func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 	provider := &stubCommitsProvider{
-		detail: &store.CommitDetailResult{
+		detail: &index.CommitDetailResult{
 			Commit:    "abc123",
 			Date:      "2024-01-01T10:00:00Z",
 			Message:   "add fact about Go",
 			Operation: "learn",
-			Author:    store.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"},
-			Files: []store.ChangedFile{
+			Author:    index.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"},
+			Files: []index.ChangedFile{
 				{Path: "know/go/abc123.md", Action: "added"},
 			},
 		},
@@ -193,7 +194,7 @@ func TestHandleCommitDetail_ReturnsHAL(t *testing.T) {
 		Date      string             `json:"date"`
 		Message   string             `json:"message"`
 		Operation string             `json:"operation"`
-		Author    store.CommitAuthor `json:"author"`
+		Author    index.CommitAuthor `json:"author"`
 		Files     []struct {
 			Path   string      `json:"path"`
 			Action string      `json:"action"`

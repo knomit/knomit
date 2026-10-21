@@ -7,11 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // identityResolver is the alias table a corpus has before any judge pass: every
@@ -221,8 +222,8 @@ func TestEnumerateMotifCandidates_IsDeterministic(t *testing.T) {
 
 func TestLaneOf_SplitsOnSimilarityAdjacency(t *testing.T) {
 	paths := []string{"kb/alpha/1.md", "kb/beta/2.md"}
-	near := store.NewSimilarityGraph([][2]string{{"kb/alpha/1.md", "kb/beta/2.md"}})
-	far := store.NewSimilarityGraph(nil)
+	near := index.NewSimilarityGraph([][2]string{{"kb/alpha/1.md", "kb/beta/2.md"}})
+	far := index.NewSimilarityGraph(nil)
 
 	require.Equal(t, LaneNear, laneOf(paths, near))
 	require.Equal(t, LaneFar, laneOf(paths, far),
@@ -258,7 +259,7 @@ func motifQualityConfig() QualityConfig {
 // doing, so the score must move the other way from the near lane's cohesion.
 func TestScoreMotifCandidate_FarLaneRewardsDissimilarity(t *testing.T) {
 	ctx, idx := motifScoreEnv(t, "kb/alpha/1.md", "kb/beta/2.md")
-	g := store.NewSimilarityGraph(nil)
+	g := index.NewSimilarityGraph(nil)
 	clusterOf := map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1}
 
 	_, distant, keptA, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
@@ -280,7 +281,7 @@ func TestScoreMotifCandidate_FarLaneRewardsDissimilarity(t *testing.T) {
 // partition the candidates; they are not a retry.
 func TestScoreMotifCandidate_NearLaneKeepsTheCohesionFloor(t *testing.T) {
 	ctx, idx := motifScoreEnv(t, "kb/alpha/1.md", "kb/beta/2.md")
-	g := store.NewSimilarityGraph(nil) // density 0, below the floor
+	g := index.NewSimilarityGraph(nil) // density 0, below the floor
 
 	_, _, kept, err := scoreMotifCandidate(ctx, motifCandidate(), LaneNear, g, idx, "main",
 		map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1}, motifQualityConfig(), 0.5, nil)
@@ -297,12 +298,12 @@ func TestScoreMotifCandidate_SeparationIsAGateInBothLanes(t *testing.T) {
 	cfg.CohFloor = 0 // so only separation can be what rejects
 
 	_, _, keptFar, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar,
-		store.NewSimilarityGraph(nil), idx, "main", sameCommunity, cfg, 0.5, constPairCos(0))
+		index.NewSimilarityGraph(nil), idx, "main", sameCommunity, cfg, 0.5, constPairCos(0))
 	require.NoError(t, err)
 	require.False(t, keptFar)
 
 	_, _, keptNear, err := scoreMotifCandidate(ctx, motifCandidate(), LaneNear,
-		store.NewSimilarityGraph([][2]string{{"kb/alpha/1.md", "kb/beta/2.md"}}),
+		index.NewSimilarityGraph([][2]string{{"kb/alpha/1.md", "kb/beta/2.md"}}),
 		idx, "main", sameCommunity, cfg, 0.5, nil)
 	require.NoError(t, err)
 	require.False(t, keptNear)
@@ -324,7 +325,7 @@ func TestScoreMotifCandidate_FarLaneDropsOversizedGroups(t *testing.T) {
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3
 
-	_, _, kept, err := scoreMotifCandidate(ctx, cand, LaneFar, store.NewSimilarityGraph(nil),
+	_, _, kept, err := scoreMotifCandidate(ctx, cand, LaneFar, index.NewSimilarityGraph(nil),
 		idx, "main", clusterOf, cfg, 0.5, constPairCos(0.1))
 	require.NoError(t, err)
 	require.False(t, kept)
@@ -335,7 +336,7 @@ func TestScoreMotifCandidate_FarLaneDropsOversizedGroups(t *testing.T) {
 // caller's pair-cosine contract says so; this pins the scorer's half of it.
 func TestScoreMotifCandidate_FarLanePropagatesPairCosErrors(t *testing.T) {
 	ctx, idx := motifScoreEnv(t, "kb/alpha/1.md", "kb/beta/2.md")
-	_, _, _, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, store.NewSimilarityGraph(nil),
+	_, _, _, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, index.NewSimilarityGraph(nil),
 		idx, "main", map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1},
 		motifQualityConfig(), 0.5,
 		func(context.Context, []string) ([]float64, error) { return nil, errors.New("no vectors") })
@@ -517,9 +518,9 @@ func (c *countingSearchIndex) TokenDF(context.Context, string, string, string) (
 	return 2, nil
 }
 
-func (c *countingSearchIndex) SimilarityAdjacency(context.Context, []string) (store.SimilarityGraph, error) {
+func (c *countingSearchIndex) SimilarityAdjacency(context.Context, []string) (index.SimilarityGraph, error) {
 	c.calls++
-	return store.NewSimilarityGraph(nil), nil
+	return index.NewSimilarityGraph(nil), nil
 }
 
 // No DERIVED_FROM edges between members, so the derivation gap is 1.0 — nobody
@@ -549,7 +550,7 @@ func TestBuildMotifBridges_MotifFreeCorpusDoesNoWork(t *testing.T) {
 
 // saturatedMotifCorpus builds n verbatim-matching, subject-disjoint,
 // cross-community pairs — more than any lane's budget.
-func saturatedMotifCorpus(n int) ([]factForLLM, ClusterResult, store.SubjectLabelDF) {
+func saturatedMotifCorpus(n int) ([]factForLLM, ClusterResult, index.SubjectLabelDF) {
 	var seeds []factForLLM
 	clusters := ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(400, nil)
@@ -654,14 +655,14 @@ func (a *allAdjacentIndex) ReverseDependentPaths(context.Context, string) (map[s
 	return map[string]struct{}{}, nil
 }
 
-func (a *allAdjacentIndex) SimilarityAdjacency(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+func (a *allAdjacentIndex) SimilarityAdjacency(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 	var pairs [][2]string
 	for i := 0; i < len(paths); i++ {
 		for j := i + 1; j < len(paths); j++ {
 			pairs = append(pairs, [2]string{paths[i], paths[j]})
 		}
 	}
-	return store.NewSimilarityGraph(pairs), nil
+	return index.NewSimilarityGraph(pairs), nil
 }
 
 // laneSplittingIndex reports adjacency for exactly one pair.
@@ -678,7 +679,7 @@ func (l *laneSplittingIndex) ReverseDependentPaths(context.Context, string) (map
 	return map[string]struct{}{}, nil
 }
 
-func (l *laneSplittingIndex) SimilarityAdjacency(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+func (l *laneSplittingIndex) SimilarityAdjacency(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 	hits := 0
 	for _, p := range paths {
 		if p == l.nearPair[0] || p == l.nearPair[1] {
@@ -686,9 +687,9 @@ func (l *laneSplittingIndex) SimilarityAdjacency(_ context.Context, paths []stri
 		}
 	}
 	if hits == 2 {
-		return store.NewSimilarityGraph([][2]string{l.nearPair}), nil
+		return index.NewSimilarityGraph([][2]string{l.nearPair}), nil
 	}
-	return store.NewSimilarityGraph(nil), nil
+	return index.NewSimilarityGraph(nil), nil
 }
 
 // permissiveMotifConfig keeps the quality gates out of the way so that budget
@@ -911,7 +912,7 @@ func (p *pairwiseIndex) ReverseDependentPaths(context.Context, string) (map[stri
 	return map[string]struct{}{}, nil
 }
 
-func (p *pairwiseIndex) SimilarityAdjacency(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+func (p *pairwiseIndex) SimilarityAdjacency(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 	in := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
 		in[path] = struct{}{}
@@ -924,7 +925,7 @@ func (p *pairwiseIndex) SimilarityAdjacency(_ context.Context, paths []string) (
 			kept = append(kept, e)
 		}
 	}
-	return store.NewSimilarityGraph(kept), nil
+	return index.NewSimilarityGraph(kept), nil
 }
 
 // ── register entry 5: the far lane's dropped population is counted ────────
@@ -1116,7 +1117,7 @@ func TestScoreMotifCandidates_CarryDroppedCandidatesWithTheirCause(t *testing.T)
 // cap. Deliberately non-degenerate (lesson 5) — the four groups differ in the
 // properties the attribution turns on, and the test asserts that as a
 // precondition rather than trusting the construction.
-func laneMixtureFixture(t *testing.T) ([]factForLLM, ClusterResult, store.SubjectLabelDF, *pairwiseIndex, QualityConfig) {
+func laneMixtureFixture(t *testing.T) ([]factForLLM, ClusterResult, index.SubjectLabelDF, *pairwiseIndex, QualityConfig) {
 	t.Helper()
 	mk := func(file, motif, entity string) factForLLM {
 		return factForLLM{File: file, Motifs: []string{motif}, Entities: []string{entity}}
@@ -1249,7 +1250,7 @@ func TestSeedRecurrence_TwoSpellingsOnOneFactAreOneCarrier(t *testing.T) {
 
 // oneCommunityEach puts every seed in its own community and gives every entity
 // a df that clears the disjointness gate.
-func oneCommunityEach(seeds []factForLLM) (ClusterResult, store.SubjectLabelDF) {
+func oneCommunityEach(seeds []factForLLM) (ClusterResult, index.SubjectLabelDF) {
 	clusters := ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
@@ -1272,7 +1273,7 @@ func (c *countingIndex) TokenDF(ctx context.Context, b, t, k string) (int, error
 	return c.pairwiseIndex.TokenDF(ctx, b, t, k)
 }
 
-func (c *countingIndex) SimilarityAdjacency(ctx context.Context, paths []string) (store.SimilarityGraph, error) {
+func (c *countingIndex) SimilarityAdjacency(ctx context.Context, paths []string) (index.SimilarityGraph, error) {
 	c.calls++
 	return c.pairwiseIndex.SimilarityAdjacency(ctx, paths)
 }
@@ -1452,7 +1453,7 @@ func TestMeanPairCos_NoVectorsScoresOneNotZero(t *testing.T) {
 // an un-embedded far group must not outrank an embedded dissimilar one.
 func TestScoreMotifCandidate_UnembeddedFarGroupDoesNotOutrankAnEmbeddedOne(t *testing.T) {
 	ctx, idx := motifScoreEnv(t, "kb/alpha/1.md", "kb/beta/2.md")
-	g := store.NewSimilarityGraph(nil)
+	g := index.NewSimilarityGraph(nil)
 	clusterOf := map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1}
 
 	_, embedded, _, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",

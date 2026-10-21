@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +92,7 @@ func TestRebuildGraph_RestoresHistoricalFactNodes(t *testing.T) {
 	//    saw) if the source node hadn't been restored.
 	var edgeCount int
 	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&edgeCount))
+		`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeDerivedFrom).Scan(&edgeCount))
 	require.GreaterOrEqual(t, edgeCount, 1,
 		"Phase B must succeed in writing at least the B → A_v1 historical edge")
 }

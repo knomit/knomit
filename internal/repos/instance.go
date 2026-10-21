@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -658,10 +660,10 @@ func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
 // store reference (Acquire), so a concurrent SwapStore/Archive drains this
 // call before closing the service instead of closing it mid-check. Delegates
 // to store.Service.Verify and stamps the report with this repo's name.
-func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (store.IntegrityReport, error) {
+func (ri *RepoInstance) Verify(ctx context.Context, opts fsck.VerifyOpts) (fsck.IntegrityReport, error) {
 	svc, release, err := ri.Acquire()
 	if err != nil {
-		return store.IntegrityReport{Repo: ri.Name()}, err
+		return fsck.IntegrityReport{Repo: ri.Name()}, err
 	}
 	defer release()
 	report, err := svc.Verify(ctx, opts)
@@ -675,10 +677,10 @@ func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (stor
 //
 // Unlike Verify this one WRITES, which is why it is a separate call an operator
 // asks for by name rather than something Verify does when it finds residue.
-func (ri *RepoInstance) PruneGeneratedRefs(ctx context.Context) (store.PruneResult, error) {
+func (ri *RepoInstance) PruneGeneratedRefs(ctx context.Context) (fsck.PruneResult, error) {
 	svc, release, err := ri.Acquire()
 	if err != nil {
-		return store.PruneResult{}, err
+		return fsck.PruneResult{}, err
 	}
 	defer release()
 	return svc.PruneGeneratedRefs(ctx)

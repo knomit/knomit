@@ -11,9 +11,11 @@ package synthesize
 
 import (
 	context "context"
+	reflect "reflect"
+
 	store "knomit/internal/store"
 	"knomit/internal/store/facts"
-	reflect "reflect"
+	"knomit/internal/store/index"
 
 	gomock "go.uber.org/mock/gomock"
 )
@@ -43,10 +45,10 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 }
 
 // Activity mocks base method.
-func (m *MockSearchIndex) Activity(ctx context.Context, branch, path string) (store.ActivityResult, error) {
+func (m *MockSearchIndex) Activity(ctx context.Context, branch, path string) (index.ActivityResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Activity", ctx, branch, path)
-	ret0, _ := ret[0].(store.ActivityResult)
+	ret0, _ := ret[0].(index.ActivityResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -73,10 +75,10 @@ func (mr *MockSearchIndexMockRecorder) BlastRadius(ctx, branch, path any) *gomoc
 }
 
 // CommitDetail mocks base method.
-func (m *MockSearchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*store.CommitDetailResult, error) {
+func (m *MockSearchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*index.CommitDetailResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CommitDetail", ctx, commitHash, pathPrefix)
-	ret0, _ := ret[0].(*store.CommitDetailResult)
+	ret0, _ := ret[0].(*index.CommitDetailResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -103,10 +105,10 @@ func (mr *MockSearchIndexMockRecorder) Completions(ctx, branch, category, prefix
 }
 
 // ExplainFact mocks base method.
-func (m *MockSearchIndex) ExplainFact(ctx context.Context, branch, path string) (store.ExplainResult, error) {
+func (m *MockSearchIndex) ExplainFact(ctx context.Context, branch, path string) (index.ExplainResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ExplainFact", ctx, branch, path)
-	ret0, _ := ret[0].(store.ExplainResult)
+	ret0, _ := ret[0].(index.ExplainResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -148,10 +150,10 @@ func (mr *MockSearchIndexMockRecorder) FactLiveAtCommit(ctx, branch, path, commi
 }
 
 // FactsIter mocks base method.
-func (m *MockSearchIndex) FactsIter(ctx context.Context, branch string) (*store.FactsIter, error) {
+func (m *MockSearchIndex) FactsIter(ctx context.Context, branch string) (*index.FactsIter, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "FactsIter", ctx, branch)
-	ret0, _ := ret[0].(*store.FactsIter)
+	ret0, _ := ret[0].(*index.FactsIter)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -178,10 +180,10 @@ func (mr *MockSearchIndexMockRecorder) GetByPath(ctx, branch, path any) *gomock.
 }
 
 // Highlights mocks base method.
-func (m *MockSearchIndex) Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]store.Highlight, bool, error) {
+func (m *MockSearchIndex) Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]index.Highlight, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Highlights", ctx, branch, pathPrefix, axis)
-	ret0, _ := ret[0].([]store.Highlight)
+	ret0, _ := ret[0].([]index.Highlight)
 	ret1, _ := ret[1].(bool)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
@@ -194,10 +196,10 @@ func (mr *MockSearchIndexMockRecorder) Highlights(ctx, branch, pathPrefix, axis 
 }
 
 // IncomingAtCommit mocks base method.
-func (m *MockSearchIndex) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]store.RefSummary, error) {
+func (m *MockSearchIndex) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]index.RefSummary, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "IncomingAtCommit", ctx, branch, path, commitHash)
-	ret0, _ := ret[0].([]store.RefSummary)
+	ret0, _ := ret[0].([]index.RefSummary)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -239,10 +241,10 @@ func (mr *MockSearchIndexMockRecorder) LiveFactCount(ctx, branch any) *gomock.Ca
 }
 
 // Log mocks base method.
-func (m *MockSearchIndex) Log(ctx context.Context, branch, path string) ([]store.LogEntry, error) {
+func (m *MockSearchIndex) Log(ctx context.Context, branch, path string) ([]index.LogEntry, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Log", ctx, branch, path)
-	ret0, _ := ret[0].([]store.LogEntry)
+	ret0, _ := ret[0].([]index.LogEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -254,10 +256,10 @@ func (mr *MockSearchIndexMockRecorder) Log(ctx, branch, path any) *gomock.Call {
 }
 
 // LogPaginated mocks base method.
-func (m *MockSearchIndex) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error) {
+func (m *MockSearchIndex) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]index.LogEntryWithTags, string, string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "LogPaginated", ctx, branch, path, limit, after, from, before)
-	ret0, _ := ret[0].([]store.LogEntryWithTags)
+	ret0, _ := ret[0].([]index.LogEntryWithTags)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(string)
 	ret3, _ := ret[3].(error)
@@ -271,10 +273,10 @@ func (mr *MockSearchIndexMockRecorder) LogPaginated(ctx, branch, path, limit, af
 }
 
 // OutgoingAtCommit mocks base method.
-func (m *MockSearchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]store.RefSummary, error) {
+func (m *MockSearchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]index.RefSummary, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "OutgoingAtCommit", ctx, branch, path, commitHash)
-	ret0, _ := ret[0].([]store.RefSummary)
+	ret0, _ := ret[0].([]index.RefSummary)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -301,11 +303,11 @@ func (mr *MockSearchIndexMockRecorder) LiveRevision(ctx, branch, path, anchor an
 }
 
 // PathHistory mocks base method.
-func (m *MockSearchIndex) PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *store.PathHistoryCursor, limit int) ([]store.FactRevision, *store.PathHistoryCursor, error) {
+func (m *MockSearchIndex) PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *index.PathHistoryCursor, limit int) ([]index.FactRevision, *index.PathHistoryCursor, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PathHistory", ctx, branch, path, anchorCommit, cur, limit)
-	ret0, _ := ret[0].([]store.FactRevision)
-	ret1, _ := ret[1].(*store.PathHistoryCursor)
+	ret0, _ := ret[0].([]index.FactRevision)
+	ret1, _ := ret[1].(*index.PathHistoryCursor)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
@@ -317,10 +319,10 @@ func (mr *MockSearchIndexMockRecorder) PathHistory(ctx, branch, path, anchorComm
 }
 
 // RecentFacts mocks base method.
-func (m *MockSearchIndex) RecentFacts(ctx context.Context, branch string, opts store.SearchOptions) ([]store.RecentFactEntry, int, error) {
+func (m *MockSearchIndex) RecentFacts(ctx context.Context, branch string, opts index.SearchOptions) ([]index.RecentFactEntry, int, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "RecentFacts", ctx, branch, opts)
-	ret0, _ := ret[0].([]store.RecentFactEntry)
+	ret0, _ := ret[0].([]index.RecentFactEntry)
 	ret1, _ := ret[1].(int)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
@@ -333,10 +335,10 @@ func (mr *MockSearchIndexMockRecorder) RecentFacts(ctx, branch, opts any) *gomoc
 }
 
 // RelevantMethodologyForFact mocks base method.
-func (m *MockSearchIndex) RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]store.MethodologyMatch, error) {
+func (m *MockSearchIndex) RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]index.MethodologyMatch, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "RelevantMethodologyForFact", ctx, branch, factPath, sourceDomains, sourceEntities, k, minScore)
-	ret0, _ := ret[0].([]store.MethodologyMatch)
+	ret0, _ := ret[0].([]index.MethodologyMatch)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -378,10 +380,10 @@ func (mr *MockSearchIndexMockRecorder) RevisionsBefore(ctx, branch, path, anchor
 }
 
 // Search mocks base method.
-func (m *MockSearchIndex) Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (m *MockSearchIndex) Search(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Search", ctx, branch, q)
-	ret0, _ := ret[0].([]store.SearchResult)
+	ret0, _ := ret[0].([]index.SearchResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -393,10 +395,10 @@ func (mr *MockSearchIndexMockRecorder) Search(ctx, branch, q any) *gomock.Call {
 }
 
 // SimilarityAdjacency mocks base method.
-func (m *MockSearchIndex) SimilarityAdjacency(ctx context.Context, paths []string) (store.SimilarityGraph, error) {
+func (m *MockSearchIndex) SimilarityAdjacency(ctx context.Context, paths []string) (index.SimilarityGraph, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SimilarityAdjacency", ctx, paths)
-	ret0, _ := ret[0].(store.SimilarityGraph)
+	ret0, _ := ret[0].(index.SimilarityGraph)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -408,10 +410,10 @@ func (mr *MockSearchIndexMockRecorder) SimilarityAdjacency(ctx, paths any) *gomo
 }
 
 // Stats mocks base method.
-func (m *MockSearchIndex) Stats(ctx context.Context, branch, pathPrefix, axis string) (store.StatsResult, error) {
+func (m *MockSearchIndex) Stats(ctx context.Context, branch, pathPrefix, axis string) (index.StatsResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", ctx, branch, pathPrefix, axis)
-	ret0, _ := ret[0].(store.StatsResult)
+	ret0, _ := ret[0].(index.StatsResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -438,10 +440,10 @@ func (mr *MockSearchIndexMockRecorder) SubgraphEdges(ctx, paths any) *gomock.Cal
 }
 
 // SubjectLabelDF mocks base method.
-func (m *MockSearchIndex) SubjectLabelDF(ctx context.Context, branch string) (store.SubjectLabelDF, error) {
+func (m *MockSearchIndex) SubjectLabelDF(ctx context.Context, branch string) (index.SubjectLabelDF, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SubjectLabelDF", ctx, branch)
-	ret0, _ := ret[0].(store.SubjectLabelDF)
+	ret0, _ := ret[0].(index.SubjectLabelDF)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

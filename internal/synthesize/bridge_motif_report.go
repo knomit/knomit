@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"sort"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/store"
 )
@@ -209,7 +211,7 @@ func MotifComponentReport(
 		Effort:     string(eff),
 	}
 
-	results, err := idx.Search(ctx, branch, store.SearchOptions{Limit: 100000})
+	results, err := idx.Search(ctx, branch, index.SearchOptions{Limit: 100000})
 	if err != nil {
 		return rep, err
 	}

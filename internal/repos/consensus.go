@@ -47,6 +47,8 @@ import (
 	"strings"
 	"sync"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 
@@ -335,7 +337,7 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 	res, err := svc.MergeConsensus(ctx, branch, m.agentBranch, tip)
 	var conflict *merge.MergeConflictError
 	var private *merge.PrivatePathMergeError
-	var invalid *store.ValidationRefusedError
+	var invalid *verify.ValidationRefusedError
 	switch {
 	case err == nil:
 		m.mu.Lock()

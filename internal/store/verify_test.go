@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -23,7 +25,7 @@ func TestVerify_FreshRepoIsClean(t *testing.T) {
 
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{Deep: true})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "fresh repo must be clean, got issues: %v", report.Issues)
 	require.True(t, report.IsStrictlyClean(), "fresh repo must be strictly clean")
@@ -47,12 +49,12 @@ func TestVerify_DetectsMissingBlob(t *testing.T) {
 	// Delete the blob from the storer directly.
 	require.NoError(t, svc.rh.Storer().DeleteObjectForTest(plumbing.NewHash(res.BlobHash)))
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.False(t, report.IsClean(), "deleted blob must produce an Error")
 	found := false
 	for _, i := range report.Issues {
-		if i.Category == CategoryGitReachability && i.Severity == SeverityError && strings.Contains(i.Detail, res.BlobHash) {
+		if i.Category == fsck.CategoryGitReachability && i.Severity == fsck.SeverityError && strings.Contains(i.Detail, res.BlobHash) {
 			found = true
 			break
 		}
@@ -87,12 +89,12 @@ func TestVerify_DetectsCommitLogGap(t *testing.T) {
 		r2.CommitHash)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.False(t, report.IsClean())
 	found := false
 	for _, i := range report.Issues {
-		if i.Category == CategoryCommitLog && i.Severity == SeverityError && strings.Contains(i.Detail, r2.CommitHash) {
+		if i.Category == fsck.CategoryCommitLog && i.Severity == fsck.SeverityError && strings.Contains(i.Detail, r2.CommitHash) {
 			found = true
 			break
 		}
@@ -116,12 +118,12 @@ func TestVerify_DetectsBranchFactsGap(t *testing.T) {
 
 	require.NoError(t, svc.deleteBranchFactsRowForTest("agent/test", "kb/x.md"))
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.False(t, report.IsClean())
 	found := false
 	for _, i := range report.Issues {
-		if i.Category == CategoryFactsCoherence && i.Severity == SeverityError && i.Path == "kb/x.md" {
+		if i.Category == fsck.CategoryFactsCoherence && i.Severity == fsck.SeverityError && i.Path == "kb/x.md" {
 			found = true
 			break
 		}
@@ -149,12 +151,12 @@ func TestVerify_DetectsBranchFactsBlobMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.corruptFactsBlobHashForTest(factID, "0000000000000000000000000000000000000000"))
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.False(t, report.IsClean())
 	found := false
 	for _, i := range report.Issues {
-		if i.Category == CategoryFactsCoherence && i.Severity == SeverityError && i.Path == "kb/x.md" {
+		if i.Category == fsck.CategoryFactsCoherence && i.Severity == fsck.SeverityError && i.Path == "kb/x.md" {
 			found = true
 			break
 		}
@@ -219,12 +221,12 @@ func TestVerify_DetectsMissingEmbedding(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.deleteEmbeddingForTest(factID))
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.False(t, report.IsClean())
 	found := false
 	for _, i := range report.Issues {
-		if i.Category == CategoryEmbeddingsCoverage && i.Severity == SeverityError {
+		if i.Category == fsck.CategoryEmbeddingsCoverage && i.Severity == fsck.SeverityError {
 			found = true
 			break
 		}
@@ -251,12 +253,12 @@ func TestVerify_DetectsMissingBranchesTableRow(t *testing.T) {
 	_, err = svc.rh.Storer().DB().Exec(`DELETE FROM branches WHERE name = 'agent/test'`)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.False(t, report.IsClean())
 	found := false
 	for _, i := range report.Issues {
-		if i.Category == CategoryBranchesTable && i.Severity == SeverityError {
+		if i.Category == fsck.CategoryBranchesTable && i.Severity == fsck.SeverityError {
 			found = true
 			break
 		}
@@ -278,12 +280,12 @@ func TestVerify_DetectsBranchesTableRefMismatch(t *testing.T) {
 	_, err = svc.rh.Storer().DB().Exec(`UPDATE branches SET git_ref = 'refs/heads/wrong' WHERE name = 'agent/test'`)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.False(t, report.IsClean())
 	found := false
 	for _, i := range report.Issues {
-		if i.Category == CategoryBranchesTable && i.Severity == SeverityError && strings.Contains(i.Detail, "git_ref") {
+		if i.Category == fsck.CategoryBranchesTable && i.Severity == fsck.SeverityError && strings.Contains(i.Detail, "git_ref") {
 			found = true
 			break
 		}
@@ -317,21 +319,21 @@ func TestVerify_DeepDetectsBadYAML(t *testing.T) {
 	// a facts-coherence Error from Task 1.4's check because its malformed YAML
 	// prevents a branch_facts row from being created. That is expected cross-talk
 	// — the test only asserts that the fact-format Warning IS present.
-	deep, err := svc.Verify(context.Background(), VerifyOpts{Deep: true})
+	deep, err := svc.Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	foundWarn := false
 	for _, i := range deep.Issues {
-		if i.Category == CategoryFactFormat && i.Severity == SeverityWarning && i.Path == "kb/bad.md" {
+		if i.Category == fsck.CategoryFactFormat && i.Severity == fsck.SeverityWarning && i.Path == "kb/bad.md" {
 			foundWarn = true
 			break
 		}
 	}
 	require.True(t, foundWarn, "Deep:true should produce fact-format Warning for kb/bad.md, got: %v", deep.Issues)
 
-	shallow, err := svc.Verify(context.Background(), VerifyOpts{Deep: false})
+	shallow, err := svc.Verify(context.Background(), fsck.VerifyOpts{Deep: false})
 	require.NoError(t, err)
 	for _, i := range shallow.Issues {
-		require.NotEqual(t, CategoryFactFormat, i.Category, "Deep:false must not run fact-format check")
+		require.NotEqual(t, fsck.CategoryFactFormat, i.Category, "Deep:false must not run fact-format check")
 	}
 }
 
@@ -355,7 +357,7 @@ func TestVerify_SoftDeletedGraphNodeIsClean(t *testing.T) {
 	_, err = svc.Facts().DeleteFact(context.Background(), "agent/test", "kb/x.md", "retract x")
 	require.NoError(t, err)
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{Deep: true})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(),
 		"post-delete repo must be clean; soft-deleted graph node must not be flagged; issues: %v", report.Issues)
@@ -381,12 +383,12 @@ func TestVerify_DetectsMissingGraphFactNode(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.deleteGraphFactNodeForTest("kb/x.md", blobHash))
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.False(t, report.IsClean())
 	found := false
 	for _, i := range report.Issues {
-		if i.Category == CategoryGraphCoherence && i.Severity == SeverityError && i.Path == "kb/x.md" {
+		if i.Category == fsck.CategoryGraphCoherence && i.Severity == fsck.SeverityError && i.Path == "kb/x.md" {
 			found = true
 			break
 		}

@@ -10,9 +10,10 @@ import (
 	"sort"
 	"sync"
 
+	"knomit/internal/store/index"
+
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
-	"knomit/internal/store"
 )
 
 // maxConcurrentNeighborSearches caps the number of in-flight idx.Search
@@ -80,7 +81,7 @@ func ScopedCluster(ctx context.Context,
 			// has a stored vector in facts_vec from when it was learned.
 			// One SQL statement (subquery resolves the source vector inside
 			// the MATCH operand) replaces an embedding inference + KNN.
-			results, err := idx.Search(gctx, agentBranch, store.SearchOptions{
+			results, err := idx.Search(gctx, agentBranch, index.SearchOptions{
 				QueryByPath:  seed.File,
 				Path:         cat,
 				Limit:        10,

@@ -11,10 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // Phase-3 acceptance: the 13 bridge-yield pairs replayed through the SHIPPED
@@ -117,8 +118,8 @@ func quotedList(re *regexp.Regexp, input string) []string {
 
 // labelsFor computes the corpus's own subject-label distribution the way
 // store.SubjectLabelDF does — same tokeniser, same one-set-per-fact counting.
-func labelsFor(facts []factForLLM) store.SubjectLabelDF {
-	d := store.SubjectLabelDF{DF: map[string]int{}, LiveFacts: len(facts)}
+func labelsFor(facts []factForLLM) index.SubjectLabelDF {
+	d := index.SubjectLabelDF{DF: map[string]int{}, LiveFacts: len(facts)}
 	for _, f := range facts {
 		for tok := range fact.SubjectTokens(f.Entities, f.Domain, f.File) {
 			d.DF[tok]++

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,12 +24,12 @@ func motifFilterEnv(t *testing.T) (*Service, string) {
 	return svc, branch
 }
 
-func motifSearch(t *testing.T, svc *Service, branch string, motif string, tier MotifMatchTier) []string {
+func motifSearch(t *testing.T, svc *Service, branch string, motif string, tier index.MotifMatchTier) []string {
 	t.Helper()
 	// Explicit non-zero Limit: a bare SearchOptions carries Limit 0, which
 	// becomes a literal LIMIT 0 and makes every assertion below vacuous
 	// (gotchas/store/testing/searchoptions-zero-limit/71123f5f).
-	res, err := svc.FactQuery().Search(context.Background(), branch, SearchOptions{
+	res, err := svc.FactQuery().Search(context.Background(), branch, index.SearchOptions{
 		Motifs:     []string{motif},
 		MotifMatch: tier,
 		Limit:      50,
@@ -45,7 +47,7 @@ func motifSearch(t *testing.T, svc *Service, branch string, motif string, tier M
 // vocabulary buys.
 func TestMotifMatch_ExactSpansAliasedSpellings(t *testing.T) {
 	svc, branch := motifFilterEnv(t)
-	got := motifSearch(t, svc, branch, "silent-fallbacks", MotifMatchExact)
+	got := motifSearch(t, svc, branch, "silent-fallbacks", index.MotifMatchExact)
 	require.ElementsMatch(t, []string{"kb/one.md", "kb/two.md"}, got,
 		"both spellings are one mechanism; querying either must find both")
 }
@@ -53,7 +55,7 @@ func TestMotifMatch_ExactSpansAliasedSpellings(t *testing.T) {
 // The DEFAULT is exact. A caller who names no tier gets the strictest one.
 func TestMotifMatch_DefaultIsExact(t *testing.T) {
 	svc, branch := motifFilterEnv(t)
-	explicit := motifSearch(t, svc, branch, "silent-fallback", MotifMatchExact)
+	explicit := motifSearch(t, svc, branch, "silent-fallback", index.MotifMatchExact)
 	implicit := motifSearch(t, svc, branch, "silent-fallback", "")
 	require.ElementsMatch(t, explicit, implicit,
 		"an unspecified tier must behave as exact, never as something looser")
@@ -64,8 +66,8 @@ func TestMotifMatch_DefaultIsExact(t *testing.T) {
 // token-1 is the loosest mechanical tier and reaches strictly further.
 func TestMotifMatch_TiersAreOrderedByStrictness(t *testing.T) {
 	svc, branch := motifFilterEnv(t)
-	exact := motifSearch(t, svc, branch, "silent-fallback", MotifMatchExact)
-	token1 := motifSearch(t, svc, branch, "silent-fallback", MotifMatchToken1)
+	exact := motifSearch(t, svc, branch, "silent-fallback", index.MotifMatchExact)
+	token1 := motifSearch(t, svc, branch, "silent-fallback", index.MotifMatchToken1)
 
 	require.Subset(t, token1, exact, "every tier must include what the stricter one found")
 	require.Contains(t, token1, "kb/three.md",
@@ -76,7 +78,7 @@ func TestMotifMatch_TiersAreOrderedByStrictness(t *testing.T) {
 // token-2 needs two shared tokens, so a single-token overlap does not qualify.
 func TestMotifMatch_Token2NeedsTwoSharedTokens(t *testing.T) {
 	svc, branch := motifFilterEnv(t)
-	got := motifSearch(t, svc, branch, "silent-fallback", MotifMatchToken2)
+	got := motifSearch(t, svc, branch, "silent-fallback", index.MotifMatchToken2)
 	require.NotContains(t, got, "kb/three.md",
 		"silent-retry shares only one token and must not match at token-2")
 	require.Contains(t, got, "kb/one.md")
@@ -86,7 +88,7 @@ func TestMotifMatch_Token2NeedsTwoSharedTokens(t *testing.T) {
 // different question.
 func TestMotifMatch_StemMatchesTheClusterKey(t *testing.T) {
 	svc, branch := motifFilterEnv(t)
-	got := motifSearch(t, svc, branch, "silent-fallbacks", MotifMatchStem)
+	got := motifSearch(t, svc, branch, "silent-fallbacks", index.MotifMatchStem)
 	require.ElementsMatch(t, []string{"kb/one.md", "kb/two.md"}, got)
 }
 
@@ -95,7 +97,7 @@ func TestMotifMatch_StemMatchesTheClusterKey(t *testing.T) {
 // received exact's results has been answered under a false name.
 func TestMotifMatch_SoftIsGatedNotSilentlyDowngraded(t *testing.T) {
 	svc, branch := motifFilterEnv(t)
-	got := motifSearch(t, svc, branch, "silent-fallback", MotifMatchSoft)
+	got := motifSearch(t, svc, branch, "silent-fallback", index.MotifMatchSoft)
 	require.Empty(t, got,
 		"an uncalibrated tier must return nothing a caller could mistake for an answer")
 }
@@ -104,7 +106,7 @@ func TestMotifMatch_SoftIsGatedNotSilentlyDowngraded(t *testing.T) {
 // byte-identical to what it was before motifs existed.
 func TestMotifMatch_NoMotifFilterMeansNoMotifClause(t *testing.T) {
 	svc, branch := motifFilterEnv(t)
-	res, err := svc.FactQuery().Search(context.Background(), branch, SearchOptions{Limit: 50})
+	res, err := svc.FactQuery().Search(context.Background(), branch, index.SearchOptions{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, res, 4, "a search naming no motif must be unaffected by the axis")
 }
@@ -112,7 +114,7 @@ func TestMotifMatch_NoMotifFilterMeansNoMotifClause(t *testing.T) {
 // A motif nothing carries matches nothing — not everything.
 func TestMotifMatch_UnknownMotifMatchesNothing(t *testing.T) {
 	svc, branch := motifFilterEnv(t)
-	got := motifSearch(t, svc, branch, "no-such-mechanism", MotifMatchExact)
+	got := motifSearch(t, svc, branch, "no-such-mechanism", index.MotifMatchExact)
 	require.Empty(t, got)
 }
 
@@ -124,7 +126,7 @@ func TestMotifMatch_UnresolvedCorpusStillMatchesExactly(t *testing.T) {
 	writeMotifFact(t, svc, branch, "kb/two.md", []string{"config-drift"})
 	// Deliberately NO RebuildAliases.
 
-	got := motifSearch(t, svc, branch, "silent-fallback", MotifMatchExact)
+	got := motifSearch(t, svc, branch, "silent-fallback", index.MotifMatchExact)
 	require.Equal(t, []string{"kb/one.md"}, got,
 		"before the vocabulary is resolved every motif is its own cluster, and the "+
 			"filter must still work rather than returning nothing")
@@ -154,11 +156,11 @@ func TestMotifMatch_TierOrderingHoldsAfterAJudgeMerge(t *testing.T) {
 	// Both spellings, because the defect was asymmetric: only the losing key
 	// broke, so a test that checked one spelling had a 50% chance of passing.
 	for _, term := range []string{"silent-fallback", "quiet-degradation"} {
-		exact := motifSearch(t, svc, branch, term, MotifMatchExact)
+		exact := motifSearch(t, svc, branch, term, index.MotifMatchExact)
 		require.ElementsMatchf(t, []string{"kb/a.md", "kb/b.md"}, exact,
 			"exact must span the merged cluster from %q", term)
 
-		for _, looser := range []MotifMatchTier{MotifMatchStem, MotifMatchToken2, MotifMatchToken1} {
+		for _, looser := range []index.MotifMatchTier{index.MotifMatchStem, index.MotifMatchToken2, index.MotifMatchToken1} {
 			got := motifSearch(t, svc, branch, term, looser)
 			require.Subsetf(t, got, exact,
 				"tier %q must include everything exact found for %q — the tiers are "+

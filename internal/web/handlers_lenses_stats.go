@@ -4,9 +4,10 @@ import (
 	"net/http"
 	"sort"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -63,7 +64,7 @@ type lensStatsResponse struct {
 	Domains       map[string]int    `json:"domains"`
 	Entities      map[string]int    `json:"entities"`
 	Types         map[string]int    `json:"types"`
-	Highlights    []store.Highlight `json:"highlights"`
+	Highlights    []index.Highlight `json:"highlights"`
 	DefaultAxis   string            `json:"default_axis"`
 	Repos         []lensRepoStats   `json:"repos"`
 }
@@ -122,13 +123,13 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 			Domains:    map[string]int{},
 			Entities:   map[string]int{},
 			Types:      map[string]int{},
-			Highlights: []store.Highlight{},
+			Highlights: []index.Highlight{},
 			Repos:      make([]lensRepoStats, 0, len(targets)),
 		}
 		// highlights[i] is mount targets[i]'s own top-N, indexed in parallel
 		// with targets so federate.WriteFirstWinners can attribute a winning
 		// path back to its mount.
-		highlights := make([][]store.Highlight, len(targets))
+		highlights := make([][]index.Highlight, len(targets))
 		// mountAxes[i] is mount targets[i]'s OWN default_axis recommendation —
 		// what its per-mount store.Stats call used to cut its top-N when the
 		// caller left axis unresolved. Used below only to decide whether the
@@ -153,8 +154,8 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		// reduction below runs on the request goroutine in mount order, so
 		// resp.Repos keeps binding order and the response stays a function of
 		// the request, not of which mount happened to finish first.
-		sts := make([]store.StatsResult, len(targets))
-		acts := make([]store.ActivityResult, len(targets))
+		sts := make([]index.StatsResult, len(targets))
+		acts := make([]index.ActivityResult, len(targets))
 		if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
 			st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, axis)
 			if err != nil {
@@ -235,8 +236,8 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		// store.Stats. NOT an AND-of-mounts vote (see the doc comment above
 		// this handler) — a mount with zero facts sums (0,0) into both sides
 		// and cannot veto the others.
-		resp.DefaultAxis = store.AxisFromSeparation(topFacts, topEdges, obsFacts, obsEdges)
-		rankAxis := store.NormalizeAxis(axis, resp.DefaultAxis)
+		resp.DefaultAxis = index.AxisFromSeparation(topFacts, topEdges, obsFacts, obsEdges)
+		rankAxis := index.NormalizeAxis(axis, resp.DefaultAxis)
 
 		// store.Stats cuts each mount's SQL LIMIT to
 		// NormalizeAxis(<requested axis>, <that mount's own default>)
@@ -278,7 +279,7 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		// store call shares fq.highlights with Stats (one query, two callers),
 		// so the corrected rows and the fallback flag are the ones Stats would
 		// have returned for the same axis.
-		if store.NormalizeAxis(axis, "") == "" && mountsDisagreeWithResolved {
+		if index.NormalizeAxis(axis, "") == "" && mountsDisagreeWithResolved {
 			if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
 				hs, fb, err := statsP.Highlights(r.Context(), t.RT.RI, t.RT.Branch, t.Path, rankAxis)
 				if err != nil {
@@ -335,8 +336,8 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		// surface must use — hand-rolling a second one here would let this
 		// endpoint's dedupe silently diverge from the others'.
 		winner := federate.WriteFirstWinners(targets, b.Write(), highlights,
-			func(h store.Highlight) string { return h.Path })
-		deduped := make([]store.Highlight, 0, len(targets)*store.MaxHighlights)
+			func(h index.Highlight) string { return h.Path })
+		deduped := make([]index.Highlight, 0, len(targets)*index.MaxHighlights)
 		for i, hs := range highlights {
 			for _, h := range hs {
 				if winner[h.Path] == i {
@@ -361,8 +362,8 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		// by that same axis (either from the start, or via the re-fetch
 		// above), so a merge-and-sort is a correct global top-N.
 		sortHighlights(deduped, rankAxis)
-		if len(deduped) > store.MaxHighlights {
-			deduped = deduped[:store.MaxHighlights]
+		if len(deduped) > index.MaxHighlights {
+			deduped = deduped[:index.MaxHighlights]
 		}
 		resp.Highlights = deduped
 
@@ -378,15 +379,15 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 // already returned its own top-N (store.MaxHighlights), so taking N from the
 // merge is a correct global top-N: a mount's (N+1)th can never displace the
 // global Nth.
-func sortHighlights(hs []store.Highlight, axis string) {
+func sortHighlights(hs []index.Highlight, axis string) {
 	sort.SliceStable(hs, func(i, j int) bool {
 		switch axis {
-		case store.AxisConfidence:
+		case index.AxisConfidence:
 			if hs[i].Confidence != hs[j].Confidence {
 				return hs[i].Confidence > hs[j].Confidence
 			}
 			return hs[i].CommittedAt > hs[j].CommittedAt
-		case store.AxisRecent:
+		case index.AxisRecent:
 			if hs[i].CommittedAt != hs[j].CommittedAt {
 				return hs[i].CommittedAt > hs[j].CommittedAt
 			}

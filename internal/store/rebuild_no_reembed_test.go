@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -87,7 +89,7 @@ func TestRebuild_PreservesRowidsAndDoesNotReEmbed(t *testing.T) {
 	require.Zero(t, emb.embedCalls.Load(), "rebuild must NOT re-embed unchanged facts (facts_vec preserved)")
 
 	// Derived state is still correct: canonical domains + tokens regenerated.
-	res, err := svc.Search().Search(ctx, branch, SearchOptions{Domain: []string{"governance"}})
+	res, err := svc.Search().Search(ctx, branch, index.SearchOptions{Domain: []string{"governance"}})
 	require.NoError(t, err)
 	found := false
 	for _, r := range res {
@@ -199,7 +201,7 @@ func TestRebuild_FailureClearsVersion_NotMaskedByGlobalEmbedIdentity(t *testing.
 	// makes them stale.
 	for _, branch := range []string{"main", phantom} {
 		_, err = svc.si.RepoForTest().DB().ExecContext(ctx,
-			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey(branch), GraphSchemaVersion)
+			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey(branch), index.GraphSchemaVersion)
 		require.NoError(t, err)
 	}
 

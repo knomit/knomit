@@ -10,17 +10,19 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // stubMotifsProvider implements motifsProvider for tests.
 type stubMotifsProvider struct {
-	clusters    []store.MotifCluster
+	clusters    []vocab.MotifCluster
 	clustersErr error
-	defs        map[string]store.MotifDefinitionStatus
-	health      store.MotifVocabularyHealth
-	aliases     map[string]store.AliasRow
+	defs        map[string]vocab.MotifDefinitionStatus
+	health      vocab.MotifVocabularyHealth
+	aliases     map[string]vocab.AliasRow
 	clusterKeys map[string]string // spelling → cluster key for ClusterKey()
 	// gotPath records the ?path= the handler passed down, so a test can assert
 	// the scope reached the store rather than only that the page rendered.
@@ -28,21 +30,21 @@ type stubMotifsProvider struct {
 	gotHealthPath string
 }
 
-func (s *stubMotifsProvider) Clusters(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) ([]store.MotifCluster, error) {
+func (s *stubMotifsProvider) Clusters(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) ([]vocab.MotifCluster, error) {
 	s.gotPath = pathPrefix
 	return s.clusters, s.clustersErr
 }
 
-func (s *stubMotifsProvider) Definitions(_ context.Context, _ *repos.RepoInstance, _ string, _ []string) (map[string]store.MotifDefinitionStatus, error) {
+func (s *stubMotifsProvider) Definitions(_ context.Context, _ *repos.RepoInstance, _ string, _ []string) (map[string]vocab.MotifDefinitionStatus, error) {
 	return s.defs, nil
 }
 
-func (s *stubMotifsProvider) VocabularyHealth(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) (store.MotifVocabularyHealth, error) {
+func (s *stubMotifsProvider) VocabularyHealth(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) (vocab.MotifVocabularyHealth, error) {
 	s.gotHealthPath = pathPrefix
 	return s.health, nil
 }
 
-func (s *stubMotifsProvider) AliasRows(_ context.Context, _ *repos.RepoInstance, _ string) (map[string]store.AliasRow, error) {
+func (s *stubMotifsProvider) AliasRows(_ context.Context, _ *repos.RepoInstance, _ string) (map[string]vocab.AliasRow, error) {
 	return s.aliases, nil
 }
 
@@ -126,8 +128,8 @@ func decodeMotifs(t *testing.T, rec *httptest.ResponseRecorder) motifsCollection
 }
 
 // threeClusters is the df-desc order Clusters already returns.
-func threeClusters() []store.MotifCluster {
-	return []store.MotifCluster{
+func threeClusters() []vocab.MotifCluster {
+	return []vocab.MotifCluster{
 		{ClusterKey: "drift-config", CanonicalID: "config-drift", Members: []string{"config-drift", "configuration-drifts"}, DF: 5},
 		{ClusterKey: "fallback-silent", CanonicalID: "silent-fallback", Members: []string{"silent-fallback"}, DF: 2},
 		{ClusterKey: "creep-scope", CanonicalID: "scope-creep", Members: []string{"scope-creep"}, DF: 2},
@@ -137,12 +139,12 @@ func threeClusters() []store.MotifCluster {
 func TestHandleHALMotifs_ReturnsRankedCollection(t *testing.T) {
 	stub := &stubMotifsProvider{
 		clusters: threeClusters(),
-		defs: map[string]store.MotifDefinitionStatus{
+		defs: map[string]vocab.MotifDefinitionStatus{
 			"drift-config":    {Definition: "Configured state diverges from applied state."},
 			"fallback-silent": {Definition: "A component keeps serving after a dependency fails.", Stale: true},
 			// creep-scope is deliberately absent: never defined.
 		},
-		health: store.MotifVocabularyHealth{Clusters: 3, Recurring: 3, Mints: 3, Links: 6, EpistemicRecurring: 2},
+		health: vocab.MotifVocabularyHealth{Clusters: 3, Recurring: 3, Mints: 3, Links: 6, EpistemicRecurring: 2},
 	}
 	body := decodeMotifs(t, getMotifs(t, motifsServer(t, stub), "/repos/alpha/branches/agent:test/motifs"))
 
@@ -225,7 +227,7 @@ func TestHandleHALMotifs_SortName(t *testing.T) {
 func TestHandleHALMotifs_NarrowByQ(t *testing.T) {
 	stub := &stubMotifsProvider{
 		clusters: threeClusters(),
-		defs: map[string]store.MotifDefinitionStatus{
+		defs: map[string]vocab.MotifDefinitionStatus{
 			// The definition, not any member spelling, is what "diverges" hits.
 			"drift-config": {Definition: "Configured state diverges from applied state."},
 		},
@@ -375,7 +377,7 @@ func decodeMotifDetail(t *testing.T, rec *httptest.ResponseRecorder) motifDetail
 
 func driftClusterStub() *stubMotifsProvider {
 	return &stubMotifsProvider{
-		clusters: []store.MotifCluster{{
+		clusters: []vocab.MotifCluster{{
 			ClusterKey:  "drift-config",
 			CanonicalID: "config-drift",
 			Members:     []string{"config-drift", "configuration-drifts"},
@@ -385,10 +387,10 @@ func driftClusterStub() *stubMotifsProvider {
 			// are one number there); the gap is what makes the copy visible.
 			DFTotal: 7,
 		}},
-		defs: map[string]store.MotifDefinitionStatus{
+		defs: map[string]vocab.MotifDefinitionStatus{
 			"drift-config": {Definition: "Configured state diverges from applied state."},
 		},
-		aliases: map[string]store.AliasRow{
+		aliases: map[string]vocab.AliasRow{
 			"config-drift": {
 				CanonicalID: "config-drift", ClusterKey: "drift-config",
 				Method: "mechanical",
@@ -403,7 +405,7 @@ func driftClusterStub() *stubMotifsProvider {
 
 func driftCarriers() *stubFactsCollectionProvider {
 	return &stubFactsCollectionProvider{
-		entries: []store.RecentFactEntry{
+		entries: []index.RecentFactEntry{
 			{Path: "kb/a.md", Title: "Newest carrier", Type: "observation", CommittedAt: 200},
 			{Path: "kb/b.md", Title: "Older carrier", Type: "policy", CommittedAt: 100},
 		},
@@ -469,7 +471,7 @@ func TestHandleHALMotifCluster_ByClusterKey(t *testing.T) {
 	if got := strings.Join(facts.lastOpts.Motifs, ","); got != "config-drift,configuration-drifts" {
 		t.Errorf("carriers query Motifs: got %v, want every member spelling", facts.lastOpts.Motifs)
 	}
-	if facts.lastOpts.MotifMatch != store.MotifMatchExact {
+	if facts.lastOpts.MotifMatch != index.MotifMatchExact {
 		t.Errorf("carriers query MotifMatch: got %q, want exact", facts.lastOpts.MotifMatch)
 	}
 	if facts.lastOpts.Limit != 20 {
@@ -506,11 +508,11 @@ func TestHandleHALMotifCluster_UnknownIs404(t *testing.T) {
 // rows — never a 404 (C2).
 func TestHandleHALMotifCluster_SingletonOnUnrebuiltCorpus(t *testing.T) {
 	stub := &stubMotifsProvider{
-		clusters: []store.MotifCluster{{
+		clusters: []vocab.MotifCluster{{
 			ClusterKey: "silent-fallback", CanonicalID: "silent-fallback",
 			Members: []string{"silent-fallback"}, DF: 1,
 		}},
-		aliases: map[string]store.AliasRow{},
+		aliases: map[string]vocab.AliasRow{},
 	}
 	rec := getMotifs(t, motifDetailServer(t, stub, driftCarriers()),
 		"/repos/alpha/branches/agent:test/motifs/silent-fallback")
@@ -609,7 +611,7 @@ func TestHandleHALMotifs_HealthNamesItsPopulationAndIgnoresQ(t *testing.T) {
 		// "correct" it back into agreement — doing so disarms the assertion.
 		// The genuine invariants are kept, since they are free:
 		// EpistemicRecurring <= Recurring <= Clusters.
-		health: store.MotifVocabularyHealth{Clusters: 9, Recurring: 4, Mints: 8, Links: 7, EpistemicRecurring: 2},
+		health: vocab.MotifVocabularyHealth{Clusters: 9, Recurring: 4, Mints: 8, Links: 7, EpistemicRecurring: 2},
 	}
 	r := motifsServer(t, stub)
 
@@ -670,7 +672,7 @@ func TestHandleHALMotifs_HealthNamesItsPopulationAndIgnoresQ(t *testing.T) {
 func TestHandleHALMotifs_PathScopesListAndHealth(t *testing.T) {
 	stub := &stubMotifsProvider{
 		clusters: threeClusters(),
-		health:   store.MotifVocabularyHealth{Clusters: 3, Recurring: 3, Mints: 3, Links: 6},
+		health:   vocab.MotifVocabularyHealth{Clusters: 3, Recurring: 3, Mints: 3, Links: 6},
 	}
 	rec := getMotifs(t, motifsServer(t, stub),
 		"/repos/alpha/branches/agent:test/motifs?path=kb%2Fdecisions")
@@ -689,7 +691,7 @@ func TestHandleHALMotifs_PathScopesListAndHealth(t *testing.T) {
 // pivot it opens drops the path, and df_total is how the row can say so.
 func TestHandleHALMotifs_CarriesBothCounts(t *testing.T) {
 	stub := &stubMotifsProvider{
-		clusters: []store.MotifCluster{
+		clusters: []vocab.MotifCluster{
 			{ClusterKey: "fallback-silent", CanonicalID: "silent-fallback",
 				Members: []string{"silent-fallback"}, DF: 2, DFTotal: 9},
 		},

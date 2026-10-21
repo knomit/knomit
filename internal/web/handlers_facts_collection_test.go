@@ -8,8 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 
 	"github.com/stretchr/testify/require"
@@ -17,23 +18,23 @@ import (
 
 // stubFactsCollectionProvider implements factsCollectionProvider for tests.
 type stubFactsCollectionProvider struct {
-	entries  []store.RecentFactEntry
+	entries  []index.RecentFactEntry
 	total    int
 	err      error
-	lastOpts store.SearchOptions
+	lastOpts index.SearchOptions
 }
 
 func (s *stubFactsCollectionProvider) RecentFacts(
 	_ context.Context,
-	_ *repos.RepoInstance, _ string, opts store.SearchOptions,
-) ([]store.RecentFactEntry, int, error) {
+	_ *repos.RepoInstance, _ string, opts index.SearchOptions,
+) ([]index.RecentFactEntry, int, error) {
 	s.lastOpts = opts
 	return s.entries, s.total, s.err
 }
 
 func TestHandleHALFactsCollection_ReturnsHALCollection(t *testing.T) {
 	provider := &stubFactsCollectionProvider{
-		entries: []store.RecentFactEntry{
+		entries: []index.RecentFactEntry{
 			{Path: "know/a.md", Title: "Fact A", Type: "observation", CommittedAt: 1700000000, Operation: "learn"},
 			{Path: "know/b.md", Title: "Fact B", Type: "hypothesis", CommittedAt: 1700000001, Operation: "update"},
 		},
@@ -102,7 +103,7 @@ func TestHandleHALFactsCollection_ReturnsHALCollection(t *testing.T) {
 func TestHandleHALFactsCollection_Pagination(t *testing.T) {
 	// 3 items total, return 1, offset=1 → both next and prev links expected.
 	provider := &stubFactsCollectionProvider{
-		entries: []store.RecentFactEntry{
+		entries: []index.RecentFactEntry{
 			{Path: "know/b.md", Title: "Fact B"},
 		},
 		total: 3,
@@ -145,7 +146,7 @@ func TestHandleHALFactsCollection_Pagination(t *testing.T) {
 // arrays and never renders the PROJECT PRINCIPLES block.
 func TestHandleHALFactsCollection_SerializesDomainAndEntities(t *testing.T) {
 	provider := &stubFactsCollectionProvider{
-		entries: []store.RecentFactEntry{
+		entries: []index.RecentFactEntry{
 			{
 				Path:     "kb/policy/p.md",
 				Title:    "Principle",
@@ -194,7 +195,7 @@ func TestHandleHALFactsCollection_SerializesDomainAndEntities(t *testing.T) {
 // fact.Fact.MarshalJSON).
 func TestHandleHALFactsCollection_KindSerialization(t *testing.T) {
 	provider := &stubFactsCollectionProvider{
-		entries: []store.RecentFactEntry{
+		entries: []index.RecentFactEntry{
 			{Path: "know/a.md", Title: "Fact A", Kind: "epistemic", Type: "observation"},
 			{Path: "know/b.md", Title: "Fact B", Kind: "pragmatic", Type: "policy"},
 		},
@@ -459,7 +460,7 @@ func TestHandleHALFactsCollection_MotifFilterReachesSearchOptions(t *testing.T) 
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, []string{"zero-value-as-valid", "silent-fallback"}, provider.lastOpts.Motifs)
-	require.Equal(t, store.MotifMatchStem, provider.lastOpts.MotifMatch)
+	require.Equal(t, index.MotifMatchStem, provider.lastOpts.MotifMatch)
 }
 
 // TestHandleHALFactsCollection_LooseMotifTierRejected: refused at the edge,
@@ -487,7 +488,7 @@ func TestHandleHALFactsCollection_LooseMotifTierRejected(t *testing.T) {
 // motif-free row omits the key entirely.
 func TestHandleHALFactsCollection_MotifsOnTheWire(t *testing.T) {
 	provider := &stubFactsCollectionProvider{
-		entries: []store.RecentFactEntry{
+		entries: []index.RecentFactEntry{
 			{Path: "kb/a.md", Title: "Carries a motif", Motifs: []string{"a-b"}},
 			{Path: "kb/b.md", Title: "Carries none"},
 		},

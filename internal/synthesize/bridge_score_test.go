@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"go.uber.org/mock/gomock"
+	"knomit/internal/store/index"
 
-	"knomit/internal/store"
+	"go.uber.org/mock/gomock"
 )
 
 // --- separation tests ---
@@ -190,7 +190,7 @@ func TestBridgeQ_ExactMaxMembers(t *testing.T) {
 // zero-value struct (empty adjacency → density 0 for any members).
 func TestCohesion_DelegatesToDensity(t *testing.T) {
 	// A zero-value SimilarityGraph has no edges → Density returns 0 for any members.
-	var g store.SimilarityGraph
+	var g index.SimilarityGraph
 	got := cohesion([]string{"a.md", "b.md", "c.md"}, g)
 	wantDensity := g.Density([]string{"a.md", "b.md", "c.md"})
 	if got != wantDensity {
@@ -373,7 +373,7 @@ func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	paths := []string{"kb/a.md", "kb/b.md"}
 	clusterOf := map[string]int{"kb/a.md": 0, "kb/b.md": 1}
-	g := store.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
+	g := index.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
 
 	// No derivation links between members → Gap = 1.0.
 	idx.EXPECT().ReverseDependentPaths(ctx, "kb/a.md").
@@ -433,7 +433,7 @@ func TestScoreBridgeCandidate_ErrorPropagation_DerivationGap(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	paths := []string{"kb/x.md", "kb/y.md"}
 	clusterOf := map[string]int{"kb/x.md": 0, "kb/y.md": 1}
-	g := store.NewSimilarityGraph([][2]string{{"kb/x.md", "kb/y.md"}})
+	g := index.NewSimilarityGraph([][2]string{{"kb/x.md", "kb/y.md"}})
 
 	boom := errors.New("revdeps unavailable")
 	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).
@@ -458,7 +458,7 @@ func TestScoreBridgeCandidate_ErrorPropagation_Specificity(t *testing.T) {
 	// Only one member → derivationGap returns (0, nil) without calling idx.
 	paths := []string{"kb/z.md"}
 	clusterOf := map[string]int{"kb/z.md": 0}
-	g := store.NewSimilarityGraph(nil)
+	g := index.NewSimilarityGraph(nil)
 
 	boom := errors.New("tokendf unavailable")
 	idx.EXPECT().TokenDF(ctx, gomock.Any(), gomock.Any(), gomock.Any()).

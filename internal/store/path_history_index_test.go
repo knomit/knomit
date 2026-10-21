@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -545,7 +547,7 @@ func TestPathHistory_FrontierOffBranchIsHistoryChanged(t *testing.T) {
 	require.NoError(t, err)
 
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", r1.CommitHash,
-		&PathHistoryCursor{Frontier: []string{side.CommitHash}, AnchorOnBranch: true}, 2)
+		&index.PathHistoryCursor{Frontier: []string{side.CommitHash}, AnchorOnBranch: true}, 2)
 	require.ErrorIs(t, err, ErrHistoryChanged, "the anchor is on the branch; only the frontier check sees the off-branch change")
 }
 
@@ -707,10 +709,10 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 	b.Logf("rebuild of %d commits: %v; swap transaction %v; worst concurrent write %v (worst of 20 writes with no rebuild: %v)", n, elapsed, time.Duration(vcs.LastSwapDuration.Load()), worst, base)
 }
 
-func fullHistoryB(b *testing.B, svc *Service, branch, path, anchor string) []FactRevision {
+func fullHistoryB(b *testing.B, svc *Service, branch, path, anchor string) []index.FactRevision {
 	b.Helper()
-	var out []FactRevision
-	var cur *PathHistoryCursor
+	var out []index.FactRevision
+	var cur *index.PathHistoryCursor
 	for {
 		page, next, err := svc.Search().PathHistory(context.Background(), branch, path, anchor, cur, 2)
 		require.NoError(b, err)
@@ -722,7 +724,7 @@ func fullHistoryB(b *testing.B, svc *Service, branch, path, anchor string) []Fac
 	}
 }
 
-func historyCommitsB(revs []FactRevision) []string { return historyCommits(revs) }
+func historyCommitsB(revs []index.FactRevision) []string { return historyCommits(revs) }
 
 // TestLiveRevision_EqualsRevisionsBefore pins LiveRevision to the walk it
 // replaces in explain: RevisionsBefore(anchor, 1), at every commit of a

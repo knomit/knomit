@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -18,7 +20,7 @@ func TestDefaultAxis_ImpactWhenDistilledLayerSeparates(t *testing.T) {
 
 	res, err := svc.FactQuery().Stats(context.Background(), branch, "", "")
 	require.NoError(t, err)
-	require.Equal(t, AxisImpact, res.DefaultAxis)
+	require.Equal(t, index.AxisImpact, res.DefaultAxis)
 }
 
 // TestDefaultAxis_ConfidenceWhenGraphIsFlat exercises the RATIO branch, not
@@ -64,7 +66,7 @@ func TestDefaultAxis_ConfidenceWhenGraphIsFlat(t *testing.T) {
 
 	res, err := svc.FactQuery().Stats(ctx, branch, "", "")
 	require.NoError(t, err)
-	require.Equal(t, AxisConfidence, res.DefaultAxis)
+	require.Equal(t, index.AxisConfidence, res.DefaultAxis)
 	// And the list must actually be confidence-ordered.
 	require.NotEmpty(t, res.Highlights)
 	require.Equal(t, 0.9, res.Highlights[0].Confidence)
@@ -95,7 +97,7 @@ func TestDefaultAxis_ZeroTopLayerShortCircuits(t *testing.T) {
 
 	res, err := svc.FactQuery().Stats(ctx, branch, "", "")
 	require.NoError(t, err)
-	require.Equal(t, AxisConfidence, res.DefaultAxis)
+	require.Equal(t, index.AxisConfidence, res.DefaultAxis)
 }
 
 // TestDefaultAxis_ImpactViaRatioNotShortCircuit exercises the TRUE side of the
@@ -139,7 +141,7 @@ func TestDefaultAxis_ImpactViaRatioNotShortCircuit(t *testing.T) {
 
 	res, err := svc.FactQuery().Stats(ctx, branch, "", "")
 	require.NoError(t, err)
-	require.Equal(t, AxisImpact, res.DefaultAxis)
+	require.Equal(t, index.AxisImpact, res.DefaultAxis)
 }
 
 // TestDefaultAxis_IsRepoScopedNotPathScoped: the list is folder-scoped but the
@@ -167,5 +169,5 @@ func TestDefaultAxis_EmptyRepoDefaultsToConfidence(t *testing.T) {
 
 	res, err := svc.FactQuery().Stats(context.Background(), branch, "", "")
 	require.NoError(t, err)
-	require.Equal(t, AxisConfidence, res.DefaultAxis)
+	require.Equal(t, index.AxisConfidence, res.DefaultAxis)
 }

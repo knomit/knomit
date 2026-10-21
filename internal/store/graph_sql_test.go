@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,7 +17,7 @@ import (
 // same writes on every rebuild. A blind INSERT would duplicate nodes and edges
 // on each pass; these primitives must be idempotent by identity.
 
-func newGraphTestIndex(t *testing.T) (*searchIndex, context.Context) {
+func newGraphTestIndex(t *testing.T) (*index.Index, context.Context) {
 	t.Helper()
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -26,7 +28,7 @@ func newGraphTestIndex(t *testing.T) (*searchIndex, context.Context) {
 }
 
 // countNodesWithLabel counts nodes carrying the given label.
-func countNodesWithLabel(t *testing.T, si *searchIndex, ctx context.Context, label string) int {
+func countNodesWithLabel(t *testing.T, si *index.Index, ctx context.Context, label string) int {
 	t.Helper()
 	var n int
 	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
@@ -34,7 +36,7 @@ func countNodesWithLabel(t *testing.T, si *searchIndex, ctx context.Context, lab
 	return n
 }
 
-func countEdgesOfType(t *testing.T, si *searchIndex, ctx context.Context, edgeType string) int {
+func countEdgesOfType(t *testing.T, si *index.Index, ctx context.Context, edgeType string) int {
 	t.Helper()
 	var n int
 	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
@@ -49,29 +51,29 @@ func TestGraphMergeNode_IsIdempotentByIdentity(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.RepoForTest().DB()
 
-	id1, err := graphMergeNode(ctx, db, NodeFact,
+	id1, err := graphMergeNode(ctx, db, index.NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "deadbeef"})
 	require.NoError(t, err)
 	require.NotZero(t, id1)
 
-	id2, err := graphMergeNode(ctx, db, NodeFact,
+	id2, err := graphMergeNode(ctx, db, index.NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "deadbeef"})
 	require.NoError(t, err)
 	require.Equal(t, id1, id2, "MERGE must return the existing node, not create a second")
-	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, NodeFact))
+	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, index.NodeFact))
 
 	// A different identity is a different node (Fact identity is per-version).
-	id3, err := graphMergeNode(ctx, db, NodeFact,
+	id3, err := graphMergeNode(ctx, db, index.NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "cafebabe"})
 	require.NoError(t, err)
 	require.NotEqual(t, id1, id3, "a different blob_hash is a distinct Fact version")
-	require.Equal(t, 2, countNodesWithLabel(t, si, ctx, NodeFact))
+	require.Equal(t, 2, countNodesWithLabel(t, si, ctx, index.NodeFact))
 
 	// Same identity values but a different label must not collide.
-	idEnt, err := graphMergeNode(ctx, db, NodeEntity, map[string]string{"name": "kb/a.md"})
+	idEnt, err := graphMergeNode(ctx, db, index.NodeEntity, map[string]string{"name": "kb/a.md"})
 	require.NoError(t, err)
 	require.NotEqual(t, id1, idEnt)
-	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, NodeEntity))
+	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, index.NodeEntity))
 }
 
 // TestGraphMergeNode_IdentityPropsAreReadable verifies the merged node's
@@ -80,7 +82,7 @@ func TestGraphMergeNode_IsIdempotentByIdentity(t *testing.T) {
 func TestGraphMergeNode_IdentityPropsAreReadable(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 
-	id, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
+	id, err := graphMergeNode(ctx, si.RepoForTest().DB(), index.NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "deadbeef"})
 	require.NoError(t, err)
 
@@ -93,7 +95,7 @@ func TestGraphSetNodeProps_InsertsAndOverwrites(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.RepoForTest().DB()
 
-	id, err := graphMergeNode(ctx, db, NodeFact,
+	id, err := graphMergeNode(ctx, db, index.NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "deadbeef"})
 	require.NoError(t, err)
 
@@ -127,14 +129,14 @@ func TestGraphMergeEdge_IsIdempotent(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.RepoForTest().DB()
 
-	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
+	a, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
-	b, err := graphMergeNode(ctx, db, NodeEntity, map[string]string{"name": "ent"})
+	b, err := graphMergeNode(ctx, db, index.NodeEntity, map[string]string{"name": "ent"})
 	require.NoError(t, err)
 
-	require.NoError(t, graphMergeEdge(ctx, db, a, b, EdgeTagged))
-	require.NoError(t, graphMergeEdge(ctx, db, a, b, EdgeTagged))
-	require.Equal(t, 1, countEdgesOfType(t, si, ctx, EdgeTagged),
+	require.NoError(t, graphMergeEdge(ctx, db, a, b, index.EdgeTagged))
+	require.NoError(t, graphMergeEdge(ctx, db, a, b, index.EdgeTagged))
+	require.Equal(t, 1, countEdgesOfType(t, si, ctx, index.EdgeTagged),
 		"MERGE on an existing edge must not create a duplicate")
 }
 
@@ -158,9 +160,9 @@ func TestGraphMergeEdge_IsAtomicUnderConcurrency(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.RepoForTest().DB()
 
-	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
+	a, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
-	b, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
+	b, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
 	require.NoError(t, err)
 
 	// Hammer the same (src, tgt, type) from many goroutines on the bare pool.
@@ -173,7 +175,7 @@ func TestGraphMergeEdge_IsAtomicUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start // maximise overlap
-			if err := graphMergeEdge(ctx, db, a, b, EdgeSimilarTo); err != nil {
+			if err := graphMergeEdge(ctx, db, a, b, index.EdgeSimilarTo); err != nil {
 				errs <- err
 			}
 		}()
@@ -185,7 +187,7 @@ func TestGraphMergeEdge_IsAtomicUnderConcurrency(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.Equal(t, 1, countEdgesOfType(t, si, ctx, EdgeSimilarTo),
+	require.Equal(t, 1, countEdgesOfType(t, si, ctx, index.EdgeSimilarTo),
 		"concurrent merges of the same edge must collapse to exactly one row")
 }
 
@@ -193,27 +195,27 @@ func TestGraphDeleteEdges_ByDirectionAndType(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.RepoForTest().DB()
 
-	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
+	a, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
-	b, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
+	b, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
 	require.NoError(t, err)
-	ent, err := graphMergeNode(ctx, db, NodeEntity, map[string]string{"name": "ent"})
+	ent, err := graphMergeNode(ctx, db, index.NodeEntity, map[string]string{"name": "ent"})
 	require.NoError(t, err)
 
-	require.NoError(t, graphMergeEdge(ctx, db, a, ent, EdgeTagged))
-	require.NoError(t, graphMergeEdge(ctx, db, a, b, EdgeSimilarTo))
-	require.NoError(t, graphMergeEdge(ctx, db, b, a, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, db, a, ent, index.EdgeTagged))
+	require.NoError(t, graphMergeEdge(ctx, db, a, b, index.EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, db, b, a, index.EdgeSimilarTo))
 
 	// Outgoing-only, type-scoped: a-[SIMILAR_TO]->b goes, b-[SIMILAR_TO]->a stays,
 	// and a-[TAGGED]->ent is untouched.
-	require.NoError(t, graphDeleteOutgoingEdges(ctx, db, a, EdgeSimilarTo))
-	require.Equal(t, 1, countEdgesOfType(t, si, ctx, EdgeSimilarTo))
-	require.Equal(t, 1, countEdgesOfType(t, si, ctx, EdgeTagged))
+	require.NoError(t, graphDeleteOutgoingEdges(ctx, db, a, index.EdgeSimilarTo))
+	require.Equal(t, 1, countEdgesOfType(t, si, ctx, index.EdgeSimilarTo))
+	require.Equal(t, 1, countEdgesOfType(t, si, ctx, index.EdgeTagged))
 
 	// Incoming-only, type-scoped: removes b-[SIMILAR_TO]->a.
-	require.NoError(t, graphDeleteIncomingEdges(ctx, db, a, EdgeSimilarTo))
-	require.Equal(t, 0, countEdgesOfType(t, si, ctx, EdgeSimilarTo))
-	require.Equal(t, 1, countEdgesOfType(t, si, ctx, EdgeTagged))
+	require.NoError(t, graphDeleteIncomingEdges(ctx, db, a, index.EdgeSimilarTo))
+	require.Equal(t, 0, countEdgesOfType(t, si, ctx, index.EdgeSimilarTo))
+	require.Equal(t, 1, countEdgesOfType(t, si, ctx, index.EdgeTagged))
 }
 
 // TestGraphDetachDeleteNode_CascadesEdgesAndProps replaces cypher's
@@ -223,17 +225,17 @@ func TestGraphDetachDeleteNode_CascadesEdgesAndProps(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.RepoForTest().DB()
 
-	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
+	a, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
-	ent, err := graphMergeNode(ctx, db, NodeEntity, map[string]string{"name": "ent"})
+	ent, err := graphMergeNode(ctx, db, index.NodeEntity, map[string]string{"name": "ent"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, db, a, ent, EdgeTagged))
+	require.NoError(t, graphMergeEdge(ctx, db, a, ent, index.EdgeTagged))
 	require.NoError(t, graphSetNodeProps(ctx, db, ent, map[string]string{"extra": "x"}))
 
 	require.NoError(t, graphDetachDeleteNode(ctx, db, ent))
 
-	require.Equal(t, 0, countNodesWithLabel(t, si, ctx, NodeEntity), "label rows must cascade")
-	require.Equal(t, 0, countEdgesOfType(t, si, ctx, EdgeTagged), "incident edges must cascade")
+	require.Equal(t, 0, countNodesWithLabel(t, si, ctx, index.NodeEntity), "label rows must cascade")
+	require.Equal(t, 0, countEdgesOfType(t, si, ctx, index.EdgeTagged), "incident edges must cascade")
 
 	var props int
 	require.NoError(t, db.QueryRowContext(ctx,
@@ -241,7 +243,7 @@ func TestGraphDetachDeleteNode_CascadesEdgesAndProps(t *testing.T) {
 	require.Equal(t, 0, props, "props must cascade")
 
 	// The other node survives untouched.
-	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, NodeFact))
+	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, index.NodeFact))
 }
 
 // ── graphSimilarToNeighbours ─────────────────────────────────────────────────
@@ -263,7 +265,7 @@ func TestGraphSimilarToNeighbours_ReadsBothOrientations(t *testing.T) {
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
 
 	// One DIRECTED edge, a → b. Nothing points back at a.
-	require.NoError(t, graphMergeEdge(ctx, si.RepoForTest().DB(), a, b, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, si.RepoForTest().DB(), a, b, index.EdgeSimilarTo))
 
 	// Forward: anchored on the SOURCE. A directed-only reader also passes this.
 	fwd, err := graphSimilarToNeighbours(ctx, si.RepoForTest().DB(), []string{"kb/a.md"}, false)
@@ -288,7 +290,7 @@ func TestGraphSimilarToNeighbours_FiltersDeletedEndpoints(t *testing.T) {
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
-	require.NoError(t, graphMergeEdge(ctx, si.RepoForTest().DB(), a, b, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, si.RepoForTest().DB(), a, b, index.EdgeSimilarTo))
 
 	// Soft-delete the FAR endpoint (b), anchored on a. Excluded either way.
 	require.NoError(t, graphSetNodeProps(ctx, si.RepoForTest().DB(), b, map[string]string{"deleted": "true"}))
@@ -322,13 +324,13 @@ func TestGraphSimilarToNeighbours_TreatsMissingDeletedPropAsLive(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 
 	// No `deleted` property on either node.
-	a, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
+	a, err := graphMergeNode(ctx, si.RepoForTest().DB(), index.NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "aaaa"})
 	require.NoError(t, err)
-	b, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
+	b, err := graphMergeNode(ctx, si.RepoForTest().DB(), index.NodeFact,
 		map[string]string{"path": "kb/b.md", "blob_hash": "bbbb"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, si.RepoForTest().DB(), a, b, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, si.RepoForTest().DB(), a, b, index.EdgeSimilarTo))
 
 	got, err := graphSimilarToNeighbours(ctx, si.RepoForTest().DB(), []string{"kb/a.md"}, true)
 	require.NoError(t, err)
@@ -349,17 +351,17 @@ func TestGCOrphanedGraphNodes_CollectsEntityOrphans(t *testing.T) {
 
 	fact := mergeFactNode(t, si, "kb/a.md", "aaaa")
 
-	tagged, err := graphMergeNode(ctx, db, NodeEntity, map[string]string{"name": "kept"})
+	tagged, err := graphMergeNode(ctx, db, index.NodeEntity, map[string]string{"name": "kept"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, db, fact, tagged, EdgeTagged))
+	require.NoError(t, graphMergeEdge(ctx, db, fact, tagged, index.EdgeTagged))
 
-	orphan, err := graphMergeNode(ctx, db, NodeEntity, map[string]string{"name": "orphan"})
+	orphan, err := graphMergeNode(ctx, db, index.NodeEntity, map[string]string{"name": "orphan"})
 	require.NoError(t, err)
 
-	require.Equal(t, 2, countNodesWithLabel(t, si, ctx, NodeEntity))
-	require.NoError(t, si.GCOrphanedGraphNodesForTest(ctx, NodeEntity, EdgeTagged))
+	require.Equal(t, 2, countNodesWithLabel(t, si, ctx, index.NodeEntity))
+	require.NoError(t, si.GCOrphanedGraphNodesForTest(ctx, index.NodeEntity, index.EdgeTagged))
 
-	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, NodeEntity),
+	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, index.NodeEntity),
 		"the untagged Entity must be collected")
 
 	var n int
@@ -372,8 +374,8 @@ func TestGCOrphanedGraphNodes_CollectsEntityOrphans(t *testing.T) {
 	require.Equal(t, 0, n, "the collected orphan's properties cascade")
 
 	// The Fact node itself is never touched by entity GC.
-	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, NodeFact))
-	require.Equal(t, 1, countEdgesOfType(t, si, ctx, EdgeTagged))
+	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, index.NodeFact))
+	require.Equal(t, 1, countEdgesOfType(t, si, ctx, index.EdgeTagged))
 }
 
 // TestGCOrphanedGraphNodes_RequiresIncomingEdgeFromFact pins the source-label
@@ -384,16 +386,16 @@ func TestGCOrphanedGraphNodes_RequiresIncomingEdgeFromFact(t *testing.T) {
 	db := si.RepoForTest().DB()
 
 	// A Domain node pointed at by another Domain, not by a Fact.
-	parent, err := graphMergeNode(ctx, db, NodeDomain, map[string]string{"path": "tech"})
+	parent, err := graphMergeNode(ctx, db, index.NodeDomain, map[string]string{"path": "tech"})
 	require.NoError(t, err)
-	child, err := graphMergeNode(ctx, db, NodeDomain, map[string]string{"path": "tech/go"})
+	child, err := graphMergeNode(ctx, db, index.NodeDomain, map[string]string{"path": "tech/go"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, db, child, parent, EdgeDomainChildOf))
+	require.NoError(t, graphMergeEdge(ctx, db, child, parent, index.EdgeDomainChildOf))
 	// Wrong source label for the IN_DOMAIN predicate.
-	require.NoError(t, graphMergeEdge(ctx, db, child, parent, EdgeInDomain))
+	require.NoError(t, graphMergeEdge(ctx, db, child, parent, index.EdgeInDomain))
 
-	require.NoError(t, si.GCOrphanedGraphNodesForTest(ctx, NodeDomain, EdgeInDomain))
-	require.Equal(t, 0, countNodesWithLabel(t, si, ctx, NodeDomain),
+	require.NoError(t, si.GCOrphanedGraphNodesForTest(ctx, index.NodeDomain, index.EdgeInDomain))
+	require.Equal(t, 0, countNodesWithLabel(t, si, ctx, index.NodeDomain),
 		"only an IN_DOMAIN edge FROM a Fact keeps a Domain alive")
 }
 
@@ -404,13 +406,13 @@ func TestGCOrphanedGraphNodes_KeepsReferencedDomain(t *testing.T) {
 	db := si.RepoForTest().DB()
 
 	fact := mergeFactNode(t, si, "kb/a.md", "aaaa")
-	dom, err := graphMergeNode(ctx, db, NodeDomain, map[string]string{"path": "tech/go"})
+	dom, err := graphMergeNode(ctx, db, index.NodeDomain, map[string]string{"path": "tech/go"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, db, fact, dom, EdgeInDomain))
+	require.NoError(t, graphMergeEdge(ctx, db, fact, dom, index.EdgeInDomain))
 
-	require.NoError(t, si.GCOrphanedGraphNodesForTest(ctx, NodeDomain, EdgeInDomain))
-	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, NodeDomain))
-	require.Equal(t, 1, countEdgesOfType(t, si, ctx, EdgeInDomain))
+	require.NoError(t, si.GCOrphanedGraphNodesForTest(ctx, index.NodeDomain, index.EdgeInDomain))
+	require.Equal(t, 1, countNodesWithLabel(t, si, ctx, index.NodeDomain))
+	require.Equal(t, 1, countEdgesOfType(t, si, ctx, index.EdgeInDomain))
 }
 
 // TestGCOrphanedGraphNodes_NoOrphansIsANoOp guards the set-based DELETE against
@@ -420,13 +422,13 @@ func TestGCOrphanedGraphNodes_NoOrphansIsANoOp(t *testing.T) {
 	db := si.RepoForTest().DB()
 
 	fact := mergeFactNode(t, si, "kb/a.md", "aaaa")
-	ent, err := graphMergeNode(ctx, db, NodeEntity, map[string]string{"name": "kept"})
+	ent, err := graphMergeNode(ctx, db, index.NodeEntity, map[string]string{"name": "kept"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, db, fact, ent, EdgeTagged))
+	require.NoError(t, graphMergeEdge(ctx, db, fact, ent, index.EdgeTagged))
 
 	var before int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes`).Scan(&before))
-	require.NoError(t, si.GCOrphanedGraphNodesForTest(ctx, NodeEntity, EdgeTagged))
+	require.NoError(t, si.GCOrphanedGraphNodesForTest(ctx, index.NodeEntity, index.EdgeTagged))
 
 	var after int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes`).Scan(&after))
@@ -440,28 +442,28 @@ func TestEdges_MergeIdentityIndexIsEnforced(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.RepoForTest().DB()
 
-	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
+	a, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
-	b, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
+	b, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
 	require.NoError(t, err)
 
 	// A raw duplicate insert of a relationship edge must be rejected by the DB,
 	// not merely avoided by application code.
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, EdgeSimilarTo)
+		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, index.EdgeSimilarTo)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, EdgeSimilarTo)
+		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, index.EdgeSimilarTo)
 	require.Error(t, err, "a duplicate SIMILAR_TO edge must violate ux_edges_merge_identity")
 
 	// DERIVED_FROM is exempt — multiple lineage edges per (src,tgt) are correct.
 	for range 3 {
 		_, err = db.ExecContext(ctx,
-			`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, EdgeDerivedFrom)
+			`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, a, b, index.EdgeDerivedFrom)
 		require.NoError(t, err, "DERIVED_FROM must remain a multi-edge")
 	}
 	var n int
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&n))
+		`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeDerivedFrom).Scan(&n))
 	require.Equal(t, 3, n)
 }

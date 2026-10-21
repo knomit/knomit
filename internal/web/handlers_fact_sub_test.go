@@ -8,22 +8,23 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
 // stubFactSubProvider implements factSubProvider for tests.
 type stubFactSubProvider struct {
-	entries     []store.LogEntryWithTags
+	entries     []index.LogEntryWithTags
 	next        string
 	prev        string
 	logErr      error
-	explain     store.ExplainResult
+	explain     index.ExplainResult
 	explainErr  error
-	incoming    []store.RefSummary
+	incoming    []index.RefSummary
 	incomingErr error
-	outgoing    []store.RefSummary
+	outgoing    []index.RefSummary
 	outgoingErr error
 	notLive     bool // when true, FactLiveAtCommit reports the fact retracted/absent
 	liveErr     error
@@ -34,28 +35,28 @@ type stubFactSubProvider struct {
 func (s *stubFactSubProvider) LogPaginatedForPath(
 	_ context.Context,
 	_ *repos.RepoInstance, _, _ string, _ int, _, _, _ string,
-) ([]store.LogEntryWithTags, string, string, error) {
+) ([]index.LogEntryWithTags, string, string, error) {
 	return s.entries, s.next, s.prev, s.logErr
 }
 
 func (s *stubFactSubProvider) ExplainFact(
 	_ context.Context,
 	_ *repos.RepoInstance, _, _ string,
-) (store.ExplainResult, error) {
+) (index.ExplainResult, error) {
 	return s.explain, s.explainErr
 }
 
 func (s *stubFactSubProvider) IncomingAtCommit(
 	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
-) ([]store.RefSummary, error) {
+) ([]index.RefSummary, error) {
 	return s.incoming, s.incomingErr
 }
 
 func (s *stubFactSubProvider) OutgoingAtCommit(
 	_ context.Context,
 	_ *repos.RepoInstance, _, _, _ string,
-) ([]store.RefSummary, error) {
+) ([]index.RefSummary, error) {
 	return s.outgoing, s.outgoingErr
 }
 
@@ -75,8 +76,8 @@ func (s *stubFactSubProvider) FactExistsAt(
 
 func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {
 	provider := &stubFactSubProvider{
-		entries: []store.LogEntryWithTags{
-			{Commit: "abc123", Date: "2024-01-01T10:00:00Z", Message: "learn fact", Operation: "learn", Author: store.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"}},
+		entries: []index.LogEntryWithTags{
+			{Commit: "abc123", Date: "2024-01-01T10:00:00Z", Message: "learn fact", Operation: "learn", Author: index.CommitAuthor{Name: "agent-7", Email: "agent-7+learn@agents.knomit.io"}},
 			{Commit: "def456", Date: "2024-01-02T10:00:00Z", Message: "update fact", Operation: "update"},
 		},
 		next: "def456",
@@ -108,7 +109,7 @@ func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {
 			Commits []struct {
 				Commit    string             `json:"commit"`
 				Operation string             `json:"operation"`
-				Author    store.CommitAuthor `json:"author"`
+				Author    index.CommitAuthor `json:"author"`
 				Links     hal.LinkMap        `json:"_links"`
 			} `json:"commits"`
 		} `json:"_embedded"`
@@ -165,8 +166,8 @@ func TestHandleFactCommits_UnknownRepo_Returns404(t *testing.T) {
 
 func TestHandleFactIncoming_ReturnsHALCollection(t *testing.T) {
 	provider := &stubFactSubProvider{
-		explain: store.ExplainResult{
-			Incoming: []store.RefSummary{
+		explain: index.ExplainResult{
+			Incoming: []index.RefSummary{
 				{Path: "know/b.md", Title: "Fact B", Deleted: false},
 				{Path: "know/c.md", Title: "Fact C (deleted)", Deleted: true},
 			},
@@ -230,8 +231,8 @@ func TestHandleFactIncoming_ReturnsHALCollection(t *testing.T) {
 
 func TestHandleFactOutgoing_ReturnsHALCollection(t *testing.T) {
 	provider := &stubFactSubProvider{
-		explain: store.ExplainResult{
-			Outgoing: []store.RefSummary{
+		explain: index.ExplainResult{
+			Outgoing: []index.RefSummary{
 				{Path: "know/x.md", Title: "Fact X"},
 			},
 		},
@@ -266,7 +267,7 @@ func TestHandleFactOutgoing_ReturnsHALCollection(t *testing.T) {
 
 func TestHandleFactIncoming_FactNotLive_Returns404(t *testing.T) {
 	provider := &stubFactSubProvider{
-		explainErr: store.ErrFactNotLive,
+		explainErr: index.ErrFactNotLive,
 	}
 	s := &Server{
 		Manager: newTestManagerWithRepos(t, "alpha"),
@@ -300,7 +301,7 @@ func TestHandleFactIncoming_FactNotLive_Returns404(t *testing.T) {
 
 func TestHandleFactOutgoing_FactNotLive_Returns404(t *testing.T) {
 	provider := &stubFactSubProvider{
-		explainErr: store.ErrFactNotLive,
+		explainErr: index.ErrFactNotLive,
 	}
 	s := &Server{
 		Manager: newTestManagerWithRepos(t, "alpha"),
@@ -346,8 +347,8 @@ func TestHandleFactIncoming_StoreError_Returns500(t *testing.T) {
 // returned on each ref entry so the UI can color-code chips.
 func TestFactIncoming_IncludesType(t *testing.T) {
 	provider := &stubFactSubProvider{
-		explain: store.ExplainResult{
-			Incoming: []store.RefSummary{
+		explain: index.ExplainResult{
+			Incoming: []index.RefSummary{
 				{Path: "kb/p.md", Title: "P", Type: "principle", Commit: "abc1234"},
 			},
 		},
@@ -390,8 +391,8 @@ func TestFactIncoming_IncludesType(t *testing.T) {
 // TestFactOutgoing_IncludesType verifies type is round-tripped on outgoing.
 func TestFactOutgoing_IncludesType(t *testing.T) {
 	provider := &stubFactSubProvider{
-		explain: store.ExplainResult{
-			Outgoing: []store.RefSummary{
+		explain: index.ExplainResult{
+			Outgoing: []index.RefSummary{
 				{Path: "kb/c.md", Title: "C", Type: "concept", Commit: "def5678"},
 			},
 		},
@@ -434,7 +435,7 @@ func TestFactOutgoing_IncludesType(t *testing.T) {
 func TestBuildGraphRefItems_AnchorsToSourceCommit(t *testing.T) {
 	b := hal.URLBuilder{Base: "https://k.example.com"}
 	a := hal.Anchor{Branch: "main"}
-	refs := []store.RefSummary{
+	refs := []index.RefSummary{
 		{Path: "kb/d.md", Title: "D", Commit: "1234abc"},
 		{Path: "kb/d.md", Title: "D v2", Commit: "1236def"},
 	}

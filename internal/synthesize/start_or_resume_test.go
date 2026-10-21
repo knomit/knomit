@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -388,9 +390,9 @@ func TestStartKey_EncodesListsAndFoldsLikeTheFilter(t *testing.T) {
 	// Unicode forms follow the filter too: DomainTagMatches normalises to NFC,
 	// EntityTagMatches only case-folds, so NFC and NFD are one domain but two
 	// entities.
-	require.True(t, store.DomainTagMatches("caf\u00e9", "cafe\u0301"))
+	require.True(t, index.DomainTagMatches("caf\u00e9", "cafe\u0301"))
 	require.Equal(t, key([]string{"caf\u00e9"}, nil), key([]string{"cafe\u0301"}, nil))
-	require.False(t, store.EntityTagMatches("caf\u00e9", "cafe\u0301"))
+	require.False(t, index.EntityTagMatches("caf\u00e9", "cafe\u0301"))
 	require.NotEqual(t, key(nil, []string{"caf\u00e9"}), key(nil, []string{"cafe\u0301"}))
 }
 

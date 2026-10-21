@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,7 +68,7 @@ func metaValue(t *testing.T, svc *Service, key string) (string, bool) {
 func TestMigration016_CarriesGlobalVersionOntoEveryKnownBranch(t *testing.T) {
 	svc := twoBranchStore(t)
 	ctx := context.Background()
-	simulatePre16(t, svc, GraphSchemaVersion)
+	simulatePre16(t, svc, index.GraphSchemaVersion)
 
 	_, err := svc.si.RepoForTest().DB().Exec(migrationSQL(t, "000016_per_branch_graph_schema_version.up.sql"))
 	require.NoError(t, err)
@@ -117,7 +119,7 @@ func TestMigration016_DownCollapsesOnlyWhenBranchesAgree(t *testing.T) {
 		for _, branch := range []string{"main", "agent/x"} {
 			_, err := svc.si.RepoForTest().DB().Exec(
 				`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
-				schemaVersionKey(branch), GraphSchemaVersion)
+				schemaVersionKey(branch), index.GraphSchemaVersion)
 			require.NoError(t, err)
 		}
 
@@ -126,14 +128,14 @@ func TestMigration016_DownCollapsesOnlyWhenBranchesAgree(t *testing.T) {
 
 		v, ok := metaValue(t, svc, "graph_schema_version")
 		require.True(t, ok, "a unanimous set collapses to the global key")
-		require.Equal(t, GraphSchemaVersion, v)
+		require.Equal(t, index.GraphSchemaVersion, v)
 	})
 
 	t.Run("disagree", func(t *testing.T) {
 		svc := twoBranchStore(t)
 		_, err := svc.si.RepoForTest().DB().Exec(
 			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
-			schemaVersionKey("main"), GraphSchemaVersion)
+			schemaVersionKey("main"), index.GraphSchemaVersion)
 		require.NoError(t, err)
 		_, err = svc.si.RepoForTest().DB().Exec(
 			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, '2')`, schemaVersionKey("agent/x"))
@@ -150,7 +152,7 @@ func TestMigration016_DownCollapsesOnlyWhenBranchesAgree(t *testing.T) {
 	svc := twoBranchStore(t)
 	_, err := svc.si.RepoForTest().DB().Exec(
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
-		schemaVersionKey("main"), GraphSchemaVersion)
+		schemaVersionKey("main"), index.GraphSchemaVersion)
 	require.NoError(t, err)
 	_, err = svc.si.RepoForTest().DB().Exec(down)
 	require.NoError(t, err)

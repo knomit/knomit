@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
@@ -384,7 +386,7 @@ func readNode(ctx context.Context, s mcpStore, branch, path, commit string) (par
 // the content it was edited from.
 // When older revisions remain, HistoryCursor carries the keyset position, bound
 // to the binding, mount and path by bind.
-func buildHistory(ctx context.Context, s mcpStore, branch, path, anchor string, pos *store.PathHistoryCursor, size int, bind historyCursor) (*explainHistory, error) {
+func buildHistory(ctx context.Context, s mcpStore, branch, path, anchor string, pos *index.PathHistoryCursor, size int, bind historyCursor) (*explainHistory, error) {
 	revs, next, err := s.history.PathHistory(ctx, branch, path, anchor, pos, size)
 	if err != nil {
 		return nil, err
@@ -499,7 +501,7 @@ func explainHistoryPage(ctx context.Context, b *repos.Binding, file, token strin
 		return mcpgo.NewToolResultError(errUnknownHistoryCursor), nil
 	}
 
-	pos := &store.PathHistoryCursor{Frontier: hc.Frontier, AnchorOnBranch: hc.AnchorOnBranch}
+	pos := &index.PathHistoryCursor{Frontier: hc.Frontier, AnchorOnBranch: hc.AnchorOnBranch}
 	history, err := buildHistory(ctx, t.s, t.rt.Branch, t.rel, hc.Anchor, pos, explainHistoryPageSize, hc)
 	if errors.Is(err, store.ErrHistoryChanged) {
 		return mcpgo.NewToolResultError(errHistoryChanged), nil

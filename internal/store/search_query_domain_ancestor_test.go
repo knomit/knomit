@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,7 +48,7 @@ func TestSearch_DomainAncestor_ExactAndParent(t *testing.T) {
 		"kb/p/d.md": "ui",
 	})
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		DomainAncestor: []string{"store/resolver"},
 	})
 	require.NoError(t, err)
@@ -62,7 +64,7 @@ func TestSearch_DomainAncestor_NoMatch(t *testing.T) {
 		"kb/p/b.md": "bridge",
 	})
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		DomainAncestor: []string{"store/resolver"},
 	})
 	require.NoError(t, err)
@@ -78,7 +80,7 @@ func TestSearch_DomainAncestor_DeepDescendant(t *testing.T) {
 		"kb/p/a.md": "store",
 	})
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		DomainAncestor: []string{"store/resolver/cache/inner"},
 	})
 	require.NoError(t, err)
@@ -94,7 +96,7 @@ func TestSearch_DomainAncestor_GlobalDoesNotLeak(t *testing.T) {
 		"kb/p/a.md": "global",
 	})
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		DomainAncestor: []string{"store/resolver"},
 	})
 	require.NoError(t, err)

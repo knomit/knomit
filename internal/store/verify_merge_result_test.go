@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -37,7 +39,7 @@ func TestValidation_AGitThatCannotMergeIsNeverAPass(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "git"), []byte(shim), 0o755))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	_, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	_, err = verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.Error(t, err, "could not run, never a pass")
 	require.Contains(t, err.Error(), "git merge-tree (git 2.38 or later)")
 }
@@ -65,11 +67,11 @@ func TestValidation_ACandidatesGitattributesDoNotChooseItsMerge(t *testing.T) {
 	_, err = os.Stat(filepath.Join(wt, ".gitattributes"))
 	require.NoError(t, err, "fixture: the work tree holds the candidate's union attribute")
 
-	v, err := CheckRange(RangeInput{KBDir: wt, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: wt, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	require.Equal(t, 1, v.ExitCode(), "%+v", v.Refused)
 	require.Len(t, v.Refused, 1)
-	require.Equal(t, RuleMergeConflict, v.Refused[0].Rule)
+	require.Equal(t, verify.RuleMergeConflict, v.Refused[0].Rule)
 }
 
 // noteConf is a note with a title and a confidence.
@@ -106,11 +108,11 @@ func TestValidation_TwoValidSidesThatMergeIntoAnInvalidFactAreRefused(t *testing
 	T := f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("a long title", 0.99)), "agent-x", nil, R)
 	f.ref(f.kb, "cand", T)
 
-	v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	require.Equal(t, 1, v.ExitCode(), "the merge lands an invalid fact: %+v", v.Refused)
 	require.Len(t, v.Refused, 1)
-	require.Equal(t, RuleValidation, v.Refused[0].Rule)
+	require.Equal(t, verify.RuleValidation, v.Refused[0].Rule)
 	require.Equal(t, T.Hash.String(), v.Refused[0].Commit)
 	require.Contains(t, v.Refused[0].Reason, "kb/notes/x.md")
 	require.Contains(t, v.Refused[0].Reason, "confident-notes-have-long-titles")
@@ -120,7 +122,7 @@ func TestValidation_TwoValidSidesThatMergeIntoAnInvalidFactAreRefused(t *testing
 	// is the branch's tip and it is admitted.
 	fixed := f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("a fine title", 0.99)), "agent-x", nil, T, mainC)
 	f.ref(f.kb, "cand", fixed)
-	v, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	v, err = verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	require.Equal(t, 0, v.ExitCode(), "%+v", v.Refused)
 }
@@ -141,17 +143,17 @@ func TestValidation_ACandidateThatConflictsWithMainIsRefused(t *testing.T) {
 	// Clean and valid: the branch adds another fact.
 	ok := f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("a long title", 0.9), "kb/notes/y.md", noteConf("why", 0.5)), "agent-x", nil, R)
 	f.ref(f.kb, "cand", ok)
-	v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	require.Equal(t, 0, v.ExitCode(), "%+v", v.Refused)
 
 	// Conflict: both sides rewrite the title line.
 	T := f.commit(f.kb, with(base, "kb/notes/x.md", noteConf("the branch's long title", 0.9)), "agent-x", nil, R)
 	f.ref(f.kb, "cand", T)
-	v, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	v, err = verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	require.Equal(t, 1, v.ExitCode(), "%+v", v.Refused)
 	require.Len(t, v.Refused, 1)
-	require.Equal(t, RuleMergeConflict, v.Refused[0].Rule)
+	require.Equal(t, verify.RuleMergeConflict, v.Refused[0].Rule)
 	require.Equal(t, T.Hash.String(), v.Refused[0].Commit)
 }

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
@@ -23,8 +25,8 @@ func newVerifyRepo(t *testing.T) *Service {
 	return svc
 }
 
-func categories(report IntegrityReport, cat string) []IntegrityIssue {
-	var out []IntegrityIssue
+func categories(report fsck.IntegrityReport, cat string) []fsck.IntegrityIssue {
+	var out []fsck.IntegrityIssue
 	for _, i := range report.Issues {
 		if i.Category == cat {
 			out = append(out, i)
@@ -51,7 +53,7 @@ func TestVerify_UnindexedBranchIsSkippedNotReported(t *testing.T) {
 	foreign := plumbing.NewBranchReferenceName("agent/other-machine-deadbeef")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(foreign, head.Hash())))
 
-	report, err := svc.Verify(ctx, VerifyOpts{})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 
 	require.Contains(t, report.Skipped, "agent/other-machine-deadbeef",
@@ -75,7 +77,7 @@ func TestVerify_AllBranchesOptsBackIn(t *testing.T) {
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewBranchReferenceName("agent/other-machine-deadbeef"), head.Hash())))
 
-	report, err := svc.Verify(ctx, VerifyOpts{AllBranches: true})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{AllBranches: true})
 	require.NoError(t, err)
 	require.Contains(t, report.Branches, "agent/other-machine-deadbeef")
 	require.Empty(t, report.Skipped)
@@ -94,10 +96,10 @@ func TestVerify_AllBranchesStillNamesTheGeneratedRefRepair(t *testing.T) {
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewBranchReferenceName("okf/main"), head.Hash())))
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{AllBranches: true})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{AllBranches: true})
 	require.NoError(t, err)
 
-	found := categories(report, CategoryGeneratedRefs)
+	found := categories(report, fsck.CategoryGeneratedRefs)
 	require.Len(t, found, 1, "the generated-ref warning must not be suppressed by --all-branches")
 	require.Contains(t, found[0].Detail, "--prune-generated-refs")
 }
@@ -118,7 +120,7 @@ func TestVerify_FreshRepoStillChecksItsAgentBranch(t *testing.T) {
 		`SELECT COUNT(*) FROM meta WHERE key LIKE 'last_commit:%'`).Scan(&metaRows))
 	require.Zero(t, metaRows, "precondition: a fresh repo has no last_commit row")
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.Contains(t, report.Branches, "agent/test",
 		"the agent branch must be checked even before the index has ever synced it")
@@ -135,13 +137,13 @@ func TestVerify_GeneratedRefIsWarnedNotErrored(t *testing.T) {
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
 		plumbing.NewBranchReferenceName("okf/main"), head.Hash())))
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "generated refs must not fail the run: %v", report.Issues)
 
-	found := categories(report, CategoryGeneratedRefs)
+	found := categories(report, fsck.CategoryGeneratedRefs)
 	require.Len(t, found, 1)
-	require.Equal(t, SeverityWarning, found[0].Severity)
+	require.Equal(t, fsck.SeverityWarning, found[0].Severity)
 	require.Equal(t, "okf/main", found[0].Branch)
 	require.Contains(t, found[0].Detail, "--prune-generated-refs")
 }
@@ -192,9 +194,9 @@ func TestPruneGeneratedRefs_RemovesResidueAndNothingElse(t *testing.T) {
 		`SELECT COUNT(*) FROM kv WHERE key LIKE 'okf:marker:%'`).Scan(&markers))
 	require.Zero(t, markers)
 
-	report, err := svc.Verify(ctx, VerifyOpts{})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
-	require.Empty(t, categories(report, CategoryGeneratedRefs),
+	require.Empty(t, categories(report, fsck.CategoryGeneratedRefs),
 		"after the prune there is nothing left to warn about")
 }
 
@@ -214,11 +216,11 @@ func TestVerify_DetectsCommitParentsDrift(t *testing.T) {
 		"0000000000000000000000000000000000000000", res.CommitHash)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(ctx, VerifyOpts{})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
-	found := categories(report, CategoryCommitParents)
+	found := categories(report, fsck.CategoryCommitParents)
 	require.NotEmpty(t, found, "a rewritten parent edge must be reported: %v", report.Issues)
-	require.Equal(t, SeverityError, found[0].Severity)
+	require.Equal(t, fsck.SeverityError, found[0].Severity)
 }
 
 // An unreadable commit_parents table must produce ONE issue, not one per
@@ -244,10 +246,10 @@ func TestVerify_UnreadableCommitParentsDoesNotFabricateOneErrorPerCommit(t *test
 	_, err := svc.rh.Storer().DB().Exec(`DROP TABLE commit_parents`)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(ctx, VerifyOpts{})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 
-	found := categories(report, CategoryCommitParents)
+	found := categories(report, fsck.CategoryCommitParents)
 	require.Len(t, found, 1, "an unreadable table is ONE finding, not one per commit: %v", found)
 	require.Contains(t, found[0].Detail, "read commit_parents")
 	require.Contains(t, found[0].Detail, "skipped")
@@ -257,9 +259,9 @@ func TestVerify_UnreadableCommitParentsDoesNotFabricateOneErrorPerCommit(t *test
 // correct there, and reporting it would make every repo dirty from birth.
 func TestVerify_RootCommitWithoutParentRowsIsClean(t *testing.T) {
 	svc := newVerifyRepo(t)
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
-	require.Empty(t, categories(report, CategoryCommitParents),
+	require.Empty(t, categories(report, fsck.CategoryCommitParents),
 		"a root commit's missing parent rows are correct, not drift")
 }
 
@@ -274,11 +276,11 @@ func TestVerify_DetectsCommitLogOrphan(t *testing.T) {
 		 VALUES ('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 'kb/ghost.md', 0, 'ghost')`)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
-	found := categories(report, CategoryCommitLog)
+	found := categories(report, fsck.CategoryCommitLog)
 	require.NotEmpty(t, found, "a commit_log row for a nonexistent commit must be reported")
-	require.Equal(t, SeverityError, found[0].Severity)
+	require.Equal(t, fsck.SeverityError, found[0].Severity)
 }
 
 // A no-op commit (a write whose blob equals the parent's at the same path) has
@@ -296,7 +298,7 @@ func TestVerify_CommitWithoutCommitLogRowsIsClean(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "agent/test", "kb/decisions/x/cccccccc.md", body, "again", "learn")
 	require.NoError(t, err)
 
-	report, err := svc.Verify(ctx, VerifyOpts{})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "a no-op commit must not be reported: %v", report.Issues)
 }
@@ -320,11 +322,11 @@ func TestVerify_DetectsDerivedTableOrphan(t *testing.T) {
 	_, err = svc.rh.Storer().DB().Exec(`PRAGMA foreign_keys = ON`)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
-	found := categories(report, CategoryDerivedTables)
+	found := categories(report, fsck.CategoryDerivedTables)
 	require.NotEmpty(t, found, "an orphan fact_domains row must be reported")
-	require.Equal(t, SeverityError, found[0].Severity)
+	require.Equal(t, fsck.SeverityError, found[0].Severity)
 }
 
 // Both writers insert canonicalizeDomain(d) into fact_domains AND
@@ -345,13 +347,13 @@ func TestVerify_DomainCanonicalizationSkewIsWarningOnly(t *testing.T) {
 		factID)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(),
 		"a canonicalization skew must not fail the run: %v", report.Issues)
-	found := categories(report, CategoryDerivedTables)
+	found := categories(report, fsck.CategoryDerivedTables)
 	require.NotEmpty(t, found)
-	require.Equal(t, SeverityWarning, found[0].Severity)
+	require.Equal(t, fsck.SeverityWarning, found[0].Severity)
 	require.Contains(t, found[0].Detail, "canonicalizeDomain drift")
 }
 
@@ -363,11 +365,11 @@ func TestVerify_DetectsDirtySchemaVersion(t *testing.T) {
 	_, err := svc.rh.Storer().DB().Exec(`UPDATE schema_migrations SET dirty = 1`)
 	require.NoError(t, err)
 
-	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
-	found := categories(report, CategorySchemaVersion)
+	found := categories(report, fsck.CategorySchemaVersion)
 	require.NotEmpty(t, found, "a dirty migration must be reported")
-	require.Equal(t, SeverityError, found[0].Severity)
+	require.Equal(t, fsck.SeverityError, found[0].Severity)
 	require.Contains(t, found[0].Detail, "DIRTY")
 }
 
@@ -414,11 +416,11 @@ func TestVerify_ReportOrderIsStable(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	first, err := svc.Verify(ctx, VerifyOpts{})
+	first, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.NotEmpty(t, first.Issues)
 	for range 5 {
-		next, err := svc.Verify(ctx, VerifyOpts{})
+		next, err := svc.Verify(ctx, fsck.VerifyOpts{})
 		require.NoError(t, err)
 		require.Equal(t, first.Issues, next.Issues, "two runs over an unchanged repo must agree exactly")
 	}
@@ -432,6 +434,6 @@ func TestVerify_HonoursContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := svc.Verify(ctx, VerifyOpts{})
+	_, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.ErrorIs(t, err, context.Canceled)
 }

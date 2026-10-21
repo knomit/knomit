@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 
+	"knomit/internal/store/fleetrec"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -45,7 +47,7 @@ const leaveRevokeReason = "left the fleet"
 // leaf, and a left record written before leaf_serial existed revokes nothing
 // (its operator revokes by hand). GET /fleet/members' revoke_due reads this
 // same rule.
-func leftLeafDue(f store.Fleet, mem store.FleetMember) *x509.Certificate {
+func leftLeafDue(f fleetrec.Fleet, mem fleetrec.Member) *x509.Certificate {
 	if f.PKI == nil || f.PKI.CRL == nil || mem.State != fact.MemberLeft || mem.LeafSerial == "" {
 		return nil
 	}

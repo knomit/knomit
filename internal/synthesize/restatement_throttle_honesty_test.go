@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -171,7 +173,7 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	// Out-rank, do not clear.
 	ids := env.liveFactIDs()
 	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, nil,
-		[]store.RestatementPair{{
+		[]vocab.RestatementPair{{
 			APath: "kb/f100.md", BPath: "kb/gone.md",
 			AFactID: ids["kb/f100.md"], BFactID: 999999,
 			TitleCos: 0.999,
@@ -202,7 +204,7 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	// old code the dropped session consumed the slot, so this session would be
 	// silent and the corpus would wait another full interval for nothing.
 	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, nil,
-		[]store.RestatementPair{{
+		[]vocab.RestatementPair{{
 			APath: "kb/f101.md", BPath: "kb/f102.md",
 			AFactID: ids["kb/f101.md"], BFactID: ids["kb/f102.md"],
 			TitleCos: 0.9999,

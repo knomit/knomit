@@ -5,6 +5,10 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/gitserve"
+
+	"knomit/internal/store/fleetrec"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -19,9 +23,9 @@ const hostV1 = "# knomit fleet host v1\nurl: https://hub.example:7443/git/fleet\
 // judgeEntry judges c as judgeIncoming does (a member's branch entering the
 // fleet repository): the fleet and the ontology at the fixture's main, the
 // fleet repository judging itself, entry set.
-func (f *rangeFixture) judgeEntry(c *object.Commit) (Refusal, bool) {
+func (f *rangeFixture) judgeEntry(c *object.Commit) (verify.Refusal, bool) {
 	f.t.Helper()
-	fleet, err := LoadFleetAt(f.fleetDir, "main", "")
+	fleet, err := fleetrec.LoadFleetAt(f.fleetDir, "main", "")
 	require.NoError(f.t, err)
 	ref, err := f.fleet.Storer.Reference(plumbing.NewBranchReferenceName("main"))
 	require.NoError(f.t, err)
@@ -60,17 +64,17 @@ func TestHostRecord_AMemberBranchNeverWritesIt(t *testing.T) {
 		want  string // "" = admitted
 	}{
 		{"edits its own record (control)", true, func(b map[string]string) map[string]string { return with(b, own, b[own]+"\nv2\n") }, "agent-x", ""},
-		{"adds the host record", false, func(b map[string]string) map[string]string { return with(b, fact.FleetHostPath, hostV1) }, "agent-x", RuleHostRecord},
-		{"rewrites the host record", true, func(b map[string]string) map[string]string { return with(b, fact.FleetHostPath, evil) }, "agent-x", RuleHostRecord},
-		{"deletes the host record", true, func(b map[string]string) map[string]string { return without(b, fact.FleetHostPath) }, "agent-x", RuleHostRecord},
-		{"adds it in another case spelling", false, func(b map[string]string) map[string]string { return with(b, "artifacts/fleet/HOST", hostV1) }, "agent-x", RuleHostRecord},
+		{"adds the host record", false, func(b map[string]string) map[string]string { return with(b, fact.FleetHostPath, hostV1) }, "agent-x", verify.RuleHostRecord},
+		{"rewrites the host record", true, func(b map[string]string) map[string]string { return with(b, fact.FleetHostPath, evil) }, "agent-x", verify.RuleHostRecord},
+		{"deletes the host record", true, func(b map[string]string) map[string]string { return without(b, fact.FleetHostPath) }, "agent-x", verify.RuleHostRecord},
+		{"adds it in another case spelling", false, func(b map[string]string) map[string]string { return with(b, "artifacts/fleet/HOST", hostV1) }, "agent-x", verify.RuleHostRecord},
 		// The master marker (fact.FleetMasterPath) is guarded by the same rule.
-		{"names itself the acting master", false, func(b map[string]string) map[string]string { return with(b, fact.FleetMasterPath, "agent-x\n") }, "agent-x", RuleHostRecord},
-		{"rewrites the master marker", true, func(b map[string]string) map[string]string { return with(b, fact.FleetMasterPath, "agent-x\n") }, "agent-x", RuleHostRecord},
-		{"deletes the master marker", true, func(b map[string]string) map[string]string { return without(b, fact.FleetMasterPath) }, "agent-x", RuleHostRecord},
+		{"names itself the acting master", false, func(b map[string]string) map[string]string { return with(b, fact.FleetMasterPath, "agent-x\n") }, "agent-x", verify.RuleHostRecord},
+		{"rewrites the master marker", true, func(b map[string]string) map[string]string { return with(b, fact.FleetMasterPath, "agent-x\n") }, "agent-x", verify.RuleHostRecord},
+		{"deletes the master marker", true, func(b map[string]string) map[string]string { return without(b, fact.FleetMasterPath) }, "agent-x", verify.RuleHostRecord},
 		{"a self-registration that also writes it", false, func(b map[string]string) map[string]string {
 			return with(b, "kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, j.PublicKey()), fact.FleetHostPath, hostV1)
-		}, "joiner", RuleHostRecord},
+		}, "joiner", verify.RuleHostRecord},
 		{"a self-registration alone (control)", false, func(b map[string]string) map[string]string {
 			return with(b, "kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, j.PublicKey()))
 		}, "joiner", ""},
@@ -131,7 +135,7 @@ func TestHostRecord_AMemberMergesTheMastersChange(t *testing.T) {
 	dirty := f.commit(f.fleet, with(merged, fact.FleetHostPath, "# knomit fleet host v1\nurl: https://evil.example/git/fleet\n"), "agent-x", x, side, main2)
 	r, ok = f.judgeEntry(dirty)
 	require.False(t, ok)
-	require.Equal(t, RuleHostRecord, r.Rule)
+	require.Equal(t, verify.RuleHostRecord, r.Rule)
 
 	// A merge of main that REVERTS the master's change: it keeps its own
 	// side's tree (no host record) plus one more edit of the member's own
@@ -141,7 +145,7 @@ func TestHostRecord_AMemberMergesTheMastersChange(t *testing.T) {
 	reverted := f.commit(f.fleet, with(base, own, base[own]+"\nv2\nv3\n"), "agent-x", x, side, main2)
 	r, ok = f.judgeEntry(reverted)
 	require.False(t, ok, "a merge that reverts the master's host record is admitted")
-	require.Equal(t, RuleHostRecord, r.Rule, r.Reason)
+	require.Equal(t, verify.RuleHostRecord, r.Rule, r.Reason)
 }
 
 // On a knomit host the push of a member's branch that writes the host record
@@ -159,7 +163,7 @@ func TestHostRecord_ReceivePackRefusesCheckRangeAdmits(t *testing.T) {
 	extra["kb/members/rogue/1.md"] = memberFile("rogue", fact.MemberActive, r.PublicKey())
 	h := newFleetPushHost(t, extra)
 	fp, _ := pusherOf(t, r)
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (Fleet, error) {
+	h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (fleetrec.Fleet, error) {
 		return h.svc.FleetAt("main")
 	}})
 
@@ -171,10 +175,10 @@ func TestHostRecord_ReceivePackRefusesCheckRangeAdmits(t *testing.T) {
 	require.Error(t, err)
 	m := pushRuleRE.FindStringSubmatch(err.Error())
 	require.NotNil(t, m, "unexpected push error: %v", err)
-	require.Equal(t, RuleHostRecord, m[1])
+	require.Equal(t, verify.RuleHostRecord, m[1])
 	require.Equal(t, plumbing.ZeroHash, h.ref("agent/rogue"), "a refused branch is not created")
 
-	v, err := CheckRange(RangeInput{KBDir: dir, Main: "refs/remotes/origin/main", Candidate: c.Hash.String(),
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: dir, Main: "refs/remotes/origin/main", Candidate: c.Hash.String(),
 		FleetDir: dir, FleetRev: "refs/remotes/origin/main"})
 	require.NoError(t, err)
 	require.Equal(t, 1, v.Checked)

@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/index"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // labelsWith builds a label distribution SHAPED LIKE A REAL ONE, then overlays
@@ -39,8 +39,8 @@ import (
 // whole corpus and is an umbrella by construction. Fixtures must say so: a
 // token ABSENT from this map reads as df 0, which is maximally specific, and a
 // fixture that forgot the root would have every pair blocked by it.
-func labelsWith(liveFacts int, counts map[string]int) store.SubjectLabelDF {
-	d := store.SubjectLabelDF{LiveFacts: liveFacts, DF: map[string]int{"kb": liveFacts}}
+func labelsWith(liveFacts int, counts map[string]int) index.SubjectLabelDF {
+	d := index.SubjectLabelDF{LiveFacts: liveFacts, DF: map[string]int{"kb": liveFacts}}
 	for i := 0; i < 70; i++ {
 		d.DF[fmt.Sprintf("hapax%d", i)] = 1
 	}
@@ -125,7 +125,7 @@ func TestSubjectDisjoint_FallsBackToStrictBelowTheFloor(t *testing.T) {
 	// On a corpus small enough that every shared label is also an umbrella,
 	// the gate correctly admits everything and the question is moot — such a
 	// corpus produces no bridge candidates anyway.
-	labels := store.SubjectLabelDF{LiveFacts: 40,
+	labels := index.SubjectLabelDF{LiveFacts: 40,
 		DF: map[string]int{"kb": 40, "evaluation": 4, "alpha": 1, "beta": 1}}
 	p := resolveDisjointnessPoint(labels)
 	require.True(t, p.Strict, "a p90 over four labels is not an estimate of anything")
@@ -156,7 +156,7 @@ func TestSubjectDisjoint_FallsBackToStrictBelowTheFloor(t *testing.T) {
 // lesson 5's coinciding values). The ruling that followed replaced both: the
 // ratio is suspended below the floor, the universal-label tautology is not.
 func TestSubjectDisjoint_StrictExcludesOnlyUniversalLabels(t *testing.T) {
-	labels := store.SubjectLabelDF{LiveFacts: 40,
+	labels := index.SubjectLabelDF{LiveFacts: 40,
 		DF: map[string]int{"kb": 40, "evaluation": 4, "alpha": 1, "beta": 1}}
 	p := resolveDisjointnessPoint(labels)
 	require.True(t, p.Strict, "precondition: too few labels for a percentile")
@@ -180,7 +180,7 @@ func TestSubjectDisjoint_StrictExcludesOnlyUniversalLabels(t *testing.T) {
 // The reviewer's original leak case, pinned: a rare shared entity blocks even at
 // six facts, where the umbrella ratio alone excused everything.
 func TestSubjectDisjoint_StrictIsNotANoOpOnTinyCorpora(t *testing.T) {
-	labels := store.SubjectLabelDF{LiveFacts: 6, DF: map[string]int{"kb": 6, "cognition": 2}}
+	labels := index.SubjectLabelDF{LiveFacts: 6, DF: map[string]int{"kb": 6, "cognition": 2}}
 	p := resolveDisjointnessPoint(labels)
 	require.True(t, p.Strict)
 	require.Greater(t, labels.DF["cognition"], p.Umbrella,
@@ -233,7 +233,7 @@ func TestSubjectDisjoint_UnknownLabelIsTreatedAsSpecific(t *testing.T) {
 // the percentile protects; between them there was nothing.
 func TestResolveDisjointnessPoint_DegenerateCutFallsBackToStrict(t *testing.T) {
 	// 60 labels, past the floor, 57 of them hapax => p90 is 1.
-	d := store.SubjectLabelDF{LiveFacts: 46, DF: map[string]int{}}
+	d := index.SubjectLabelDF{LiveFacts: 46, DF: map[string]int{}}
 	for i := range 57 {
 		d.DF[fmt.Sprintf("hapax%d", i)] = 1
 	}
@@ -254,7 +254,7 @@ func TestResolveDisjointnessPoint_DegenerateCutFallsBackToStrict(t *testing.T) {
 // back meaningless". A reader debugging a corpus that bridges nothing needs to
 // know which.
 func TestResolveDisjointnessPoint_NamesWhichFallbackFired(t *testing.T) {
-	small := store.SubjectLabelDF{LiveFacts: 6, DF: map[string]int{"a": 2, "b": 2}}
+	small := index.SubjectLabelDF{LiveFacts: 6, DF: map[string]int{"a": 2, "b": 2}}
 	p := resolveDisjointnessPoint(small)
 	require.True(t, p.Strict)
 	require.Equal(t, labelFloor, p.Fallback)
@@ -272,7 +272,7 @@ func TestResolveDisjointnessPoint_NamesWhichFallbackFired(t *testing.T) {
 // A healthy distribution still gets a real percentile — the fallback must not
 // swallow the ordinary case.
 func TestResolveDisjointnessPoint_HealthyDistributionKeepsItsPercentile(t *testing.T) {
-	d := store.SubjectLabelDF{LiveFacts: 400, DF: map[string]int{}}
+	d := index.SubjectLabelDF{LiveFacts: 400, DF: map[string]int{}}
 	for i := range 60 {
 		d.DF[fmt.Sprintf("hapax%d", i)] = 1
 	}
@@ -291,7 +291,7 @@ func TestResolveDisjointnessPoint_HealthyDistributionKeepsItsPercentile(t *testi
 // the point: in the degenerate band a pair sharing a rare entity must be
 // REJECTED. Before the fix it passed.
 func TestSubjectDisjoint_DegenerateBandStillBlocksASharedRareEntity(t *testing.T) {
-	d := store.SubjectLabelDF{LiveFacts: 46, DF: map[string]int{}}
+	d := index.SubjectLabelDF{LiveFacts: 46, DF: map[string]int{}}
 	for i := range 57 {
 		d.DF[fmt.Sprintf("hapax%d", i)] = 1
 	}

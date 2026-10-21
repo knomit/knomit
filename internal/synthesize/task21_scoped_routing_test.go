@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
@@ -214,7 +216,7 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 	scope := ScopeFilter{Domain: []string{"auth"}}
 
 	// buildFilteredBridges calls SimilarityAdjacency (no TokenDF — filtered path).
-	g := store.NewSimilarityGraph([][2]string{{"kb/auth/a.md", "kb/auth/b.md"}})
+	g := index.NewSimilarityGraph([][2]string{{"kb/auth/a.md", "kb/auth/b.md"}})
 	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil).AnyTimes()
 	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
 	// buildFilteredBridges must NOT call TokenDF — no expectation set.

@@ -7,11 +7,13 @@ import (
 	"net/url"
 	"strings"
 
+	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -32,9 +34,9 @@ import (
 // set — a key another mount coined can name an unrelated cluster on this one.
 func motifDefinitionOf(
 	g *federate.MotifGroup, targets []federate.Target, write *repos.RepoInstance,
-	defsByMount []map[string]store.MotifDefinitionStatus,
-) (store.MotifDefinitionStatus, bool) {
-	var best store.MotifDefinitionStatus
+	defsByMount []map[string]vocab.MotifDefinitionStatus,
+) (vocab.MotifDefinitionStatus, bool) {
+	var best vocab.MotifDefinitionStatus
 	bestRank, bestWrite := 0, false
 	for i, t := range targets {
 		isWrite := t.RT.RI == write
@@ -52,7 +54,7 @@ func motifDefinitionOf(
 }
 
 // definitionRank scores a mount's definition for the election above.
-func definitionRank(st store.MotifDefinitionStatus, ok bool) int {
+func definitionRank(st vocab.MotifDefinitionStatus, ok bool) int {
 	switch {
 	case !ok:
 		return 0
@@ -91,9 +93,9 @@ func definitionRank(st store.MotifDefinitionStatus, ok bool) int {
 func gatherLensMotifs(
 	w http.ResponseWriter, r *http.Request, bind *repos.Binding,
 	provider motifsProvider, targets []federate.Target, withDefs, withHealth bool,
-) (*federate.MotifUnion, []map[string]store.MotifDefinitionStatus, store.MotifVocabularyHealth, bool) {
-	var pooled store.MotifVocabularyHealth
-	defsByMount := make([]map[string]store.MotifDefinitionStatus, len(targets))
+) (*federate.MotifUnion, []map[string]vocab.MotifDefinitionStatus, vocab.MotifVocabularyHealth, bool) {
+	var pooled vocab.MotifVocabularyHealth
+	defsByMount := make([]map[string]vocab.MotifDefinitionStatus, len(targets))
 	u := federate.NewMotifUnion()
 	for i, t := range targets {
 		clusters, err := provider.Clusters(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
@@ -150,7 +152,7 @@ func expandLensMotifs(
 	if len(terms) == 0 || provider == nil {
 		return terms, true
 	}
-	read := func(ctx context.Context, rt repos.ReadTarget) ([]store.MotifCluster, error) {
+	read := func(ctx context.Context, rt repos.ReadTarget) ([]vocab.MotifCluster, error) {
 		// Branch-wide: identity is not scoped by where the reader stands.
 		return provider.Clusters(ctx, rt.RI, rt.Branch, "")
 	}
@@ -222,11 +224,11 @@ func handleHALLensMotifs(b hal.URLBuilder, provider motifsProvider) http.Handler
 		// per-mount bulk read does: a key absent from it has no definition on
 		// any mount.
 		groups := u.Groups()
-		clusters := make([]store.MotifCluster, 0, len(groups))
-		defs := make(map[string]store.MotifDefinitionStatus, len(groups))
+		clusters := make([]vocab.MotifCluster, 0, len(groups))
+		defs := make(map[string]vocab.MotifDefinitionStatus, len(groups))
 		for _, g := range groups {
 			key := g.Key()
-			clusters = append(clusters, store.MotifCluster{
+			clusters = append(clusters, vocab.MotifCluster{
 				ClusterKey:  key,
 				CanonicalID: g.Canonical,
 				Members:     g.Members(),
@@ -292,14 +294,14 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 		// every MERGED spelling is what makes the union correct per mount: each
 		// mount expands only what its own alias table knows, and the union of
 		// spellings is what covers the shapes it has not merged yet.
-		lists := make([][]store.RecentFactEntry, len(targets))
+		lists := make([][]index.RecentFactEntry, len(targets))
 		stamps := make([][]int64, len(targets))
 		total, fetched := 0, 0
 		truncated := false
 		for i, t := range targets {
-			entries, n, err := facts.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, store.SearchOptions{
+			entries, n, err := facts.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, index.SearchOptions{
 				Motifs:     members,
-				MotifMatch: store.MotifMatchExact,
+				MotifMatch: index.MotifMatchExact,
 				Limit:      carrierLimit,
 			})
 			if err != nil {
@@ -323,7 +325,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 		// merge by committed_at — comparable across mounts, unlike a relevance
 		// rank, and this preview has no text query.
 		winner := federate.WriteFirstWinners(targets, bind.Write(), lists,
-			func(e store.RecentFactEntry) string { return e.Path })
+			func(e index.RecentFactEntry) string { return e.Path })
 		carriers := make([]motifCarrierItem, 0, min(fetched, carrierLimit))
 		deduped := 0
 		for _, ref := range federate.MergeRecent(stamps, fetched) {
@@ -377,7 +379,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 		// mount first, then binding order, mirroring WriteFirstWinners' rule
 		// (Reads() is name-sorted, so the write mount is not positionally
 		// first and has to be prioritised explicitly).
-		rowFor := map[string]store.AliasRow{}
+		rowFor := map[string]vocab.AliasRow{}
 		for _, pass := range []bool{true, false} {
 			for _, t := range targets {
 				if (t.RT.RI == bind.Write()) != pass {
@@ -418,7 +420,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 
 		pivot := url.Values{}
 		pivot.Set("motifs", strings.Join(members, ","))
-		pivot.Set("motif_match", string(store.MotifMatchExact))
+		pivot.Set("motif_match", string(index.MotifMatchExact))
 
 		hal.WriteHAL(w, http.StatusOK, motifDetailView{
 			ClusterKey:      key,

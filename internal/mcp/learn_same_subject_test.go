@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 
 	"github.com/stretchr/testify/require"
@@ -18,12 +19,12 @@ import (
 // branch, band floor, donated vector), not only what the function does with
 // the rows that come back.
 type fakeSearcher struct {
-	results []store.SearchResult
-	gotOpts store.SearchOptions
+	results []index.SearchResult
+	gotOpts index.SearchOptions
 	calls   int
 }
 
-func (f *fakeSearcher) Search(_ context.Context, _ string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (f *fakeSearcher) Search(_ context.Context, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
 	f.calls++
 	f.gotOpts = q
 	return f.results, nil
@@ -33,8 +34,8 @@ func (f *fakeSearcher) Search(_ context.Context, _ string, q store.SearchOptions
 // in; it is stored as cosine*100 because that is what the real store returns
 // (search_query.go: Score = c.score * 100.0). Feeding the fake the raw cosine
 // instead would make every band comparison pass for the wrong reason.
-func hit(path, title string, cosine float64, entities ...string) store.SearchResult {
-	return store.SearchResult{
+func hit(path, title string, cosine float64, entities ...string) index.SearchResult {
+	return index.SearchResult{
 		FactWithBody: facts.FactWithBody{
 			FactRecord: facts.FactRecord{
 				Path:     path,
@@ -111,7 +112,7 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 			cases := []struct {
 				name     string
 				f        fact.Fact
-				results  []store.SearchResult
+				results  []index.SearchResult
 				wantPath string
 				wantEnts []string
 				wantSim  float64 // 0 means "the in-band midpoint"
@@ -119,7 +120,7 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 				{
 					name:    "(a) incoming fact has no entities is never refused",
 					f:       fact.Fact{Title: incoming.Title, Body: incoming.Body},
-					results: []store.SearchResult{hit("kb/a.md", "A", band, "Ramp")},
+					results: []index.SearchResult{hit("kb/a.md", "A", band, "Ramp")},
 				},
 				{
 					// SAME category directory: inside applyDedupMerge's prefix
@@ -127,7 +128,7 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 					// folded this one.
 					name:    "(b) same-category hit at the auto-merge floor belongs to applyDedupMerge",
 					f:       incoming,
-					results: []store.SearchResult{hit(incomingDir+"/a.md", "A", ts.th.Dedup, "Ramp")},
+					results: []index.SearchResult{hit(incomingDir+"/a.md", "A", ts.th.Dedup, "Ramp")},
 				},
 				{
 					// CROSS category: applyDedupMerge never looked here, so
@@ -135,7 +136,7 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 					// shape of every measured collision pair.
 					name:     "(h) cross-category hit at the auto-merge floor is still a candidate",
 					f:        incoming,
-					results:  []store.SearchResult{hit("kb/technology/other/a.md", "A", ts.th.Dedup, "Ramp")},
+					results:  []index.SearchResult{hit("kb/technology/other/a.md", "A", ts.th.Dedup, "Ramp")},
 					wantPath: "kb/technology/other/a.md",
 					wantEnts: []string{"Ramp"},
 					wantSim:  ts.th.Dedup,
@@ -143,7 +144,7 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 				{
 					name:     "(i) cross-category hit far above Dedup is still a candidate",
 					f:        incoming,
-					results:  []store.SearchResult{hit("kb/technology/other/a.md", "A", 0.98, "Ramp")},
+					results:  []index.SearchResult{hit("kb/technology/other/a.md", "A", 0.98, "Ramp")},
 					wantPath: "kb/technology/other/a.md",
 					wantEnts: []string{"Ramp"},
 					wantSim:  0.98,
@@ -151,29 +152,29 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 				{
 					name:     "(c) hit in band sharing one non-generic entity is a candidate",
 					f:        incoming,
-					results:  []store.SearchResult{hit("kb/a.md", "A", band, "Ramp")},
+					results:  []index.SearchResult{hit("kb/a.md", "A", band, "Ramp")},
 					wantPath: "kb/a.md",
 					wantEnts: []string{"Ramp"},
 				},
 				{
 					name:    "(d) hit in band sharing no entity has no anchor",
 					f:       incoming,
-					results: []store.SearchResult{hit("kb/a.md", "A", band, "Coursera")},
+					results: []index.SearchResult{hit("kb/a.md", "A", band, "Coursera")},
 				},
 				{
 					name:    "(e) hit at the band floor is too far to be the same subject",
 					f:       incoming,
-					results: []store.SearchResult{hit("kb/a.md", "A", ts.th.ReflectNovelty, "Ramp")},
+					results: []index.SearchResult{hit("kb/a.md", "A", ts.th.ReflectNovelty, "Ramp")},
 				},
 				{
 					name:    "(f) hit in band sharing only a generic entity is not refused",
 					f:       incoming,
-					results: []store.SearchResult{hit("kb/a.md", "A", band, "MCP")},
+					results: []index.SearchResult{hit("kb/a.md", "A", band, "MCP")},
 				},
 				{
 					name:     "(g) generic and non-generic shared: only the non-generic anchors",
 					f:        incoming,
-					results:  []store.SearchResult{hit("kb/a.md", "A", band, "MCP", "Ramp")},
+					results:  []index.SearchResult{hit("kb/a.md", "A", band, "MCP", "Ramp")},
 					wantPath: "kb/a.md",
 					wantEnts: []string{"Ramp"},
 				},
@@ -237,7 +238,7 @@ func TestFindSameSubjectCandidates_SearchesWholeBranchAtTheBandFloor(t *testing.
 // checkSameSubjectCollisions and are pinned by the handler tests.
 func TestFindSameSubjectCandidates_AllGenericNeverRefuses(t *testing.T) {
 	th := params.Defaults()
-	q := &fakeSearcher{results: []store.SearchResult{
+	q := &fakeSearcher{results: []index.SearchResult{
 		hit("kb/a.md", "A", inBand(th), "MCP"),
 	}}
 	got, err := findSameSubjectCandidates(
@@ -257,7 +258,7 @@ func TestFindSameSubjectCandidates_HypothesisLeftToSubsume(t *testing.T) {
 	th := params.Defaults()
 	h := hit("kb/a.md", "A", inBand(th), "Ramp")
 	h.Type = string(fact.Hypothesis)
-	q := &fakeSearcher{results: []store.SearchResult{h}}
+	q := &fakeSearcher{results: []index.SearchResult{h}}
 
 	got, err := findSameSubjectCandidates(
 		context.Background(), q, "agent/test",
@@ -286,7 +287,7 @@ func TestFindSameSubjectCandidates_SignalIsNotASameSubjectCollision(t *testing.T
 	t.Run("signal candidate is skipped", func(t *testing.T) {
 		h := hit("kb/tasks/inbox/mindev-local-8ef0cd32/sig.md", "task-7f3a9c: survey", inBand(th), "task-7f3a9c")
 		h.Type = string(fact.Signal)
-		q := &fakeSearcher{results: []store.SearchResult{h}}
+		q := &fakeSearcher{results: []index.SearchResult{h}}
 
 		got, err := findSameSubjectCandidates(
 			context.Background(), q, "agent/test",
@@ -300,7 +301,7 @@ func TestFindSameSubjectCandidates_SignalIsNotASameSubjectCollision(t *testing.T
 	t.Run("observation candidate IS refused", func(t *testing.T) {
 		h := hit("kb/technology/obs.md", "task-7f3a9c: survey", inBand(th), "task-7f3a9c")
 		h.Type = string(fact.Observation)
-		q := &fakeSearcher{results: []store.SearchResult{h}}
+		q := &fakeSearcher{results: []index.SearchResult{h}}
 
 		got, err := findSameSubjectCandidates(
 			context.Background(), q, "agent/test",

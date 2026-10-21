@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/vocab"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // ── §7: the shortlist eligibility widener ─────────────────────────────────
@@ -291,8 +291,8 @@ func TestDistillEnrichment_SharedMotifsReachThePrompt(t *testing.T) {
 
 // storeRestatementPair builds the minimal pair the widener inspects — it reads
 // only the two paths.
-func storeRestatementPair(a, b string) store.RestatementPair {
-	return store.RestatementPair{APath: a, BPath: b}
+func storeRestatementPair(a, b string) vocab.RestatementPair {
+	return vocab.RestatementPair{APath: a, BPath: b}
 }
 
 // titleAxisVector places a fact on the TITLE axis while leaving its BODY vector

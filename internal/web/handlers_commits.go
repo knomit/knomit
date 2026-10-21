@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/fact"
@@ -28,11 +30,11 @@ type commitFileView struct {
 type commitsProvider interface {
 	// LogPaginated returns a paged branch-wide commit log. Use empty path for
 	// all commits on the branch.
-	LogPaginated(ctx context.Context, ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
+	LogPaginated(ctx context.Context, ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]index.LogEntryWithTags, string, string, error)
 
 	// CommitDetail returns the detail for a single commit, including files
 	// enriched with titles. Only files under ontologyRoot are returned.
-	CommitDetail(ctx context.Context, ri *repos.RepoInstance, branch, hash, ontologyRoot string) (*store.CommitDetailResult, []commitFileView, error)
+	CommitDetail(ctx context.Context, ri *repos.RepoInstance, branch, hash, ontologyRoot string) (*index.CommitDetailResult, []commitFileView, error)
 }
 
 // defaultCommitsProvider is the production commitsProvider that calls through
@@ -42,9 +44,9 @@ type defaultCommitsProvider struct{}
 func (defaultCommitsProvider) LogPaginated(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string, limit int, after, from, before string,
-) ([]store.LogEntryWithTags, string, string, error) {
+) ([]index.LogEntryWithTags, string, string, error) {
 	var (
-		entries []store.LogEntryWithTags
+		entries []index.LogEntryWithTags
 		next    string
 		prev    string
 		err     error
@@ -61,7 +63,7 @@ func (defaultCommitsProvider) LogPaginated(
 func (defaultCommitsProvider) CommitDetail(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, hash, ontologyRoot string,
-) (*store.CommitDetailResult, []commitFileView, error) {
+) (*index.CommitDetailResult, []commitFileView, error) {
 	// Acquire (not WithRead): the per-file title resolution below reads
 	// through gs/idx long after CommitDetail returns, so the store reference
 	// must outlive a single closure. Copying the handles out of a WithRead
@@ -121,8 +123,8 @@ type commitItem struct {
 	Date      string             `json:"date"`
 	Message   string             `json:"message"`
 	Operation string             `json:"operation,omitempty"`
-	Author    store.CommitAuthor `json:"author"`
-	Files     store.FileCounts   `json:"files,omitempty"`
+	Author    index.CommitAuthor `json:"author"`
+	Files     index.FileCounts   `json:"files,omitempty"`
 	Links     hal.LinkMap        `json:"_links"`
 }
 
@@ -150,7 +152,7 @@ func handleHALCommitsList(b hal.URLBuilder, provider commitsProvider, ontologyRo
 			return
 		}
 		if entries == nil {
-			entries = []store.LogEntryWithTags{}
+			entries = []index.LogEntryWithTags{}
 		}
 
 		branchURL := b.Branch(repoName, a)

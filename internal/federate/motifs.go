@@ -4,8 +4,9 @@ import (
 	"context"
 	"sort"
 
+	"knomit/internal/store/vocab"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // The lens-wide motif vocabulary: every mount's clusters merged into one.
@@ -150,7 +151,7 @@ func (u *MotifUnion) absorb(a, b int) {
 }
 
 // Add folds one mount's cluster into the union.
-func (u *MotifUnion) Add(ri *repos.RepoInstance, c store.MotifCluster) {
+func (u *MotifUnion) Add(ri *repos.RepoInstance, c vocab.MotifCluster) {
 	g := &MotifGroup{
 		keys:      map[string]bool{c.ClusterKey: true},
 		members:   map[string]bool{},
@@ -263,7 +264,7 @@ func (u *MotifUnion) ExpandTerms(terms []string) []string {
 // consumers already have a seam for this — the web handlers' motifsProvider and
 // MCP's ri.WithRead — so the union takes the read as a function rather than
 // growing an interface each caller would have to satisfy twice.
-type MotifClusterReader func(ctx context.Context, rt repos.ReadTarget) ([]store.MotifCluster, error)
+type MotifClusterReader func(ctx context.Context, rt repos.ReadTarget) ([]vocab.MotifCluster, error)
 
 // MotifReadError names the mount whose vocabulary read failed.
 //

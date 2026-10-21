@@ -28,6 +28,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -68,8 +70,8 @@ func (hypothesizeStrategy) Tool() string { return hypothesizeTool }
 //
 // The type restriction is pushed into SQL purely as an efficiency measure;
 // AcceptSeed repeats it and is the authoritative statement of the rule.
-func (hypothesizeStrategy) SeedQuery() store.SearchOptions {
-	return store.SearchOptions{
+func (hypothesizeStrategy) SeedQuery() index.SearchOptions {
+	return index.SearchOptions{
 		Limit:        100_000,
 		IncludeTypes: []string{string(fact.Synthesis)},
 	}
@@ -467,7 +469,7 @@ const hypothesizeWorkflowMethodology = `WORKFLOW (do not skip steps):
 // pass the branch the synth fact was fetched from so retrieval lands on
 // the same branch.
 func hypothesizeMethodologySection(ctx context.Context, ri *repos.RepoInstance, branch, synthPath string) string {
-	var matches []store.MethodologyMatch
+	var matches []index.MethodologyMatch
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			log.Error().Str("branch", branch).Str("synth_path", synthPath).
@@ -494,7 +496,7 @@ func hypothesizeMethodologySection(ctx context.Context, ri *repos.RepoInstance, 
 				Msg("hypothesize: methodology retrieval failed; continuing without section")
 		}
 	})
-	bullets := store.FormatMethodologySection(matches)
+	bullets := index.FormatMethodologySection(matches)
 	if bullets == "" {
 		return ""
 	}

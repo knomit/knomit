@@ -15,6 +15,8 @@ import (
 	"sort"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 
@@ -218,12 +220,12 @@ func writePushedMergeError(w http.ResponseWriter, r *http.Request, err error) {
 	var conflict *merge.MergeConflictError
 	var moved *merge.BranchMovedError
 	var private *merge.PrivatePathMergeError
-	var invalid *store.ValidationRefusedError
+	var invalid *verify.ValidationRefusedError
 	switch {
 	case errors.As(err, &invalid):
 		hal.WriteProblemWithExtra(w, http.StatusConflict, "Merge would bring an invalid fact",
 			"merging the pushed branch would add or change a fact that fails this knowledge base's ontology validations; nothing was merged and nothing changed: "+invalid.Reason,
-			r.URL.Path, map[string]any{"rule": store.RuleValidation, "reason": invalid.Reason, "peer_commit": invalid.SrcTip})
+			r.URL.Path, map[string]any{"rule": verify.RuleValidation, "reason": invalid.Reason, "peer_commit": invalid.SrcTip})
 	case errors.As(err, &private):
 		hal.WriteProblemWithExtra(w, http.StatusConflict, "Merge would change system files",
 			`merging the pushed branch would change paths a pushed branch may never change (.knomit/ and any other path with a segment beginning with "."); nothing was merged and nothing changed`,

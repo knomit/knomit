@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -62,7 +64,7 @@ func TestRecentFacts_IncludeOriginsFilters(t *testing.T) {
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
 	// Filtering to discovered returns only the discovered fact.
-	got, total, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{
+	got, total, err := svc.Search().RecentFacts(ctx, branch, index.SearchOptions{
 		IncludeOrigins: []string{"discovered"},
 		Limit:          50,
 	})
@@ -72,7 +74,7 @@ func TestRecentFacts_IncludeOriginsFilters(t *testing.T) {
 	require.Equal(t, "kb/b.md", got[0].Path)
 
 	// Filtering to two origins returns both, but not the third.
-	got, total, err = svc.Search().RecentFacts(ctx, branch, SearchOptions{
+	got, total, err = svc.Search().RecentFacts(ctx, branch, index.SearchOptions{
 		IncludeOrigins: []string{"discovered", "distilled"},
 		Limit:          50,
 	})
@@ -82,7 +84,7 @@ func TestRecentFacts_IncludeOriginsFilters(t *testing.T) {
 	require.ElementsMatch(t, []string{"kb/b.md", "kb/c.md"}, paths)
 
 	// No origin filter returns all three.
-	_, total, err = svc.Search().RecentFacts(ctx, branch, SearchOptions{Limit: 50})
+	_, total, err = svc.Search().RecentFacts(ctx, branch, index.SearchOptions{Limit: 50})
 	require.NoError(t, err)
 	require.Equal(t, 3, total)
 }

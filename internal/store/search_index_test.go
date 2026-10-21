@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/embeddings/params"
@@ -64,7 +66,7 @@ func TestNeedsRebuildDetectsModelChange(t *testing.T) {
 	emb := &configurableEmbedder{id: "embeddinggemma", dim: 768}
 	svc.SetEmbedder(emb)
 	_, err = si.RepoForTest().DB().ExecContext(ctx,
-		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey("main"), GraphSchemaVersion)
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey("main"), index.GraphSchemaVersion)
 	require.NoError(t, err)
 	seedEmbedIdentity(t, si, "embeddinggemma", 768)
 
@@ -101,7 +103,7 @@ func TestRebuild_BumpsGraphSchemaVersion(t *testing.T) {
 	si := svc.si
 	var version string
 	require.NoError(t, si.RepoForTest().DB().QueryRow(`SELECT value FROM meta WHERE key = ?`, schemaVersionKey("main")).Scan(&version))
-	require.Equal(t, GraphSchemaVersion, version)
+	require.Equal(t, index.GraphSchemaVersion, version)
 }
 
 // TestRebuildGraph_WritesEdgePerRefEvent verifies that after a full
@@ -131,7 +133,7 @@ func TestRebuildGraph_WritesEdgePerRefEvent(t *testing.T) {
 	si := svc.si
 	var count int
 	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
+		`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeDerivedFrom).Scan(&count))
 	require.Equal(t, 2, count, "expected one DERIVED_FROM edge per (D version) referencing E")
 }
 
@@ -185,7 +187,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 	require.Equal(t, 3, domainRows, "fact_domains must be re-populated after rebuild (alpha:2 + beta:1)")
 
 	// Specifically: 'ai' should match both facts via the search filter path.
-	results, err := svc.Search().Search(ctx, branch, SearchOptions{Domain: []string{"ai"}})
+	results, err := svc.Search().Search(ctx, branch, index.SearchOptions{Domain: []string{"ai"}})
 	require.NoError(t, err)
 	require.Len(t, results, 2, "search by domain=ai must find both facts after rebuild")
 
@@ -195,7 +197,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 		`SELECT COUNT(*) FROM fact_entities`).Scan(&entityRows))
 	require.Equal(t, 3, entityRows, "fact_entities must be re-populated after rebuild (alpha:2 + beta:1)")
 
-	results, err = svc.Search().Search(ctx, branch, SearchOptions{Entities: []string{"Anthropic"}})
+	results, err = svc.Search().Search(ctx, branch, index.SearchOptions{Entities: []string{"Anthropic"}})
 	require.NoError(t, err)
 	require.Len(t, results, 1, "search by entity=Anthropic must find alpha after rebuild")
 }

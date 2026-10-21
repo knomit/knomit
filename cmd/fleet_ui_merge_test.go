@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -154,7 +156,7 @@ func TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable(t *testing.T) {
 		plumbing.NewBranchReferenceName(fleetServerAgent), plumbing.NewHash(aTip))); err != nil {
 		t.Fatal(err)
 	}
-	if err := reclone(); !errors.Is(err, store.ErrForeignLineage) {
+	if err := reclone(); !errors.Is(err, verify.ErrForeignLineage) {
 		t.Fatalf("a peer commit B never merged must still be refused, got %v", err)
 	}
 }

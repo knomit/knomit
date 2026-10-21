@@ -3,7 +3,7 @@ package synthesize
 import (
 	"sort"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
 )
 
 // reshapeCohesiveSubset extracts a tight cross-community cohesive subset from
@@ -21,7 +21,7 @@ import (
 //  3. Return subset sorted by path; size in [2, maxMembers].
 func reshapeCohesiveSubset(
 	members []string,
-	g store.SimilarityGraph,
+	g index.SimilarityGraph,
 	clusterOf map[string]int,
 	cohFloor float64,
 	maxMembers int,

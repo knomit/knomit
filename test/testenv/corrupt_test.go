@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -33,12 +35,12 @@ func TestCorruptObject_ProducesReachabilityError(t *testing.T) {
 	r.CorruptObject(res.BlobHash)
 	r.ExpectDirty()
 
-	rep := r.VerifyWith(store.VerifyOpts{})
+	rep := r.VerifyWith(fsck.VerifyOpts{})
 	require.False(t, rep.IsClean(), "report should be non-clean after corrupt")
 
 	found := false
 	for _, issue := range rep.Issues {
-		if issue.Category == store.CategoryGitReachability && issue.Severity == store.SeverityError {
+		if issue.Category == fsck.CategoryGitReachability && issue.Severity == fsck.SeverityError {
 			found = true
 			break
 		}
@@ -65,10 +67,10 @@ func TestRawSQL_CanDeleteBranchFactsRow(t *testing.T) {
 	require.NoError(t, err)
 	r.ExpectDirty()
 
-	rep := r.VerifyWith(store.VerifyOpts{})
+	rep := r.VerifyWith(fsck.VerifyOpts{})
 	found := false
 	for _, issue := range rep.Issues {
-		if issue.Category == store.CategoryFactsCoherence && issue.Path == "kb/x.md" {
+		if issue.Category == fsck.CategoryFactsCoherence && issue.Path == "kb/x.md" {
 			found = true
 			break
 		}
@@ -98,10 +100,10 @@ func TestRawGitWrite_DeepVerifyCatchesBadYAML(t *testing.T) {
 	// Deep verify should warn about the malformed fact. It is NOT an error
 	// (warnings don't affect IsClean). We use VerifyWith to inspect issues
 	// directly rather than MustVerify which only trips on errors.
-	rep := r.VerifyWith(store.VerifyOpts{Deep: true})
+	rep := r.VerifyWith(fsck.VerifyOpts{Deep: true})
 	foundWarn := false
 	for _, issue := range rep.Issues {
-		if issue.Category == store.CategoryFactFormat && issue.Severity == store.SeverityWarning && issue.Path == "kb/bad.md" {
+		if issue.Category == fsck.CategoryFactFormat && issue.Severity == fsck.SeverityWarning && issue.Path == "kb/bad.md" {
 			foundWarn = true
 			break
 		}
@@ -109,9 +111,9 @@ func TestRawGitWrite_DeepVerifyCatchesBadYAML(t *testing.T) {
 	require.True(t, foundWarn, "expected fact-format Warning for kb/bad.md under Deep verify, got: %v", rep.Issues)
 
 	// Shallow verify must NOT report fact-format issues.
-	shallow := r.VerifyWith(store.VerifyOpts{Deep: false})
+	shallow := r.VerifyWith(fsck.VerifyOpts{Deep: false})
 	for _, issue := range shallow.Issues {
-		require.NotEqual(t, store.CategoryFactFormat, issue.Category,
+		require.NotEqual(t, fsck.CategoryFactFormat, issue.Category,
 			"shallow verify must not run fact-format check: %v", shallow.Issues)
 	}
 

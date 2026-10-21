@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/index"
 	"knomit/internal/store/merge"
 )
 
@@ -20,7 +21,7 @@ import (
 // It iterates facts from the iterator (newest-first, deduped by path), reads their
 // blob content from the local store, resolves dead refs, and writes each fact
 // to the target store.
-func Replay(ctx context.Context, local *Service, localBranch string, iter FactIter, target *Service, cfg ReplayConfig) (*ReplayResult, error) {
+func Replay(ctx context.Context, local *Service, localBranch string, iter *index.FactsIter, target *Service, cfg ReplayConfig) (*ReplayResult, error) {
 	if cfg.AgentBranch == "" {
 		return nil, fmt.Errorf("Replay: AgentBranch must be set")
 	}

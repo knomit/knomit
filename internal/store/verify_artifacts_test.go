@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -56,14 +58,14 @@ func newArtFleet(t *testing.T) *artFleet {
 // cand puts one commit by author/signer on "cand", base + kv on top of main
 // (a "" value deletes the path), and returns the verdict of the fleet's own
 // gate at main.
-func (a *artFleet) cand(author string, signer ssh.Signer, kv ...string) RangeVerdict {
+func (a *artFleet) cand(author string, signer ssh.Signer, kv ...string) verify.RangeVerdict {
 	a.t.Helper()
 	c := a.f.commit(a.f.fleet, with(a.base, kv...), author, signer, a.main)
 	a.f.ref(a.f.fleet, "cand", c)
 	return a.f.checkSelf("")
 }
 
-func requireArtifactRefusal(t *testing.T, v RangeVerdict, rule, reason, name string) {
+func requireArtifactRefusal(t *testing.T, v verify.RangeVerdict, rule, reason, name string) {
 	t.Helper()
 	require.Equal(t, 1, v.Checked, name)
 	r := onlyRefusal(t, v)
@@ -104,25 +106,25 @@ func TestArtifactRules_TrustFilesAreProtected(t *testing.T) {
 		// rogue leaf renews.
 		{"P1 rogue root, CRL and leaves", []string{
 			a.l.Root, rogue.rootPEM(), a.l.CRL, rogue.crl(), a.l.LeafPath("boss"), rogueBoss, a.l.LeafPath("stranger"), rogueStranger,
-		}, RuleArtifactReplace, "certs/boss.pem is replaced but replace_when leaf-renewal does not hold"},
-		{"P1 rogue root alone", []string{a.l.Root, rogue.rootPEM()}, RuleArtifactWriteOnce, "write-once"},
-		{"P2 root deleted", []string{a.l.Root, ""}, RuleArtifactWriteOnce, "is deleted"},
-		{"root corrupted", []string{a.l.Root, "junk"}, RuleArtifactWriteOnce, "write-once"},
-		{"CRL deleted", []string{a.l.CRL, ""}, RuleArtifactReplace, "is deleted"},
-		{"CRL corrupted", []string{a.l.CRL, "junk"}, RuleArtifactReplace, "no X509 CRL PEM block"},
-		{"CRL from another root", []string{a.l.CRL, rogue.crl()}, RuleArtifactReplace, "not signed by the fleet root"},
-		{"leaf deleted", []string{a.l.LeafPath("vic"), ""}, RuleArtifactReplace, "is deleted"},
-		{"leaf corrupted", []string{a.l.LeafPath("vic"), "junk"}, RuleArtifactReplace, "replace_when leaf-renewal does not hold"},
-		{"issuance record deleted", []string{a.issued, ""}, RuleArtifactWriteOnce, "is deleted"},
-		{"issuance record modified", []string{a.issued, a.base[issuedDir+"0002-vic.pem"]}, RuleArtifactWriteOnce, "write-once"},
-		{"revocation deleted", []string{a.rev, ""}, RuleArtifactWriteOnce, "is deleted"},
-		{"revocation modified", []string{a.rev, a.p.revocation(big.NewInt(0x5), "other")}, RuleArtifactWriteOnce, "write-once"},
-		{"size cap", []string{issuedDir + "big.pem", strings.Repeat("x", 16<<10+1)}, RuleArtifactSize, "larger than its max_size of 16384"},
+		}, verify.RuleArtifactReplace, "certs/boss.pem is replaced but replace_when leaf-renewal does not hold"},
+		{"P1 rogue root alone", []string{a.l.Root, rogue.rootPEM()}, verify.RuleArtifactWriteOnce, "write-once"},
+		{"P2 root deleted", []string{a.l.Root, ""}, verify.RuleArtifactWriteOnce, "is deleted"},
+		{"root corrupted", []string{a.l.Root, "junk"}, verify.RuleArtifactWriteOnce, "write-once"},
+		{"CRL deleted", []string{a.l.CRL, ""}, verify.RuleArtifactReplace, "is deleted"},
+		{"CRL corrupted", []string{a.l.CRL, "junk"}, verify.RuleArtifactReplace, "no X509 CRL PEM block"},
+		{"CRL from another root", []string{a.l.CRL, rogue.crl()}, verify.RuleArtifactReplace, "not signed by the fleet root"},
+		{"leaf deleted", []string{a.l.LeafPath("vic"), ""}, verify.RuleArtifactReplace, "is deleted"},
+		{"leaf corrupted", []string{a.l.LeafPath("vic"), "junk"}, verify.RuleArtifactReplace, "replace_when leaf-renewal does not hold"},
+		{"issuance record deleted", []string{a.issued, ""}, verify.RuleArtifactWriteOnce, "is deleted"},
+		{"issuance record modified", []string{a.issued, a.base[issuedDir+"0002-vic.pem"]}, verify.RuleArtifactWriteOnce, "write-once"},
+		{"revocation deleted", []string{a.rev, ""}, verify.RuleArtifactWriteOnce, "is deleted"},
+		{"revocation modified", []string{a.rev, a.p.revocation(big.NewInt(0x5), "other")}, verify.RuleArtifactWriteOnce, "write-once"},
+		{"size cap", []string{issuedDir + "big.pem", strings.Repeat("x", 16<<10+1)}, verify.RuleArtifactSize, "larger than its max_size of 16384"},
 		{"control: a new issuance record", []string{issuedDir + "0003-boss.pem", a.base[a.l.LeafPath("boss")]}, "", ""},
 		{"control: a newer CRL", []string{a.l.CRL, newer}, "", ""},
 		// On the fleet repository an undeclared path has no artifact rule,
 		// so it is the record-owner rule's (S4): boss may not write it.
-		{"an undeclared file is the owner rule's", []string{"artifacts/fleet/notes.txt", strings.Repeat("x", 1<<20)}, RuleNotOwner, "artifacts/fleet/notes.txt"},
+		{"an undeclared file is the owner rule's", []string{"artifacts/fleet/notes.txt", strings.Repeat("x", 1<<20)}, verify.RuleNotOwner, "artifacts/fleet/notes.txt"},
 	}
 	ran := 0
 	for _, r := range rows {
@@ -154,9 +156,9 @@ func TestArtifactRules_CRLRollbackRefused(t *testing.T) {
 	a.base = with(a.base, a.l.CRL, n2)
 	a.main = a.f.fleetMain(a.base)
 
-	requireArtifactRefusal(t, a.cand("boss", a.boss, a.l.CRL, n1), RuleArtifactReplace, "is not greater than the 2 it replaces", "older CRL")
+	requireArtifactRefusal(t, a.cand("boss", a.boss, a.l.CRL, n1), verify.RuleArtifactReplace, "is not greater than the 2 it replaces", "older CRL")
 	a.p.crlN-- // sign another Number 2, listing a serial so its bytes differ
-	requireArtifactRefusal(t, a.cand("boss", a.boss, a.l.CRL, a.p.crl(big.NewInt(77))), RuleArtifactReplace, "rollback", "same Number")
+	requireArtifactRefusal(t, a.cand("boss", a.boss, a.l.CRL, a.p.crl(big.NewInt(77))), verify.RuleArtifactReplace, "rollback", "same Number")
 	v := a.cand("boss", a.boss, a.l.CRL, a.p.crl()) // Number 3
 	require.Empty(t, v.Refused, "control: a newer CRL")
 
@@ -171,7 +173,7 @@ func TestArtifactRules_CRLRollbackRefused(t *testing.T) {
 			rules = append(rules, r.Rule)
 		}
 	}
-	require.Equal(t, []string{RuleArtifactReplace}, rules, "%+v", vm)
+	require.Equal(t, []string{verify.RuleArtifactReplace}, rules, "%+v", vm)
 }
 
 // P4: a leaf the root really issued, but to another id, written at vic's
@@ -194,17 +196,17 @@ func TestArtifactRules_LeafPlantAndRenewal(t *testing.T) {
 		name, rule, reason string
 		kv                 []string
 	}{
-		{"plant over vic's leaf", RuleArtifactReplace, `names agent "boss", but the file is for "vic"`, []string{a.l.LeafPath("vic"), bossLeaf}},
-		{"plant where none was", RuleArtifactPKI, `names agent "boss", but the file is for "newbie"`, []string{a.l.LeafPath("newbie"), bossLeaf}},
-		{"older renewal", RuleArtifactReplace, "is not later than", []string{a.l.LeafPath("vic"), older}},
-		{"renewal for another key", RuleArtifactReplace, "not the current key of agent \"vic\"", []string{a.l.LeafPath("vic"), otherKey}},
-		{"revoked renewal", RuleArtifactReplace, "revoked", []string{a.l.LeafPath("vic"), revoked, a.l.CRL, a.p.crl(revSerial, big.NewInt(0x5))}},
+		{"plant over vic's leaf", verify.RuleArtifactReplace, `names agent "boss", but the file is for "vic"`, []string{a.l.LeafPath("vic"), bossLeaf}},
+		{"plant where none was", verify.RuleArtifactPKI, `names agent "boss", but the file is for "newbie"`, []string{a.l.LeafPath("newbie"), bossLeaf}},
+		{"older renewal", verify.RuleArtifactReplace, "is not later than", []string{a.l.LeafPath("vic"), older}},
+		{"renewal for another key", verify.RuleArtifactReplace, "not the current key of agent \"vic\"", []string{a.l.LeafPath("vic"), otherKey}},
+		{"revoked renewal", verify.RuleArtifactReplace, "revoked", []string{a.l.LeafPath("vic"), revoked, a.l.CRL, a.p.crl(revSerial, big.NewInt(0x5))}},
 		// Agent ids are lower case and compared exactly (review F2 is
 		// answered by never folding case): vic's real leaf at Vic.pem is for
 		// "vic", not "Vic"; a leaf the root signed for the upper-case address
 		// Vic@agents.knomit.io is no agent's at all.
-		{"vic's leaf at an upper-case path", RuleArtifactPKI, `names agent "vic", but the file is for "Vic"`, []string{a.l.LeafPath("Vic"), a.base[a.l.LeafPath("vic")]}},
-		{"upper-case email SAN", RuleArtifactPKI, `names agent "", but the file is for "Vic"`, []string{a.l.LeafPath("Vic"), a.p.craftedLeaf("Vic@agents.knomit.io", a.vic)}},
+		{"vic's leaf at an upper-case path", verify.RuleArtifactPKI, `names agent "vic", but the file is for "Vic"`, []string{a.l.LeafPath("Vic"), a.base[a.l.LeafPath("vic")]}},
+		{"upper-case email SAN", verify.RuleArtifactPKI, `names agent "", but the file is for "Vic"`, []string{a.l.LeafPath("Vic"), a.p.craftedLeaf("Vic@agents.knomit.io", a.vic)}},
 		{"control: renewal", "", "", []string{a.l.LeafPath("vic"), renewal}},
 	}
 	for _, r := range rows {
@@ -247,7 +249,7 @@ func TestArtifactRules_Bootstrap(t *testing.T) {
 	} {
 		g, gmain, gbase := selfRegFixture(t, nil)
 		g.ref(g.fleet, "cand", g.commit(g.fleet, with(gbase, kv...), "boss", boss, gmain))
-		requireArtifactRefusal(t, g.checkSelf(""), RuleArtifactPKI, "does not hold", name)
+		requireArtifactRefusal(t, g.checkSelf(""), verify.RuleArtifactPKI, "does not hold", name)
 	}
 
 	h, hmain, hbase := selfRegFixture(t, nil)
@@ -257,7 +259,7 @@ func TestArtifactRules_Bootstrap(t *testing.T) {
 	hmain = h.fleetMain(rootOnly)
 	h.ref(h.fleet, "cand", h.commit(h.fleet, with(rootOnly, "kb/members/boss/2.md", "note"), "boss", boss, hmain))
 	r := onlyRefusal(t, h.checkSelf(""))
-	require.Equal(t, RuleNoCert, r.Rule, "with the root on main, a member with no CRL and no leaf is refused")
+	require.Equal(t, verify.RuleNoCert, r.Rule, "with the root on main, a member with no CRL and no leaf is refused")
 }
 
 // An oversized trust file at the fleet revision is never read whole: the
@@ -270,18 +272,18 @@ func TestFleetPKI_ReadsAreBounded(t *testing.T) {
 	f := newRangeFixture(t)
 	arts := p.artifacts(p.crl(), map[string]string{"agent-x": leaf + strings.Repeat("\n", 16<<10)})
 	f.abFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, arts)
-	f.kbWith(VerifyEnforce, "agent-x", x)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", x)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
 	r := onlyRefusal(t, v)
-	require.Equal(t, RuleNoCert, r.Rule)
+	require.Equal(t, verify.RuleNoCert, r.Rule)
 	require.Contains(t, r.Reason, l.LeafPath("agent-x")+": larger than its max_size")
 }
 
 // Log mode reports an artifact refusal and blocks nothing; off judges
 // nothing. Under enforce the same commit is exit 1.
 func TestArtifactRules_FollowTheMode(t *testing.T) {
-	for _, mode := range []string{VerifyEnforce, VerifyLog, VerifyOff} {
+	for _, mode := range []string{verify.VerifyEnforce, verify.VerifyLog, verify.VerifyOff} {
 		a := newArtFleet(t)
 		ont := strings.Replace(a.base[fact.OntologyFile], "verify_signatures: enforce", "verify_signatures: "+mode, 1)
 		require.Contains(t, ont, "verify_signatures: "+mode, "fixture: the mode line is in the preset")
@@ -289,13 +291,13 @@ func TestArtifactRules_FollowTheMode(t *testing.T) {
 		a.main = a.f.fleetMain(a.base)
 		v := a.cand("boss", a.boss, a.l.Root, "")
 		switch mode {
-		case VerifyEnforce:
-			require.Equal(t, RuleArtifactWriteOnce, onlyRefusal(t, v).Rule)
+		case verify.VerifyEnforce:
+			require.Equal(t, verify.RuleArtifactWriteOnce, onlyRefusal(t, v).Rule)
 			require.Equal(t, 1, v.ExitCode())
-		case VerifyLog:
-			require.Equal(t, RuleArtifactWriteOnce, onlyRefusal(t, v).Rule)
+		case verify.VerifyLog:
+			require.Equal(t, verify.RuleArtifactWriteOnce, onlyRefusal(t, v).Rule)
 			require.Equal(t, 0, v.ExitCode())
-		case VerifyOff:
+		case verify.VerifyOff:
 			require.Equal(t, 0, v.Checked)
 			require.Empty(t, v.Refused)
 		}
@@ -327,13 +329,13 @@ func TestArtifactRules_PerOperationRecords(t *testing.T) {
 		name, rule, reason string
 		kv                 []string
 	}{
-		{"forged revocation (another root)", RuleArtifactPKI, "not this fleet's root", []string{revocationsDir + "0002.txt", rogue.revocation(big.NewInt(0x77), "x")}},
-		{"revocation with a tampered serial", RuleArtifactPKI, "signature does not verify", []string{revocationsDir + "0002.txt", tampered}},
-		{"revocation that is a CRL", RuleArtifactPKI, "statement lines", []string{revocationsDir + "0002.txt", a.p.crl(big.NewInt(0x5))}},
-		{"issuance that does not chain", RuleArtifactPKI, "does not chain", []string{issuedDir + "0003.pem", rogueLeaf}},
-		{"issuance junk", RuleArtifactPKI, "no CERTIFICATE PEM block", []string{issuedDir + "0003.pem", "junk"}},
-		{"issuance of the root itself", RuleArtifactPKI, "CA certificate", []string{issuedDir + "0003.pem", a.p.rootPEM()}},
-		{"issuance for an upper-case agent address", RuleArtifactPKI, "upper-case", []string{issuedDir + "0003.pem", a.p.craftedLeaf("Vic@agents.knomit.io", a.vic)}},
+		{"forged revocation (another root)", verify.RuleArtifactPKI, "not this fleet's root", []string{revocationsDir + "0002.txt", rogue.revocation(big.NewInt(0x77), "x")}},
+		{"revocation with a tampered serial", verify.RuleArtifactPKI, "signature does not verify", []string{revocationsDir + "0002.txt", tampered}},
+		{"revocation that is a CRL", verify.RuleArtifactPKI, "statement lines", []string{revocationsDir + "0002.txt", a.p.crl(big.NewInt(0x5))}},
+		{"issuance that does not chain", verify.RuleArtifactPKI, "does not chain", []string{issuedDir + "0003.pem", rogueLeaf}},
+		{"issuance junk", verify.RuleArtifactPKI, "no CERTIFICATE PEM block", []string{issuedDir + "0003.pem", "junk"}},
+		{"issuance of the root itself", verify.RuleArtifactPKI, "CA certificate", []string{issuedDir + "0003.pem", a.p.rootPEM()}},
+		{"issuance for an upper-case agent address", verify.RuleArtifactPKI, "upper-case", []string{issuedDir + "0003.pem", a.p.craftedLeaf("Vic@agents.knomit.io", a.vic)}},
 		{"control: a revocation statement", "", "", []string{revocationsDir + "first.txt", good}},
 		{"control: an operator issuance", "", "", []string{issuedDir + "0003-ops.pem", operator}},
 		{"control: a name means nothing", "", "", []string{issuedDir + "9999-vic.pem", a.base[a.l.LeafPath("boss")]}},
@@ -361,9 +363,9 @@ func TestArtifactRules_ReplacementCRLIsASuperset(t *testing.T) {
 	a.main = a.f.fleetMain(a.base) // main: CRL #2 listing 0x5, 0x6
 
 	requireArtifactRefusal(t, a.cand("boss", a.boss, a.l.CRL, a.p.crl(big.NewInt(0x6), big.NewInt(0x7))),
-		RuleArtifactReplace, "drops serial 5", "drops a serial")
+		verify.RuleArtifactReplace, "drops serial 5", "drops a serial")
 	requireArtifactRefusal(t, a.cand("boss", a.boss, a.l.CRL, a.p.crl()),
-		RuleArtifactReplace, "drops serial", "empty")
+		verify.RuleArtifactReplace, "drops serial", "empty")
 	v := a.cand("boss", a.boss, a.l.CRL, a.p.crl(big.NewInt(0x5), big.NewInt(0x6), big.NewInt(0x7)))
 	require.Equal(t, 1, v.Checked)
 	require.Empty(t, v.Refused, "control: a superset")
@@ -387,12 +389,12 @@ func TestArtifactRules_DirectorySquatRefused(t *testing.T) {
 		name, rule, reason string
 		kv                 []string
 	}{
-		{"directory at a leaf's path", RuleNotOwner, "changes artifacts/fleet/certs/newbie.pem/x", []string{a.l.LeafPath("newbie") + "/x", "junk"}},
-		{"deep directory at a leaf's path", RuleNotOwner, "changes artifacts/fleet/certs/newbie.pem/a/b", []string{a.l.LeafPath("newbie") + "/a/b", "junk"}},
-		{"directory at an issuance path", RuleNotOwner, "changes artifacts/fleet/issued/x.pem/y", []string{issuedDir + "x.pem/y", "junk"}},
-		{"directory at a revocation path", RuleNotOwner, "changes artifacts/fleet/revocations/x.txt/y", []string{revocationsDir + "x.txt/y", "junk"}},
-		{"symlink at a leaf's path", RuleArtifactNotAFile, "must be a regular file", []string{a.l.LeafPath("newbie"), symlinkEntry + "../root.crt"}},
-		{"submodule at an issuance path", RuleArtifactNotAFile, "must be a regular file", []string{issuedDir + "x.pem", gitlink}},
+		{"directory at a leaf's path", verify.RuleNotOwner, "changes artifacts/fleet/certs/newbie.pem/x", []string{a.l.LeafPath("newbie") + "/x", "junk"}},
+		{"deep directory at a leaf's path", verify.RuleNotOwner, "changes artifacts/fleet/certs/newbie.pem/a/b", []string{a.l.LeafPath("newbie") + "/a/b", "junk"}},
+		{"directory at an issuance path", verify.RuleNotOwner, "changes artifacts/fleet/issued/x.pem/y", []string{issuedDir + "x.pem/y", "junk"}},
+		{"directory at a revocation path", verify.RuleNotOwner, "changes artifacts/fleet/revocations/x.txt/y", []string{revocationsDir + "x.txt/y", "junk"}},
+		{"symlink at a leaf's path", verify.RuleArtifactNotAFile, "must be a regular file", []string{a.l.LeafPath("newbie"), symlinkEntry + "../root.crt"}},
+		{"submodule at an issuance path", verify.RuleArtifactNotAFile, "must be a regular file", []string{issuedDir + "x.pem", gitlink}},
 		{"control: a declared path", "", "", []string{issuedDir + "0003-boss.pem", a.base[a.l.LeafPath("boss")]}},
 	} {
 		v := a.cand("boss", a.boss, r.kv...)
@@ -433,8 +435,8 @@ func TestArtifactRules_FamilyPatternIsNotASquat(t *testing.T) {
 		{"fleet/**: a new issuance record", "", "", []string{issuedDir + "0003-boss.pem", a.base[a.l.LeafPath("boss")]}},
 		{"fleet/**: a newer CRL", "", "", []string{a.l.CRL, newer}},
 		{"fleet/**: an undeclared note", "", "", []string{"artifacts/fleet/notes/x.md", "ok"}},
-		{"fleet/**: its cap still applies", RuleArtifactSize, "larger than its max_size of 1048576", []string{"artifacts/fleet/notes/x.md", strings.Repeat("x", 1<<20+1)}},
-		{"fleet/**: a directory at a leaf's path", RuleArtifactNotAFile, "certs/newbie.pem, which is a declared artifact file", []string{a.l.LeafPath("newbie") + "/x", "junk"}},
+		{"fleet/**: its cap still applies", verify.RuleArtifactSize, "larger than its max_size of 1048576", []string{"artifacts/fleet/notes/x.md", strings.Repeat("x", 1<<20+1)}},
+		{"fleet/**: a directory at a leaf's path", verify.RuleArtifactNotAFile, "certs/newbie.pem, which is a declared artifact file", []string{a.l.LeafPath("newbie") + "/x", "junk"}},
 	} {
 		v := a.cand("boss", a.boss, r.kv...)
 		if r.rule == "" {
@@ -447,7 +449,7 @@ func TestArtifactRules_FamilyPatternIsNotASquat(t *testing.T) {
 
 	b := withCap(t, "fleet/*: { max_size: 1MiB }")
 	requireArtifactRefusal(t, b.cand("boss", b.boss, issuedDir+"0003-boss.pem", b.base[b.l.LeafPath("boss")]),
-		RuleArtifactNotAFile, "under artifacts/fleet/issued, which is a declared artifact file", "fleet/*: declares fleet/issued a file")
+		verify.RuleArtifactNotAFile, "under artifacts/fleet/issued, which is a declared artifact file", "fleet/*: declares fleet/issued a file")
 }
 
 // Agent ids are lower case everywhere and compared exactly: an author
@@ -456,7 +458,7 @@ func TestArtifactRules_FamilyPatternIsNotASquat(t *testing.T) {
 func TestRulesAB_UpperCaseAuthorIsNoAgent(t *testing.T) {
 	a := newArtFleet(t)
 	r := onlyRefusal(t, a.cand("Vic", a.vic, "kb/members/vic/2.md", "note"))
-	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, verify.RuleNoRecord, r.Rule)
 	require.Contains(t, r.Reason, "is not an agent address")
 	v := a.cand("vic", a.vic, "kb/members/vic/2.md", "note")
 	require.Empty(t, v.Refused, "control: the same commit as vic")

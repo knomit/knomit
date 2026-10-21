@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,10 +66,10 @@ func TestIndex_SkipsFilesOutsideOntologyRoot(t *testing.T) {
 		"rebuild must not re-admit files outside the ontology root")
 
 	// The whole point: the tree and the index agree, so Verify is clean.
-	report, err := svc.Verify(ctx, VerifyOpts{Deep: true})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	for _, iss := range report.Issues {
-		require.NotEqual(t, CategoryFactsCoherence, iss.Category,
+		require.NotEqual(t, fsck.CategoryFactsCoherence, iss.Category,
 			"stray index row would surface here as a ghost: %+v", iss)
 	}
 }
@@ -153,10 +155,10 @@ func TestIndex_SkipsPrivatePathsUnderOntologyRoot(t *testing.T) {
 	require.Equal(t, []string{"kb/obs/real.md"}, indexedPaths(t, svc, "agent/a"),
 		"rebuild must not re-admit a private path")
 
-	report, err := svc.Verify(ctx, VerifyOpts{Deep: true})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	for _, iss := range report.Issues {
-		require.NotEqual(t, CategoryFactsCoherence, iss.Category,
+		require.NotEqual(t, fsck.CategoryFactsCoherence, iss.Category,
 			"a private path must be invisible to Verify, not a ghost: %+v", iss)
 	}
 }

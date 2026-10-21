@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
@@ -20,7 +22,7 @@ import (
 // methods aren't called by ApplyReflectDecisions — leaving them
 // unstubbed means an unexpected call would fail the test, which is the
 // contract we want.
-func stubSearch(t *testing.T, hits []store.SearchResult) *MockSearchIndex {
+func stubSearch(t *testing.T, hits []index.SearchResult) *MockSearchIndex {
 	t.Helper()
 	m := NewMockSearchIndex(gomock.NewController(t))
 	m.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(hits, nil).AnyTimes()
@@ -138,7 +140,7 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 	require.NoError(t, err)
 
 	// Locate the written fact via search; assert it's of type=methodology.
-	entries, _, err := svc.Search().RecentFacts(ctx, branch, store.SearchOptions{
+	entries, _, err := svc.Search().RecentFacts(ctx, branch, index.SearchOptions{
 		Path:         "kb/meta/reasoning",
 		Limit:        50,
 		IncludeTypes: []string{"methodology"},
@@ -146,7 +148,7 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, entries, "propose must result in a methodology fact under kb/meta/reasoning")
 
-	var found *store.RecentFactEntry
+	var found *index.RecentFactEntry
 	for i, e := range entries {
 		if e.Title == "Verify embeddings before trusting them" {
 			found = &entries[i]
@@ -168,7 +170,7 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 	const conflictPath = "kb/meta/reasoning/existing.md"
 	writeMethodologyForTest(t, svc, sess.Branch, conflictPath, "Existing", "Already on file")
 
-	stub := stubSearch(t, []store.SearchResult{{
+	stub := stubSearch(t, []index.SearchResult{{
 		FactWithBody: facts.FactWithBody{
 			FactRecord: facts.FactRecord{Path: conflictPath, Title: "Existing", Type: "methodology"},
 		},
@@ -194,7 +196,7 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 	require.Contains(t, strings.ToLower(err.Error()), "similar")
 
 	// No methodology fact written under meta/reasoning beyond the seeded one.
-	entries, _, err := svc.Search().RecentFacts(ctx, sess.Branch, store.SearchOptions{
+	entries, _, err := svc.Search().RecentFacts(ctx, sess.Branch, index.SearchOptions{
 		Path:         "kb/meta/reasoning",
 		Limit:        50,
 		IncludeTypes: []string{"methodology"},

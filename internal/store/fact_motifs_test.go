@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -200,7 +202,7 @@ func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
 	ctx := context.Background()
 	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback", "config-drift"})
 
-	clean, err := svc.Verify(ctx, VerifyOpts{})
+	clean, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.Empty(t, derivedTableIssues(clean),
 		"a healthy repo must report no derived-table issues, or the test below proves nothing")
@@ -211,7 +213,7 @@ func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
 		`DELETE FROM fact_motifs WHERE motif = 'config-drift'`)
 	require.NoError(t, err)
 
-	drifted, err := svc.Verify(ctx, VerifyOpts{})
+	drifted, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	issues := derivedTableIssues(drifted)
 	require.NotEmpty(t, issues, "a lost junction row must be reported")
@@ -222,7 +224,7 @@ func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
 		`INSERT INTO fact_motifs(fact_id, motif) SELECT id, 'never-authored' FROM facts LIMIT 1`)
 	require.NoError(t, err)
 
-	both, err := svc.Verify(ctx, VerifyOpts{})
+	both, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	var details []string
 	for _, i := range derivedTableIssues(both) {
@@ -254,7 +256,7 @@ func TestVerify_DetectsMotifOrphans(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
-	report, err := svc.Verify(ctx, VerifyOpts{})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	var found bool
 	for _, i := range derivedTableIssues(report) {
@@ -265,10 +267,10 @@ func TestVerify_DetectsMotifOrphans(t *testing.T) {
 	require.True(t, found, "an orphaned fact_motifs row must be reported")
 }
 
-func derivedTableIssues(r IntegrityReport) []IntegrityIssue {
-	var out []IntegrityIssue
+func derivedTableIssues(r fsck.IntegrityReport) []fsck.IntegrityIssue {
+	var out []fsck.IntegrityIssue
 	for _, i := range r.Issues {
-		if i.Category == CategoryDerivedTables {
+		if i.Category == fsck.CategoryDerivedTables {
 			out = append(out, i)
 		}
 	}

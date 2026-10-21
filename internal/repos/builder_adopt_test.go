@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
 )
 
 // The restored-home tests below all follow the same shape: boot a home under
@@ -106,7 +107,7 @@ func TestEnsureBranch_AdoptsAgentBranchOnRestoredHome(t *testing.T) {
 	// The inherited fact must be INDEXED on the adopted branch, not merely
 	// present in the tree — CreateBranch clones branch_facts from the seed, and
 	// a gap there is exactly what Verify's facts-coherence check exists to catch.
-	rep, err := m2.Get(testRepoName).Verify(context.Background(), store.VerifyOpts{Deep: true})
+	rep, err := m2.Get(testRepoName).Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, rep.IsClean(), "adopted branch must be index-coherent: %+v", rep.Issues)
 

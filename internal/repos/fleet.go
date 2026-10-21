@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/fleetrec"
+	"knomit/internal/store/verify"
+
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -303,7 +306,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
 		LastErrorRefused: strings.Contains(row.LastError, pki.ErrRefusedByPeer.Error()),
-		LastErrorCommitRefused: (strings.Contains(row.LastError, store.CommitRefusedByJudge) || strings.Contains(row.LastError, store.CommitRefusedByValidation)) &&
+		LastErrorCommitRefused: (strings.Contains(row.LastError, verify.CommitRefusedByJudge) || strings.Contains(row.LastError, verify.CommitRefusedByValidation)) &&
 			!strings.Contains(row.LastError, remotesync.OwnCommitRefusedText),
 		LastErrorStoodDown:      strings.Contains(row.LastError, FleetPushRefusalStoodDown),
 		LastErrorMainHeldCommit: mainHeldCommit(row.LastError),
@@ -401,7 +404,7 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st.LastErrorFleetMoved = st.FollowsHost != nil && !*st.FollowsHost && strings.Contains(row.LastError, FleetPushRefusalHasOrigin)
 	if f, lerr := m.fleetAtMain(ri); lerr == nil {
 		var onMain bool
-		var written store.FleetMember
+		var written fleetrec.Member
 		for _, mem := range f.Members {
 			if mem.Agent == row.AgentID {
 				onMain, written = true, mem
@@ -448,7 +451,7 @@ const RecordPending = "pending"
 //     written). A newer version of an accepted record that differs only in
 //     its advertised fields is record_pending_update, not pending;
 //   - on neither: "" (no record; the field is omitted).
-func recordStateOf(branch store.FleetMember, onBranch bool, main store.FleetMember, onMain, revokedAtMain bool) string {
+func recordStateOf(branch fleetrec.Member, onBranch bool, main fleetrec.Member, onMain, revokedAtMain bool) string {
 	switch {
 	case onBranch && (!onMain || main.State != branch.State):
 		return RecordPending
@@ -497,7 +500,7 @@ const maxFleetWalk = 2000
 // `left` record whose leaf the master's leave duty revokes (leftLeafDue),
 // which it does once an instance that acts as the master runs its round.
 type FleetMemberRow struct {
-	store.FleetMember
+	fleetrec.Member
 	Since     *time.Time
 	RevokeDue bool
 }
@@ -522,7 +525,7 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 	rows := make([]FleetMemberRow, 0, len(f.Members))
 	recorded := map[string]bool{}
 	for _, mem := range f.Members {
-		rows = append(rows, FleetMemberRow{FleetMember: mem, RevokeDue: due[mem.Path]})
+		rows = append(rows, FleetMemberRow{Member: mem, RevokeDue: due[mem.Path]})
 		recorded[mem.Agent] = true
 	}
 	for _, id := range f.PKI.CertIDs() {
@@ -533,7 +536,7 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 		if f.PKI.Revoked(id) {
 			state = fact.MemberRevoked
 		}
-		rows = append(rows, FleetMemberRow{FleetMember: store.FleetMember{
+		rows = append(rows, FleetMemberRow{Member: fleetrec.Member{
 			Member: fact.Member{Agent: id, State: state, Addresses: []string{}}, Path: f.PKI.Layout.LeafPath(id)}})
 	}
 	paths := make([]string, len(rows))
@@ -564,10 +567,10 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 
 // FleetAtMain returns what the commit judge reads from the fleet repository's
 // main: the member records and the certificate artifacts, from one revision.
-func (m *Manager) FleetAtMain(ctx context.Context) (store.Fleet, error) {
+func (m *Manager) FleetAtMain(ctx context.Context) (fleetrec.Fleet, error) {
 	ri := m.fleetRepo()
 	if ri == nil {
-		return store.Fleet{}, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone: no fleet repository is mounted")
+		return fleetrec.Fleet{}, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone: no fleet repository is mounted")
 	}
 	return m.fleetAtMain(ri)
 }
@@ -578,7 +581,7 @@ func (m *Manager) FleetAtMain(ctx context.Context) (store.Fleet, error) {
 // (M6: revoked is derived, never written). Only readers get this view
 // (FleetStatus, GET /fleet/members); the judge reads the records as written
 // (FleetAtMain) and refuses a revoked leaf by rule B.
-func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, error) {
+func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]fleetrec.Member, error) {
 	f, err := m.fleetAtMain(ri)
 	deriveRevoked(f)
 	return f.Members, err
@@ -586,7 +589,7 @@ func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, err
 
 // deriveRevoked sets State revoked on every record of f whose leaf the CRL of
 // the same revision lists (M6).
-func deriveRevoked(f store.Fleet) {
+func deriveRevoked(f fleetrec.Fleet) {
 	for i := range f.Members {
 		if f.PKI.Revoked(f.Members[i].Agent) {
 			f.Members[i].State = fact.MemberRevoked
@@ -597,8 +600,8 @@ func deriveRevoked(f store.Fleet) {
 // fleetAtMain reads the fleet at the fleet repository's consensus branch: the
 // origin's branch, else the one recorded with the repo
 // (remotesync.Index.UpstreamBranch). Never a name assumed for it.
-func (m *Manager) fleetAtMain(ri *RepoInstance) (store.Fleet, error) {
-	var out store.Fleet
+func (m *Manager) fleetAtMain(ri *RepoInstance) (fleetrec.Fleet, error) {
+	var out fleetrec.Fleet
 	var lerr error
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -612,7 +615,7 @@ func (m *Manager) fleetAtMain(ri *RepoInstance) (store.Fleet, error) {
 		}
 		out, lerr = svc.FleetAt(upstream)
 	}); err != nil {
-		return store.Fleet{}, err
+		return fleetrec.Fleet{}, err
 	}
 	return out, lerr
 }

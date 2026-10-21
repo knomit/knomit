@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
 )
 
 // ScoredBridge is a single bridge candidate with its Q-score components and
@@ -58,7 +58,7 @@ func BridgeComponentReport(
 	cfg QualityConfig,
 ) ([]ScoredBridge, error) {
 	// 1. Load pool via Search, mirroring hypothesize.go:138-150.
-	results, err := idx.Search(ctx, branch, store.SearchOptions{
+	results, err := idx.Search(ctx, branch, index.SearchOptions{
 		IncludeTypes: []string{"synthesis"},
 		Limit:        100000,
 	})

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
 )
 
 // min_similarity is a raw cosine in [0, 1]. A value outside it (typically the
@@ -62,7 +62,7 @@ func TestLensSearchAndFacts_MinSimilarityOutOfRange400(t *testing.T) {
 // so (best cosine, cutoff) instead of looking like "nothing matched". Without a
 // caller cutoff, or with a different cause for emptiness, there is no notice.
 func TestHandleSearch_CutoffExplainsEmptyResult(t *testing.T) {
-	run := func(url string, d *store.SearchDiag) map[string]any {
+	run := func(url string, d *index.SearchDiag) map[string]any {
 		provider := &stubSearchProvider{diag: d}
 		s := &Server{Manager: newTestManagerWithRepos(t, "alpha"), providers: storeProviders{search: provider}}
 		rec := httptest.NewRecorder()
@@ -76,7 +76,7 @@ func TestHandleSearch_CutoffExplainsEmptyResult(t *testing.T) {
 		}
 		return out
 	}
-	emptied := &store.SearchDiag{Text: true, VecHits: 12, BestCosine: 0.54, Cutoff: 0.7, Candidates: 0}
+	emptied := &index.SearchDiag{Text: true, VecHits: 12, BestCosine: 0.54, Cutoff: 0.7, Candidates: 0}
 
 	out := run("/repos/alpha/branches/agent:test/search?q=x&min_similarity=0.7", emptied)
 	notice, _ := out["notice"].(string)
@@ -86,7 +86,7 @@ func TestHandleSearch_CutoffExplainsEmptyResult(t *testing.T) {
 	if _, ok := run("/repos/alpha/branches/agent:test/search?q=x", emptied)["notice"]; ok {
 		t.Error("no caller cutoff: the model's own floor must not produce a notice")
 	}
-	none := &store.SearchDiag{Text: true, VecHits: 0, Cutoff: 0.7}
+	none := &index.SearchDiag{Text: true, VecHits: 0, Cutoff: 0.7}
 	if _, ok := run("/repos/alpha/branches/agent:test/search?q=x&min_similarity=0.7", none)["notice"]; ok {
 		t.Error("nothing matched at all: no cutoff notice")
 	}

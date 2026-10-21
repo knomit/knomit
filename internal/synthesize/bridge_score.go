@@ -3,7 +3,7 @@ package synthesize
 import (
 	"context"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
 )
 
 // BridgeComponents holds the raw signal values computed for a bridge seed set.
@@ -72,7 +72,7 @@ type QualityConfig struct {
 // cohesion returns the intra-cluster cohesion of members in g — the fraction
 // of unordered pairs that share a SIMILAR_TO edge. It delegates entirely to
 // g.Density so the math lives in one place.
-func cohesion(members []string, g store.SimilarityGraph) float64 {
+func cohesion(members []string, g index.SimilarityGraph) float64 {
 	return g.Density(members)
 }
 
@@ -172,7 +172,7 @@ func scoreBridgeCandidate(
 	paths []string,
 	kind BridgeKind,
 	token string,
-	g store.SimilarityGraph,
+	g index.SimilarityGraph,
 	idx SearchQuery,
 	branch string,
 	clusterOf map[string]int,
@@ -181,7 +181,7 @@ func scoreBridgeCandidate(
 	// Canonicalize token for domain bridges; use as-is for entity bridges.
 	specToken := token
 	if kind == BridgeDomain {
-		specToken = store.CanonicalizeTag(token)
+		specToken = index.CanonicalizeTag(token)
 	}
 
 	gap, err := derivationGap(ctx, paths, idx)

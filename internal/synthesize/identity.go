@@ -36,8 +36,9 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/vocab"
+
 	"knomit/internal/fact/textnorm"
-	"knomit/internal/store"
 )
 
 // maxStructuralPairs is a RESOURCE BUDGET on one refresh's writes: the most
@@ -76,7 +77,7 @@ type identityIndex struct {
 // insufficiently rare while accepting nothing useful. Weighting by occurrence
 // asks "is this token more specific than what a path segment usually is?",
 // which is the question, and it is answered entirely by the corpus.
-func buildIdentityIndex(titles map[int64]store.LiveFactTitle) *identityIndex {
+func buildIdentityIndex(titles map[int64]vocab.LiveFactTitle) *identityIndex {
 	ix := &identityIndex{
 		pathTokens:     make(map[int64]map[string]struct{}, len(titles)),
 		discriminating: make(map[int64][]string, len(titles)),
@@ -300,10 +301,10 @@ func (ix *identityIndex) structuralCandidates(requeue []int64) []structuralMatch
 // shared rare identifier is the weaker, wider net.
 func (ix *identityIndex) classify(a, b int64) (string, bool) {
 	if ix.pathIdentity(a, b) {
-		return store.MatchPathIdentity, true
+		return vocab.MatchPathIdentity, true
 	}
 	if sharesToken(ix.identifiers[a], ix.identifiers[b]) {
-		return store.MatchRareToken, true
+		return vocab.MatchRareToken, true
 	}
 	return "", false
 }

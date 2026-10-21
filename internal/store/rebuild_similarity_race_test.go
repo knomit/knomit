@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +24,7 @@ func similarToOutDegree(t *testing.T, svc *Service, ctx context.Context, path, b
 		      JOIN node_props_text b  ON b.node_id = nl.node_id
 		      JOIN property_keys  kb ON kb.id = b.key_id AND kb.key = 'blob_hash'
 		      WHERE nl.label = ? AND p.value = ? AND b.value = ?)`,
-		EdgeSimilarTo, NodeFact, path, blobHash).Scan(&n))
+		index.EdgeSimilarTo, index.NodeFact, path, blobHash).Scan(&n))
 	return n
 }
 
@@ -63,7 +65,7 @@ func TestRebuild_DoesNotDestroyConcurrentCrossBranchSimilarityEdges(t *testing.T
 	// vacuously on an empty graph.
 	var baseline int
 	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeSimilarTo).Scan(&baseline))
+		`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeSimilarTo).Scan(&baseline))
 	require.Greater(t, baseline, 0, "similarity layer must be populated for this test to mean anything")
 
 	// A second branch, sharing the graph, not the branch lock.
@@ -120,21 +122,21 @@ func TestRebuild_StillPrunesSupersededVersionEdges(t *testing.T) {
 	// An orphan version: a node with no `facts` row, carrying an outgoing edge.
 	// This is the shape a superseded version leaves behind, and no per-source
 	// prune driven by the current fact set would ever visit it.
-	ghost, err := graphMergeNode(ctx, svc.rh.DB(), NodeFact,
+	ghost, err := graphMergeNode(ctx, svc.rh.DB(), index.NodeFact,
 		map[string]string{"path": "kb/p.md", "blob_hash": "supersededblob"})
 	require.NoError(t, err)
-	live, err := graphNodeIDByProps(ctx, svc.rh.DB(), NodeFact, map[string]string{
+	live, err := graphNodeIDByProps(ctx, svc.rh.DB(), index.NodeFact, map[string]string{
 		"path": "kb/q.md", "blob_hash": mustBlob(t, svc, ctx, "kb/q.md")})
 	require.NoError(t, err)
 	require.NotZero(t, live)
-	require.NoError(t, graphMergeEdge(ctx, svc.rh.DB(), ghost, live, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, svc.rh.DB(), ghost, live, index.EdgeSimilarTo))
 
 	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))
 
 	var left int
 	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ? AND source_id = ?`,
-		EdgeSimilarTo, ghost).Scan(&left))
+		index.EdgeSimilarTo, ghost).Scan(&left))
 	require.Zero(t, left, "edges of a superseded version must still be pruned")
 }
 

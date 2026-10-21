@@ -14,7 +14,7 @@ import (
 // FleetMembersAt returns the member records at branch in THIS store (a
 // mounted fleet repository), after checking that its ontology there is the
 // fleet ontology. root is the store's fact root.
-func (s *Service) FleetMembersAt(branch string) ([]FleetMember, error) {
+func (s *Service) FleetMembersAt(branch string) ([]fleetrec.Member, error) {
 	f, err := s.FleetAt(branch)
 	return f.Members, err
 }
@@ -22,7 +22,7 @@ func (s *Service) FleetMembersAt(branch string) ([]FleetMember, error) {
 // FleetPKIAt returns the fleet's certificate artifacts at branch in THIS store
 // (a mounted fleet repository): nil, nil when that revision declares no
 // pki: root or holds no root file.
-func (s *Service) FleetPKIAt(branch string) (*FleetPKI, error) {
+func (s *Service) FleetPKIAt(branch string) (*fleetrec.PKI, error) {
 	f, err := s.FleetAt(branch)
 	return f.PKI, err
 }
@@ -31,7 +31,7 @@ func (s *Service) FleetPKIAt(branch string) (*FleetPKI, error) {
 // repository) at branch, all from the ONE commit branch names: the member
 // records and the certificate artifacts. Reading them separately could pair
 // the records of one revision with the CRL of another.
-func (s *Service) FleetAt(branch string) (Fleet, error) {
+func (s *Service) FleetAt(branch string) (fleetrec.Fleet, error) {
 	return fleetrec.At(s.rh.Storer(), branch, s.rh.FactRoot())
 }
 
@@ -65,6 +65,6 @@ func (s *Service) FleetSince(branch string, paths []string, maxCommits int) (map
 // branch, walking at most maxCommits commits and stopping once maxEntries are
 // found: the walk is newest first, so a caller that shows only the newest n
 // events needs no more than n entries.
-func (s *Service) FleetMainLog(branch, rootCert string, maxCommits, maxEntries int) ([]FleetMainCommit, error) {
+func (s *Service) FleetMainLog(branch, rootCert string, maxCommits, maxEntries int) ([]fleetrec.MainCommit, error) {
 	return fleetrec.MainLog(s.rh.Storer(), branch, s.rh.FactRoot(), rootCert, maxCommits, maxEntries)
 }

@@ -3,6 +3,8 @@ package store
 import (
 	"testing"
 
+	"knomit/internal/store/fleetrec"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -59,13 +61,13 @@ func TestRecordOwner_OnlyTheOwnFolderAndNoDelete(t *testing.T) {
 		{"adds a second file in its own folder", func(b map[string]string) map[string]string { return with(b, "kb/members/agent-x/notes.md", "n") }, "", ""},
 		{"edits another member's record", func(b map[string]string) map[string]string {
 			return with(b, "kb/members/boss/1.md", "x")
-		}, RuleNotOwner, "kb/members/boss/1.md"},
+		}, verify.RuleNotOwner, "kb/members/boss/1.md"},
 		{"writes two folders", func(b map[string]string) map[string]string {
 			return with(b, own, b[own]+"\nv2\n", "kb/members/boss/2.md", "x")
-		}, RuleNotOwner, "kb/members/boss/2.md"},
-		{"writes outside members", func(b map[string]string) map[string]string { return with(b, "kb/notes/1.md", "x") }, RuleNotOwner, "kb/notes/1.md"},
-		{"writes the README", func(b map[string]string) map[string]string { return with(b, "README.md", "x") }, RuleNotOwner, "README.md"},
-		{"deletes its record", func(b map[string]string) map[string]string { return without(b, own) }, RuleNotOwner, "deletes " + own},
+		}, verify.RuleNotOwner, "kb/members/boss/2.md"},
+		{"writes outside members", func(b map[string]string) map[string]string { return with(b, "kb/notes/1.md", "x") }, verify.RuleNotOwner, "kb/notes/1.md"},
+		{"writes the README", func(b map[string]string) map[string]string { return with(b, "README.md", "x") }, verify.RuleNotOwner, "README.md"},
+		{"deletes its record", func(b map[string]string) map[string]string { return without(b, own) }, verify.RuleNotOwner, "deletes " + own},
 	}
 	ran := 0
 	for _, row := range rows {
@@ -98,7 +100,7 @@ func TestRecordOwner_ArtifactPathsAreTheArtifactRules(t *testing.T) {
 	f, main, base, _, x := ownerFixture(t)
 	f.ref(f.fleet, "cand", f.commit(f.fleet, with(base, "artifacts/fleet/certs/evil.pem", "x"), "agent-x", x, main))
 	r := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleArtifactPKI, r.Rule)
+	require.Equal(t, verify.RuleArtifactPKI, r.Rule)
 }
 
 // The owner rule is the fleet repository's only: in an ordinary knowledge
@@ -113,11 +115,11 @@ func TestRecordOwner_OnlyInTheFleetRepository(t *testing.T) {
 	f := newRangeFixture(t)
 	f.abFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())},
 		p.artifacts(p.crl(), map[string]string{"agent-x": xl}))
-	base := map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}
+	base := map[string]string{fact.OntologyFile: kbOntology(verify.VerifyEnforce)}
 	root := f.commit(f.kb, base, "", nil)
 	f.ref(f.kb, "main", root)
 	f.ref(f.kb, "cand", f.commit(f.kb, with(base, "kb/members/boss/1.md", "x"), "agent-x", x, root))
-	v, err := f.check(VerifyEnforce)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
 	require.Equal(t, 1, v.Checked)
 	require.Empty(t, v.Refused)
@@ -156,7 +158,7 @@ func TestM3_EverySignedMergeBeforeTheRecordRules(t *testing.T) {
 	f.ref(f.fleet, "cand", dirty)
 	r := onlyRefusal(t, f.checkSelf(""))
 	require.Equal(t, dirty.Hash.String(), r.Commit)
-	require.Equal(t, RuleNoRecord, r.Rule, "a merge beyond its parents is judged: rule A refuses another folder")
+	require.Equal(t, verify.RuleNoRecord, r.Rule, "a merge beyond its parents is judged: rule A refuses another folder")
 }
 
 // The same for an active member: its signed clean merge of main is admitted
@@ -183,7 +185,7 @@ func TestM3_ActiveMemberMergeOfMain(t *testing.T) {
 	f.ref(f.fleet, "cand", dirty)
 	r := onlyRefusal(t, f.checkSelf(""))
 	require.Equal(t, dirty.Hash.String(), r.Commit)
-	require.Equal(t, RuleNotOwner, r.Rule)
+	require.Equal(t, verify.RuleNotOwner, r.Rule)
 }
 
 // brokenSig stores a copy of the signed commit c whose message is changed
@@ -201,7 +203,7 @@ func brokenSig(t *testing.T, repo *gogit.Repository, c *object.Commit) *object.C
 	got, err := object.GetCommit(repo.Storer, h)
 	require.NoError(t, err)
 	_, serr := verify.VerifyCommitSignature(got)
-	require.ErrorIs(t, serr, ErrBadSignature, "fixture: the signature is present and does not verify")
+	require.ErrorIs(t, serr, verify.ErrBadSignature, "fixture: the signature is present and does not verify")
 	return got
 }
 
@@ -225,10 +227,10 @@ func TestRecordOwner_ARecordInTheOwnFolderIsForTheOwner(t *testing.T) {
 	}{
 		{"adds a record for boss in its own folder", func(b map[string]string) map[string]string {
 			return with(b, "kb/members/agent-x/evil.md", memberFile("boss", fact.MemberActive, other.PublicKey()))
-		}, RuleNotOwner, `kb/members/agent-x/evil.md, a record for agent "boss"`},
+		}, verify.RuleNotOwner, `kb/members/agent-x/evil.md, a record for agent "boss"`},
 		{"rewrites its own record to name boss", func(b map[string]string) map[string]string {
 			return with(b, own, memberFile("boss", fact.MemberActive, other.PublicKey()))
-		}, RuleNotOwner, `kb/members/agent-x/1.md, a record for agent "boss"`},
+		}, verify.RuleNotOwner, `kb/members/agent-x/1.md, a record for agent "boss"`},
 		{"control: edits its own record", func(b map[string]string) map[string]string { return with(b, own, b[own]+"\nv2\n") }, "", ""},
 		{"control: a note that is no record", func(b map[string]string) map[string]string {
 			return with(b, "kb/members/agent-x/notes.md", "n")
@@ -274,7 +276,7 @@ func TestFleetLoader_IgnoresARecordInAnotherAgentsFolder(t *testing.T) {
 	arts["kb/members/agent-x/pre.md"] = memberFile("joiner", fact.MemberActive, j.PublicKey())
 	f, main, base := selfRegFixture(t, arts)
 
-	ms, err := LoadFleet(f.fleetDir, "main", "")
+	ms, err := fleetrec.LoadFleet(f.fleetDir, "main", "")
 	require.NoError(t, err)
 	byPath := map[string]string{}
 	for _, m := range ms {
@@ -322,7 +324,7 @@ func TestRecordOwner_OnlyDeclaredArtifactPathsAreExempt(t *testing.T) {
 		v := f.checkSelf("")
 		require.Equal(t, 1, v.Checked, row.name)
 		r := onlyRefusal(t, v)
-		require.Equal(t, RuleNotOwner, r.Rule, row.name)
+		require.Equal(t, verify.RuleNotOwner, r.Rule, row.name)
 		require.Contains(t, r.Reason, row.path, row.name)
 		ran++
 	}
@@ -380,7 +382,7 @@ func TestM3_CleanMergeWithABadSignatureIsAdmitted(t *testing.T) {
 	f.ref(f.fleet, "cand", dirty)
 	r := onlyRefusal(t, f.checkSelf(""))
 	require.Equal(t, dirty.Hash.String(), r.Commit)
-	require.Equal(t, RuleSignature, r.Rule, "a merge beyond its parents needs a signature that verifies")
+	require.Equal(t, verify.RuleSignature, r.Rule, "a merge beyond its parents needs a signature that verifies")
 }
 
 // S1 at the gate: a merge whose tree adds a gitlink (a submodule entry)
@@ -405,13 +407,13 @@ func TestM3_AGitlinkBeyondTheParentsIsJudged(t *testing.T) {
 	f.ref(f.fleet, "cand", signed)
 	r := onlyRefusal(t, f.checkSelf(""))
 	require.Equal(t, signed.Hash.String(), r.Commit)
-	require.Equal(t, RuleNotOwner, r.Rule, r.Reason)
+	require.Equal(t, verify.RuleNotOwner, r.Rule, r.Reason)
 	require.Contains(t, r.Reason, "changes a-gitlink")
 
 	unsigned := f.commit(f.fleet, merged, "", nil, side, main2)
 	f.ref(f.fleet, "cand", unsigned)
 	r = onlyRefusal(t, f.checkSelf(""))
 	require.Equal(t, unsigned.Hash.String(), r.Commit)
-	require.Equal(t, RuleMerge, r.Rule)
+	require.Equal(t, verify.RuleMerge, r.Rule)
 	require.Contains(t, r.Reason, "a-gitlink")
 }

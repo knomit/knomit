@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
@@ -18,7 +20,7 @@ import (
 // searchProvider is the narrow interface the search HAL handler depends on.
 // Production wires it to defaultSearchProvider; tests inject stubs.
 type searchProvider interface {
-	Search(ctx context.Context, ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error)
+	Search(ctx context.Context, ri *repos.RepoInstance, emb store.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error)
 }
 
 // defaultSearchProvider is the production searchProvider that calls through
@@ -26,7 +28,7 @@ type searchProvider interface {
 // query vector generation.
 type defaultSearchProvider struct{}
 
-func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance, emb store.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 	// Generate query vector if text is provided and an embedder is available.
 	if q.Text != "" && emb != nil && len(q.QueryVec) == 0 {
 		vec, err := emb.EmbedQuery(ctx, q.Text)
@@ -40,7 +42,7 @@ func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance,
 	}
 
 	var (
-		out []store.SearchResult
+		out []index.SearchResult
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -120,7 +122,7 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 					"invalid min_similarity value", r.URL.Path)
 				return
 			}
-			if err := store.ValidateMinSimilarity(v); err != nil {
+			if err := index.ValidateMinSimilarity(v); err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
 				return
 			}
@@ -136,7 +138,7 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 			return
 		}
 
-		q := store.SearchOptions{
+		q := index.SearchOptions{
 			Text:           text,
 			Path:           path,
 			Entities:       splitCSV(entitiesStr),
@@ -182,10 +184,10 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Msg("hal search")
 
 		var (
-			results []store.SearchResult
+			results []index.SearchResult
 			err     error
 		)
-		var diag store.SearchDiag
+		var diag index.SearchDiag
 		q.Diag = &diag
 		if !empty {
 			results, err = provider.Search(r.Context(), ri, emb, branch, q)
@@ -243,7 +245,7 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 		}}
 		// An empty text result caused by the caller's own cutoff says so, rather
 		// than looking like "nothing matched".
-		view.Notice = store.CutoffNotice(text != "", minSimilarity, diag)
+		view.Notice = index.CutoffNotice(text != "", minSimilarity, diag)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

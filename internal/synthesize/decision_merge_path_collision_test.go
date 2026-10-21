@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -91,7 +93,7 @@ func TestApplyPruneDecisions_MergeDoesNotOverwriteAnExistingFact(t *testing.T) {
 // A helper that cannot find what it was asked for should say which.
 func mergedFactPath(t *testing.T, svc *store.Service, branch, title string) string {
 	t.Helper()
-	facts, err := svc.Search().Search(context.Background(), branch, store.SearchOptions{Limit: 1000})
+	facts, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{Limit: 1000})
 	require.NoError(t, err)
 	for _, f := range facts {
 		if f.Title == title {
@@ -142,7 +144,7 @@ func TestApplyPruneDecisions_MergeStillWritesUnderANormalizedPath(t *testing.T) 
 
 	// It landed under a UUID filename in the directory the LLM chose — the
 	// same shape distill has always produced.
-	facts, err := svc.Search().Search(ctx, branch, store.SearchOptions{Limit: 100})
+	facts, err := svc.Search().Search(ctx, branch, index.SearchOptions{Limit: 100})
 	require.NoError(t, err)
 
 	var mergedPath string

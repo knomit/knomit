@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -221,7 +223,7 @@ func TestApplyReflectDecisions_ProposeSourcesIsOne(t *testing.T) {
 // methodologyFactPaths lists every methodology-typed fact on the branch.
 func methodologyFactPaths(t *testing.T, svc *store.Service, branch string) []string {
 	t.Helper()
-	hits, err := svc.Search().Search(context.Background(), branch, store.SearchOptions{
+	hits, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		IncludeTypes: []string{string(fact.Methodology)}, Limit: 50,
 	})
 	require.NoError(t, err)
