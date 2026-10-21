@@ -555,7 +555,7 @@ type FleetDropResult struct {
 // (GET /fleet last_error_main_held). The refused commit stays on the agent
 // branch and every later move of main is refused with it; this rebuilds the
 // fleet repository's agent branch on main without that commit
-// (store.DropUnpublishedCommit: that commit's own changes are gone, except
+// (remotesync.Index.DropUnpublishedCommit: that commit's own changes are gone, except
 // where a later commit on the branch edited the same file; every other
 // unpublished commit, members' merges included, is replayed), then publishes
 // main. Only a non-merge commit main does not hold can be dropped (409
@@ -572,7 +572,7 @@ func (m *Manager) DropFleetCommit(ctx context.Context, commit string) (FleetDrop
 // with merge_commit or foreign_commit and the member who could fix the
 // content cannot (it has left, or is gone for good). The merge that brought
 // commit in (or commit itself, when it is that merge) is left out WHOLE,
-// with every commit its side brought (store.DropUnpublishedCommitLeavingOutMerges);
+// with every commit its side brought (remotesync.Index.DropUnpublishedCommitLeavingOutMerges);
 // the rest of the branch is replayed and main is published. confirmed is the
 // list of commit hashes the operator was shown (the refusal's leave_out) and
 // confirmed: when what would be left out differs now, nothing changes (409

@@ -368,7 +368,7 @@ func TestFleetMaster_MergerGateIsTheMasterPredicate(t *testing.T) {
 // The fetch-time judge is receive-pack's: the private-path closure runs
 // before the signature rules, so a member branch that changes .knomit/ is
 // refused for that, not for anything else.
-// SABOTAGE: drop the privatePathClosure call in store.AdmitPeerBranch -> the
+// SABOTAGE: drop the privatePathClosure call in remotesync.Index.AdmitPeerBranch -> the
 // refusal names the signature rule instead, red.
 func TestFleetMaster_FetchJudgeRunsThePrivatePathClosure(t *testing.T) {
 	alpha := testsigner.Named("alpha")
@@ -583,7 +583,7 @@ func editOwnRecord(t *testing.T, ri *RepoInstance, id, line string) {
 // existing member's X would be refused not-owner instead; that case is
 // TestFleetMaster_FetchedEditByAnExistingMemberIsRefusedNotOwner). The tip
 // Y is refused, naming X, and no local branch is left.
-// SABOTAGE: in store.JudgePeerBranch judge the tip commit only -> Y alone is
+// SABOTAGE: in remotesync.Index.JudgePeerBranch judge the tip commit only -> Y alone is
 // admitted and agent/alpha becomes a local branch, red.
 func TestFleetMaster_ARefusedCommitUnderAnAdmissibleTipIsRefused(t *testing.T) {
 	ctx := context.Background()

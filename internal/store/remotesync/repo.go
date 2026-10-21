@@ -12,7 +12,7 @@ import (
 // the origin identity, peer admission, the publish-time own-range judge and
 // the unpublished-commit drop. The parent's repoHandler embeds it next to the
 // git-layer, facts and merge handles, so callers keep writing
-// rh.AdvanceBranchTo, rh.PromotePeer, ... by promotion. The git-layer handle
+// rh.AdvanceBranchTo, rh.WriteAgentBase, ... by promotion. The git-layer handle
 // is the named field vr, never embedded, so none of its methods is promoted
 // onto this type. Embedding is not virtual: nothing in here calls a method
 // declared on the parent's repoHandler.

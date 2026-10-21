@@ -1196,7 +1196,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 //
 // Like initClone, this does NOT persist the origin anywhere — Create does that,
 // into control.db, once this returns the resolved upstream. Unlike initClone,
-// this DOES push before returning: store.InitFromRemote only ever writes
+// this DOES push before returning: remotesync.Index.InitFromRemote only ever writes
 // locally, so without it the ontology would sit on a local branch the remote has
 // never heard of, and the "backed up from the first write" promise would be
 // false.

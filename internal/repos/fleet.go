@@ -596,7 +596,7 @@ func deriveRevoked(f store.Fleet) {
 
 // fleetAtMain reads the fleet at the fleet repository's consensus branch: the
 // origin's branch, else the one recorded with the repo
-// (store.UpstreamBranch). Never a name assumed for it.
+// (remotesync.Index.UpstreamBranch). Never a name assumed for it.
 func (m *Manager) fleetAtMain(ri *RepoInstance) (store.Fleet, error) {
 	var out store.Fleet
 	var lerr error
