@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
+	"knomit/internal/pki/pkitest"
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -39,7 +41,19 @@ func installMasterLeaf(t *testing.T, f *forgeFleet) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	mk, err := testsigner.WriteNamedKey(dir, "master")
 	require.NoError(t, err)
-	f.root.Install(t, f.root.Enroll(t, "master@"+pki.AgentEmailDomain, mk), f.master.deps.Cfg.TLS.Dir)
+	// Back-dated by an hour: the installed leaf must start strictly before any
+	// renewal the master issues later in the test, whatever second the test
+	// runs in. A leaf issued "now" shares the renewal's one-second NotBefore
+	// when the fixture is fast, and installMainLeaf (NotBefore strictly later)
+	// then installs nothing.
+	_, pub, err := pki.LoadSigner(mk)
+	require.NoError(t, err)
+	is, err := pki.IssueLeaf(f.root.Root, pub, "master@"+pki.AgentEmailDomain, 2*time.Hour, time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+	blk, _ := pem.Decode(is.CertPEM)
+	cert, err := x509.ParseCertificate(blk.Bytes)
+	require.NoError(t, err)
+	f.root.Install(t, pkitest.Member{KeyPath: mk, Pub: pub, CertPEM: is.CertPEM, Cert: cert}, f.master.deps.Cfg.TLS.Dir)
 }
 
 // mainCRLNumber is the Number of the CRL on the forge's main.
