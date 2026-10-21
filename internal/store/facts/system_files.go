@@ -69,7 +69,7 @@ func (rh *Repo) SystemFileAt(ctx context.Context, branch, commit, path string, m
 		return SystemFile{}, false, fmt.Errorf("%w: system file: %q is not a file path under %s/", ErrInvalidPath, path, fact.PrivateRoot)
 	}
 	if commit == "" {
-		head, err := rh.HeadCommit(ctx, branch)
+		head, err := rh.vr.HeadCommit(ctx, branch)
 		if err != nil {
 			return SystemFile{}, false, fmt.Errorf("system file: %w", err)
 		}
@@ -78,7 +78,7 @@ func (rh *Repo) SystemFileAt(ctx context.Context, branch, commit, path string, m
 	if !plumbing.IsHash(commit) {
 		return SystemFile{}, false, fmt.Errorf("%w: system file: %q is not a full 40-hex commit hash", ErrInvalidPath, commit)
 	}
-	c, err := rh.Repository().CommitObject(plumbing.NewHash(commit))
+	c, err := rh.vr.Repository().CommitObject(plumbing.NewHash(commit))
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
 		// No such commit here: nothing to read, which is "not found", not a
 		// failure of the store.
@@ -144,7 +144,7 @@ func (rh *Repo) SystemFileAt(ctx context.Context, branch, commit, path string, m
 // validatePath, the signer taken before any object is written, the ctx
 // trailers stamped, NotifyCommit under the branch lock.
 func (fi *Index) WriteSystemTree(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
-	if fi.rh.ReadOnly() {
+	if fi.rh.vr.ReadOnly() {
 		return "", nil, ErrRepoReadOnly
 	}
 	if len(files) == 0 {
@@ -163,13 +163,13 @@ func (fi *Index) WriteSystemTree(ctx context.Context, branch string, files map[s
 			return "", nil, fmt.Errorf("store: WriteSystemTree: %w", err)
 		}
 	}
-	unlock := fi.rh.LockBranch(branch)
+	unlock := fi.rh.vr.LockBranch(branch)
 	defer unlock()
-	cHash, blobHashes, err := fi.BatchWriteLocked(ctx, branch, files, nil, nil, message, operation)
+	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, nil, nil, message, operation)
 	if err != nil {
 		return "", nil, err
 	}
-	if err := fi.rh.NotifyCommit(ctx, branch, cHash); err != nil {
+	if err := fi.rh.vr.NotifyCommit(ctx, branch, cHash); err != nil {
 		return "", nil, err
 	}
 	return cHash.String(), blobHashes, nil

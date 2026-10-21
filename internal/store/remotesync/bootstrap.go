@@ -77,9 +77,9 @@ func CloneFrom(rh *Repo, url string, auth transport.AuthMethod, progress func(st
 		opts.Progress = &progressWriter{fn: progress}
 	}
 
-	ctx, cancel := rh.NetCtx(context.Background())
+	ctx, cancel := rh.vr.NetCtx(context.Background())
 	defer cancel()
-	repo, cloneErr := gogit.CloneContext(ctx, rh.Storer(), memfs.New(), opts)
+	repo, cloneErr := gogit.CloneContext(ctx, rh.vr.Storer(), memfs.New(), opts)
 	if errors.Is(cloneErr, transport.ErrEmptyRemoteRepository) {
 		return ErrEmptyRemote
 	}
@@ -94,7 +94,7 @@ func CloneFrom(rh *Repo, url string, auth transport.AuthMethod, progress func(st
 	branch := strings.TrimPrefix(head.Name().String(), "refs/heads/")
 
 	log.Info().Str("branch", branch).Str("url", url).Msg("cloned remote into storer")
-	rh.SetRepository(repo)
+	rh.vr.SetRepository(repo)
 	return nil
 }
 
@@ -186,7 +186,7 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 			ri.RecordConsensusBranch(upstream)
 		}
 	}()
-	repo, err := gogit.Init(rh.Storer(), memfs.New())
+	repo, err := gogit.Init(rh.vr.Storer(), memfs.New())
 	if err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: git init: %w", err)
 	}
@@ -204,7 +204,7 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 		if agentBranch == "" {
 			agentBranch = vcs.DefaultAgentBranch()
 		}
-		bootstrap, err = ownBranchesRefspecs(ctx, originURL, auth, agentBranch, rh.NetTimeout())
+		bootstrap, err = ownBranchesRefspecs(ctx, originURL, auth, agentBranch, rh.vr.NetTimeout())
 		if err != nil && !errors.Is(err, transport.ErrEmptyRemoteRepository) {
 			return "", false, fmt.Errorf("InitFromRemote: list the remote: %w", err)
 		}
@@ -219,7 +219,7 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 	}
 
 	if err == nil {
-		fetchCtx, fetchCancel := rh.NetCtx(ctx)
+		fetchCtx, fetchCancel := rh.vr.NetCtx(ctx)
 		err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{
 			RemoteName: "origin",
 			Auth:       auth,
@@ -249,13 +249,13 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 	// the git config, and would panic on nil otherwise. The rest of
 	// InitFromRemote also depends on rh.repo being live for the remote-
 	// tracking ref lookups below.
-	rh.SetRepository(repo)
+	rh.vr.SetRepository(repo)
 
 	// Configure remote with two-refspec fetch (main + agent/<host>).
 	// The initial CreateRemote above used a wildcard refspec (or, under
 	// OwnBranchesOnly, every branch but other agents') to discover the remote's
 	// branches at bootstrap; now we lock it down for steady state.
-	if err := rh.ConfigureRemote(originURL, upstreamMain, agentBranch); err != nil {
+	if err := rh.vr.ConfigureRemote(originURL, upstreamMain, agentBranch); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: configure remote: %w", err)
 	}
 
@@ -264,14 +264,14 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 	// wildcard fetch already pulled objects; this just establishes the
 	// remote-tracking refs under the new refspec shape.) Use FetchOrigin so
 	// the agent ref's absence on origin (typical first connect) is tolerated.
-	if err := FetchOrigin(ctx, repo, auth, upstreamMain, rh.NetTimeout()); err != nil {
+	if err := FetchOrigin(ctx, repo, auth, upstreamMain, rh.vr.NetTimeout()); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
 	// Bootstrap local upstream branch from origin/<upstreamMain>. Origin's
 	// main is trusted as fetched (F09 verifies once, at the gate that
 	// advanced it).
-	originMainRef, err := rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain))
+	originMainRef, err := rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain))
 	if err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: resolve origin/%s: %w", upstreamMain, err)
 	}
@@ -286,14 +286,14 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 	if agentBranch == "" {
 		agentBranch = vcs.DefaultAgentBranch()
 	}
-	if remoteAgent, rerr := rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", agentBranch)); rerr == nil {
-		// rh.Repo.Repo is the one shared *vcs.Repo, reached through
+	if remoteAgent, rerr := rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", agentBranch)); rerr == nil {
+		// rh.vr is the one shared *vcs.Repo, reached through
 		// remotesync.Repo -> merge.Repo -> vcs.Repo.
-		if e4err := verify.CheckOwnLineage(ctx, rh.Repo.Repo, agentBranch, remoteAgent.Hash(), originMainRef.Hash()); e4err != nil {
+		if e4err := verify.CheckOwnLineage(ctx, rh.vr, agentBranch, remoteAgent.Hash(), originMainRef.Hash()); e4err != nil {
 			return "", false, fmt.Errorf("InitFromRemote: %w", e4err)
 		}
 	}
-	if err := rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(upstreamMain), originMainRef.Hash())); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(upstreamMain), originMainRef.Hash())); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: set local %s: %w", upstreamMain, err)
 	}
 
@@ -320,20 +320,20 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 	// unpushedCommits walk stops there cleanly.
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 	var watermarkHash plumbing.Hash
-	remoteAgentRef, remoteAgentErr := rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", agentBranch))
+	remoteAgentRef, remoteAgentErr := rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", agentBranch))
 	// The rule, applied here against the refs just fetched. ProbeInitialized
 	// applies the SAME function against the refs the remote advertises, so its
 	// prediction of what this create will read cannot drift from what it does.
 	if BranchACreateReads(remoteAgentErr == nil, agentBranch, upstreamMain) == agentBranch {
 		// Adopt path: agent ref points at the adopted origin/agent tip.
-		if err := rh.Storer().SetReference(plumbing.NewHashReference(agentRefName, remoteAgentRef.Hash())); err != nil {
+		if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(agentRefName, remoteAgentRef.Hash())); err != nil {
 			return "", false, fmt.Errorf("InitFromRemote: set agent from remote agent: %w", err)
 		}
-		remoteAgentCommit, err := rh.Repository().CommitObject(remoteAgentRef.Hash())
+		remoteAgentCommit, err := rh.vr.Repository().CommitObject(remoteAgentRef.Hash())
 		if err != nil {
 			return "", false, fmt.Errorf("InitFromRemote: load remote agent commit: %w", err)
 		}
-		originMainCommit, err := rh.Repository().CommitObject(originMainRef.Hash())
+		originMainCommit, err := rh.vr.Repository().CommitObject(originMainRef.Hash())
 		if err != nil {
 			return "", false, fmt.Errorf("InitFromRemote: load origin main commit: %w", err)
 		}
@@ -352,13 +352,13 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 	} else {
 		// Bootstrap-from-main path: agent ref is origin/main, watermark
 		// equals it.
-		if err := rh.Storer().SetReference(plumbing.NewHashReference(agentRefName, originMainRef.Hash())); err != nil {
+		if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(agentRefName, originMainRef.Hash())); err != nil {
 			return "", false, fmt.Errorf("InitFromRemote: set agent from main: %w", err)
 		}
 		watermarkHash = originMainRef.Hash()
 	}
 
-	if err := rh.Storer().SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: set HEAD: %w", err)
 	}
 
@@ -369,21 +369,21 @@ func InitFromRemote(ctx context.Context, rh *Repo, ri *Index, originURL string, 
 	log.Info().Str("branch", agentBranch).Str("upstream", upstreamMain).Str("origin", originURL).Msg("git store initialized from remote")
 	// The shared *vcs.Repo already has its go-git repository published (set
 	// earlier so ConfigureRemote could run).
-	if _, err := rh.EnsureBranch(ctx, agentBranch, "refs/heads/"+agentBranch); err != nil {
+	if _, err := rh.vr.EnsureBranch(ctx, agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: ensure agent branch %q: %w", agentBranch, err)
 	}
-	if _, err := rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+	if _, err := rh.vr.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: ensure upstream branch %q: %w", upstreamMain, err)
 	}
 	// History is derived before the repo serves anything (OpenHistory); a
 	// failure keeps it closed, and the next open retries.
-	if err := rh.OpenHistory(ctx); err != nil {
+	if err := rh.vr.OpenHistory(ctx); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: history: %w", err)
 	}
-	if err := rh.PopulateCommitLog(ctx, agentBranch); err != nil {
+	if err := rh.vr.PopulateCommitLog(ctx, agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
 	}
-	if err := rh.PopulateCommitLog(ctx, upstreamMain); err != nil {
+	if err := rh.vr.PopulateCommitLog(ctx, upstreamMain); err != nil {
 		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: remote populate (upstream) failed")
 	}
 	// remoteWasEmpty=false: this is the CLONE path — the fetch above found refs.
@@ -402,7 +402,7 @@ func resolveUpstream(ctx context.Context, rh *Repo, repo *gogit.Repository, auth
 		return requested, nil
 	}
 	branches := remoteTrackingBranches(repo)
-	head := detectRemoteUpstream(ctx, repo, auth, rh.NetTimeout())
+	head := detectRemoteUpstream(ctx, repo, auth, rh.vr.NetTimeout())
 	if b := vcs.ChooseConsensusBranch("", head, branches); b != "" {
 		log.Info().Str("upstream", b).Str("remote_head", head).Msg("resolveUpstream: adopted the remote's consensus branch")
 		return b, nil
@@ -446,7 +446,7 @@ func remoteTrackingBranches(repo *gogit.Repository) []string {
 // there is no branch to follow, and unlike InitFromRemote there is no
 // seed-locally fallback because a subscription owns no content.
 func InitSubscription(ctx context.Context, rh *Repo, ri *Index, originURL string, auth transport.AuthMethod, upstreamMain string, progress func(string)) (string, error) {
-	repo, err := gogit.Init(rh.Storer(), memfs.New())
+	repo, err := gogit.Init(rh.vr.Storer(), memfs.New())
 	if err != nil {
 		return "", fmt.Errorf("InitSubscription: git init: %w", err)
 	}
@@ -461,7 +461,7 @@ func InitSubscription(ctx context.Context, rh *Repo, ri *Index, originURL string
 		return "", fmt.Errorf("InitSubscription: create remote: %w", err)
 	}
 
-	fetchCtx, fetchCancel := rh.NetCtx(ctx)
+	fetchCtx, fetchCancel := rh.vr.NetCtx(ctx)
 	err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
@@ -478,36 +478,36 @@ func InitSubscription(ctx context.Context, rh *Repo, ri *Index, originURL string
 	}
 
 	// Publish before ConfigureRemote, which reads and rewrites rh.repo's config.
-	rh.SetRepository(repo)
-	if err := rh.ConfigureRemote(originURL, upstreamMain, ""); err != nil {
+	rh.vr.SetRepository(repo)
+	if err := rh.vr.ConfigureRemote(originURL, upstreamMain, ""); err != nil {
 		return "", fmt.Errorf("InitSubscription: configure remote: %w", err)
 	}
-	if err := FetchOrigin(ctx, repo, auth, upstreamMain, rh.NetTimeout()); err != nil {
+	if err := FetchOrigin(ctx, repo, auth, upstreamMain, rh.vr.NetTimeout()); err != nil {
 		return "", fmt.Errorf("InitSubscription: re-fetch: %w", err)
 	}
 
-	originRef, err := rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain))
+	originRef, err := rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain))
 	if err != nil {
 		return "", fmt.Errorf("InitSubscription: resolve origin/%s: %w", upstreamMain, err)
 	}
 	localName := plumbing.NewBranchReferenceName(upstreamMain)
-	if err := rh.Storer().SetReference(plumbing.NewHashReference(localName, originRef.Hash())); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(localName, originRef.Hash())); err != nil {
 		return "", fmt.Errorf("InitSubscription: set local %s: %w", upstreamMain, err)
 	}
-	if err := rh.Storer().SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, localName)); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, localName)); err != nil {
 		return "", fmt.Errorf("InitSubscription: set HEAD: %w", err)
 	}
 	ri.RecordConsensusBranch(upstreamMain)
 
-	if _, err := rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+	if _, err := rh.vr.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", fmt.Errorf("InitSubscription: ensure upstream branch %q: %w", upstreamMain, err)
 	}
 	// History is derived before the repo serves anything (OpenHistory); a
 	// failure keeps it closed, and the next open retries.
-	if err := rh.OpenHistory(ctx); err != nil {
+	if err := rh.vr.OpenHistory(ctx); err != nil {
 		return "", fmt.Errorf("InitSubscription: history: %w", err)
 	}
-	if err := rh.PopulateCommitLog(ctx, upstreamMain); err != nil {
+	if err := rh.vr.PopulateCommitLog(ctx, upstreamMain); err != nil {
 		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: subscription populate failed")
 	}
 	log.Info().Str("upstream", upstreamMain).Str("origin", originURL).Msg("git store initialized as a subscription")
@@ -587,12 +587,12 @@ func initFromEmptyRemote(ctx context.Context, rh *Repo, repo *gogit.Repository, 
 	// first-writer-wins lock on origin), NOT automatic reconciliation after the
 	// fact.
 	initMsg := fmt.Sprintf("init: create knowledge base\n\nknomit-repo-nonce: %s", uuid.New().String())
-	lastCommit, _, writeErr := vcs.WriteFileToStore(rh.Storer(), nil, plumbing.ZeroHash, "README.md", rootManifest, initMsg, initSig, initSig)
+	lastCommit, _, writeErr := vcs.WriteFileToStore(rh.vr.Storer(), nil, plumbing.ZeroHash, "README.md", rootManifest, initMsg, initSig, initSig)
 	if writeErr != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
 	}
 	for path, content := range initFiles {
-		lastCommit, _, writeErr = vcs.WriteFileToStore(rh.Storer(), nil, lastCommit, path, content, "init: "+path, initSig, initSig)
+		lastCommit, _, writeErr = vcs.WriteFileToStore(rh.vr.Storer(), nil, lastCommit, path, content, "init: "+path, initSig, initSig)
 		if writeErr != nil {
 			return "", fmt.Errorf("InitFromRemote: empty remote write %s: %w", path, writeErr)
 		}
@@ -601,13 +601,13 @@ func initFromEmptyRemote(ctx context.Context, rh *Repo, repo *gogit.Repository, 
 		agentBranch = vcs.DefaultAgentBranch()
 	}
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
-	if writeErr = rh.Storer().SetReference(plumbing.NewHashReference(agentRefName, lastCommit)); writeErr != nil {
+	if writeErr = rh.vr.Storer().SetReference(plumbing.NewHashReference(agentRefName, lastCommit)); writeErr != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote set agent ref: %w", writeErr)
 	}
-	if writeErr = rh.Storer().SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); writeErr != nil {
+	if writeErr = rh.vr.Storer().SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); writeErr != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote set HEAD: %w", writeErr)
 	}
-	if writeErr = rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(upstreamMain), lastCommit)); writeErr != nil {
+	if writeErr = rh.vr.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(upstreamMain), lastCommit)); writeErr != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote set %s: %w", upstreamMain, writeErr)
 	}
 	// Seed the watermark — same shape as the non-empty remote bootstrap.
@@ -615,22 +615,22 @@ func initFromEmptyRemote(ctx context.Context, rh *Repo, repo *gogit.Repository, 
 		return "", fmt.Errorf("InitFromRemote: empty remote seed agent watermark: %w", writeErr)
 	}
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")
-	rh.SetRepository(repo)
-	if _, err := rh.EnsureBranch(ctx, agentBranch, "refs/heads/"+agentBranch); err != nil {
+	rh.vr.SetRepository(repo)
+	if _, err := rh.vr.EnsureBranch(ctx, agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote ensure agent branch %q: %w", agentBranch, err)
 	}
-	if _, err := rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+	if _, err := rh.vr.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote ensure upstream branch %q: %w", upstreamMain, err)
 	}
 	// History is derived before the repo serves anything (OpenHistory); a
 	// failure keeps it closed, and the next open retries.
-	if err := rh.OpenHistory(ctx); err != nil {
+	if err := rh.vr.OpenHistory(ctx); err != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote history: %w", err)
 	}
-	if err := rh.PopulateCommitLog(ctx, agentBranch); err != nil {
+	if err := rh.vr.PopulateCommitLog(ctx, agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
 	}
-	if err := rh.PopulateCommitLog(ctx, upstreamMain); err != nil {
+	if err := rh.vr.PopulateCommitLog(ctx, upstreamMain); err != nil {
 		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: empty-remote populate (upstream) failed")
 	}
 	return upstreamMain, nil

@@ -29,7 +29,7 @@ import (
 // upstreamMain is the consensus branch name to merge from (never empty here,
 // see Sync).
 func (rh *Repo) reconcileAgentMerge(ctx context.Context, agentBranch, upstreamMain string, strategy merge.ConflictStrategy) (merge.AgentReconcileResult, error) {
-	unlock := rh.LockBranch(agentBranch)
+	unlock := rh.vr.LockBranch(agentBranch)
 	defer unlock()
 
 	res, err := rh.MergeIntoBranchLocked(ctx, upstreamMain, agentBranch, strategy)
@@ -37,7 +37,7 @@ func (rh *Repo) reconcileAgentMerge(ctx context.Context, agentBranch, upstreamMa
 		return res, fmt.Errorf("reconcileAgentMerge: %w", err)
 	}
 
-	mainRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(upstreamMain))
+	mainRef, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(upstreamMain))
 	if err != nil {
 		return res, fmt.Errorf("reconcileAgentMerge: read local %s for watermark: %w", upstreamMain, err)
 	}

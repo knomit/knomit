@@ -30,7 +30,7 @@ const peerTrackingPrefix = "refs/remotes/origin/agent/"
 // by local branch name ("agent/<x>"), except own (this instance's agent
 // branch, which the ordinary reconcile owns).
 func (ri *Index) PeerTips(own string) (map[string]plumbing.Hash, error) {
-	iter, err := ri.rh.Storer().IterReferences()
+	iter, err := ri.rh.vr.Storer().IterReferences()
 	if err != nil {
 		return nil, fmt.Errorf("PeerTips: %w", err)
 	}
@@ -79,11 +79,11 @@ func (h *MainHistory) Tip() plumbing.Hash { return h.tip }
 // for a push, minus the objects (a fetch already stored them) and the
 // old-hash check (nothing advertised a value to compare).
 func (rh *Repo) PromotePeer(ctx context.Context, branch, upstream string, tip plumbing.Hash) error {
-	defer rh.LockBranch(branch)()
+	defer rh.vr.LockBranch(branch)()
 	ctx = context.WithoutCancel(ctx)
 	seeded := false
-	if _, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch)); errors.Is(err, plumbing.ErrReferenceNotFound) {
-		if err := rh.CreateBranch(ctx, branch, upstream); err != nil {
+	if _, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(branch)); errors.Is(err, plumbing.ErrReferenceNotFound) {
+		if err := rh.vr.CreateBranch(ctx, branch, upstream); err != nil {
 			return fmt.Errorf("AdmitPeerBranch: seed %s: %w", branch, err)
 		}
 		seeded = true
@@ -95,7 +95,7 @@ func (rh *Repo) PromotePeer(ctx context.Context, branch, upstream string, tip pl
 		return fmt.Errorf("AdmitPeerBranch: %w", err)
 	}
 	if seeded && res.Mode == merge.ModeNoop {
-		return rh.NotifyCommit(ctx, branch, tip)
+		return rh.vr.NotifyCommit(ctx, branch, tip)
 	}
 	return nil
 }
@@ -104,12 +104,12 @@ func (rh *Repo) PromotePeer(ctx context.Context, branch, upstream string, tip pl
 // contract is Service.MainHistory's. upstream is the consensus branch's name
 // (the Service resolves it and refuses "").
 func (rh *Repo) ReadMainHistory(ctx context.Context, upstream string) (*MainHistory, error) {
-	uh, err := rh.ResolveRef(ctx, upstream)
+	uh, err := rh.vr.ResolveRef(ctx, upstream)
 	if err != nil {
 		return nil, fmt.Errorf("MainHistory: %s: %w", upstream, err)
 	}
 	onMain := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), uh, nil, func(c *object.Commit) { onMain[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("MainHistory: %w", err)
 	}
 	return NewMainHistory(uh, onMain), nil
@@ -134,17 +134,17 @@ func (rh *Repo) JudgePeerBranch(ctx context.Context, upstream, branch, own strin
 		}
 	}
 	var commits []*object.Commit
-	if err := vcs.WalkHistory(rh.Storer(), tip, main.OnMain(), func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), tip, main.OnMain(), func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return "", fmt.Errorf("JudgePeerBranch: %w", err)
 	}
-	if msg := verify.PrivatePathClosure(ctx, rh.Repo.Repo, rh.Storer(), upstream, commits); msg != "" {
+	if msg := verify.PrivatePathClosure(ctx, rh.vr, rh.vr.Storer(), upstream, commits); msg != "" {
 		return msg, nil
 	}
-	lg := log.With().Str("repo", rh.Name()).Str("branch", branch).Logger()
+	lg := log.With().Str("repo", rh.vr.Name()).Str("branch", branch).Logger()
 	self := func(context.Context) (fleetrec.Fleet, error) {
-		return fleetrec.At(rh.Storer(), upstream, rh.FactRoot())
+		return fleetrec.At(rh.vr.Storer(), upstream, rh.vr.FactRoot())
 	}
-	return verify.JudgeIncoming(ctx, rh.Repo.Repo, upstream, self, nil, tip, commits, lg), nil
+	return verify.JudgeIncoming(ctx, rh.vr, upstream, self, nil, tip, commits, lg), nil
 }
 
 // DemotePeerBranch removes the local refs/heads/<branch> when it is still at
@@ -154,12 +154,12 @@ func (rh *Repo) DemotePeerBranch(ctx context.Context, upstream, branch, own stri
 	if !strings.HasPrefix(branch, "agent/") || branch == upstream || branch == own {
 		return false, fmt.Errorf("DemotePeerBranch: %q is not a member's agent branch", branch)
 	}
-	id, err := rh.BranchID(ctx, branch)
+	id, err := rh.vr.BranchID(ctx, branch)
 	if err != nil {
 		return false, nil // not a registered branch: nothing to demote
 	}
-	defer rh.LockBranch(branch)()
-	ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
+	defer rh.vr.LockBranch(branch)()
+	ref, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, nil
 	}
@@ -169,7 +169,7 @@ func (rh *Repo) DemotePeerBranch(ctx context.Context, upstream, branch, own stri
 	if ref.Hash() != tip {
 		return false, nil
 	}
-	if err := rh.DropBranchLocked(context.WithoutCancel(ctx), branch, id); err != nil {
+	if err := rh.vr.DropBranchLocked(context.WithoutCancel(ctx), branch, id); err != nil {
 		return false, fmt.Errorf("DemotePeerBranch: %w", err)
 	}
 	return true, nil

@@ -79,7 +79,7 @@ func experimentRewoundRefName(name string) plumbing.ReferenceName {
 //
 // Caller holds LockBranch(agentBranch).
 func (rh *Repo) MarkExperimentsRewound(ctx context.Context, agentBranch string, oldTip plumbing.Hash) error {
-	if rh.DB() == nil {
+	if rh.vr.DB() == nil {
 		return nil
 	}
 	exps, err := rh.ListExperiments(ctx)
@@ -91,12 +91,12 @@ func (rh *Repo) MarkExperimentsRewound(ctx context.Context, agentBranch string, 
 			continue
 		}
 		ref := experimentRewoundRefName(exp.Name)
-		if _, err := rh.Storer().Reference(ref); err == nil {
+		if _, err := rh.vr.Storer().Reference(ref); err == nil {
 			continue
 		} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return fmt.Errorf("experiment %q: read rewind record: %w", exp.Name, err)
 		}
-		if err := rh.Storer().SetReference(plumbing.NewHashReference(ref, oldTip)); err != nil {
+		if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(ref, oldTip)); err != nil {
 			return fmt.Errorf("experiment %q: write rewind record: %w", exp.Name, err)
 		}
 		log.Info().Str("experiment", exp.Name).Str("agent_tip", shortHash(oldTip.String())).
@@ -107,7 +107,7 @@ func (rh *Repo) MarkExperimentsRewound(ctx context.Context, agentBranch string, 
 
 // clearExperimentRewound removes the record (absent is fine).
 func (rh *Repo) clearExperimentRewound(name string) error {
-	err := rh.Storer().RemoveReference(experimentRewoundRefName(name))
+	err := rh.vr.Storer().RemoveReference(experimentRewoundRefName(name))
 	if err != nil && !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return err
 	}
@@ -127,7 +127,7 @@ func (rh *Repo) clearExperimentRewound(name string) error {
 //
 // Caller holds LockBranch(exp.Parent) and LockBranch(exp.Branch()).
 func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment, strategy ConflictStrategy, resolutions map[string]Resolution, o MergeOpts) (rebuilt bool, squashed int, settled []SettledPath, err error) {
-	rec, err := rh.Storer().Reference(experimentRewoundRefName(exp.Name))
+	rec, err := rh.vr.Storer().Reference(experimentRewoundRefName(exp.Name))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, 0, nil, nil
 	}
@@ -136,11 +136,11 @@ func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment
 	}
 	oldAgent := rec.Hash()
 
-	expRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(exp.Branch()))
+	expRef, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(exp.Branch()))
 	if err != nil {
 		return false, 0, nil, fmt.Errorf("experiment ref: %w", err)
 	}
-	parentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(exp.Parent))
+	parentRef, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(exp.Parent))
 	if err != nil {
 		return false, 0, nil, fmt.Errorf("parent ref: %w", err)
 	}
@@ -149,13 +149,13 @@ func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment
 	// The old agent branch's history: everything the experiment holds of it
 	// is the agent's, not the experiment's.
 	oldHist := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), oldAgent, nil, func(c *object.Commit) { oldHist[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), oldAgent, nil, func(c *object.Commit) { oldHist[c.Hash] = true }); err != nil {
 		return false, 0, nil, fmt.Errorf("old agent history: %w", err)
 	}
 	// The experiment's own commits.
 	ownSet := map[plumbing.Hash]bool{}
 	var own []*object.Commit
-	if err := vcs.WalkHistory(rh.Storer(), expTip, oldHist, func(c *object.Commit) {
+	if err := vcs.WalkHistory(rh.vr.Storer(), expTip, oldHist, func(c *object.Commit) {
 		own = append(own, c)
 		ownSet[c.Hash] = true
 	}); err != nil {
@@ -180,7 +180,7 @@ func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment
 		}
 	}
 	parentHist := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), parentTip, nil, func(c *object.Commit) { parentHist[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), parentTip, nil, func(c *object.Commit) { parentHist[c.Hash] = true }); err != nil {
 		return false, 0, nil, fmt.Errorf("parent history: %w", err)
 	}
 	removed := false
@@ -197,15 +197,15 @@ func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment
 		return false, 0, nil, nil
 	}
 
-	srcCommit, err := rh.Repository().CommitObject(expTip)
+	srcCommit, err := rh.vr.Repository().CommitObject(expTip)
 	if err != nil {
 		return false, 0, nil, fmt.Errorf("experiment commit: %w", err)
 	}
-	dstCommit, err := rh.Repository().CommitObject(parentTip)
+	dstCommit, err := rh.vr.Repository().CommitObject(parentTip)
 	if err != nil {
 		return false, 0, nil, fmt.Errorf("parent commit: %w", err)
 	}
-	oldCommit, err := rh.Repository().CommitObject(oldAgent)
+	oldCommit, err := rh.vr.Repository().CommitObject(oldAgent)
 	if err != nil {
 		return false, 0, nil, fmt.Errorf("recorded agent commit: %w", err)
 	}
@@ -232,11 +232,11 @@ func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment
 			return false, 0, nil, err
 		}
 	}
-	signer, err := rh.CommitSigner()
+	signer, err := rh.vr.CommitSigner()
 	if err != nil {
 		return false, 0, nil, err
 	}
-	author, committer, err := rh.CommitSigs(ctx, exp.Branch(), "rebuild")
+	author, committer, err := rh.vr.CommitSigs(ctx, exp.Branch(), "rebuild")
 	if err != nil {
 		return false, 0, nil, err
 	}
@@ -286,26 +286,26 @@ func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment
 			TreeHash:     tree,
 			ParentHashes: []plumbing.Hash{parentTip},
 		}
-		if newTip, err = vcs.StoreCommit(rh.Storer(), signer, nc); err != nil {
+		if newTip, err = vcs.StoreCommit(rh.vr.Storer(), signer, nc); err != nil {
 			return false, 0, nil, err
 		}
 	}
 
-	if err := rh.DeriveBeforeAdvance(ctx, newTip); err != nil {
+	if err := rh.vr.DeriveBeforeAdvance(ctx, newTip); err != nil {
 		return false, 0, nil, err
 	}
-	if err := rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(exp.Branch()), newTip)); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(exp.Branch()), newTip)); err != nil {
 		return false, 0, nil, fmt.Errorf("move experiment ref: %w", err)
 	}
-	if err := rh.RepopulateBranch(ctx, exp.Branch()); err != nil {
+	if err := rh.vr.RepopulateBranch(ctx, exp.Branch()); err != nil {
 		return false, 0, nil, fmt.Errorf("repopulate: %w", err)
 	}
-	if err := rh.NotifyCommit(ctx, exp.Branch(), newTip); err != nil {
+	if err := rh.vr.NotifyCommit(ctx, exp.Branch(), newTip); err != nil {
 		return false, 0, nil, fmt.Errorf("notify: %w", err)
 	}
 	// The fork point moves to where the experiment now starts: "changed since
 	// the fork" is its own work, not the scrubbed content it no longer holds.
-	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx,
+	if _, err := sqlite.Conn(ctx, rh.vr.DB()).ExecContext(ctx,
 		`UPDATE experiments SET fork_commit = ? WHERE name = ?`, parentTip.String(), exp.Name); err != nil {
 		return false, 0, nil, fmt.Errorf("record new fork point: %w", err)
 	}
@@ -314,7 +314,7 @@ func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment
 	// chain and moves to the new fork point, so the next run reviews the whole
 	// rebuilt delta rather than diffing from a commit that still holds what
 	// the rewind removed.
-	if _, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx, `
+	if _, err := sqlite.Conn(ctx, rh.vr.DB()).ExecContext(ctx, `
 		UPDATE pipeline_watermarks
 		SET commit_hash = CASE WHEN commit_hash = ? THEN ? ELSE ? END
 		WHERE branch = ?`,

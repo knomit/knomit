@@ -46,7 +46,7 @@ func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 		return vocab.DropBranchReviewState(ctx, db, branchID)
 	})
 	mr := merge.NewRepo(r)
-	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r), mergeRepo: mr, syncRepo: remotesync.NewRepo(mr)}
+	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r), mergeRepo: mr, syncRepo: remotesync.NewRepo(mr, r)}
 }
 
 // Types.

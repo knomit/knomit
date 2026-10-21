@@ -34,21 +34,21 @@ type Index struct {
 // once per Service.
 func NewIndex(rh *Repo) *Index { return &Index{rh: rh} }
 
-// WarnAmbiguousOnce runs f the first time it is called on this index and
+// warnAmbiguousOnceDo runs f the first time it is called on this index and
 // never again: the consensus-branch resolution warns once per repo that an
 // unrecorded repository has several candidate branches.
-func (ri *Index) WarnAmbiguousOnce(f func()) { ri.warnAmbiguousOnce.Do(f) }
+func (ri *Index) warnAmbiguousOnceDo(f func()) { ri.warnAmbiguousOnce.Do(f) }
 
-// SetConsensus caches the recorded consensus branch (consensus_branch.go in
+// setConsensus caches the recorded consensus branch (consensus_branch.go in
 // this package decides it), under originMu.
-func (ri *Index) SetConsensus(b string) {
+func (ri *Index) setConsensus(b string) {
 	ri.originMu.Lock()
 	ri.consensus = b
 	ri.originMu.Unlock()
 }
 
-// Consensus returns the cached consensus branch ("" until one is cached).
-func (ri *Index) Consensus() string {
+// cachedConsensus returns the cached consensus branch ("" until one is cached).
+func (ri *Index) cachedConsensus() string {
 	ri.originMu.RLock()
 	defer ri.originMu.RUnlock()
 	return ri.consensus
@@ -109,11 +109,11 @@ type Remote struct {
 // report them as its own. A missing row and a missing git remote are both
 // tolerated, so the call is idempotent.
 func (ri *Index) DeleteRemote(name string) error {
-	if _, err := ri.rh.DB().Exec(`DELETE FROM remotes WHERE name = ?`, name); err != nil {
+	if _, err := ri.rh.vr.DB().Exec(`DELETE FROM remotes WHERE name = ?`, name); err != nil {
 		return fmt.Errorf("delete remote row: %w", err)
 	}
-	if ri.rh.Repository() != nil {
-		if err := ri.rh.Repository().DeleteRemote(name); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
+	if ri.rh.vr.Repository() != nil {
+		if err := ri.rh.vr.Repository().DeleteRemote(name); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
 			return fmt.Errorf("delete git remote: %w", err)
 		}
 	}
@@ -147,7 +147,7 @@ func (ri *Index) GetRemote(name string) (*Remote, error) {
 	}
 	// Status is optional: a repo whose origin was just configured has no row
 	// until its first sync, and that is not an error.
-	err := ri.rh.DB().QueryRow(
+	err := ri.rh.vr.DB().QueryRow(
 		`SELECT interval, last_sync_at, last_status, last_error,
 		        push_interval, last_push_at, last_push_status, last_push_error
 		   FROM remotes WHERE name = ?`, name,
@@ -172,7 +172,7 @@ const defaultSyncInterval = 300
 // inserts it ahead of time.
 func (ri *Index) updateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := ri.rh.DB().Exec(
+	_, err := ri.rh.vr.DB().Exec(
 		`INSERT INTO remotes (name, interval, push_interval, last_sync_at, last_status, last_error)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET
@@ -205,7 +205,7 @@ func (ri *Index) RecordPushError(name, msg string) error {
 // the status row if absent. See updateRemoteStatus.
 func (ri *Index) updateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := ri.rh.DB().Exec(
+	_, err := ri.rh.vr.DB().Exec(
 		`INSERT INTO remotes (name, interval, push_interval, last_push_at, last_push_status, last_push_error)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET

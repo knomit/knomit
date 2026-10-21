@@ -29,30 +29,30 @@ func (rh *Repo) EnsureLocalUpstream(ctx context.Context, upstream string) (bool,
 	if upstream == "" {
 		return false, nil
 	}
-	unlock := rh.LockBranch(upstream)
+	unlock := rh.vr.LockBranch(upstream)
 	defer unlock()
 
 	local := plumbing.NewBranchReferenceName(upstream)
-	if _, err := rh.Storer().Reference(local); err == nil {
+	if _, err := rh.vr.Storer().Reference(local); err == nil {
 		return false, nil
 	}
-	originRef, err := rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstream))
+	originRef, err := rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstream))
 	if err != nil {
 		return false, nil
 	}
-	if err := rh.DeriveBeforeAdvance(ctx, originRef.Hash()); err != nil {
+	if err := rh.vr.DeriveBeforeAdvance(ctx, originRef.Hash()); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: %w", err)
 	}
-	if err := rh.Storer().SetReference(plumbing.NewHashReference(local, originRef.Hash())); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(local, originRef.Hash())); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: create %s: %w", upstream, err)
 	}
-	if _, err := rh.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
+	if _, err := rh.vr.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: ensure %s: %w", upstream, err)
 	}
-	if err := rh.PopulateCommitLog(ctx, upstream); err != nil {
+	if err := rh.vr.PopulateCommitLog(ctx, upstream); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: populate commit_log: %w", err)
 	}
-	if err := rh.NotifyCommit(ctx, upstream, originRef.Hash()); err != nil {
+	if err := rh.vr.NotifyCommit(ctx, upstream, originRef.Hash()); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: notify: %w", err)
 	}
 	log.Info().Str("upstream", upstream).Str("at", originRef.Hash().String()[:8]).
@@ -70,26 +70,26 @@ func (rh *Repo) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstream 
 	}
 	// Only the upstream is written; the agent branch is read. One lock, the
 	// same one reconcileMain runs under.
-	unlock := rh.LockBranch(upstream)
+	unlock := rh.vr.LockBranch(upstream)
 	defer unlock()
 
-	agentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch))
+	agentRef, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch))
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: read %s: %w", agentBranch, err)
 	}
 	upstreamName := plumbing.NewBranchReferenceName(upstream)
-	upRef, err := rh.Storer().Reference(upstreamName)
+	upRef, err := rh.vr.Storer().Reference(upstreamName)
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: read %s: %w", upstream, err)
 	}
 	if upRef.Hash() == agentRef.Hash() {
 		return MainReconcileResult{Mode: merge.ModeNoop}, nil
 	}
-	upCommit, err := rh.Repository().CommitObject(upRef.Hash())
+	upCommit, err := rh.vr.Repository().CommitObject(upRef.Hash())
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %s commit: %w", upstream, err)
 	}
-	agentCommit, err := rh.Repository().CommitObject(agentRef.Hash())
+	agentCommit, err := rh.vr.Repository().CommitObject(agentRef.Hash())
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %s commit: %w", agentBranch, err)
 	}
@@ -105,23 +105,23 @@ func (rh *Repo) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstream 
 	// The fleet repository's own commits are judged before its main moves
 	// (JudgeOwnRange; every other repository returns at once). A refusal
 	// leaves main where it is.
-	own, _ := rh.OwnAgentID(agentBranch)
+	own, _ := rh.vr.OwnAgentID(agentBranch)
 	if err := rh.JudgeOwnRange(upstream, upRef.Hash(), agentRef.Hash(), own, agentRef.Hash()); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %w", err)
 	}
-	if _, err := rh.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
+	if _, err := rh.vr.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: ensure %s: %w", upstream, err)
 	}
-	if err := rh.DeriveBeforeAdvance(ctx, agentRef.Hash()); err != nil {
+	if err := rh.vr.DeriveBeforeAdvance(ctx, agentRef.Hash()); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %w", err)
 	}
-	if err := rh.Storer().SetReference(plumbing.NewHashReference(upstreamName, agentRef.Hash())); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(upstreamName, agentRef.Hash())); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: fast-forward: %w", err)
 	}
-	if err := rh.PopulateCommitLog(ctx, upstream); err != nil {
+	if err := rh.vr.PopulateCommitLog(ctx, upstream); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: populate commit_log after fast-forward: %w", err)
 	}
-	if err := rh.NotifyCommit(ctx, upstream, agentRef.Hash()); err != nil {
+	if err := rh.vr.NotifyCommit(ctx, upstream, agentRef.Hash()); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: notify after fast-forward: %w", err)
 	}
 	log.Info().Str("upstream", upstream).Str("agent", agentBranch).

@@ -59,11 +59,11 @@ func (e *PrivatePathMergeError) Is(target error) bool { return target == ErrPriv
 // privatePathsChanged lists, sorted, the private paths whose content differs
 // between two trees.
 func (rh *Repo) privatePathsChanged(from, to plumbing.Hash) ([]string, error) {
-	ft, err := object.GetTree(rh.Storer(), from)
+	ft, err := object.GetTree(rh.vr.Storer(), from)
 	if err != nil {
 		return nil, err
 	}
-	tt, err := object.GetTree(rh.Storer(), to)
+	tt, err := object.GetTree(rh.vr.Storer(), to)
 	if err != nil {
 		return nil, err
 	}
@@ -105,14 +105,14 @@ func (e *BranchMovedError) Is(target error) bool { return target == ErrBranchMov
 // rule must not stand in for it (each is pinned by its own test).
 func (rh *Repo) onlyMergeCommits(src, dst plumbing.Hash) (bool, error) {
 	inDst := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
 		return false, err
 	}
 	if inDst[src] {
 		return false, nil
 	}
 	only, n := true, 0
-	if err := vcs.WalkHistory(rh.Storer(), src, inDst, func(c *object.Commit) {
+	if err := vcs.WalkHistory(rh.vr.Storer(), src, inDst, func(c *object.Commit) {
 		n++
 		if len(c.ParentHashes) < 2 {
 			only = false
@@ -145,16 +145,16 @@ type PushedBranchInfo struct {
 // decides which branches are pushed ones (repos.RepoInstance.IsPushedBranch);
 // this only reads. The agent branch's history is walked once for all of them.
 func (rh *Repo) PushedBranches(ctx context.Context, names []string, agentBranch, ontologyRoot string) ([]PushedBranchInfo, error) {
-	agentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch))
+	agentRef, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch))
 	if err != nil {
 		return nil, fmt.Errorf("pushed branches: agent branch %q: %w", agentBranch, err)
 	}
-	agentCommit, err := object.GetCommit(rh.Storer(), agentRef.Hash())
+	agentCommit, err := object.GetCommit(rh.vr.Storer(), agentRef.Hash())
 	if err != nil {
 		return nil, fmt.Errorf("pushed branches: agent tip: %w", err)
 	}
 	inAgent := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), agentRef.Hash(), nil, func(c *object.Commit) { inAgent[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), agentRef.Hash(), nil, func(c *object.Commit) { inAgent[c.Hash] = true }); err != nil {
 		return nil, err
 	}
 	prefix := strings.TrimSuffix(ontologyRoot, "/") + "/"
@@ -164,11 +164,11 @@ func (rh *Repo) PushedBranches(ctx context.Context, names []string, agentBranch,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(name))
+		ref, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(name))
 		if err != nil {
 			return nil, fmt.Errorf("pushed branches: %q: %w", name, err)
 		}
-		tip, err := object.GetCommit(rh.Storer(), ref.Hash())
+		tip, err := object.GetCommit(rh.vr.Storer(), ref.Hash())
 		if err != nil {
 			return nil, fmt.Errorf("pushed branches: %q tip: %w", name, err)
 		}
@@ -177,7 +177,7 @@ func (rh *Repo) PushedBranches(ctx context.Context, names []string, agentBranch,
 			TipTime: tip.Committer.When, TipAuthor: tip.Author.Name,
 		}
 		if !inAgent[tip.Hash] {
-			if err := vcs.WalkHistory(rh.Storer(), tip.Hash, inAgent, func(*object.Commit) { info.ToMerge++ }); err != nil {
+			if err := vcs.WalkHistory(rh.vr.Storer(), tip.Hash, inAgent, func(*object.Commit) { info.ToMerge++ }); err != nil {
 				return nil, err
 			}
 		}

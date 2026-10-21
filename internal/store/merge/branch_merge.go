@@ -53,7 +53,7 @@ func (rh *Repo) mergeIntoBranchResolved(
 	strategy ConflictStrategy,
 	resolutions map[string]Resolution,
 ) (AgentReconcileResult, error) {
-	unlock := rh.LockBranch(dst)
+	unlock := rh.vr.LockBranch(dst)
 	defer unlock()
 	return rh.mergeIntoBranchLockedResolved(ctx, src, dst, strategy, resolutions)
 }
@@ -181,21 +181,21 @@ func (rh *Repo) MergeIntoBranchLockedOpts(
 		strategy = StrategyLocalWins
 	}
 
-	if _, err := rh.BranchID(ctx, src); err != nil {
+	if _, err := rh.vr.BranchID(ctx, src); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: src %q: %w", src, err)
 	}
-	if _, err := rh.BranchID(ctx, dst); err != nil {
+	if _, err := rh.vr.BranchID(ctx, dst); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: dst %q: %w", dst, err)
 	}
 
 	srcRefName := plumbing.NewBranchReferenceName(src)
 	dstRefName := plumbing.NewBranchReferenceName(dst)
 
-	srcRef, err := rh.Storer().Reference(srcRefName)
+	srcRef, err := rh.vr.Storer().Reference(srcRefName)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: resolve src ref %q: %w", src, err)
 	}
-	dstRef, err := rh.Storer().Reference(dstRefName)
+	dstRef, err := rh.vr.Storer().Reference(dstRefName)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: resolve dst ref %q: %w", dst, err)
 	}
@@ -215,11 +215,11 @@ func (rh *Repo) MergeIntoBranchLockedOpts(
 		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
 	}
 
-	srcCommit, err := rh.Repository().CommitObject(srcHash)
+	srcCommit, err := rh.vr.Repository().CommitObject(srcHash)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: src commit: %w", err)
 	}
-	dstCommit, err := rh.Repository().CommitObject(dstHash)
+	dstCommit, err := rh.vr.Repository().CommitObject(dstHash)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: dst commit: %w", err)
 	}
@@ -248,17 +248,17 @@ func (rh *Repo) MergeIntoBranchLockedOpts(
 		if err := noLeftoverResolutions(resolutions, nil); err != nil {
 			return AgentReconcileResult{}, err
 		}
-		if err := rh.DeriveBeforeAdvance(ctx, srcHash); err != nil {
+		if err := rh.vr.DeriveBeforeAdvance(ctx, srcHash); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 		}
 		newRef := plumbing.NewHashReference(dstRefName, srcHash)
-		if err := rh.Storer().SetReference(newRef); err != nil {
+		if err := rh.vr.Storer().SetReference(newRef); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward ref: %w", err)
 		}
-		if err := rh.PopulateCommitLog(ctx, dst); err != nil {
+		if err := rh.vr.PopulateCommitLog(ctx, dst); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward populate: %w", err)
 		}
-		if err := rh.NotifyCommit(ctx, dst, srcHash); err != nil {
+		if err := rh.vr.NotifyCommit(ctx, dst, srcHash); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward notify: %w", err)
 		}
 		log.Info().
@@ -315,14 +315,14 @@ func (rh *Repo) MergeIntoBranchLockedOpts(
 
 	// The signer is resolved BEFORE the three-way merge writes any tree: a
 	// refused merge (ErrNoSigner) must leave no object behind.
-	signer, err := rh.CommitSigner()
+	signer, err := rh.vr.CommitSigner()
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
 	// The merge commit's author is resolved here too, for the same reason: an
 	// experiment whose owning agent cannot be named (commitAgentID) refuses
 	// the merge before any tree is written.
-	author, committer, err := rh.CommitSigs(ctx, dst, "merge")
+	author, committer, err := rh.vr.CommitSigs(ctx, dst, "merge")
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
@@ -425,23 +425,23 @@ func (rh *Repo) MergeIntoBranchLockedOpts(
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},
 	}
 
-	mergeHash, err := vcs.StoreCommit(rh.Storer(), signer, mc)
+	mergeHash, err := vcs.StoreCommit(rh.vr.Storer(), signer, mc)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge commit: %w", err)
 	}
 
-	if err := rh.DeriveBeforeAdvance(ctx, mergeHash); err != nil {
+	if err := rh.vr.DeriveBeforeAdvance(ctx, mergeHash); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
 	newRef := plumbing.NewHashReference(dstRefName, mergeHash)
-	if err := rh.Storer().SetReference(newRef); err != nil {
+	if err := rh.vr.Storer().SetReference(newRef); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: update dst ref: %w", err)
 	}
 
-	if err := rh.PopulateCommitLog(ctx, dst); err != nil {
+	if err := rh.vr.PopulateCommitLog(ctx, dst); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: populate commit_log: %w", err)
 	}
-	if err := rh.NotifyCommit(ctx, dst, mergeHash); err != nil {
+	if err := rh.vr.NotifyCommit(ctx, dst, mergeHash); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: three-way notify: %w", err)
 	}
 
@@ -577,11 +577,11 @@ func (rh *Repo) MergeTreesWithStrategy(
 					pickSide(path, ResolveSrc, plumbing.ZeroHash, blobHash, dstBlob)
 				}
 			}
-			newRootHash, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
+			newRootHash, err := vcs.BuildTree(rh.vr.Storer(), currentTree, path, blobHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("apply insert %q: %w", path, err)
 			}
-			currentTree, err = object.GetTree(rh.Storer(), newRootHash)
+			currentTree, err = object.GetTree(rh.vr.Storer(), newRootHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("reload tree after insert %q: %w", path, err)
 			}
@@ -633,11 +633,11 @@ func (rh *Repo) MergeTreesWithStrategy(
 				}
 			}
 
-			newRootHash, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
+			newRootHash, err := vcs.BuildTree(rh.vr.Storer(), currentTree, path, blobHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("apply modify %q: %w", path, err)
 			}
-			currentTree, err = object.GetTree(rh.Storer(), newRootHash)
+			currentTree, err = object.GetTree(rh.vr.Storer(), newRootHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("reload tree after modify %q: %w", path, err)
 			}
@@ -679,7 +679,7 @@ func (rh *Repo) MergeTreesWithStrategy(
 				pickSide(path, ResolveSrc, baseHash, plumbing.ZeroHash, dstHashAtPath)
 			}
 
-			newRootHash, err := vcs.DeleteFromTree(rh.Storer(), currentTree, path)
+			newRootHash, err := vcs.DeleteFromTree(rh.vr.Storer(), currentTree, path)
 			if err != nil {
 				// dstHas was confirmed above, so the path SHOULD be present
 				// in currentTree (an earlier iteration cannot have removed
@@ -690,7 +690,7 @@ func (rh *Repo) MergeTreesWithStrategy(
 				// still contains a file the strategy meant to delete.
 				return plumbing.ZeroHash, nil, fmt.Errorf("merge: delete %q from tree: %w", path, err)
 			}
-			currentTree, err = object.GetTree(rh.Storer(), newRootHash)
+			currentTree, err = object.GetTree(rh.vr.Storer(), newRootHash)
 			if err != nil {
 				return plumbing.ZeroHash, nil, fmt.Errorf("reload tree after delete %q: %w", path, err)
 			}
@@ -776,7 +776,7 @@ func (rh *Repo) applyResolution(
 ) (*object.Tree, error) {
 	switch {
 	case res.Body != nil:
-		blobHash, err := vcs.WriteBlobToStore(rh.Storer(), res.Body)
+		blobHash, err := vcs.WriteBlobToStore(rh.vr.Storer(), res.Body)
 		if err != nil {
 			return nil, fmt.Errorf("resolution body for %q: %w", path, err)
 		}
@@ -784,11 +784,11 @@ func (rh *Repo) applyResolution(
 
 	case res.Side == ResolveSrc:
 		if srcDeleted {
-			newRoot, err := vcs.DeleteFromTree(rh.Storer(), currentTree, path)
+			newRoot, err := vcs.DeleteFromTree(rh.vr.Storer(), currentTree, path)
 			if err != nil {
 				return nil, fmt.Errorf("resolution src-delete %q: %w", path, err)
 			}
-			return object.GetTree(rh.Storer(), newRoot)
+			return object.GetTree(rh.vr.Storer(), newRoot)
 		}
 		return rh.setPath(currentTree, path, srcBlob)
 
@@ -804,11 +804,11 @@ func (rh *Repo) applyResolution(
 
 // setPath puts blobHash at path in the tree and reloads it.
 func (rh *Repo) setPath(currentTree *object.Tree, path string, blobHash plumbing.Hash) (*object.Tree, error) {
-	newRoot, err := vcs.BuildTree(rh.Storer(), currentTree, path, blobHash)
+	newRoot, err := vcs.BuildTree(rh.vr.Storer(), currentTree, path, blobHash)
 	if err != nil {
 		return nil, fmt.Errorf("apply resolution %q: %w", path, err)
 	}
-	return object.GetTree(rh.Storer(), newRoot)
+	return object.GetTree(rh.vr.Storer(), newRoot)
 }
 
 // treeBlobHash looks up path in tree. Returns (hash, true) if the path
@@ -833,9 +833,9 @@ func (rh *Repo) mergeFactsInvalid(dstCommit *object.Commit, merged plumbing.Hash
 	if err != nil {
 		return "", err
 	}
-	mt, err := object.GetTree(rh.Storer(), merged)
+	mt, err := object.GetTree(rh.vr.Storer(), merged)
 	if err != nil {
 		return "", err
 	}
-	return verify.ValidateNewFacts(ont, rh.OntologyRoot(), []*object.Tree{dt}, mt)
+	return verify.ValidateNewFacts(ont, rh.vr.OntologyRoot(), []*object.Tree{dt}, mt)
 }

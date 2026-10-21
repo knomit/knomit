@@ -20,7 +20,7 @@ func (fi *Index) readFileLastCommit(ctx context.Context, branch, path, beforeCom
 	// "Before" is exclusive: start the walk from the first parent so a version
 	// added exactly at beforeCommit isn't returned (matches the retract use
 	// case — read the version that existed before the retract commit).
-	parent, err := fi.rh.FirstParentCommit(ctx, beforeCommitHash)
+	parent, err := fi.rh.vr.FirstParentCommit(ctx, beforeCommitHash)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
@@ -35,7 +35,7 @@ func (fi *Index) readFileLastCommit(ctx context.Context, branch, path, beforeCom
 	// the edges and honors the first-parent-not-wall-clock invariant. A more
 	// recent deletion is stepped over; only a path never added in the ancestry
 	// yields not-found.
-	hash, ok, err := fi.rh.ResolveActiveCommitForPath(ctx, branch, path, parent)
+	hash, ok, err := fi.rh.vr.ResolveActiveCommitForPath(ctx, branch, path, parent)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileLastCommit: %w", err)
 	}
@@ -43,7 +43,7 @@ func (fi *Index) readFileLastCommit(ctx context.Context, branch, path, beforeCom
 		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, vcs.ErrPathNotFound)
 	}
 
-	content, err = fi.rh.ReadFileAtCommit(ctx, path, hash)
+	content, err = fi.rh.vr.ReadFileAtCommit(ctx, path, hash)
 	return content, hash, err
 }
 
@@ -57,12 +57,12 @@ func (fi *Index) readFileLastCommit(ctx context.Context, branch, path, beforeCom
 // fix for external ones (knomit_update, knomit_retract).
 func (fi *Index) fileExists(ctx context.Context, branch, path string) (bool, error) {
 	path = strings.ToLower(path)
-	headHash, err := fi.rh.ResolveRef(ctx, branch)
+	headHash, err := fi.rh.vr.ResolveRef(ctx, branch)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: ref: %w", err)
 	}
 
-	commit, err := fi.rh.Repository().CommitObject(headHash)
+	commit, err := fi.rh.vr.Repository().CommitObject(headHash)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: commit: %w", err)
 	}
@@ -95,19 +95,19 @@ func (fi *Index) ReadFact(ctx context.Context, branch, path string, opts *ReadFa
 		}
 		return ReadFactResult{Content: content, FromCommit: fromCommit}, nil
 	case opts.AtCommit != "":
-		content, err := fi.rh.ReadFileAtCommit(ctx, path, opts.AtCommit)
+		content, err := fi.rh.vr.ReadFileAtCommit(ctx, path, opts.AtCommit)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content}, nil
 	case opts.WithHash:
-		content, blobHash, err := fi.rh.ReadFileWithHash(ctx, branch, path)
+		content, blobHash, err := fi.rh.vr.ReadFileWithHash(ctx, branch, path)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content, BlobHash: blobHash}, nil
 	default:
-		content, err := fi.rh.ReadFile(ctx, branch, path)
+		content, err := fi.rh.vr.ReadFile(ctx, branch, path)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
@@ -124,12 +124,12 @@ func (fi *Index) FactExists(ctx context.Context, branch, path string) (bool, err
 // Subdirectories have IsDir=true, .md files have IsDir=false.
 func (fi *Index) ListDir(ctx context.Context, branch, path string) ([]DirEntry, error) {
 	path = strings.ToLower(path)
-	headHash, err := fi.rh.ResolveRef(ctx, branch)
+	headHash, err := fi.rh.vr.ResolveRef(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: ref: %w", err)
 	}
 
-	commit, err := fi.rh.Repository().CommitObject(headHash)
+	commit, err := fi.rh.vr.Repository().CommitObject(headHash)
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: commit: %w", err)
 	}
@@ -166,10 +166,10 @@ func (fi *Index) ListDir(ctx context.Context, branch, path string) ([]DirEntry, 
 // ListAllWithHash returns all .md files at the tip of branch with their blob hashes.
 // Single tree walk — no per-file I/O.
 func (fi *Index) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
-	return fi.rh.ListAllWithHash(ctx, branch)
+	return fi.rh.vr.ListAllWithHash(ctx, branch)
 }
 
 // ListAll returns paths of all .md files at the tip of branch.
 func (fi *Index) ListAll(ctx context.Context, branch string) ([]string, error) {
-	return fi.rh.ListAll(ctx, branch)
+	return fi.rh.vr.ListAll(ctx, branch)
 }

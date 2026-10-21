@@ -33,7 +33,7 @@ const originIdentityKey = "origin_identity"
 // readOriginIdentity returns the recorded origin identity, "" when none is.
 func (rh *Repo) readOriginIdentity() (string, error) {
 	var v string
-	err := rh.DB().QueryRow(`SELECT value FROM meta WHERE key = ?`, originIdentityKey).Scan(&v)
+	err := rh.vr.DB().QueryRow(`SELECT value FROM meta WHERE key = ?`, originIdentityKey).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -45,7 +45,7 @@ func (rh *Repo) readOriginIdentity() (string, error) {
 
 // recordOriginIdentity records id (an originIdentity, never a raw URL).
 func (rh *Repo) recordOriginIdentity(id string) error {
-	if _, err := rh.DB().Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, originIdentityKey, id); err != nil {
+	if _, err := rh.vr.DB().Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, originIdentityKey, id); err != nil {
 		return fmt.Errorf("record origin identity: %w", err)
 	}
 	return nil
@@ -54,19 +54,19 @@ func (rh *Repo) recordOriginIdentity(id string) error {
 // branchSharesHistory reports whether agentBranch and local upstreamMain have
 // a common commit.
 func (rh *Repo) branchSharesHistory(agentBranch, upstreamMain string) (bool, error) {
-	a, err := rh.ResolveRef(context.Background(), agentBranch)
+	a, err := rh.vr.ResolveRef(context.Background(), agentBranch)
 	if err != nil {
 		return false, err
 	}
-	m, err := rh.ResolveRef(context.Background(), upstreamMain)
+	m, err := rh.vr.ResolveRef(context.Background(), upstreamMain)
 	if err != nil {
 		return false, err
 	}
-	ac, err := rh.Repository().CommitObject(a)
+	ac, err := rh.vr.Repository().CommitObject(a)
 	if err != nil {
 		return false, err
 	}
-	mc, err := rh.Repository().CommitObject(m)
+	mc, err := rh.vr.Repository().CommitObject(m)
 	if err != nil {
 		return false, err
 	}
