@@ -11,16 +11,14 @@ import (
 	"sync"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/index"
 	"knomit/internal/store/internal/sessions"
+	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/migrate"
 	"knomit/internal/store/remotesync"
 	"knomit/internal/store/vocab"
@@ -374,53 +372,7 @@ func (s *Service) SetOnCommit(fn func(branch, hash string)) {
 // HasSharedHistory checks whether localBranch shares any commits with remoteBranch on the remote service.
 // Uses a bounded walk (max 1000 commits) to avoid scanning huge histories.
 func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remote *Service, remoteBranch string) (bool, error) {
-	const maxCommits = 1000
-
-	localHash, err := s.rh.ResolveRef(ctx, localBranch)
-	if err != nil {
-		return false, fmt.Errorf("HasSharedHistory: local ref: %w", err)
-	}
-	localHashes := make(map[plumbing.Hash]struct{})
-	localIter, err := s.rh.Repository().Log(&gogit.LogOptions{From: localHash})
-	if err != nil {
-		return false, fmt.Errorf("HasSharedHistory: local log: %w", err)
-	}
-	count := 0
-	if err := localIter.ForEach(func(c *object.Commit) error {
-		if count >= maxCommits {
-			return storer.ErrStop
-		}
-		localHashes[c.Hash] = struct{}{}
-		count++
-		return nil
-	}); err != nil {
-		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
-	}
-
-	remoteHash, err := remote.rh.ResolveRef(ctx, remoteBranch)
-	if err != nil {
-		return false, fmt.Errorf("HasSharedHistory: remote ref: %w", err)
-	}
-	remoteIter, err := remote.rh.Repository().Log(&gogit.LogOptions{From: remoteHash})
-	if err != nil {
-		return false, fmt.Errorf("HasSharedHistory: remote log: %w", err)
-	}
-	count = 0
-	found := false
-	if err := remoteIter.ForEach(func(c *object.Commit) error {
-		if count >= maxCommits {
-			return storer.ErrStop
-		}
-		if _, ok := localHashes[c.Hash]; ok {
-			found = true
-			return storer.ErrStop
-		}
-		count++
-		return nil
-	}); err != nil && !found {
-		return false, fmt.Errorf("HasSharedHistory: remote walk: %w", err)
-	}
-	return found, nil
+	return vcs.HasSharedHistory(ctx, s.rh.Repo, localBranch, remote.rh.Repo, remoteBranch)
 }
 
 // canonicalizePath resolves symlinks so the path matches what SQLite returns

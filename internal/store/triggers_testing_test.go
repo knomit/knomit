@@ -13,11 +13,11 @@ import (
 	"knomit/internal/store/internal/vcs"
 )
 
-// TestingCommitFiles builds its trees in one pass (testingTree) instead of one
+// TestingCommitFiles (vcs.Repo.CommitFilesForTest) builds its trees in one pass (vcs testingTree) instead of one
 // BuildTree per path. The commit must still carry the SAME root tree that the
 // per-path build gives: untouched entries kept, files added in existing and in
 // new directories, an existing file replaced. Sabotage: drop the parent's
-// untouched entries in testingDir.write, or write a directory with the leaf
+// untouched entries in vcs testingDir.write, or write a directory with the leaf
 // mode; the root hashes then differ.
 func TestTestingCommitFiles_TreeMatchesPerPathBuild(t *testing.T) {
 	svc := newBatchTestService(t)

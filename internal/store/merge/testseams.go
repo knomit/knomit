@@ -2,9 +2,13 @@ package merge
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
+
+	"knomit/internal/store/internal/sqlite"
 )
 
 // Test seams for the parent's white-box tests, which reach into the merge
@@ -51,4 +55,32 @@ func ConflictsStrategyForTest(facts, state string) ConflictStrategy {
 func ExperimentRewoundRefNameForTest(name string) plumbing.ReferenceName {
 	mustBeTest("ExperimentRewoundRefNameForTest")
 	return experimentRewoundRefName(name)
+}
+
+// SetExperimentActivityForTest backdates an experiment's last_activity_at.
+//
+// TEST SEAM, and exported only because the sweeper's tests live in
+// internal/repos and cannot reach this table any other way. Expiry is
+// measured in days, so the alternative is a test that either sleeps for days
+// or asserts nothing; backdating the row makes the assertion about WHICH
+// experiment the cutoff selects, which is the part that can be wrong.
+//
+// Not part of ExperimentIndex: production code records activity through
+// NotifyCommit, which is what keeps "activity" meaning exactly "a commit
+// landed here".
+func (rh *Repo) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
+	mustBeTest("SetExperimentActivityForTest")
+	res, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx,
+		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`, when.Unix(), name)
+	if err != nil {
+		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
+	}
+	return nil
 }

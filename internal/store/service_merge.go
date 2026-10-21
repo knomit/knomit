@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"knomit/internal/fact"
-	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
-	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // MergePushed merges the pushed branch src, at exactly the commit srcTip, into
@@ -114,7 +111,7 @@ func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip pl
 // A symlink at the first rung present is an error wrapping
 // fact.ErrSymlinkNotFollowed and naming the path, never (nil, nil).
 func (s *Service) OntologyAt(ctx context.Context, branch string) ([]byte, error) {
-	_, data, err := s.OntologyFileAt(ctx, branch)
+	_, data, err := s.rh.OntologyFileAt(ctx, branch)
 	return data, err
 }
 
@@ -122,85 +119,13 @@ func (s *Service) OntologyAt(ctx context.Context, branch string) ([]byte, error)
 // tip has none). The repo's open (repos.loadOntology) and its create-time
 // check (branchHasOntology) read the ontology through it.
 func (s *Service) OntologyFileAt(ctx context.Context, branch string) (string, []byte, error) {
-	h, err := s.rh.ResolveRef(ctx, branch)
-	if err != nil {
-		return "", nil, err
-	}
-	c, err := object.GetCommit(s.rh.Storer(), h)
-	if err != nil {
-		return "", nil, fmt.Errorf("OntologyAt %s: %w", branch, err)
-	}
-	return vcs.TreeOntologyFile(c)
+	return s.rh.OntologyFileAt(ctx, branch)
 }
 
-// PushedBranches reports each named branch against agentBranch. The caller
-// decides which branches are pushed ones (repos.RepoInstance.IsPushedBranch);
-// this only reads. The agent branch's history is walked once for all of them.
+// PushedBranches reports each named branch against agentBranch. See
+// merge.Repo.PushedBranches.
 func (s *Service) PushedBranches(ctx context.Context, names []string, agentBranch, ontologyRoot string) ([]PushedBranchInfo, error) {
-	rh := s.rh
-	agentRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch))
-	if err != nil {
-		return nil, fmt.Errorf("pushed branches: agent branch %q: %w", agentBranch, err)
-	}
-	agentCommit, err := object.GetCommit(rh.Storer(), agentRef.Hash())
-	if err != nil {
-		return nil, fmt.Errorf("pushed branches: agent tip: %w", err)
-	}
-	inAgent := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), agentRef.Hash(), nil, func(c *object.Commit) { inAgent[c.Hash] = true }); err != nil {
-		return nil, err
-	}
-	prefix := strings.TrimSuffix(ontologyRoot, "/") + "/"
-
-	out := make([]PushedBranchInfo, 0, len(names))
-	for _, name := range names {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		ref, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(name))
-		if err != nil {
-			return nil, fmt.Errorf("pushed branches: %q: %w", name, err)
-		}
-		tip, err := object.GetCommit(rh.Storer(), ref.Hash())
-		if err != nil {
-			return nil, fmt.Errorf("pushed branches: %q tip: %w", name, err)
-		}
-		info := PushedBranchInfo{
-			Name: name, Tip: tip.Hash.String(),
-			TipTime: tip.Committer.When, TipAuthor: tip.Author.Name,
-		}
-		if !inAgent[tip.Hash] {
-			if err := vcs.WalkHistory(rh.Storer(), tip.Hash, inAgent, func(*object.Commit) { info.ToMerge++ }); err != nil {
-				return nil, err
-			}
-		}
-		var baseTree *object.Tree
-		if bases, err := tip.MergeBase(agentCommit); err == nil && len(bases) > 0 {
-			info.MergeBase = bases[0].Hash.String()
-			if baseTree, err = bases[0].Tree(); err != nil {
-				return nil, err
-			}
-		}
-		tipTree, err := tip.Tree()
-		if err != nil {
-			return nil, err
-		}
-		changes, err := object.DiffTree(baseTree, tipTree)
-		if err != nil {
-			return nil, fmt.Errorf("pushed branches: %q diff: %w", name, err)
-		}
-		for _, ch := range changes {
-			p := ch.To.Name
-			if p == "" {
-				p = ch.From.Name
-			}
-			if !strings.HasPrefix(p, prefix) {
-				info.OtherFilesChanged++
-			}
-		}
-		out = append(out, info)
-	}
-	return out, nil
+	return s.rh.PushedBranches(ctx, names, agentBranch, ontologyRoot)
 }
 
 // Experiments returns the experiment lifecycle sub-service.
@@ -209,26 +134,8 @@ func (s *Service) Experiments() ExperimentIndex { return s.rh }
 // SetExperimentActivityForTest backdates an experiment's last_activity_at.
 //
 // TEST SEAM, and exported only because the sweeper's tests live in
-// internal/repos and cannot reach this table any other way. Expiry is
-// measured in days, so the alternative is a test that either sleeps for days
-// or asserts nothing; backdating the row makes the assertion about WHICH
-// experiment the cutoff selects, which is the part that can be wrong.
-//
-// Not part of ExperimentIndex: production code records activity through
-// NotifyCommit, which is what keeps "activity" meaning exactly "a commit
-// landed here".
+// internal/repos and cannot reach this table any other way. See
+// merge.Repo.SetExperimentActivityForTest. Not part of ExperimentIndex.
 func (s *Service) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
-	res, err := conn(ctx, s.rh.DB()).ExecContext(ctx,
-		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`, when.Unix(), name)
-	if err != nil {
-		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
-	}
-	return nil
+	return s.rh.SetExperimentActivityForTest(ctx, name, when)
 }

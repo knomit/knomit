@@ -1,8 +1,10 @@
 package vcs
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"knomit/internal/fact"
 	"sync"
 
@@ -64,4 +66,18 @@ func TreeOntologyFile(c *object.Commit) (string, []byte, error) {
 		return p, []byte(s), err
 	}
 	return "", nil, nil
+}
+
+// OntologyFileAt is the ontology file at branch's tip, with the rung it read
+// ("" when the tip has none); see Service.OntologyAt.
+func (rh *Repo) OntologyFileAt(ctx context.Context, branch string) (string, []byte, error) {
+	h, err := rh.ResolveRef(ctx, branch)
+	if err != nil {
+		return "", nil, err
+	}
+	c, err := object.GetCommit(rh.Storer(), h)
+	if err != nil {
+		return "", nil, fmt.Errorf("OntologyAt %s: %w", branch, err)
+	}
+	return TreeOntologyFile(c)
 }
