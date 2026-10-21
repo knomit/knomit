@@ -66,18 +66,15 @@ const (
 	AxisConfidence = index.AxisConfidence
 	AxisRecent     = index.AxisRecent
 
-	NodeFact         = index.NodeFact
-	NodeEntity       = index.NodeEntity
-	NodeDomain       = index.NodeDomain
-	NodeOntologyNode = index.NodeOntologyNode
+	NodeFact   = index.NodeFact
+	NodeEntity = index.NodeEntity
+	NodeDomain = index.NodeDomain
 
-	EdgeTagged          = index.EdgeTagged
-	EdgeInDomain        = index.EdgeInDomain
-	EdgeUnder           = index.EdgeUnder
-	EdgeDerivedFrom     = index.EdgeDerivedFrom
-	EdgeSimilarTo       = index.EdgeSimilarTo
-	EdgeDomainChildOf   = index.EdgeDomainChildOf
-	EdgeOntologyChildOf = index.EdgeOntologyChildOf
+	EdgeTagged        = index.EdgeTagged
+	EdgeInDomain      = index.EdgeInDomain
+	EdgeDerivedFrom   = index.EdgeDerivedFrom
+	EdgeSimilarTo     = index.EdgeSimilarTo
+	EdgeDomainChildOf = index.EdgeDomainChildOf
 
 	MotifMatchExact  = index.MotifMatchExact
 	MotifMatchStem   = index.MotifMatchStem
@@ -119,9 +116,6 @@ func EntityTagMatches(factEntity, queryEntity string) bool {
 func FormatMethodologySection(matches []MethodologyMatch) string {
 	return index.FormatMethodologySection(matches)
 }
-
-// IsMethodologyMarker is index.IsMethodologyMarker.
-func IsMethodologyMarker(s string) bool { return index.IsMethodologyMarker(s) }
 
 // NewSimilarityGraph is index.NewSimilarityGraph.
 func NewSimilarityGraph(pairs [][2]string) SimilarityGraph { return index.NewSimilarityGraph(pairs) }

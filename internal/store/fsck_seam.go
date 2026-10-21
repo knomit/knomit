@@ -27,16 +27,13 @@ const (
 	CategoryBranchesTable      = fsck.CategoryBranchesTable
 	CategoryCommitLog          = fsck.CategoryCommitLog
 	CategoryCommitParents      = fsck.CategoryCommitParents
-	CategoryDatabase           = fsck.CategoryDatabase
 	CategoryDerivedTables      = fsck.CategoryDerivedTables
-	CategoryEmbeddingIdentity  = fsck.CategoryEmbeddingIdentity
 	CategoryEmbeddingsCoverage = fsck.CategoryEmbeddingsCoverage
 	CategoryFactFormat         = fsck.CategoryFactFormat
 	CategoryFactsCoherence     = fsck.CategoryFactsCoherence
 	CategoryGeneratedRefs      = fsck.CategoryGeneratedRefs
 	CategoryGitReachability    = fsck.CategoryGitReachability
 	CategoryGraphCoherence     = fsck.CategoryGraphCoherence
-	CategoryOrphanObjects      = fsck.CategoryOrphanObjects
 	CategorySchemaVersion      = fsck.CategorySchemaVersion
 	SeverityError              = fsck.SeverityError
 	SeverityWarning            = fsck.SeverityWarning

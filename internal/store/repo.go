@@ -261,7 +261,6 @@ func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func
 
 	log.Info().Str("branch", branch).Str("url", url).Msg("cloned remote into storer")
 	s.rh.SetRepository(repo)
-	s.fi.SetAuth(auth)
 	return nil
 }
 
@@ -561,7 +560,6 @@ func (s *Service) InitFromRemote(ctx context.Context, originURL string, auth tra
 
 	log.Info().Str("branch", agentBranch).Str("upstream", upstreamMain).Str("origin", originURL).Msg("git store initialized from remote")
 	// s.rh.repo is already published (set earlier so ConfigureRemote could run).
-	s.fi.SetAuth(auth)
 	if _, err := s.rh.EnsureBranch(ctx, agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: ensure agent branch %q: %w", agentBranch, err)
 	}
@@ -692,7 +690,6 @@ func (s *Service) InitSubscription(ctx context.Context, originURL string, auth t
 	}
 	s.recordConsensusBranch(upstreamMain)
 
-	s.fi.SetAuth(auth)
 	if _, err := s.rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", fmt.Errorf("InitSubscription: ensure upstream branch %q: %w", upstreamMain, err)
 	}
@@ -810,7 +807,6 @@ func (s *Service) initFromEmptyRemote(ctx context.Context, repo *gogit.Repositor
 	}
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")
 	s.rh.SetRepository(repo)
-	s.fi.SetAuth(auth)
 	if _, err := s.rh.EnsureBranch(ctx, agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote ensure agent branch %q: %w", agentBranch, err)
 	}

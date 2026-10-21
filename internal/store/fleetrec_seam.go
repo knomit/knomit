@@ -11,11 +11,10 @@ import "knomit/internal/store/fleetrec"
 
 // Types.
 type (
-	Fleet             = fleetrec.Fleet
-	FleetMainCommit   = fleetrec.MainCommit
-	FleetMember       = fleetrec.Member
-	FleetPKI          = fleetrec.PKI
-	FleetRecordChange = fleetrec.RecordChange
+	Fleet           = fleetrec.Fleet
+	FleetMainCommit = fleetrec.MainCommit
+	FleetMember     = fleetrec.Member
+	FleetPKI        = fleetrec.PKI
 )
 
 // ErrNotFleet: the repository's ontology is not the fleet ontology. The same
