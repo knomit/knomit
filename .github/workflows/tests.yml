@@ -478,10 +478,16 @@ jobs:
         # macos-latest run all three packages at 10m; windows-2025 runs one
         # package per leg (synthesize, store, repos) at 40m. PR (full=false):
         # the ubuntu leg alone.
+        #
+        # EVERY entry is a RECURSIVE pattern (`...`). A bare `./internal/x/`
+        # names exactly one package, so a child package created under it would
+        # be run by no leg on any OS (kb gotcha 663ba6f0). Each subtree is named
+        # by exactly one pattern per leg and appears in no other job, so a child
+        # runs once per leg that already ran its parent.
         include: >-
           ${{ fromJSON(inputs.full
-          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/ ./internal/store/... ./internal/repos/","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/synthesize/ ./internal/store/... ./internal/repos/","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/synthesize/","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/store/...","timeout":"40m"},{"leg":"windows-2025 repos","os":"windows-2025","packages":"./internal/repos/","timeout":"40m"}]'
-          || '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/ ./internal/store/... ./internal/repos/","timeout":"10m"}]') }}
+          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/synthesize/...","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/store/...","timeout":"40m"},{"leg":"windows-2025 repos","os":"windows-2025","packages":"./internal/repos/...","timeout":"40m"}]'
+          || '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"}]') }}
     runs-on: ${{ matrix.os }}
     # Deliberately looser than the -timeout below, for the reason race.yml
     # spells out: the go test timeout prints a goroutine dump naming the stuck
