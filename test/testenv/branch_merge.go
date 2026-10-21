@@ -8,7 +8,7 @@ import (
 )
 
 // MergeFrom merges the source branch into this branch using the given
-// conflict strategy. Wraps store.BranchIndex.MergeBranch and captures the
+// conflict strategy. Wraps merge.Repo.MergeBranch (Service.Merge) and captures the
 // resulting HEAD as a Snapshot. Auto-verifies the repo unless
 // StoryboardOpts.AutoVerify is false.
 //
