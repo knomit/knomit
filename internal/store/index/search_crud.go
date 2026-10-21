@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -30,7 +32,7 @@ func donatedVec(ctx context.Context, path string) ([]float32, bool) {
 // validateDonatedVec checks a caller-supplied embedding against the active
 // embedder's dimension and converts it to storage bytes. When no embedder is
 // configured we cannot know the expected dim, so the vector is stored as-is.
-func validateDonatedVec(emb vcs.Embedder, path string, vec []float32) ([]byte, error) {
+func validateDonatedVec(emb model.Embedder, path string, vec []float32) ([]byte, error) {
 	if emb != nil && len(vec) != emb.Dim() {
 		return nil, fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", path, len(vec), emb.Dim())
 	}

@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"knomit/internal/fact"
@@ -91,7 +93,7 @@ func (reviewStrategy) AcceptSeed(f fact.Fact) bool {
 // it explicitly names the general-freeze reading as a misreading that once
 // blocked a legitimate uniform fix. A health line costs no discovery and
 // produces no facts.
-func recordVocabularySkipHealth(sess *store.PipelineSession, effort Effort) {
+func recordVocabularySkipHealth(sess *model.PipelineSession, effort Effort) {
 	if sess == nil || effort.MaintainsVocabulary() {
 		return
 	}
@@ -120,7 +122,7 @@ func recordVocabularySkipHealth(sess *store.PipelineSession, effort Effort) {
 // "does the corpus have work?" and then, separately, planned it — two
 // statements that could drift apart. This plans, then reports what it planned,
 // so the health line and the queue cannot disagree.
-func (reviewStrategy) PlanStandingWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) (bool, []string, error) {
+func (reviewStrategy) PlanStandingWork(ctx context.Context, d Deps, sess *model.PipelineSession, branch string) (bool, []string, error) {
 	before := len(sess.Health)
 	// nil clusters: an empty dirty set clusters to nothing, so there is no
 	// co-membership to exclude against. That is not a degradation — the
@@ -160,7 +162,7 @@ func (reviewStrategy) PlanStandingWork(ctx context.Context, d Deps, sess *store.
 //
 // branch comes off sess, never off d.RI: by the time Plan runs, the session is
 // already bound to the branch it was created against.
-func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSession, seeds []fact.Fact) error {
+func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSession, seeds []fact.Fact) error {
 	branch := sess.Branch
 	llmSeeds := factsForLLM(seeds, fact.ID12(d.RI.ID()))
 
@@ -175,7 +177,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
 	// The near-duplicate floor is model-dependent (see internal/embeddings/params).
 	t = time.Now()
-	dedupThreshold := store.EmbedderThresholds(d.RI.Embedder()).Dedup
+	dedupThreshold := model.EmbedderThresholds(d.RI.Embedder()).Dedup
 	for i := range clusters {
 		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Files, d.Search, dedupThreshold, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()))
 		if err != nil {
@@ -241,7 +243,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 				Int("facts", len(cluster)).Int("bytes", len(factsJSON)).Int("limit", maxItemBytes).
 				Msg("review: prune cluster exceeds maxItemBytes; it will page, but merge quality may suffer — consider raising clustering resolution")
 		}
-		item := store.PipelineWorkItem{
+		item := model.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "prune",
 			ClusterKey: fmt.Sprintf("cluster-%d", i),
@@ -390,7 +392,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 				if err != nil {
 					return wrapf(reviewTool, err, "marshal seeds for distill group %s chunk %d", group.Key, ci)
 				}
-				item := store.PipelineWorkItem{
+				item := model.PipelineWorkItem{
 					SessionID:  sess.ID,
 					StepType:   "distill",
 					ClusterKey: fmt.Sprintf("%s-%d", group.Key, ci),
@@ -539,7 +541,7 @@ var pagedStepTypes = map[string]bool{
 }
 
 // RequireCompletion implements pagedStrategy.
-func (reviewStrategy) RequireCompletion(item *store.PipelineWorkItem, completionToken string) error {
+func (reviewStrategy) RequireCompletion(item *model.PipelineWorkItem, completionToken string) error {
 	if !pagedStepTypes[item.StepType] {
 		return nil
 	}
@@ -558,7 +560,7 @@ func (reviewStrategy) RequireCompletion(item *store.PipelineWorkItem, completion
 //
 // Everything expensive in Render (methodology retrieval, template execution)
 // is absent here by design, which is the entire point of the method.
-func (reviewStrategy) RenderPayload(item *store.PipelineWorkItem) (string, error) {
+func (reviewStrategy) RenderPayload(item *model.PipelineWorkItem) (string, error) {
 	if !pagedStepTypes[item.StepType] {
 		return "", nil
 	}
@@ -705,7 +707,7 @@ func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
 
 // OnPhaseAdvance hooks the work→reflect transition to enqueue the session's
 // single reflect item. reflect→done needs nothing.
-func (reviewStrategy) OnPhaseAdvance(ctx context.Context, d Deps, sess *store.PipelineSession, from, to string) error {
+func (reviewStrategy) OnPhaseAdvance(ctx context.Context, d Deps, sess *model.PipelineSession, from, to string) error {
 	if from != "work" || to != "reflect" {
 		return nil
 	}
@@ -717,7 +719,7 @@ func (reviewStrategy) OnPhaseAdvance(ctx context.Context, d Deps, sess *store.Pi
 // the work→reflect CAS, which is what guarantees at-most-once insertion. A
 // failure to detect transitions is logged but not fatal — the session still
 // advances (matching the pre-extraction tolerance).
-func maybeEnqueueReflectItem(ctx context.Context, d Deps, sess *store.PipelineSession) error {
+func maybeEnqueueReflectItem(ctx context.Context, d Deps, sess *model.PipelineSession) error {
 	transitions, err := findHypothesisTransitions(ctx, d, sess)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sess.ID).Msg("review: failed to find hypothesis transitions")
@@ -730,7 +732,7 @@ func maybeEnqueueReflectItem(ctx context.Context, d Deps, sess *store.PipelineSe
 	if err != nil {
 		return wrapf(reviewTool, err, "marshal transitions")
 	}
-	return d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	return d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "reflect",
 		ClusterKey: "reflect",
@@ -803,7 +805,7 @@ type itemDecision struct {
 // The normalized response is the raw response for every step type that carries
 // mandatory content (reflect/prune/distill). Only discover may legitimately be
 // answered with nothing, and it substitutes a placeholder — see the case below.
-func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any, string, error) {
+func (reviewStrategy) Decode(item *model.PipelineWorkItem, response string) (any, string, error) {
 	switch item.StepType {
 	case "reflect":
 		var transitions []hypothesisTransition
@@ -907,7 +909,7 @@ func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any
 // the paths the response is allowed to reference. Validating against these —
 // not against the whole corpus — is what stops a response from acting on
 // facts its item never showed the agent.
-func itemInputPaths(item *store.PipelineWorkItem) ([]string, error) {
+func itemInputPaths(item *model.PipelineWorkItem) ([]string, error) {
 	var facts []factForLLM
 	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 		return nil, wrapf(reviewTool, err, "unmarshal facts")
@@ -925,7 +927,7 @@ func itemInputPaths(item *store.PipelineWorkItem) ([]string, error) {
 // after the item's claim CAS was won, so it executes at most once per item. An
 // error here surfaces to the caller with the item already consumed — see
 // Pipeline.ContinueSessionForItem for why that tradeoff is the safe direction.
-func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem, decision any) error {
+func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem, decision any) error {
 	dec, ok := decision.(*itemDecision)
 	if !ok {
 		return errf(reviewTool, "apply: unexpected decision type %T", decision)
@@ -938,7 +940,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 	switch item.StepType {
 	case "reflect":
 		if err := ApplyReflectDecisions(ctx, d.Facts, d.Files, d.Search, *dec.reflect, sess, fact.ID12(d.RI.ID()),
-			d.RI.OntologyRoot(), reflectNoveltyThreshold(store.EmbedderThresholds(d.RI.Embedder()).ReflectNovelty), d.OnProgress); err != nil {
+			d.RI.OntologyRoot(), reflectNoveltyThreshold(model.EmbedderThresholds(d.RI.Embedder()).ReflectNovelty), d.OnProgress); err != nil {
 			return wrapf(reviewTool, err, "apply reflect")
 		}
 
@@ -1045,8 +1047,8 @@ const maxRaptorDepth = 3
 func enqueueRaptorFollowups(
 	ctx context.Context,
 	d Deps,
-	sess *store.PipelineSession,
-	item *store.PipelineWorkItem,
+	sess *model.PipelineSession,
+	item *model.PipelineWorkItem,
 	writtenFacts []distillFact,
 ) {
 	if len(writtenFacts) == 0 || item.Depth >= maxRaptorDepth {
@@ -1082,7 +1084,7 @@ func enqueueRaptorFollowups(
 		// fall back to NextPipelineWorkItem's `id ASC` tiebreak.
 		for chi, chunk := range chunkFacts(cluster, maxItemBytes) {
 			factsJSON, _ := json.Marshal(chunk)
-			wItem := store.PipelineWorkItem{
+			wItem := model.PipelineWorkItem{
 				SessionID:  sess.ID,
 				StepType:   "distill",
 				ClusterKey: fmt.Sprintf("raptor-d%d-c%d-%d", nextDepth, ci, chi),
@@ -1105,7 +1107,7 @@ func enqueueRaptorFollowups(
 // Render builds the prompt and response schema for one review work item.
 // Pure presentation; the engine decides whether to call this or advance the
 // phase, and attaches the item id and progress counts afterwards.
-func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem) (*WorkItemView, error) {
+func (reviewStrategy) Render(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*WorkItemView, error) {
 	branch := sess.Branch
 	ontologyRoot := d.RI.OntologyRoot()
 
@@ -1304,7 +1306,7 @@ type hypothesisTransition struct {
 // retracted, or had their confidence changed during the given review
 // session. All branch reads use sess.Branch — the session's recorded
 // branch — so the diff is consistent with the session's scope.
-func findHypothesisTransitions(ctx context.Context, d Deps, sess *store.PipelineSession) ([]hypothesisTransition, error) {
+func findHypothesisTransitions(ctx context.Context, d Deps, sess *model.PipelineSession) ([]hypothesisTransition, error) {
 	gs := d.Facts
 	branch := sess.Branch
 

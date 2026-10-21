@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -100,7 +102,7 @@ func TestExplain_HistoryCursorWalksMergeDeliveredWrites(t *testing.T) {
 
 	// The root's own commit stays the first-parent resolved version (the last
 	// PR merge), even though the newest CHANGE is the write behind it.
-	var live []store.RevisionMeta
+	var live []model.RevisionMeta
 	ri.WithRead(func(svc *store.Service) {
 		head, err := svc.Branches().HeadCommit(ctx, explainTestBranch)
 		require.NoError(t, err)

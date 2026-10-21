@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 
+	"knomit/internal/store/model"
+
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/sqlite"
 )
@@ -29,5 +31,5 @@ var (
 	usableKNNSimilarity  = sqlite.UsableKNNSimilarity
 	groupingKey          = sqlite.GroupingKey
 	motifClusterKeyExpr  = sqlite.MotifClusterKeyExpr
-	precomputedEmbedding = sqlite.PrecomputedEmbedding
+	precomputedEmbedding = model.PrecomputedEmbedding
 )

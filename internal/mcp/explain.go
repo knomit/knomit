@@ -9,12 +9,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -184,11 +185,11 @@ func readFileNode(ctx context.Context, s mcpStore, branch, path, commit string, 
 // it stood when the fact was written (decision 3). Derived from the fact's
 // refs at that version, so no graph edge carries them: the pin is a function
 // of (fact version, ref) and .knomit/ never enters the index.
-func systemFileChildren(refs []string, localRepoID, commit string, depth int, wire func(string) string) []store.QueueItem {
-	var out []store.QueueItem
+func systemFileChildren(refs []string, localRepoID, commit string, depth int, wire func(string) string) []model.QueueItem {
+	var out []model.QueueItem
 	for _, raw := range refs {
 		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalSystemFile {
-			out = append(out, store.QueueItem{Path: wire(r.Path), CommitHash: commit, SortKey: depth})
+			out = append(out, model.QueueItem{Path: wire(r.Path), CommitHash: commit, SortKey: depth})
 		}
 	}
 	return out
@@ -256,8 +257,8 @@ func decodeHistoryCursor(s string) (historyCursor, bool) {
 }
 
 // revisionDiff is a revision's delta from the content it was edited from,
-// precomputed by the store (see store.RevisionDiff).
-type revisionDiff = store.RevisionDiff
+// precomputed by the store (see model.RevisionDiff).
+type revisionDiff = model.RevisionDiff
 
 // classifyRefs splits a fact's refs into the local fact edges the provenance
 // walk descends into, and everything else. It consumes fact.ClassifyRef — the
@@ -503,7 +504,7 @@ func explainHistoryPage(ctx context.Context, b *repos.Binding, file, token strin
 
 	pos := &index.PathHistoryCursor{Frontier: hc.Frontier, AnchorOnBranch: hc.AnchorOnBranch}
 	history, err := buildHistory(ctx, t.s, t.rt.Branch, t.rel, hc.Anchor, pos, explainHistoryPageSize, hc)
-	if errors.Is(err, store.ErrHistoryChanged) {
+	if errors.Is(err, model.ErrHistoryChanged) {
 		return mcpgo.NewToolResultError(errHistoryChanged), nil
 	}
 	if err != nil {
@@ -617,7 +618,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("outgoing error: %v", err)), nil
 	}
-	var queueItems []store.QueueItem
+	var queueItems []model.QueueItem
 	seenSeed := []string{seenKey(rel, rootCommit)}
 	enqueued := map[string]bool{seenKey(rel, rootCommit): true}
 	for _, e := range edges {
@@ -630,7 +631,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		// enqueue only (never emission), so this stops resume re-enqueuing a node
 		// that was already queued at mint (e.g. a diamond root→A, root→B, A→B).
 		seenSeed = append(seenSeed, k)
-		queueItems = append(queueItems, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: 1})
+		queueItems = append(queueItems, model.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: 1})
 	}
 	for _, item := range systemFileChildren(parsed.Refs, fact.ID12(rt.RI.ID()), rootCommit, 1, wire) {
 		_, frel, _, _ := federate.ParseQualifiedPath(item.Path)
@@ -721,7 +722,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	// factEntries holds explainFactEntry and explainFileEntry nodes, in walk order.
 	var factEntries []any
 	var newSeen []string
-	var newQueue []store.QueueItem
+	var newQueue []model.QueueItem
 
 	// Per-mount store handles, resolved once per resume. Explain never leaves the
 	// input fact's mount, but each dequeued item carries its own wire path, so it
@@ -830,7 +831,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 						}
 						seen[k] = true
 						newSeen = append(newSeen, k)
-						newQueue = append(newQueue, store.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: item.SortKey + 1})
+						newQueue = append(newQueue, model.QueueItem{Path: wire(e.Path), CommitHash: e.Commit, SortKey: item.SortKey + 1})
 					}
 				}
 				localID := fact.ID12(rt.RI.ID())

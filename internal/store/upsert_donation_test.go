@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,7 +71,7 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 	for i := range donated {
 		donated[i] = 0.5 // sentinel pattern — stub768Embedder maps len*31+i%256
 	}
-	donateCtx := WithPrecomputedEmbeddings(ctx, map[string][]float32{
+	donateCtx := model.WithPrecomputedEmbeddings(ctx, map[string][]float32{
 		"kb/donated.md": donated,
 	})
 
@@ -125,7 +127,7 @@ func TestUpsert_DonatedVectorWrongDimRejected(t *testing.T) {
 
 	// Donate a 384-dim vector — half of what the schema demands.
 	wrongDim := make([]float32, 384)
-	donateCtx := WithPrecomputedEmbeddings(ctx, map[string][]float32{
+	donateCtx := model.WithPrecomputedEmbeddings(ctx, map[string][]float32{
 		"kb/wrong.md": wrongDim,
 	})
 

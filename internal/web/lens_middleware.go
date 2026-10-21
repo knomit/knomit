@@ -4,10 +4,11 @@ import (
 	"errors"
 	"net/http"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -111,7 +112,7 @@ func LensExperimentMiddleware(m *repos.Manager) func(http.Handler) http.Handler 
 					"the write member of lens "+lensName+" is not available", r.URL.Path)
 				return
 			}
-			if !write.WritableBranch(store.ExperimentBranch(expName)) {
+			if !write.WritableBranch(model.ExperimentBranch(expName)) {
 				hal.WriteProblem(w, http.StatusNotFound, "Experiment not found",
 					"no experiment named "+expName+" on repo "+write.Name()+
 						" that this instance may write; it may have been committed, rolled back or expired",

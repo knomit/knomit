@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/store"
 )
 
 // Cousin-meeting inside prune (knomit#149).
@@ -91,7 +91,7 @@ func cousinFixtureIsSound(t *testing.T, env *restatementEnv) {
 	vecs, err := env.svc.Abstraction().BodyVectorsByFactID(context.Background(),
 		[]int64{ids[cousinAPath], ids[cousinBPath]})
 	require.NoError(t, err)
-	cos := store.CosineSim(vecs[ids[cousinAPath]], vecs[ids[cousinBPath]])
+	cos := model.CosineSim(vecs[ids[cousinAPath]], vecs[ids[cousinBPath]])
 	require.GreaterOrEqual(t, cos, env.dedupThreshold(),
 		"fixture must sit at or above the mechanical dedup floor")
 

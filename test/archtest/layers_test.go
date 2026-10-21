@@ -213,6 +213,17 @@ var sameLayerEdges = map[string]bool{
 	// imports.
 	"store/storetest -> store/internal/sqlite": true,
 	"store/storetest -> store/internal/vcs":    true,
+	// store/model is the leaf every store child may import: plain data types,
+	// sentinels and pure helpers. It imports nothing from the store
+	// (TestStoreModel_IsALeaf), so these edges can never close a cycle.
+	"store/facts -> store/model":             true,
+	"store/fsck -> store/model":              true,
+	"store/index -> store/model":             true,
+	"store/internal/sessions -> store/model": true,
+	"store/internal/sqlite -> store/model":   true,
+	"store/internal/vcs -> store/model":      true,
+	"store/merge -> store/model":             true,
+	"store/remotesync -> store/model":        true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,

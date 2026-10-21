@@ -30,9 +30,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/rs/zerolog/log"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/rs/zerolog/log"
 )
 
 // minJudgeableMembers is the smallest payload a consolidation judge can act on.
@@ -60,7 +60,7 @@ const minBridgeMembers = 2
 // Per-item failures warn and skip that item (conventions/synthesize/write-paths/
 // failure-isolation): a payload that cannot be decoded is one stale item, and
 // losing the whole refresh over it would strand every other item too.
-func refreshInFlightItems(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, stats *ReviewStats) error {
+func refreshInFlightItems(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, stats *ReviewStats) error {
 	if sess == nil || stats == nil {
 		return nil
 	}
@@ -163,7 +163,7 @@ const (
 // passes, which name motifs rather than facts — fall through unchanged. That
 // is not an oversight to be tidied later: a pass whose payload cannot name a
 // retired fact has nothing to reconcile.
-func refreshedPayload(ctx context.Context, d Deps, branch string, item store.PipelineWorkItem, m mutation) (refreshAction, string, error) {
+func refreshedPayload(ctx context.Context, d Deps, branch string, item model.PipelineWorkItem, m mutation) (refreshAction, string, error) {
 	switch item.StepType {
 	case "prune":
 		// Cluster prunes and shortlist pairs share this shape, and share the

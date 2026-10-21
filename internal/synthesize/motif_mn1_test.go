@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // MN1, checked against what a MODEL ACTUALLY RECEIVES.
@@ -92,7 +92,7 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 	out := env.vocabSession()
 	require.NotEmpty(t, out.restatementItems, "the session must produce items to inspect")
 
-	sess := store.PipelineSession{ID: out.sessionID, Branch: env.branch}
+	sess := model.PipelineSession{ID: out.sessionID, Branch: env.branch}
 	seen := map[string]bool{}
 	// markedReached records whether a NON-excepted item was handed the marked
 	// facts at all. Without it the scan can pass for want of opportunity: if no

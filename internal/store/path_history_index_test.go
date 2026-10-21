@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"knomit/internal/store/index"
+	"knomit/internal/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -532,7 +533,7 @@ func TestPathHistory_AnchorLeftBranchIsHistoryChanged(t *testing.T) {
 	moveBranch(t, svc, "main", commits[4])
 	require.NoError(t, svc.rh.RepopulateBranch(ctx, "main"))
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", anchor, cur, 2)
-	require.ErrorIs(t, err, ErrHistoryChanged, "the frontier is still on the branch; only the anchor check sees the rewind")
+	require.ErrorIs(t, err, model.ErrHistoryChanged, "the frontier is still on the branch; only the anchor check sees the rewind")
 }
 
 // TestPathHistory_FrontierOffBranchIsHistoryChanged makes the frontier check
@@ -548,7 +549,7 @@ func TestPathHistory_FrontierOffBranchIsHistoryChanged(t *testing.T) {
 
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", r1.CommitHash,
 		&index.PathHistoryCursor{Frontier: []string{side.CommitHash}, AnchorOnBranch: true}, 2)
-	require.ErrorIs(t, err, ErrHistoryChanged, "the anchor is on the branch; only the frontier check sees the off-branch change")
+	require.ErrorIs(t, err, model.ErrHistoryChanged, "the anchor is on the branch; only the frontier check sees the off-branch change")
 }
 
 // BenchmarkPathHistoryDeep is the at-scale measurement (review N5/N6): a

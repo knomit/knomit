@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/model"
 )
 
 // Accessors and build-time setters for the Repo's wiring. The parent
@@ -54,7 +55,7 @@ func (rh *Repo) SetOnDropBranchRows(f func(ctx context.Context, branchID int64) 
 
 // SetIndexManager installs the index manager NotifyCommit syncs after every
 // commit (nil: NotifyCommit skips the sync).
-func (rh *Repo) SetIndexManager(im IndexManager) { rh.im = im }
+func (rh *Repo) SetIndexManager(im model.IndexManager) { rh.im = im }
 
 // SetOnCommit installs the external commit observer NotifyCommit calls last.
 func (rh *Repo) SetOnCommit(f func(branch, hash string)) { rh.onCommit = f }
@@ -92,10 +93,10 @@ func (rh *Repo) SetSigner(s ssh.Signer) { rh.signer = s }
 func (rh *Repo) SetAgentID(id string) { rh.agentID = id }
 
 // AcceptList is the operator's accept list (nil is empty).
-func (rh *Repo) AcceptList() AcceptList { return rh.acceptList }
+func (rh *Repo) AcceptList() model.AcceptList { return rh.acceptList }
 
 // SetAcceptList sets AcceptList.
-func (rh *Repo) SetAcceptList(a AcceptList) { rh.acceptList = a }
+func (rh *Repo) SetAcceptList(a model.AcceptList) { rh.acceptList = a }
 
 // OwnKeys returns every key this instance's fleet member record has held, or
 // nil when no source is installed (standalone).

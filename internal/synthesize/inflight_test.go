@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // The in-flight refresh tests drive reviewStrategy.Apply — the production call
@@ -20,7 +20,7 @@ import (
 // that the backfill budget can be observed refilling.
 type inflightEnv struct {
 	*restatementEnv
-	sess *store.PipelineSession
+	sess *model.PipelineSession
 }
 
 const (
@@ -51,7 +51,7 @@ func (e *inflightEnv) queue(stepType, clusterKey string, payload any, priority f
 	e.t.Helper()
 	blob, err := json.Marshal(payload)
 	require.NoError(e.t, err)
-	require.NoError(e.t, e.svc.Pipeline().InsertPipelineWorkItem(context.Background(), store.PipelineWorkItem{
+	require.NoError(e.t, e.svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
 		SessionID: e.sess.ID, StepType: stepType, ClusterKey: clusterKey,
 		FactsJSON: string(blob), Priority: priority,
 	}))
@@ -67,14 +67,14 @@ func (e *inflightEnv) queue(stepType, clusterKey string, payload any, priority f
 	return newest
 }
 
-func (e *inflightEnv) pending() []store.PipelineWorkItem {
+func (e *inflightEnv) pending() []model.PipelineWorkItem {
 	e.t.Helper()
 	items, err := e.svc.Pipeline().PendingPipelineWorkItems(context.Background(), e.sess.ID)
 	require.NoError(e.t, err)
 	return items
 }
 
-func (e *inflightEnv) itemByID(id int64) *store.PipelineWorkItem {
+func (e *inflightEnv) itemByID(id int64) *model.PipelineWorkItem {
 	e.t.Helper()
 	for _, it := range e.pending() {
 		if it.ID == id {

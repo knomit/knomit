@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // knomit#120. The work item exposes id/type/prompt/response_schema/facts — not
@@ -34,14 +34,14 @@ func TestNextItem_CarriesClusterKeyOnTheWire(t *testing.T) {
 
 	// Two 2-fact prune items, indistinguishable on every field the wire
 	// carried before this fix: same type, same shape, same fact count.
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "prune",
 		ClusterKey: restatementClusterKeyPrefix + "0",
 		FactsJSON:  `[{"file":"kb/technology/a.md"},{"file":"kb/technology/b.md"}]`,
 		Priority:   restatementPriority,
 	}))
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "prune",
 		ClusterKey: "cluster-7",

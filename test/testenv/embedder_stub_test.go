@@ -4,15 +4,15 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // Compile-time assertion that DeterministicEmbedder satisfies the production
-// store.BatchEmbedder interface. If this fails to compile, the stub is out
+// model.BatchEmbedder interface. If this fails to compile, the stub is out
 // of sync with the real interface.
-var _ store.BatchEmbedder = (*DeterministicEmbedder)(nil)
+var _ model.BatchEmbedder = (*DeterministicEmbedder)(nil)
 
 // TestDeterministicEmbedder_SameInputSameOutput asserts that the stub embedder
 // is deterministic and produces 768-dim vectors compatible with the facts_vec

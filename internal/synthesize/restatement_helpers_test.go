@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/vocab"
 
 	"github.com/stretchr/testify/require"
@@ -241,7 +243,7 @@ func (e *restatementEnv) factIDs() map[string]int64 {
 // dedupThreshold is the active model's calibrated near-duplicate floor, the
 // same value reviewStrategy.Plan hands to dedupCluster.
 func (e *restatementEnv) dedupThreshold() float64 {
-	return store.EmbedderThresholds(e.ri.Embedder()).Dedup
+	return model.EmbedderThresholds(e.ri.Embedder()).Dedup
 }
 
 func containsPair(pairs []vocab.RestatementPair, a, b string) bool {
@@ -391,9 +393,9 @@ func newRestatementEnvOnAxis(t *testing.T, n int, spacing float64) *restatementE
 }
 
 // workItems drains the session's queue for inspection.
-func (e *restatementEnv) workItems(sessionID string) []store.PipelineWorkItem {
+func (e *restatementEnv) workItems(sessionID string) []model.PipelineWorkItem {
 	e.t.Helper()
-	var out []store.PipelineWorkItem
+	var out []model.PipelineWorkItem
 	seen := map[int64]bool{}
 	for range 5000 {
 		item, err := e.svc.Pipeline().NextPipelineWorkItem(context.Background(), sessionID)

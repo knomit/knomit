@@ -9,10 +9,11 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 
 	"github.com/google/uuid"
@@ -571,7 +572,7 @@ func ApplyReflectDecisions(
 	sysFiles *facts.Repo,
 	idx SearchQuery,
 	result ReflectResult,
-	sess *store.PipelineSession,
+	sess *model.PipelineSession,
 	// localRepoID is this repo's 12-hex id, for the ref gate below.
 	localRepoID string,
 	ontologyRoot string,

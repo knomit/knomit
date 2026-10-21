@@ -17,13 +17,14 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/serverkey"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/playbooks"
@@ -890,7 +891,7 @@ func TestRun_RecipeWritesStampedAndGuarded(t *testing.T) {
 	require.Len(t, commits, 1, "the recipe made one commit")
 	tr := trailersOf(t, ri, commits[0])
 	require.Regexp(t, `^run-[0-9a-f]{32}$`, rows[0].RunID)
-	require.Equal(t, store.Trailers{Trace: rows[0].Trace, Cause: fired, Trigger: "w", Run: rows[0].RunID}, tr)
+	require.Equal(t, model.Trailers{Trace: rows[0].Trace, Cause: fired, Trigger: "w", Run: rows[0].RunID}, tr)
 	require.True(t, strings.HasSuffix(commitMessage(t, ri, commits[0]), "\nKnomit-Trigger: w\nKnomit-Run: "+rows[0].RunID+"\n"),
 		"Knomit-Run is the last line, after Knomit-Trigger")
 	require.Equal(t, int64(1), ri.triggers.stats.view("w").SelfCaused, "its own write does not re-fire it")

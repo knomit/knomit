@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store/merge"
+	"knomit/internal/store/model"
 )
 
 // Experiments are forked from an AGENT branch, so these fixtures name the
@@ -73,7 +74,7 @@ func readExperimentFact(t *testing.T, svc *Service, branch, path string) string 
 func writeOnOrphanRef(t *testing.T, svc *Service, name, path, title, body string) {
 	t.Helper()
 	ctx := context.Background()
-	branch := ExperimentBranch(name)
+	branch := model.ExperimentBranch(name)
 	tip, err := svc.Branches().HeadCommit(ctx, branch)
 	require.NoError(t, err)
 	_, err = svc.rh.DB().Exec(`INSERT INTO experiments (name, description, parent_branch, fork_commit, created_at, last_activity_at)
@@ -623,7 +624,7 @@ func TestCommitExperiment_RefusesStaleParent(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.Merge().CommitExperiment(ctx, "orphaned", nil)
-	require.ErrorIs(t, err, ErrStaleExperimentParent)
+	require.ErrorIs(t, err, model.ErrStaleExperimentParent)
 	require.Contains(t, err.Error(), testAgentBranch, "the error names the recorded parent")
 	require.Contains(t, err.Error(), "agent/successor", "and the branch that owns the database now")
 
@@ -659,7 +660,7 @@ func TestSyncExperiment_RefusesStaleParent(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.Merge().SyncExperiment(ctx, "orphaned")
-	require.ErrorIs(t, err, ErrStaleExperimentParent)
+	require.ErrorIs(t, err, model.ErrStaleExperimentParent)
 
 	expAfter, err := svc.Branches().HeadCommit(ctx, "exp/orphaned")
 	require.NoError(t, err)
@@ -728,7 +729,7 @@ func TestOpenExperiment_RefusesOrphanRef(t *testing.T) {
 	writeMergeFact(t, svc, testAgentBranch, "kb/newer.md", "newer", "body")
 
 	_, err = svc.Merge().OpenExperiment(ctx, "orphan", "", testAgentBranch)
-	require.ErrorIs(t, err, ErrOrphanExperimentRef)
+	require.ErrorIs(t, err, model.ErrOrphanExperimentRef)
 	require.Contains(t, err.Error(), "exp/orphan", "the error names the ref standing in the way")
 
 	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM experiments WHERE name = ?`, "orphan"),
@@ -818,7 +819,7 @@ func TestRollbackExperiment_OrphanThenReopenSucceeds(t *testing.T) {
 
 	// Refused while the orphan stands...
 	_, err := svc.Merge().OpenExperiment(ctx, "retry-me", "", testAgentBranch)
-	require.ErrorIs(t, err, ErrOrphanExperimentRef)
+	require.ErrorIs(t, err, model.ErrOrphanExperimentRef)
 
 	// ...rolled back, then it opens cleanly.
 	require.NoError(t, svc.Merge().RollbackExperiment(ctx, "retry-me"))

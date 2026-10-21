@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
 	"knomit/internal/store/verify"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -31,23 +32,23 @@ func TestDiffFacts_NoAncestryCheck(t *testing.T) {
 	// Sideways: main's head and agent/a's head share the root only.
 	rows, err := svc.DiffFacts(ctx, x, y)
 	require.NoError(t, err, "a non-ancestor pair must diff, not refuse")
-	require.Equal(t, []PathChange{
-		{Path: "kb/tasks/a/x.md", Change: ChangeDeleted},
-		{Path: "kb/tasks/a/y.md", Change: ChangeAdded},
+	require.Equal(t, []model.PathChange{
+		{Path: "kb/tasks/a/x.md", Change: model.ChangeDeleted},
+		{Path: "kb/tasks/a/y.md", Change: model.ChangeAdded},
 	}, rows)
-	_, err = svc.Facts().ChangesUnder(ctx, "agent/a", ChangesQuery{Prefix: "tasks/a", Since: x.String()})
-	require.ErrorIs(t, err, ErrSinceNotBehind, "ChangesUnder keeps its check; only DiffFacts drops it")
+	_, err = svc.Facts().ChangesUnder(ctx, "agent/a", model.ChangesQuery{Prefix: "tasks/a", Since: x.String()})
+	require.ErrorIs(t, err, model.ErrSinceNotBehind, "ChangesUnder keeps its check; only DiffFacts drops it")
 
 	// Linear: W → H lists the net difference under the WHOLE ontology root.
 	z := plumbing.NewHash(writeF(t, svc, "agent/a", "kb/other/z.md"))
 	rows, err = svc.DiffFacts(ctx, y, z)
 	require.NoError(t, err)
-	require.Equal(t, []PathChange{{Path: "kb/other/z.md", Change: ChangeAdded}}, rows)
+	require.Equal(t, []model.PathChange{{Path: "kb/other/z.md", Change: model.ChangeAdded}}, rows)
 
 	// The empty tree as `from`: everything is added.
 	rows, err = svc.DiffFacts(ctx, plumbing.ZeroHash, y)
 	require.NoError(t, err)
-	require.Contains(t, rows, PathChange{Path: "kb/tasks/a/y.md", Change: ChangeAdded})
+	require.Contains(t, rows, model.PathChange{Path: "kb/tasks/a/y.md", Change: model.ChangeAdded})
 }
 
 // ---- The treesame toucher walk
@@ -186,7 +187,7 @@ func TestTrailerValue(t *testing.T) {
 		{"learn: x\n\nKnomit-Trace: early\n\nlater paragraph\n", ""},
 		{"", ""},
 	} {
-		require.Equal(t, tc.want, TrailerValue(tc.msg, "Knomit-Trace"), "%q", tc.msg)
+		require.Equal(t, tc.want, model.TrailerValue(tc.msg, "Knomit-Trace"), "%q", tc.msg)
 	}
 	// The message a knomit write produces carries none: nothing stamps one
 	// before PR 3.
@@ -194,7 +195,7 @@ func TestTrailerValue(t *testing.T) {
 	h := plumbing.NewHash(writeF(t, svc, "agent/a", "kb/tasks/a/t.md"))
 	info, err := svc.FactsRepo().CommitInfo(context.Background(), h)
 	require.NoError(t, err)
-	require.Equal(t, "", TrailerValue(info.Message, "Knomit-Trace"))
+	require.Equal(t, "", model.TrailerValue(info.Message, "Knomit-Trace"))
 }
 
 // ---- The two tables

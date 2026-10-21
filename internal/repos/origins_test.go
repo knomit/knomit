@@ -4,12 +4,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
-func openTestOrigins(t *testing.T, crypt *store.Crypt) (*Registry, *Origins) {
+func openTestOrigins(t *testing.T, crypt *model.Crypt) (*Registry, *Origins) {
 	t.Helper()
 	r, err := OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
 	require.NoError(t, err)
@@ -18,9 +18,9 @@ func openTestOrigins(t *testing.T, crypt *store.Crypt) (*Registry, *Origins) {
 	return r, o
 }
 
-func testCrypt(t *testing.T) *store.Crypt {
+func testCrypt(t *testing.T) *model.Crypt {
 	t.Helper()
-	c, err := store.NewCrypt([]byte("test-key-material-not-a-real-ssh-key"))
+	c, err := model.NewCrypt([]byte("test-key-material-not-a-real-ssh-key"))
 	require.NoError(t, err)
 	return c
 }

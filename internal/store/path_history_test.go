@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"knomit/internal/store/index"
+	"knomit/internal/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -412,7 +413,7 @@ func TestPathHistory_ContinuationAfterPurgeIsHistoryChanged(t *testing.T) {
 	_, err = svc.rh.DB().ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = (SELECT id FROM branches WHERE name = 'main')`)
 	require.NoError(t, err)
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", last, cur, 2)
-	require.ErrorIs(t, err, ErrHistoryChanged)
+	require.ErrorIs(t, err, model.ErrHistoryChanged)
 
 	// Healed (repopulated): the same position continues correctly.
 	require.NoError(t, svc.rh.PopulateCommitLog(ctx, "main"))
@@ -422,7 +423,7 @@ func TestPathHistory_ContinuationAfterPurgeIsHistoryChanged(t *testing.T) {
 
 	// A position naming a change that is not indexed is refused, not empty.
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", last, &index.PathHistoryCursor{Frontier: []string{strings.Repeat("ab", 20)}, AnchorOnBranch: true}, 2)
-	require.ErrorIs(t, err, ErrHistoryChanged)
+	require.ErrorIs(t, err, model.ErrHistoryChanged)
 }
 
 // TestPathHistory_RebuildAndVersionResetAreConsistent: the derived rows are

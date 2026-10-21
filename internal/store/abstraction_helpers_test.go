@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/embeddings/params"
+	"knomit/internal/store/model"
 )
 
 // openAbstractionTestService opens a fresh repo with a stub embedder, ready for
@@ -23,7 +24,7 @@ func openAbstractionTestService(t *testing.T) *Service {
 // openAbstractionTestServiceAt opens (or reopens) a repo at path under emb.
 // A repo that already exists is opened rather than initialised, so a test can
 // reopen the same file under a different embedder.
-func openAbstractionTestServiceAt(t *testing.T, path string, emb BatchEmbedder) *Service {
+func openAbstractionTestServiceAt(t *testing.T, path string, emb model.BatchEmbedder) *Service {
 	t.Helper()
 	_, statErr := os.Stat(path)
 	existed := statErr == nil

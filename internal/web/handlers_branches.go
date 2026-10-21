@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
@@ -23,7 +25,7 @@ type branchSummary struct {
 // handleHALBranches serves GET /api/v1/repos/{repo}/branches.
 func handleHALBranches(
 	b hal.URLBuilder,
-	lister func(context.Context, *repos.RepoInstance) ([]store.Branch, error),
+	lister func(context.Context, *repos.RepoInstance) ([]model.Branch, error),
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
@@ -229,12 +231,12 @@ func embedBranchRoot(
 // computed far-future date would be a claim nobody made, and a null would be
 // indistinguishable from "not yet calculated".
 func branchExperiment(ri *repos.RepoInstance, branch string, expiryDays int) map[string]any {
-	name, ok := store.ExperimentNameOf(branch)
+	name, ok := model.ExperimentNameOf(branch)
 	if !ok {
 		return nil
 	}
 	var (
-		exp   store.Experiment
+		exp   model.Experiment
 		found bool
 	)
 	// A read failure is reported as "not an experiment" rather than failing

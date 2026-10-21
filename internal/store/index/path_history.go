@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
-	"sort"
+	"knomit/internal/store/model"
 )
 
 // LiveRevision returns the commit whose version of path is live at anchor on
@@ -42,7 +44,7 @@ type FactRevision struct {
 	// Diff is the change against FromBlob; nil when there is none to show (an
 	// addition, no tracked change, content that is not a fact, or content
 	// that is unavailable).
-	Diff *vcs.RevisionDiff
+	Diff *model.RevisionDiff
 	// ContentUnavailable: this revision's content, or the content it was
 	// edited from, is missing from the repository.
 	ContentUnavailable bool
@@ -120,7 +122,7 @@ func (hq *HistoryQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 				return nil, nil, err
 			}
 			if !on {
-				return nil, nil, vcs.ErrHistoryChanged
+				return nil, nil, model.ErrHistoryChanged
 			}
 		}
 	}
@@ -133,7 +135,7 @@ func (hq *HistoryQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 			return nil, nil, err
 		}
 		if !ok {
-			return nil, nil, vcs.ErrHistoryChanged
+			return nil, nil, model.ErrHistoryChanged
 		}
 		seen[f] = true
 		heap.Push(h, n)
@@ -154,7 +156,7 @@ func (hq *HistoryQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 			if !ok {
 				// A change's ancestors are on every branch it is on; a link
 				// that is not visible means the branch moved under us.
-				return nil, nil, vcs.ErrHistoryChanged
+				return nil, nil, model.ErrHistoryChanged
 			}
 			seen[from] = true
 			heap.Push(h, m)
@@ -198,7 +200,7 @@ func loadChange(ctx context.Context, db storegit.CtxExecer, branchID int64, path
 	}
 	n.ContentUnavailable = unavailable != 0
 	if diff != "" {
-		n.Diff = &vcs.RevisionDiff{}
+		n.Diff = &model.RevisionDiff{}
 		if err := json.Unmarshal([]byte(diff), n.Diff); err != nil {
 			return n, false, fmt.Errorf("PathHistory: diff of %s: %w", commit, err)
 		}
@@ -265,7 +267,7 @@ func (h *changeHeap) Pop() any {
 // branch_commits on the resolved branch_id, so revisions reachable only via an
 // off-branch lineage never surface even when anchorCommit was committed
 // elsewhere.
-func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]vcs.RevisionMeta, error) {
+func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]model.RevisionMeta, error) {
 	if anchorCommit == "" || limit <= 0 {
 		return nil, nil
 	}
@@ -287,9 +289,9 @@ func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, ancho
 	}
 	defer rows.Close()
 
-	var out []vcs.RevisionMeta
+	var out []model.RevisionMeta
 	for rows.Next() {
-		var rm vcs.RevisionMeta
+		var rm model.RevisionMeta
 		var msg string
 		if err := rows.Scan(&rm.Commit, &rm.CommittedAt, &msg, &rm.Action); err != nil {
 			return nil, fmt.Errorf("RevisionsBefore: scan: %w", err)

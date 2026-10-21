@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // Prune paging.
@@ -112,7 +112,7 @@ func TestPaging_LargePruneClusterPagesAndRequiresToken(t *testing.T) {
 	}
 	require.Len(t, seen, len(facts), "pages must cover every fact in the cluster exactly once")
 
-	item := &store.PipelineWorkItem{ID: 7, StepType: "prune", FactsJSON: content.Facts}
+	item := &model.PipelineWorkItem{ID: 7, StepType: "prune", FactsJSON: content.Facts}
 
 	require.Error(t, reviewStrategy{}.RequireCompletion(item, ""),
 		"a multi-page prune item answered without a token must be rejected")
@@ -165,7 +165,7 @@ func TestPaging_TokenRequiredOnlyWhereItIsIssued(t *testing.T) {
 		{"reflect", string(reflectJSON)},
 		{"discover", string(discoverJSON)},
 	} {
-		item := &store.PipelineWorkItem{ID: 11, StepType: tc.step, FactsJSON: tc.payload}
+		item := &model.PipelineWorkItem{ID: 11, StepType: tc.step, FactsJSON: tc.payload}
 		require.NoErrorf(t, reviewStrategy{}.RequireCompletion(item, ""),
 			"%s does not page, so it must never demand a token the agent was never issued", tc.step)
 	}

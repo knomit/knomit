@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // Tests for the response envelope contract. Every work item ships a
@@ -144,7 +144,7 @@ func TestReviewer_DiscoverWrites_CountedInSummary(t *testing.T) {
 	}
 	pj, err := json.Marshal(payload)
 	require.NoError(t, err)
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "discover",
 		ClusterKey: "discover-counted",

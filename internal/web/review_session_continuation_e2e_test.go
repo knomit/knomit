@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
@@ -185,7 +187,7 @@ func TestReviewE2E_AnswerWithoutSessionIDIsRefusedAndChangesNothing(t *testing.T
 // session DB — the only input the resume window reads.
 func (e *reviewE2E) backdate(id string, d time.Duration) {
 	e.t.Helper()
-	db, err := sql.Open("sqlite3", store.SessionDBPathFor(e.dbPath)+"?_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", model.SessionDBPathFor(e.dbPath)+"?_busy_timeout=5000")
 	require.NoError(e.t, err)
 	defer db.Close()
 	at := time.Now().UTC().Add(-d).Format(time.RFC3339)

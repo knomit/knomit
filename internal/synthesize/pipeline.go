@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"knomit/internal/fact"
@@ -213,7 +215,7 @@ type pipelineHooks struct {
 
 // markPlanned clears a session's planning mark once its work is queued and
 // its first item rendered, so a second start may resume it from here on.
-func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *store.PipelineSession) error {
+func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *model.PipelineSession) error {
 	if !sess.Planning {
 		return nil
 	}
@@ -253,7 +255,7 @@ func (p *Pipeline) currentItemHint(sessionID string) string {
 
 // activeSession loads a session a call is about to act on, refusing one that
 // is missing, no longer active, or still planning.
-func (p *Pipeline) activeSession(ctx context.Context, d Deps, sessionID string) (*store.PipelineSession, error) {
+func (p *Pipeline) activeSession(ctx context.Context, d Deps, sessionID string) (*model.PipelineSession, error) {
 	tool := p.strategy.Tool()
 	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -299,7 +301,7 @@ func errStillPlanning(tool, sessionID string) error {
 // paths. A plan that fails, by error or panic, abandons the session while it
 // is still planning: otherwise it would hold the slot, refusing every start
 // as still planning until the reaper took it.
-func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (res *PipelineResult, err error) {
+func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, totalStart time.Time) (res *PipelineResult, err error) {
 	planned := false
 	defer func() {
 		if planned {
@@ -316,7 +318,7 @@ func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.Pipeline
 
 // plan is StartSession after the session row exists: mark scope, scan
 // seeds, plan, and serve the first item.
-func (p *Pipeline) plan(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (*PipelineResult, error) {
+func (p *Pipeline) plan(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, totalStart time.Time) (*PipelineResult, error) {
 	if p.hooks.beforePlan != nil {
 		p.hooks.beforePlan(ctx, sess.ID)
 	}
@@ -447,7 +449,7 @@ func (p *Pipeline) plan(ctx context.Context, d Deps, sess *store.PipelineSession
 // On the START turn only. The identity does not change mid-session, and the
 // abandonment is a fact about one moment — repeating either on every continue
 // would be noise that trains a reader to skip the envelope.
-func (p *Pipeline) stampIdentity(res *PipelineResult, sess *store.PipelineSession) {
+func (p *Pipeline) stampIdentity(res *PipelineResult, sess *model.PipelineSession) {
 	if res == nil {
 		return
 	}
@@ -743,7 +745,7 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // successfully; it is an ADDITION to the session, not a precondition for one.
 // The error is not swallowed silently, though: it becomes a health line, on the
 // same rule as every other failure in this area.
-func (p *Pipeline) planStandingWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, scan seedScan) (bool, []string, error) {
+func (p *Pipeline) planStandingWork(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, scan seedScan) (bool, []string, error) {
 	// A SCOPED session never plans standing work (knomit#128 review, MEDIUM-2,
 	// reinstated here verbatim in intent).
 	//
@@ -1048,7 +1050,7 @@ func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int
 // page after the first never carries: Prompt and ResponseSchema. Progress
 // counts are still read — they are one cheap query and the agent tracks the
 // session by them.
-func (p *Pipeline) payloadResult(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem, facts string) (*PipelineResult, error) {
+func (p *Pipeline) payloadResult(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem, facts string) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 
 	completed, remaining, err := d.Pipeline.PipelineWorkItemStats(ctx, sess.ID)
@@ -1084,7 +1086,7 @@ func (p *Pipeline) payloadResult(ctx context.Context, d Deps, sess *store.Pipeli
 //
 // sess.Branch is the branch this session was created against; it does not
 // change as the user's live AgentBranch changes during the session.
-func (p *Pipeline) nextItem(ctx context.Context, sess *store.PipelineSession) (*PipelineResult, error) {
+func (p *Pipeline) nextItem(ctx context.Context, sess *model.PipelineSession) (*PipelineResult, error) {
 	switch sess.Phase {
 	case "work":
 		return p.handlePhase(ctx, sess, "work", "reflect")
@@ -1108,7 +1110,7 @@ func (p *Pipeline) nextItem(ctx context.Context, sess *store.PipelineSession) (*
 // falls through to the next phase's dispatch
 // (architecture/store/pipeline-session-phase-cas — a losing CAS is a benign
 // no-op, not an error).
-func (p *Pipeline) handlePhase(ctx context.Context, sess *store.PipelineSession, from, to string) (*PipelineResult, error) {
+func (p *Pipeline) handlePhase(ctx context.Context, sess *model.PipelineSession, from, to string) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	d := p.deps()
 
@@ -1206,7 +1208,7 @@ func (p *Pipeline) refetchAndDispatch(ctx context.Context, sessionID string) (*P
 // counts. Attaching the id here rather than in each strategy is deliberate —
 // the D2 staleness guard only works if every rendered item carries the id the
 // client is expected to echo back.
-func (p *Pipeline) renderWorkItem(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem) (*PipelineResult, error) {
+func (p *Pipeline) renderWorkItem(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 
 	view, err := p.strategy.Render(ctx, d, sess, item)
@@ -1243,7 +1245,7 @@ func (p *Pipeline) renderWorkItem(ctx context.Context, d Deps, sess *store.Pipel
 // Branch comes from sess.Branch — the branch the session was created against —
 // so the HEAD lookup and the watermark advance are consistent with the seed
 // scan that opened the session.
-func (p *Pipeline) completeSession(ctx context.Context, sess *store.PipelineSession) (*PipelineResult, error) {
+func (p *Pipeline) completeSession(ctx context.Context, sess *model.PipelineSession) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	d := p.deps()
 	branch := sess.Branch
@@ -1336,11 +1338,11 @@ func (p *Pipeline) completeSession(ctx context.Context, sess *store.PipelineSess
 // informational, the mutations it describes are already committed, and the
 // claim protocol already accepts losing a whole item's decisions to a mid-apply
 // crash — so there is nothing here worth a transaction or a retry.
-func recordStats(ctx context.Context, tool string, d Deps, sess *store.PipelineSession, stats *ReviewStats) {
+func recordStats(ctx context.Context, tool string, d Deps, sess *model.PipelineSession, stats *ReviewStats) {
 	if stats == nil {
 		return
 	}
-	if err := d.Pipeline.AddPipelineSessionStats(ctx, sess.ID, store.PipelineSessionStats{
+	if err := d.Pipeline.AddPipelineSessionStats(ctx, sess.ID, model.PipelineSessionStats{
 		Pruned:      stats.Pruned,
 		Merged:      stats.Merged,
 		Updated:     stats.Updated,
@@ -1500,7 +1502,7 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 			}
 		}
 		sess, err := d.Pipeline.CreatePipelineSessionReplacing(ctx, tool, branch, actor, key, replace, idleBefore)
-		if errors.Is(err, store.ErrPipelineSlotChanged) {
+		if errors.Is(err, model.ErrPipelineSlotChanged) {
 			continue
 		}
 		if err != nil {

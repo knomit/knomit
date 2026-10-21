@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -223,7 +225,7 @@ func TestHypothesizer_BackwardDiscovery_SingleFact(t *testing.T) {
 // let apply run.
 func insertManualDiscoverItem(t *testing.T, svc *store.Service, sessionID string) {
 	t.Helper()
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
 		SessionID:  sessionID,
 		StepType:   "discover",
 		ClusterKey: "discover-bwd-0",
@@ -281,7 +283,7 @@ func insertSeededDiscoverItem(t *testing.T, svc *store.Service, sessionID string
 	t.Helper()
 	writeTestFact(t, svc, "kb/seedone.md", "Seed one", fact.Observation, "auth")
 	writeTestFact(t, svc, "kb/seedtwo.md", "Seed two", fact.Observation, "auth")
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
 		SessionID:  sessionID,
 		StepType:   "discover",
 		ClusterKey: "discover-bwd-0",

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
@@ -116,13 +118,13 @@ func (si *Index) GetEmbeddingByFactForTest(ctx context.Context, path, blobHash s
 }
 
 // RebuildEmbeddingsForTest is rebuildEmbeddings.
-func (si *Index) RebuildEmbeddingsForTest(ctx context.Context, progress vcs.RebuildProgress) (int, error) {
+func (si *Index) RebuildEmbeddingsForTest(ctx context.Context, progress model.RebuildProgress) (int, error) {
 	mustBeTest("RebuildEmbeddingsForTest")
 	return si.rebuildEmbeddings(ctx, progress)
 }
 
 // RebuildGraphForTest is rebuildGraph.
-func (si *Index) RebuildGraphForTest(ctx context.Context, branch string, progress vcs.RebuildProgress) (int, error) {
+func (si *Index) RebuildGraphForTest(ctx context.Context, branch string, progress model.RebuildProgress) (int, error) {
 	mustBeTest("RebuildGraphForTest")
 	return si.rebuildGraph(ctx, branch, progress)
 }

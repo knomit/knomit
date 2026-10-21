@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
 	"knomit/internal/store/facts"
@@ -941,7 +943,7 @@ func (fq *FactQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	}
 
 	// Model-dependent cosine cutoffs (rerank tiers + recall floor below).
-	th := vcs.EmbedderThresholds(fq.rh.Embedder())
+	th := model.EmbedderThresholds(fq.rh.Embedder())
 
 	vecSimByPath := make(map[string]float64)
 	kLimit := limit * 5

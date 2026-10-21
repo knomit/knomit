@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
@@ -17,7 +19,7 @@ import (
 
 // errFactNotFound is the sentinel the fact handler maps to 404 problem+json.
 // Production code returns this from defaultFactReader when ReadFact surfaces
-// store.ErrPathNotFound — distinguishing "no fact at this path/commit" from a
+// model.ErrPathNotFound — distinguishing "no fact at this path/commit" from a
 // real backend error (which propagates to 500 instead of masquerading as 404).
 var errFactNotFound = errors.New("fact not found")
 
@@ -96,11 +98,11 @@ func (defaultFactReader) Read(
 			// walk back to the most recent ancestor where it did. Only the
 			// History view's retract-commit case sets this — when it's off the
 			// caller wants the raw "not found" answer.
-			if fallback && !a.IsHEAD() && errors.Is(rerr, store.ErrPathNotFound) {
+			if fallback && !a.IsHEAD() && errors.Is(rerr, model.ErrPathNotFound) {
 				fbOpts := &facts.ReadFactOpts{BeforeCommit: a.Commit}
 				fbRes, fbErr := svc.Facts().ReadFact(ctx, a.Branch, path, fbOpts)
 				if fbErr != nil {
-					if errors.Is(fbErr, store.ErrPathNotFound) {
+					if errors.Is(fbErr, model.ErrPathNotFound) {
 						err = errFactNotFound
 						return
 					}
@@ -117,7 +119,7 @@ func (defaultFactReader) Read(
 				head = fbRes.FromCommit
 				return
 			}
-			if errors.Is(rerr, store.ErrPathNotFound) {
+			if errors.Is(rerr, model.ErrPathNotFound) {
 				err = errFactNotFound
 				return
 			}

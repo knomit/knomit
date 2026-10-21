@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/go-chi/chi/v5"
@@ -20,7 +22,7 @@ import (
 // searchProvider is the narrow interface the search HAL handler depends on.
 // Production wires it to defaultSearchProvider; tests inject stubs.
 type searchProvider interface {
-	Search(ctx context.Context, ri *repos.RepoInstance, emb store.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error)
+	Search(ctx context.Context, ri *repos.RepoInstance, emb model.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error)
 }
 
 // defaultSearchProvider is the production searchProvider that calls through
@@ -28,7 +30,7 @@ type searchProvider interface {
 // query vector generation.
 type defaultSearchProvider struct{}
 
-func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance, emb store.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance, emb model.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 	// Generate query vector if text is provided and an embedder is available.
 	if q.Text != "" && emb != nil && len(q.QueryVec) == 0 {
 		vec, err := emb.EmbedQuery(ctx, q.Text)
@@ -80,7 +82,7 @@ type searchView struct {
 }
 
 // handleSearch serves GET /repos/{repo}/branches/{branch}/search.
-func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder) http.HandlerFunc {
+func handleSearch(b hal.URLBuilder, provider searchProvider, emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())

@@ -24,14 +24,6 @@ const FirstParentChainCTE = `
 	      JOIN fpc ON cp.commit_hash = fpc.commit_hash AND cp.parent_order = 0
 	)`
 
-// RevisionMeta is one revision of a fact path in its commit history.
-type RevisionMeta struct {
-	Commit      string
-	CommittedAt int64  // Unix seconds
-	Message     string // first line of the commit message
-	Action      string // "added" | "modified"
-}
-
 // ResolveActiveCommitForPath walks first-parent ancestry of fromCommit on
 // `branch`, returning the most recent commit where `path` was added or
 // modified. Deletions are stepped over: they're write events in the

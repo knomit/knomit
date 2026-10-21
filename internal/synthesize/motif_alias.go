@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/vocab"
 
 	"github.com/rs/zerolog/log"
-
-	"knomit/internal/store"
 )
 
 // Alias-resolution pair selection: choosing which cluster comparisons the LLM
@@ -459,7 +459,7 @@ func applyMotifAliasVerdicts(ctx context.Context, d Deps, branch string, res mot
 // Degrades to "no item" rather than failing the session, and records health on
 // every path — a corpus whose vocabulary could not be read must not look like
 // one with nothing to resolve.
-func planMotifAliasWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) error {
+func planMotifAliasWork(ctx context.Context, d Deps, sess *model.PipelineSession, branch string) error {
 	pairs, health, err := selectMotifJudgePairs(ctx, d, branch)
 	recordMotifAliasHealth(sess, health)
 	if err != nil || len(pairs) == 0 {
@@ -480,7 +480,7 @@ func planMotifAliasWork(ctx context.Context, d Deps, sess *store.PipelineSession
 	if err != nil {
 		return wrapf(reviewTool, err, "motif alias: marshal pairs")
 	}
-	return d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	return d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   motifAliasStepType,
 		ClusterKey: "motif-alias",
@@ -513,7 +513,7 @@ func otherMembers(members []string, canonical string) []string {
 //
 // TestMotifAliasHealth_CoexistsWithRestatementLines is the guard; it fails if
 // either producer starts clobbering the other.
-func recordMotifAliasHealth(sess *store.PipelineSession, h motifAliasHealth) {
+func recordMotifAliasHealth(sess *model.PipelineSession, h motifAliasHealth) {
 	if sess == nil {
 		return
 	}

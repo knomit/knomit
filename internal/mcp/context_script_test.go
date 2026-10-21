@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // Scripts and recipes (knomit.learn / knomit.update) reach the same handlers
@@ -19,7 +20,7 @@ func TestScriptTools_ContextThroughTheSameGates(t *testing.T) {
 	require.NoError(t, err)
 	ri := newLearnTestRepo(t, o)
 	tools := NewScriptTools(nil)
-	ctx := scriptCtx(t, ri, store.Trailers{})
+	ctx := scriptCtx(t, ri, model.Trailers{})
 
 	learned, text, isErr := callScript(t, tools, ctx, "learn", map[string]any{
 		"moment_name": "trigger:t1",

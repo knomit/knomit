@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/fsck"
 
 	"github.com/rs/zerolog/log"
@@ -77,7 +79,7 @@ type stageEnv struct {
 	signer   ssh.Signer
 	agentID  string // Deps.AgentID: the store's commit author (SetAgentID)
 	keyPath  string
-	embedder store.BatchEmbedder
+	embedder model.BatchEmbedder
 	// onPush observes every push the reconcile loop makes (the fleet state
 	// machine's retry: Manager.fleetPushed).
 	onPush func(repo string, err error)
@@ -132,7 +134,7 @@ type RepoInstance struct {
 	// non-nil ontologyErr makes the repo readable but not writable — see
 	// WritableBranch.
 	ident               atomic.Pointer[identity]
-	embedder            store.BatchEmbedder
+	embedder            model.BatchEmbedder
 	ontologyRoot        string
 	methodologyMinScore float64
 	clusterResolution   float64
@@ -482,10 +484,10 @@ func (ri *RepoInstance) WritableBranch(branch string) bool {
 // The shape test comes first, so the common case — a write gate asking about
 // an ordinary branch — costs a prefix compare and no query at all.
 func (ri *RepoInstance) writableExperiment(branch string) bool {
-	if !store.IsExperimentBranch(branch) {
+	if !model.IsExperimentBranch(branch) {
 		return false
 	}
-	name, ok := store.ExperimentNameOf(branch)
+	name, ok := model.ExperimentNameOf(branch)
 	if !ok {
 		return false
 	}
@@ -547,7 +549,7 @@ func (ri *RepoInstance) IdentifiedOntologyError() error {
 }
 
 // Embedder returns the batch embedder for this repo, or nil if unavailable.
-func (ri *RepoInstance) Embedder() store.BatchEmbedder { return ri.embedder }
+func (ri *RepoInstance) Embedder() model.BatchEmbedder { return ri.embedder }
 
 // OntologyRoot returns the root path under which facts live for this repo (e.g. "kb").
 func (ri *RepoInstance) OntologyRoot() string { return ri.ontologyRoot }
@@ -723,7 +725,7 @@ type TestInstanceConfig struct {
 	Svc                 *store.Service
 	Ontology            *fact.Ontology
 	Hub                 *TaskHub
-	Embedder            store.BatchEmbedder
+	Embedder            model.BatchEmbedder
 	OntologyRoot        string
 	MethodologyMinScore float64
 	// Quality carries the bridge-quality knobs (CohFloor, MaxMembers, the Q

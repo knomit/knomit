@@ -13,7 +13,8 @@ import (
 	context "context"
 	reflect "reflect"
 
-	store "knomit/internal/store"
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/facts"
 	"knomit/internal/store/index"
 
@@ -365,10 +366,10 @@ func (mr *MockSearchIndexMockRecorder) ReverseDependentPaths(ctx, path any) *gom
 }
 
 // RevisionsBefore mocks base method.
-func (m *MockSearchIndex) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]store.RevisionMeta, error) {
+func (m *MockSearchIndex) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]model.RevisionMeta, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "RevisionsBefore", ctx, branch, path, anchorCommit, limit)
-	ret0, _ := ret[0].([]store.RevisionMeta)
+	ret0, _ := ret[0].([]model.RevisionMeta)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

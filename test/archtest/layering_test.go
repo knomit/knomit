@@ -197,3 +197,19 @@ func TestTextnormImportsNoInternal(t *testing.T) {
 		}
 	}
 }
+
+// goListLines runs `go list <args>` and returns its non-empty output lines.
+func goListLines(t *testing.T, args ...string) []string {
+	t.Helper()
+	out, err := exec.Command("go", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("go %s failed: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	var got []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if l := strings.TrimSpace(line); l != "" {
+			got = append(got, l)
+		}
+	}
+	return got
+}

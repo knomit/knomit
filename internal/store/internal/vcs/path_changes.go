@@ -20,6 +20,7 @@ import (
 	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/sqlite"
+	"knomit/internal/store/model"
 )
 
 // Per-path change history, precomputed (tables: migration 000032).
@@ -79,11 +80,6 @@ const (
 	degradedContent    = 1 // a revision of this commit is content_unavailable
 	degradedStructural = 2 // a parent commit was missing, here or below: depth and links are cut
 )
-
-// ErrHistoryChanged is returned for a PathHistory continuation whose anchor
-// has left the branch, or whose position names a change no longer on the
-// branch: the history it was paging is gone, and the caller must restart.
-var ErrHistoryChanged = errors.New("path history changed since this position was issued")
 
 // errParentUnderived is returned by apply for a commit whose parent (present
 // in the object store) is not derived. deriveClosure orders parents first, so
@@ -660,7 +656,7 @@ func (d *deriver) blobAt(rootHash plumbing.Hash, path string) (plumbing.Hash, bl
 	switch {
 	case err == nil:
 		return e.Hash, blobPresent, nil
-	case errors.Is(err, ErrPathNotFound):
+	case errors.Is(err, model.ErrPathNotFound):
 		return plumbing.ZeroHash, blobAbsent, nil
 	case errors.Is(err, plumbing.ErrObjectNotFound):
 		return plumbing.ZeroHash, blobUnknown, nil

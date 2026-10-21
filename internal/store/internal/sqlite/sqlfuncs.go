@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
+	"knomit/internal/store/model"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
@@ -124,7 +125,7 @@ func sqlCosineSim(a, b []byte) interface{} {
 	if err != nil || len(vb) != len(va) {
 		return nil
 	}
-	sim, ok := cosineSim(va, vb)
+	sim, ok := model.CosineSimOK(va, vb)
 	if !ok {
 		// NULL only for a vector with no defined similarity. Orthogonal vectors
 		// are not that case: their similarity is 0, and reporting NULL for it

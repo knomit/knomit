@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/model"
 )
 
 // WriteSystemTree keeps the case of every path, writes ONE commit signed by
@@ -46,7 +47,7 @@ func TestWriteSystemTree_ExactCaseOneSignedCommitNarrowPaths(t *testing.T) {
 		".knomit/ontology.yaml":             "id: x\n",
 		".knomit/skills/work-task/SKILL.md": "S",
 	}
-	tctx := WithTrailers(ctx, Trailers{Template: "mission", TemplateSource: "kb://abc@def"})
+	tctx := model.WithTrailers(ctx, model.Trailers{Template: "mission", TemplateSource: "kb://abc@def"})
 	h, blobs, err := svc.Facts().WriteSystemTree(tctx, "agent/a", files, "init: from template mission", "created")
 	require.NoError(t, err)
 	require.Len(t, blobs, 3)
@@ -54,8 +55,8 @@ func TestWriteSystemTree_ExactCaseOneSignedCommitNarrowPaths(t *testing.T) {
 	info, err := svc.FactsRepo().CommitInfo(ctx, hash)
 	require.NoError(t, err)
 	require.Equal(t, []plumbing.Hash{before}, info.Parents, "ONE commit on top of the branch tip")
-	require.Equal(t, "mission", TrailerValue(info.Message, TrailerTemplate))
-	require.Equal(t, "kb://abc@def", TrailerValue(info.Message, TrailerTemplateSource))
+	require.Equal(t, "mission", model.TrailerValue(info.Message, model.TrailerTemplate))
+	require.Equal(t, "kb://abc@def", model.TrailerValue(info.Message, model.TrailerTemplateSource))
 	signer, err := svc.FactsRepo().CommitSignerOf(ctx, hash)
 	require.NoError(t, err)
 	require.Equal(t, svc.FactsRepo().SignerFingerprint(), signer.Fingerprint)

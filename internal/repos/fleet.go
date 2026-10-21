@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/verify"
 
@@ -610,7 +612,7 @@ func (m *Manager) fleetAtMain(ri *RepoInstance) (fleetrec.Fleet, error) {
 		}
 		upstream := svc.Remote().UpstreamBranch()
 		if upstream == "" {
-			lerr = fmt.Errorf("fleet repository: %w", store.ErrNoConsensusBranch)
+			lerr = fmt.Errorf("fleet repository: %w", model.ErrNoConsensusBranch)
 			return
 		}
 		out, lerr = svc.FleetAt(upstream)

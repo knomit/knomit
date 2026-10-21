@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/model"
 	"knomit/internal/store/remotesync"
 )
 
@@ -121,7 +122,7 @@ func TestInitFromRemote_RecordsTheResolvedConsensusBranchBeforeAnySetOrigin(t *t
 	t.Run("a refused clone records nothing", func(t *testing.T) {
 		svc := open(t)
 		_, _, err := svc.Remote().InitFromRemote(context.Background(), fileuri.New(bareRemoteWith(t, "agent/other", "main", "trunk", "agent/other")), nil, "", "agent/test", nil, nil)
-		require.ErrorIs(t, err, ErrNoConsensusBranch)
+		require.ErrorIs(t, err, model.ErrNoConsensusBranch)
 		require.Empty(t, svc.Remote().RecordedConsensusBranch(), "the record is written on success only")
 	})
 	t.Run("subscription records the branch it resolved", func(t *testing.T) {
@@ -155,20 +156,20 @@ func TestRemote_EmptyConsensusBranchRefusals(t *testing.T) {
 
 	t.Run("MainHistory refuses", func(t *testing.T) {
 		h, err := svc.Remote().MainHistory(ctx)
-		require.ErrorIs(t, err, ErrNoConsensusBranch)
+		require.ErrorIs(t, err, model.ErrNoConsensusBranch)
 		require.Nil(t, h)
 	})
 	t.Run("JudgePeerBranch refuses before its shape checks", func(t *testing.T) {
 		// "main" is not an agent/* branch, which the shape check would refuse
 		// with its own text; the consensus-branch refusal comes first.
 		_, err := svc.Remote().JudgePeerBranch(ctx, "main", "agent/me", tip, nil)
-		require.ErrorIs(t, err, ErrNoConsensusBranch)
+		require.ErrorIs(t, err, model.ErrNoConsensusBranch)
 		_, err = svc.Remote().JudgePeerBranch(ctx, "agent/peer", "agent/me", plumbing.ZeroHash, nil)
-		require.ErrorIs(t, err, ErrNoConsensusBranch, "and before the zero-tip check")
+		require.ErrorIs(t, err, model.ErrNoConsensusBranch, "and before the zero-tip check")
 	})
 	t.Run("AdmitPeerBranch refuses through the judge", func(t *testing.T) {
 		_, err := svc.Remote().AdmitPeerBranch(ctx, "agent/peer", "agent/me", tip, nil)
-		require.ErrorIs(t, err, ErrNoConsensusBranch)
+		require.ErrorIs(t, err, model.ErrNoConsensusBranch)
 	})
 	t.Run("DemotePeerBranch does not refuse", func(t *testing.T) {
 		// An agent/* branch nobody registered: nothing to demote, and no
@@ -179,7 +180,7 @@ func TestRemote_EmptyConsensusBranchRefusals(t *testing.T) {
 		// The shape check still applies, with its own text.
 		_, err = svc.Remote().DemotePeerBranch(ctx, "main", "agent/me", tip)
 		require.Error(t, err)
-		require.NotErrorIs(t, err, ErrNoConsensusBranch)
+		require.NotErrorIs(t, err, model.ErrNoConsensusBranch)
 	})
 	t.Run("EnsureLocalUpstream and AdvanceLocalUpstream take an empty upstream as a no-op", func(t *testing.T) {
 		created, err := svc.Remote().EnsureLocalUpstream(ctx, "")

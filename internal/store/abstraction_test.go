@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/model"
 	"knomit/internal/store/vocab"
 
 	"github.com/stretchr/testify/require"
@@ -452,6 +453,6 @@ func TestCosineSim_OrthogonalIsZeroNotNull(t *testing.T) {
 		float32SliceToBytes(a), float32SliceToBytes(make([]float32, 8))).Scan(&sim))
 	require.Nil(t, sim, "a degenerate vector has no similarity to anything")
 
-	require.InDelta(t, 0.0, CosineSim(a, b), 1e-9)
-	require.InDelta(t, 0.0, CosineSim(a, make([]float32, 8)), 1e-9)
+	require.InDelta(t, 0.0, model.CosineSim(a, b), 1e-9)
+	require.InDelta(t, 0.0, model.CosineSim(a, make([]float32, 8)), 1e-9)
 }

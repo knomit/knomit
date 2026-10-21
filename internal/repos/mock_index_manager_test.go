@@ -11,8 +11,9 @@ package repos
 
 import (
 	context "context"
-	store "knomit/internal/store"
 	reflect "reflect"
+
+	"knomit/internal/store/model"
 
 	gomock "go.uber.org/mock/gomock"
 )
@@ -57,7 +58,7 @@ func (mr *MockIndexManagerMockRecorder) NeedsRebuild(ctx, branch any) *gomock.Ca
 }
 
 // Rebuild mocks base method.
-func (m *MockIndexManager) Rebuild(ctx context.Context, branch string, progress store.RebuildProgress) error {
+func (m *MockIndexManager) Rebuild(ctx context.Context, branch string, progress model.RebuildProgress) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Rebuild", ctx, branch, progress)
 	ret0, _ := ret[0].(error)

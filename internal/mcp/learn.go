@@ -9,13 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/synthesize"
 
@@ -590,7 +591,7 @@ func hypothesisMergeNote(i int, path string, incoming, existing fact.Fact) strin
 // reuse a precomputed vector instead of paying a fresh ONNX call. Returns nil
 // when no embedder is configured or the batch fails — both are non-fatal, and
 // callers fall back to per-fact embedding inside Search.
-func dedupEmbed(ctx context.Context, batchEmb store.BatchEmbedder, facts []fact.Fact) [][]float32 {
+func dedupEmbed(ctx context.Context, batchEmb model.BatchEmbedder, facts []fact.Fact) [][]float32 {
 	if batchEmb == nil || len(facts) == 0 {
 		return nil
 	}
@@ -642,7 +643,7 @@ func applyDedupMerge(
 	writeBranch string,
 	ontology *fact.Ontology,
 	ontologyRoot string,
-	batchEmb store.BatchEmbedder,
+	batchEmb model.BatchEmbedder,
 	dedupVecs [][]float32,
 	facts []fact.Fact,
 	topicCategories []string,
@@ -653,7 +654,7 @@ func applyDedupMerge(
 	distinctFrom [][]string,
 ) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, map[int]string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/embeddings/params).
-	dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
+	dedupThreshold := model.EmbedderThresholds(batchEmb).Dedup
 	// dedupVecs is computed by the CALLER now, because the same-subject stage
 	// downstream needs the same vectors and re-embedding for it would be a
 	// second ONNX pass over the identical text. It is still the first thing
@@ -969,8 +970,8 @@ func computeEvidenceWeights(ctx context.Context, s mcpStore, writeBranch, localR
 // LearnHandler returns the handler function for knomit_learn.
 // If embedder is non-nil, dedup checks batch-embed all incoming facts upfront
 // instead of embedding one-at-a-time inside each Search call.
-func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	var batchEmb store.BatchEmbedder
+func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var batchEmb model.BatchEmbedder
 	if len(embedders) > 0 {
 		batchEmb = embedders[0]
 	}
@@ -1141,7 +1142,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 
 		// upsert reads the donation map from ctx and skips its own ONNX call
 		// when an entry is present for the path it is writing.
-		ctx = store.WithPrecomputedEmbeddings(ctx, embByPath)
+		ctx = model.WithPrecomputedEmbeddings(ctx, embByPath)
 
 		// A local fact ref must resolve once this call lands, or nothing is
 		// written. Checked BEFORE BatchWriteFacts so the call stays

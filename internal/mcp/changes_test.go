@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -17,7 +19,7 @@ import (
 )
 
 type changesOut struct {
-	Changes  []store.PathChange `json:"changes"`
+	Changes  []model.PathChange `json:"changes"`
 	Repo     string             `json:"repo"`
 	Branch   string             `json:"branch"`
 	Head     string             `json:"head"`
@@ -103,7 +105,7 @@ func TestChangesHandler_DefaultReadsTheBoundBranch(t *testing.T) {
 	require.Equal(t, "agent/test", out.Branch)
 	require.Equal(t, id12(ri), out.Repo)
 	require.Equal(t, id12(ri)+":"+out.Head, out.Bookmark)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/unsynced.md", Change: store.ChangeAdded}}, out.Changes,
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/unsynced.md", Change: model.ChangeAdded}}, out.Changes,
 		"the unsynced write is visible and rows from the write repo are bare paths")
 	require.Nil(t, out.Cursor, "no cursor on the last page")
 
@@ -112,7 +114,7 @@ func TestChangesHandler_DefaultReadsTheBoundBranch(t *testing.T) {
 	for _, s := range []string{out.Bookmark, out.Head} {
 		next, text, isErr := callChanges(t, b, map[string]any{"prefix": "tasks/a", "since": s})
 		require.False(t, isErr, text)
-		require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/later.md", Change: store.ChangeAdded}}, next.Changes, s)
+		require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/later.md", Change: model.ChangeAdded}}, next.Changes, s)
 	}
 }
 
@@ -130,7 +132,7 @@ func TestChangesHandler_ConsensusReadsUpstream(t *testing.T) {
 	out, text, isErr := callChanges(t, b, map[string]any{"prefix": "tasks/a", "since": since, "consensus": true})
 	require.False(t, isErr, text)
 	require.Equal(t, "main", out.Branch)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/on-main.md", Change: store.ChangeAdded}}, out.Changes)
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/on-main.md", Change: model.ChangeAdded}}, out.Changes)
 
 	// The same answer by naming the branch.
 	named, text, isErr := callChanges(t, b, map[string]any{"prefix": "tasks/a", "since": since, "branch": "main"})
@@ -149,7 +151,7 @@ func TestChangesHandler_ConsensusResolvesANonMainName(t *testing.T) {
 	out, text, isErr := callChanges(t, b, map[string]any{"prefix": "tasks/a", "consensus": true})
 	require.False(t, isErr, text)
 	require.Equal(t, "trunk", out.Branch)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/on-trunk.md", Change: store.ChangeAdded}}, out.Changes)
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/on-trunk.md", Change: model.ChangeAdded}}, out.Changes)
 }
 
 // A session in an experiment defaults to the experiment branch: its own
@@ -164,7 +166,7 @@ func TestChangesHandler_ExperimentBoundDefaultsToTheExperiment(t *testing.T) {
 	out, text, isErr := callChanges(t, b, map[string]any{"prefix": "tasks/a"})
 	require.False(t, isErr, text)
 	require.Equal(t, branch, out.Branch)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/in-exp.md", Change: store.ChangeAdded}}, out.Changes)
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/in-exp.md", Change: model.ChangeAdded}}, out.Changes)
 
 	onAgent, text, isErr := callChanges(t, b, map[string]any{"prefix": "tasks/a", "branch": "agent/test"})
 	require.False(t, isErr, text)
@@ -195,21 +197,21 @@ func TestChangesHandler_ReadsAMountedRepo(t *testing.T) {
 	require.Equal(t, id12(repoB), out.Repo)
 	require.Equal(t, "agent/test", out.Branch)
 	require.Equal(t, id12(repoB)+":"+out.Head, out.Bookmark)
-	require.Equal(t, []store.PathChange{{Path: federate.QualifyPath(id12(repoB), "kb/tasks/a/b.md"), Change: store.ChangeAdded}}, out.Changes)
+	require.Equal(t, []model.PathChange{{Path: federate.QualifyPath(id12(repoB), "kb/tasks/a/b.md"), Change: model.ChangeAdded}}, out.Changes)
 
 	cons, text, isErr := callChanges(t, b, map[string]any{"repo": id12(repoB), "prefix": "tasks/a", "consensus": true})
 	require.False(t, isErr, text)
 	require.Equal(t, "main", cons.Branch)
-	require.Equal(t, []store.PathChange{{Path: federate.QualifyPath(id12(repoB), "kb/tasks/a/b-main.md"), Change: store.ChangeAdded}}, cons.Changes)
+	require.Equal(t, []model.PathChange{{Path: federate.QualifyPath(id12(repoB), "kb/tasks/a/b-main.md"), Change: model.ChangeAdded}}, cons.Changes)
 
 	subOut, text, isErr := callChanges(t, b, map[string]any{"repo": id12(sub), "prefix": "tasks/a"})
 	require.False(t, isErr, text)
 	require.Equal(t, "main", subOut.Branch, "a subscription is read at the branch it follows")
-	require.Equal(t, []store.PathChange{{Path: federate.QualifyPath(id12(sub), "kb/tasks/a/s.md"), Change: store.ChangeAdded}}, subOut.Changes)
+	require.Equal(t, []model.PathChange{{Path: federate.QualifyPath(id12(sub), "kb/tasks/a/s.md"), Change: model.ChangeAdded}}, subOut.Changes)
 
 	own, text, isErr := callChanges(t, b, map[string]any{"repo": id12(repoA), "prefix": "tasks/a"})
 	require.False(t, isErr, text)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/a.md", Change: store.ChangeAdded}}, own.Changes)
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/a.md", Change: model.ChangeAdded}}, own.Changes)
 }
 
 // Refusals reach the caller as tool errors with their remedy, never as an
@@ -279,7 +281,7 @@ func TestChangesHandler_CursorPagesTheSameComparison(t *testing.T) {
 	// The cursor alone: prefix and since given here must be ignored.
 	p2, text, isErr := callChanges(t, b, map[string]any{"cursor": *p1.Cursor, "prefix": "elsewhere", "since": ""})
 	require.False(t, isErr, text)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/t100.md", Change: store.ChangeAdded}}, p2.Changes)
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/t100.md", Change: model.ChangeAdded}}, p2.Changes)
 	require.False(t, p2.HasMore)
 	require.Nil(t, p2.Cursor)
 	require.Equal(t, p1.Head, p2.Head)
@@ -288,7 +290,7 @@ func TestChangesHandler_CursorPagesTheSameComparison(t *testing.T) {
 	// The bookmark idiom: the finished read's bookmark is the next since.
 	p3, text, isErr := callChanges(t, b, map[string]any{"prefix": "tasks/a", "since": p2.Bookmark})
 	require.False(t, isErr, text)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/zz-late.md", Change: store.ChangeAdded}}, p3.Changes)
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/zz-late.md", Change: model.ChangeAdded}}, p3.Changes)
 }
 
 // A cursor records its repo and branch: a cursor minted on a read mount pages
@@ -315,7 +317,7 @@ func TestChangesHandler_CursorRecordsRepoAndBranch(t *testing.T) {
 	require.False(t, isErr, text)
 	require.Equal(t, b12, p2.Repo)
 	require.Equal(t, "main", p2.Branch)
-	require.Equal(t, []store.PathChange{{Path: federate.QualifyPath(b12, "kb/tasks/a/t2.md"), Change: store.ChangeAdded}}, p2.Changes)
+	require.Equal(t, []model.PathChange{{Path: federate.QualifyPath(b12, "kb/tasks/a/t2.md"), Change: model.ChangeAdded}}, p2.Changes)
 
 	_, text, isErr = callChanges(t, lens, map[string]any{"cursor": *p1.Cursor, "repo": id12(repoA)})
 	require.True(t, isErr, text)
@@ -340,15 +342,15 @@ func TestChangesHandler_ScopelessCursorIsRefused(t *testing.T) {
 	writeOn(t, svc, "main", "kb/tasks/a/t1.md")
 	head := writeOn(t, svc, "main", "kb/tasks/a/t2.md")
 
-	cursor := store.EncodeChangesCursor(store.ChangesScope{}, "", head, "tasks/a", "kb/tasks/a/t1.md")
+	cursor := model.EncodeChangesCursor(model.ChangesScope{}, "", head, "tasks/a", "kb/tasks/a/t1.md")
 	_, text, isErr := callChanges(t, b, map[string]any{"cursor": cursor})
 	require.True(t, isErr, text)
-	require.Contains(t, text, store.ErrInvalidChangesCursor.Error())
+	require.Contains(t, text, model.ErrInvalidChangesCursor.Error())
 
-	halfScoped := store.EncodeChangesCursor(store.ChangesScope{Repo: id12(ri)}, "", head, "tasks/a", "kb/tasks/a/t1.md")
+	halfScoped := model.EncodeChangesCursor(model.ChangesScope{Repo: id12(ri)}, "", head, "tasks/a", "kb/tasks/a/t1.md")
 	_, text, isErr = callChanges(t, b, map[string]any{"cursor": halfScoped})
 	require.True(t, isErr, text)
-	require.Contains(t, text, store.ErrInvalidChangesCursor.Error())
+	require.Contains(t, text, model.ErrInvalidChangesCursor.Error())
 }
 
 // A cursor minted for repo A and a call that names repo B is a contradiction,

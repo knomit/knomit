@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/vocab"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/store"
 )
 
 // TestEnsureTitleVectors_WatermarkIncremental is the conformance test for
@@ -514,7 +514,7 @@ func TestPlan_EmitsRestatementItemsAsOrdinaryPruneItems(t *testing.T) {
 	require.NotEmpty(t, res.SessionID)
 
 	items := env.workItems(res.SessionID)
-	var restatement []store.PipelineWorkItem
+	var restatement []model.PipelineWorkItem
 	for _, it := range items {
 		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
 			restatement = append(restatement, it)
@@ -593,7 +593,7 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 	env.seedShortlist()
 
 	// An ordinary cluster item, answered with a merge: must NOT be attributed.
-	clusterItem := &store.PipelineWorkItem{
+	clusterItem := &model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: "cluster-0",
 		FactsJSON: env.factsJSON("kb/filler0.md", "kb/filler1.md"),
 	}
@@ -608,7 +608,7 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 	require.Empty(t, verdicts)
 
 	// A shortlist item, answered with keep: attributed, and not merged.
-	restateItem := &store.PipelineWorkItem{
+	restateItem := &model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: restatementClusterKeyPrefix + "0",
 		FactsJSON: env.factsJSON("kb/pair-a.md", "kb/pair-b.md"),
 	}
@@ -663,7 +663,7 @@ func TestApply_SkipsVerdictWhenAnEndpointIsAlreadyGone(t *testing.T) {
 	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 
-	item := &store.PipelineWorkItem{
+	item := &model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: restatementClusterKeyPrefix + "0",
 		FactsJSON: env.factsJSON("kb/f0.md", "kb/f1.md"),
 	}

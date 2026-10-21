@@ -14,6 +14,7 @@ import (
 
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/model"
 	"knomit/internal/store/remotesync"
 )
 
@@ -55,7 +56,7 @@ func TestChooseConsensusBranch(t *testing.T) {
 		{"only role branches", "", "agent/x", []string{"agent/x"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, ChooseConsensusBranch(tc.requested, tc.head, tc.branches))
+			require.Equal(t, tc.want, model.ChooseConsensusBranch(tc.requested, tc.head, tc.branches))
 		})
 	}
 }
@@ -104,7 +105,7 @@ func TestResolveUpstream_UndecidableIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	_, _, err = svc.Remote().InitFromRemote(context.Background(), fileuri.New(bare), nil, "", "agent/test", nil, nil)
-	require.ErrorIs(t, err, ErrNoConsensusBranch)
+	require.ErrorIs(t, err, model.ErrNoConsensusBranch)
 	require.Contains(t, err.Error(), "trunk", "the refusal lists the candidates")
 }
 
@@ -158,14 +159,14 @@ func TestSyncEntries_RefuseAnEmptyConsensusBranch(t *testing.T) {
 	require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "trunk", "agent/test"))
 
 	err = svc.ConfigureRemote("https://example.invalid/kb.git", "", "agent/test")
-	require.ErrorIs(t, err, ErrNoConsensusBranch)
+	require.ErrorIs(t, err, model.ErrNoConsensusBranch)
 	cfg, err := svc.rh.Repository().Config()
 	require.NoError(t, err)
 	require.NotContains(t, cfg.Remotes, "origin", "nothing is configured for a refused branch")
 
 	svc.Remote().SetOrigin(&remotesync.Origin{URL: "https://example.invalid/kb.git"})
 	_, err = svc.Remote().Sync(context.Background(), "agent/test", nil)
-	require.ErrorIs(t, err, ErrNoConsensusBranch)
+	require.ErrorIs(t, err, model.ErrNoConsensusBranch)
 }
 
 // Replay with no DefaultBranch cuts the agent branch from the target clone's

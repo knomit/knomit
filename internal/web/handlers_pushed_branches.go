@@ -15,6 +15,8 @@ import (
 	"sort"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/verify"
 
 	"github.com/go-chi/chi/v5"
@@ -44,7 +46,7 @@ type pushedBranchView struct {
 // with what merging it would bring. A subscription has none.
 func handleHALPushedBranches(
 	b hal.URLBuilder,
-	lister func(context.Context, *repos.RepoInstance) ([]store.Branch, error),
+	lister func(context.Context, *repos.RepoInstance) ([]model.Branch, error),
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
@@ -247,9 +249,9 @@ func writePushedMergeError(w http.ResponseWriter, r *http.Request, err error) {
 			map[string]any{"expected_tip": moved.Expected, "actual_tip": moved.Actual})
 	case errors.Is(err, merge.ErrUnrelatedHistories):
 		hal.WriteProblem(w, http.StatusConflict, "Unrelated histories", err.Error(), r.URL.Path)
-	case errors.Is(err, store.ErrNoSigner):
+	case errors.Is(err, model.ErrNoSigner):
 		hal.WriteProblem(w, http.StatusConflict, "Cannot sign", err.Error(), r.URL.Path)
-	case errors.Is(err, store.ErrBranchNotFound):
+	case errors.Is(err, model.ErrBranchNotFound):
 		hal.WriteProblem(w, http.StatusNotFound, "Branch not found", err.Error(), r.URL.Path)
 	default:
 		hal.WriteProblem(w, http.StatusInternalServerError, "Could not merge", err.Error(), r.URL.Path)

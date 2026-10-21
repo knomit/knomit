@@ -11,9 +11,10 @@ package mcp
 
 import (
 	context "context"
-	store "knomit/internal/store"
 	reflect "reflect"
 	time "time"
+
+	"knomit/internal/store/model"
 
 	gomock "go.uber.org/mock/gomock"
 )
@@ -57,10 +58,10 @@ func (mr *MockPipelineIndexMockRecorder) AbandonPlanningPipelineSession(ctx, id 
 }
 
 // ActivePipelineSession mocks base method.
-func (m *MockPipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*store.PipelineSession, error) {
+func (m *MockPipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*model.PipelineSession, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ActivePipelineSession", ctx, tool, branch)
-	ret0, _ := ret[0].(*store.PipelineSession)
+	ret0, _ := ret[0].(*model.PipelineSession)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -72,7 +73,7 @@ func (mr *MockPipelineIndexMockRecorder) ActivePipelineSession(ctx, tool, branch
 }
 
 // AddPipelineSessionStats mocks base method.
-func (m *MockPipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s store.PipelineSessionStats) error {
+func (m *MockPipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s model.PipelineSessionStats) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AddPipelineSessionStats", ctx, id, s)
 	ret0, _ := ret[0].(error)
@@ -161,10 +162,10 @@ func (mr *MockPipelineIndexMockRecorder) CompletePipelineSession(ctx, id any) *g
 }
 
 // CreatePipelineSession mocks base method.
-func (m *MockPipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*store.PipelineSession, error) {
+func (m *MockPipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*model.PipelineSession, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreatePipelineSession", ctx, tool, branch, createdBy)
-	ret0, _ := ret[0].(*store.PipelineSession)
+	ret0, _ := ret[0].(*model.PipelineSession)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -176,10 +177,10 @@ func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(ctx, tool, branch
 }
 
 // CreatePipelineSessionReplacing mocks base method.
-func (m *MockPipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*store.PipelineSession, error) {
+func (m *MockPipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*model.PipelineSession, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreatePipelineSessionReplacing", ctx, tool, branch, createdBy, startKey, replace, idleBefore)
-	ret0, _ := ret[0].(*store.PipelineSession)
+	ret0, _ := ret[0].(*model.PipelineSession)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -234,10 +235,10 @@ func (mr *MockPipelineIndexMockRecorder) FinishPipelineWorkItem(ctx, id any) *go
 }
 
 // GetPipelineSession mocks base method.
-func (m *MockPipelineIndex) GetPipelineSession(ctx context.Context, id string) (*store.PipelineSession, error) {
+func (m *MockPipelineIndex) GetPipelineSession(ctx context.Context, id string) (*model.PipelineSession, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetPipelineSession", ctx, id)
-	ret0, _ := ret[0].(*store.PipelineSession)
+	ret0, _ := ret[0].(*model.PipelineSession)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -264,7 +265,7 @@ func (mr *MockPipelineIndexMockRecorder) GetPipelineWatermark(ctx, tool, branch 
 }
 
 // InsertPipelineWorkItem mocks base method.
-func (m *MockPipelineIndex) InsertPipelineWorkItem(ctx context.Context, item store.PipelineWorkItem) error {
+func (m *MockPipelineIndex) InsertPipelineWorkItem(ctx context.Context, item model.PipelineWorkItem) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "InsertPipelineWorkItem", ctx, item)
 	ret0, _ := ret[0].(error)
@@ -307,10 +308,10 @@ func (mr *MockPipelineIndexMockRecorder) MarkPipelineSessionScoped(ctx, id any) 
 }
 
 // NextPipelineWorkItem mocks base method.
-func (m *MockPipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID string) (*store.PipelineWorkItem, error) {
+func (m *MockPipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID string) (*model.PipelineWorkItem, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NextPipelineWorkItem", ctx, sessionID)
-	ret0, _ := ret[0].(*store.PipelineWorkItem)
+	ret0, _ := ret[0].(*model.PipelineWorkItem)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -322,10 +323,10 @@ func (mr *MockPipelineIndexMockRecorder) NextPipelineWorkItem(ctx, sessionID any
 }
 
 // PendingPipelineWorkItems mocks base method.
-func (m *MockPipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]store.PipelineWorkItem, error) {
+func (m *MockPipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]model.PipelineWorkItem, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PendingPipelineWorkItems", ctx, sessionID)
-	ret0, _ := ret[0].([]store.PipelineWorkItem)
+	ret0, _ := ret[0].([]model.PipelineWorkItem)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

@@ -8,10 +8,11 @@ import (
 	"reflect"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
@@ -26,7 +27,7 @@ type stubSearchProvider struct {
 	lastQuery index.SearchOptions
 }
 
-func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ store.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ model.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 	s.lastQuery = q
 	if s.diag != nil && q.Diag != nil {
 		*q.Diag = *s.diag

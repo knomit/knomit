@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -47,7 +49,7 @@ func dedupAttrOntology(t *testing.T) *fact.Ontology {
 // length embedder makes identical text land at cosine 1.0, far above the
 // dedup floor. Returns the RepoInstance too, for tests that drive
 // applyDedupMerge directly.
-func newDedupAttrRepo(t *testing.T) (*repos.RepoInstance, context.Context, store.BatchEmbedder) {
+func newDedupAttrRepo(t *testing.T) (*repos.RepoInstance, context.Context, model.BatchEmbedder) {
 	t.Helper()
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)

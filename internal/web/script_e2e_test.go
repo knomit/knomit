@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -13,7 +15,6 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 )
 
@@ -76,7 +77,7 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 	signer, err := svc.FactsRepo().CommitSignerOf(ctx, plumbing.NewHash(scriptCommit))
 	require.NoError(t, err)
 	require.Equal(t, svc.FactsRepo().SignerFingerprint(), signer.Fingerprint, "signed by this store's key")
-	require.Equal(t, firing.CommitHash, store.TrailerValue(info.Message, store.TrailerCause))
+	require.Equal(t, firing.CommitHash, model.TrailerValue(info.Message, model.TrailerCause))
 
 	paths, err := svc.Facts().ListAll(ctx, branch)
 	require.NoError(t, err)

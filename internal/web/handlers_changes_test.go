@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/federate"
@@ -22,7 +24,7 @@ type changesPage struct {
 	Head     string                        `json:"head"`
 	HasMore  bool                          `json:"has_more"`
 	Links    map[string]map[string]string  `json:"_links"`
-	Embedded map[string][]store.PathChange `json:"_embedded"`
+	Embedded map[string][]model.PathChange `json:"_embedded"`
 }
 
 func changesRepo(t *testing.T) (*repos.RepoInstance, http.Handler) {
@@ -68,7 +70,7 @@ func TestREST_Changes_ReadsTheURLBranch(t *testing.T) {
 
 	rec, p := getChanges(t, r, "/repos/alpha/branches/"+urlBranch(agent)+"/changes?prefix=tasks/a&since="+since)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/new.md", Change: store.ChangeAdded}}, p.Embedded["changes"])
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/new.md", Change: model.ChangeAdded}}, p.Embedded["changes"])
 	require.Equal(t, 1, p.Count)
 	require.Len(t, p.Head, 40)
 	require.NotContains(t, p.Links, "next")
@@ -97,7 +99,7 @@ func TestREST_Changes_PagesWithNextLink(t *testing.T) {
 
 	rec, p2 := getChanges(t, r, strings.TrimPrefix(next, "/api/v1"))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/t2.md", Change: store.ChangeAdded}}, p2.Embedded["changes"])
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/t2.md", Change: model.ChangeAdded}}, p2.Embedded["changes"])
 	require.False(t, p2.HasMore)
 	require.Equal(t, p1.Head, p2.Head)
 }
@@ -144,10 +146,10 @@ func TestREST_Changes_AcceptsBookmarkForThisRepo(t *testing.T) {
 
 	rec, bare := getChanges(t, r, base+since)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	rec, marked := getChanges(t, r, base+store.ChangesBookmark(federate.ID12(ri.ID()), since))
+	rec, marked := getChanges(t, r, base+model.ChangesBookmark(federate.ID12(ri.ID()), since))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, bare.Embedded, marked.Embedded)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/new.md", Change: store.ChangeAdded}}, marked.Embedded["changes"])
+	require.Equal(t, []model.PathChange{{Path: "kb/tasks/a/new.md", Change: model.ChangeAdded}}, marked.Embedded["changes"])
 }
 
 // A cursor records the repo and branch it was minted for: replayed on another
@@ -180,7 +182,7 @@ func TestREST_Changes_CursorIsScopedToRepoAndBranch(t *testing.T) {
 		require.Contains(t, rec.Body.String(), "cursor is for branch", name) // the guard's own text, not the store's generic refusal
 	}
 
-	noScope := store.EncodeChangesCursor(store.ChangesScope{}, "", p1.Head, "tasks/a", p1.Embedded["changes"][0].Path)
+	noScope := model.EncodeChangesCursor(model.ChangesScope{}, "", p1.Head, "tasks/a", p1.Embedded["changes"][0].Path)
 	rec = httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, base+"?limit=1&cursor="+noScope, nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())

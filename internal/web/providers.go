@@ -3,14 +3,15 @@ package web
 import (
 	"context"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // branchesListerFunc enumerates a repo's branches. It is a named type rather
 // than an inline func literal so the signature has exactly one definition to
 // change when the shape evolves (as it did when ctx threading landed).
-type branchesListerFunc func(ctx context.Context, ri *repos.RepoInstance) ([]store.Branch, error)
+type branchesListerFunc func(ctx context.Context, ri *repos.RepoInstance) ([]model.Branch, error)
 
 // branchRootReaderFunc reads the head + index watermark for one branch. Named
 // for the same reason as branchesListerFunc.

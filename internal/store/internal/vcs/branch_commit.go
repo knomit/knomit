@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
@@ -59,7 +61,7 @@ func (rh *Repo) CommitSigs(ctx context.Context, branch, operation string) (autho
 // The id itself is OwnAgentID: the persisted id this store was given, never
 // a parse of either branch name.
 func (rh *Repo) commitAgentID(ctx context.Context, branch string) (string, error) {
-	name, isExp := ExperimentNameOf(branch)
+	name, isExp := model.ExperimentNameOf(branch)
 	if !isExp {
 		return rh.OwnAgentID(branch)
 	}
@@ -68,9 +70,9 @@ func (rh *Repo) commitAgentID(ctx context.Context, branch string) (string, error
 		return "", fmt.Errorf("author of %s: %w", branch, err)
 	}
 	if !ok {
-		return "", fmt.Errorf("author of %s: %w: no experiment record names its owning agent", branch, ErrOrphanExperimentRef)
+		return "", fmt.Errorf("author of %s: %w: no experiment record names its owning agent", branch, model.ErrOrphanExperimentRef)
 	}
-	if exp.Parent == "" || IsExperimentBranch(exp.Parent) {
+	if exp.Parent == "" || model.IsExperimentBranch(exp.Parent) {
 		return "", fmt.Errorf("author of %s: recorded parent %q is not an agent branch", branch, exp.Parent)
 	}
 	if err := rh.CheckExperimentParentCurrent(ctx, exp); err != nil {

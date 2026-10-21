@@ -21,14 +21,8 @@ import (
 
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/sqlite"
+	"knomit/internal/store/model"
 )
-
-// Branch holds metadata about an indexed branch.
-type Branch struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	GitRef string `json:"git_ref"`
-}
 
 // branchCache is a simple thread-safe name→ID cache.
 type branchCache struct {
@@ -104,7 +98,7 @@ type Repo struct {
 	// acceptList is the operator's accept list (control.db), bound to this
 	// repository. Nil is empty. Set by Service.SetAcceptList at build/swap
 	// time, never mutated afterwards.
-	acceptList AcceptList
+	acceptList model.AcceptList
 
 	// ownKeys, when set, returns every key this instance's fleet member record
 	// has held (E4 accepts them as its own). Nil when standalone.
@@ -115,7 +109,7 @@ type Repo struct {
 	// tree at HEAD. Set by Service.Open (via bindIndexManager). If nil,
 	// NotifyCommit skips the sync — useful for bare Repo tests that
 	// don't exercise the index.
-	im IndexManager
+	im model.IndexManager
 
 	// readOnly refuses authored commits at the shared write seam — the
 	// structural half of a subscription (see Service.SetReadOnly). Set by
@@ -145,7 +139,7 @@ type Repo struct {
 
 	configMu sync.RWMutex // write: configureRemote refspec rewrite; read: held across a fetch so a rewrite can't race it
 	embedMu  sync.RWMutex // guards embedder
-	embedder Embedder
+	embedder model.Embedder
 	branchMu sync.Map // per-branch write serialization
 	// pushMu serializes PUSHES of a branch (remoteIndex.Push), and only
 	// pushes: it is not the write lock, so a fact write never waits on it.
@@ -218,14 +212,14 @@ func NetCtxWith(parent context.Context, timeout time.Duration) (context.Context,
 }
 
 // SetEmbedder attaches an Embedder. Called once during service construction.
-func (rh *Repo) SetEmbedder(e Embedder) {
+func (rh *Repo) SetEmbedder(e model.Embedder) {
 	rh.embedMu.Lock()
 	defer rh.embedMu.Unlock()
 	rh.embedder = e
 }
 
 // Embedder returns the current Embedder under a read lock.
-func (rh *Repo) Embedder() Embedder {
+func (rh *Repo) Embedder() model.Embedder {
 	rh.embedMu.RLock()
 	defer rh.embedMu.RUnlock()
 	return rh.embedder
@@ -269,7 +263,7 @@ func (rh *Repo) BranchID(ctx context.Context, name string) (int64, error) {
 	var id int64
 	err := sqlite.Conn(ctx, rh.db).QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, name).Scan(&id)
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("branch %q: %w", name, ErrBranchNotFound)
+		return 0, fmt.Errorf("branch %q: %w", name, model.ErrBranchNotFound)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("branch lookup: %w", err)
@@ -348,16 +342,16 @@ func (rh *Repo) DropBranchLocked(ctx context.Context, name string, id int64) err
 }
 
 // ListBranches returns all registered branches.
-func (rh *Repo) ListBranches(ctx context.Context) ([]Branch, error) {
+func (rh *Repo) ListBranches(ctx context.Context) ([]model.Branch, error) {
 	rows, err := sqlite.Conn(ctx, rh.db).QueryContext(ctx, `SELECT id, name, git_ref FROM branches ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
 	defer rows.Close()
 
-	var branches []Branch
+	var branches []model.Branch
 	for rows.Next() {
-		var b Branch
+		var b model.Branch
 		if err := rows.Scan(&b.ID, &b.Name, &b.GitRef); err != nil {
 			return nil, fmt.Errorf("list branches scan: %w", err)
 		}
@@ -563,7 +557,7 @@ func (rh *Repo) ResolveRef(ctx context.Context, branch string) (plumbing.Hash, e
 	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
-			return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w: %w", branch, ErrBranchNotFound, err)
+			return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w: %w", branch, model.ErrBranchNotFound, err)
 		}
 		return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w", branch, err)
 	}
@@ -591,8 +585,8 @@ func (rh *Repo) ReadFileAtCommit(ctx context.Context, path, commitHash string) (
 	// Exact lookup failed — try case-insensitive walk.
 	content, err := treeFileInsensitive(rh.repo, tree, path)
 	if err != nil {
-		if errors.Is(err, ErrPathNotFound) {
-			return "", fmt.Errorf("readFileAtCommit: %q at %s: %w", path, commitHash, ErrPathNotFound)
+		if errors.Is(err, model.ErrPathNotFound) {
+			return "", fmt.Errorf("readFileAtCommit: %q at %s: %w", path, commitHash, model.ErrPathNotFound)
 		}
 		return "", fmt.Errorf("readFileAtCommit: file %q (case-insensitive): %w", path, err)
 	}
@@ -716,7 +710,7 @@ func (rh *Repo) ReadFileWithHash(ctx context.Context, branch, path string) (stri
 	entry, err := tree.FindEntry(path)
 	if err != nil {
 		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
-			return "", "", fmt.Errorf("readFileWithHash: %q: %w", path, ErrPathNotFound)
+			return "", "", fmt.Errorf("readFileWithHash: %q: %w", path, model.ErrPathNotFound)
 		}
 		return "", "", fmt.Errorf("readFileWithHash: entry %s: %w", path, err)
 	}

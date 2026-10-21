@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +43,7 @@ func TestCreatePipelineSessionReplacing_ConcurrentStartsSerialise(t *testing.T) 
 			switch {
 			case err == nil:
 				created++
-			case errors.Is(err, ErrPipelineSlotChanged):
+			case errors.Is(err, model.ErrPipelineSlotChanged):
 				changed++
 			default:
 				t.Fatalf("round %d: a lost race must be ErrPipelineSlotChanged, got %v", round, err)
@@ -86,7 +88,7 @@ func TestCreatePipelineSessionReplacing_StaleDisplacementRechecksIdle(t *testing
 	require.NoError(t, err)
 
 	_, err = pi.CreatePipelineSessionReplacing(ctx, "review", "agent/a", "q", "key", live.ID, time.Now().Add(-time.Hour))
-	require.ErrorIs(t, err, ErrPipelineSlotChanged, "used within the hour, so not stale")
+	require.ErrorIs(t, err, model.ErrPipelineSlotChanged, "used within the hour, so not stale")
 	got, err := pi.GetPipelineSession(ctx, live.ID)
 	require.NoError(t, err)
 	require.Equal(t, "active", got.Status)

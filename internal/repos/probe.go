@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -16,7 +18,6 @@ import (
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/storage/memory"
 
-	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
 )
 
@@ -458,10 +459,10 @@ func classifyProbeError(err error) (empty bool, authRequired bool) {
 
 // resolveUpstream is InitFromRemote's rule applied to a ref listing, so the
 // wizard shows the branch the create would actually adopt. It IS the store's
-// rule (store.ChooseConsensusBranch), not a copy of it: an explicit request
+// rule (model.ChooseConsensusBranch), not a copy of it: an explicit request
 // wins, then the remote's symbolic HEAD unless that is an agent branch, then
 // the one branch with no other role. "" means the create would refuse
-// (store.ErrNoConsensusBranch) until a branch is named.
+// (model.ErrNoConsensusBranch) until a branch is named.
 //
 // The empty-remote case (branches empty) is the seed path, which CREATES the
 // consensus branch: the requested name, else remotesync.DefaultConsensusBranch,
@@ -473,5 +474,5 @@ func resolveUpstream(requested, head string, branches []string) string {
 		}
 		return remotesync.DefaultConsensusBranch
 	}
-	return store.ChooseConsensusBranch(requested, head, branches)
+	return model.ChooseConsensusBranch(requested, head, branches)
 }

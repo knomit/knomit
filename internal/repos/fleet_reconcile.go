@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/fleetrec"
 
 	"github.com/rs/zerolog/log"
@@ -96,7 +98,7 @@ func (m *Manager) ownRecordAt(ri *RepoInstance, branch string) (rec fleetrec.Mem
 // changed since it was read.
 func (m *Manager) writeRecord(ctx context.Context, ri *RepoInstance, rec fact.Member, message, expectBlob string) error {
 	if m.deps.Signer == nil {
-		return store.ErrNoSigner
+		return model.ErrNoSigner
 	}
 	f := fact.Fact{Title: "member " + rec.Agent, Body: fact.RenderMember(rec), Kind: fact.Pragmatic, Type: fact.Policy, Confidence: 1, Sources: 1, Entities: []string{rec.Agent}}
 	content, err := fact.SerializeFact(f)

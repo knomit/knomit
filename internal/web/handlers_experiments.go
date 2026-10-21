@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
@@ -57,7 +59,7 @@ type experimentsCollection struct {
 }
 
 // experimentViewOf renders one experiment.
-func experimentViewOf(b hal.URLBuilder, repoName string, ri *repos.RepoInstance, e store.Experiment, expiryDays int) experimentView {
+func experimentViewOf(b hal.URLBuilder, repoName string, ri *repos.RepoInstance, e model.Experiment, expiryDays int) experimentView {
 	self := b.Experiment(repoName, e.Name)
 	v := experimentView{
 		Name:         e.Name,
@@ -89,7 +91,7 @@ func handleHALExperiments(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		var (
-			list []store.Experiment
+			list []model.Experiment
 			err  error
 		)
 		if aerr := ri.WithRead(func(svc *store.Service) {
@@ -159,7 +161,7 @@ func handleExperimentOpen(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 		}
 
 		var (
-			exp store.Experiment
+			exp model.Experiment
 			err error
 		)
 		if aerr := ri.WithRead(func(svc *store.Service) {
@@ -259,7 +261,7 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 			return
 		}
 		var (
-			exp store.Experiment
+			exp model.Experiment
 			ok  bool
 		)
 		_ = ri.WithRead(func(svc *store.Service) {
@@ -291,16 +293,16 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 // all three versions, and that is an agent's job through knomit_experiment.
 // experimentForResolutions reads the experiment record, for the two branch
 // names the ref gate needs.
-func experimentForResolutions(ctx context.Context, ri *repos.RepoInstance, name string) (store.Experiment, bool, error) {
+func experimentForResolutions(ctx context.Context, ri *repos.RepoInstance, name string) (model.Experiment, bool, error) {
 	var (
-		exp store.Experiment
+		exp model.Experiment
 		ok  bool
 		err error
 	)
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		exp, ok, err = svc.Branches().GetExperiment(ctx, name)
 	}); aerr != nil {
-		return store.Experiment{}, false, aerr
+		return model.Experiment{}, false, aerr
 	}
 	return exp, ok, err
 }
@@ -378,9 +380,9 @@ func writeExperimentError(w http.ResponseWriter, r *http.Request, title string, 
 		hal.WriteProblem(w, http.StatusNotFound, "Experiment not found", err.Error(), r.URL.Path)
 	case errors.Is(err, merge.ErrInvalidExperimentName):
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid experiment name", err.Error(), r.URL.Path)
-	case errors.Is(err, store.ErrOrphanExperimentRef):
+	case errors.Is(err, model.ErrOrphanExperimentRef):
 		hal.WriteProblem(w, http.StatusConflict, "Branch already exists", err.Error(), r.URL.Path)
-	case errors.Is(err, store.ErrStaleExperimentParent):
+	case errors.Is(err, model.ErrStaleExperimentParent):
 		hal.WriteProblem(w, http.StatusConflict, "Experiment is orphaned", err.Error(), r.URL.Path)
 	default:
 		hal.WriteProblem(w, http.StatusInternalServerError, title, err.Error(), r.URL.Path)

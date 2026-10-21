@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
 	"knomit/internal/store/verify"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -200,11 +201,11 @@ func TestE4_OwnRecordKeysAreOwn(t *testing.T) {
 // list is repos.VerifyAccepts; store sees only the interface).
 type fixedAccepts []plumbing.Hash
 
-func (f fixedAccepts) Lookup(h plumbing.Hash) (Accept, bool) {
+func (f fixedAccepts) Lookup(h plumbing.Hash) (model.Accept, bool) {
 	for _, x := range f {
 		if x == h {
-			return Accept{Commit: h.String()}, true
+			return model.Accept{Commit: h.String()}, true
 		}
 	}
-	return Accept{}, false
+	return model.Accept{}, false
 }
