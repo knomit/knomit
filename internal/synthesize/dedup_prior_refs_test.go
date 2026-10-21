@@ -12,6 +12,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/refs"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ func (f *fixedPairSearch) Search(context.Context, string, store.SearchOptions) (
 // by 100 to get the cosine it compares against the threshold.
 func searchHit(path string) store.SearchResult {
 	return store.SearchResult{
-		FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: path}},
+		FactWithBody: facts.FactWithBody{FactRecord: facts.FactRecord{Path: path}},
 		Score:        96,
 	}
 }
@@ -94,7 +95,7 @@ func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 		},
 	}
 
-	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), idx, 0.92, "test",
+	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",
 		func(ProgressEvent) {}, branch, bareRefFixture)
 	require.NoError(t, err, "a carried ref that no longer resolves must not abort the dedup pass")
 

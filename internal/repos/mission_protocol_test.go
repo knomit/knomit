@@ -24,6 +24,7 @@ import (
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // ---- T-D0: the shipped template's settings, and that it loads as-is
@@ -241,7 +242,7 @@ func TestMission_ExpiryScriptRetracts(t *testing.T) {
 	}
 	ran := false
 	for _, f := range h.fires(t) {
-		if f.Trigger == "expire" && f.Path == taskPath && f.Episode == "due" && f.Outcome == store.TriggerOutcomeRan {
+		if f.Trigger == "expire" && f.Path == taskPath && f.Episode == "due" && f.Outcome == facts.TriggerOutcomeRan {
 			ran = true
 		}
 	}
@@ -296,7 +297,7 @@ func TestMission_WinnerCrashReoffered(t *testing.T) {
 	}
 	crashed := false
 	for _, f := range h.fires(t) {
-		if f.Trigger == "decide" && f.Outcome == store.TriggerOutcomeScriptError && strings.Contains(f.Error, "crashed") {
+		if f.Trigger == "decide" && f.Outcome == facts.TriggerOutcomeScriptError && strings.Contains(f.Error, "crashed") {
 			crashed = true
 		}
 	}
@@ -383,7 +384,7 @@ func TestMission_AssignedTaskNeverClaimed(t *testing.T) {
 	}
 	woke := false
 	for _, f := range p.fires(t) {
-		if f.Trigger == "wake" && f.Path == path && f.Outcome == store.TriggerOutcomeStarted {
+		if f.Trigger == "wake" && f.Path == path && f.Outcome == facts.TriggerOutcomeStarted {
 			woke = true
 		}
 	}

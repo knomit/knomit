@@ -11,6 +11,7 @@ import (
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -85,7 +86,7 @@ func (defaultFactReader) Read(
 			err = errFactNotFound
 			return
 		}
-		opts := &store.ReadFactOpts{WithHash: false}
+		opts := &facts.ReadFactOpts{WithHash: false}
 		if !a.IsHEAD() {
 			opts.AtCommit = a.Commit
 		}
@@ -96,7 +97,7 @@ func (defaultFactReader) Read(
 			// History view's retract-commit case sets this — when it's off the
 			// caller wants the raw "not found" answer.
 			if fallback && !a.IsHEAD() && errors.Is(rerr, store.ErrPathNotFound) {
-				fbOpts := &store.ReadFactOpts{BeforeCommit: a.Commit}
+				fbOpts := &facts.ReadFactOpts{BeforeCommit: a.Commit}
 				fbRes, fbErr := svc.Facts().ReadFact(ctx, a.Branch, path, fbOpts)
 				if fbErr != nil {
 					if errors.Is(fbErr, store.ErrPathNotFound) {

@@ -15,6 +15,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/testsupport/playbooks"
 )
 
@@ -190,11 +191,11 @@ func tips(t *testing.T, n *missionNode) map[string]string {
 }
 
 // newCommits is every commit reachable from tip and not from base.
-func newCommits(t *testing.T, n *missionNode, base, tip string) []store.CommitInfo {
+func newCommits(t *testing.T, n *missionNode, base, tip string) []facts.CommitInfo {
 	t.Helper()
 	svc := n.svc(t)
-	walk := func(from string, stop map[plumbing.Hash]bool) map[plumbing.Hash]store.CommitInfo {
-		out := map[plumbing.Hash]store.CommitInfo{}
+	walk := func(from string, stop map[plumbing.Hash]bool) map[plumbing.Hash]facts.CommitInfo {
+		out := map[plumbing.Hash]facts.CommitInfo{}
 		queue := []plumbing.Hash{plumbing.NewHash(from)}
 		for len(queue) > 0 {
 			h := queue[0]
@@ -202,7 +203,7 @@ func newCommits(t *testing.T, n *missionNode, base, tip string) []store.CommitIn
 			if _, done := out[h]; done || stop[h] {
 				continue
 			}
-			c, err := svc.Triggers().CommitInfo(context.Background(), h)
+			c, err := svc.FactsRepo().CommitInfo(context.Background(), h)
 			require.NoError(t, err)
 			out[h] = c
 			queue = append(queue, c.Parents...)
@@ -213,7 +214,7 @@ func newCommits(t *testing.T, n *missionNode, base, tip string) []store.CommitIn
 	for h := range walk(base, nil) {
 		old[h] = true
 	}
-	var out []store.CommitInfo
+	var out []facts.CommitInfo
 	for _, c := range walk(tip, old) {
 		out = append(out, c)
 	}

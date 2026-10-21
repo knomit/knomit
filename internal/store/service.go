@@ -282,8 +282,16 @@ func (s *Service) SetReadOnly(ro bool) { s.rh.SetReadOnly(ro) }
 // Remote returns the RemoteIndex for git remote configuration and sync.
 func (s *Service) Remote() RemoteIndex { return s.ri }
 
-// Facts returns the FactIndex for git-backed fact operations.
-func (s *Service) Facts() FactIndex { return s.fi }
+// Facts is the fact index: git-backed fact reads and writes, and the one
+// system-tree write door (WriteSystemTree, callable only from internal/repos;
+// see test/archtest/store_write_internals_test.go).
+func (s *Service) Facts() *facts.Index { return s.fi }
+
+// FactsRepo is the facts child's reader of one commit's own tree: the system
+// files, templates, skills and trigger-dispatcher rows, plus the signer
+// fingerprint. It holds the vcs handle privately, so none of the git layer's
+// methods is reachable through it.
+func (s *Service) FactsRepo() *facts.Repo { return s.rh.factsRepo }
 
 // Search returns the SearchIndex composite (a facade over the four query
 // sub-services). Prefer the narrow accessors below (FactQuery/GraphStore/

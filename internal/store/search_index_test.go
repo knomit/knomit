@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // configurableEmbedder is a BatchEmbedder whose ID() and Dim() are settable,
@@ -214,7 +215,7 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 	branch := "main"
 
 	// Create a FactRecord with duplicate entities and domains.
-	rec := FactRecord{
+	rec := facts.FactRecord{
 		Path:       "kb/test-dupes.md",
 		Title:      "Test with duplicates",
 		BlobHash:   "abc123def456",

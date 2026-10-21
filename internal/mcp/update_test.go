@@ -250,7 +250,7 @@ func TestUpdateHandler_CommitRecordsMomentName(t *testing.T) {
 	head, err := svc.Branches().HeadCommit(context.Background(), "agent/test")
 	require.NoError(t, err)
 	require.Equal(t, out.Commit, head, "fixture: the update's commit is the head")
-	info, err := svc.Triggers().CommitInfo(context.Background(), plumbing.NewHash(head))
+	info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(head))
 	require.NoError(t, err)
 	require.Equal(t, "update(corroborate: kb/evidence/one.md): Test Principle", info.Message,
 		"the commit message carries the moment label, then the fact's title, and nothing else")

@@ -64,7 +64,7 @@ func TestManagerStore_AuthorsAsThePersistedAgentID(t *testing.T) {
 	require.NoError(t, err)
 	tip, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
-	info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(tip))
+	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(tip))
 	require.NoError(t, err)
 	require.Equal(t, "opaque-2", info.AuthorName)
 	require.Equal(t, "opaque-2+learn@agents.knomit.io", info.AuthorEmail)

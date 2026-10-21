@@ -60,7 +60,7 @@ func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q s
 // test stops compiling.
 //
 // Behavioral coverage: a cluster with fewer than 2 members is a no-op —
-// dedupCluster returns it unchanged before touching FactIndex,
+// dedupCluster returns it unchanged before touching the facts index,
 // SearchIndex, or anything else. That's the cheapest exercise of the new
 // signature without needing a real store stood up.
 func TestDedupCluster_NoEmbedderDependency(t *testing.T) {
@@ -76,8 +76,9 @@ func TestDedupCluster_NoEmbedderDependency(t *testing.T) {
 			out, err := dedupCluster(
 				context.Background(),
 				tc.cluster,
-				nil, // FactIndex — never reached for len(cluster) < 2
-				nil, // SearchIndex — never reached
+				nil, // facts.Index — never reached for len(cluster) < 2
+				nil, // facts.Repo — never reached
+				nil, // SearchQuery — never reached
 				0.92,
 				"test",
 				func(ProgressEvent) {},
@@ -110,7 +111,7 @@ func TestDedupCluster_RespectsContextCancellation(t *testing.T) {
 	}
 	idx := &ctxCapturingSearchIndex{}
 
-	_, err := dedupCluster(ctx, cluster, nil, idx, 0.92, "test", func(ProgressEvent) {}, "agent/test", bareRefFixture)
+	_, err := dedupCluster(ctx, cluster, nil, nil, idx, 0.92, "test", func(ProgressEvent) {}, "agent/test", bareRefFixture)
 	if err == nil {
 		t.Fatal("dedupCluster with a canceled ctx must return an error")
 	}
@@ -190,7 +191,7 @@ func TestDedupCluster_SkipsUnparsableMember(t *testing.T) {
 	}
 
 	var warnings []string
-	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), idx, 0.92, "test",
+	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",
 		func(e ProgressEvent) {
 			if e.Phase == "warn" {
 				warnings = append(warnings, e.Message)

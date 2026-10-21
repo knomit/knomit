@@ -11,7 +11,7 @@ import (
 
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -21,13 +21,13 @@ import (
 // a "was this mount fanned out to at all" probe for the narrowing/skip tests);
 // errRepo makes that one mount's ListDir fail.
 type lensTopicsStub struct {
-	dirsByRepo  map[string][]store.DirEntry
-	factsByRepo map[string]map[string]*store.FactWithBody // repo → fullPath → fact
+	dirsByRepo  map[string][]facts.DirEntry
+	factsByRepo map[string]map[string]*facts.FactWithBody // repo → fullPath → fact
 	errRepo     string
 	listPaths   map[string]string
 }
 
-func (s *lensTopicsStub) ListDir(_ context.Context, ri *repos.RepoInstance, _ string, path string) ([]store.DirEntry, error) {
+func (s *lensTopicsStub) ListDir(_ context.Context, ri *repos.RepoInstance, _ string, path string) ([]facts.DirEntry, error) {
 	if s.listPaths == nil {
 		s.listPaths = map[string]string{}
 	}
@@ -38,7 +38,7 @@ func (s *lensTopicsStub) ListDir(_ context.Context, ri *repos.RepoInstance, _ st
 	return s.dirsByRepo[ri.Name()], nil
 }
 
-func (s *lensTopicsStub) GetByPath(_ context.Context, ri *repos.RepoInstance, _ string, path string) (*store.FactWithBody, error) {
+func (s *lensTopicsStub) GetByPath(_ context.Context, ri *repos.RepoInstance, _ string, path string) (*facts.FactWithBody, error) {
 	if m := s.factsByRepo[ri.Name()]; m != nil {
 		if fb, ok := m[path]; ok {
 			return fb, nil
@@ -83,13 +83,13 @@ func decodeLensTopics(t *testing.T, rec *httptest.ResponseRecorder) lensTopicsBo
 func TestLensTopics_UnionMergedLevel(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensTopicsStub{
-		dirsByRepo: map[string][]store.DirEntry{
+		dirsByRepo: map[string][]facts.DirEntry{
 			"alpha": {{Name: "gotchas", IsDir: true}, {Name: "decisions", IsDir: true}, {Name: "aaa.md", IsDir: false}},
 			"beta":  {{Name: "decisions", IsDir: true}, {Name: "bbb.md", IsDir: false}},
 		},
-		factsByRepo: map[string]map[string]*store.FactWithBody{
-			"alpha": {"kb/aaa.md": {FactRecord: store.FactRecord{Title: "Alpha fact", Type: "decision"}}},
-			"beta":  {"kb/bbb.md": {FactRecord: store.FactRecord{Title: "Beta fact", Type: "gotcha"}}},
+		factsByRepo: map[string]map[string]*facts.FactWithBody{
+			"alpha": {"kb/aaa.md": {FactRecord: facts.FactRecord{Title: "Alpha fact", Type: "decision"}}},
+			"beta":  {"kb/bbb.md": {FactRecord: facts.FactRecord{Title: "Beta fact", Type: "gotcha"}}},
 		},
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
@@ -157,15 +157,15 @@ func TestLensTopics_UnionMergedLevel(t *testing.T) {
 func TestLensTopics_SharedLeafDedupsWriteWins(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensTopicsStub{
-		dirsByRepo: map[string][]store.DirEntry{
+		dirsByRepo: map[string][]facts.DirEntry{
 			// beta (read) is fanned out first in binding order, but the write
 			// mount alpha must still win the shared "dup.md".
 			"alpha": {{Name: "dup.md", IsDir: false}},
 			"beta":  {{Name: "dup.md", IsDir: false}, {Name: "beta-only.md", IsDir: false}},
 		},
-		factsByRepo: map[string]map[string]*store.FactWithBody{
-			"alpha": {"kb/dup.md": {FactRecord: store.FactRecord{Title: "Alpha copy", Type: "decision"}}},
-			"beta":  {"kb/dup.md": {FactRecord: store.FactRecord{Title: "Beta copy", Type: "gotcha"}}},
+		factsByRepo: map[string]map[string]*facts.FactWithBody{
+			"alpha": {"kb/dup.md": {FactRecord: facts.FactRecord{Title: "Alpha copy", Type: "decision"}}},
+			"beta":  {"kb/dup.md": {FactRecord: facts.FactRecord{Title: "Beta copy", Type: "gotcha"}}},
 		},
 	}
 	s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
@@ -192,7 +192,7 @@ func TestLensTopics_SharedLeafDedupsWriteWins(t *testing.T) {
 func TestLensTopics_NodePathListsSubdirectory(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensTopicsStub{
-		dirsByRepo: map[string][]store.DirEntry{
+		dirsByRepo: map[string][]facts.DirEntry{
 			"alpha": {{Name: "lens", IsDir: true}},
 			"beta":  {{Name: "lens", IsDir: true}},
 		},
@@ -220,7 +220,7 @@ func TestLensTopics_NodePathListsSubdirectory(t *testing.T) {
 func TestLensTopics_RepoFilterNarrows(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensTopicsStub{
-		dirsByRepo: map[string][]store.DirEntry{
+		dirsByRepo: map[string][]facts.DirEntry{
 			"alpha": {{Name: "a.md", IsDir: false}},
 			"beta":  {{Name: "b.md", IsDir: false}},
 		},
@@ -266,7 +266,7 @@ func TestLensTopics_TopicSkipUnderDeepPath(t *testing.T) {
 		t.Fatalf("create code-preset repo: %v", err)
 	}
 	stub := &lensTopicsStub{
-		dirsByRepo: map[string][]store.DirEntry{
+		dirsByRepo: map[string][]facts.DirEntry{
 			"alpha": {{Name: "x.md", IsDir: false}},
 			"beta":  {{Name: "y.md", IsDir: false}},
 		},
@@ -292,7 +292,7 @@ func TestLensTopics_TopicSkipUnderDeepPath(t *testing.T) {
 func TestLensTopics_MountErrorFailsWholeRequest(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensTopicsStub{
-		dirsByRepo: map[string][]store.DirEntry{
+		dirsByRepo: map[string][]facts.DirEntry{
 			"alpha": {{Name: "a.md", IsDir: false}},
 		},
 		errRepo: "beta",
@@ -334,7 +334,7 @@ func TestLensTopics_EmptyLevel(t *testing.T) {
 func TestLensTopics_HidesPrivateDirectory(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensTopicsStub{
-		dirsByRepo: map[string][]store.DirEntry{
+		dirsByRepo: map[string][]facts.DirEntry{
 			"alpha": {{Name: "gotchas", IsDir: true}, {Name: ".drafts", IsDir: true}},
 			"beta":  {{Name: ".hidden.md", IsDir: false}, {Name: "b.md", IsDir: false}},
 		},

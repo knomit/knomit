@@ -46,6 +46,7 @@ import (
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/testsupport/playbooks"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -289,7 +290,7 @@ func newMissionHost(t *testing.T, edit mutate) (*missionNode, string) {
 		}
 		head, err := h.svc(t).Branches().HeadCommit(context.Background(), h.branch)
 		require.NoError(t, err)
-		got, ok, err := h.svc(t).Triggers().BlobAt(context.Background(), plumbing.NewHash(head), p)
+		got, ok, err := h.svc(t).FactsRepo().BlobAt(context.Background(), plumbing.NewHash(head), p)
 		require.NoError(t, err)
 		require.True(t, ok, "%s must land at its exact path", p)
 		require.Equal(t, want, got, p)
@@ -562,9 +563,9 @@ func requireNoRefusal(t *testing.T, h *missionNode) {
 	require.Positive(t, c.Merges, "H merged what P pushed")
 }
 
-func (n *missionNode) fires(t *testing.T) []store.TriggerFire {
+func (n *missionNode) fires(t *testing.T) []facts.TriggerFire {
 	t.Helper()
-	rows, err := n.svc(t).Triggers().RecentTriggerFires(context.Background(), n.branch, 1000)
+	rows, err := n.svc(t).FactsRepo().RecentTriggerFires(context.Background(), n.branch, 1000)
 	require.NoError(t, err)
 	return rows
 }
@@ -576,8 +577,8 @@ func requireNoFailedFires(t *testing.T, nodes ...*missionNode) {
 	for _, n := range nodes {
 		for _, f := range n.fires(t) {
 			switch f.Outcome {
-			case store.TriggerOutcomeScriptError, store.TriggerOutcomeScriptTimeout, store.TriggerOutcomeRateLimited,
-				store.TriggerOutcomeIfError, store.TriggerOutcomeRecipeError, store.TriggerOutcomeRecipeTimeout:
+			case facts.TriggerOutcomeScriptError, facts.TriggerOutcomeScriptTimeout, facts.TriggerOutcomeRateLimited,
+				facts.TriggerOutcomeIfError, facts.TriggerOutcomeRecipeError, facts.TriggerOutcomeRecipeTimeout:
 				t.Fatalf("%s: trigger %s on %s: %s: %s", n.name, f.Trigger, f.Path, f.Outcome, f.Error)
 			}
 		}

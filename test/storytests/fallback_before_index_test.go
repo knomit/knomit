@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/test/testenv"
 )
 
@@ -22,15 +23,15 @@ import (
 // This is what keeps fallback-before content consistent with /incoming and
 // /outgoing, which resolve the effective commit the same way.
 func TestFallbackBeforeReadsIndex(t *testing.T) {
-	readBefore := func(t *testing.T, b *testenv.BranchHandle, path, before string) (store.ReadFactResult, error) {
+	readBefore := func(t *testing.T, b *testenv.BranchHandle, path, before string) (facts.ReadFactResult, error) {
 		t.Helper()
 		var (
-			res store.ReadFactResult
+			res facts.ReadFactResult
 			err error
 		)
 		b.WithRead(func(svc *store.Service) {
 			res, err = svc.Facts().ReadFact(context.Background(), "main", path,
-				&store.ReadFactOpts{BeforeCommit: before})
+				&facts.ReadFactOpts{BeforeCommit: before})
 		})
 		return res, err
 	}

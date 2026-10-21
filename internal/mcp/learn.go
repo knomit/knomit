@@ -14,6 +14,7 @@ import (
 	"knomit/internal/refs"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/synthesize"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -1050,15 +1051,15 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 
 		// 3. Validate inputs, build paths, and serialize facts.
-		facts, topicCategories, paths, files, err := validateAndBuildFacts(ontology, ontologyRoot, factInputs)
+		parsed, topicCategories, paths, files, err := validateAndBuildFacts(ontology, ontologyRoot, factInputs)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		// Each fact's context as built, before the dedup stage may replace a
 		// fact with the existing one it matched (contextNotAppliedNotes).
-		builtContext := make([]map[string]any, len(facts))
-		for i := range facts {
-			builtContext[i] = facts[i].Context
+		builtContext := make([]map[string]any, len(parsed))
+		for i := range parsed {
+			builtContext[i] = parsed[i].Context
 		}
 
 		// An explicit path is a NAMED SLOT: learn allocates it once, update
@@ -1106,12 +1107,12 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		//
 		// Embedding happens HERE, once, because two stages need the same
 		// vectors: the dedup merge below and the same-subject gate after it.
-		dedupVecs := dedupEmbed(ctx, batchEmb, facts)
+		dedupVecs := dedupEmbed(ctx, batchEmb, parsed)
 		distinctFrom := make([][]string, len(factInputs))
 		for i, in := range factInputs {
 			distinctFrom[i] = in.DistinctFrom
 		}
-		embByPath, retract, priorRefs, touched, uncounted, hypMerged, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
+		embByPath, retract, priorRefs, touched, uncounted, hypMerged, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, parsed, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -1128,11 +1129,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// refused, and BEFORE any write — including before evidence weighting,
 		// since a refused call should pay for nothing. Refusing here costs the
 		// caller one round trip and the corpus nothing.
-		if err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb, retracting); err != nil {
+		if err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, parsed, topicCategories, paths, touched, dedupVecs, batchEmb, retracting); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
-		if err := computeEvidenceWeights(ctx, s, writeBranch, gate.LocalRepoID(), facts, paths, files); err != nil {
+		if err := computeEvidenceWeights(ctx, s, writeBranch, gate.LocalRepoID(), parsed, paths, files); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
@@ -1151,8 +1152,8 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// priorRefs carries the refs a dedup-merged fact inherited from the fact
 		// it merged into: those resolved at their own commit and this write does
 		// not re-judge them.
-		refsByPath := make(map[string][]string, len(facts))
-		for i, f := range facts {
+		refsByPath := make(map[string][]string, len(parsed))
+		for i, f := range parsed {
 			refsByPath[paths[i]] = f.Refs
 		}
 		if err := gate.CheckBatch(ctx, refsByPath, priorRefs); err != nil {
@@ -1162,13 +1163,13 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Qualify local refs AFTER the gate, so a rejection still echoes the ref
 		// exactly as the caller sent it. Bare paths are accepted on input and
 		// stored canonical, which is why an author never needs a repo id.
-		for i, f := range facts {
+		for i, f := range parsed {
 			canon, changed := gate.Canonicalize(f.Refs)
 			if !changed {
 				continue
 			}
-			facts[i].Refs = canon
-			if err := reserialize(files, paths[i], facts[i]); err != nil {
+			parsed[i].Refs = canon
+			if err := reserialize(files, paths[i], parsed[i]); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 		}
@@ -1182,7 +1183,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// index and are not preconditions.
 		operation := "learn"
 		switch {
-		case len(retractPaths) > 0 && len(facts) > 0:
+		case len(retractPaths) > 0 && len(parsed) > 0:
 			operation = "move"
 		case len(retractPaths) > 0:
 			operation = "retract"
@@ -1198,7 +1199,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		} else {
 			hash, _, err = s.facts.BatchWriteFacts(ctx, writeBranch, files, deletes, commitMsg, operation)
 		}
-		var missing *store.RetractMissingError
+		var missing *facts.RetractMissingError
 		if errors.As(err, &missing) {
 			return mcpgo.NewToolResultError(fmt.Sprintf("%v; nothing written", missing)), nil
 		}
@@ -1211,15 +1212,15 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			File string `json:"file"`
 			Hash string `json:"hash"`
 		}
-		commits := make([]commitEntry, len(facts))
-		for i, f := range facts {
+		commits := make([]commitEntry, len(parsed))
+		for i, f := range parsed {
 			commits[i] = commitEntry{File: f.Path(), Hash: hash}
 		}
 
 		dest := describeWriteDestination(b)
-		what := pluralFacts(len(facts))
+		what := pluralFacts(len(parsed))
 		switch {
-		case len(retractPaths) > 0 && len(facts) == 0:
+		case len(retractPaths) > 0 && len(parsed) == 0:
 			what = pluralRetractions(len(retractPaths))
 		case len(retractPaths) > 0:
 			what = fmt.Sprintf("%s and %s", what, pluralRetractions(len(retractPaths)))
@@ -1234,9 +1235,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			result["retracted"] = retractPaths
 			result["commit"] = hash
 		}
-		notes := expiresNotAppliedNotes(factInputs, facts)
-		notes = append(notes, contextNotAppliedNotes(builtContext, facts)...)
-		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, facts)...)
+		notes := expiresNotAppliedNotes(factInputs, parsed)
+		notes = append(notes, contextNotAppliedNotes(builtContext, parsed)...)
+		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, parsed)...)
 		if len(notes) > 0 {
 			result["notes"] = notes
 			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")

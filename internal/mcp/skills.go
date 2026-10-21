@@ -15,6 +15,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // Skills (F08 PR C, user rulings R6/R8/D2) are `.knomit/skills/<name>/SKILL.md`
@@ -112,7 +113,7 @@ func (src *skillSource) load(ctx context.Context, ri *repos.RepoInstance) (*skil
 
 func (src *skillSource) loadFrom(ctx context.Context, repo string, svc *store.Service) (*skillSet, error) {
 	branch := svc.UpstreamBranch()
-	tip, err := svc.Triggers().UpstreamTip(ctx, branch)
+	tip, err := svc.FactsRepo().UpstreamTip(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("skills: read %s of repo %s: %w", branch, repo, err)
 	}
@@ -120,7 +121,7 @@ func (src *skillSource) loadFrom(ctx context.Context, repo string, svc *store.Se
 	if tip.IsZero() {
 		return set, nil
 	}
-	entries, err := svc.Skills().SkillsAt(ctx, tip)
+	entries, err := svc.FactsRepo().SkillsAt(ctx, tip)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +140,7 @@ func (src *skillSource) loadFrom(ctx context.Context, repo string, svc *store.Se
 // per malformed blob. The folder name joins the key because it is part of the
 // check (name must equal folder): the same bytes in another folder can parse
 // differently.
-func (src *skillSource) parse(repo string, e store.SkillEntry) (fact.Skill, error) {
+func (src *skillSource) parse(repo string, e facts.SkillEntry) (fact.Skill, error) {
 	key := e.Dir + "\x00" + e.Blob
 	src.mu.Lock()
 	p, ok := src.parsed[key]
@@ -197,7 +198,7 @@ func (src *skillSource) bundledFiles(ctx context.Context, ri *repos.RepoInstance
 		return nil, nil, errStoreUnavailable
 	}
 	defer release()
-	files, err := svc.Skills().SkillFilesAt(ctx, set.tip, name)
+	files, err := svc.FactsRepo().SkillFilesAt(ctx, set.tip, name)
 	if err != nil {
 		return nil, nil, err
 	}

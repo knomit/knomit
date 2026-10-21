@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/test/testenv"
 )
 
@@ -58,11 +59,11 @@ func TestVerify_DetectsMissingBlob(t *testing.T) {
 	r.Branch("agent/test").Write("kb/x.md", testenv.Fact("x"), "add x")
 
 	// Look up the blob hash via the production read-with-hash API.
-	var res store.ReadFactResult
+	var res facts.ReadFactResult
 	var err error
 	r.Instance().WithRead(func(svc *store.Service) {
 		res, err = svc.Facts().ReadFact(context.Background(), "agent/test", "kb/x.md",
-			&store.ReadFactOpts{WithHash: true})
+			&facts.ReadFactOpts{WithHash: true})
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, res.BlobHash)

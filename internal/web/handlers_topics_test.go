@@ -10,22 +10,23 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
 // stubTopicLister implements TopicLister for tests.
 type stubTopicLister struct {
-	dirs    []store.DirEntry
+	dirs    []facts.DirEntry
 	listErr error
-	byPath  map[string]*store.FactWithBody
+	byPath  map[string]*facts.FactWithBody
 	getErr  error
 }
 
-func (s *stubTopicLister) ListDir(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]store.DirEntry, error) {
+func (s *stubTopicLister) ListDir(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]facts.DirEntry, error) {
 	return s.dirs, s.listErr
 }
 
-func (s *stubTopicLister) GetByPath(_ context.Context, _ *repos.RepoInstance, _, path string) (*store.FactWithBody, error) {
+func (s *stubTopicLister) GetByPath(_ context.Context, _ *repos.RepoInstance, _, path string) (*facts.FactWithBody, error) {
 	if s.byPath != nil {
 		if fb, ok := s.byPath[path]; ok {
 			return fb, nil
@@ -36,13 +37,13 @@ func (s *stubTopicLister) GetByPath(_ context.Context, _ *repos.RepoInstance, _,
 
 func TestHandleTopics_ReturnsCollection(t *testing.T) {
 	lister := &stubTopicLister{
-		dirs: []store.DirEntry{
+		dirs: []facts.DirEntry{
 			{Name: "ai", IsDir: true},
 			{Name: "intro.md", IsDir: false},
 		},
-		byPath: map[string]*store.FactWithBody{
+		byPath: map[string]*facts.FactWithBody{
 			"ontology/intro.md": {
-				FactRecord: store.FactRecord{
+				FactRecord: facts.FactRecord{
 					Title: "Introduction",
 					Type:  "observation",
 				},
@@ -125,13 +126,13 @@ func TestHandleTopics_ReturnsCollection(t *testing.T) {
 
 func TestHandleTopicNode_ReturnsChildren(t *testing.T) {
 	lister := &stubTopicLister{
-		dirs: []store.DirEntry{
+		dirs: []facts.DirEntry{
 			{Name: "ml", IsDir: true},
 			{Name: "overview.md", IsDir: false},
 		},
-		byPath: map[string]*store.FactWithBody{
+		byPath: map[string]*facts.FactWithBody{
 			"ontology/ai/overview.md": {
-				FactRecord: store.FactRecord{
+				FactRecord: facts.FactRecord{
 					Title: "AI Overview",
 					Type:  "claim",
 				},
@@ -207,7 +208,7 @@ func TestHandleTopicNode_ReturnsChildren(t *testing.T) {
 // ".drafts" as an ordinary topic.
 func TestHandleTopics_HidesPrivateDirectory(t *testing.T) {
 	lister := &stubTopicLister{
-		dirs: []store.DirEntry{
+		dirs: []facts.DirEntry{
 			{Name: "ai", IsDir: true},
 			{Name: ".drafts", IsDir: true},
 		},

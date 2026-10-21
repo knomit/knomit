@@ -14,6 +14,7 @@ import (
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // TestScript_RealToolsEndToEnd [T4, the real wiring]: a Manager built the way
@@ -58,7 +59,7 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 		if err != nil || h == firing.CommitHash {
 			return false
 		}
-		info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(h))
+		info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(h))
 		if err != nil || !strings.Contains(info.Message, "Knomit-Trigger: t1") {
 			return false
 		}
@@ -66,15 +67,15 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 		return true
 	}, 20*time.Second, 25*time.Millisecond, "the script's commit never landed")
 
-	info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(scriptCommit))
+	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(scriptCommit))
 	require.NoError(t, err)
 	want := "learn: trigger:t1\n\nKnomit-Trace: " + firing.CommitHash + "\nKnomit-Cause: " + firing.CommitHash + "\nKnomit-Trigger: t1\n"
 	require.Equal(t, want, info.Message, "the real learn handler's commit carries the paragraph the store stamps")
 	require.Equal(t, "test", info.AuthorName, "authored as this machine's agent branch")
 	require.Equal(t, []plumbing.Hash{plumbing.NewHash(firing.CommitHash)}, info.Parents, "on the agent branch, right after the firing commit")
-	signer, err := svc.Triggers().CommitSignerOf(ctx, plumbing.NewHash(scriptCommit))
+	signer, err := svc.FactsRepo().CommitSignerOf(ctx, plumbing.NewHash(scriptCommit))
 	require.NoError(t, err)
-	require.Equal(t, svc.SignerFingerprint(), signer.Fingerprint, "signed by this store's key")
+	require.Equal(t, svc.FactsRepo().SignerFingerprint(), signer.Fingerprint, "signed by this store's key")
 	require.Equal(t, firing.CommitHash, store.TrailerValue(info.Message, store.TrailerCause))
 
 	paths, err := svc.Facts().ListAll(ctx, branch)
@@ -133,7 +134,7 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 			if err != nil || h == firing {
 				return false
 			}
-			info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(h))
+			info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(h))
 			if err != nil || !strings.Contains(info.Message, "Knomit-Trigger: "+trigger) {
 				return false
 			}
@@ -143,10 +144,10 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 		return got
 	}
 	diffOf := func(h string) map[string]string {
-		info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(h))
+		info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(h))
 		require.NoError(t, err)
 		require.Len(t, info.Parents, 1)
-		rows, err := svc.Triggers().DiffFacts(ctx, info.Parents[0], plumbing.NewHash(h))
+		rows, err := svc.DiffFacts(ctx, info.Parents[0], plumbing.NewHash(h))
 		require.NoError(t, err)
 		out := map[string]string{}
 		for _, r := range rows {
@@ -159,7 +160,7 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 	firing, err := svc.Facts().WriteFact(ctx, branch, "kb/tasks/in/a.md", body, "learn: a", "learn")
 	require.NoError(t, err)
 	move := waitTrigger(firing.CommitHash, "take")
-	info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(move))
+	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(move))
 	require.NoError(t, err)
 	require.Equal(t, "move: trigger:take\n\nKnomit-Trace: "+firing.CommitHash+"\nKnomit-Cause: "+firing.CommitHash+"\nKnomit-Trigger: take\n", info.Message)
 	require.Contains(t, info.AuthorEmail, "+move@agents.knomit.io")
@@ -177,7 +178,7 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 	firing2, err := svc.Facts().WriteFact(ctx, branch, "kb/tasks/drop/b.md", body, "learn: b", "learn")
 	require.NoError(t, err)
 	drop := waitTrigger(firing2.CommitHash, "drop")
-	info, err = svc.Triggers().CommitInfo(ctx, plumbing.NewHash(drop))
+	info, err = svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(drop))
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(info.Message, "retract: trigger:drop\n"), info.Message)
 	require.Equal(t, map[string]string{"kb/tasks/drop/b.md": "deleted"}, diffOf(drop))
@@ -253,9 +254,9 @@ func TestScript_ArtifactsLandThroughRealTools(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/tasks/in/a.md", body, "learn: a", "learn")
 	require.NoError(t, err)
 
-	var t1 store.TriggerFire
+	var t1 facts.TriggerFire
 	require.Eventually(t, func() bool {
-		rows, err := svc.Triggers().RecentTriggerFires(ctx, branch, 100)
+		rows, err := svc.FactsRepo().RecentTriggerFires(ctx, branch, 100)
 		require.NoError(t, err)
 		for _, r := range rows {
 			if r.Trigger == "t1" && r.Path == "kb/tasks/in/a.md" && r.Outcome != "" {
@@ -265,7 +266,7 @@ func TestScript_ArtifactsLandThroughRealTools(t *testing.T) {
 		}
 		return false
 	}, 20*time.Second, 25*time.Millisecond, "t1 never recorded an outcome")
-	require.Equal(t, store.TriggerOutcomeRan, t1.Outcome, "the whole sequence ran without a refusal: %s", t1.Error)
+	require.Equal(t, facts.TriggerOutcomeRan, t1.Outcome, "the whole sequence ran without a refusal: %s", t1.Error)
 
 	// Positive control + settle point: written AFTER the script's commits, on
 	// the ontology root's own "artifacts" topic, where `watch` really can see
@@ -275,7 +276,7 @@ func TestScript_ArtifactsLandThroughRealTools(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/artifacts/ctl.md", body, "learn: ctl", "learn")
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		rows, err := svc.Triggers().RecentTriggerFires(ctx, branch, 100)
+		rows, err := svc.FactsRepo().RecentTriggerFires(ctx, branch, 100)
 		require.NoError(t, err)
 		for _, r := range rows {
 			if r.Trigger == "watch" && r.Path == "kb/artifacts/ctl.md" && r.Outcome != "" {
@@ -285,7 +286,7 @@ func TestScript_ArtifactsLandThroughRealTools(t *testing.T) {
 		return false
 	}, 20*time.Second, 25*time.Millisecond, "watch never fired on the positive control kb/artifacts/ctl.md — the match pattern itself may be broken")
 
-	rows, err := svc.Triggers().RecentTriggerFires(ctx, branch, 100)
+	rows, err := svc.FactsRepo().RecentTriggerFires(ctx, branch, 100)
 	require.NoError(t, err)
 	var t1Count, watchCount int
 	for _, r := range rows {

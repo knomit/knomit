@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/facts"
 )
 
 // A root file's name is chosen for an EXTERNAL reader — git providers look for
@@ -78,14 +80,14 @@ func TestWriteFactIfUnchanged_RefusesStaleBlob(t *testing.T) {
 
 	_, err = fi.WriteFact(ctx, "main", path, "v1", "v1", "update")
 	require.NoError(t, err)
-	read, err := fi.ReadFact(ctx, "main", path, &ReadFactOpts{WithHash: true})
+	read, err := fi.ReadFact(ctx, "main", path, &facts.ReadFactOpts{WithHash: true})
 	require.NoError(t, err)
 
 	_, err = fi.WriteFactIfUnchanged(ctx, "main", path, "v2", "v2", "update", read.BlobHash)
 	require.NoError(t, err, "the blob is still the one read: the write proceeds")
 
 	_, err = fi.WriteFactIfUnchanged(ctx, "main", path, "v3", "v3", "update", read.BlobHash)
-	require.ErrorIs(t, err, ErrFactChanged, "the blob moved on: the stale writer is refused")
+	require.ErrorIs(t, err, facts.ErrFactChanged, "the blob moved on: the stale writer is refused")
 
 	now, err := fi.ReadFact(ctx, "main", path, nil)
 	require.NoError(t, err)

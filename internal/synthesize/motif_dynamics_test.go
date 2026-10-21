@@ -171,7 +171,7 @@ func TestMotifDynamics_ReviewMergePreservesLoserMotifs(t *testing.T) {
 	}
 
 	// threshold 0 so the pair merges on the deterministic embedder's similarity.
-	out, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.Search(), 0,
+	out, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(), 0,
 		"test", func(ProgressEvent) {}, env.branch, bareRefFixture)
 	require.NoError(t, err)
 	require.Len(t, out, 1, "the fixture must actually have merged, or this proves nothing")
@@ -224,7 +224,7 @@ func TestMotifDynamics_ReviewMergeTrimsToTheCapWinnerFirst(t *testing.T) {
 			Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
 	}
 
-	out, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.Search(), 0,
+	out, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(), 0,
 		"test", func(ProgressEvent) {}, env.branch, bareRefFixture)
 	require.NoError(t, err)
 	require.Len(t, out, 1, "the fixture must actually have merged, or this proves nothing")

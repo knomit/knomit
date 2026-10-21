@@ -24,6 +24,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	"github.com/rs/zerolog/log"
 )
@@ -174,7 +175,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	t = time.Now()
 	dedupThreshold := store.EmbedderThresholds(d.RI.Embedder()).Dedup
 	for i := range clusters {
-		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Search, dedupThreshold, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()))
+		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Files, d.Search, dedupThreshold, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()))
 		if err != nil {
 			return wrapf(reviewTool, err, "dedup cluster %d", i)
 		}
@@ -934,7 +935,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 
 	switch item.StepType {
 	case "reflect":
-		if err := ApplyReflectDecisions(ctx, d.Facts, d.Search, *dec.reflect, sess, fact.ID12(d.RI.ID()),
+		if err := ApplyReflectDecisions(ctx, d.Facts, d.Files, d.Search, *dec.reflect, sess, fact.ID12(d.RI.ID()),
 			d.RI.OntologyRoot(), reflectNoveltyThreshold(store.EmbedderThresholds(d.RI.Embedder()).ReflectNovelty), d.OnProgress); err != nil {
 			return wrapf(reviewTool, err, "apply reflect")
 		}
@@ -946,7 +947,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		// Returns nil for ordinary cluster items.
 		judged := resolveShortlistPair(ctx, d, sess, item)
 
-		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.RI.Ontology())
+		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Files, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.RI.Ontology())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply prune")
 		}
@@ -995,7 +996,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		}
 
 	case "distill":
-		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Search, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
+		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Files, d.Search, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply distill")
 		}
@@ -1322,7 +1323,7 @@ func findHypothesisTransitions(ctx context.Context, d Deps, sess *store.Pipeline
 
 	// Check deleted paths — were any hypotheses retracted?
 	for _, path := range deleted {
-		readResult, err := gs.ReadFact(ctx, branch, path, &store.ReadFactOpts{AtCommit: watermark})
+		readResult, err := gs.ReadFact(ctx, branch, path, &facts.ReadFactOpts{AtCommit: watermark})
 		if err != nil {
 			continue
 		}
@@ -1339,7 +1340,7 @@ func findHypothesisTransitions(ctx context.Context, d Deps, sess *store.Pipeline
 
 	// Check modified paths — did any hypothesis change confidence or type?
 	for _, path := range modified {
-		oldResult, err := gs.ReadFact(ctx, branch, path, &store.ReadFactOpts{AtCommit: watermark})
+		oldResult, err := gs.ReadFact(ctx, branch, path, &facts.ReadFactOpts{AtCommit: watermark})
 		if err != nil {
 			continue
 		}

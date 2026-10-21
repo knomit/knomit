@@ -25,7 +25,7 @@ import (
 //	snap := r.Branch("agent/test").Write("kb/x.md", Fact("x"), "add x")
 //	// resolve the blob hash, then delete it
 //	res, _ := r.Instance().Facts().ReadFact(ctx, "agent/test", "kb/x.md",
-//	    &store.ReadFactOpts{WithHash: true})
+//	    &facts.ReadFactOpts{WithHash: true})
 //	r.CorruptObject(res.BlobHash)
 //	r.ExpectDirty()
 //	rep := r.VerifyWith(store.VerifyOpts{})

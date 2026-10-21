@@ -12,6 +12,7 @@ package synthesize
 import (
 	context "context"
 	store "knomit/internal/store"
+	"knomit/internal/store/facts"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -162,10 +163,10 @@ func (mr *MockSearchIndexMockRecorder) FactsIter(ctx, branch any) *gomock.Call {
 }
 
 // GetByPath mocks base method.
-func (m *MockSearchIndex) GetByPath(ctx context.Context, branch, path string) (*store.FactWithBody, error) {
+func (m *MockSearchIndex) GetByPath(ctx context.Context, branch, path string) (*facts.FactWithBody, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetByPath", ctx, branch, path)
-	ret0, _ := ret[0].(*store.FactWithBody)
+	ret0, _ := ret[0].(*facts.FactWithBody)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

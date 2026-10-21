@@ -42,6 +42,7 @@ import (
 	"knomit/internal/refs"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // Normalize validates every {body} resolution and rewrites it to the bytes
@@ -196,7 +197,7 @@ func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 		}
 		type version struct {
 			branch string
-			opts   *store.ReadFactOpts
+			opts   *facts.ReadFactOpts
 		}
 		var versions []version
 		if name, ok := strings.CutPrefix(experiment, store.ExperimentPrefix); ok {
@@ -206,7 +207,7 @@ func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 				return
 			}
 			if found && exp.ForkCommit != "" {
-				versions = append(versions, version{parent, &store.ReadFactOpts{AtCommit: exp.ForkCommit}})
+				versions = append(versions, version{parent, &facts.ReadFactOpts{AtCommit: exp.ForkCommit}})
 			}
 		}
 		for _, branch := range slices.Compact([]string{parent, experiment}) {
@@ -282,7 +283,7 @@ func resolveGate(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 				if branch == "" {
 					continue
 				}
-				ok, qerr := refs.FromSystemFiles(svc.SystemFiles(), branch)(ctx, p)
+				ok, qerr := refs.FromSystemFiles(svc.FactsRepo(), branch)(ctx, p)
 				if qerr != nil {
 					err = qerr
 					return

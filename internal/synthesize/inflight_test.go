@@ -188,20 +188,6 @@ func TestInFlightRefresh_UntouchedItemsKeepTheirExactPayload(t *testing.T) {
 		"an item naming no retired fact must be left exactly as planned")
 }
 
-// failingDelete wraps a FactIndex and refuses to delete one path, so a test can
-// drive the case where the corpus did NOT actually lose the fact.
-type failingDelete struct {
-	store.FactIndex
-	refuse string
-}
-
-func (f failingDelete) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
-	if path == f.refuse {
-		return "", fmt.Errorf("simulated delete failure for %s", path)
-	}
-	return f.FactIndex.DeleteFact(ctx, branch, path, message)
-}
-
 // TestApplyPrune_RetiredNamesOnlyFactsThatActuallyLeft — ReviewStats.Retired
 // drives a refresh that STRIPS facts from queued items, so a path reported as
 // retired when its delete failed would remove a live fact from the judge's
@@ -214,8 +200,14 @@ func TestApplyPrune_RetiredNamesOnlyFactsThatActuallyLeft(t *testing.T) {
 	env.writeFact("kb/goes.md", "Goes", "deleted for real")
 
 	d := env.deps()
-	gs := failingDelete{FactIndex: env.svc.Facts(), refuse: "kb/keep-me.md"}
-	stats, err := ApplyPruneDecisions(ctx, gs, env.svc.Search(),
+	// Refuse one path's delete so the corpus does NOT actually lose that fact.
+	defer env.svc.Facts().SetDeleteFaultForTest(func(path string) error {
+		if path == "kb/keep-me.md" {
+			return fmt.Errorf("simulated delete failure for %s", path)
+		}
+		return nil
+	})()
+	stats, err := ApplyPruneDecisions(ctx, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 		[]PruneDecision{{Path: "kb/keep-me.md", Action: "retract"}, {Path: "kb/goes.md", Action: "retract"}},
 		nil, reviewTool, d.OnProgress, env.branch, "", "kb", nil)
 	require.NoError(t, err)
@@ -380,7 +372,7 @@ func TestApplyPrune_RewrittenExcludesPathsTheSameApplyRetired(t *testing.T) {
 		"type":"observation","domain":["security"],"confidence":0.9,"sources":2,
 		"entities":["SmartConsole"],"refs":[]}`, mergedPath)), &merged))
 
-	stats, err := ApplyPruneDecisions(ctx, env.svc.Facts(), env.svc.Search(),
+	stats, err := ApplyPruneDecisions(ctx, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
 		// Raise dup-a's confidence, then merge it away in the same response.
 		[]PruneDecision{{Path: dupAPath, Action: "update", Confidence: 0.42}},
 		[]MergeEntry{{Paths: []string{dupAPath, dupBPath}, Merged: merged}},

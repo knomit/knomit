@@ -68,14 +68,14 @@ var readablePaths = []string{
 func TestValidatePath_FollowsGoGitReadBackRule(t *testing.T) {
 	for name, p := range unreadablePaths {
 		err := facts.ValidatePath(p)
-		require.ErrorIs(t, err, ErrInvalidPath, name)
-		require.True(t, IsInvalidPath(err), name)
+		require.ErrorIs(t, err, facts.ErrInvalidPath, name)
+		require.True(t, facts.IsInvalidPath(err), name)
 	}
 	for _, p := range readablePaths {
 		require.NoError(t, facts.ValidatePath(p), p)
 	}
-	require.ErrorIs(t, facts.ValidatePath(""), ErrInvalidPath)
-	require.ErrorIs(t, facts.ValidatePath("kb/a/../b.md"), ErrInvalidPath)
+	require.ErrorIs(t, facts.ValidatePath(""), facts.ErrInvalidPath)
+	require.ErrorIs(t, facts.ValidatePath("kb/a/../b.md"), facts.ErrInvalidPath)
 }
 
 func TestWriteFact_RefusesUnreadablePath(t *testing.T) {
@@ -88,7 +88,7 @@ func TestWriteFact_RefusesUnreadablePath(t *testing.T) {
 			_, err := svc.Facts().WriteFact(ctx, "main", path, "body", "learn: m", "learn")
 			require.Error(t, err)
 			require.Equal(t, before, headOfBranch(t, svc, "main"), "a refused write must not move the ref")
-			require.ErrorIs(t, err, ErrInvalidPath)
+			require.ErrorIs(t, err, facts.ErrInvalidPath)
 
 			// The branch is not poisoned: the next valid write commits AND syncs.
 			_, err = svc.Facts().WriteFact(ctx, "main", "kb/architecture/ok/y.md",
@@ -102,7 +102,7 @@ func TestWriteFact_RefusesUnreadablePath(t *testing.T) {
 func TestWriteFact_InvalidPathErrorQuotesThePath(t *testing.T) {
 	svc := newInvalidPathTestStore(t)
 	_, err := svc.Facts().WriteFact(context.Background(), "main", "kb/architecture/a\nb/x.md", "body", "m", "learn")
-	require.ErrorIs(t, err, ErrInvalidPath)
+	require.ErrorIs(t, err, facts.ErrInvalidPath)
 	require.Contains(t, err.Error(), `invalid path "kb/architecture/a\nb/x.md": `)
 	require.NotContains(t, err.Error(), "a\nb", "the raw line feed must not reach the message")
 }
@@ -112,7 +112,7 @@ func TestWriteFactIfUnchanged_RefusesUnreadablePath(t *testing.T) {
 	before := headOfBranch(t, svc, "main")
 	_, err := svc.Facts().WriteFactIfUnchanged(context.Background(), "main",
 		".knomit/jobs/a\nb/x.md", "v", "update", "update", "deadbeef")
-	require.ErrorIs(t, err, ErrInvalidPath)
+	require.ErrorIs(t, err, facts.ErrInvalidPath)
 	require.Equal(t, before, headOfBranch(t, svc, "main"))
 }
 
@@ -130,14 +130,14 @@ func TestBatchWriteFacts_RefusesUnreadablePath(t *testing.T) {
 			}, nil, "learn: m", "learn")
 			require.Error(t, err)
 			require.Equal(t, before, headOfBranch(t, svc, "main"), "a refused batch must not move the ref")
-			require.ErrorIs(t, err, ErrInvalidPath)
+			require.ErrorIs(t, err, facts.ErrInvalidPath)
 
 			_, _, err = svc.Facts().BatchWriteFacts(ctx, "main", nil, []string{bad}, "retract: m", "retract")
-			require.ErrorIs(t, err, ErrInvalidPath)
+			require.ErrorIs(t, err, facts.ErrInvalidPath)
 			require.Equal(t, before, headOfBranch(t, svc, "main"))
 
 			_, err = svc.Facts().DeleteFact(ctx, "main", bad, "retract: m")
-			require.ErrorIs(t, err, ErrInvalidPath)
+			require.ErrorIs(t, err, facts.ErrInvalidPath)
 			require.Equal(t, before, headOfBranch(t, svc, "main"))
 		})
 	}
@@ -168,11 +168,11 @@ func TestWriteFact_RefusesBackslashOnlyName(t *testing.T) {
 	ctx := context.Background()
 	before := headOfBranch(t, svc, "main")
 	_, err := svc.Facts().WriteFact(ctx, "main", path, "body", "learn: m", "learn")
-	require.ErrorIs(t, err, ErrInvalidPath)
+	require.ErrorIs(t, err, facts.ErrInvalidPath)
 	require.Equal(t, before, headOfBranch(t, svc, "main"), "a refused write must not move the ref")
 
 	_, _, err = svc.Facts().BatchWriteFacts(ctx, "main", map[string]string{path: "body"}, nil, "learn: m", "learn")
-	require.ErrorIs(t, err, ErrInvalidPath)
+	require.ErrorIs(t, err, facts.ErrInvalidPath)
 	require.Equal(t, before, headOfBranch(t, svc, "main"))
 }
 
@@ -188,7 +188,7 @@ func TestWriteFact_EmptySegmentRefusedBeforeRefMoves(t *testing.T) {
 			before := headOfBranch(t, svc, "main")
 			_, err := svc.Facts().WriteFact(context.Background(), "main", path, "body", "m", "learn")
 			require.Error(t, err)
-			require.NotErrorIs(t, err, ErrInvalidPath)
+			require.NotErrorIs(t, err, facts.ErrInvalidPath)
 			require.Equal(t, before, headOfBranch(t, svc, "main"))
 		})
 	}

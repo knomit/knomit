@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // TestTopicBrowsersSkipPrivateNamespace pins the same rule
@@ -25,7 +25,7 @@ func TestTopicBrowsersSkipPrivateNamespace(t *testing.T) {
 	// TestHandleTopicFacts_HidesPrivateTopic pins for .drafts).
 	t.Run("repo topic facts under .knomit", func(t *testing.T) {
 		lister := &stubTopicLister{
-			dirs: []store.DirEntry{{Name: "x.md", IsDir: false}},
+			dirs: []facts.DirEntry{{Name: "x.md", IsDir: false}},
 		}
 		s := &Server{
 			Manager:      newTestManagerWithRepos(t, "alpha"),
@@ -57,7 +57,7 @@ func TestTopicBrowsersSkipPrivateNamespace(t *testing.T) {
 	// already carries the private segment, exactly the .knomit/jobs shape.
 	t.Run("repo topic node under .knomit", func(t *testing.T) {
 		lister := &stubTopicLister{
-			dirs: []store.DirEntry{{Name: "jobs", IsDir: true}},
+			dirs: []facts.DirEntry{{Name: "jobs", IsDir: true}},
 		}
 		s := &Server{
 			Manager:      newTestManagerWithRepos(t, "alpha"),
@@ -100,7 +100,7 @@ func TestTopicBrowsersSkipPrivateNamespace(t *testing.T) {
 	t.Run("lens topic browser under .knomit", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
 		stub := &lensTopicsStub{
-			dirsByRepo: map[string][]store.DirEntry{
+			dirsByRepo: map[string][]facts.DirEntry{
 				"alpha": {{Name: "gotchas", IsDir: true}, {Name: ".knomit", IsDir: true}},
 			},
 		}

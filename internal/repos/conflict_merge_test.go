@@ -15,6 +15,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 const sharedPath = "kb/tasks/shared.md"
@@ -45,12 +46,12 @@ func cmDelete(t *testing.T, ri *RepoInstance, branch string) {
 	require.NoError(t, err)
 }
 
-func headCommit(t *testing.T, ri *RepoInstance, branch string) store.CommitInfo {
+func headCommit(t *testing.T, ri *RepoInstance, branch string) facts.CommitInfo {
 	t.Helper()
 	svc := testService(t, ri)
 	h, err := svc.Branches().HeadCommit(context.Background(), branch)
 	require.NoError(t, err)
-	c, err := svc.Triggers().CommitInfo(context.Background(), plumbing.NewHash(h))
+	c, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(h))
 	require.NoError(t, err)
 	return c
 }
@@ -58,7 +59,7 @@ func headCommit(t *testing.T, ri *RepoInstance, branch string) store.CommitInfo 
 // hasAt reports whether path exists at commit in ri's store.
 func hasAt(t *testing.T, ri *RepoInstance, branch string, commit plumbing.Hash, path string) bool {
 	t.Helper()
-	_, err := testService(t, ri).Facts().ReadFact(context.Background(), branch, path, &store.ReadFactOpts{AtCommit: commit.String()})
+	_, err := testService(t, ri).Facts().ReadFact(context.Background(), branch, path, &facts.ReadFactOpts{AtCommit: commit.String()})
 	return err == nil
 }
 

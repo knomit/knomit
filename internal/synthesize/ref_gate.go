@@ -3,6 +3,7 @@ package synthesize
 import (
 	"knomit/internal/refs"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // writeGate is the ONE constructor of the ref gate every synthesize write goes
@@ -11,7 +12,7 @@ import (
 // .knomit/ file with files, both at the tip of branch — the branch the write
 // lands on, the session's own (invariants/synthesize/session-branch-binding).
 //
-// files is the FactIndex the caller writes through: Pipeline.storeIndices
+// files is the facts.Repo of the Service the caller writes through: Pipeline.storeIndices
 // resolves it in the same read lock as idx, so the two resolvers never come
 // from two different Services. A nil files (fixtures with no git store) leaves
 // the gate without a file resolver, which REFUSES a new .knomit/ ref rather
@@ -22,7 +23,7 @@ import (
 // or carry refs as prior; they use this constructor anyway so that no gate in
 // this package is built without the file resolver.
 // TestSynthesize_OneRefGateConstructor keeps it that way.
-func writeGate(localRepoID string, idx store.FactQuery, files store.SystemFileIndex, branch string) refs.Gate {
+func writeGate(localRepoID string, idx store.FactQuery, files *facts.Repo, branch string) refs.Gate {
 	g := refs.New(localRepoID, refs.FromFactQuery(idx, branch))
 	if files != nil {
 		g = g.WithFiles(refs.FromSystemFiles(files, branch))

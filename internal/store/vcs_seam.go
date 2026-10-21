@@ -28,9 +28,14 @@ import (
 //
 // The names callers outside store use are re-exported below unchanged, so
 // the public surface of package store does not move.
+// factsRepo is the embedded facts.Repo; the alias gives the embedded field a
+// name that does not collide with the embedded *vcs.Repo's `Repo`. Unexported
+// parent naming, not a re-export; E7 replaces the embed with a named field.
+type factsRepo = facts.Repo
+
 type repoHandler struct {
 	*vcs.Repo
-	*factsRepo // the facts child's methods on the same handle; see facts_seam.go
+	*factsRepo // the facts child's methods on the same handle; see the factsRepo alias above
 	*mergeRepo // the merge child's methods on the same handle; see merge_seam.go
 	*syncRepo  // the remotesync child's methods on the same handle; see remotesync_seam.go
 }

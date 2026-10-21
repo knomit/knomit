@@ -14,24 +14,11 @@ import (
 	"knomit/internal/fact"
 )
 
-// SkillIndex reads skills (fact.SkillsDir) out of one commit's own tree. The
-// caller chooses the commit: the MCP layer passes the tip of the consensus
-// branch (UpstreamTip(UpstreamBranch()), ruling D2), never the agent branch.
-// The rules are privateFileAt's: absent is empty, never an error; a path that
+// Skills are read out of ONE commit's own tree (fact.SkillsDir). The caller
+// chooses the commit: the MCP layer passes the tip of the consensus branch
+// (UpstreamTip(UpstreamBranch()), ruling D2), never the agent branch. The
+// rules are privateFileAt's: absent is empty, never an error; a path that
 // exists but cannot be read IS an error.
-type SkillIndex interface {
-	// SkillsAt lists every folder under fact.SkillsDir that holds a
-	// SKILL.md file, sorted by folder name, with that file's blob hash and
-	// content. A folder without one is not a skill and is not listed; a
-	// symlinked SKILL.md is not one (never followed, isSystemFileMode). No
-	// skills folder at all is an empty list.
-	SkillsAt(ctx context.Context, commit plumbing.Hash) ([]SkillEntry, error)
-	// SkillFilesAt lists skill name's bundled files — every file under its
-	// folder, recursively, except the top-level SKILL.md and any symlink —
-	// sorted by path.
-	// Contents are read only when asked for.
-	SkillFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]SkillBundledFile, error)
-}
 
 // SkillEntry is one skill folder's SKILL.md at a commit.
 type SkillEntry struct {
@@ -107,7 +94,11 @@ func skillFileEntry(sub *object.Tree) *object.TreeEntry {
 	return folded
 }
 
-// SkillsAt implements SkillIndex.
+// SkillsAt lists every folder under fact.SkillsDir that holds a
+// SKILL.md file, sorted by folder name, with that file's blob hash and
+// content. A folder without one is not a skill and is not listed; a
+// symlinked SKILL.md is not one (never followed, isSystemFileMode). No
+// skills folder at all is an empty list.
 func (rh *Repo) SkillsAt(ctx context.Context, commit plumbing.Hash) ([]SkillEntry, error) {
 	t, err := rh.skillsTree(commit)
 	if err != nil || t == nil {
@@ -140,7 +131,10 @@ func (rh *Repo) SkillsAt(ctx context.Context, commit plumbing.Hash) ([]SkillEntr
 	return out, nil
 }
 
-// SkillFilesAt implements SkillIndex.
+// SkillFilesAt lists skill name's bundled files — every file under its
+// folder, recursively, except the top-level SKILL.md and any symlink —
+// sorted by path.
+// Contents are read only when asked for.
 func (rh *Repo) SkillFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]SkillBundledFile, error) {
 	if !fact.ValidSkillName(name) {
 		return nil, fmt.Errorf("skills: invalid skill name %q", name)

@@ -15,6 +15,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // triggersRepo boots a real manager with one repo whose agent branch carries
@@ -66,7 +67,7 @@ type triggersPage struct {
 	Head     string                    `json:"head"`
 	Runs     repos.TriggerRunStats     `json:"runs"`
 	Triggers []repos.TriggerView       `json:"triggers"`
-	Fires    []store.TriggerFire       `json:"fires"`
+	Fires    []facts.TriggerFire       `json:"fires"`
 	Links    map[string]map[string]any `json:"_links"`
 }
 
@@ -128,15 +129,15 @@ func TestREST_TriggersExposed(t *testing.T) {
 	kinds := map[string]int{}
 	for _, f := range page.Fires {
 		kinds[f.Outcome]++
-		if f.Outcome == store.TriggerOutcomeEmitted {
+		if f.Outcome == facts.TriggerOutcomeEmitted {
 			require.Equal(t, "kb/tasks/a/fire.md", f.Path)
 			require.Equal(t, "learn", f.Episode)
 			require.Equal(t, "local", f.Source)
 			require.Equal(t, head, f.Commit)
 		}
 	}
-	require.Equal(t, 1, kinds[store.TriggerOutcomeEmitted])
-	require.GreaterOrEqual(t, kinds[store.TriggerOutcomeRun], 1)
+	require.Equal(t, 1, kinds[facts.TriggerOutcomeEmitted])
+	require.GreaterOrEqual(t, kinds[facts.TriggerOutcomeRun], 1)
 	require.Contains(t, page.Links["self"]["href"], "/triggers")
 	require.Contains(t, page.Links["events"]["href"], "/events")
 
@@ -249,10 +250,10 @@ func TestREST_TriggersByRun(t *testing.T) {
 		ids = ids[:0]
 		done := 0
 		for _, f := range p.Fires {
-			if f.Trigger == "work" && f.Outcome == store.TriggerOutcomeStarted {
+			if f.Trigger == "work" && f.Outcome == facts.TriggerOutcomeStarted {
 				ids = append(ids, f.RunID)
 			}
-			if f.Trigger == "work" && f.Outcome == store.TriggerOutcomeDone {
+			if f.Trigger == "work" && f.Outcome == facts.TriggerOutcomeDone {
 				done++
 			}
 		}
@@ -265,15 +266,15 @@ func TestREST_TriggersByRun(t *testing.T) {
 	rec, page := getTriggers(t, r, base+"?log=50&run="+id)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Len(t, page.Fires, 2, "exactly this run's two rows: %+v", page.Fires)
-	require.Equal(t, store.TriggerOutcomeStarted, page.Fires[0].Outcome)
-	require.Equal(t, store.TriggerOutcomeDone, page.Fires[1].Outcome)
+	require.Equal(t, facts.TriggerOutcomeStarted, page.Fires[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeDone, page.Fires[1].Outcome)
 	require.Equal(t, "ran "+id, page.Fires[1].Message, "the recipe saw run.id; a done row's text is a message")
 	require.Empty(t, page.Fires[1].Error, "F5: a done row carries no error")
 	for _, f := range page.Fires {
 		require.Equal(t, id, f.RunID, "never the other run's rows")
 		require.Equal(t, "work", f.Trigger)
 		require.Equal(t, page.Fires[0].Trace, f.Trace)
-		require.Equal(t, store.RecipeSourceLocal, f.RecipeSource)
+		require.Equal(t, facts.RecipeSourceLocal, f.RecipeSource)
 	}
 	// ONLY the run's rows (F5): no declared triggers, statistics, run
 	// summary, head or ontology blob — the whole trigger state is not sent.

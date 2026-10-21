@@ -213,7 +213,7 @@ func TestCreateFromTemplate_CopiesTreeSignedWithTrailers(t *testing.T) {
 	srcID := src.ID()
 	srcSvc, release, err := src.Acquire()
 	require.NoError(t, err)
-	srcTip, err := srcSvc.Triggers().UpstreamTip(context.Background(), srcSvc.UpstreamBranch())
+	srcTip, err := srcSvc.FactsRepo().UpstreamTip(context.Background(), srcSvc.UpstreamBranch())
 	release()
 	require.NoError(t, err)
 
@@ -268,7 +268,7 @@ func TestCreateFromTemplate_ReadsConsensusNotAgent(t *testing.T) {
 	src := mount(t, m, "src", "clone", url)
 	svc, release, err := src.Acquire()
 	require.NoError(t, err)
-	_, _, err = svc.WriteSystemTree(context.Background(), src.AgentBranch(), map[string]string{
+	_, _, err = svc.Facts().WriteSystemTree(context.Background(), src.AgentBranch(), map[string]string{
 		".knomit/templates/x/.knomit/ontology.yaml": "id: x-b\nname: B\ntopics:\n  notes:\n    description: B\n",
 	}, "B on the agent branch", "updated")
 	release()
@@ -308,9 +308,9 @@ func TestTemplateSource_Inert(t *testing.T) {
 	require.NoError(t, err)
 	defer release()
 	ctx := context.Background()
-	tip, err := svc.Triggers().UpstreamTip(ctx, svc.UpstreamBranch())
+	tip, err := svc.FactsRepo().UpstreamTip(ctx, svc.UpstreamBranch())
 	require.NoError(t, err)
-	skills, err := svc.Skills().SkillsAt(ctx, tip)
+	skills, err := svc.FactsRepo().SkillsAt(ctx, tip)
 	require.NoError(t, err)
 	var names []string
 	for _, s := range skills {
@@ -331,7 +331,7 @@ func TestTemplateSource_Inert(t *testing.T) {
 	}
 	require.NoError(t, it.Close())
 	require.Greater(t, n, 0, "the playbooks facts themselves are indexed")
-	_, _, err = svc.Triggers().RecipeAt(ctx, tip, "work-task")
+	_, _, err = svc.FactsRepo().RecipeAt(ctx, tip, "work-task")
 	require.Error(t, err, "the mission template's recipe is not the playbooks repo's recipe")
 }
 
@@ -648,7 +648,7 @@ func TestListTemplates(t *testing.T) {
 	createRepo(t, m, "plain")
 	svc, release, err := other.Acquire()
 	require.NoError(t, err)
-	_, _, err = svc.WriteSystemTree(context.Background(), other.AgentBranch(), map[string]string{
+	_, _, err = svc.Facts().WriteSystemTree(context.Background(), other.AgentBranch(), map[string]string{
 		".knomit/templates/agent-only/.knomit/ontology.yaml": onto,
 	}, "agent only", "updated")
 	release()

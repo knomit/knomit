@@ -116,7 +116,7 @@ func TestConsensusGuidance_ReadsOnlyTheConsensusTip(t *testing.T) {
 	snap := g.ri.ConsensusGuidance(ctx)
 	require.NotNil(t, snap)
 	require.Equal(t, "main", snap.Branch)
-	tip, err := g.svc.Triggers().UpstreamTip(ctx, "main")
+	tip, err := g.svc.FactsRepo().UpstreamTip(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, tip.String(), snap.Commit)
 	require.Len(t, snap.ShortCommit(), 7)

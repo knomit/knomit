@@ -85,7 +85,7 @@ func TestConnect_ReplayAuthorsAsThePersistedAgentID(t *testing.T) {
 			t.Errorf("head: %v", err)
 			return
 		}
-		info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(tip))
+		info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(tip))
 		if err != nil {
 			t.Errorf("commit info: %v", err)
 			return

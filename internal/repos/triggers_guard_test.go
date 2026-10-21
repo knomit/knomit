@@ -25,8 +25,8 @@ import (
 var triggersRepoAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// the store: reads, and the three tables
-		"d.ri.Acquire", "release", "svc.Triggers", "svc.Branches", "?.HeadCommit", "svc.UpstreamBranch", "svc.SignerFingerprint",
-		"tr.OntologyAtCommit", "tr.TriggerWatermarks", "tr.IsAncestor", "tr.DiffFacts", "tr.TreeReader",
+		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.Branches", "?.HeadCommit", "svc.UpstreamBranch", "tr.SignerFingerprint",
+		"tr.OntologyAtCommit", "tr.TriggerWatermarks", "tr.IsAncestor", "svc.DiffFacts", "tr.TreeReader",
 		"tr.UpstreamTip", "tr.AncestorSet", "tr.RecordTriggerRuns", "tr.AdvanceTriggerWatermarks",
 		"tr.DueCandidates", "tr.DueMarks",
 		"cr.tr.CommitInfo", "cr.tr.CommitSignerOf", "cr.trees.Toucher", "cr.trees.BlobAt", "trees.BlobAt", "?.TriggerWatermarks", "?.RecentTriggerFires",
@@ -112,7 +112,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 	// TestRecipe_OSExecOnlyInExecFile), never from here.
 	"trigger_recipe.go": {
 		// the store: main's tip and the recipe blob at it
-		"d.ri.Acquire", "release", "svc.Triggers", "svc.UpstreamBranch", "tr.UpstreamTip", "tr.RecipeAt", "tip.IsZero",
+		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.UpstreamBranch", "tr.UpstreamTip", "tr.RecipeAt", "tip.IsZero",
 		// the local tier
 		"os.Stat", "os.ReadFile", "filepath.Join", "fi.Mode", "?.IsRegular", "fi.ModTime", "fi.Size", "cur.mtime.Equal",
 		"sha256.Sum256", "hex.EncodeToString",
@@ -122,7 +122,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"d.recipeGlobals", "d.recipeEnv",
 		// F5: which result outcomes are failures (their text in `error`, else
 		// `message`) — a pure predicate on the outcome string
-		"store.IsRecipeFailure",
+		"facts.IsRecipeFailure",
 		// the child's KNOMIT_SERVER: the server's own address, read from the
 		// Manager (no I/O), waited for (bounded) while the server is booting
 		"d.serverAddr", "d.waitServerAddr", "time.NewTicker", "tick.Stop", "deadline.Stop", "ctx.Err",

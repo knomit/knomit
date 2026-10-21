@@ -47,7 +47,7 @@ func writeAndAuthor(t *testing.T, ri *RepoInstance) string {
 	require.NoError(t, err)
 	tip, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
-	info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(tip))
+	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(tip))
 	require.NoError(t, err)
 	return info.AuthorEmail
 }

@@ -9,7 +9,7 @@ import (
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -95,14 +95,14 @@ func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFu
 		// and leaf entries (kept per-mount for now, deduped by winner below).
 		var dirNames []string
 		dirSeen := make(map[string]bool)
-		leafLists := make([][]store.DirEntry, len(targets))
+		leafLists := make([][]facts.DirEntry, len(targets))
 		for i, t := range targets {
 			entries, err := lister.ListDir(r.Context(), t.RT.RI, t.RT.Branch, dirPath)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to list topics", t.RT.Branch)
 				return
 			}
-			var leafEntries []store.DirEntry
+			var leafEntries []facts.DirEntry
 			for _, e := range entries {
 				// Private paths are excluded from discovery everywhere else
 				// (indexer, Verify, the OKF exporter, the repo topicHandler
@@ -133,7 +133,7 @@ func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFu
 		// openable here. Within one level the repo-relative path collides iff
 		// the filename does, so the entry name is the winner key.
 		winner := federate.WriteFirstWinners(targets, b.Write(), leafLists,
-			func(e store.DirEntry) string { return e.Name })
+			func(e facts.DirEntry) string { return e.Name })
 
 		leaves := []lensTopicChild{}
 		for i, t := range targets {

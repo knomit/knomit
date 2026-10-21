@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/facts"
 )
 
 // ---- F07 PR 5: the recipe columns (migration 000031) and the late rows.
@@ -49,9 +51,9 @@ func TestMigration000031_RecipeColumns(t *testing.T) {
 func TestMigration000031_ReRunsAndKeepsTheLog(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	tr := svc.Triggers()
-	_, err := tr.RecordTriggerRuns(ctx, []TriggerRun{{Branch: "agent/a", RangeFrom: "f", RangeTo: "t",
-		Rows: []TriggerFire{{Trigger: "w", Path: "kb/x.md", Outcome: TriggerOutcomeEmitted}}}})
+	tr := svc.FactsRepo()
+	_, err := tr.RecordTriggerRuns(ctx, []facts.TriggerRun{{Branch: "agent/a", RangeFrom: "f", RangeTo: "t",
+		Rows: []facts.TriggerFire{{Trigger: "w", Path: "kb/x.md", Outcome: facts.TriggerOutcomeEmitted}}}})
 	require.NoError(t, err)
 	before := mustFires(t, tr, "agent/a")
 	require.Len(t, before, 2)
@@ -77,7 +79,7 @@ func TestMigration000031_ReRunsAndKeepsTheLog(t *testing.T) {
 	_, err = svc.rh.DB().Exec(later)
 	require.NoError(t, err)
 	require.Equal(t, before, mustFires(t, tr, "agent/a"), "down then up keeps the log and its ids")
-	_, err = tr.RecordTriggerRuns(ctx, []TriggerRun{{Branch: "agent/a", RangeFrom: "t", RangeTo: "u"}})
+	_, err = tr.RecordTriggerRuns(ctx, []facts.TriggerRun{{Branch: "agent/a", RangeFrom: "t", RangeTo: "u"}})
 	require.NoError(t, err)
 	after := mustFires(t, tr, "agent/a")
 	require.Greater(t, after[0].ID, before[0].ID, "ids continue after the copied ones")
@@ -91,30 +93,30 @@ func TestMigration000031_ReRunsAndKeepsTheLog(t *testing.T) {
 func TestTriggerFires_ResultsAndLookupByRun(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	tr := svc.Triggers()
+	tr := svc.FactsRepo()
 	const id = "run-0123456789abcdef0123456789abcdef"
-	_, err := tr.RecordTriggerRuns(ctx, []TriggerRun{{Branch: "agent/a", RangeFrom: "f", RangeTo: "t", Rows: []TriggerFire{{
-		Trigger: "w", Path: "kb/x.md", Outcome: TriggerOutcomeStarted, RecipeSource: RecipeSourceLocal, RecipeRev: "abc", RunID: id,
+	_, err := tr.RecordTriggerRuns(ctx, []facts.TriggerRun{{Branch: "agent/a", RangeFrom: "f", RangeTo: "t", Rows: []facts.TriggerFire{{
+		Trigger: "w", Path: "kb/x.md", Outcome: facts.TriggerOutcomeStarted, RecipeSource: facts.RecipeSourceLocal, RecipeRev: "abc", RunID: id,
 	}}}})
 	require.NoError(t, err)
 	before := len(mustFires(t, tr, "agent/a"))
-	require.NoError(t, tr.RecordTriggerResults(ctx, []TriggerFire{{
-		Trigger: "w", Branch: "agent/a", Path: "kb/x.md", Outcome: TriggerOutcomeDone, Error: "ok", RangeFrom: "f", RangeTo: "t",
-		DurationMS: 1234, RecipeSource: RecipeSourceLocal, RecipeRev: "abc", RunID: id,
+	require.NoError(t, tr.RecordTriggerResults(ctx, []facts.TriggerFire{{
+		Trigger: "w", Branch: "agent/a", Path: "kb/x.md", Outcome: facts.TriggerOutcomeDone, Error: "ok", RangeFrom: "f", RangeTo: "t",
+		DurationMS: 1234, RecipeSource: facts.RecipeSourceLocal, RecipeRev: "abc", RunID: id,
 	}}))
 	require.Len(t, mustFires(t, tr, "agent/a"), before+1, "one row and no run row")
 
 	got, err := tr.TriggerFiresByRun(ctx, "agent/a", id)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	require.Equal(t, TriggerOutcomeStarted, got[0].Outcome)
-	require.Equal(t, TriggerOutcomeDone, got[1].Outcome)
+	require.Equal(t, facts.TriggerOutcomeStarted, got[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeDone, got[1].Outcome)
 	require.Equal(t, int64(1234), got[1].DurationMS)
 	require.Equal(t, "f", got[1].RangeFrom)
 	require.Equal(t, "t", got[1].RangeTo)
 	for _, r := range got {
 		require.Equal(t, id, r.RunID)
-		require.Equal(t, RecipeSourceLocal, r.RecipeSource)
+		require.Equal(t, facts.RecipeSourceLocal, r.RecipeSource)
 		require.Equal(t, "abc", r.RecipeRev)
 	}
 	other, err := tr.TriggerFiresByRun(ctx, "agent/b", id)
@@ -135,12 +137,12 @@ func TestTriggerFires_ResultsAndLookupByRun(t *testing.T) {
 func TestMigration000033_MessageColumn(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	tr := svc.Triggers()
+	tr := svc.FactsRepo()
 	var dflt string
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT dflt_value FROM pragma_table_info('trigger_fires') WHERE name = 'message'`).Scan(&dflt))
 	require.Equal(t, "''", dflt)
-	require.NoError(t, tr.RecordTriggerResults(ctx, []TriggerFire{{
-		Trigger: "w", Branch: "agent/a", Path: "kb/x.md", Outcome: TriggerOutcomeDone, Message: "exit 0 cost=1.03",
+	require.NoError(t, tr.RecordTriggerResults(ctx, []facts.TriggerFire{{
+		Trigger: "w", Branch: "agent/a", Path: "kb/x.md", Outcome: facts.TriggerOutcomeDone, Message: "exit 0 cost=1.03",
 		RangeFrom: "f", RangeTo: "t", RunID: "run-0123456789abcdef0123456789abcdef",
 	}}))
 	before := mustFires(t, tr, "agent/a")
@@ -172,7 +174,7 @@ func TestMigration000033_MessageColumn(t *testing.T) {
 	require.Equal(t, 0, n, "the copy table is gone")
 }
 
-func mustFires(t *testing.T, tr TriggerIndex, branch string) []TriggerFire {
+func mustFires(t *testing.T, tr *facts.Repo, branch string) []facts.TriggerFire {
 	t.Helper()
 	rows, err := tr.RecentTriggerFires(context.Background(), branch, 100)
 	require.NoError(t, err)

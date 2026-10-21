@@ -62,6 +62,7 @@ import (
 	"knomit/internal/serveraddr"
 	"knomit/internal/serverkey"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // outcomeUnbound is a `do: run` evaluation that found no recipe anywhere: a
@@ -73,7 +74,7 @@ const outcomeUnbound = "unbound"
 // broken file (does not compile, bad header, unreadable): a `recipe-error`.
 type compiledRecipe struct {
 	name   string
-	source string // store.RecipeSourceRepo | store.RecipeSourceLocal
+	source string // facts.RecipeSourceRepo | facts.RecipeSourceLocal
 	rev    string // the blob at main's tip, or sha256[:12] of the local file
 	prog   *goja.Program
 	limits fact.RecipeLimits
@@ -129,7 +130,7 @@ func (d *triggerDispatcher) mainRecipe(ctx context.Context, name string) (*compi
 		return &compiledRecipe{name: name, err: fmt.Errorf("recipe %s: store unavailable: %w", name, err)}, true
 	}
 	defer release()
-	tr := svc.Triggers()
+	tr := svc.FactsRepo()
 	tip, err := tr.UpstreamTip(ctx, svc.UpstreamBranch())
 	if err != nil {
 		return &compiledRecipe{name: name, err: fmt.Errorf("recipe %s: main unreadable: %w", name, err)}, true
@@ -138,11 +139,11 @@ func (d *triggerDispatcher) mainRecipe(ctx context.Context, name string) (*compi
 		return nil, false // no upstream branch: no repo tier
 	}
 	blob, data, err := tr.RecipeAt(ctx, tip, name)
-	if errors.Is(err, store.ErrNoRecipeAtCommit) {
+	if errors.Is(err, facts.ErrNoRecipeAtCommit) {
 		return nil, false
 	}
 	if err != nil {
-		return &compiledRecipe{name: name, source: store.RecipeSourceRepo, err: fmt.Errorf("recipe %s: %w", name, err)}, true
+		return &compiledRecipe{name: name, source: facts.RecipeSourceRepo, err: fmt.Errorf("recipe %s: %w", name, err)}, true
 	}
 	d.rc.mu.Lock()
 	if cur := d.rc.repo[name]; cur != nil && cur.rev == blob {
@@ -150,7 +151,7 @@ func (d *triggerDispatcher) mainRecipe(ctx context.Context, name string) (*compi
 		return cur, true
 	}
 	d.rc.mu.Unlock()
-	cr := d.compileRecipe(name, store.RecipeSourceRepo, blob, data)
+	cr := d.compileRecipe(name, facts.RecipeSourceRepo, blob, data)
 	d.rc.mu.Lock()
 	d.rc.repo[name] = cr
 	d.rc.mu.Unlock()
@@ -168,10 +169,10 @@ func (d *triggerDispatcher) localRecipe(name string) (*compiledRecipe, bool) {
 		return nil, false
 	}
 	if err != nil {
-		return &compiledRecipe{name: name, source: store.RecipeSourceLocal, err: fmt.Errorf("recipe %s: %w", name, err)}, true
+		return &compiledRecipe{name: name, source: facts.RecipeSourceLocal, err: fmt.Errorf("recipe %s: %w", name, err)}, true
 	}
 	if !fi.Mode().IsRegular() {
-		return &compiledRecipe{name: name, source: store.RecipeSourceLocal, err: fmt.Errorf("recipe %s: %s is not a file", name, path)}, true
+		return &compiledRecipe{name: name, source: facts.RecipeSourceLocal, err: fmt.Errorf("recipe %s: %s is not a file", name, path)}, true
 	}
 	d.rc.mu.Lock()
 	cur := d.rc.local[name]
@@ -182,7 +183,7 @@ func (d *triggerDispatcher) localRecipe(name string) (*compiledRecipe, bool) {
 	d.rc.mu.Unlock()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return &compiledRecipe{name: name, source: store.RecipeSourceLocal, err: fmt.Errorf("recipe %s: %w", name, err)}, true
+		return &compiledRecipe{name: name, source: facts.RecipeSourceLocal, err: fmt.Errorf("recipe %s: %w", name, err)}, true
 	}
 	sum := sha256.Sum256(data)
 	rev := hex.EncodeToString(sum[:])[:12]
@@ -190,7 +191,7 @@ func (d *triggerDispatcher) localRecipe(name string) (*compiledRecipe, bool) {
 	if cur != nil && cur.cr.rev == rev {
 		cr = cur.cr // touched, not changed: keep the program
 	} else {
-		cr = d.compileRecipe(name, store.RecipeSourceLocal, rev, data)
+		cr = d.compileRecipe(name, facts.RecipeSourceLocal, rev, data)
 	}
 	d.rc.mu.Lock()
 	d.rc.local[name] = &localRecipe{mtime: fi.ModTime(), size: fi.Size(), cr: cr}
@@ -272,7 +273,7 @@ type recipeJob struct {
 	// row is the result row's template: the fire's identity, its range and
 	// branch (a late row is written without its run), the recipe source, rev
 	// and run id. The runner fills the outcome, the error and the duration.
-	row store.TriggerFire
+	row facts.TriggerFire
 }
 
 // startRecipe is the whole of `do: run` inside phase B, and knomit.run: resolve
@@ -290,18 +291,18 @@ func (d *triggerDispatcher) startRecipe(p pendingFire, name string, payload any,
 	}
 	st := runStart{source: cr.source, rev: cr.rev}
 	if cr.err != nil {
-		st.outcome, st.errText = store.TriggerOutcomeRecipeError, cr.err.Error()
+		st.outcome, st.errText = facts.TriggerOutcomeRecipeError, cr.err.Error()
 		return st
 	}
 	if !d.rc.tryTake(name, cr.limits.Concurrent) {
-		st.outcome = store.TriggerOutcomeBusy
+		st.outcome = facts.TriggerOutcomeBusy
 		st.errText = fmt.Sprintf("recipe %s is at its limit of %d concurrent run(s); the fire is dropped", name, cr.limits.Concurrent)
 		return st
 	}
-	st.outcome, st.id = store.TriggerOutcomeStarted, newRunID()
+	st.outcome, st.id = facts.TriggerOutcomeStarted, newRunID()
 	job := recipeJob{
 		cr: cr, id: st.id, p: p, globals: globals, payload: payload,
-		row: store.TriggerFire{
+		row: facts.TriggerFire{
 			Trigger: p.trig.Name, Branch: d.branch, Path: p.repoPath, Episode: p.episode, Source: p.source,
 			Commit: p.commit, Trace: p.trace, Nonlinear: p.nonlinear, RangeFrom: rangeFrom, RangeTo: rangeTo,
 			RecipeSource: cr.source, RecipeRev: cr.rev, RunID: st.id,
@@ -324,7 +325,7 @@ func (d *triggerDispatcher) runJob(ctx context.Context, j recipeJob) {
 	// The result text goes in `error` only when the run FAILED; a recipe's
 	// own report on a run that succeeded (done, spawned, delivered —
 	// "exit 0 cost=…") is a message, not an error (F5).
-	if store.IsRecipeFailure(outcome) {
+	if facts.IsRecipeFailure(outcome) {
 		row.Error = msg
 	} else {
 		row.Message = msg
@@ -340,7 +341,7 @@ func (d *triggerDispatcher) runJob(ctx context.Context, j recipeJob) {
 func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcome, msg string) {
 	defer func() {
 		if r := recover(); r != nil {
-			outcome, msg = store.TriggerOutcomeRecipeError, fmt.Sprintf("recipe %s: panic: %v", j.cr.name, r)
+			outcome, msg = facts.TriggerOutcomeRecipeError, fmt.Sprintf("recipe %s: panic: %v", j.cr.name, r)
 		}
 	}()
 	if jit := j.cr.limits.Jitter; jit > 0 {
@@ -352,7 +353,7 @@ func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcom
 		}
 	}
 	if ctx.Err() != nil {
-		return store.TriggerOutcomeRecipeError, fmt.Sprintf("recipe %s: stopped before it ran", j.cr.name)
+		return facts.TriggerOutcomeRecipeError, fmt.Sprintf("recipe %s: stopped before it ran", j.cr.name)
 	}
 	budget, cancel := context.WithTimeout(ctx, j.cr.limits.Timeout)
 	defer cancel()
@@ -367,7 +368,7 @@ func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcom
 	var interrupted *goja.InterruptedError
 	switch {
 	case ctx.Err() != nil:
-		return store.TriggerOutcomeRecipeError, fmt.Sprintf("recipe %s: stopped (knomit stopped the dispatcher)", j.cr.name)
+		return facts.TriggerOutcomeRecipeError, fmt.Sprintf("recipe %s: stopped (knomit stopped the dispatcher)", j.cr.name)
 	case err == nil:
 		msg := res.Message
 		if res.ID != "" {
@@ -377,13 +378,13 @@ func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcom
 			msg += "id=" + res.ID
 		}
 		if res.Status == fact.RecipeStatusError {
-			return store.TriggerOutcomeRecipeError, msg
+			return facts.TriggerOutcomeRecipeError, msg
 		}
 		return res.Status, msg // done | spawned | delivered | unreachable: the store's kinds
 	case errors.As(err, &interrupted) || errors.Is(budget.Err(), context.DeadlineExceeded):
-		return store.TriggerOutcomeRecipeTimeout, fmt.Sprintf("recipe %s exceeded %s", j.cr.name, j.cr.limits.Timeout)
+		return facts.TriggerOutcomeRecipeTimeout, fmt.Sprintf("recipe %s exceeded %s", j.cr.name, j.cr.limits.Timeout)
 	default:
-		return store.TriggerOutcomeRecipeError, err.Error()
+		return facts.TriggerOutcomeRecipeError, err.Error()
 	}
 }
 
@@ -498,7 +499,7 @@ func recipeHostFunctions(h *scriptHost, x *recipeExec) fact.ScriptHost {
 
 // addLate hands one row to the dispatcher (the late inbox) and kicks it. Any
 // goroutine; never touches d.pending.
-func (d *triggerDispatcher) addLate(row store.TriggerFire) {
+func (d *triggerDispatcher) addLate(row facts.TriggerFire) {
 	d.lateMu.Lock()
 	d.lateIn = append(d.lateIn, row)
 	d.lateMu.Unlock()

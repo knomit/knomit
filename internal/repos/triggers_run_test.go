@@ -24,6 +24,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/serverkey"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/playbooks"
 )
@@ -74,15 +75,15 @@ func putMainRecipe(t *testing.T, ri *RepoInstance, name, src string) string {
 	upstream := svc.UpstreamBranch()
 	_, err := svc.Facts().WriteFact(context.Background(), upstream, fact.TriggerRecipePath(name), src, "recipe: "+name, "updated")
 	require.NoError(t, err)
-	tip, err := svc.Triggers().UpstreamTip(context.Background(), upstream)
+	tip, err := svc.FactsRepo().UpstreamTip(context.Background(), upstream)
 	require.NoError(t, err)
-	blob, _, err := svc.Triggers().RecipeAt(context.Background(), tip, name)
+	blob, _, err := svc.FactsRepo().RecipeAt(context.Background(), tip, name)
 	require.NoError(t, err)
 	return blob
 }
 
 // rowsOf is a trigger's rows, OLDEST first.
-func rowsOf(t *testing.T, ri *RepoInstance, trigger string) []store.TriggerFire {
+func rowsOf(t *testing.T, ri *RepoInstance, trigger string) []facts.TriggerFire {
 	t.Helper()
 	rows := firesOf(t, ri, trigger)
 	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
@@ -90,9 +91,9 @@ func rowsOf(t *testing.T, ri *RepoInstance, trigger string) []store.TriggerFire 
 }
 
 // waitRows waits until trigger has n rows in the TABLE and returns them.
-func waitRows(t *testing.T, ri *RepoInstance, trigger string, n int) []store.TriggerFire {
+func waitRows(t *testing.T, ri *RepoInstance, trigger string, n int) []facts.TriggerFire {
 	t.Helper()
-	var rows []store.TriggerFire
+	var rows []facts.TriggerFire
 	require.Eventually(t, func() bool {
 		rows = rowsOf(t, ri, trigger)
 		return len(rows) >= n
@@ -141,10 +142,10 @@ func TestRun_LocalArgvVerbatimNoShell(t *testing.T) {
 	require.Equal(t, os.Getpid(), rep.Ppid, "knomit starts the program itself: no shell in between")
 
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeStarted, rows[0].Outcome)
-	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
+	require.Equal(t, facts.TriggerOutcomeStarted, rows[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
 	for _, r := range rows {
-		require.Equal(t, store.RecipeSourceLocal, r.RecipeSource)
+		require.Equal(t, facts.RecipeSourceLocal, r.RecipeSource)
 		require.Equal(t, localRev(src), r.RecipeRev)
 	}
 }
@@ -163,7 +164,7 @@ func TestRun_MainWinsOverLocal(t *testing.T) {
 	rows := waitRows(t, ri, "w", 2)
 	require.Equal(t, "main", rows[1].Message, "the recipe on main wins")
 	require.Empty(t, rows[1].Error, "F5: a done row's text is a message, never an error")
-	require.Equal(t, store.RecipeSourceRepo, rows[0].RecipeSource)
+	require.Equal(t, facts.RecipeSourceRepo, rows[0].RecipeSource)
 	require.Equal(t, blob, rows[0].RecipeRev)
 	require.Equal(t, blob, rows[1].RecipeRev)
 }
@@ -189,17 +190,17 @@ func TestRun_AgentBranchRecipeNeverRuns(t *testing.T) {
 	write(t, ri, "kb/tasks/in/local.md")
 	rows := waitRows(t, ri, "w", 2)
 	require.Equal(t, "local", rows[1].Message, "the agent branch never shadows the local recipe")
-	require.Equal(t, store.RecipeSourceLocal, rows[1].RecipeSource)
+	require.Equal(t, facts.RecipeSourceLocal, rows[1].RecipeSource)
 
 	// No upstream branch: the repo tier is skipped, the local recipe runs.
 	svc := testService(t, ri)
 	require.NoError(t, storetest.DeleteRef(svc, "refs/heads/"+svc.UpstreamBranch()))
-	tip, err := svc.Triggers().UpstreamTip(context.Background(), svc.UpstreamBranch())
+	tip, err := svc.FactsRepo().UpstreamTip(context.Background(), svc.UpstreamBranch())
 	require.NoError(t, err)
 	require.True(t, tip.IsZero(), "the fixture must really have no main")
 	write(t, ri, "kb/tasks/in/no-main.md")
 	rows = waitRows(t, ri, "w", 4)
-	require.Equal(t, store.TriggerOutcomeStarted, rows[2].Outcome, rows[2].Error)
+	require.Equal(t, facts.TriggerOutcomeStarted, rows[2].Outcome, rows[2].Error)
 	require.Equal(t, "local", rows[3].Message)
 }
 
@@ -217,9 +218,9 @@ func TestRun_BrokenMainRecipeIsErrorNoFallback(t *testing.T) {
 	rows := rowsOf(t, ri, "w")
 	require.Len(t, rows, 2, "one row per fire, and no result rows: nothing started")
 	for _, r := range rows {
-		require.Equal(t, store.TriggerOutcomeRecipeError, r.Outcome)
+		require.Equal(t, facts.TriggerOutcomeRecipeError, r.Outcome)
 		require.Contains(t, r.Error, "does not compile")
-		require.Equal(t, store.RecipeSourceRepo, r.RecipeSource)
+		require.Equal(t, facts.RecipeSourceRepo, r.RecipeSource)
 		require.Equal(t, blob, r.RecipeRev)
 		require.Empty(t, r.RunID, "nothing started, no run id")
 	}
@@ -295,7 +296,7 @@ func TestRun_TimeoutKillsProcessGroup(t *testing.T) {
 	gc := waitHelperReports(t, dir, "grandchild", 1)[0]
 	t.Cleanup(func() { killProcess(gc.Pid) })
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeUnreachable, rows[1].Outcome)
+	require.Equal(t, facts.TriggerOutcomeUnreachable, rows[1].Outcome)
 	require.Contains(t, rows[1].Error, "timed out after 3000 ms")
 	require.Empty(t, rows[1].Message, "F5: unreachable is a failure, its text stays in error")
 	require.Less(t, rows[1].DurationMS, int64(3000+recipeWaitDelay.Milliseconds()+5000),
@@ -320,7 +321,7 @@ func TestRun_CleanExitLeavesDetachedGrandchild(t *testing.T) {
 	write(t, ri, "kb/tasks/in/a.md")
 
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeSpawned, rows[1].Outcome, rows[1].Error)
+	require.Equal(t, facts.TriggerOutcomeSpawned, rows[1].Outcome, rows[1].Error)
 	gcs := helperReports(t, dir, "grandchild")
 	require.Len(t, gcs, 1, "the child must really have started a grandchild")
 	gc := gcs[0]
@@ -349,7 +350,7 @@ var r = knomit.exec([%s], {env: %s});
 	waitHelperReports(t, dir, "child", 1)
 	write(t, ri, "kb/tasks/in/b.md")
 	rows := rowsOf(t, ri, "w")
-	require.Equal(t, []string{store.TriggerOutcomeStarted, store.TriggerOutcomeBusy}, outcomesOf(rows))
+	require.Equal(t, []string{facts.TriggerOutcomeStarted, facts.TriggerOutcomeBusy}, outcomesOf(rows))
 	require.Empty(t, rows[1].RunID, "a busy fire started nothing and has no run id")
 	time.Sleep(200 * time.Millisecond)
 	require.Len(t, helperReports(t, dir, "child"), 1, "the busy fire started no process")
@@ -359,7 +360,7 @@ var r = knomit.exec([%s], {env: %s});
 	write(t, ri, "kb/tasks/in/c.md")
 	waitHelperReports(t, dir, "child", 2)
 	rows = waitRows(t, ri, "w", 5)
-	require.Equal(t, store.TriggerOutcomeStarted, rows[3].Outcome, "the slot is free again")
+	require.Equal(t, facts.TriggerOutcomeStarted, rows[3].Outcome, "the slot is free again")
 	require.Equal(t, int64(1), ri.triggers.stats.view("w").Busy)
 }
 
@@ -419,7 +420,7 @@ func TestRun_ScriptGetsStartedAndResultIsLogged(t *testing.T) {
 	require.Len(t, rowsOf(t, ri, "s"), 2, "ran + started are in the table; the recipe still runs")
 	require.NoError(t, os.WriteFile(block, nil, 0o600))
 	rows := waitRows(t, ri, "s", 3)
-	require.Equal(t, []string{store.TriggerOutcomeRan, store.TriggerOutcomeStarted, store.TriggerOutcomeDelivered}, outcomesOf(rows))
+	require.Equal(t, []string{facts.TriggerOutcomeRan, facts.TriggerOutcomeStarted, facts.TriggerOutcomeDelivered}, outcomesOf(rows))
 	require.Equal(t, id, rows[1].RunID)
 	require.Equal(t, id, rows[2].RunID, "the result row carries the same run id")
 	require.Equal(t, "k=1 path=kb/tasks/in/a.md", rows[2].Message)
@@ -459,14 +460,14 @@ var r = knomit.exec([%s, run.id], {env: %s});
 			start = rows[1] // after the script's own `ran` row
 			rows = waitRows(t, ri, name, 3)
 		}
-		require.Equal(t, store.TriggerOutcomeStarted, start.Outcome, name)
+		require.Equal(t, facts.TriggerOutcomeStarted, start.Outcome, name)
 		id := start.RunID
 		require.Regexp(t, `^run-[0-9a-f]{32}$`, id)
 		ids = append(ids, id)
 		byRun, err := ri.TriggerFiresByRun(context.Background(), id)
 		require.NoError(t, err)
 		require.Len(t, byRun, 2, "%s: exactly the started row and the result row", name)
-		require.Equal(t, []string{store.TriggerOutcomeStarted, store.TriggerOutcomeDone}, outcomesOf(byRun))
+		require.Equal(t, []string{facts.TriggerOutcomeStarted, facts.TriggerOutcomeDone}, outcomesOf(byRun))
 		for _, r := range byRun {
 			require.Equal(t, id, r.RunID)
 			require.Equal(t, start.Trace, r.Trace, "both rows carry the story's trace")
@@ -514,7 +515,7 @@ func TestRun_StopKillsAndRecords(t *testing.T) {
 	require.Less(t, time.Since(t0), recipeWaitDelay+5*time.Second, "stop() waits for the killed recipe, not for its program")
 	require.Eventually(t, func() bool { return !processAlive(child.Pid) }, 10*time.Second, 20*time.Millisecond, "the program survived stop()")
 	rows := rowsOf(t, ri, "w")
-	require.Equal(t, []string{store.TriggerOutcomeStarted, store.TriggerOutcomeRecipeError}, outcomesOf(rows), "the stopped row is in the TABLE after stop()")
+	require.Equal(t, []string{facts.TriggerOutcomeStarted, facts.TriggerOutcomeRecipeError}, outcomesOf(rows), "the stopped row is in the TABLE after stop()")
 	require.Contains(t, rows[1].Error, "stopped")
 	require.Equal(t, rows[0].RunID, rows[1].RunID)
 	require.NoError(t, m.Close())
@@ -633,7 +634,7 @@ func TestSampleRecipe_ArgvHasPathNotBody(t *testing.T) {
 		require.NotContains(t, kv, sentinel, "the task body never enters the environment")
 	}
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
+	require.Equal(t, facts.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
 
 	// #349: the prompt hands the session its trace as a JSON literal — the
 	// fire's trace (a plain id here: the firing commit), the firing commit and
@@ -649,9 +650,9 @@ func TestSampleRecipe_ArgvHasPathNotBody(t *testing.T) {
 	// the report files nor the rows are guaranteed to come back in start order.
 	reports := waitHelperReports(t, dir, "child", 2)
 	waitRows(t, ri, "w", 4)
-	var second store.TriggerFire
+	var second facts.TriggerFire
 	for _, r := range rowsOf(t, ri, "w") {
-		if r.Path == "kb/tasks/in/other.md" && r.Outcome == store.TriggerOutcomeStarted {
+		if r.Path == "kb/tasks/in/other.md" && r.Outcome == facts.TriggerOutcomeStarted {
 			second = r
 		}
 	}
@@ -693,7 +694,7 @@ func TestRun_RecipeNameValidatedAtCall(t *testing.T) {
 	putScript(t, ri, "caller", `knomit.run("../x");`)
 	write(t, ri, "kb/tasks/in/a.md")
 	rows := rowsOf(t, ri, "s")
-	require.Equal(t, []string{store.TriggerOutcomeScriptError}, outcomesOf(rows))
+	require.Equal(t, []string{facts.TriggerOutcomeScriptError}, outcomesOf(rows))
 	require.Contains(t, rows[0].Error, "kebab-case recipe name")
 }
 
@@ -843,7 +844,7 @@ func TestRun_ExecBeforeTheAddressIsSetStartsNothing(t *testing.T) {
 		jsString(helperExe(t)), helperEnv(dir)))
 	write(t, ri, "kb/tasks/in/a.md")
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeRecipeError, rows[1].Outcome, rows[1].Error)
+	require.Equal(t, facts.TriggerOutcomeRecipeError, rows[1].Outcome, rows[1].Error)
 	require.Contains(t, rows[1].Error, "server address not ready")
 	require.Empty(t, helperReports(t, dir, "child"), "a program was started without this server's address")
 }
@@ -867,7 +868,7 @@ func TestRun_ExecWaitsForTheAddress(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, own, got)
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
+	require.Equal(t, facts.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
 }
 
 // ---- T18: a recipe's writes
@@ -883,7 +884,7 @@ func TestRun_RecipeWritesStampedAndGuarded(t *testing.T) {
 	putLocalRecipe(t, home, "worker", `knomit.learn({topic: "tasks", category: "in", title: "From recipe"}); ({status: "done"});`)
 	fired := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
+	require.Equal(t, facts.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
 	settle(t, ri)
 	commits := commitsAfter(t, ri, fired)
 	require.Len(t, commits, 1, "the recipe made one commit")
@@ -909,7 +910,7 @@ try { knomit.learn({topic: "tasks", category: "out", title: "From recipe"}, {tra
 ({status: "done", message: m});`)
 	fired := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome)
+	require.Equal(t, facts.TriggerOutcomeDone, rows[1].Outcome)
 	require.Contains(t, rows[1].Message, "opts.trace is refused")
 	settle(t, ri)
 	require.Empty(t, commitsAfter(t, ri, fired), "nothing was committed")
@@ -932,7 +933,7 @@ func TestRun_OutputCap(t *testing.T) {
 		jsString(helperExe(t)), helperEnv(dir, "HELPER_WRITE_BYTES", strconv.Itoa(3<<20))))
 	write(t, ri, "kb/tasks/in/a.md")
 	rows := waitRows(t, ri, "w", 2)
-	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
+	require.Equal(t, facts.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
 	require.Equal(t, fmt.Sprintf("%d:true:0", recipeOutputCap), rows[1].Message)
 }
 
@@ -946,13 +947,13 @@ func TestRun_OutputCap(t *testing.T) {
 func TestRun_ResultShapes(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ src, outcome, msg string }{
-		{`({status: "unreachable", message: "no session", id: "s-1"});`, store.TriggerOutcomeUnreachable, "no session id=s-1"},
-		{`({status: "error", message: "boom"});`, store.TriggerOutcomeRecipeError, "boom"},
-		{`({status: "maybe"});`, store.TriggerOutcomeRecipeError, "invalid result"},
-		{`42;`, store.TriggerOutcomeRecipeError, "invalid result"},
-		{`throw new Error("thrown");`, store.TriggerOutcomeRecipeError, "thrown"},
-		{"// knomit: {\"timeout_ms\": 50}\nwhile (true) {}", store.TriggerOutcomeRecipeTimeout, "exceeded"},
-		{"// knomit: {\"bogus\": 1}\n({status: \"done\"});", store.TriggerOutcomeRecipeError, "does not compile"},
+		{`({status: "unreachable", message: "no session", id: "s-1"});`, facts.TriggerOutcomeUnreachable, "no session id=s-1"},
+		{`({status: "error", message: "boom"});`, facts.TriggerOutcomeRecipeError, "boom"},
+		{`({status: "maybe"});`, facts.TriggerOutcomeRecipeError, "invalid result"},
+		{`42;`, facts.TriggerOutcomeRecipeError, "invalid result"},
+		{`throw new Error("thrown");`, facts.TriggerOutcomeRecipeError, "thrown"},
+		{"// knomit: {\"timeout_ms\": 50}\nwhile (true) {}", facts.TriggerOutcomeRecipeTimeout, "exceeded"},
+		{"// knomit: {\"bogus\": 1}\n({status: \"done\"});", facts.TriggerOutcomeRecipeError, "does not compile"},
 	}
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	n := 0

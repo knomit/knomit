@@ -14,6 +14,7 @@ import (
 	"knomit/internal/refs"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 
@@ -60,7 +61,7 @@ func systemFileResolver(ri *repos.RepoInstance, branch string) refs.ResolveFunc 
 				err = errFactNotFound
 				return
 			}
-			ok, err = refs.FromSystemFiles(svc.SystemFiles(), branch)(ctx, path)
+			ok, err = refs.FromSystemFiles(svc.FactsRepo(), branch)(ctx, path)
 		})
 		return ok, err
 	}
@@ -304,7 +305,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 			// go-git's refusal of a path it will not look up surfaces here,
 			// before the store's write-side refusal would. Same answer: the
 			// path is the client's mistake (#384).
-			if store.IsInvalidPath(perr) {
+			if facts.IsInvalidPath(perr) {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid path", perr.Error(), r.URL.Path)
 				return
 			}

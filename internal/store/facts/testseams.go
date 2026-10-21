@@ -15,29 +15,16 @@ func (fi *Index) WriteFileExactForTest(ctx context.Context, branch, path, conten
 	return fi.writeFileExact(ctx, branch, path, content, message, operation, expectBlob)
 }
 
-// serviceIndex maps a *store.Service, passed as any because this package cannot
-// import the store, to the *Index it was built with. The store registers it
-// from its init; storetest reads it through ServiceIndexForTest. Same shape and
-// reason as vcs.ServiceRepoForTest: no Service accessor returns the handle.
-var serviceIndex func(svc any) *Index
-
-// RegisterServiceIndex installs the function ServiceIndexForTest uses. The
-// store calls it once, from its init. A second registration panics.
-func RegisterServiceIndex(f func(svc any) *Index) {
-	if serviceIndex != nil {
-		panic("facts: RegisterServiceIndex called twice")
-	}
-	serviceIndex = f
-}
-
-// ServiceIndexForTest is the *Index of svc, a *store.Service. It panics outside
-// a test binary.
-func ServiceIndexForTest(svc any) *Index {
-	mustBeTest("ServiceIndexForTest")
-	if serviceIndex == nil {
-		panic("facts: ServiceIndexForTest called before the store registered its Service")
-	}
-	return serviceIndex(svc)
+// SetDeleteFaultForTest makes DeleteFact on this Index call f(path) first and
+// return its error, without deleting anything, when f returns one. A nil f
+// result lets the delete through. It lets a test drive the case where one
+// retract fails while its neighbours succeed, which the write path never
+// produces on its own. It affects this Index only, never another Service's.
+// It panics outside a test binary; the returned func removes the hook.
+func (fi *Index) SetDeleteFaultForTest(f func(path string) error) (restore func()) {
+	mustBeTest("SetDeleteFaultForTest")
+	fi.deleteFault.Store(&f)
+	return func() { fi.deleteFault.Store(nil) }
 }
 
 func mustBeTest(name string) {

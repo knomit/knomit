@@ -14,7 +14,6 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
-	"knomit/internal/store/facts"
 )
 
 // pusherOf is the full certificate-key fingerprint an instance holding k
@@ -120,7 +119,7 @@ func TestReceivePack_MergeOfMainWithKnomitChangeAccepted(t *testing.T) {
 
 	// The host's main changes its ontology (still enforce) after the clone.
 	changed := kbOntology(VerifyEnforce) + "# host edit\n"
-	_, _, err := h.svc.Facts().(*facts.Index).WriteFileExactForTest(context.Background(), "main", fact.OntologyFile, changed, "ontology", "edit", "")
+	_, _, err := h.svc.Facts().WriteFileExactForTest(context.Background(), "main", fact.OntologyFile, changed, "ontology", "edit", "")
 	require.NoError(t, err)
 	require.NoError(t, p.repo.Fetch(&gogit.FetchOptions{RemoteName: "origin"}))
 	main := p.head()
@@ -140,7 +139,7 @@ func TestReceivePack_MergeOfMainWithKnomitChangeAccepted(t *testing.T) {
 func (h *pushHost) hostEditsOntology(mode string) string {
 	h.t.Helper()
 	changed := kbOntology(mode) + "# host edit\n"
-	_, _, err := h.svc.Facts().(*facts.Index).WriteFileExactForTest(context.Background(), "main", fact.OntologyFile, changed, "ontology", "edit", "")
+	_, _, err := h.svc.Facts().WriteFileExactForTest(context.Background(), "main", fact.OntologyFile, changed, "ontology", "edit", "")
 	require.NoError(h.t, err)
 	return changed
 }

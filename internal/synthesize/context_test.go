@@ -72,7 +72,7 @@ func TestApplyPruneDecisions_ContextKeepsOnlyAgreedKeys(t *testing.T) {
 	seedWithContext(t, svc, branch, "kb/verdicts/b.md", 0.8, map[string]any{"task": "t-17", "verdict": "disagree"})
 	seedWithContext(t, svc, branch, "kb/verdicts/c.md", 0.8, map[string]any{"task": "t-17", "verdict": "agree"})
 	sink, warns := collectWarns()
-	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(), nil, []MergeEntry{{
+	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []MergeEntry{{
 		Paths:  []string{"kb/verdicts/a.md", "kb/verdicts/b.md", "kb/verdicts/c.md"},
 		Merged: mergedFact{Path: "kb/verdicts/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
 	}}, "review-test", sink, branch, bareRefFixture, "kb", synthOntology(t))
@@ -104,7 +104,7 @@ func TestApplyPruneDecisions_ContextAgreedButUndeclaredAtTarget(t *testing.T) {
 			seedWithContext(t, svc, branch, "kb/verdicts/a.md", 0.8, map[string]any{"task": "t-17"})
 			seedWithContext(t, svc, branch, "kb/verdicts/b.md", 0.8, map[string]any{"task": "t-17"})
 			sink, warns := collectWarns()
-			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(), nil, []MergeEntry{{
+			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []MergeEntry{{
 				Paths:  []string{"kb/verdicts/a.md", "kb/verdicts/b.md"},
 				Merged: mergedFact{Path: tc.target, Title: "Merged", Body: "merged body", Type: "observation"},
 			}}, "review-test", sink, branch, bareRefFixture, "kb", tc.o)
@@ -122,7 +122,7 @@ func TestApplyPruneDecisions_ContextAgreedButUndeclaredAtTarget(t *testing.T) {
 func TestApplyPruneDecisions_ConfidenceUpdateKeepsContext(t *testing.T) {
 	svc, branch := newSourcesTestRepo(t)
 	seedWithContext(t, svc, branch, "kb/verdicts/a.md", 0.8, map[string]any{"task": "t-17", "verdict": "agree"})
-	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(),
+	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		[]PruneDecision{{Path: "kb/verdicts/a.md", Action: "update", Confidence: 0.42}}, nil,
 		"review-test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
@@ -140,7 +140,7 @@ func TestApplyPruneDecisions_ConfidenceUpdateSkipsMalformedContext(t *testing.T)
 	_, err := svc.Facts().WriteFact(context.Background(), branch, "kb/verdicts/m.md", raw, "sync", "")
 	require.NoError(t, err)
 	sink, warns := collectWarns()
-	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(),
+	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		[]PruneDecision{{Path: "kb/verdicts/m.md", Action: "update", Confidence: 0.42}}, nil,
 		"review-test", sink, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestDedupCluster_ContextIsTheWinnersWholeMap(t *testing.T) {
 		{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
 	}
 	idx := &fixedPairSearch{SearchQuery: svc.Search(), results: []store.SearchResult{searchHit(winnerPath), searchHit(loserPath)}}
-	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), idx, 0.92, "test", func(ProgressEvent) {}, branch, bareRefFixture)
+	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test", func(ProgressEvent) {}, branch, bareRefFixture)
 	require.NoError(t, err)
 	require.Len(t, surviving, 1)
 	require.Equal(t, winnerPath, surviving[0].File, "fixture: the more confident fact wins")
@@ -180,7 +180,7 @@ func TestApplyDistillDecisions_NewClaimInheritsNoContext(t *testing.T) {
 		Path: "kb/verdicts/synth.md", Title: "S", Body: "distilled", Type: "synthesis",
 		Domain: []string{"verdicts"}, Confidence: 0.9, Refs: []string{"kb/verdicts/a.md", "kb/verdicts/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.Search(), []distillFact{df}, nil,
+	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []distillFact{df}, nil,
 		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1)

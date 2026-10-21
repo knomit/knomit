@@ -52,7 +52,7 @@ func runMerge(t *testing.T, svc *store.Service, branch, title string, refs []str
 			Refs:  refs,
 		},
 	}}
-	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(), nil, merges,
+	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
 		"review-test", func(e ProgressEvent) {
 			if e.Phase == "warn" {
 				warns = append(warns, e.Message)
@@ -106,7 +106,7 @@ func TestApplyPruneDecisions_MergeKeepsRefsOfAMemberRetractedEarlierInTheCall(t 
 			Refs: []string{"src://knomit/internal/a.go@ca1c272", "src://knomit/internal/b.go"},
 		},
 	}}
-	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(), decisions, merges,
+	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), decisions, merges,
 		"review-test", func(e ProgressEvent) {
 			if e.Phase == "warn" && strings.Contains(e.Message, "rejected") {
 				warns = append(warns, e.Message)
@@ -134,7 +134,7 @@ func TestApplyPruneDecisions_SecondMergeKeepsRefsOfAMemberTheFirstConsumed(t *te
 				Refs: []string{"src://knomit/internal/a.go@ca1c272"}},
 		},
 	}
-	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.Search(), nil, merges,
+	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
 		"review-test", func(e ProgressEvent) {
 			if e.Phase == "warn" && strings.Contains(e.Message, "rejected") {
 				warns = append(warns, e.Message)

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/facts"
 )
 
 // craftedOntology is a symlink target whose TEXT is itself a parseable
@@ -34,7 +35,7 @@ func executableAt(t *testing.T, svc *Service, branch, path, content string) plum
 func requireSymlinkOntologyError(t *testing.T, err error, path string) {
 	t.Helper()
 	require.ErrorIs(t, err, fact.ErrSymlinkNotFollowed)
-	require.NotErrorIs(t, err, ErrNoOntologyAtCommit)
+	require.NotErrorIs(t, err, facts.ErrNoOntologyAtCommit)
 	require.Contains(t, err.Error(), path+" is a symlink")
 	require.Contains(t, err.Error(), "does not follow symlinks")
 }
@@ -50,7 +51,7 @@ func requireSymlinkOntologyError(t *testing.T, err error, path string) {
 func TestOntologyReaders_SymlinkIsANamedError(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	tr := svc.Triggers()
+	tr := svc.FactsRepo()
 
 	regular := putRaw(t, svc, "main", fact.OntologyFile, "id: real\n")
 	putRaw(t, svc, "main", fact.LegacyOntologyFile, "id: legacy\n")
@@ -85,7 +86,7 @@ func TestOntologyReaders_SymlinkedLegacyRungIsANamedError(t *testing.T) {
 	ctx := context.Background()
 	tip := symlinkAt(t, svc, "main", fact.LegacyOntologyFile, craftedOntology)
 
-	_, _, _, err := svc.Triggers().OntologyAtCommit(ctx, tip)
+	_, _, _, err := svc.FactsRepo().OntologyAtCommit(ctx, tip)
 	requireSymlinkOntologyError(t, err, fact.LegacyOntologyFile)
 	_, err = svc.OntologyAt(ctx, "main")
 	requireSymlinkOntologyError(t, err, fact.LegacyOntologyFile)
@@ -98,7 +99,7 @@ func TestOntologyReaders_ExecutableIsAFile(t *testing.T) {
 	ctx := context.Background()
 	tip := executableAt(t, svc, "main", fact.OntologyFile, "id: x\n")
 
-	p, _, data, err := svc.Triggers().OntologyAtCommit(ctx, tip)
+	p, _, data, err := svc.FactsRepo().OntologyAtCommit(ctx, tip)
 	require.NoError(t, err)
 	require.Equal(t, fact.OntologyFile, p)
 	require.Equal(t, "id: x\n", string(data))
@@ -117,7 +118,7 @@ func TestOntologyReaders_ExecutableIsAFile(t *testing.T) {
 func TestPrivateFileAt_SymlinkIsAbsentExecutableIsAFile(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	tr := svc.Triggers()
+	tr := svc.FactsRepo()
 	putRaw(t, svc, "main", fact.TriggerScriptPath("real"), "SCRIPT")
 	putRaw(t, svc, "main", fact.TriggerRecipePath("real"), "RECIPE")
 	symlinkAt(t, svc, "main", fact.TriggerScriptPath("link"), "real.js")
@@ -126,10 +127,10 @@ func TestPrivateFileAt_SymlinkIsAbsentExecutableIsAFile(t *testing.T) {
 	tip := executableAt(t, svc, "main", fact.TriggerRecipePath("exec"), "EXEC RECIPE")
 
 	_, data, err := tr.ScriptAt(ctx, tip, "link")
-	require.ErrorIs(t, err, ErrNoScriptAtCommit, "a symlinked script is absent")
+	require.ErrorIs(t, err, facts.ErrNoScriptAtCommit, "a symlinked script is absent")
 	require.Nil(t, data)
 	_, data, err = tr.RecipeAt(ctx, tip, "link")
-	require.ErrorIs(t, err, ErrNoRecipeAtCommit, "a symlinked recipe is absent")
+	require.ErrorIs(t, err, facts.ErrNoRecipeAtCommit, "a symlinked recipe is absent")
 	require.Nil(t, data)
 
 	for _, c := range []struct {
@@ -158,12 +159,12 @@ func TestSystemFileAndSkill_ExecutableIsAFile(t *testing.T) {
 	executableAt(t, svc, "main", ".knomit/run.sh", "#!/bin/sh\n")
 	tip := executableAt(t, svc, "main", ".knomit/skills/ex/SKILL.md", "EXEC SKILL")
 
-	sf, found, err := svc.SystemFiles().SystemFileAt(ctx, "main", tip.String(), ".knomit/run.sh", 1<<10)
+	sf, found, err := svc.FactsRepo().SystemFileAt(ctx, "main", tip.String(), ".knomit/run.sh", 1<<10)
 	require.NoError(t, err)
 	require.True(t, found, "an executable system file is a file")
 	require.Equal(t, "#!/bin/sh\n", string(sf.Content))
 
-	skills, err := svc.Skills().SkillsAt(ctx, tip)
+	skills, err := svc.FactsRepo().SkillsAt(ctx, tip)
 	require.NoError(t, err)
 	require.Len(t, skills, 1)
 	require.Equal(t, "ex", skills[0].Dir)

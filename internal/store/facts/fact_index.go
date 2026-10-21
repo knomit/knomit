@@ -2,6 +2,7 @@ package facts
 
 import (
 	"context"
+	"sync/atomic"
 
 	"knomit/internal/fact"
 	"knomit/internal/store/internal/vcs"
@@ -23,6 +24,9 @@ func ParseFactRecord(path, content string) (FactRecord, error) {
 // so Index no longer holds its own IndexManager back-reference.
 type Index struct {
 	rh *Repo
+	// deleteFault is the failure-injection hook of SetDeleteFaultForTest
+	// (testseams.go); nil in production, where nothing can set it.
+	deleteFault atomic.Pointer[func(path string) error]
 }
 
 // NewIndex builds the fact index over rh. The parent's constructors call it

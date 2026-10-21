@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // errStoreUnavailable is the caller-facing error for a mount whose store
@@ -20,7 +21,7 @@ var errStoreUnavailable = errors.New("knowledge base is unavailable (repo is clo
 // split by cluster: MCP uses FactQuery, GraphStore, and HistoryQuery, never
 // MethodologyMatcher.
 type mcpStore struct {
-	facts       store.FactIndex
+	facts       *facts.Index
 	factQuery   store.FactQuery
 	graph       store.GraphStore
 	history     store.HistoryQuery
@@ -33,7 +34,7 @@ type mcpStore struct {
 	motifs store.MotifIndex
 	// files reads one file under .knomit/ by exact path (explain, the refs gate).
 	// Read-only: nothing lists or indexes the system root.
-	files store.SystemFileIndex
+	files *facts.Repo
 }
 
 // storeIndices acquires the mount's store and returns its indices plus the
@@ -58,7 +59,7 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 		pipeline:    svc.Pipeline(),
 		branches:    svc.Branches(),
 		motifs:      svc.Motifs(),
-		files:       svc.SystemFiles(),
+		files:       svc.FactsRepo(),
 	}, release, nil
 }
 

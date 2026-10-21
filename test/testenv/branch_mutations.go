@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // Write creates or overwrites a fact at path with spec's content and
@@ -44,7 +45,7 @@ func (b *BranchHandle) write(path string, spec FactSpec, message, name string) *
 	t := b.repo.sb.t
 	t.Helper()
 	content := spec.Build()
-	var res store.WriteFactResult
+	var res facts.WriteFactResult
 	var writeErr error
 	b.repo.ri.WithRead(func(svc *store.Service) {
 		res, writeErr = svc.Facts().WriteFact(

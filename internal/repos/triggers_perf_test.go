@@ -15,6 +15,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 )
 
@@ -168,8 +169,8 @@ func TestDispatch_Tx1Bounded(t *testing.T) {
 	// tx1 inserted 10,000 fire rows plus the run row; tx2's prune then kept
 	// the newest 10,000 rows of the log, so the run row (newest) and 9,999
 	// fire rows remain.
-	require.Len(t, rows, store.TriggerFireRetention, "the log holds exactly the retention after the flush")
-	require.Equal(t, store.TriggerOutcomeRun, rows[0].Outcome)
+	require.Len(t, rows, facts.TriggerFireRetention, "the log holds exactly the retention after the flush")
+	require.Equal(t, facts.TriggerOutcomeRun, rows[0].Outcome)
 	require.Equal(t, 2000, rows[0].FiresNotLogged)
 	require.Equal(t, 12000, rows[0].Fires)
 	require.Equal(t, 12000, rows[0].Evaluated)
@@ -554,7 +555,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				if len(names) > 0 {
-					must(svc.Triggers().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil, nil))
+					must(svc.FactsRepo().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil, nil))
 				}
 				b.StartTimer()
 				d.runOnce(ctx)

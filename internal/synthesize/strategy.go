@@ -24,6 +24,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 
 	"github.com/rs/zerolog/log"
 )
@@ -55,8 +56,11 @@ type SearchQuery interface {
 // invariants/synthesize/session-branch-binding — nothing below StartSession
 // may consult RI.AgentBranch().
 type Deps struct {
-	RI       *repos.RepoInstance
-	Facts    store.FactIndex
+	RI    *repos.RepoInstance
+	Facts *facts.Index
+	// Files reads the system files (.knomit/) the ref gate resolves a new
+	// ref against, from the same Service as Facts.
+	Files    *facts.Repo
 	Search   SearchQuery
 	Pipeline store.PipelineIndex
 	Branches store.BranchIndex
@@ -349,7 +353,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 		return nil
 	}
 	gates := DiscoveryGatesFor(d.RI, dec.payload.Direction)
-	written, err := applyDiscoveredProposals(ctx, d.Facts, d.Search, d.RI.Embedder(),
+	written, err := applyDiscoveredProposals(ctx, d.Facts, d.Files, d.Search, d.RI.Embedder(),
 		dec.payload, dec.proposals, gates, sess.Branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.OnProgress)
 	if err != nil {
 		log.Warn().Err(err).Str("tool", tool).Str("session", sess.ID).
@@ -375,7 +379,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 	// Phase-3 review (L7) pointed out the branch handling it was unreachable —
 	// a handled failure mode that did not exist reads as a risk that was
 	// considered, which is worse than no branch at all.
-	reinforced := applyReinforcements(ctx, d.Facts, d.Search, dec.payload,
+	reinforced := applyReinforcements(ctx, d.Facts, d.Files, d.Search, dec.payload,
 		dec.reinforcements, sess.Branch, fact.ID12(d.RI.ID()), d.OnProgress)
 	if len(reinforced) > 0 {
 		// Reinforcement REWRITES a live fact — it bumps sources and adds a ref

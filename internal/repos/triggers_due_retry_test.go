@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // ---- F08 PR A, M3: a due fire dropped for CAPACITY is retried.
@@ -70,7 +70,7 @@ func TestDue_RateLimitedRetriedNextSweep(t *testing.T) {
 	ranCount := func() int {
 		n := 0
 		for _, byOutcome := range outcomesByPath(t, ri, "exp") {
-			n += byOutcome[store.TriggerOutcomeRan]
+			n += byOutcome[facts.TriggerOutcomeRan]
 		}
 		return n
 	}
@@ -87,7 +87,7 @@ func TestDue_RateLimitedRetriedNextSweep(t *testing.T) {
 	kickAndWait(t, ri)
 	byPath := outcomesByPath(t, ri, "exp")
 	for _, p := range paths {
-		require.Equal(t, 1, byPath[p][store.TriggerOutcomeRan], "%s ran exactly once: %v", p, byPath)
+		require.Equal(t, 1, byPath[p][facts.TriggerOutcomeRan], "%s ran exactly once: %v", p, byPath)
 	}
 	require.Len(t, dueMarks(t, ri), 3)
 	require.Equal(t, 3, ranCount(), "nothing runs twice once every fact is marked")
@@ -115,9 +115,9 @@ var r = knomit.exec([%s], {env: %s});
 		started, busy = map[string]int{}, map[string]int{}
 		for _, f := range dueFiresOf(t, ri, "w") {
 			switch f.Outcome {
-			case store.TriggerOutcomeStarted:
+			case facts.TriggerOutcomeStarted:
 				started[f.Path]++
-			case store.TriggerOutcomeBusy:
+			case facts.TriggerOutcomeBusy:
 				busy[f.Path]++
 			}
 		}
@@ -158,10 +158,10 @@ func TestDue_ScriptErrorNotRetried(t *testing.T) {
 		t.Helper()
 		th := dueFiresOf(t, ri, "throws")
 		require.Len(t, th, 1, "%+v", th)
-		require.Equal(t, store.TriggerOutcomeScriptError, th[0].Outcome)
+		require.Equal(t, facts.TriggerOutcomeScriptError, th[0].Outcome)
 		lo := dueFiresOf(t, ri, "loops")
 		require.Len(t, lo, 1, "%+v", lo)
-		require.Equal(t, store.TriggerOutcomeScriptTimeout, lo[0].Outcome)
+		require.Equal(t, facts.TriggerOutcomeScriptTimeout, lo[0].Outcome)
 		require.Len(t, dueMarks(t, ri), 2, "both are marked: processed, not dropped")
 	}
 	want()

@@ -25,7 +25,7 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
+	"knomit/internal/store/facts"
 )
 
 // permittedRewriteLines are the frontmatter keys a reinforcement may change.
@@ -46,7 +46,8 @@ var permittedRewriteLines = map[string]struct{}{
 // like the proposal loop it runs beside.
 func applyReinforcements(
 	ctx context.Context,
-	gs store.FactIndex,
+	gs *facts.Index,
+	sysFiles *facts.Repo,
 	idx SearchQuery,
 	payload DiscoverWorkPayload,
 	rs []FactReinforcement,
@@ -61,7 +62,7 @@ func applyReinforcements(
 	for _, m := range payload.Bridge.Members {
 		seedPaths[m.File] = struct{}{}
 	}
-	gate := writeGate(localRepoID, idx, gs, branch)
+	gate := writeGate(localRepoID, idx, sysFiles, branch)
 
 	var written []string
 	for _, r := range rs {

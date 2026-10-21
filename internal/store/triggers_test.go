@@ -9,6 +9,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/facts"
 )
 
 // ---- DiffFacts
@@ -24,7 +26,7 @@ func TestDiffFacts_NoAncestryCheck(t *testing.T) {
 	y := plumbing.NewHash(writeF(t, svc, "agent/a", "kb/tasks/a/y.md"))
 
 	// Sideways: main's head and agent/a's head share the root only.
-	rows, err := svc.Triggers().DiffFacts(ctx, x, y)
+	rows, err := svc.DiffFacts(ctx, x, y)
 	require.NoError(t, err, "a non-ancestor pair must diff, not refuse")
 	require.Equal(t, []PathChange{
 		{Path: "kb/tasks/a/x.md", Change: ChangeDeleted},
@@ -35,21 +37,21 @@ func TestDiffFacts_NoAncestryCheck(t *testing.T) {
 
 	// Linear: W → H lists the net difference under the WHOLE ontology root.
 	z := plumbing.NewHash(writeF(t, svc, "agent/a", "kb/other/z.md"))
-	rows, err = svc.Triggers().DiffFacts(ctx, y, z)
+	rows, err = svc.DiffFacts(ctx, y, z)
 	require.NoError(t, err)
 	require.Equal(t, []PathChange{{Path: "kb/other/z.md", Change: ChangeAdded}}, rows)
 
 	// The empty tree as `from`: everything is added.
-	rows, err = svc.Triggers().DiffFacts(ctx, plumbing.ZeroHash, y)
+	rows, err = svc.DiffFacts(ctx, plumbing.ZeroHash, y)
 	require.NoError(t, err)
 	require.Contains(t, rows, PathChange{Path: "kb/tasks/a/y.md", Change: ChangeAdded})
 }
 
 // ---- The treesame toucher walk
 
-func toucher(t *testing.T, svc *Service, head plumbing.Hash, path string) TouchResult {
+func toucher(t *testing.T, svc *Service, head plumbing.Hash, path string) facts.TouchResult {
 	t.Helper()
-	res, err := svc.Triggers().Toucher(context.Background(), head, path)
+	res, err := svc.FactsRepo().Toucher(context.Background(), head, path)
 	require.NoError(t, err)
 	return res
 }
@@ -187,17 +189,17 @@ func TestTrailerValue(t *testing.T) {
 	// before PR 3.
 	svc := newChangesService(t)
 	h := plumbing.NewHash(writeF(t, svc, "agent/a", "kb/tasks/a/t.md"))
-	info, err := svc.Triggers().CommitInfo(context.Background(), h)
+	info, err := svc.FactsRepo().CommitInfo(context.Background(), h)
 	require.NoError(t, err)
 	require.Equal(t, "", TrailerValue(info.Message, "Knomit-Trace"))
 }
 
 // ---- The two tables
 
-func fireRows(n int, prefix string) []TriggerFire {
-	rows := make([]TriggerFire, 0, n)
+func fireRows(n int, prefix string) []facts.TriggerFire {
+	rows := make([]facts.TriggerFire, 0, n)
 	for i := 0; i < n; i++ {
-		rows = append(rows, TriggerFire{Trigger: "t", Path: fmt.Sprintf("kb/%s/%06d.md", prefix, i), Episode: "learn", Source: "local", Commit: "c", Outcome: TriggerOutcomeEmitted})
+		rows = append(rows, facts.TriggerFire{Trigger: "t", Path: fmt.Sprintf("kb/%s/%06d.md", prefix, i), Episode: "learn", Source: "local", Commit: "c", Outcome: facts.TriggerOutcomeEmitted})
 	}
 	return rows
 }
@@ -229,15 +231,15 @@ func TestRecordTriggerRun_Tx1Bounded(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 	rows := fireRows(12000, "big")
-	logged, err := svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "w", RangeTo: "h", Paths: 12000, Evaluated: 12000, Fires: 12000, Rows: rows})
+	logged, err := svc.FactsRepo().RecordTriggerRun(ctx, facts.TriggerRun{Branch: "agent/a", RangeFrom: "w", RangeTo: "h", Paths: 12000, Evaluated: 12000, Fires: 12000, Rows: rows})
 	require.NoError(t, err)
-	require.Equal(t, TriggerFireRetention, logged)
+	require.Equal(t, facts.TriggerFireRetention, logged)
 	total, runs, _, _ := countFires(t, svc)
-	require.Equal(t, TriggerFireRetention+1, total)
+	require.Equal(t, facts.TriggerFireRetention+1, total)
 	require.Equal(t, 1, runs)
-	recent, err := svc.Triggers().RecentTriggerFires(ctx, "agent/a", 2)
+	recent, err := svc.FactsRepo().RecentTriggerFires(ctx, "agent/a", 2)
 	require.NoError(t, err)
-	require.Equal(t, TriggerOutcomeRun, recent[0].Outcome)
+	require.Equal(t, facts.TriggerOutcomeRun, recent[0].Outcome)
 	require.Equal(t, 2000, recent[0].FiresNotLogged)
 	require.Equal(t, 12000, recent[0].Fires, "the run row counts every fire")
 	require.Equal(t, rows[11999].Path, recent[1].Path, "the newest path is kept")
@@ -250,12 +252,12 @@ func TestRecordTriggerRun_Tx1Bounded(t *testing.T) {
 func TestRecordTriggerRun_OneRunRow(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	_, err := svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "w1", RangeTo: "h1", Paths: 5, Evaluated: 250})
+	_, err := svc.FactsRepo().RecordTriggerRun(ctx, facts.TriggerRun{Branch: "agent/a", RangeFrom: "w1", RangeTo: "h1", Paths: 5, Evaluated: 250})
 	require.NoError(t, err)
 	total, runs, _, _ := countFires(t, svc)
 	require.Equal(t, 1, total)
 	require.Equal(t, 1, runs)
-	recent, err := svc.Triggers().RecentTriggerFires(ctx, "agent/a", 10)
+	recent, err := svc.FactsRepo().RecentTriggerFires(ctx, "agent/a", 10)
 	require.NoError(t, err)
 	require.Len(t, recent, 1)
 	require.Equal(t, "w1", recent[0].RangeFrom)
@@ -271,32 +273,32 @@ func TestRecordTriggerRun_OneRunRow(t *testing.T) {
 func TestTriggerFires_PrunesToRetention(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	_, err := svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "a", RangeTo: "b", Rows: fireRows(6000, "one")})
+	_, err := svc.FactsRepo().RecordTriggerRun(ctx, facts.TriggerRun{Branch: "agent/a", RangeFrom: "a", RangeTo: "b", Rows: fireRows(6000, "one")})
 	require.NoError(t, err)
-	_, err = svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "b", RangeTo: "c", Rows: fireRows(4050, "two")})
+	_, err = svc.FactsRepo().RecordTriggerRun(ctx, facts.TriggerRun{Branch: "agent/a", RangeFrom: "b", RangeTo: "c", Rows: fireRows(4050, "two")})
 	require.NoError(t, err)
 	total, _, _, maxBefore := countFires(t, svc)
 	require.Equal(t, 10052, total)
 
-	require.NoError(t, svc.Triggers().AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"t": "c"}, nil, nil))
+	require.NoError(t, svc.FactsRepo().AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"t": "c"}, nil, nil))
 	total, _, minID, maxID := countFires(t, svc)
-	require.Equal(t, TriggerFireRetention, total)
+	require.Equal(t, facts.TriggerFireRetention, total)
 	require.Equal(t, maxBefore, maxID, "the newest row survives")
-	require.Equal(t, maxID-int64(TriggerFireRetention)+1, minID, "exactly the newest 10,000 remain")
+	require.Equal(t, maxID-int64(facts.TriggerFireRetention)+1, minID, "exactly the newest 10,000 remain")
 
 	// Steady state: another run of 3 rows prunes exactly 4 (3 fires + 1 run row).
-	_, err = svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "c", RangeTo: "d", Rows: fireRows(3, "three")})
+	_, err = svc.FactsRepo().RecordTriggerRun(ctx, facts.TriggerRun{Branch: "agent/a", RangeFrom: "c", RangeTo: "d", Rows: fireRows(3, "three")})
 	require.NoError(t, err)
-	require.NoError(t, svc.Triggers().AdvanceTriggerWatermarks(ctx, "agent/a", nil, nil, nil))
+	require.NoError(t, svc.FactsRepo().AdvanceTriggerWatermarks(ctx, "agent/a", nil, nil, nil))
 	total, _, _, _ = countFires(t, svc)
-	require.Equal(t, TriggerFireRetention, total)
+	require.Equal(t, facts.TriggerFireRetention, total)
 }
 
 // Watermarks: upsert, delete, read; keyed per (trigger, branch).
 func TestTriggerWatermarks_RoundTrip(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	tr := svc.Triggers()
+	tr := svc.FactsRepo()
 	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"x": "h1", "y": "h1"}, nil, nil))
 	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/b", map[string]string{"x": "other"}, nil, nil))
 	wms, err := tr.TriggerWatermarks(ctx, "agent/a")
@@ -323,7 +325,7 @@ func TestOntologyAtCommit_ReadsTheHeadsFile(t *testing.T) {
 	r, err := svc.Facts().WriteFact(ctx, "agent/a", ".knomit/ontology.yaml", yaml, "ont", "updated")
 	require.NoError(t, err)
 	h := plumbing.NewHash(r.CommitHash)
-	path, blob, data, err := svc.Triggers().OntologyAtCommit(ctx, h)
+	path, blob, data, err := svc.FactsRepo().OntologyAtCommit(ctx, h)
 	require.NoError(t, err)
 	require.Equal(t, ".knomit/ontology.yaml", path)
 	require.Equal(t, yaml, string(data))
@@ -333,7 +335,7 @@ func TestOntologyAtCommit_ReadsTheHeadsFile(t *testing.T) {
 
 	// A tree without any ontology file: a named error.
 	root := plumbing.NewHash(writeF(t, svc, "main", "kb/x.md"))
-	_, _, _, err = svc.Triggers().OntologyAtCommit(ctx, root)
+	_, _, _, err = svc.FactsRepo().OntologyAtCommit(ctx, root)
 	if err == nil {
 		t.Skip("fixture: main carries an ontology at init; the not-found case is covered by the empty-tree path")
 	}
@@ -345,14 +347,14 @@ func TestCommitSignerOf_MatchesSignerFingerprint(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 	h := plumbing.NewHash(writeF(t, svc, "agent/a", "kb/tasks/a/t.md"))
-	signer, err := svc.Triggers().CommitSignerOf(ctx, h)
+	signer, err := svc.FactsRepo().CommitSignerOf(ctx, h)
 	require.NoError(t, err)
 	require.NotEmpty(t, signer.Fingerprint)
-	require.Equal(t, svc.SignerFingerprint(), signer.Fingerprint)
+	require.Equal(t, svc.FactsRepo().SignerFingerprint(), signer.Fingerprint)
 
 	// An unsigned commit has no signer.
 	restamp(t, svc, "agent/a", nil, fixedTime(3))
-	_, err = svc.Triggers().CommitSignerOf(ctx, mustHeadHash(t, svc, "agent/a"))
+	_, err = svc.FactsRepo().CommitSignerOf(ctx, mustHeadHash(t, svc, "agent/a"))
 	require.ErrorIs(t, err, ErrUnsigned)
 }
 
@@ -362,17 +364,17 @@ func TestCommitSignerOf_MatchesSignerFingerprint(t *testing.T) {
 func TestUpstreamTip_AndAncestorSet(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	none, err := svc.Triggers().UpstreamTip(ctx, "no-such-branch")
+	none, err := svc.FactsRepo().UpstreamTip(ctx, "no-such-branch")
 	require.NoError(t, err)
 	require.Equal(t, plumbing.ZeroHash, none)
 
 	a := writeF(t, svc, "main", "kb/tasks/a/a.md")
 	b := writeF(t, svc, "agent/a", "kb/tasks/a/b.md") // the agent's own write, not through main
-	tip, err := svc.Triggers().UpstreamTip(ctx, "main")
+	tip, err := svc.FactsRepo().UpstreamTip(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, plumbing.NewHash(a), tip)
 
-	below, err := svc.Triggers().AncestorSet(ctx, tip)
+	below, err := svc.FactsRepo().AncestorSet(ctx, tip)
 	require.NoError(t, err)
 	require.True(t, below[plumbing.NewHash(a)])
 	require.False(t, below[plumbing.NewHash(b)], "an unmerged agent write is not below main")

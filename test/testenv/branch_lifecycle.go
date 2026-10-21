@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"knomit/internal/store"
+	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 )
 
@@ -64,7 +65,7 @@ func (b *BranchHandle) HeadCommit() string {
 func (b *BranchHandle) HasFile(path string) bool {
 	t := b.repo.sb.t
 	t.Helper()
-	var res store.ReadFactResult
+	var res facts.ReadFactResult
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
 		res, err = svc.Facts().ReadFact(context.Background(), b.name, path, nil)

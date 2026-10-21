@@ -59,13 +59,13 @@ func workingCopy(title string, refs ...string) map[string]any {
 }
 
 // commitDiff is the name-status of commit h against its only parent.
-func commitDiff(t *testing.T, svc *store.Service, h string) (store.CommitInfo, map[string]string) {
+func commitDiff(t *testing.T, svc *store.Service, h string) (facts.CommitInfo, map[string]string) {
 	t.Helper()
 	ctx := context.Background()
-	info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(h))
+	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(h))
 	require.NoError(t, err)
 	require.Len(t, info.Parents, 1)
-	rows, err := svc.Triggers().DiffFacts(ctx, info.Parents[0], plumbing.NewHash(h))
+	rows, err := svc.DiffFacts(ctx, info.Parents[0], plumbing.NewHash(h))
 	require.NoError(t, err)
 	out := map[string]string{}
 	for _, r := range rows {

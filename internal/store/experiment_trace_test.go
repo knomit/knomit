@@ -43,7 +43,7 @@ func TestExperimentTrace_OnlyTheExperimentsOwnMerge(t *testing.T) {
 	msgOf := func(branch string) string {
 		h, err := svc.Branches().HeadCommit(ctx, branch)
 		require.NoError(t, err)
-		info, err := svc.Triggers().CommitInfo(ctx, plumbing.NewHash(h))
+		info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(h))
 		require.NoError(t, err)
 		return info.Message
 	}

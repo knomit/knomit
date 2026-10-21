@@ -16,7 +16,7 @@ import (
 	"knomit/internal/fact"
 )
 
-// F24 template reads. Like SkillIndex, a TemplateIndex reads ONE commit's own
+// F24 template reads. Like the skill reader, they read ONE commit's own
 // tree and the caller chooses the commit: the repos layer passes the tip of
 // the source repo's consensus branch (UpstreamTip(UpstreamBranch())), never
 // its agent branch or an experiment.
@@ -37,23 +37,6 @@ var (
 	// (fact.TemplatePathAllowed), or two paths differing only by case.
 	ErrTemplateLayout = errors.New("template holds a path outside README.md and .knomit/")
 )
-
-// TemplateIndex reads templates out of one commit's tree.
-type TemplateIndex interface {
-	// TemplateFilesAt reads every file of template name at commit, keyed by
-	// its path relative to the template folder (the path it lands at),
-	// refusing (ErrTemplate*) a missing folder, a file that is not plain, a
-	// path the layout forbids, and a template over the limits. The walk
-	// stops at the first refusal; no partial result is returned.
-	TemplateFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]TemplateFile, error)
-	// TemplateExistsAt reports whether template name's folder exists at
-	// commit.
-	TemplateExistsAt(ctx context.Context, commit plumbing.Hash, name string) (bool, error)
-	// TemplateFactsAt reads every direct child <root>/templates/<folder>/*.md
-	// at commit (the candidate describing facts), sorted by path. Absent is
-	// empty.
-	TemplateFactsAt(ctx context.Context, commit plumbing.Hash, ontologyRoot string) ([]TemplateFactFile, error)
-}
 
 // TemplateFile is one file of a template.
 type TemplateFile struct {
@@ -88,7 +71,8 @@ func (rh *Repo) treeAt(commit plumbing.Hash, dir string) (*object.Tree, error) {
 	return t, nil
 }
 
-// TemplateExistsAt implements TemplateIndex.
+// TemplateExistsAt reports whether template name's folder exists at
+// commit.
 func (rh *Repo) TemplateExistsAt(ctx context.Context, commit plumbing.Hash, name string) (bool, error) {
 	if !fact.ValidTemplateName(name) {
 		return false, nil
@@ -97,7 +81,11 @@ func (rh *Repo) TemplateExistsAt(ctx context.Context, commit plumbing.Hash, name
 	return t != nil, err
 }
 
-// TemplateFilesAt implements TemplateIndex.
+// TemplateFilesAt reads every file of template name at commit, keyed by
+// its path relative to the template folder (the path it lands at),
+// refusing (ErrTemplate*) a missing folder, a file that is not plain, a
+// path the layout forbids, and a template over the limits. The walk
+// stops at the first refusal; no partial result is returned.
 func (rh *Repo) TemplateFilesAt(ctx context.Context, commit plumbing.Hash, name string) ([]TemplateFile, error) {
 	if !fact.ValidTemplateName(name) {
 		return nil, fmt.Errorf("%w: invalid template name %q", ErrTemplateNotFound, name)
@@ -180,7 +168,9 @@ func (w *templateWalk) walk(ctx context.Context, t *object.Tree, prefix string) 
 	return nil
 }
 
-// TemplateFactsAt implements TemplateIndex.
+// TemplateFactsAt reads every direct child <root>/templates/<folder>/*.md
+// at commit (the candidate describing facts), sorted by path. Absent is
+// empty.
 func (rh *Repo) TemplateFactsAt(ctx context.Context, commit plumbing.Hash, ontologyRoot string) ([]TemplateFactFile, error) {
 	dir := fact.TemplateFactsDir
 	if r := strings.Trim(ontologyRoot, "/"); r != "" {
