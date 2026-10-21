@@ -523,8 +523,9 @@ func TestDue_ClockReadOncePerRun(t *testing.T) {
 
 // SweepNotReachableFromWritePath: the due identifiers appear in the store's
 // triggers file, the dispatcher, the migration and tests — nowhere else: not
-// in fact_write.go, branch_commit.go or the index. Sabotage: reference
-// DueCandidates from fact_write.go.
+// in fact_write.go, branch_commit.go, the index or internal/web. Only the
+// repo-root web/ frontend directory is skipped. Sabotage: reference
+// DueCandidates from fact_write.go, or from a file in internal/web.
 func TestDue_SweepNotReachableFromWritePath(t *testing.T) {
 	allowed := map[string]bool{
 		"internal/store/facts/triggers.go": true,
@@ -538,7 +539,14 @@ func TestDue_SweepNotReachableFromWritePath(t *testing.T) {
 		}
 		if info.IsDir() {
 			switch info.Name() {
-			case ".git", "node_modules", "dist", ".claude", "web":
+			case ".git", "node_modules", "dist", ".claude":
+				return filepath.SkipDir
+			}
+			// Only the repository-root `web` directory is the frontend
+			// (the Svelte app and its Go embed shim). A directory named `web`
+			// anywhere else, notably internal/web, is Go code that can reach
+			// the store and must stay inside this scan.
+			if r, _ := filepath.Rel(root, p); filepath.ToSlash(r) == "web" {
 				return filepath.SkipDir
 			}
 			return nil

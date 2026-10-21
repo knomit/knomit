@@ -37,15 +37,12 @@ const (
 	AuditNeverMember          = verify.AuditNeverMember
 	AuditOtherAgent           = verify.AuditOtherAgent
 	AuditRevoked              = verify.AuditRevoked
-	AuditUnsigned             = verify.AuditUnsigned
 	CommitRefusedByJudge      = verify.CommitRefusedByJudge
 	CommitRefusedByValidation = verify.CommitRefusedByValidation
 	RuleAmbiguous             = verify.RuleAmbiguous
-	RuleArtifactAppendOnly    = verify.RuleArtifactAppendOnly
 	RuleArtifactNotAFile      = verify.RuleArtifactNotAFile
 	RuleArtifactPKI           = verify.RuleArtifactPKI
 	RuleArtifactReplace       = verify.RuleArtifactReplace
-	RuleArtifactRules         = verify.RuleArtifactRules
 	RuleArtifactSize          = verify.RuleArtifactSize
 	RuleArtifactWriteOnce     = verify.RuleArtifactWriteOnce
 	RuleDuplicateKey          = verify.RuleDuplicateKey
@@ -73,11 +70,9 @@ var (
 	ErrForeignLineage    = verify.ErrForeignLineage
 	ErrMalformedSig      = verify.ErrMalformedSig
 	ErrNoFleet           = verify.ErrNoFleet
-	ErrNotEd25519Key     = verify.ErrNotEd25519Key
 	ErrNotSSHSIG         = verify.ErrNotSSHSIG
 	ErrUnsigned          = verify.ErrUnsigned
 	ErrValidationRefused = verify.ErrValidationRefused
-	ErrWrongHashAlgo     = verify.ErrWrongHashAlgo
 	ErrWrongNamespace    = verify.ErrWrongNamespace
 )
 

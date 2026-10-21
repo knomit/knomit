@@ -50,19 +50,18 @@ type (
 
 // Constants.
 const (
-	MaxExperimentNameLen = merge.MaxExperimentNameLen
-	ModeFF               = merge.ModeFF
-	ModeMerge            = merge.ModeMerge
-	ModeNoop             = merge.ModeNoop
-	ModeRebase           = merge.ModeRebase
-	ModeRewound          = merge.ModeRewound
-	ResolveDst           = merge.ResolveDst
-	ResolveSrc           = merge.ResolveSrc
-	StrategyLocalWins    = merge.StrategyLocalWins
-	StrategyRefuse       = merge.StrategyRefuse
-	StrategyRemoteWins   = merge.StrategyRemoteWins
-	TrailerConflict      = merge.TrailerConflict
-	TrailerMerge         = merge.TrailerMerge
+	ModeFF             = merge.ModeFF
+	ModeMerge          = merge.ModeMerge
+	ModeNoop           = merge.ModeNoop
+	ModeRebase         = merge.ModeRebase
+	ModeRewound        = merge.ModeRewound
+	ResolveDst         = merge.ResolveDst
+	ResolveSrc         = merge.ResolveSrc
+	StrategyLocalWins  = merge.StrategyLocalWins
+	StrategyRefuse     = merge.StrategyRefuse
+	StrategyRemoteWins = merge.StrategyRemoteWins
+	TrailerConflict    = merge.TrailerConflict
+	TrailerMerge       = merge.TrailerMerge
 )
 
 // Sentinel errors: the same values, so errors.Is matches across the seam.

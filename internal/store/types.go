@@ -1,17 +1,5 @@
 package store
 
-const ()
-
-const (
-// The `conflicts` setting's strategies have no constant: each is
-// conflictsPolicy.strategy(), the value "conflicts:<facts>/<state>"
-// (e.g. "conflicts:merge/consensus"). They run on the refusing walk as
-// per-path resolutions; what a key set to off settles gets the calling
-// site's own side-picking strategy (mergeOpts.factFallback). Chosen by
-// the sites whose repo sets `conflicts` (or `consensus: auto`) at its
-// consensus branch tip. See conflict_merge.go.
-)
-
 // ReplayConfig controls replay behavior.
 type ReplayConfig struct {
 	Strategy          ConflictStrategy

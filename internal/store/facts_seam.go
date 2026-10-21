@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 
-	"knomit/internal/fact"
 	"knomit/internal/store/facts"
 )
 
@@ -39,13 +38,10 @@ type (
 	ReadFactOpts        = facts.ReadFactOpts
 	ReadFactResult      = facts.ReadFactResult
 	RetractMissingError = facts.RetractMissingError
-	SkillBundledFile    = facts.SkillBundledFile
 	SkillEntry          = facts.SkillEntry
 	SkillIndex          = facts.SkillIndex
 	SystemFile          = facts.SystemFile
 	SystemFileIndex     = facts.SystemFileIndex
-	TemplateFactFile    = facts.TemplateFactFile
-	TemplateFile        = facts.TemplateFile
 	TemplateIndex       = facts.TemplateIndex
 	TouchResult         = facts.TouchResult
 	TriggerFire         = facts.TriggerFire
@@ -75,7 +71,6 @@ const (
 	TriggerOutcomeRun           = facts.TriggerOutcomeRun
 	TriggerOutcomeScriptError   = facts.TriggerOutcomeScriptError
 	TriggerOutcomeScriptTimeout = facts.TriggerOutcomeScriptTimeout
-	TriggerOutcomeSelfCaused    = facts.TriggerOutcomeSelfCaused
 	TriggerOutcomeSpawned       = facts.TriggerOutcomeSpawned
 	TriggerOutcomeStarted       = facts.TriggerOutcomeStarted
 	TriggerOutcomeUnparseable   = facts.TriggerOutcomeUnparseable
@@ -106,9 +101,6 @@ func IsInvalidPath(err error) bool { return facts.IsInvalidPath(err) }
 
 // IsRecipeFailure reports whether a trigger fire outcome is a recipe failure.
 func IsRecipeFailure(outcome string) bool { return facts.IsRecipeFailure(outcome) }
-
-// NewFactRecord constructs a FactRecord from a parsed fact and a blob hash.
-func NewFactRecord(f fact.Fact, blobHash string) FactRecord { return facts.NewFactRecord(f, blobHash) }
 
 // UTCStamp renders Unix seconds as RFC 3339 UTC with an explicit Z.
 func UTCStamp(unix int64) string { return facts.UTCStamp(unix) }
