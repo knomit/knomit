@@ -1,10 +1,6 @@
 package store
 
 import (
-	"context"
-
-	"github.com/go-git/go-git/v5/plumbing"
-
 	"knomit/internal/store/verify"
 )
 
@@ -78,13 +74,3 @@ func Audit(in AuditInput) (AuditReport, error) { return verify.Audit(in) }
 
 // CheckRange is the acceptance gate (see verify.CheckRange).
 func CheckRange(in RangeInput) (RangeVerdict, error) { return verify.CheckRange(in) }
-
-// The method of the parent's repoHandler that reaches the verify child. It
-// stays declared here for the parent's own caller (Open/Clone in repo.go); it
-// passes the embedded *vcs.Repo, which is all the child reads. The incoming
-// judge and the private-path closure are called directly by remotesync's
-// JudgePeerBranch.
-
-func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
-	return verify.CheckOwnLineage(ctx, rh.Repo, branch, agentTip, upstream)
-}
