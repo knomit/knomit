@@ -127,7 +127,7 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 	roots := []struct {
 		dir     string
 		minDirs int
-	}{{".", 1}, {"../synthesize", 1}, {"../web", 1}, {"../store", 5}}
+	}{{".", 1}, {"../synthesize", 1}, {"../web", 1}, {"../store", 5}, {"../repos", 1}}
 	for _, root := range roots {
 		found, dirs := 0, 0
 		require.NoErrorf(t, filepath.WalkDir(root.dir, func(p string, d os.DirEntry, err error) error {
