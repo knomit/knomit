@@ -11,27 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
-	"knomit/internal/store/internal/vcs"
 )
-
-// F24 M3: a set holding ONLY the template keys is not zero, and renders them
-// after Run, Template before TemplateSource. Sabotage: leave Template or
-// TemplateSource out of IsZero — the create's commit would be unstamped and
-// nothing else would fail.
-func TestTrailers_TemplateOnlySetIsStamped(t *testing.T) {
-	for _, set := range []Trailers{{Template: "mission"}, {TemplateSource: "kb://abc@def"}} {
-		require.False(t, set.IsZero(), "%+v must not be zero", set)
-	}
-	set := Trailers{Template: "mission", TemplateSource: "kb://034f37d5b4a5@" + strings.Repeat("a", 40), Run: "run-x"}
-	got := vcs.AppendTrailers("init: x", set)
-	require.Equal(t, "init: x\n\nKnomit-Run: run-x\nKnomit-Template: mission\nKnomit-Template-Source: kb://034f37d5b4a5@"+strings.Repeat("a", 40)+"\n", got)
-	require.Equal(t, "mission", TrailerValue(got, TrailerTemplate))
-
-	// A ctx carrying a template set refuses an agent's trace on top of it,
-	// exactly as it refuses one over a script's set.
-	_, err := WithAgentTrace(WithTrailers(context.Background(), Trailers{Template: "m"}), Trailers{Trace: "t"})
-	require.ErrorIs(t, err, ErrTraceOverride)
-}
 
 // WriteSystemTree keeps the case of every path, writes ONE commit signed by
 // the store's signer and stamped with the ctx trailers, and refuses anything

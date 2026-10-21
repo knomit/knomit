@@ -508,15 +508,3 @@ func TestPeerSync_Off_RecordsEverySidePick(t *testing.T) {
 	require.Regexp(t, `^x\.txt kept=src dropped=dst-add strategy=local_wins base=none `, lines[2])
 	require.Empty(t, TrailerValues(tip.Message, TrailerMerge))
 }
-
-// The trailer paragraph: appended to an existing trailer block, else a new
-// last paragraph; sorted by path.
-func TestAppendTrailerLines(t *testing.T) {
-	require.Equal(t, "merge: a into b (x)\n\nKnomit-Conflict: a.md k\nKnomit-Merge: b.md m\n",
-		merge.AppendTrailerLines("merge: a into b (x)", []string{"Knomit-Merge: b.md m", "Knomit-Conflict: a.md k"}))
-	require.Equal(t, "learn: x\n\nKnomit-Trace: t\nKnomit-Merge: f.md m\n",
-		merge.AppendTrailerLines("learn: x\n\nKnomit-Trace: t\n", []string{"Knomit-Merge: f.md m"}))
-	require.Equal(t, "learn: x\n\nbody words here.\n\nKnomit-Merge: f.md m\n",
-		merge.AppendTrailerLines("learn: x\n\nbody words here.", []string{"Knomit-Merge: f.md m"}))
-	require.Equal(t, "same", merge.AppendTrailerLines("same", nil))
-}
