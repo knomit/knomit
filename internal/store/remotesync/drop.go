@@ -25,22 +25,22 @@ type DropOutcome struct {
 // upstream. This is the body of the former Service.dropUnpublished from the
 // branch lock on, statement for statement.
 func (rh *Repo) DropUnpublished(ctx context.Context, upstream, branch string, drop plumbing.Hash, ownOnly, leaveOut bool, confirmed []string) (DropOutcome, error) {
-	unlock := rh.LockBranch(branch)
+	unlock := rh.vr.LockBranch(branch)
 	defer unlock()
-	localRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
+	localRef, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", branch, err)
 	}
-	upRef, err := rh.Storer().Reference(plumbing.NewBranchReferenceName(upstream))
+	upRef, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(upstream))
 	if err != nil {
 		return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %s: %w", upstream, err)
 	}
 	onUp := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), upRef.Hash(), nil, func(c *object.Commit) { onUp[c.Hash] = true }); err != nil {
 		return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
 	unpublished := map[plumbing.Hash]bool{}
-	if err := vcs.WalkHistory(rh.Storer(), localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), localRef.Hash(), onUp, func(c *object.Commit) { unpublished[c.Hash] = true }); err != nil {
 		return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
 	if !unpublished[drop] {
@@ -54,7 +54,7 @@ func (rh *Repo) DropUnpublished(ctx context.Context, upstream, branch string, dr
 		return DropOutcome{}, &LeaveOutChangedError{LeaveOut: leftOut}
 	}
 	tempRef := plumbing.NewBranchReferenceName(branch + "-dropping")
-	defer func() { _ = rh.Storer().RemoveReference(tempRef) }()
+	defer func() { _ = rh.vr.Storer().RemoveReference(tempRef) }()
 	current := upRef.Hash()
 	for _, st := range line {
 		var others []plumbing.Hash
@@ -64,21 +64,21 @@ func (rh *Repo) DropUnpublished(ctx context.Context, upstream, branch string, dr
 		if current, err = rh.replayCommit(ctx, st.c, current, merge.StrategyLocalWins, others...); err != nil {
 			return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: replay %s: %w", st.c.Hash, err)
 		}
-		if err := rh.Storer().SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {
+		if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(tempRef, current)); err != nil {
 			return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 		}
 	}
 	ctx = context.WithoutCancel(ctx)
-	if err := rh.DeriveBeforeAdvance(ctx, current); err != nil {
+	if err := rh.vr.DeriveBeforeAdvance(ctx, current); err != nil {
 		return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
-	if err := rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), current)); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), current)); err != nil {
 		return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: %w", err)
 	}
-	if err := rh.RepopulateBranch(ctx, branch); err != nil {
+	if err := rh.vr.RepopulateBranch(ctx, branch); err != nil {
 		return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: repopulate: %w", err)
 	}
-	if err := rh.NotifyCommit(ctx, branch, current); err != nil {
+	if err := rh.vr.NotifyCommit(ctx, branch, current); err != nil {
 		return DropOutcome{}, fmt.Errorf("DropUnpublishedCommit: notify: %w", err)
 	}
 	log.Warn().Str("branch", branch).Str("dropped", drop.String()).Int("replayed", len(line)).Int("merges_unfolded", unfolded).Int("left_out", len(leftOut)).

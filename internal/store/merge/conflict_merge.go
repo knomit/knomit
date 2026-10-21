@@ -244,7 +244,7 @@ func (rh *Repo) FactMergeResolutions(
 		switch {
 		case c.src == c.dst:
 			res[p] = Resolution{Side: ResolveDst}
-		case !rh.IsFactPath(p):
+		case !rh.vr.IsFactPath(p):
 			stateRule(c, "not-a-fact")
 		case fm.Policy.facts == fact.ConflictsConsensus:
 			takeConsensus(c, "")
@@ -414,7 +414,7 @@ func settledFrom(lines []string) []SettledPath {
 }
 
 func (rh *Repo) blobBytes(h plumbing.Hash) ([]byte, error) {
-	blob, err := object.GetBlob(rh.Storer(), h)
+	blob, err := object.GetBlob(rh.vr.Storer(), h)
 	if err != nil {
 		return nil, fmt.Errorf("blob %s: %w", h, err)
 	}
@@ -437,14 +437,14 @@ var conflictsLogged sync.Map
 // instance reads it — the tip of the CONSENSUS branch — so the caller passes
 // that branch, never a hardcoded name.
 func (rh *Repo) ConflictsStrategy(ctx context.Context, branch string) (ConflictStrategy, bool) {
-	h, err := rh.ResolveRef(ctx, branch)
+	h, err := rh.vr.ResolveRef(ctx, branch)
 	if err != nil {
 		if !errors.Is(err, vcs.ErrBranchNotFound) {
 			log.Warn().Err(err).Str("branch", branch).Msg("conflicts: cannot resolve the consensus branch; read as off")
 		}
 		return "", false
 	}
-	c, err := object.GetCommit(rh.Storer(), h)
+	c, err := object.GetCommit(rh.vr.Storer(), h)
 	if err != nil {
 		log.Warn().Err(err).Str("branch", branch).Msg("conflicts: cannot read the consensus tip; read as off")
 		return "", false

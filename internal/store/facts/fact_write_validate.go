@@ -20,7 +20,7 @@ import (
 var ErrFactInvalid = errors.New("the fact fails the ontology's validations")
 
 // FactInvalidError is a write refused at the source (writeFileExact,
-// BatchWriteLocked) because a fact it would add or change fails the
+// batchWriteLocked) because a fact it would add or change fails the
 // validations of the ontology at the branch's tip (RuleValidation). Nothing
 // was written. Err is the *fact.ValidationError (or the context gate's
 // error), whose message is the ontology's own.
@@ -60,7 +60,7 @@ func carriedOver(ctx context.Context) bool {
 // (user ruling 2026-10-16: validations are honoured everywhere): REST fact
 // writes, the review pipeline (distill, prune, reflect, dedup, discovery),
 // the fleet code, trigger scripts and the MCP tools all commit through
-// writeFileExact or BatchWriteLocked, which call it under the branch lock
+// writeFileExact or batchWriteLocked, which call it under the branch lock
 // before any object is written. Each file in files that is a fact
 // (verify.IsFactPathUnder the fact root, not in deletes) and whose content differs
 // from the blob at head is parsed and validated against the ontology at head,
@@ -74,7 +74,7 @@ func (rh *Repo) validateWrite(head plumbing.Hash, files map[string]string, delet
 	if head.IsZero() || len(files) == 0 {
 		return nil
 	}
-	root := rh.OntologyRoot()
+	root := rh.vr.OntologyRoot()
 	var paths []string
 	deleted := map[string]bool{}
 	for _, d := range deletes {
@@ -88,7 +88,7 @@ func (rh *Repo) validateWrite(head plumbing.Hash, files map[string]string, delet
 	if len(paths) == 0 {
 		return nil
 	}
-	c, err := object.GetCommit(rh.Storer(), head)
+	c, err := object.GetCommit(rh.vr.Storer(), head)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
@@ -99,7 +99,7 @@ func (rh *Repo) validateWrite(head plumbing.Hash, files map[string]string, delet
 	if raw == nil {
 		return nil
 	}
-	ont, err := rh.OntologyCache().Parse(raw)
+	ont, err := rh.vr.OntologyCache().Parse(raw)
 	if err != nil {
 		// No rule can be read. Whether such a repository takes writes at all
 		// is decided where it is opened (repos.loadOntology: unwritable), and

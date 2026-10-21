@@ -70,7 +70,7 @@ func agentBaseRefName(agentBranch string) plumbing.ReferenceName {
 // Returns plumbing.ErrReferenceNotFound (wrapped) when the watermark has
 // never been written for this branch.
 func (rh *Repo) readAgentBase(agentBranch string) (plumbing.Hash, error) {
-	ref, err := rh.Storer().Reference(agentBaseRefName(agentBranch))
+	ref, err := rh.vr.Storer().Reference(agentBaseRefName(agentBranch))
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
@@ -81,7 +81,7 @@ func (rh *Repo) readAgentBase(agentBranch string) (plumbing.Hash, error) {
 // watermark identifies "the main commit this agent last consumed" and
 // is read on the next Sync tick as the base for unpushedCommits.
 func (rh *Repo) WriteAgentBase(agentBranch string, hash plumbing.Hash) error {
-	return rh.Storer().SetReference(plumbing.NewHashReference(agentBaseRefName(agentBranch), hash))
+	return rh.vr.Storer().SetReference(plumbing.NewHashReference(agentBaseRefName(agentBranch), hash))
 }
 
 // seedMissingWatermark writes the watermark for agentBranch from lastOrigin,
@@ -121,7 +121,7 @@ func (rh *Repo) seedMissingWatermark(agentBranch string, lastOrigin plumbing.Has
 	if lastOrigin == plumbing.ZeroHash {
 		return nil
 	}
-	unlock := rh.LockBranch(agentBranch)
+	unlock := rh.vr.LockBranch(agentBranch)
 	defer unlock()
 	if _, err := rh.readAgentBase(agentBranch); err == nil {
 		return nil
@@ -173,7 +173,7 @@ type MainReconcileResult struct {
 // downstream readers see consistent state.
 func (rh *Repo) reconcileMain(ctx context.Context, upstreamMain string) (MainReconcileResult, error) {
 	originMainName := plumbing.NewRemoteReferenceName("origin", upstreamMain)
-	originMainRef, err := rh.Storer().Reference(originMainName)
+	originMainRef, err := rh.vr.Storer().Reference(originMainName)
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: read origin/%s: %w", upstreamMain, err)
 	}
@@ -241,22 +241,22 @@ func (rh *Repo) AdvanceBranchTo(ctx context.Context, branch string, hash plumbin
 	if hash == plumbing.ZeroHash {
 		return MainReconcileResult{Mode: merge.ModeNoop}, advanceMove{}, nil // nothing to move to
 	}
-	localRef, err := rh.Storer().Reference(refName)
+	localRef, err := rh.vr.Storer().Reference(refName)
 	if err != nil {
 		// The branch doesn't exist — create it at hash.
-		if err := rh.DeriveBeforeAdvance(ctx, hash); err != nil {
+		if err := rh.vr.DeriveBeforeAdvance(ctx, hash); err != nil {
 			return MainReconcileResult{}, advanceMove{}, err
 		}
-		if err := rh.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+		if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("create local %s: %w", branch, err)
 		}
-		if _, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
+		if _, err := rh.vr.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("ensure %s: %w", branch, err)
 		}
-		if err := rh.PopulateCommitLog(ctx, branch); err != nil {
+		if err := rh.vr.PopulateCommitLog(ctx, branch); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("populate commit_log after create: %w", err)
 		}
-		if err := rh.NotifyCommit(ctx, branch, hash); err != nil {
+		if err := rh.vr.NotifyCommit(ctx, branch, hash); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("notify after create: %w", err)
 		}
 		return MainReconcileResult{Mode: merge.ModeFF, NewTip: hash.String()}, advanceMove{created: true}, nil
@@ -269,7 +269,7 @@ func (rh *Repo) AdvanceBranchTo(ctx context.Context, branch string, hash plumbin
 	// which previously killed the entire reconcile loop. EnsureBranch is
 	// idempotent (INSERT OR IGNORE + cache), so this is a cheap invariant
 	// to assert on every success path.
-	if _, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
+	if _, err := rh.vr.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 		return MainReconcileResult{}, advanceMove{}, fmt.Errorf("ensure %s: %w", branch, err)
 	}
 	localHash := localRef.Hash()
@@ -279,11 +279,11 @@ func (rh *Repo) AdvanceBranchTo(ctx context.Context, branch string, hash plumbin
 		return MainReconcileResult{Mode: merge.ModeNoop}, move, nil
 	}
 
-	localCommit, err := rh.Repository().CommitObject(localHash)
+	localCommit, err := rh.vr.Repository().CommitObject(localHash)
 	if err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("local commit: %w", err)
 	}
-	newCommit, err := rh.Repository().CommitObject(hash)
+	newCommit, err := rh.vr.Repository().CommitObject(hash)
 	if err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("target commit: %w", err)
 	}
@@ -294,16 +294,16 @@ func (rh *Repo) AdvanceBranchTo(ctx context.Context, branch string, hash plumbin
 	}
 	if isLocalAncestor {
 		// Fast-forward.
-		if err := rh.DeriveBeforeAdvance(ctx, hash); err != nil {
+		if err := rh.vr.DeriveBeforeAdvance(ctx, hash); err != nil {
 			return MainReconcileResult{}, move, err
 		}
-		if err := rh.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+		if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 			return MainReconcileResult{}, move, fmt.Errorf("fast-forward: %w", err)
 		}
-		if err := rh.PopulateCommitLog(ctx, branch); err != nil {
+		if err := rh.vr.PopulateCommitLog(ctx, branch); err != nil {
 			return MainReconcileResult{}, move, fmt.Errorf("populate commit_log after fast-forward: %w", err)
 		}
-		if err := rh.NotifyCommit(ctx, branch, hash); err != nil {
+		if err := rh.vr.NotifyCommit(ctx, branch, hash); err != nil {
 			return MainReconcileResult{}, move, fmt.Errorf("notify after fast-forward: %w", err)
 		}
 		return MainReconcileResult{Mode: merge.ModeFF, NewTip: hash.String()}, move, nil
@@ -315,19 +315,19 @@ func (rh *Repo) AdvanceBranchTo(ctx context.Context, branch string, hash plumbin
 	// MergeBase itself fails (object-store IO error).
 	move.rewindClassification = classifyMainRewind(localCommit, newCommit)
 
-	if err := rh.DeriveBeforeAdvance(ctx, hash); err != nil {
+	if err := rh.vr.DeriveBeforeAdvance(ctx, hash); err != nil {
 		return MainReconcileResult{}, move, err
 	}
-	if err := rh.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("force-update: %w", err)
 	}
 	// The old chain is no longer reachable from the branch. Purge stale
 	// branch_commits rows before repopulating; otherwise Verify reports
 	// unreachable rows because PopulateCommitLog only INSERTs.
-	if err := rh.RepopulateBranch(ctx, branch); err != nil {
+	if err := rh.vr.RepopulateBranch(ctx, branch); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("repopulate commit_log after force-update: %w", err)
 	}
-	if err := rh.NotifyCommit(ctx, branch, hash); err != nil {
+	if err := rh.vr.NotifyCommit(ctx, branch, hash); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("notify after force-update: %w", err)
 	}
 	return MainReconcileResult{Mode: merge.ModeRewound, NewTip: hash.String()}, move, nil

@@ -234,15 +234,15 @@ func (ri *Index) sync(ctx context.Context, agentBranch string, auth transport.Au
 	// branch that has none (seedMissingWatermark). It can only be read here.
 	var lastOrigin plumbing.Hash
 	fetchErr := func() error {
-		unlockConfig := ri.rh.RLockConfig()
+		unlockConfig := ri.rh.vr.RLockConfig()
 		defer unlockConfig()
-		if _, err := ri.rh.Repository().Remote("origin"); err != nil {
+		if _, err := ri.rh.vr.Repository().Remote("origin"); err != nil {
 			return errNoOriginRemote
 		}
-		if ref, err := ri.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain)); err == nil {
+		if ref, err := ri.rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain)); err == nil {
 			lastOrigin = ref.Hash()
 		}
-		return FetchOrigin(ctx, ri.rh.Repository(), auth, upstreamMain, ri.rh.NetTimeout(), extra...)
+		return FetchOrigin(ctx, ri.rh.vr.Repository(), auth, upstreamMain, ri.rh.vr.NetTimeout(), extra...)
 	}()
 	if fetchErr == errNoOriginRemote {
 		log.Debug().Msg("Sync: no origin git remote configured, skipping")
@@ -327,7 +327,7 @@ func (ri *Index) reconcileNowSwitched(ctx context.Context, agentBranch, upstream
 
 	// Stated assumption (user ruling 2026-10-15, PR #524 S1): the origin's main is trusted as fetched, rewinds included, on the fleet master too; branch protection on it is the forge admin's job.
 	mainRes, err := func() (MainReconcileResult, error) {
-		defer ri.rh.LockBranch(upstreamMain)()
+		defer ri.rh.vr.LockBranch(upstreamMain)()
 		return ri.rh.reconcileMain(ctx, upstreamMain)
 	}()
 	if err != nil {
@@ -414,10 +414,10 @@ func (ri *Index) Push(ctx context.Context, branch string, auth transport.AuthMet
 		return PushResult{}, ErrNoAgentBranch
 	}
 
-	unlockPush := ri.rh.LockPush(branch)
+	unlockPush := ri.rh.vr.LockPush(branch)
 	defer unlockPush()
 
-	if _, err := ri.rh.Repository().Remote("origin"); err != nil {
+	if _, err := ri.rh.vr.Repository().Remote("origin"); err != nil {
 		log.Debug().Msg("Push: no origin remote configured, skipping")
 		return PushResult{}, nil
 	}
@@ -442,8 +442,8 @@ func (ri *Index) Push(ctx context.Context, branch string, auth transport.AuthMet
 	// The snapshot: the branch's tip, read under the write lock and nothing
 	// else. The lock is released before any network I/O.
 	snap, err := func() (plumbing.Hash, error) {
-		defer ri.rh.LockBranch(branch)()
-		localRef, err := ri.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
+		defer ri.rh.vr.LockBranch(branch)()
+		localRef, err := ri.rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
@@ -455,7 +455,7 @@ func (ri *Index) Push(ctx context.Context, branch string, auth transport.AuthMet
 
 	// Already-up-to-date check: the snapshot matches the last-known
 	// origin/agent ref, so there is nothing to push.
-	if remoteRef, err := ri.rh.Storer().Reference(plumbing.NewRemoteReferenceName("origin", branch)); err == nil {
+	if remoteRef, err := ri.rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", branch)); err == nil {
 		if remoteRef.Hash() == snap {
 			return PushResult{Pushed: false}, nil
 		}
@@ -466,7 +466,7 @@ func (ri *Index) Push(ctx context.Context, branch string, auth transport.AuthMet
 	// remote.go, addOrUpdateReferences): a push that sent nothing would read
 	// as "up to date". So the snapshot's commit must resolve here, and an
 	// unreadable one is an error, never a silent Pushed:false.
-	if _, err := ri.rh.Repository().CommitObject(snap); err != nil {
+	if _, err := ri.rh.vr.Repository().CommitObject(snap); err != nil {
 		return PushResult{}, fmt.Errorf("Push: snapshot commit %s is unreadable: %w", snap, err)
 	}
 
@@ -477,7 +477,7 @@ func (ri *Index) Push(ctx context.Context, branch string, auth transport.AuthMet
 	// Force-push the snapshot BY HASH: local replayed history is the new truth
 	// on origin, and a commit made after the snapshot is not in this push.
 	refspec := fmt.Sprintf("+%s:refs/heads/%s", snap, branch)
-	pushCtx, pushCancel := ri.rh.NetCtx(ctx)
+	pushCtx, pushCancel := ri.rh.vr.NetCtx(ctx)
 	defer pushCancel()
 	// Progress is the SERVER'S SIDE of the conversation, and without it a
 	// refusal arrives as go-git's summary alone: "command error on
@@ -486,7 +486,7 @@ func (ri *Index) Push(ctx context.Context, branch string, auth transport.AuthMet
 	// on the sideband as `remote:` lines, and dropping them left a reader
 	// staring at the fact of a refusal with no way to learn its cause.
 	var srv bytes.Buffer
-	if err := ri.rh.Repository().PushContext(pushCtx, &gogit.PushOptions{
+	if err := ri.rh.vr.Repository().PushContext(pushCtx, &gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
 		Auth:       auth,
@@ -526,10 +526,10 @@ func (ri *Index) PublishUpstream(ctx context.Context, from string, auth transpor
 	if from == "" || from == upstream {
 		return PushResult{}, fmt.Errorf("PublishUpstream: %q is not a branch to publish to %q", from, upstream)
 	}
-	defer ri.rh.LockPush(upstream)()
+	defer ri.rh.vr.LockPush(upstream)()
 	tip, err := func() (plumbing.Hash, error) {
-		defer ri.rh.LockBranch(from)()
-		ref, err := ri.rh.Storer().Reference(plumbing.NewBranchReferenceName(from))
+		defer ri.rh.vr.LockBranch(from)()
+		ref, err := ri.rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(from))
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
@@ -538,7 +538,7 @@ func (ri *Index) PublishUpstream(ctx context.Context, from string, auth transpor
 	if err != nil {
 		return PushResult{}, fmt.Errorf("PublishUpstream: local ref %s: %w", from, err)
 	}
-	if _, err := ri.rh.Repository().CommitObject(tip); err != nil {
+	if _, err := ri.rh.vr.Repository().CommitObject(tip); err != nil {
 		return PushResult{}, fmt.Errorf("PublishUpstream: tip %s is unreadable: %w", tip, err)
 	}
 	// The commits the publish adds to the origin's main are judged first
@@ -548,10 +548,10 @@ func (ri *Index) PublishUpstream(ctx context.Context, from string, auth transpor
 		return PushResult{}, fmt.Errorf("PublishUpstream: %w", err)
 	}
 	refspec := fmt.Sprintf("%s:refs/heads/%s", tip, upstream)
-	pushCtx, cancel := ri.rh.NetCtx(ctx)
+	pushCtx, cancel := ri.rh.vr.NetCtx(ctx)
 	defer cancel()
 	var srv bytes.Buffer
-	if err := ri.rh.Repository().PushContext(pushCtx, &gogit.PushOptions{
+	if err := ri.rh.vr.Repository().PushContext(pushCtx, &gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
 		Auth:       auth,
@@ -582,11 +582,11 @@ func (ri *Index) PublishTo(ctx context.Context, gitURL, from, upstream string, a
 	if from == "" || upstream == "" || from == upstream {
 		return fmt.Errorf("PublishTo: %q is not a branch to publish to %q", from, upstream)
 	}
-	defer ri.rh.LockPush(upstream)()
-	defer ri.rh.LockPush(from)()
+	defer ri.rh.vr.LockPush(upstream)()
+	defer ri.rh.vr.LockPush(from)()
 	tip, err := func() (plumbing.Hash, error) {
-		defer ri.rh.LockBranch(from)()
-		ref, err := ri.rh.Storer().Reference(plumbing.NewBranchReferenceName(from))
+		defer ri.rh.vr.LockBranch(from)()
+		ref, err := ri.rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(from))
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
@@ -595,20 +595,20 @@ func (ri *Index) PublishTo(ctx context.Context, gitURL, from, upstream string, a
 	if err != nil {
 		return fmt.Errorf("PublishTo: local ref %s: %w", from, err)
 	}
-	if _, err := ri.rh.Repository().CommitObject(tip); err != nil {
+	if _, err := ri.rh.vr.Repository().CommitObject(tip); err != nil {
 		return fmt.Errorf("PublishTo: tip %s is unreadable: %w", tip, err)
 	}
 	// The seed becomes the forge's main: judged first (JudgeOwnRange), tip ∖
 	// this copy's own main.
 	base := plumbing.ZeroHash
-	if ref, err := ri.rh.Storer().Reference(plumbing.NewBranchReferenceName(upstream)); err == nil {
+	if ref, err := ri.rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(upstream)); err == nil {
 		base = ref.Hash()
 	}
 	if err := ri.rh.JudgeOwnRange(upstream, base, tip, ri.ownID(from), tip); err != nil {
 		return fmt.Errorf("PublishTo: %w", err)
 	}
-	rem := gogit.NewRemote(ri.rh.Repository().Storer, &gogitconfig.RemoteConfig{Name: "publish-to", URLs: []string{gitURL}})
-	pushCtx, cancel := ri.rh.NetCtx(ctx)
+	rem := gogit.NewRemote(ri.rh.vr.Repository().Storer, &gogitconfig.RemoteConfig{Name: "publish-to", URLs: []string{gitURL}})
+	pushCtx, cancel := ri.rh.vr.NetCtx(ctx)
 	defer cancel()
 	var srv bytes.Buffer
 	err = rem.PushContext(pushCtx, &gogit.PushOptions{
@@ -654,8 +654,8 @@ func (ri *Index) RetractPushedBranch(ctx context.Context, branch string, auth tr
 	if branch == "" {
 		return ErrNoAgentBranch
 	}
-	defer ri.rh.LockPush(branch)()
-	remote, err := ri.rh.Repository().Remote("origin")
+	defer ri.rh.vr.LockPush(branch)()
+	remote, err := ri.rh.vr.Repository().Remote("origin")
 	if errors.Is(err, gogit.ErrRemoteNotFound) {
 		return nil // nothing can push here any more, and a re-run after a removal lands here
 	}
@@ -665,13 +665,13 @@ func (ri *Index) RetractPushedBranch(ctx context.Context, branch string, auth tr
 	name := plumbing.NewBranchReferenceName(branch)
 	tracking := plumbing.NewRemoteReferenceName("origin", branch)
 	var pushed plumbing.Hash
-	if ref, err := ri.rh.Storer().Reference(tracking); err == nil {
+	if ref, err := ri.rh.vr.Storer().Reference(tracking); err == nil {
 		pushed = ref.Hash()
 	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return fmt.Errorf("RetractPushedBranch: %s: %w", tracking, err)
 	}
 
-	netCtx, cancel := ri.rh.NetCtx(ctx)
+	netCtx, cancel := ri.rh.vr.NetCtx(ctx)
 	defer cancel()
 	refs, err := remote.ListContext(netCtx, &gogit.ListOptions{Auth: auth})
 	if err != nil && !errors.Is(err, transport.ErrEmptyRemoteRepository) {
@@ -692,7 +692,7 @@ func (ri *Index) RetractPushedBranch(ctx context.Context, branch string, auth tr
 		return fmt.Errorf("RetractPushedBranch: the origin's %s is at %s, not %s (the commit this instance pushed): left alone", branch, at, pushed)
 	default:
 		var srv bytes.Buffer
-		if err := ri.rh.Repository().PushContext(netCtx, &gogit.PushOptions{
+		if err := ri.rh.vr.Repository().PushContext(netCtx, &gogit.PushOptions{
 			RemoteName:        "origin",
 			RefSpecs:          []gogitconfig.RefSpec{gogitconfig.RefSpec(":" + name.String())},
 			RequireRemoteRefs: []gogitconfig.RefSpec{gogitconfig.RefSpec(pushed.String() + ":" + name.String())},
@@ -703,10 +703,10 @@ func (ri *Index) RetractPushedBranch(ctx context.Context, branch string, auth tr
 		}
 		log.Info().Str("branch", branch).Str("commit", pushed.String()).Msg("RetractPushedBranch: deleted on the origin")
 	}
-	if err := ri.rh.Storer().RemoveReference(tracking); err != nil && !errors.Is(err, plumbing.ErrReferenceNotFound) {
+	if err := ri.rh.vr.Storer().RemoveReference(tracking); err != nil && !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return fmt.Errorf("RetractPushedBranch: %s: %w", tracking, err)
 	}
-	if err := ri.rh.Repository().DeleteRemote("origin"); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
+	if err := ri.rh.vr.Repository().DeleteRemote("origin"); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
 		return fmt.Errorf("RetractPushedBranch: remove the origin remote: %w", err)
 	}
 	return nil
@@ -796,16 +796,16 @@ func (ri *Index) PublishUpstreamChange(ctx context.Context, from, path string, c
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: the origin has no branch: %w", vcs.ErrNoConsensusBranch)
 	}
 	rh := ri.rh
-	signer, err := rh.CommitSigner()
+	signer, err := rh.vr.CommitSigner()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
-	defer rh.LockPush(upstream)()
-	parent, err := rh.ResolveRef(ctx, upstream)
+	defer rh.vr.LockPush(upstream)()
+	parent, err := rh.vr.ResolveRef(ctx, upstream)
 	if err != nil || parent == plumbing.ZeroHash {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: local %s: %v", upstream, err)
 	}
-	pc, err := object.GetCommit(rh.Storer(), parent)
+	pc, err := object.GetCommit(rh.vr.Storer(), parent)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
@@ -815,7 +815,7 @@ func (ri *Index) PublishUpstreamChange(ctx context.Context, from, path string, c
 	}
 	var root plumbing.Hash
 	if content != nil {
-		blob := rh.Storer().NewEncodedObject()
+		blob := rh.vr.Storer().NewEncodedObject()
 		blob.SetType(plumbing.BlobObject)
 		w, err := blob.Writer()
 		if err != nil {
@@ -826,25 +826,25 @@ func (ri *Index) PublishUpstreamChange(ctx context.Context, from, path string, c
 			return plumbing.ZeroHash, err
 		}
 		w.Close()
-		bh, err := rh.Storer().SetEncodedObject(blob)
+		bh, err := rh.vr.Storer().SetEncodedObject(blob)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
-		if root, err = vcs.BuildTree(rh.Storer(), tree, path, bh); err != nil {
+		if root, err = vcs.BuildTree(rh.vr.Storer(), tree, path, bh); err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 		}
-	} else if root, err = vcs.DeleteFromTree(rh.Storer(), tree, path); err != nil {
+	} else if root, err = vcs.DeleteFromTree(rh.vr.Storer(), tree, path); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
 	if root == tree.Hash {
 		return parent, nil // nothing to change
 	}
-	author, committer, err := rh.CommitSigs(ctx, upstream, "updated")
+	author, committer, err := rh.vr.CommitSigs(ctx, upstream, "updated")
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
 	c := &object.Commit{Author: author, Committer: committer, Message: message, TreeHash: root, ParentHashes: []plumbing.Hash{parent}}
-	h, err := vcs.StoreCommit(rh.Storer(), signer, c)
+	h, err := vcs.StoreCommit(rh.vr.Storer(), signer, c)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
@@ -853,10 +853,10 @@ func (ri *Index) PublishUpstreamChange(ctx context.Context, from, path string, c
 	if err := rh.JudgeOwnRange(upstream, parent, h, ri.ownID(upstream), ri.branchTip(from)); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w", err)
 	}
-	pushCtx, cancel := rh.NetCtx(ctx)
+	pushCtx, cancel := rh.vr.NetCtx(ctx)
 	defer cancel()
 	var srv bytes.Buffer
-	if err := rh.Repository().PushContext(pushCtx, &gogit.PushOptions{
+	if err := rh.vr.Repository().PushContext(pushCtx, &gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(fmt.Sprintf("%s:refs/heads/%s", h, upstream))},
 		Auth:       auth,
@@ -867,7 +867,7 @@ func (ri *Index) PublishUpstreamChange(ctx context.Context, from, path string, c
 		}
 		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: %w%s", err, remoteSays(srv.String()))
 	}
-	unlock := rh.LockBranch(upstream)
+	unlock := rh.vr.LockBranch(upstream)
 	_, _, err = rh.AdvanceBranchTo(context.WithoutCancel(ctx), upstream, h)
 	unlock()
 	if err != nil {

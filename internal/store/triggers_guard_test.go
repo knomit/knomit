@@ -38,15 +38,16 @@ var triggersAllowedCalls = map[string][]string{
 		// F23: GuidanceAt's path re-check and content checks — pure helpers
 		// over the path string and the blob it read, no write
 		"strings.HasPrefix", "path.Clean", "slices.Contains", "strings.Split", "utf8.ValidString", "strings.ContainsRune",
-		// the repo's handles, read through the vcs accessors (field reads
-		// before the vcs extraction): the go-git repository and storer for the
-		// git reads above, the database for this store's own tables below
-		"rh.Repository", "?.Repository", "rh.Storer", "rh.DB",
+		// the repo's handles, read through the vcs accessors of the named
+		// handle rh.vr (E2: no longer promoted): the go-git repository and
+		// storer for the git reads above, the database for this store's own
+		// tables below
+		"rh.vr.Repository", "?.Repository", "rh.vr.Storer", "rh.vr.DB",
 		// this store's own tables (and the read-only liveness join)
-		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "sqlite.Conn", "rh.BranchID",
+		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "sqlite.Conn", "rh.vr.BranchID",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",
 		// the signer
-		"rh.CommitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",
+		"rh.vr.CommitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",
 		// pure helpers
 		"boolInt", "UTCStamp", "time.Now", "time.Unix", "?.UTC", "?.Unix", "?.Format", "ctx.Err", "errors.Is", "errors.New", "fmt.Errorf", "sort.Strings",
 		"append", "len", "make", "min",
@@ -70,6 +71,23 @@ var triggersAllowedCalls = map[string][]string{
 	},
 }
 
+// triggersCallKey is callKey, except that a call through the facts.Repo's
+// named vcs handle keeps its whole chain. Since E2 facts.Repo no longer embeds
+// *vcs.Repo, a vcs call reads rh.vr.Storer(); callKey would fold that to the
+// anonymous "?.Storer", which would then allow ANY x.y.Storer call. Keeping
+// "rh.vr.Storer" in the key leaves the allowlist exactly as narrow as it was
+// when the key was "rh.Storer".
+func triggersCallKey(call *ast.CallExpr) string {
+	if fn, ok := call.Fun.(*ast.SelectorExpr); ok {
+		if x, ok := fn.X.(*ast.SelectorExpr); ok && x.Sel.Name == "vr" {
+			if id, ok := x.X.(*ast.Ident); ok {
+				return id.Name + ".vr." + fn.Sel.Name
+			}
+		}
+	}
+	return callKey(call)
+}
+
 // TestTriggers_StoreCallsAreAllowlisted is the structural no-write guard for
 // the dispatcher's store files, modelled on F05's. Sabotage: add a WriteFact
 // (or any ref/object write) to triggers.go — the call is not on the list.
@@ -88,7 +106,7 @@ func TestTriggers_StoreCallsAreAllowlisted(t *testing.T) {
 			if !ok {
 				return true
 			}
-			key := callKey(call)
+			key := triggersCallKey(call)
 			if key == "" {
 				return true
 			}

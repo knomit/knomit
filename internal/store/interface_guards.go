@@ -18,6 +18,14 @@ import (
 
 var _ BranchIndex = (*repoHandler)(nil)
 var _ ExperimentIndex = (*repoHandler)(nil)
+
+// facts.Repo no longer embeds *vcs.Repo, so the facts interfaces below are
+// satisfied by the parent's repoHandler (which embeds both), not by *facts.Repo.
+var _ facts.TriggerIndex = (*repoHandler)(nil)
+var _ facts.TemplateIndex = (*repoHandler)(nil)
+var _ facts.SystemFileIndex = (*repoHandler)(nil)
+var _ facts.SkillIndex = (*repoHandler)(nil)
+
 var _ FactIndex = (*facts.Index)(nil)
 var _ PipelineIndex = (*sessions.PipelineIndex)(nil)
 var _ RemoteIndex = (*remotesync.Index)(nil)

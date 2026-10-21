@@ -97,17 +97,17 @@ func (e *OwnCommitRefusedError) Is(target error) bool { return target == ErrOwnC
 // verify_signatures at the judged ontology decides 2 and 3 as everywhere:
 // enforce refuses, log logs, off checks nothing.
 func (rh *Repo) JudgeOwnRange(upstream string, base, tip plumbing.Hash, own string, vouch plumbing.Hash) error {
-	tipC, err := object.GetCommit(rh.Storer(), tip)
+	tipC, err := object.GetCommit(rh.vr.Storer(), tip)
 	if err != nil {
 		return fmt.Errorf("judge own commits: %s: %w", tip, err)
 	}
 	var baseC *object.Commit
 	onBase := map[plumbing.Hash]bool{}
 	if !base.IsZero() {
-		if baseC, err = object.GetCommit(rh.Storer(), base); err != nil {
+		if baseC, err = object.GetCommit(rh.vr.Storer(), base); err != nil {
 			return fmt.Errorf("judge own commits: %s: %w", base, err)
 		}
-		if err := vcs.WalkHistory(rh.Storer(), base, nil, func(c *object.Commit) { onBase[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.vr.Storer(), base, nil, func(c *object.Commit) { onBase[c.Hash] = true }); err != nil {
 			return fmt.Errorf("judge own commits: %w", err)
 		}
 	}
@@ -135,13 +135,13 @@ func (rh *Repo) JudgeOwnRange(upstream string, base, tip plumbing.Hash, own stri
 		return nil
 	}
 	var commits []*object.Commit
-	if err := vcs.WalkHistory(rh.Storer(), tip, onBase, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
+	if err := vcs.WalkHistory(rh.vr.Storer(), tip, onBase, func(c *object.Commit) { commits = append(commits, c) }); err != nil {
 		return fmt.Errorf("judge own commits: %w", err)
 	}
 	if len(commits) == 0 {
 		return nil
 	}
-	root := rh.OntologyRoot()
+	root := rh.vr.OntologyRoot()
 	if r, ok := verify.BranchFactsValid(tipC, baseC, ont, root); !ok {
 		return &OwnCommitRefusedError{Upstream: upstream, Commit: r.Commit, Rule: r.Rule,
 			Text: fmt.Sprintf("commit %s %s: %s: %s", r.Commit, verify.CommitRefusedByValidation, r.Rule, r.Reason)}
@@ -179,7 +179,7 @@ func (rh *Repo) JudgeOwnRange(upstream string, base, tip plumbing.Hash, own stri
 	if vouch.IsZero() {
 		vouch = tip
 	}
-	vouchC, err := object.GetCommit(rh.Storer(), vouch)
+	vouchC, err := object.GetCommit(rh.vr.Storer(), vouch)
 	if err != nil {
 		return fmt.Errorf("judge own commits: %s: %w", vouch, err)
 	}
@@ -194,7 +194,7 @@ func (rh *Repo) JudgeOwnRange(upstream string, base, tip plumbing.Hash, own stri
 		}
 	}
 	selfFP := ""
-	if s, err := rh.CommitSigner(); err == nil {
+	if s, err := rh.vr.CommitSigner(); err == nil {
 		if fp, err := verify.KeyFingerprint(s.PublicKey()); err == nil {
 			selfFP = fp
 		}
@@ -231,7 +231,7 @@ func (rh *Repo) JudgeOwnRange(upstream string, base, tip plumbing.Hash, own stri
 			return &OwnCommitRefusedError{Upstream: upstream, Commit: c.Hash.String(), Rule: r.Rule,
 				Text: fmt.Sprintf("commit %s %s: %s: %s", c.Hash, verify.CommitRefusedByJudge, r.Rule, r.Reason)}
 		}
-		log.Warn().Str("repo", rh.Name()).Str("commit", c.Hash.String()).Str("rule", r.Rule).Str("reason", r.Reason).
+		log.Warn().Str("repo", rh.vr.Name()).Str("commit", c.Hash.String()).Str("rule", r.Rule).Str("reason", r.Reason).
 			Msg("judge own commits: commit would be refused (verify_signatures=log)")
 	}
 	return nil
@@ -332,7 +332,7 @@ func markerIn(c *object.Commit) (string, error) {
 // (refs/remotes/origin/<upstream>), else the local upstream, else nothing.
 func (ri *Index) publishBase(upstream string) plumbing.Hash {
 	for _, name := range []plumbing.ReferenceName{plumbing.NewRemoteReferenceName("origin", upstream), plumbing.NewBranchReferenceName(upstream)} {
-		if ref, err := ri.rh.Storer().Reference(name); err == nil {
+		if ref, err := ri.rh.vr.Storer().Reference(name); err == nil {
 			return ref.Hash()
 		}
 	}
@@ -343,7 +343,7 @@ func (ri *Index) publishBase(upstream string) plumbing.Hash {
 // it has none: then no commit is its own, and every one is judged as a
 // member's).
 func (ri *Index) ownID(branch string) string {
-	id, _ := ri.rh.OwnAgentID(branch)
+	id, _ := ri.rh.vr.OwnAgentID(branch)
 	return id
 }
 
@@ -352,7 +352,7 @@ func (ri *Index) branchTip(branch string) plumbing.Hash {
 	if branch == "" {
 		return plumbing.ZeroHash
 	}
-	ref, err := ri.rh.Storer().Reference(plumbing.NewBranchReferenceName(branch))
+	ref, err := ri.rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return plumbing.ZeroHash
 	}
@@ -452,7 +452,7 @@ func lostCommit(c *object.Commit) LostCommit {
 // and, with ownOnly, a foreign side commit a *DropForeignError, each
 // carrying the fallback's left-out list.
 func (rh *Repo) dropPlan(branch string, tip plumbing.Hash, onUp map[plumbing.Hash]bool, drop plumbing.Hash, ownOnly, leaveOut bool) (line []dropStep, unfolded int, leftOut []LostCommit, err error) {
-	dropC, err := object.GetCommit(rh.Storer(), drop)
+	dropC, err := object.GetCommit(rh.vr.Storer(), drop)
 	if err != nil {
 		return nil, 0, nil, err
 	}
@@ -466,17 +466,17 @@ func (rh *Repo) dropPlan(branch string, tip plumbing.Hash, onUp map[plumbing.Has
 	if dropC.NumParents() > 1 && !leaveOut {
 		return nil, 0, nil, &DropMergeError{Commit: drop.String(), LeaveOut: fallback()}
 	}
-	own, _ := rh.OwnAgentID(branch)
+	own, _ := rh.vr.OwnAgentID(branch)
 	// groups in tip -> base order; each group's steps in replay order.
 	var groups [][]dropStep
-	cur, err := object.GetCommit(rh.Storer(), tip)
+	cur, err := object.GetCommit(rh.vr.Storer(), tip)
 	if err != nil {
 		return nil, 0, nil, err
 	}
 	reaches := func(from []plumbing.Hash, target plumbing.Hash) (bool, error) {
 		found := false
 		for _, p := range from {
-			if err := vcs.WalkHistory(rh.Storer(), p, onUp, func(c *object.Commit) {
+			if err := vcs.WalkHistory(rh.vr.Storer(), p, onUp, func(c *object.Commit) {
 				if c.Hash == target {
 					found = true
 				}
@@ -493,11 +493,11 @@ func (rh *Repo) dropPlan(branch string, tip plumbing.Hash, onUp map[plumbing.Has
 		for h := range onUp {
 			first[h] = true
 		}
-		if err := vcs.WalkHistory(rh.Storer(), m.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
+		if err := vcs.WalkHistory(rh.vr.Storer(), m.ParentHashes[0], onUp, func(c *object.Commit) { first[c.Hash] = true }); err != nil {
 			return err
 		}
 		for _, p := range m.ParentHashes[1:] {
-			if err := vcs.WalkHistory(rh.Storer(), p, first, func(c *object.Commit) {
+			if err := vcs.WalkHistory(rh.vr.Storer(), p, first, func(c *object.Commit) {
 				first[c.Hash] = true // a commit two parents share once
 				visit(c)
 			}); err != nil {

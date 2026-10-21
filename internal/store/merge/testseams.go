@@ -70,7 +70,7 @@ func ExperimentRewoundRefNameForTest(name string) plumbing.ReferenceName {
 // landed here".
 func (rh *Repo) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
 	mustBeTest("SetExperimentActivityForTest")
-	res, err := sqlite.Conn(ctx, rh.DB()).ExecContext(ctx,
+	res, err := sqlite.Conn(ctx, rh.vr.DB()).ExecContext(ctx,
 		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`, when.Unix(), name)
 	if err != nil {
 		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)

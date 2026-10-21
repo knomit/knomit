@@ -68,11 +68,11 @@ func (ri *Index) UpstreamBranch() string {
 // (a store not yet initialised); several candidates are warned about once and
 // the first by name is used, unrecorded.
 func (ri *Index) localConsensusBranch() string {
-	if b := ri.Consensus(); b != "" {
+	if b := ri.cachedConsensus(); b != "" {
 		return b
 	}
 	if b := ri.RecordedConsensusBranch(); b != "" {
-		ri.SetConsensus(b)
+		ri.setConsensus(b)
 		return b
 	}
 	cands := ri.consensusCandidates()
@@ -83,7 +83,7 @@ func (ri *Index) localConsensusBranch() string {
 		ri.RecordConsensusBranch(cands[0])
 		return cands[0]
 	default:
-		ri.WarnAmbiguousOnce(func() {
+		ri.warnAmbiguousOnceDo(func() {
 			log.Warn().Strs("branches", cands).Str("using", cands[0]).
 				Msg("consensus branch: none recorded and the repo has no origin; several candidate branches, using the first")
 		})
@@ -94,11 +94,11 @@ func (ri *Index) localConsensusBranch() string {
 // RecordedConsensusBranch is the name stored in the meta table ("" when none
 // is recorded or the read fails).
 func (ri *Index) RecordedConsensusBranch() string {
-	if ri.rh == nil || ri.rh.DB() == nil {
+	if ri.rh == nil || ri.rh.vr.DB() == nil {
 		return ""
 	}
 	var b string
-	err := ri.rh.DB().QueryRow(`SELECT value FROM meta WHERE key = ?`, ConsensusBranchKey).Scan(&b)
+	err := ri.rh.vr.DB().QueryRow(`SELECT value FROM meta WHERE key = ?`, ConsensusBranchKey).Scan(&b)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Warn().Err(err).Msg("consensus branch: meta read failed")
 	}
@@ -112,11 +112,11 @@ func (ri *Index) RecordConsensusBranch(name string) {
 	if name == "" {
 		return
 	}
-	ri.SetConsensus(name)
-	if ri.rh == nil || ri.rh.DB() == nil {
+	ri.setConsensus(name)
+	if ri.rh == nil || ri.rh.vr.DB() == nil {
 		return
 	}
-	if _, err := ri.rh.DB().ExecContext(context.Background(),
+	if _, err := ri.rh.vr.DB().ExecContext(context.Background(),
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, ConsensusBranchKey, name); err != nil {
 		log.Warn().Err(err).Str("branch", name).Msg("consensus branch: record failed")
 	}
@@ -127,10 +127,10 @@ func (ri *Index) RecordConsensusBranch(name string) {
 // agent branches (this machine's and pushed peers'), experiments and
 // generated branches.
 func (ri *Index) consensusCandidates() []string {
-	if ri.rh == nil || ri.rh.Storer() == nil {
+	if ri.rh == nil || ri.rh.vr.Storer() == nil {
 		return nil
 	}
-	iter, err := ri.rh.Storer().IterReferences()
+	iter, err := ri.rh.vr.Storer().IterReferences()
 	if err != nil {
 		return nil
 	}

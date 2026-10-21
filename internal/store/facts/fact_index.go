@@ -32,11 +32,11 @@ func NewIndex(rh *Repo) *Index { return &Index{rh: rh} }
 // DiffFiles returns paths added/modified/deleted between fromCommit and the tip of branch.
 // Only .md files are returned. If fromCommit is empty, diffs from empty tree.
 func (fi *Index) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
-	return fi.rh.DiffFiles(ctx, branch, fromCommit)
+	return fi.rh.vr.DiffFiles(ctx, branch, fromCommit)
 }
 
 // ChangesUnder reports what differs under a folder between two commits. See
 // changes.go: a read of two trees, no clock, no write.
 func (fi *Index) ChangesUnder(ctx context.Context, branch string, q vcs.ChangesQuery) (vcs.ChangesResult, error) {
-	return fi.rh.ChangesUnder(ctx, branch, q)
+	return fi.rh.vr.ChangesUnder(ctx, branch, q)
 }
