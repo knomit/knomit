@@ -302,9 +302,14 @@ func TestPush_UnreadableSnapshotIsAnError(t *testing.T) {
 
 // P6 HungOriginDoesNotStallWrites: P1's property against a REAL hang — an
 // origin that accepts the connection and never answers. While the push waits
-// on it, a writer writing every 50 ms keeps going and no write waits anywhere
-// near the push's duration. Sabotage: hold LockBranch across PushContext →
-// every write stalls until the push gives up → red.
+// on it, a burst of writes all complete, and the push is still hung when the
+// last one returns. The proof is the ORDER (every write finished before the
+// push did), not a latency bound: a wall-clock bound on one write measures
+// machine load, not the lock (it read 1.138 s against a 1 s bound under
+// parallel test runs). The 10 s wait is only a hang detector.
+// Sabotage: hold LockBranch across PushContext → every write waits until the
+// push gives up → the writes miss the hang detector (or the push returns
+// first) → red.
 func TestPush_HungOriginDoesNotStallWrites(t *testing.T) {
 	svc, _ := newSnapshotPushFixture(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -330,10 +335,10 @@ func TestPush_HungOriginDoesNotStallWrites(t *testing.T) {
 	svc.SetOrigin(&Origin{URL: hung, Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote(hung, "main", snapBranch))
 
-	// The watchdog stands in for network_timeout: it ends the push after 5 s
-	// whatever happens, so a write stuck behind it (the sabotage) returns
-	// late and fails the latency bound instead of hanging the test.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The watchdog stands in for network_timeout: it ends the push whatever
+	// happens. It is well past the hang detector below, so a healthy run never
+	// sees the push end before the writes do, however loaded the machine.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, err := svc.Remote().Push(ctx, snapBranch, nil); done <- err }()
@@ -344,19 +349,25 @@ func TestPush_HungOriginDoesNotStallWrites(t *testing.T) {
 		t.Fatal("the push never reached the origin")
 	}
 
-	var maxWait time.Duration
-	writes := 0
-	deadline := time.Now().Add(2 * time.Second)
-	for i := 0; time.Now().Before(deadline); i++ {
-		start := time.Now()
-		_, err := svc.Facts().WriteFact(context.Background(), snapBranch, fmt.Sprintf("kb/notes/hung-%d.md", i),
-			"---\ntype: observation\n---\n# hung\n\nhung", "write during a hung push", "test")
-		require.NoError(t, err)
-		if d := time.Since(start); d > maxWait {
-			maxWait = d
+	const writes = 10
+	written := make(chan error, 1)
+	go func() {
+		for i := 0; i < writes; i++ {
+			if _, err := svc.Facts().WriteFact(context.Background(), snapBranch, fmt.Sprintf("kb/notes/hung-%d.md", i),
+				"---\ntype: observation\n---\n# hung\n\nhung", "write during a hung push", "test"); err != nil {
+				written <- err
+				return
+			}
 		}
-		writes++
-		time.Sleep(50 * time.Millisecond)
+		written <- nil
+	}()
+	select {
+	case err := <-written:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("writes waited on the hung push")
 	}
 	select {
 	case err := <-done:
@@ -365,6 +376,4 @@ func TestPush_HungOriginDoesNotStallWrites(t *testing.T) {
 	}
 	cancel()
 	<-done
-	require.GreaterOrEqual(t, writes, 10, "writes kept going during the hung push")
-	require.Less(t, maxWait, time.Second, "a write waited on the hung push")
 }
