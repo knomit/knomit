@@ -389,7 +389,7 @@ func TestBridgeLineage_BackwardProjectionExcludesLineagePair(t *testing.T) {
 		env := newGraphEnv(t, "agent/test").seedFacts(stored...).
 			partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
 			similar([2]string{"kb/a.md", "kb/b.md"})
-		m := env.idx()
+		m := env.allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 		out, err := BuildBackwardBridges(ctx, m, facts, "agent/test", testLocalRepoID,
 			EffortHigh, BridgeDomain, 2.0, 2, testNeighborKinds, testCfg, ScopeFilter{})

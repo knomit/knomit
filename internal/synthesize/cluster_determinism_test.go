@@ -78,7 +78,7 @@ func capturePathOrder(t *testing.T) []string {
 	// No seeded facts or edges: the neighbour searches find nothing, and the
 	// edge read only has to report the node list it was handed.
 	env := newGraphEnv(t, branch)
-	idx := env.idx()
+	idx := env.allow("Search", "SubgraphEdges").idx()
 	var captured []string
 	calls := 0
 	overridesOf(t, idx).subgraphEdges(func(_ context.Context, paths []string) ([][2]string, error) {

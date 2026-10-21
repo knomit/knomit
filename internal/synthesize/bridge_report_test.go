@@ -52,7 +52,7 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 	// nothing cites anything → gap = 1.0; bridgeTok is carried by 2 live facts.
 	idx := newGraphEnv(t, branch).seedResults(searchResults).
 		partition([][]string{{"kb/a.md", "kb/c.md", "kb/d.md"}, {"kb/b.md"}}).
-		similar([2]string{"kb/a.md", "kb/b.md"}).idx()
+		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5,
@@ -136,7 +136,7 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 	// p,q in distinct communities → their shared token bridges, but with no
 	// SIMILAR_TO edge between them cohesion is 0 and the candidate is gated out.
 	idx := newGraphEnv(t, branch).seedResults(searchResults).
-		partition([][]string{{"kb/p.md"}, {"kb/q.md"}}).idx()
+		partition([][]string{{"kb/p.md"}, {"kb/q.md"}}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5, // cohesion 0 fails this gate
@@ -181,7 +181,7 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 	// alpha has an edge → cohesion 1.0; beta has none → cohesion 0 (gated out by CohFloor=0.5)
 	idx := newGraphEnv(t, branch).seedResults(searchResults).
 		partition([][]string{{"kb/a1.md", "kb/b1.md"}, {"kb/a2.md", "kb/b2.md"}}).
-		similar([2]string{"kb/a1.md", "kb/a2.md"}).idx()
+		similar([2]string{"kb/a1.md", "kb/a2.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5, // beta (cohesion=0) gated out

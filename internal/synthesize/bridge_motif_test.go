@@ -359,7 +359,7 @@ func TestSharedMotifSpecificity_SecondSharedMotifBoostsNeverGates(t *testing.T) 
 	idx := newGraphEnv(t, "main").seed(
 		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "bravo-shape"}},
 		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape", "bravo-shape"}},
-	).idx()
+	).allow("TokenDF").idx()
 
 	one := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape"}},
@@ -383,7 +383,7 @@ func TestSharedMotifSpecificity_OnlyMotifsEveryMemberCarriesCount(t *testing.T) 
 	idx := newGraphEnv(t, "main").seed(
 		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "bravo-shape"}},
 		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape"}},
-	).idx()
+	).allow("TokenDF").idx()
 
 	cand := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
@@ -404,7 +404,7 @@ func TestSharedMotifSpecificity_IsInverseInDF(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		specs = append(specs, seedFact{path: fmt.Sprintf("kb/more/%d.md", i), motifs: []string{"common-shape"}})
 	}
-	idx := newGraphEnv(t, "main").seed(specs...).idx()
+	idx := newGraphEnv(t, "main").seed(specs...).allow("TokenDF").idx()
 
 	mk := func(m string) BridgeSeedSet {
 		return BridgeSeedSet{Token: m, Members: []factForLLM{
@@ -424,7 +424,7 @@ func TestSharedMotifSpecificity_OneMemberCannotVoteTwiceForACluster(t *testing.T
 	idx := newGraphEnv(t, "main").seed(
 		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "alpha-shaped"}},
 		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape"}},
-	).idx()
+	).allow("TokenDF").idx()
 
 	// Both spellings resolve to one canonical id.
 	resolve := func(string) string { return "alpha-shape" }

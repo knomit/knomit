@@ -152,7 +152,7 @@ func cohesiveIdx(t *testing.T, seeds []factForLLM) *index.Facade {
 	for _, members := range groups {
 		env.similarAll(members)
 	}
-	return env.idx()
+	return env.allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 }
 
 // TestBridgeSeeds_EffortBudget asserts the per-effort budget truncates the pool
@@ -297,7 +297,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	// Scoring: a↔b similar (a real edge), nothing cites anything.
 	m := newGraphEnv(t, "agent/test").seedFacts(synthFacts...).
 		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
-		similar([2]string{"kb/a.md", "kb/b.md"}).idx()
+		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	// Entity kind: only the shared ENTITY token bridges.
 	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeEntity, 2.0, 2, testNeighborKinds, testCfg, ScopeFilter{})
@@ -432,7 +432,7 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	// a,b cluster apart so "shared" bridges across communities.
 	m := newGraphEnv(t, "agent/test").seedFacts(synthFacts...).
 		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
-		similar([2]string{"kb/a.md", "kb/b.md"}).idx()
+		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testNeighborKinds, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -502,7 +502,7 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 	}
 
 	// a↔b connected → cohesion = 1.0 (≥ CohFloor=0.5) — passes the gate.
-	idx := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/a.md", "kb/b.md"}).idx()
+	idx := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -531,7 +531,7 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 	}
 
 	// No edges → cohesion = 0 < CohFloor=0.5 → gate fires → not kept.
-	idx := newGraphEnv(t, branch).seedAll(seeds).idx()
+	idx := newGraphEnv(t, branch).seedAll(seeds).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -568,7 +568,7 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 		{"kb/p2.md", "kb/p3.md"}, {"kb/p2.md", "kb/p4.md"},
 		{"kb/p3.md", "kb/p4.md"},
 	}
-	idx := newGraphEnv(t, branch).seedAll(seeds).similar(cohesivePairs...).idx()
+	idx := newGraphEnv(t, branch).seedAll(seeds).similar(cohesivePairs...).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -623,11 +623,10 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 	ctx := context.Background()
 	branch := "main"
 
-	// Two tokens: "alpha" (cohesion 1.0) and "beta" (cohesion 1.0).
-	// Both cross-community; alpha is carried by 2 live facts (df=2, spec=0.5),
-	// beta by 3 (df=3, spec=1/3: a third carrier is seeded in community 0).
-	// With WCoh=WGap=WSpec=1 and gap=1.0 for both, alpha out-scores beta, and
-	// beta is the rarer-to-score token only by its extra carrier.
+	// Two tokens: "alpha" and "beta", both cross-community with cohesion 1.0.
+	// alpha is carried by 2 live facts (df=2, spec=0.5); beta by 3 (df=3,
+	// spec=1/3: a third carrier is seeded in community 0). With
+	// WCoh=WGap=WSpec=1 and gap=1.0 for both, alpha's Q exceeds beta's.
 	// Expected order: alpha first.
 	seeds := []factForLLM{
 		makeFact("kb/a1.md", "authored", nil, []string{"alpha"}),
@@ -840,7 +839,7 @@ func TestBuildScoredBridges_Determinism(t *testing.T) {
 		Clusters: map[int][]string{0: {"kb/p.md"}, 1: {"kb/q.md"}},
 	}
 
-	idx := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/p.md", "kb/q.md"}).idx()
+	idx := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/p.md", "kb/q.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 
 	run1, err1 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	run2, err2 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})

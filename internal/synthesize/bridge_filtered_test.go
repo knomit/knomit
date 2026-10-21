@@ -545,7 +545,7 @@ func TestBuildFilteredBridges_DerivationGapError(t *testing.T) {
 	wantErr := errors.New("revdeps failed")
 
 	idx := newGraphEnv(t, "main").seedAll(seeds).similar([2]string{"kb/x.md", "kb/y.md"}).idx()
-	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency"},
+	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"},
 		Fail: map[string]error{"ReverseDependentPaths": wantErr}})
 
 	_, err := buildFilteredBridges(

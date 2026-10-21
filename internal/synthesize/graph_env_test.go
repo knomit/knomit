@@ -26,6 +26,8 @@ type graphEnv struct {
 	t      *testing.T
 	svc    *store.Service
 	branch string
+	// log is the reads seen under the current policy.
+	log *readLog
 }
 
 func newGraphEnv(t *testing.T, branch string) *graphEnv {
@@ -34,7 +36,23 @@ func newGraphEnv(t *testing.T, branch string) *graphEnv {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
-	return &graphEnv{t: t, svc: svc, branch: branch}
+	e := &graphEnv{t: t, svc: svc, branch: branch}
+	// Strict by default: the handle fails the test on ANY read of the index
+	// until the test widens the policy with allow / allowAll (or guardReads).
+	e.log = guardReads(t, svc.Search(), readPolicy{})
+	return e
+}
+
+// allow widens the strict default to the named reads and returns the env.
+func (e *graphEnv) allow(methods ...string) *graphEnv {
+	e.log = guardReads(e.t, e.idx(), readPolicy{Allow: methods})
+	return e
+}
+
+// allowAll turns the strict default off.
+func (e *graphEnv) allowAll() *graphEnv {
+	e.log = guardReads(e.t, e.idx(), readPolicy{AllowAll: true})
+	return e
 }
 
 // idx is the store's own search handle.
@@ -259,22 +277,31 @@ func (l *readLog) CountOf(method string) int {
 // The policy is store-wide (see index.Overrides): every read of every query
 // service of that store passes through it. It is strict by default: a read the
 // policy does not allow fails the test, which restores the "any other call
-// fails" property the gomock fakes had for every method.
+// fails" property the gomock fakes had for every method. A Fail entry must name
+// a read that can hand an error to its caller, and is also subject to the
+// strict check.
 func guardReads(t *testing.T, idx *index.Facade, p readPolicy) *readLog {
 	t.Helper()
 	allowed := make(map[string]bool, len(p.Allow))
 	for _, a := range p.Allow {
 		allowed[a] = true
 	}
+	for m := range p.Fail {
+		switch m {
+		case "SimilarityAdjacency", "ReverseDependentPaths", "TokenDF", "SubgraphEdges":
+		default:
+			t.Fatalf("guardReads: Fail names %q, which does not return an error to its caller; only SimilarityAdjacency, ReverseDependentPaths, TokenDF and SubgraphEdges can fail", m)
+		}
+	}
 	log := &readLog{}
 	s := overridesOf(t, idx)
 	s.ov.Reads = func(method string) error {
 		log.add(method)
-		if err, ok := p.Fail[method]; ok {
-			return err
-		}
 		if !p.AllowAll && !allowed[method] {
 			t.Errorf("unexpected read of %s", method)
+		}
+		if err, ok := p.Fail[method]; ok {
+			return err
 		}
 		return nil
 	}

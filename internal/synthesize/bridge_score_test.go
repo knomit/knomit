@@ -271,11 +271,27 @@ func TestDerivationGap_ErrorPropagation(t *testing.T) {
 
 // TestSpecificity_DF1_ReturnsOne verifies df=1 → spec=1.0 (maximally specific).
 func TestSpecificity_DF1_ReturnsOne(t *testing.T) {
-	// Exactly one live fact carries the entity.
+	// Exactly one live fact carries the ENTITY "auth", while three carry the
+	// DOMAIN "auth": a read of the wrong kind (domain df 3, spec 1/3) or of the
+	// wrong token or branch (df 0 or an error) cannot also come out as 1.0
+	// through a df of 1.
 	idx := newGraphEnv(t, "main").seed(
 		seedFact{path: "kb/one.md", entities: []string{"auth"}},
-		seedFact{path: "kb/other.md", entities: []string{"unrelated"}},
-	).idx()
+		seedFact{path: "kb/d1.md", domains: []string{"auth"}},
+		seedFact{path: "kb/d2.md", domains: []string{"auth"}},
+		seedFact{path: "kb/d3.md", domains: []string{"auth"}},
+	).allow("TokenDF").idx()
+
+	// The exact read: entity "auth" on "main" is carried by exactly one fact,
+	// the domain "auth" by three (so the kind matters), and another branch has
+	// no such branch at all. A wrong token alone reads df 0, which max(df,1)
+	// also scores 1.0 (TestSpecificity_DF0), so the precondition pins df == 1.
+	df, err := idx.TokenDF(context.Background(), "main", "auth", "entity")
+	require.NoError(t, err)
+	require.Equal(t, 1, df, "precondition: entity auth has one carrier")
+	dfDomain, err := idx.TokenDF(context.Background(), "main", "auth", "domain")
+	require.NoError(t, err)
+	require.Equal(t, 3, dfDomain, "precondition: the kind changes the answer")
 
 	got, err := specificity(context.Background(), "main", "auth", "entity", idx)
 	if err != nil {
@@ -297,7 +313,7 @@ func TestSpecificity_DF4_Returns0_25(t *testing.T) {
 		seedFact{path: "kb/c3.md", domains: []string{"cache"}},
 		seedFact{path: "kb/c4.md", domains: []string{"cache"}},
 		seedFact{path: "kb/d1.md", domains: []string{"other"}},
-	).idx()
+	).allow("TokenDF").idx()
 
 	got, err := specificity(context.Background(), "main", "cache", "domain", idx)
 	if err != nil {
@@ -314,7 +330,7 @@ func TestSpecificity_DF4_Returns0_25(t *testing.T) {
 // yielding spec=1.0.
 func TestSpecificity_DF0_ReturnsOne(t *testing.T) {
 	// No live fact carries the entity: the real document frequency is 0.
-	idx := newGraphEnv(t, "main").seed(seedFact{path: "kb/x.md", entities: []string{"common"}}).idx()
+	idx := newGraphEnv(t, "main").seed(seedFact{path: "kb/x.md", entities: []string{"common"}}).allow("TokenDF").idx()
 
 	got, err := specificity(context.Background(), "main", "rare", "entity", idx)
 	if err != nil {
