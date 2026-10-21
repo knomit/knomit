@@ -256,6 +256,12 @@ type SearchFunc = func(ctx context.Context, branch string, q SearchOptions) ([]S
 //     cohesion) holds edges ACROSS those communities: one real table cannot be
 //     both, so the clustering read is scripted and cohesion is seeded.
 //
+// NESTED CALLS: probes and the Search wrapper fire on nested calls too, not
+// only on the call a test makes. ExplainFact calls IncomingAtCommit and
+// OutgoingAtCommit (three probes for one call), and RecentFacts reaches
+// FactQuery.Search through recentFactsSearch, so a Search wrapper also changes
+// what RecentFacts returns. A strict policy must allow the nested names too.
+//
 // SCOPE: an Overrides is installed on the whole *Service's query services, not
 // on one handle. Service.Search(), FactQuery(), GraphStore(), HistoryQuery()
 // and Methodology() all hand out the same services, so installing through any
