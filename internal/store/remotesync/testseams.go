@@ -128,12 +128,3 @@ func SetStoreHooksForTest(afterSnapshot func(branch string, snap plumbing.Hash),
 		storeHooksMu.Unlock()
 	}
 }
-
-// ForgetConsensusForTest empties the cached consensus branch, as on a repo
-// opened from an older binary that never recorded one. It is the only way a
-// white-box test outside this package can reach the cache now that the setter
-// is unexported; it does not touch the recorded meta row.
-func (ri *Index) ForgetConsensusForTest() {
-	mustBeTest("ForgetConsensusForTest")
-	ri.setConsensus("")
-}

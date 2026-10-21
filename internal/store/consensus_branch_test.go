@@ -46,15 +46,20 @@ func TestConsensusBranch_RecordedNotDefaulted(t *testing.T) {
 	})
 
 	t.Run("a repo written before the name was recorded resolves its one non-agent branch", func(t *testing.T) {
-		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+		path := filepath.Join(t.TempDir(), "k.db")
+		svc, err := Open(path)
 		require.NoError(t, err)
-		defer svc.Close()
 		require.NoError(t, svc.InitRepoWithUpstream(context.Background(), map[string]string{}, "trunk", "agent/host-1"))
-		// Forget the record, as on a repo from an older binary; add a pushed
-		// peer branch and an experiment, which are never candidates.
+		// Forget the record, as on a repo from an older binary, then reopen so
+		// the fresh index starts with an empty cache (init cached "trunk");
+		// add a pushed peer branch and an experiment, which are never candidates.
 		_, err = svc.rh.DB().Exec(`DELETE FROM meta WHERE key = ?`, remotesync.ConsensusBranchKey)
 		require.NoError(t, err)
-		svc.ri.ForgetConsensusForTest()
+		require.NoError(t, svc.Close())
+		svc, err = Open(path)
+		require.NoError(t, err)
+		defer svc.Close()
+		require.NoError(t, svc.OpenRepo())
 		tip, err := svc.Branches().HeadCommit(ctx, "agent/host-1")
 		require.NoError(t, err)
 		for _, b := range []string{"agent/peer-abcd1234", "exp/try"} {
