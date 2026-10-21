@@ -200,21 +200,9 @@ func TestFleetE2E_Forge(t *testing.T) {
 	}
 	bravo := newFleetNode(t, dir, "bravo", allow)
 	charlie := newFleetNode(t, dir, "charlie", allow)
-	// until runs the master's rounds until cond holds on the forge. It is
-	// bounded by ROUNDS, not by the clock: the property is that the master's
-	// rounds bring the change within a handful of them (two, measured, for the
-	// leave duty's revocation), and a round's duration says nothing about that.
-	// A wall-clock deadline here failed on a loaded machine, where a slow
-	// round can spend it alone. A round that hangs is caught by go test -timeout.
-	const maxRounds = 10
 	until := func(what string, cond func() bool) {
 		t.Helper()
-		for rounds := 0; !cond(); rounds++ {
-			if rounds == maxRounds {
-				t.Fatalf("the master's %d rounds never brought %s", maxRounds, what)
-			}
-			alpha.round(t)
-		}
+		untilMasterRounds(t, alpha, what, cond)
 	}
 	joinAnswer(t, bravo, alpha, "none")
 	joinAnswer(t, charlie, alpha, "none")
